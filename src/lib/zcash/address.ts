@@ -34,9 +34,10 @@ export function validateTestnetAddress(input: string): AddressInfo {
     return { valid: false, reason: "That looks like a MAINNET address. This faucet only funds testnet." };
   }
 
-  // Unified testnet: utest1<data>
-  if (addr.startsWith("utest1")) {
-    const data = addr.slice("utest1".length).toLowerCase();
+  // Unified, testnet (utest1…) or regtest (uregtest1…).
+  const uniPrefix = ["utest1", "uregtest1"].find((p) => addr.startsWith(p));
+  if (uniPrefix) {
+    const data = addr.slice(uniPrefix.length).toLowerCase();
     if (data.length < 8 || !BECH32_CHARSET.test(data)) {
       return { valid: false, reason: "Malformed unified address." };
     }
@@ -44,9 +45,10 @@ export function validateTestnetAddress(input: string): AddressInfo {
     return { valid: true, kind: "unified", shielded: true };
   }
 
-  // Sapling testnet: ztestsapling1<data>, canonical length ~78 chars total.
-  if (addr.startsWith("ztestsapling1")) {
-    const data = addr.slice("ztestsapling1".length).toLowerCase();
+  // Sapling, testnet (ztestsapling1…) or regtest (zregtestsapling1…).
+  const sapPrefix = ["ztestsapling1", "zregtestsapling1"].find((p) => addr.startsWith(p));
+  if (sapPrefix) {
+    const data = addr.slice(sapPrefix.length).toLowerCase();
     if (data.length < 32 || !BECH32_CHARSET.test(data)) {
       return { valid: false, reason: "Malformed Sapling address." };
     }
