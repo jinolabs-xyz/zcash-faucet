@@ -29,6 +29,15 @@ services:
         value: mock # flip to "webzjs" once the real sender is wired + wallet funded
       - key: LIGHTWALLETD_ENDPOINT
         value: https://testnet.zec.rocks:443,https://lightwalletd.testnet.electriccoin.co:9067
+      # Ledger: starts as local sqlite so the FIRST deploy boots with zero setup.
+      # After you deploy the D1 proxy Worker (see DEPLOY.md), set DB_BACKEND=d1 in
+      # the dashboard + fill D1_PROXY_URL/SECRET so the ledger survives restarts.
+      - key: DB_BACKEND
+        value: sqlite
+      - key: D1_PROXY_URL
+        sync: false
+      - key: D1_PROXY_SECRET
+        sync: false
       # Secrets — set these in the Render dashboard, do NOT commit values:
       - key: RATE_LIMIT_SALT
         sync: false

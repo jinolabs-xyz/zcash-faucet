@@ -1,0 +1,15 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "zcash-faucet-db",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-01",
+  // After `wrangler d1 create zcash-faucet-db`, paste the printed database_id here.
+  // For local dev (`wrangler dev`) the id is not validated — the placeholder is fine.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "zcash-faucet-db",
+      "database_id": "REPLACE_WITH_DATABASE_ID_FROM_d1_create"
+    }
+  ]
+}

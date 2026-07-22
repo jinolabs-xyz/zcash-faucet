@@ -2,6 +2,7 @@ node_modules
 .next
 .git
 data
+worker
 .env
 .env.local
 .claude

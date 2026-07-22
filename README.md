@@ -20,6 +20,11 @@ This is a Zcash tool, so it tries to act like one:
 - **Configurable, self-hostable backend.** `LIGHTWALLETD_ENDPOINT` takes a list
   with failover. Point it at **your own** Zebra + Zaino/lightwalletd (the Z3
   docker-compose stack) to drop the third-party dependency entirely.
+- **Durable ledger on ephemeral hosts.** On a host whose disk is wiped on
+  restart (e.g. Render free), local SQLite would reset the rate-limit ledger and
+  make the faucet drainable across redeploys. Setting `DB_BACKEND=d1` routes the
+  ledger to Cloudflare D1 via `worker/`, so cooldowns/caps persist — verified by
+  a fresh process still seeing prior claims.
 - **Shielded-first.** Shielded transfers are private; transparent recipients get
   an explicit "this is public" warning.
 - **Honest about the soft spots.** Two centralized touchpoints remain, by choice,
@@ -60,7 +65,9 @@ Aztec faucet:
 | Backend status endpoint | `src/app/api/status/route.ts` |
 | Testnet address validation | `src/lib/zcash/address.ts` |
 | Send adapter (mock + WebZjs real path) | `src/lib/zcash/send.ts` |
-| Atomic claim reserve (cooldown + daily cap, concurrency-safe) | `src/lib/db.ts` |
+| Atomic claim reserve (cooldown + daily cap, concurrency-safe) | `src/lib/db/` |
+| Ledger backends: local SQLite + Cloudflare D1 proxy | `src/lib/db/driver.ts` |
+| D1 proxy Worker (persistent ledger for ephemeral hosts) | `worker/` |
 | Serial FIFO send queue (one wallet tx at a time) | `src/lib/zcash/queue.ts` |
 | Turnstile server verify | `src/lib/turnstile.ts` |
 | SQLite claim ledger | `src/lib/db.ts` |

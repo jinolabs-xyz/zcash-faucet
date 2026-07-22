@@ -95,7 +95,7 @@ export async function POST(req: NextRequest) {
   // 4. Reserve atomically (cooldown + daily cap in one transaction). This is the
   //    concurrency gate: with N simultaneous requests from the same client, only
   //    one reservation succeeds — the rest are blocked before any coins move.
-  const reservation = reserveClaim({
+  const reservation = await reserveClaim({
     address,
     ipHash,
     amountZat: config.dripZatoshi,
@@ -117,7 +117,7 @@ export async function POST(req: NextRequest) {
     const result = await getSendQueue().run(() =>
       getSender().send({ toAddress: address, addressInfo: info, amountZat: config.dripZatoshi }),
     );
-    finalizeClaim(reservation.claimId, "sent", result.txid);
+    await finalizeClaim(reservation.claimId, "sent", result.txid);
     return NextResponse.json({
       ok: true,
       txid: result.txid,
@@ -127,7 +127,7 @@ export async function POST(req: NextRequest) {
       to: { kind: info.kind, shielded: info.shielded },
     });
   } catch (err) {
-    finalizeClaim(reservation.claimId, "failed", null);
+    await finalizeClaim(reservation.claimId, "failed", null);
     if (err instanceof QueueFullError) {
       return NextResponse.json({ ok: false, error: err.message }, { status: 503 });
     }

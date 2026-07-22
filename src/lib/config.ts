@@ -58,6 +58,12 @@ export const config = {
   // Public address shown on the Donate tab so people can refill the faucet.
   donationAddress: process.env.FAUCET_DONATION_ADDRESS ?? "",
 
+  // Ledger backend. "sqlite" = local file (dev / single box). "d1" = Cloudflare
+  // D1 via the proxy Worker (survives Render's ephemeral disk). See worker/.
+  dbBackend: (process.env.DB_BACKEND ?? "sqlite") as "sqlite" | "d1",
+  d1ProxyUrl: process.env.D1_PROXY_URL ?? "",
+  d1ProxySecret: process.env.D1_PROXY_SECRET ?? "",
+
   // Simulated spendable balance for the mock sender (real sender reads on-chain).
   mockBalanceZatoshi: tazToZatoshi(num("FAUCET_MOCK_BALANCE_TAZ", 10)),
 

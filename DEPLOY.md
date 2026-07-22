@@ -34,14 +34,38 @@ Render can't be driven headless — do this in the dashboard (one-time):
 ## 2. Move the ledger to Cloudflare D1 (survives restarts)
 
 Render's free disk is wiped on every restart/redeploy, which would reset the
-rate-limit ledger. Point it at D1 instead:
+rate-limit ledger. Point it at D1 (SQLite, free) via the proxy Worker in
+[`worker/`](worker/). All of this is verified locally, including that a fresh app
+process still sees prior cooldowns (i.e. restart-safe).
 
-1. `wrangler d1 create zcash-faucet-db`
-2. Deploy the tiny proxy Worker (binds D1, checks a shared secret) — see the
-   Cloudflare D1 "access from outside a Worker" tutorial.
-3. In `db.ts`, the adapter switches to the Worker when `DB_BACKEND=d1` +
-   `D1_PROXY_URL` + `D1_PROXY_SECRET` are set; otherwise it uses local file
-   SQLite (dev). *(This adapter is the next thing to wire — say the word.)*
+```bash
+cd worker
+npm install
+npx wrangler login
+
+# 1. create the D1 database, paste the printed database_id into wrangler.jsonc
+npx wrangler d1 create zcash-faucet-db
+
+# 2. create the schema on the remote DB
+npx wrangler d1 execute zcash-faucet-db --remote --file schema.sql
+
+# 3. set the shared secret the app will authenticate with (pick a long random one)
+npx wrangler secret put PROXY_SECRET
+
+# 4. deploy — note the printed https://zcash-faucet-db.<subdomain>.workers.dev URL
+npx wrangler deploy
+```
+
+Then in the Render dashboard set:
+
+- `DB_BACKEND` = `d1`
+- `D1_PROXY_URL` = the Worker URL from step 4
+- `D1_PROXY_SECRET` = the same value you set in step 3
+
+The app's `db/` driver switches to the Worker when `DB_BACKEND=d1`; otherwise it
+uses local file SQLite (dev). The atomic claim reservation runs as one conditional
+`INSERT`, so it's race-safe on D1-over-HTTP too — load-tested with 5 concurrent
+requests (exactly one wins).
 
 ## 3. Keep it awake (UptimeRobot)
 
