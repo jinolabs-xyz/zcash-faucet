@@ -26,3 +26,6 @@ tsconfig.tsbuildinfo
 
 # local editor / harness config
 .claude/
+
+# faucet wallet secret — NEVER commit
+.faucet-wallet.local
