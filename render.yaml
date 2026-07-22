@@ -1,0 +1,42 @@
+# Render Blueprint — deploy the faucet as a free web service.
+# Docs: https://render.com/docs/blueprint-spec
+#
+# Heads up: Render's FREE web service has an EPHEMERAL filesystem, so the local
+# SQLite ledger is wiped on every restart/redeploy/spin-down. For real use, point
+# the ledger at Cloudflare D1 (via the proxy Worker) — see DEPLOY.md. The free
+# service also spins down after 15 min idle; the UptimeRobot ping keeps it warm.
+services:
+  - type: web
+    name: zcash-faucet
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: FAUCET_DRIP_TAZ
+        value: "0.1"
+      - key: FAUCET_COOLDOWN_SECONDS
+        value: "86400"
+      - key: FAUCET_DAILY_CAP_TAZ
+        value: "100"
+      - key: TRUSTED_PROXY_COUNT
+        value: "1" # Render sits behind its own proxy → trust exactly 1 XFF hop
+      - key: FAUCET_SENDER
+        value: mock # flip to "webzjs" once the real sender is wired + wallet funded
+      - key: LIGHTWALLETD_ENDPOINT
+        value: https://testnet.zec.rocks:443,https://lightwalletd.testnet.electriccoin.co:9067
+      # Secrets — set these in the Render dashboard, do NOT commit values:
+      - key: RATE_LIMIT_SALT
+        sync: false
+      - key: FAUCET_WALLET_SEED
+        sync: false
+      - key: TURNSTILE_SECRET_KEY
+        sync: false
+      - key: NEXT_PUBLIC_TURNSTILE_SITE_KEY
+        sync: false
+      - key: FAUCET_DONATION_ADDRESS
+        sync: false
