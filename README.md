@@ -109,21 +109,31 @@ on the free tier. Steps (full version in [DEPLOY.md](DEPLOY.md)):
 4. **Enable anti-abuse.** Create a [Cloudflare Turnstile](https://dash.cloudflare.com/?to=/:account/turnstile)
    widget and set `NEXT_PUBLIC_TURNSTILE_SITE_KEY` + `TURNSTILE_SECRET_KEY`.
 
-### Shielded recipients (real mode)
+### Shielded sends — two backends
 
-Unified addresses (`utest1…`, Orchard) **are** paid for real, via transparent→
-shielded (t2z, [`t2z.ts`](src/lib/zcash/t2z.ts) + [`workers/t2z-worker.mjs`](workers/t2z-worker.mjs)):
-the faucet spends its transparent UTXOs, the recipient gets a private Orchard
-note, and **change returns to the faucet's own t-address** (verified via
+**`real` mode — transparent wallet + t2z.** The faucet spends a funded
+transparent wallet. Unified recipients (`utest1…`, Orchard) are paid via a
+transparent→shielded t2z tx ([`t2z.ts`](src/lib/zcash/t2z.ts) +
+[`workers/t2z-worker.mjs`](workers/t2z-worker.mjs)): the recipient gets a private
+Orchard note and **change returns to the faucet's own t-address** (verified via
 `inspect_pczt`) so nothing strands. The Halo2 proof (~15–26s) runs in a
-worker_thread behind the FIFO queue, so it never blocks the server.
+worker_thread behind the FIFO queue.
 
-- `tm…` (transparent) → real transparent tx (`RealSender`).
-- `utest1…` (unified/Orchard) → real t2z shielded send (`T2zSender`).
+- `tm…` (transparent) → transparent tx (`RealSender`).
+- `utest1…` (unified/Orchard) → t2z shielded send (`T2zSender`).
 - `ztestsapling1…` (Sapling-only) → refused; t2z emits Orchard outputs only.
 
-The whole pipeline (propose → sign → prove → finalize) is verified offline; the
-final acceptance test is one funded testnet broadcast (see DEPLOY.md).
+The catch: the faucet's own funds are transparent, so its balance and every
+drip's origin are **public**.
+
+**`zallet` mode — a genuinely shielded faucet (Z3 stack).** The faucet holds
+**Orchard notes** and pays **z→z** through a running Zallet wallet (zebrad +
+`zallet-zaino`) over JSON-RPC ([`zalletsend.ts`](src/lib/zcash/zalletsend.ts)):
+`z_getbalanceforaccount` for the guard, `z_sendmany` (ZIP-317 fees, async opid →
+polled to a txid) per drip. Faucet holdings and the faucet↔claimant link stay
+private, and it can pay Sapling recipients too. This trades the no-node,
+free-tier deploy for running a full node — see DEPLOY.md §5. Verified end to end
+locally (build, live RPC balance, empty-guard) except one *funded* z→z send.
 
 ## Configuration (`.env`)
 
@@ -133,8 +143,10 @@ final acceptance test is one funded testnet broadcast (see DEPLOY.md).
 | `FAUCET_COOLDOWN_SECONDS` | `86400` | Per-address **and** per-IP cooldown |
 | `FAUCET_DAILY_CAP_TAZ` | `100` | Global 24h dispense ceiling |
 | `LIGHTWALLETD_ENDPOINT` | `testnet.zec.rocks:443` | Light client gRPC endpoint |
-| `FAUCET_SENDER` | `mock` | `mock` or `real` |
+| `FAUCET_SENDER` | `mock` | `mock`, `real` (transparent + t2z), or `zallet` (shielded) |
 | `FAUCET_WALLET_SEED` | — | Funded transparent wallet WIF/hex (`real` only) |
+| `ZALLET_RPC_URL` / `ZALLET_RPC_USER` / `ZALLET_RPC_PASSWORD` | — | Zallet JSON-RPC (`zallet` only) |
+| `ZALLET_ACCOUNT` / `ZALLET_ADDRESS` | — | Faucet's shielded account UUID + unified address (`zallet` only) |
 | `NEXT_PUBLIC_TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY` | — | Anti-bot |
 
 ## Supported recipient types

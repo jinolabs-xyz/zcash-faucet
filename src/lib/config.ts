@@ -52,8 +52,29 @@ export const config = {
   get lightwalletdEndpoint() {
     return this.lightwalletdEndpoints[0]!;
   },
-  sender: (process.env.FAUCET_SENDER ?? "mock") as "mock" | "real",
+  sender: (process.env.FAUCET_SENDER ?? "mock") as "mock" | "real" | "zallet",
   walletSeed: process.env.FAUCET_WALLET_SEED ?? "",
+
+  // Zallet backend (FAUCET_SENDER=zallet): a genuinely shielded faucet. Holds
+  // Orchard notes and pays z→z via a running `zallet start` over JSON-RPC.
+  zallet: {
+    endpoint: process.env.ZALLET_RPC_URL ?? "http://127.0.0.1:28232/",
+    user: process.env.ZALLET_RPC_USER ?? "",
+    password: process.env.ZALLET_RPC_PASSWORD ?? "",
+    // The faucet's own account UUID (z_getnewaccount) and one of its unified
+    // addresses (z_getaddressforaccount) — spent-from in z_sendmany.
+    account: process.env.ZALLET_ACCOUNT ?? "",
+    address: process.env.ZALLET_ADDRESS ?? "",
+    // Confirmations a note needs before the wallet will spend it (Zallet default 10).
+    minConf: Math.max(0, Math.floor(num("ZALLET_MIN_CONF", 10))),
+    // If the wallet is encrypted at rest, unlock it for this many seconds per send.
+    passphrase: process.env.ZALLET_PASSPHRASE ?? "",
+    unlockSeconds: Math.max(1, Math.floor(num("ZALLET_UNLOCK_SECONDS", 60))),
+    rpcTimeoutMs: Math.max(1000, Math.floor(num("ZALLET_RPC_TIMEOUT_MS", 15_000))),
+    // A shielded build+prove can take tens of seconds; give the opid room to land.
+    opTimeoutMs: Math.max(5000, Math.floor(num("ZALLET_OP_TIMEOUT_MS", 180_000))),
+    pollMs: Math.max(250, Math.floor(num("ZALLET_POLL_MS", 1500))),
+  },
 
   // Public address shown on the Donate tab so people can refill the faucet.
   donationAddress: process.env.FAUCET_DONATION_ADDRESS ?? "",

@@ -3,19 +3,22 @@
  * and exposes the faucet wallet's spendable balance so the API can guard against
  * draining the single hot wallet.
  *
- * Two implementations behind one interface:
+ * Three implementations behind one interface:
  *
  *   MockSender  (FAUCET_SENDER=mock, default)
  *     Runs with no keys and no node. Keeps a simulated balance (seeded from
  *     FAUCET_MOCK_BALANCE_TAZ) that decrements per send, so the low-balance
  *     guard, the "faucet empty" UX, and the whole flow are testable end to end.
  *
- *   RealSender  (FAUCET_SENDER=real, see ./realsend.ts)
- *     Spends the faucet's funded transparent testnet wallet: fetch UTXOs, build
- *     + sign a real Zcash tx (@bitgo/utxo-lib), broadcast via lightwalletd.
+ *   RealSender  (FAUCET_SENDER=real, see ./realsend.ts + ./t2zsend.ts)
+ *     Spends the faucet's funded *transparent* testnet wallet. Transparent
+ *     recipients get a plain Zcash tx (@bitgo/utxo-lib); unified recipients get
+ *     a transparent→Orchard t2z bridge tx. Balance and drip origins are public.
  *
- * The interface is intentionally minimal so a third backend (e.g. a Zallet RPC
- * over the Z3 stack, for shielded sends) can drop in later.
+ *   ZalletSender  (FAUCET_SENDER=zallet, see ./zalletsend.ts)
+ *     A genuinely shielded faucet: holds Orchard notes and pays z→z via a running
+ *     Zallet wallet (Z3 stack) over JSON-RPC. Faucet holdings and the faucet↔
+ *     claimant link stay private, and it can pay Sapling recipients too.
  */
 import { config } from "../config";
 import type { AddressInfo } from "./address";
@@ -116,8 +119,17 @@ let cached: Sender | null = null;
 
 export function getSender(): Sender {
   if (cached) return cached;
-  cached = config.sender === "real" ? new CompositeRealSender() : new MockSender();
-  return cached;
+  let s: Sender;
+  if (config.sender === "zallet") {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    s = new (require("./zalletsend").ZalletSender)() as Sender;
+  } else if (config.sender === "real") {
+    s = new CompositeRealSender();
+  } else {
+    s = new MockSender();
+  }
+  cached = s;
+  return s;
 }
 
 /**
