@@ -40,7 +40,7 @@ export default function Home() {
       </div>
       <p className="sub">
         Free <strong>TAZ</strong> (testnet ZEC, no monetary value) for building and testing on the
-        Zcash testnet.
+        Zcash testnet. <strong>Shielded by default</strong> — transparent addresses are opt-in.
       </p>
 
       <nav className="tabs">

@@ -1,14 +1,17 @@
 /**
  * POST /api/account — generate a throwaway TESTNET account.
- * Server-side randomness, never stored or logged. Body: { type: "transparent" | "shielded" }.
+ * Shielded (default): a real Orchard account (address + spending key) via t2z.
+ * Transparent (opt-in): a P2PKH key (WIF + tm… address), pure JS.
+ * Server-side randomness, never stored or logged.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { generateThrowaway } from "@/lib/zcash/keys";
+import { generateTransparentAccount, type ThrowawayAccount } from "@/lib/zcash/keys";
+import { generateShieldedAccount } from "@/lib/zcash/t2z";
 
 export const runtime = "nodejs";
 
-const BodySchema = z.object({ type: z.enum(["transparent", "shielded"]).default("transparent") });
+const BodySchema = z.object({ type: z.enum(["transparent", "shielded"]).default("shielded") });
 
 export async function POST(req: NextRequest) {
   let type: "transparent" | "shielded";
@@ -18,7 +21,27 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: "Invalid request." }, { status: 400 });
   }
 
-  const acct = generateThrowaway(type);
-  // Note: the secret is returned exactly once and never persisted server-side.
-  return NextResponse.json({ ok: true, account: acct });
+  try {
+    if (type === "shielded") {
+      const kp = await generateShieldedAccount();
+      const account: ThrowawayAccount = {
+        type: "shielded",
+        shielded: true,
+        address: kp.address,
+        secret: kp.spendingKey,
+        secretLabel: "Orchard spending key (testnet)",
+        mock: false,
+        warning:
+          "Testnet throwaway. Real Orchard address + spending key — copy the key now, it isn't stored. " +
+          "Testnet only; never reuse on mainnet.",
+      };
+      return NextResponse.json({ ok: true, account });
+    }
+    return NextResponse.json({ ok: true, account: generateTransparentAccount() });
+  } catch (err) {
+    return NextResponse.json(
+      { ok: false, error: `Account generation failed: ${err instanceof Error ? err.message : "error"}` },
+      { status: 500 },
+    );
+  }
 }

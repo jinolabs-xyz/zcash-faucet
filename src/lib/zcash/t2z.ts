@@ -1,32 +1,63 @@
 /**
- * Client for the t2z proving worker (workers/t2z-worker.mjs). We spawn the
- * worker by file path at runtime, so the Next.js bundler never sees the wasm —
- * and the ~15–26s CPU-bound proof runs off the server's event loop.
- *
- * Sends are already serialized by the FIFO queue (concurrency 1), so a single
- * worker handling one job at a time is sufficient.
+ * Client for the t2z worker (workers/t2z-worker.mjs). Spawns the worker by file
+ * path at runtime so the bundler never sees the wasm, and runs the ~15–26s proof
+ * off the server event loop. Requests are id-correlated, so a quick account-gen
+ * can be answered while a send is still proving.
  */
 import { Worker } from "node:worker_threads";
 import path from "node:path";
 
 let worker: Worker | null = null;
+let seq = 0;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const pending = new Map<number, { resolve: (v: any) => void; reject: (e: unknown) => void }>();
 
 function getWorker(): Worker {
   if (worker) return worker;
-  const workerPath = path.join(process.cwd(), "workers", "t2z-worker.mjs");
-  worker = new Worker(workerPath);
-  worker.on("error", () => {
-    worker = null; // let the next send respawn a fresh worker
+  const w = new Worker(path.join(process.cwd(), "workers", "t2z-worker.mjs"));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  w.on("message", (m: any) => {
+    if (typeof m?.id !== "number") return;
+    const p = pending.get(m.id);
+    if (!p) return;
+    pending.delete(m.id);
+    if (m.ok) p.resolve(m);
+    else p.reject(new Error(m.error ?? "t2z worker error"));
   });
-  worker.on("exit", () => {
-    worker = null;
-  });
-  return worker;
+  const fail = (e: unknown) => {
+    for (const p of pending.values()) p.reject(e);
+    pending.clear();
+    worker = null; // next call respawns
+  };
+  w.on("error", fail);
+  w.on("exit", () => fail(new Error("t2z worker exited")));
+  worker = w;
+  return w;
 }
 
-/** Spawn + warm the worker (wasm load + proving-key build) at server startup. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function call(job: Record<string, any>): Promise<any> {
+  const w = getWorker();
+  const id = ++seq;
+  return new Promise((resolve, reject) => {
+    pending.set(id, { resolve, reject });
+    w.postMessage({ ...job, id });
+  });
+}
+
+/** Spawn + warm the worker (build the proving key) at server startup. */
 export function warmT2z(): void {
-  getWorker();
+  call({ type: "warm" }).catch(() => {});
+}
+
+/** Mint a real testnet Orchard account (address + spending key). */
+export async function generateShieldedAccount(): Promise<{
+  address: string;
+  spendingKey: string;
+  fvk: string;
+}> {
+  const m = await call({ type: "keypair" });
+  return m.keypair;
 }
 
 export interface T2zInput {
@@ -37,7 +68,7 @@ export interface T2zInput {
   scriptHex: string;
 }
 
-export function buildT2zTx(o: {
+export async function buildT2zTx(o: {
   inputs: T2zInput[];
   recipientUA: string;
   changeTAddr: string;
@@ -45,37 +76,20 @@ export function buildT2zTx(o: {
   expiryHeight: number;
   dripZat: bigint;
 }): Promise<{ hex: string; feeZat: bigint }> {
-  const w = getWorker();
-  return new Promise((resolve, reject) => {
-    const onMessage = (m: { ready?: boolean; ok?: boolean; hex?: string; feeZat?: string; error?: string }) => {
-      if (m.ready !== undefined) return; // startup warm-up ping, not our result
-      cleanup();
-      if (m.ok) resolve({ hex: m.hex!, feeZat: BigInt(m.feeZat!) });
-      else reject(new Error(m.error ?? "t2z worker failed"));
-    };
-    const onError = (e: Error) => {
-      cleanup();
-      reject(e);
-    };
-    const cleanup = () => {
-      w.off("message", onMessage);
-      w.off("error", onError);
-    };
-    w.on("message", onMessage);
-    w.on("error", onError);
-    w.postMessage({
-      inputs: o.inputs.map((i) => ({
-        pubHex: i.pubHex,
-        txidHex: i.txidHex,
-        index: i.index,
-        valueZat: i.valueZat.toString(),
-        scriptHex: i.scriptHex,
-      })),
-      recipientUA: o.recipientUA,
-      changeTAddr: o.changeTAddr,
-      faucetPrivHex: o.faucetPrivHex,
-      expiryHeight: o.expiryHeight,
-      dripZat: o.dripZat.toString(),
-    });
+  const m = await call({
+    type: "send",
+    inputs: o.inputs.map((i) => ({
+      pubHex: i.pubHex,
+      txidHex: i.txidHex,
+      index: i.index,
+      valueZat: i.valueZat.toString(),
+      scriptHex: i.scriptHex,
+    })),
+    recipientUA: o.recipientUA,
+    changeTAddr: o.changeTAddr,
+    faucetPrivHex: o.faucetPrivHex,
+    expiryHeight: o.expiryHeight,
+    dripZat: o.dripZat.toString(),
   });
+  return { hex: m.hex, feeZat: BigInt(m.feeZat) };
 }

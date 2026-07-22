@@ -133,6 +133,24 @@ h1 {
   color: var(--accent-ink);
 }
 
+/* ── Shielded-first toggle ── */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.toggle-row input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 /* ── Key/value rows (account) ── */
 .kv {
   display: flex;

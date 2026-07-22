@@ -1,12 +1,12 @@
 /**
- * t2z proving worker (plain Node, run via worker_thread — deliberately OUTSIDE
- * src/ so the Next.js bundler never touches the wasm). Loads @d4mr/t2z-wasm via
- * the bundler-target shim, builds a transparent→Orchard tx, and returns the raw
- * tx hex. Proving (~15–26s, CPU-bound) happens here, off the server event loop.
+ * t2z worker (plain Node, run via worker_thread — deliberately OUTSIDE src/ so
+ * the Next.js bundler never touches the wasm). Handles three job types, each
+ * tagged with an `id` so several can be in flight without their replies crossing:
+ *   - warm     : build the Halo2 proving key (~11s), so the first send is fast
+ *   - keypair  : mint a real testnet Orchard account (address + spending key)
+ *   - send     : build → sign → prove → finalize a transparent→Orchard tx
  *
- * Protocol: parent postMessage({inputs, recipientUA, changeTAddr, faucetPrivHex,
- * expiryHeight, dripZat}) → worker postMessage({ok, hex, feeZat} | {ok:false, error}).
- * Amounts cross the boundary as strings (belt-and-suspenders around BigInt).
+ * Proving (~15–26s, CPU-bound) runs here, off the server event loop.
  */
 import { parentPort } from "node:worker_threads";
 import { createRequire } from "node:module";
@@ -25,42 +25,58 @@ async function load() {
   });
   mod.__wbg_set_wasm(instance.exports);
   instance.exports.__wbindgen_start?.();
-  if (!mod.is_proving_key_ready()) mod.prebuild_proving_key(); // ~11s, once
   bg = mod;
   return bg;
 }
 
-// Warm the wasm + proving key as soon as the worker starts.
-load().then(
-  () => parentPort?.postMessage({ ready: true }),
-  (e) => parentPort?.postMessage({ ready: false, error: String(e?.message ?? e) }),
-);
-
 parentPort?.on("message", async (job) => {
+  const { id, type } = job;
   try {
     const t = await load();
-    const inputs = job.inputs.map(
-      (i) => new t.WasmTransparentInput(i.pubHex, i.txidHex, i.index, BigInt(i.valueZat), i.scriptHex, null),
-    );
-    const payment = new t.WasmPayment(job.recipientUA, BigInt(job.dripZat), null, null);
 
-    let pczt = t.propose_transaction(inputs, [payment], job.changeTAddr, "testnet", job.expiryHeight);
-
-    const info = t.inspect_pczt(pczt.to_hex());
-    const feeZat = BigInt(info.implied_fee);
-    const totalIn = job.inputs.reduce((s, i) => s + BigInt(i.valueZat), 0n);
-    if (totalIn < BigInt(job.dripZat) + feeZat) {
-      throw new Error("Selected inputs don't cover drip + fee.");
+    if (type === "warm") {
+      if (!t.is_proving_key_ready()) t.prebuild_proving_key();
+      parentPort.postMessage({ id, ok: true });
+      return;
     }
 
-    job.inputs.forEach((_, i) => {
-      pczt = t.sign_transparent_input(pczt, i, job.faucetPrivHex);
-    });
-    pczt = t.prove_transaction(pczt);
-    const hex = t.finalize_and_extract_hex(pczt);
+    if (type === "keypair") {
+      const kp = t.generate_test_keypair("testnet");
+      parentPort.postMessage({
+        id,
+        ok: true,
+        keypair: {
+          address: kp.address,
+          spendingKey: kp.spending_key,
+          fvk: kp.full_viewing_key_hex ?? kp.full_viewing_key ?? "",
+        },
+      });
+      return;
+    }
 
-    parentPort?.postMessage({ ok: true, hex, feeZat: feeZat.toString() });
+    if (type === "send") {
+      const inputs = job.inputs.map(
+        (i) => new t.WasmTransparentInput(i.pubHex, i.txidHex, i.index, BigInt(i.valueZat), i.scriptHex, null),
+      );
+      const payment = new t.WasmPayment(job.recipientUA, BigInt(job.dripZat), null, null);
+      let pczt = t.propose_transaction(inputs, [payment], job.changeTAddr, "testnet", job.expiryHeight);
+
+      const info = t.inspect_pczt(pczt.to_hex());
+      const feeZat = BigInt(info.implied_fee);
+      const totalIn = job.inputs.reduce((s, i) => s + BigInt(i.valueZat), 0n);
+      if (totalIn < BigInt(job.dripZat) + feeZat) throw new Error("Selected inputs don't cover drip + fee.");
+
+      job.inputs.forEach((_, i) => {
+        pczt = t.sign_transparent_input(pczt, i, job.faucetPrivHex);
+      });
+      pczt = t.prove_transaction(pczt);
+      const hex = t.finalize_and_extract_hex(pczt);
+      parentPort.postMessage({ id, ok: true, hex, feeZat: feeZat.toString() });
+      return;
+    }
+
+    parentPort.postMessage({ id, ok: false, error: `unknown job type: ${type}` });
   } catch (e) {
-    parentPort?.postMessage({ ok: false, error: String(e?.message ?? e) });
+    parentPort.postMessage({ id, ok: false, error: String(e?.message ?? e) });
   }
 });

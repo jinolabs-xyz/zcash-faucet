@@ -17,8 +17,6 @@ import { getPublicKey } from "@noble/secp256k1";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { ripemd160 } from "@noble/hashes/legacy.js";
 import { base58check as base58checkFactory } from "@scure/base";
-import { generateMnemonic } from "@scure/bip39";
-import { wordlist } from "@scure/bip39/wordlists/english.js";
 
 const base58check = base58checkFactory(sha256);
 
@@ -77,27 +75,6 @@ function generateTransparent(): ThrowawayAccount {
   };
 }
 
-function generateShieldedMock(): ThrowawayAccount {
-  const mnemonic = generateMnemonic(wordlist, 256); // real 24-word seed
-  // Placeholder unified testnet address (NOT spendable) until WASM derivation.
-  const filler = base58check
-    .encode(new Uint8Array(randomBytes(24)))
-    .toLowerCase()
-    .replace(/[^023456789acdefghjklmnpqrstuvwxyz]/g, "q")
-    .slice(0, 50);
-  const address = `utest1${filler}`;
-  return {
-    type: "shielded",
-    shielded: true,
-    address,
-    secret: mnemonic,
-    secretLabel: "Seed phrase (24 words)",
-    mock: true,
-    warning:
-      "MOCK shielded address — not spendable yet. The seed phrase is real; unified address derivation needs the shielded (WASM) tooling.",
-  };
-}
-
 function isValidScalar(b: Uint8Array): boolean {
   // reject 0 and values >= curve order n (secp256k1)
   const N = BigInt("0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141");
@@ -106,6 +83,8 @@ function isValidScalar(b: Uint8Array): boolean {
   return x > 0n && x < N;
 }
 
-export function generateThrowaway(type: "transparent" | "shielded"): ThrowawayAccount {
-  return type === "shielded" ? generateShieldedMock() : generateTransparent();
+// Transparent generation lives here (pure JS). Shielded (Orchard) accounts are
+// minted via the t2z worker — see generateShieldedAccount in ./t2z.
+export function generateTransparentAccount(): ThrowawayAccount {
+  return generateTransparent();
 }

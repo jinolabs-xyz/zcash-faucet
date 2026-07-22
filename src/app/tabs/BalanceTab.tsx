@@ -38,7 +38,11 @@ export function BalanceTab({ prefill }: { prefill?: string }) {
 
   return (
     <form className="panel" onSubmit={lookup}>
-      <label htmlFor="baddr">Check a testnet balance</label>
+      <label htmlFor="baddr">Check a transparent balance</label>
+      <p className="tab-lead" style={{ marginTop: 0, marginBottom: 12 }}>
+        Shielded balances are <strong>private by design</strong> — check them in your own wallet.
+        Only transparent (<code>tm…</code>) balances are public and lookup-able here.
+      </p>
       <input
         id="baddr"
         type="text"

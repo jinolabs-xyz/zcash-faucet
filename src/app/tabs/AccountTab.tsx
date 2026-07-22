@@ -5,7 +5,8 @@ import type { ThrowawayAccount } from "./types";
 import { Copy } from "./Copy";
 
 export function AccountTab({ onUseForBalance }: { onUseForBalance?: (addr: string) => void }) {
-  const [type, setType] = useState<"transparent" | "shielded">("transparent");
+  const [type, setType] = useState<"transparent" | "shielded">("shielded");
+  const [showTransparent, setShowTransparent] = useState(false);
   const [acct, setAcct] = useState<ThrowawayAccount | null>(null);
   const [loading, setLoading] = useState(false);
   const [revealed, setRevealed] = useState(false);
@@ -30,29 +31,45 @@ export function AccountTab({ onUseForBalance }: { onUseForBalance?: (addr: strin
   return (
     <div className="panel">
       <p className="tab-lead">
-        Generate a disposable testnet account without a wallet or CLI. Keys are created server-side
-        with secure randomness and <strong>never stored or logged</strong> — copy them now.
+        Generate a disposable <strong>shielded</strong> testnet account without a wallet or CLI —
+        a real Orchard address + spending key, created server-side and <strong>never stored</strong>.
+        Copy the key now.
       </p>
 
-      <div className="segmented">
-        <button
-          type="button"
-          className={type === "transparent" ? "seg active" : "seg"}
-          onClick={() => setType("transparent")}
-        >
-          Transparent
-        </button>
-        <button
-          type="button"
-          className={type === "shielded" ? "seg active" : "seg"}
-          onClick={() => setType("shielded")}
-        >
-          Shielded (mock)
-        </button>
-      </div>
+      {showTransparent ? (
+        <div className="segmented">
+          <button
+            type="button"
+            className={type === "shielded" ? "seg active" : "seg"}
+            onClick={() => setType("shielded")}
+          >
+            Shielded
+          </button>
+          <button
+            type="button"
+            className={type === "transparent" ? "seg active" : "seg"}
+            onClick={() => setType("transparent")}
+          >
+            Transparent
+          </button>
+        </div>
+      ) : (
+        <label className="toggle-row">
+          <input
+            type="checkbox"
+            checked={false}
+            onChange={() => setShowTransparent(true)}
+          />
+          Need a transparent (tm…) account instead?
+        </label>
+      )}
 
       <button className="cta" onClick={generate} disabled={loading}>
-        {loading ? "Generating…" : "Generate throwaway account"}
+        {loading
+          ? type === "shielded"
+            ? "Generating shielded account…"
+            : "Generating…"
+          : "Generate throwaway account"}
       </button>
 
       {acct ? (

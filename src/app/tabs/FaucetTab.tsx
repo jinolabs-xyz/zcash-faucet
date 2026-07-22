@@ -34,6 +34,7 @@ function recipientLabel(kind?: string): string {
 
 export function FaucetTab({ status }: { status: Status | null }) {
   const [address, setAddress] = useState("");
+  const [allowTransparent, setAllowTransparent] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
   const [loading, setLoading] = useState(false);
   const [token, setToken] = useState("");
@@ -55,6 +56,14 @@ export function FaucetTab({ status }: { status: Status | null }) {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    // Shielded-first: transparent addresses only go through when explicitly enabled.
+    if (!allowTransparent && /^(tm|t2)/.test(address.trim())) {
+      setResult({
+        ok: false,
+        error: "This faucet is shielded-first. Turn on “allow transparent” to send to a tm… address.",
+      });
+      return;
+    }
     setLoading(true);
     setResult(null);
     try {
@@ -73,16 +82,27 @@ export function FaucetTab({ status }: { status: Status | null }) {
 
   return (
     <form className="panel" onSubmit={submit}>
-      <label htmlFor="addr">Your testnet address — shielded or transparent</label>
+      <label htmlFor="addr">
+        Your <strong>shielded</strong> address{allowTransparent ? " (or transparent)" : ""}
+      </label>
       <input
         id="addr"
         type="text"
-        placeholder="utest1… / ztestsapling1… / tm…"
+        placeholder={allowTransparent ? "utest1… (shielded) or tm… (transparent)" : "utest1… (unified / shielded)"}
         value={address}
         onChange={(e) => setAddress(e.target.value)}
         autoComplete="off"
         spellCheck={false}
       />
+
+      <label className="toggle-row">
+        <input
+          type="checkbox"
+          checked={allowTransparent}
+          onChange={(e) => setAllowTransparent(e.target.checked)}
+        />
+        Allow a transparent (tm…) address — not private
+      </label>
 
       {SITE_KEY ? <div className="turnstile" ref={widgetRef} /> : null}
 
