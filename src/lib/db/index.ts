@@ -1,14 +1,20 @@
 /**
  * Ledger public API. Backend (local SQLite vs Cloudflare D1) is chosen by
  * config; callers just await reserveClaim / finalizeClaim.
+ *
+ * The ledger never stores plaintext addresses or IPs — only salted fingerprints
+ * (see lib/privacy.ts) — and it purges rows past the retention window, so it
+ * holds the minimum needed to enforce cooldowns and nothing more.
  */
 import { config } from "../config";
+import { fingerprintAddress } from "../privacy";
 import { SqliteDriver, D1Driver, type DbDriver } from "./driver";
 import {
   RESERVE_SQL,
   reserveParams,
   LIVE_BLOCK_SQL,
   FINALIZE_SQL,
+  PURGE_SQL,
   PENDING_LEASE_SECONDS,
 } from "./sql";
 
@@ -24,12 +30,12 @@ export type ReserveResult =
 
 /** Diagnose why an atomic reserve inserted 0 rows (for a useful error message). */
 async function whyBlocked(
-  address: string,
+  addressHash: string,
   ipHash: string | null,
   now: number,
   cooldownSeconds: number,
 ): Promise<ReserveResult & { ok: false }> {
-  const keys: [("address" | "ip_hash"), string, string][] = [["address", address, "address"]];
+  const keys: [("address_hash" | "ip_hash"), string, string][] = [["address_hash", addressHash, "address"]];
   if (ipHash) keys.push(["ip_hash", ipHash, "client"]);
 
   for (const [col, val, label] of keys) {
@@ -52,6 +58,11 @@ async function whyBlocked(
   return { ok: false, kind: "cap", reason: "Faucet daily cap reached. Please come back tomorrow." };
 }
 
+/** Rows older than this can't affect a cooldown or the 24h cap — safe to delete. */
+function retentionCutoff(now: number, cooldownSeconds: number): number {
+  return now - Math.max(cooldownSeconds, 86_400) - 3_600; // +1h grace
+}
+
 /** Atomically enforce cooldown + daily cap and reserve a pending claim. */
 export async function reserveClaim(opts: {
   address: string;
@@ -61,11 +72,18 @@ export async function reserveClaim(opts: {
   cooldownSeconds: number;
   dailyCapZat: bigint;
 }): Promise<ReserveResult> {
+  const addressHash = fingerprintAddress(opts.address);
   const ipHash = opts.ipHash ?? "";
+
+  // Data minimization: drop expired rows opportunistically (best-effort).
+  driver()
+    .run(PURGE_SQL, [retentionCutoff(opts.now, opts.cooldownSeconds)])
+    .catch(() => {});
+
   const res = await driver().run(
     RESERVE_SQL,
     reserveParams({
-      address: opts.address,
+      addressHash,
       ipHash,
       amountZat: Number(opts.amountZat),
       now: opts.now,
@@ -75,7 +93,7 @@ export async function reserveClaim(opts: {
   );
 
   if (res.changes === 1) return { ok: true, claimId: res.lastInsertRowid };
-  return whyBlocked(opts.address, opts.ipHash, opts.now, opts.cooldownSeconds);
+  return whyBlocked(addressHash, opts.ipHash, opts.now, opts.cooldownSeconds);
 }
 
 /** Finalise a reserved claim once the send resolves. */
