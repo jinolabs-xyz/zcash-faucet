@@ -1,0 +1,385 @@
+:root {
+  --bg: #0d1117;
+  --panel: #161b22;
+  --border: #2b3240;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --accent: #f4b728; /* Zcash yellow */
+  --accent-ink: #1a1200;
+  --ok: #3fb950;
+  --err: #f85149;
+  --radius: 12px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 48px 20px 80px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.brand .dot {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink);
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  font-size: 18px;
+}
+
+h1 {
+  font-size: 26px;
+  margin: 0;
+  letter-spacing: -0.02em;
+}
+
+.sub {
+  color: var(--muted);
+  margin: 6px 0 28px;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 22px;
+}
+
+/* ── Tabs ── */
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  background: none;
+  border: none;
+  color: var(--muted);
+  padding: 10px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.tab-lead {
+  color: var(--muted);
+  font-size: 13.5px;
+  line-height: 1.55;
+  margin: 0 0 16px;
+}
+
+/* ── Segmented control ── */
+.segmented {
+  display: inline-flex;
+  background: #0d1117;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 3px;
+  margin-bottom: 16px;
+}
+
+.seg {
+  background: none;
+  border: none;
+  color: var(--muted);
+  padding: 7px 16px;
+  font-size: 13.5px;
+  font-weight: 600;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.seg.active {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* ── Key/value rows (account) ── */
+.kv {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 14px;
+}
+
+.kv .k {
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.kv .v {
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.kv .v code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  word-break: break-all;
+}
+
+.copy {
+  background: #0d1117;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 3px 9px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.copy:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.badge {
+  background: rgba(248, 81, 73, 0.15);
+  color: var(--err);
+  border-radius: 5px;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.warn {
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+  margin: 8px 0 12px;
+}
+
+.ghost {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ghost:hover {
+  border-color: var(--accent);
+}
+
+/* ── Network table ── */
+.net-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 14px;
+}
+
+.net-refresh {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.net-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.net-table td {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.net-k {
+  color: var(--muted);
+  width: 42%;
+}
+
+.net-v code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  word-break: break-all;
+}
+
+/* ── FAQ ── */
+.sec-h {
+  font-size: 16px;
+  margin: 0 0 12px;
+}
+
+.faq details {
+  border-bottom: 1px solid var(--border);
+  padding: 10px 0;
+}
+
+.faq summary {
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.faq-a {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+  margin-top: 8px;
+}
+
+label {
+  display: block;
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+input[type="text"] {
+  width: 100%;
+  padding: 13px 14px;
+  font-size: 15px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--text);
+  background: #0d1117;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  outline: none;
+}
+
+input[type="text"]:focus {
+  border-color: var(--accent);
+}
+
+button.cta {
+  width: 100%;
+  margin-top: 16px;
+  padding: 13px 16px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--accent-ink);
+  background: var(--accent);
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+button.cta:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.turnstile {
+  margin-top: 16px;
+  min-height: 0;
+}
+
+.result {
+  margin-top: 18px;
+  padding: 14px;
+  border-radius: 10px;
+  font-size: 14px;
+  line-height: 1.55;
+  word-break: break-all;
+}
+
+.result.ok {
+  background: rgba(63, 185, 80, 0.1);
+  border: 1px solid rgba(63, 185, 80, 0.4);
+}
+
+.result.err {
+  background: rgba(248, 81, 73, 0.1);
+  border: 1px solid rgba(248, 81, 73, 0.4);
+}
+
+.result a {
+  color: var(--accent);
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-top: 22px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.meta .pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.status-dot.up {
+  background: var(--ok);
+}
+.status-dot.down {
+  background: var(--err);
+}
+
+.foot {
+  margin-top: 30px;
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.foot code {
+  background: #0d1117;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 5px;
+  font-size: 12px;
+}
