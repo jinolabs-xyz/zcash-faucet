@@ -22,6 +22,7 @@
 *.pem
 npm-debug.log*
 next-env.d.ts
+tsconfig.tsbuildinfo
 
 # local editor / harness config
 .claude/
