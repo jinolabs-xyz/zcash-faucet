@@ -23,18 +23,42 @@ const BodySchema = z.object({
   turnstileToken: z.string().optional(),
 });
 
-function clientIp(req: NextRequest): string {
-  const xff = req.headers.get("x-forwarded-for");
-  if (xff) return xff.split(",")[0]!.trim();
-  return req.headers.get("x-real-ip")?.trim() || "0.0.0.0";
+/**
+ * Best-effort client IP for rate-limiting.
+ *
+ * X-Forwarded-For is a client-writable header: a request can arrive with any
+ * value already in it, and each proxy *appends* the peer it saw. So only the
+ * rightmost `trustedProxyCount` entries — the ones our own infra added — are
+ * trustworthy; everything to the left is attacker-controlled. Taking XFF[0]
+ * (the old behaviour) let anyone rotate the header to dodge the per-IP cooldown.
+ *
+ * With no trusted proxy configured we ignore XFF entirely rather than trust a
+ * spoofable value. IP limiting is only ever a secondary guard anyway — the
+ * spoof-proof ceiling on total drain is FAUCET_DAILY_CAP_TAZ.
+ */
+function clientIp(req: NextRequest): string | null {
+  const trusted = config.trustedProxyCount;
+  if (trusted > 0) {
+    const xff = req.headers.get("x-forwarded-for");
+    if (xff) {
+      const hops = xff
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const idx = hops.length - trusted; // the hop our outermost proxy recorded
+      if (idx >= 0 && hops[idx]) return hops[idx];
+    }
+  }
+  return null; // unidentifiable → skip the IP layer rather than trust a spoof
 }
 
 export async function POST(req: NextRequest) {
   const now = Math.floor(Date.now() / 1000);
   // Raw IP stays local (only handed to Turnstile, which Cloudflare sees anyway).
-  // Everything we persist uses the salted fingerprint instead.
+  // Everything we persist uses the salted fingerprint instead. null = we can't
+  // trust an IP for this request, so the IP-based limit is skipped.
   const rawIp = clientIp(req);
-  const ipHash = fingerprintIp(rawIp);
+  const ipHash = rawIp ? fingerprintIp(rawIp) : null;
 
   let body: z.infer<typeof BodySchema>;
   try {
@@ -51,7 +75,7 @@ export async function POST(req: NextRequest) {
   const address = body.address.trim();
 
   // 2. Anti-bot
-  const human = await verifyTurnstile(body.turnstileToken, rawIp);
+  const human = await verifyTurnstile(body.turnstileToken, rawIp ?? undefined);
   if (!human) {
     return NextResponse.json({ ok: false, error: "Captcha verification failed." }, { status: 403 });
   }

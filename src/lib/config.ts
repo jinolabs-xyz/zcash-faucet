@@ -37,6 +37,12 @@ export const config = {
   cooldownSeconds: num("FAUCET_COOLDOWN_SECONDS", 86_400),
   dailyCapZatoshi: tazToZatoshi(num("FAUCET_DAILY_CAP_TAZ", 100)),
 
+  // How many reverse proxies YOU operate in front of the app (nginx, Cloudflare,
+  // Vercel, …). Each appends to X-Forwarded-For, so only the last N hops are
+  // trustworthy — anything further left is client-supplied and spoofable. 0 =
+  // no trusted proxy, so X-Forwarded-For is ignored entirely.
+  trustedProxyCount: Math.max(0, Math.floor(num("TRUSTED_PROXY_COUNT", 0))),
+
   // Keep this much TAZ in the faucet wallet untouched (reserve floor). Below
   // drip + reserve the faucet reports "empty" instead of attempting a send.
   minReserveZatoshi: tazToZatoshi(num("FAUCET_MIN_RESERVE_TAZ", 0)),

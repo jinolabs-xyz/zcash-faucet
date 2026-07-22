@@ -46,7 +46,7 @@ export interface ClaimRow {
 
 export function recordClaim(row: {
   address: string;
-  ipHash: string;
+  ipHash: string | null;
   amountZat: bigint;
   txid: string | null;
   status: "sent" | "failed";
@@ -57,7 +57,8 @@ export function recordClaim(row: {
      VALUES (@address, @ip_hash, @amount_zat, @txid, @status, @created_at)`,
   ).run({
     address: row.address,
-    ip_hash: row.ipHash,
+    ip_hash: row.ipHash ?? "", // "" = no trusted IP for this claim
+
     amount_zat: Number(row.amountZat),
     txid: row.txid,
     status: row.status,

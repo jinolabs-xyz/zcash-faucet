@@ -23,13 +23,14 @@ function lastClaimAt(column: "address" | "ip_hash", value: string): number | nul
   return row?.created_at ?? null;
 }
 
-export function checkLimits(address: string, ipHash: string, now: number): LimitResult {
+export function checkLimits(address: string, ipHash: string | null, now: number): LimitResult {
   const { cooldownSeconds, dailyCapZatoshi } = config;
 
-  for (const [column, value, label] of [
-    ["address", address, "address"],
-    ["ip_hash", ipHash, "client"],
-  ] as const) {
+  const checks: [("address" | "ip_hash"), string, string][] = [["address", address, "address"]];
+  // Only rate-limit by IP when we actually trust one (see clientIp in the route).
+  if (ipHash) checks.push(["ip_hash", ipHash, "client"]);
+
+  for (const [column, value, label] of checks) {
     const last = lastClaimAt(column, value);
     if (last !== null) {
       const elapsed = now - last;

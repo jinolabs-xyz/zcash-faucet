@@ -6,15 +6,15 @@ import { config } from "./config";
 
 const SITEVERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
 
-export async function verifyTurnstile(token: string | undefined, ip: string): Promise<boolean> {
+export async function verifyTurnstile(token: string | undefined, ip?: string): Promise<boolean> {
   if (!config.turnstile.enabled) return true; // disabled in dev
   if (!token) return false;
 
   const body = new URLSearchParams({
     secret: config.turnstile.secretKey,
     response: token,
-    remoteip: ip,
   });
+  if (ip) body.set("remoteip", ip); // optional; only include when we have one
 
   try {
     const res = await fetch(SITEVERIFY_URL, { method: "POST", body });

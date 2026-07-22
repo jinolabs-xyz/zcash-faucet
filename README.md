@@ -158,6 +158,11 @@ testable without real coins.
   expose the seed to the browser or commit it.
 - Rate-limit + daily cap + reserve floor are the guardrails against draining.
   Tune them and keep Turnstile on in production.
+- **Trust your proxy, not the client.** `X-Forwarded-For` is client-writable, so
+  per-IP limiting only trusts the last `TRUSTED_PROXY_COUNT` hops (the ones your
+  own infra adds). Set it to your real proxy depth (usually `1`); leave it `0`
+  and the header is ignored entirely. The spoof-proof backstop regardless of IP
+  tricks is `FAUCET_DAILY_CAP_TAZ`.
 - SQLite is fine for a single instance. For multi-instance, move the ledger to
   Postgres (swap `src/lib/db.ts`).
 
