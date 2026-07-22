@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { config, ZATOSHI_PER_TAZ } from "@/lib/config";
 import { pingBackend } from "@/lib/zcash/lightwalletd";
 import { safeBalance } from "@/lib/zcash/send";
+import { getSendQueue } from "@/lib/zcash/queue";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,6 +24,7 @@ export async function GET() {
     balanceTaz, // null = unknown (real sender not wired yet)
     empty,
     donationAddress: config.donationAddress,
+    queueDepth: getSendQueue().depth,
     backend,
   });
 }

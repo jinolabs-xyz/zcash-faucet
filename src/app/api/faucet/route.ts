@@ -13,6 +13,7 @@ import { config } from "@/lib/config";
 import { validateTestnetAddress } from "@/lib/zcash/address";
 import { verifyTurnstile } from "@/lib/turnstile";
 import { getSender, safeBalance } from "@/lib/zcash/send";
+import { getSendQueue, QueueFullError } from "@/lib/zcash/queue";
 import { reserveClaim, finalizeClaim } from "@/lib/db";
 import { fingerprintIp } from "@/lib/privacy";
 
@@ -109,14 +110,13 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 5. Send, then finalise the reservation ('sent' commits the cooldown;
-  //    'failed' releases it so the user can retry without waiting).
+  // 5. Send through the serial FIFO queue — one transaction touches the single
+  //    hot wallet at a time. Then finalise the reservation ('sent' commits the
+  //    cooldown; 'failed' releases it so the user can retry without waiting).
   try {
-    const result = await getSender().send({
-      toAddress: address,
-      addressInfo: info,
-      amountZat: config.dripZatoshi,
-    });
+    const result = await getSendQueue().run(() =>
+      getSender().send({ toAddress: address, addressInfo: info, amountZat: config.dripZatoshi }),
+    );
     finalizeClaim(reservation.claimId, "sent", result.txid);
     return NextResponse.json({
       ok: true,
@@ -128,6 +128,9 @@ export async function POST(req: NextRequest) {
     });
   } catch (err) {
     finalizeClaim(reservation.claimId, "failed", null);
+    if (err instanceof QueueFullError) {
+      return NextResponse.json({ ok: false, error: err.message }, { status: 503 });
+    }
     const message = err instanceof Error ? err.message : "Send failed.";
     return NextResponse.json({ ok: false, error: message }, { status: 502 });
   }

@@ -61,6 +61,7 @@ Aztec faucet:
 | Testnet address validation | `src/lib/zcash/address.ts` |
 | Send adapter (mock + WebZjs real path) | `src/lib/zcash/send.ts` |
 | Atomic claim reserve (cooldown + daily cap, concurrency-safe) | `src/lib/db.ts` |
+| Serial FIFO send queue (one wallet tx at a time) | `src/lib/zcash/queue.ts` |
 | Turnstile server verify | `src/lib/turnstile.ts` |
 | SQLite claim ledger | `src/lib/db.ts` |
 
@@ -163,6 +164,13 @@ testable without real coins.
   (cooldown + daily cap checked and a `pending` row inserted atomically) *before*
   the send, so N simultaneous requests from the same address/IP can't all pass
   the check and double-drip — load-tested with 5 concurrent requests.
+- **Sends run through a serial FIFO queue** (`src/lib/zcash/queue.ts`). The front
+  door is concurrent, but the actual send is processed one at a time: the faucet
+  is a single hot wallet, so parallel sends would race on the same notes
+  (double-spend), and parallel WebZjs proofs would OOM a small instance. A bounded
+  backlog (`SEND_QUEUE_MAX_PENDING`) fast-rejects a surge with a "busy" response
+  instead of queueing unbounded work. Verified: 5 concurrent sends process
+  serially and all succeed; an over-cap burst serves the cap and rejects the rest.
 - **Trust your proxy, not the client.** `X-Forwarded-For` is client-writable, so
   per-IP limiting only trusts the last `TRUSTED_PROXY_COUNT` hops (the ones your
   own infra adds). Set it to your real proxy depth (usually `1`); leave it `0`

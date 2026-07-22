@@ -61,6 +61,9 @@ export const config = {
   // Simulated spendable balance for the mock sender (real sender reads on-chain).
   mockBalanceZatoshi: tazToZatoshi(num("FAUCET_MOCK_BALANCE_TAZ", 10)),
 
+  // Max sends waiting in the serial FIFO queue before we reject with "busy".
+  sendQueueMaxPending: Math.max(1, Math.floor(num("SEND_QUEUE_MAX_PENDING", 20))),
+
   turnstile: {
     siteKey: process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? "",
     secretKey: process.env.TURNSTILE_SECRET_KEY ?? "",
