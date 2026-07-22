@@ -60,7 +60,7 @@ Aztec faucet:
 | Backend status endpoint | `src/app/api/status/route.ts` |
 | Testnet address validation | `src/lib/zcash/address.ts` |
 | Send adapter (mock + WebZjs real path) | `src/lib/zcash/send.ts` |
-| Rate limit + daily cap | `src/lib/rateLimit.ts` |
+| Atomic claim reserve (cooldown + daily cap, concurrency-safe) | `src/lib/db.ts` |
 | Turnstile server verify | `src/lib/turnstile.ts` |
 | SQLite claim ledger | `src/lib/db.ts` |
 
@@ -158,6 +158,11 @@ testable without real coins.
   expose the seed to the browser or commit it.
 - Rate-limit + daily cap + reserve floor are the guardrails against draining.
   Tune them and keep Turnstile on in production.
+- **Concurrency-safe by construction.** Multiple developers can hit the faucet
+  at once. Each claim is reserved in a single synchronous SQLite transaction
+  (cooldown + daily cap checked and a `pending` row inserted atomically) *before*
+  the send, so N simultaneous requests from the same address/IP can't all pass
+  the check and double-drip — load-tested with 5 concurrent requests.
 - **Trust your proxy, not the client.** `X-Forwarded-For` is client-writable, so
   per-IP limiting only trusts the last `TRUSTED_PROXY_COUNT` hops (the ones your
   own infra adds). Set it to your real proxy depth (usually `1`); leave it `0`

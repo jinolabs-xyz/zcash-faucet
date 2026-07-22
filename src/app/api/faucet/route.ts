@@ -3,17 +3,17 @@
  * Order matters: cheap rejects first, expensive send last.
  *   1. parse + validate address
  *   2. verify Turnstile (anti-bot)
- *   3. rate-limit + daily-cap
- *   4. send + record
+ *   3. low-balance guard
+ *   4. atomically reserve the claim (cooldown + daily cap, concurrency-safe)
+ *   5. send, then finalise the reservation
  */
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { config } from "@/lib/config";
 import { validateTestnetAddress } from "@/lib/zcash/address";
 import { verifyTurnstile } from "@/lib/turnstile";
-import { checkLimits } from "@/lib/rateLimit";
 import { getSender, safeBalance } from "@/lib/zcash/send";
-import { recordClaim } from "@/lib/db";
+import { reserveClaim, finalizeClaim } from "@/lib/db";
 import { fingerprintIp } from "@/lib/privacy";
 
 export const runtime = "nodejs"; // better-sqlite3 needs Node, not Edge.
@@ -80,16 +80,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: "Captcha verification failed." }, { status: 403 });
   }
 
-  // 3. Rate limit
-  const limit = checkLimits(address, ipHash, now);
-  if (!limit.ok) {
-    return NextResponse.json(
-      { ok: false, error: limit.reason, retryAfterSeconds: limit.retryAfterSeconds },
-      { status: 429 },
-    );
-  }
-
-  // 4. Low-balance guard — protect the single hot wallet from being drained
+  // 3. Low-balance guard — protect the single hot wallet from being drained
   //    below its reserve floor. `null` means the backend can't report a balance
   //    yet (real sender not wired); we skip the guard and let send() surface it.
   const balance = await safeBalance();
@@ -100,21 +91,33 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 5. Send
+  // 4. Reserve atomically (cooldown + daily cap in one transaction). This is the
+  //    concurrency gate: with N simultaneous requests from the same client, only
+  //    one reservation succeeds — the rest are blocked before any coins move.
+  const reservation = reserveClaim({
+    address,
+    ipHash,
+    amountZat: config.dripZatoshi,
+    now,
+    cooldownSeconds: config.cooldownSeconds,
+    dailyCapZat: config.dailyCapZatoshi,
+  });
+  if (!reservation.ok) {
+    return NextResponse.json(
+      { ok: false, error: reservation.reason, retryAfterSeconds: reservation.retryAfterSeconds },
+      { status: reservation.kind === "cap" ? 503 : 429 },
+    );
+  }
+
+  // 5. Send, then finalise the reservation ('sent' commits the cooldown;
+  //    'failed' releases it so the user can retry without waiting).
   try {
     const result = await getSender().send({
       toAddress: address,
       addressInfo: info,
       amountZat: config.dripZatoshi,
     });
-    recordClaim({
-      address,
-      ipHash,
-      amountZat: config.dripZatoshi,
-      txid: result.txid,
-      status: "sent",
-      createdAt: now,
-    });
+    finalizeClaim(reservation.claimId, "sent", result.txid);
     return NextResponse.json({
       ok: true,
       txid: result.txid,
@@ -124,14 +127,7 @@ export async function POST(req: NextRequest) {
       to: { kind: info.kind, shielded: info.shielded },
     });
   } catch (err) {
-    recordClaim({
-      address,
-      ipHash,
-      amountZat: config.dripZatoshi,
-      txid: null,
-      status: "failed",
-      createdAt: now,
-    });
+    finalizeClaim(reservation.claimId, "failed", null);
     const message = err instanceof Error ? err.message : "Send failed.";
     return NextResponse.json({ ok: false, error: message }, { status: 502 });
   }
