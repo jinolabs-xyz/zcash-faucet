@@ -1,0 +1,67 @@
+/**
+ * Central config, read once from the environment.
+ * All amounts are handled as zatoshi (1 TAZ = 100_000_000 zatoshi) internally
+ * to avoid floating-point drift; TAZ values in env are converted here.
+ */
+
+export const ZATOSHI_PER_TAZ = 100_000_000n;
+
+function num(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) throw new Error(`Env ${name} must be a number, got "${raw}"`);
+  return n;
+}
+
+export function tazToZatoshi(taz: number): bigint {
+  // Round to nearest zatoshi.
+  return BigInt(Math.round(taz * Number(ZATOSHI_PER_TAZ)));
+}
+
+/** Parse a comma-separated endpoint list; falls back to a sensible default. */
+function endpointList(): string[] {
+  const raw = process.env.LIGHTWALLETD_ENDPOINT ?? "https://testnet.zec.rocks:443";
+  const list = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return list.length ? list : ["https://testnet.zec.rocks:443"];
+}
+
+export const config = {
+  dripTaz: num("FAUCET_DRIP_TAZ", 0.1),
+  get dripZatoshi() {
+    return tazToZatoshi(this.dripTaz);
+  },
+  cooldownSeconds: num("FAUCET_COOLDOWN_SECONDS", 86_400),
+  dailyCapZatoshi: tazToZatoshi(num("FAUCET_DAILY_CAP_TAZ", 100)),
+
+  // Keep this much TAZ in the faucet wallet untouched (reserve floor). Below
+  // drip + reserve the faucet reports "empty" instead of attempting a send.
+  minReserveZatoshi: tazToZatoshi(num("FAUCET_MIN_RESERVE_TAZ", 0)),
+
+  // Ordered list of lightwalletd/Zaino testnet endpoints; tried in order.
+  lightwalletdEndpoints: endpointList(),
+  get lightwalletdEndpoint() {
+    return this.lightwalletdEndpoints[0]!;
+  },
+  sender: (process.env.FAUCET_SENDER ?? "mock") as "mock" | "webzjs",
+  walletSeed: process.env.FAUCET_WALLET_SEED ?? "",
+
+  // Public address shown on the Donate tab so people can refill the faucet.
+  donationAddress: process.env.FAUCET_DONATION_ADDRESS ?? "",
+
+  // Simulated spendable balance for the mock sender (real sender reads on-chain).
+  mockBalanceZatoshi: tazToZatoshi(num("FAUCET_MOCK_BALANCE_TAZ", 10)),
+
+  turnstile: {
+    siteKey: process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? "",
+    secretKey: process.env.TURNSTILE_SECRET_KEY ?? "",
+    get enabled() {
+      return this.secretKey.length > 0;
+    },
+  },
+
+  network: "testnet" as const,
+} as const;
