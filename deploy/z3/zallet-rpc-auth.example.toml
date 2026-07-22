@@ -1,0 +1,22 @@
+# Add this block to z3's Zallet config so the faucet can authenticate to the
+# Zallet JSON-RPC. Edit the file z3 generated for your network:
+#
+#   z3/config/testnet/zallet.toml        (testnet)
+#   z3/config/mainnet/zallet.toml        (mainnet)
+#
+# then restart Zallet:
+#
+#   docker compose --env-file .env.testnet up -d zallet
+#
+# Pick a long random password and put the SAME value in faucet.env
+# (ZALLET_RPC_USER / ZALLET_RPC_PASSWORD). This authenticates the faucet to
+# Zallet's own RPC server — it is separate from Zebra's validator cookie, which
+# z3 manages for you.
+#
+# (Zallet also accepts a hashed `pwhash` instead of `password`, produced by
+#  `zallet-zaino add-rpc-user <user>` — preferable if you'd rather not store the
+#  plaintext in the config file.)
+
+[[rpc.auth]]
+user = "faucet"
+password = "REPLACE_WITH_A_LONG_RANDOM_SECRET"

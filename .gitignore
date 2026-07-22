@@ -29,3 +29,7 @@ tsconfig.tsbuildinfo
 
 # faucet wallet secret — NEVER commit
 .faucet-wallet.local
+
+# deploy secrets — NEVER commit (keep the .example templates)
+deploy/**/faucet.env
+deploy/**/.env

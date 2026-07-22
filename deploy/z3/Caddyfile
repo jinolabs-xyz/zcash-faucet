@@ -1,0 +1,13 @@
+# Reverse proxy + automatic HTTPS for the faucet.
+#
+# FAUCET_DOMAIN is injected by the compose file:
+#   - a real hostname (faucet.example.org) → Caddy provisions a Let's Encrypt
+#     certificate automatically and serves HTTPS.
+#   - ":80" → plain HTTP on port 80, for a quick localhost / IP smoke test.
+#
+# Caddy sets X-Forwarded-For for the upstream; the app trusts exactly one hop
+# (TRUSTED_PROXY_COUNT=1) so per-IP rate limiting sees the real client IP.
+{$FAUCET_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy faucet:3000
+}

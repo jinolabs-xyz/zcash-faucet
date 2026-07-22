@@ -1,0 +1,93 @@
+# The shielded faucet, deployed on top of the z3 stack (Zebra + Zallet).
+#
+# This overlay runs TWO containers — the Next.js faucet app and a Caddy reverse
+# proxy — and attaches the app to z3's existing Docker network so it can reach
+# Zallet's JSON-RPC at http://zallet:28232/ (in-network DNS; never public).
+# Only Caddy is exposed to the internet (80/443, auto-TLS).
+#
+# Prereqs (see README.md in this dir):
+#   1. z3 is cloned and the TESTNET stack is up:
+#        docker compose --env-file .env.testnet up -d
+#   2. z3's config/testnet/zallet.toml has an [[rpc.auth]] user (see
+#      zallet-rpc-auth.example.toml) matching ZALLET_RPC_USER/PASSWORD below.
+#   3. A shielded account exists in z3's Zallet; its UUID + unified address are
+#      in faucet.env (ZALLET_ACCOUNT / ZALLET_ADDRESS).
+#
+# Bring it up (from this directory):
+#   cp faucet.env.example faucet.env   # then fill it in
+#   docker compose -f docker-compose.faucet.yml up -d --build
+#
+# The z3 network name defaults to the testnet project (z3-testnet). Point at
+# mainnet with Z3_NETWORK_NAME=z3-mainnet in your shell or an .env here.
+
+name: zcash-faucet
+
+x-common: &common
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+
+services:
+  faucet:
+    build:
+      # Repo root — reuses the existing multi-stage Dockerfile.
+      context: ../..
+      dockerfile: Dockerfile
+    image: zcash-faucet:latest
+    <<: *common
+    env_file:
+      - path: ./faucet.env
+        required: true
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      # Shielded backend: pay z→z through z3's Zallet over the shared network.
+      FAUCET_SENDER: zallet
+      ZALLET_RPC_URL: http://zallet:28232/
+      # Caddy is the one proxy in front, so trust exactly one X-Forwarded-For hop.
+      TRUSTED_PROXY_COUNT: "1"
+      # Single box has a real disk — local SQLite ledger (persisted on a volume)
+      # is enough; no need for the Cloudflare D1 fallback used on ephemeral hosts.
+      DB_BACKEND: sqlite
+    volumes:
+      # Persist the rate-limit / cooldown ledger across restarts.
+      - faucet_data:/app/data
+    expose:
+      - "3000"
+    networks:
+      - z3
+      - edge
+
+  caddy:
+    image: caddy:2
+    <<: *common
+    depends_on:
+      - faucet
+    environment:
+      # Your public hostname for automatic HTTPS, e.g. faucet.example.org.
+      # Use ":80" (no TLS) for a quick localhost/IP test.
+      FAUCET_DOMAIN: ${FAUCET_DOMAIN:-:80}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - edge
+
+networks:
+  # z3's stack network. `external: true` = we ATTACH to the network the z3
+  # compose project already created; we do not manage its lifecycle. The name
+  # is z3's Compose project name (z3-testnet / z3-mainnet).
+  z3:
+    external: true
+    name: ${Z3_NETWORK_NAME:-z3-testnet}
+  # Private bridge just for faucet↔caddy.
+  edge:
+    driver: bridge
+
+volumes:
+  faucet_data:
+  caddy_data:
+  caddy_config:
