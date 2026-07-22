@@ -109,12 +109,21 @@ on the free tier. Steps (full version in [DEPLOY.md](DEPLOY.md)):
 4. **Enable anti-abuse.** Create a [Cloudflare Turnstile](https://dash.cloudflare.com/?to=/:account/turnstile)
    widget and set `NEXT_PUBLIC_TURNSTILE_SITE_KEY` + `TURNSTILE_SECRET_KEY`.
 
-> **Shielded recipients in real mode are refused on purpose.** A shielded output
-> needs a zk-proof, and its change lands in an Orchard pool a transparent wallet
-> can't re-spend — the faucet would strand its own funds. Enable them via a
-> sweep-capable shielded wallet: run **Z3** (`zebrad` + `zallet`) and add a
-> `ZalletSender` on the same `Sender` interface, or sweep the Orchard change
-> periodically. Until then, point users at a `tm…` address for real TAZ.
+### Shielded recipients (real mode)
+
+Unified addresses (`utest1…`, Orchard) **are** paid for real, via transparent→
+shielded (t2z, [`t2z.ts`](src/lib/zcash/t2z.ts) + [`workers/t2z-worker.mjs`](workers/t2z-worker.mjs)):
+the faucet spends its transparent UTXOs, the recipient gets a private Orchard
+note, and **change returns to the faucet's own t-address** (verified via
+`inspect_pczt`) so nothing strands. The Halo2 proof (~15–26s) runs in a
+worker_thread behind the FIFO queue, so it never blocks the server.
+
+- `tm…` (transparent) → real transparent tx (`RealSender`).
+- `utest1…` (unified/Orchard) → real t2z shielded send (`T2zSender`).
+- `ztestsapling1…` (Sapling-only) → refused; t2z emits Orchard outputs only.
+
+The whole pipeline (propose → sign → prove → finalize) is verified offline; the
+final acceptance test is one funded testnet broadcast (see DEPLOY.md).
 
 ## Configuration (`.env`)
 

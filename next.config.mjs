@@ -8,6 +8,7 @@ const nextConfig = {
     "@grpc/grpc-js",
     "@grpc/proto-loader",
     "@bitgo/utxo-lib",
+    "@d4mr/t2z-wasm", // keep external so the .wasm stays on disk for the runtime shim
   ],
 };
 

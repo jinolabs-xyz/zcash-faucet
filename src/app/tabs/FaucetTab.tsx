@@ -105,17 +105,29 @@ export function FaucetTab({ status }: { status: Status | null }) {
       {result?.ok ? (
         <div className="result ok">
           ✅ Sent {result.amountTaz} TAZ to your {recipientLabel(result.to?.kind)}
-          {result.sender === "mock" ? " (mock)" : ""}.<br />
-          txid: <code>{result.txid}</code>
-          {result.explorerUrl ? (
+          {result.sender === "mock" ? " (mock)" : ""}.
+          {result.txid ? (
             <>
-              {" "}
-              —{" "}
-              <a href={result.explorerUrl} target="_blank" rel="noreferrer">
-                view on explorer
-              </a>
+              <br />
+              txid: <code>{result.txid}</code>
+              {result.explorerUrl ? (
+                <>
+                  {" "}
+                  —{" "}
+                  <a href={result.explorerUrl} target="_blank" rel="noreferrer">
+                    view on explorer
+                  </a>
+                </>
+              ) : null}
             </>
-          ) : null}
+          ) : (
+            <>
+              <br />
+              <span style={{ color: "var(--muted)" }}>
+                Broadcast accepted — it’ll appear in your wallet shortly.
+              </span>
+            </>
+          )}
           {result.to && result.to.shielded === false ? (
             <>
               <br />

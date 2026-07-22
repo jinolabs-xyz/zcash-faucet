@@ -72,19 +72,52 @@ class MockSender implements Sender {
   }
 }
 
+/**
+ * Real mode routes by recipient type: transparent (`tm…`) → RealSender (a plain
+ * Zcash tx), unified (`utest1…`, Orchard) → T2zSender (transparent→shielded).
+ * Sapling-only (`ztestsapling1…`) isn't payable via t2z (Orchard outputs only),
+ * so it's refused with a clear message. Balance is the same transparent wallet
+ * either way.
+ */
+class CompositeRealSender implements Sender {
+  readonly name = "real";
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private _real: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private _t2z: any;
+
+  private real() {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return (this._real ??= new (require("./realsend").RealSender)());
+  }
+  private t2z() {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return (this._t2z ??= new (require("./t2zsend").T2zSender)());
+  }
+
+  balance(): Promise<bigint> {
+    return this.real().balance(); // both spend the same transparent wallet
+  }
+
+  send(req: SendRequest): Promise<SendResult> {
+    const kind = req.addressInfo.kind;
+    if (kind === "unified") return this.t2z().send(req);
+    if (kind === "sapling") {
+      throw new Error(
+        "Sapling-only addresses (ztestsapling1…) aren't supported. Use a unified " +
+          "shielded address (utest1…) or a transparent one (tm…).",
+      );
+    }
+    return this.real().send(req); // transparent
+  }
+}
+
 let cached: Sender | null = null;
 
 export function getSender(): Sender {
   if (cached) return cached;
-  if (config.sender === "real") {
-    // Lazy require so the real sender's heavy deps only load when configured.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { RealSender } = require("./realsend");
-    cached = new RealSender();
-  } else {
-    cached = new MockSender();
-  }
-  return cached!;
+  cached = config.sender === "real" ? new CompositeRealSender() : new MockSender();
+  return cached;
 }
 
 /**
