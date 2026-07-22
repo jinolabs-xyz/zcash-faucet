@@ -52,7 +52,7 @@ export const config = {
   get lightwalletdEndpoint() {
     return this.lightwalletdEndpoints[0]!;
   },
-  sender: (process.env.FAUCET_SENDER ?? "mock") as "mock" | "webzjs",
+  sender: (process.env.FAUCET_SENDER ?? "mock") as "mock" | "real",
   walletSeed: process.env.FAUCET_WALLET_SEED ?? "",
 
   // Public address shown on the Donate tab so people can refill the faucet.

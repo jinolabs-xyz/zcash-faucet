@@ -75,9 +75,36 @@ requests (exactly one wins).
 
 Render free gives ~750 instance-hours/month; one always-pinged service (~730h) fits.
 
-## 4. Later: real sends (WebZjs)
+## 4. Real sends (moving real TAZ)
 
-Flip `FAUCET_SENDER=webzjs`, set a funded `FAUCET_WALLET_SEED`, and wire the
-`WebzjsSender` TODOs. zk-proving is memory-heavy — if it OOMs Render's 512 MB
-free instance, bump to Render's cheapest paid tier (still just Render). See the
-main README "Design principles" for the decentralization/privacy notes.
+The faucet spends a funded **transparent** testnet wallet. Transparent sends
+need no zk-proof, so this runs on the free tier. What's already verified:
+wallet derivation, real balance over lightwalletd, transparent tx build+sign
+(valid Sapling v4, decodes cleanly), and broadcast wiring. The one thing that
+needs you is a **funded wallet + one real broadcast** — that's the acceptance
+test I can't run.
+
+1. **Get a wallet + address.** Use the Account tab (or any tool) to make a
+   transparent testnet account — you get a `tm…` address and a WIF private key.
+2. **Fund its `tm…` address** from an existing faucet (faucet.zecpages.com,
+   fauzec.com) or the Zcash Discord `#testnet` channel.
+3. **Set secrets** (Render dashboard, never commit):
+   - `FAUCET_SENDER=real`
+   - `FAUCET_WALLET_SEED=<the WIF>` (or a 64-hex key)
+4. **First claim is the acceptance test.** Request a drip to a `tm…` address and
+   confirm the returned txid appears on a testnet explorer. If broadcast is
+   rejected, the error carries lightwalletd's reason (e.g. bad branch id / fee).
+
+### Shielded recipients
+
+Real **shielded** sends (`utest1…`/`ztestsapling1…`) are intentionally refused
+in real mode with a clear message. Reason: creating a shielded output needs a
+zk-proof, and its change lands in an Orchard pool this transparent wallet can't
+re-spend — the faucet would slowly strand its own funds. To enable them
+properly you need a sweep-capable shielded wallet: run **Zallet + Zebra (Z3)**
+and add a `ZalletSender` (same `Sender` interface), or periodically sweep the
+Orchard change back to the transparent wallet. Until then, point users at a
+`tm…` address for real TAZ.
+
+zk-proving, if you add it, is memory-heavy — expect to move off Render's 512 MB
+free instance to its cheapest paid tier. See the README "Design principles."

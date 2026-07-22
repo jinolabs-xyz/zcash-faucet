@@ -94,7 +94,7 @@ function generateShieldedMock(): ThrowawayAccount {
     secretLabel: "Seed phrase (24 words)",
     mock: true,
     warning:
-      "MOCK shielded address — not spendable yet. The seed phrase is real; unified address derivation is wired with the WebZjs WASM sender.",
+      "MOCK shielded address — not spendable yet. The seed phrase is real; unified address derivation needs the shielded (WASM) tooling.",
   };
 }
 

@@ -88,3 +88,49 @@ export async function getTaddressBalance(addresses: string[]): Promise<bigint> {
   const { result } = await callFirst<{ valueZat: string }>("GetTaddressBalance", { addresses });
   return BigInt(result.valueZat ?? "0");
 }
+
+export interface Utxo {
+  txid: string; // internal (little-endian) byte order, hex — as lightwalletd returns it
+  txidBytes: Buffer;
+  index: number;
+  script: string; // scriptPubKey hex
+  scriptBytes: Buffer;
+  valueZat: bigint;
+  height: number;
+}
+
+/** Unspent outputs the faucet can spend, for a transparent address. */
+export async function getAddressUtxos(address: string): Promise<Utxo[]> {
+  const { result } = await callFirst<{ addressUtxos?: Record<string, unknown>[] }>("GetAddressUtxos", {
+    addresses: [address],
+    startHeight: 0,
+    maxEntries: 0,
+  });
+  return (result.addressUtxos ?? []).map((u) => {
+    const txidBytes = u.txid as Buffer;
+    const scriptBytes = u.script as Buffer;
+    return {
+      txidBytes,
+      txid: Buffer.from(txidBytes).toString("hex"),
+      index: Number(u.index ?? 0),
+      scriptBytes,
+      script: Buffer.from(scriptBytes).toString("hex"),
+      valueZat: BigInt((u.valueZat as string) ?? "0"),
+      height: Number(u.height ?? 0),
+    };
+  });
+}
+
+export interface SendResult {
+  errorCode: number;
+  errorMessage: string;
+}
+
+/** Broadcast a signed raw tx. errorCode 0 = accepted into the mempool. */
+export async function sendRawTransaction(data: Uint8Array, height: number): Promise<SendResult> {
+  const { result } = await callFirst<{ errorCode?: string | number; errorMessage?: string }>(
+    "SendTransaction",
+    { data: Buffer.from(data), height },
+  );
+  return { errorCode: Number(result.errorCode ?? 0), errorMessage: result.errorMessage ?? "" };
+}

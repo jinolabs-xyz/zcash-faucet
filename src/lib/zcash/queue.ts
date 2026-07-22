@@ -4,8 +4,10 @@
  * Why sends must be serialized (not run concurrently):
  *   - The faucet is ONE hot wallet. Two sends building transactions at the same
  *     time would select the same notes → double-spend / conflicting txs.
- *   - A real WebZjs send generates a zk-proof (CPU + hundreds of MB). Running
- *     several at once OOMs a small (512 MB) instance.
+ *   - A real send builds and broadcasts one tx against the wallet's UTXOs;
+ *     serializing avoids two sends racing on the same inputs. (And a shielded
+ *     send would generate a zk-proof — CPU + hundreds of MB — which you never
+ *     want several of at once on a small instance.)
  *
  * So the front door stays concurrent (validate, Turnstile, atomic reserve), but
  * the send itself is funnelled through here: strictly one at a time, in the

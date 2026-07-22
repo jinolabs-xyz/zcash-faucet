@@ -88,7 +88,7 @@ export default function Home() {
         {status?.sender === "mock" ? (
           <>
             Running in <code>mock</code> mode — no real coins are sent. Set{" "}
-            <code>FAUCET_SENDER=webzjs</code> and a funded <code>FAUCET_WALLET_SEED</code> to go live.
+            <code>FAUCET_SENDER=real</code> and a funded <code>FAUCET_WALLET_SEED</code> to go live.
           </>
         ) : (
           <>Real sends enabled. Keep the faucet wallet seed server-side only.</>

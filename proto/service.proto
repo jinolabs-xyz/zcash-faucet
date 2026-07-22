@@ -36,8 +36,38 @@ message Balance {
   int64 valueZat = 1;
 }
 
+// Unspent outputs for a transparent address — the faucet's spendable inputs.
+message GetAddressUtxosArg {
+  repeated string addresses = 1;
+  uint64 startHeight = 2;
+  uint32 maxEntries = 3;
+}
+message GetAddressUtxosReply {
+  string address = 6;
+  bytes txid = 1;
+  int32 index = 2;
+  bytes script = 3;
+  int64 valueZat = 4;
+  uint64 height = 5;
+}
+message GetAddressUtxosReplyList {
+  repeated GetAddressUtxosReply addressUtxos = 1;
+}
+
+// Broadcast a signed raw transaction. SendResponse.errorCode == 0 means accepted.
+message RawTransaction {
+  bytes data = 1;
+  uint64 height = 2;
+}
+message SendResponse {
+  int32 errorCode = 1;
+  string errorMessage = 2;
+}
+
 service CompactTxStreamer {
   rpc GetLatestBlock(ChainSpec) returns (BlockID) {}
   rpc GetLightdInfo(Empty) returns (LightdInfo) {}
   rpc GetTaddressBalance(AddressList) returns (Balance) {}
+  rpc GetAddressUtxos(GetAddressUtxosArg) returns (GetAddressUtxosReplyList) {}
+  rpc SendTransaction(RawTransaction) returns (SendResponse) {}
 }

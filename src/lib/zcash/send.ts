@@ -5,23 +5,19 @@
  *
  * Two implementations behind one interface:
  *
- *   MockSender  (default, FAUCET_SENDER=mock)
+ *   MockSender  (FAUCET_SENDER=mock, default)
  *     Runs with no keys and no node. Keeps a simulated balance (seeded from
  *     FAUCET_MOCK_BALANCE_TAZ) that decrements per send, so the low-balance
  *     guard, the "faucet empty" UX, and the whole flow are testable end to end.
  *
- *   WebzjsSender (FAUCET_SENDER=webzjs)
- *     Real path. Uses a WASM light-wallet (Zcash Foundation's WebZjs /
- *     zcash_client_backend compiled to WASM) that talks to a reachable
- *     lightwalletd endpoint (with failover) to scan the ONE funded faucet
- *     wallet, read its spendable balance, build a shielded spend, prove, and
- *     broadcast. Wire the marked TODOs.
+ *   RealSender  (FAUCET_SENDER=real, see ./realsend.ts)
+ *     Spends the faucet's funded transparent testnet wallet: fetch UTXOs, build
+ *     + sign a real Zcash tx (@bitgo/utxo-lib), broadcast via lightwalletd.
  *
- * The interface is intentionally minimal so a third backend (e.g. a private
- * zallet RPC over the Z3 docker-compose stack) can drop in later.
+ * The interface is intentionally minimal so a third backend (e.g. a Zallet RPC
+ * over the Z3 stack, for shielded sends) can drop in later.
  */
 import { config } from "../config";
-import { resolveEndpoint } from "./lightwalletd";
 import type { AddressInfo } from "./address";
 
 export interface SendRequest {
@@ -76,74 +72,25 @@ class MockSender implements Sender {
   }
 }
 
-class WebzjsSender implements Sender {
-  readonly name = "webzjs";
-
-  private requireSeed(): string {
-    if (!config.walletSeed) {
-      throw new Error("FAUCET_WALLET_SEED is required when FAUCET_SENDER=webzjs.");
-    }
-    return config.walletSeed;
-  }
-
-  async balance(): Promise<bigint> {
-    this.requireSeed();
-    const endpoint = await resolveEndpoint();
-    if (!endpoint) throw new Error("No reachable lightwalletd endpoint.");
-    // ─── Real integration outline ─────────────────────────────────────────
-    //   const wallet = await WebWallet.new("test", endpoint, 1);
-    //   const acct   = await wallet.create_account_from_seed(config.walletSeed);
-    //   await wallet.sync();
-    //   return BigInt(await wallet.spendable_balance(acct));   // zatoshi
-    throw new Error("WebzjsSender.balance() not wired yet. See README → Going live.");
-  }
-
-  async send(req: SendRequest): Promise<SendResult> {
-    this.requireSeed();
-    const endpoint = await resolveEndpoint();
-    if (!endpoint) throw new Error("No reachable lightwalletd endpoint.");
-
-    // Recipient can be shielded (unified / Sapling) or transparent — both are
-    // supported. The wallet routes funds by the destination address:
-    //   • shielded  → shielded-to-shielded spend (fully private)
-    //   • transparent → a "deshielding" spend; funds leave the shielded pool and
-    //     land in a PUBLIC transparent output. Allowed, just not private.
-    const recipientIsShielded = req.addressInfo.shielded === true;
-    void recipientIsShielded; // (wire pool selection / policy here if desired)
-
-    // ─── Real integration outline (see README "Going live") ───────────────
-    // 1. const wallet = await WebWallet.new("test", endpoint, 1);
-    //    const acct   = await wallet.create_account_from_seed(config.walletSeed);
-    // 2. await wallet.sync();                       // catch up the faucet's notes
-    // 3. Optionally re-check spendable >= req.amountZat and throw a clear error.
-    // 4. propose_transfer accepts unified, Sapling, AND transparent addresses;
-    //    it builds a shielded->transparent (deshielding) tx automatically when
-    //    the recipient is a t-address.
-    //    const proposal = await wallet.propose_transfer(acct, req.toAddress, req.amountZat);
-    //    const txids    = await wallet.create_proposed_transactions(proposal, config.walletSeed);
-    //    const txid     = txids[0];
-    //    return { txid, explorerUrl: explorerUrl(txid) };
-    //
-    // Keep this server-side only — the seed must never reach the browser.
-    throw new Error(
-      "WebzjsSender.send() is not wired yet. Implement the WASM wallet flow in send.ts, " +
-        "or run FAUCET_SENDER=mock for a working demo. See README → Going live.",
-    );
-  }
-}
-
 let cached: Sender | null = null;
 
 export function getSender(): Sender {
   if (cached) return cached;
-  cached = config.sender === "webzjs" ? new WebzjsSender() : new MockSender();
-  return cached;
+  if (config.sender === "real") {
+    // Lazy require so the real sender's heavy deps only load when configured.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { RealSender } = require("./realsend");
+    cached = new RealSender();
+  } else {
+    cached = new MockSender();
+  }
+  return cached!;
 }
 
 /**
  * Read the faucet balance safely for guards/status. If the backend can't report
- * a balance yet (e.g. real sender not wired), returns null = "unknown" rather
- * than throwing, so an unimplemented balance never blocks the app from loading.
+ * a balance (e.g. real mode but the endpoint is down), returns null = "unknown"
+ * rather than throwing, so status/guards never hard-fail the app.
  */
 export async function safeBalance(): Promise<bigint | null> {
   try {

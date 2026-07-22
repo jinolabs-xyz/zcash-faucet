@@ -43,8 +43,8 @@ Aztec faucet:
 - **Faucet** — request TAZ to a shielded or transparent address.
 - **Account** — generate a throwaway testnet account. Transparent accounts are
   **real & usable now** (secp256k1 → `tm…` address + testnet WIF); shielded is a
-  **mock** (real 24-word seed, placeholder `utest1…` address) until the WebZjs
-  WASM sender lands. Keys are generated server-side and never stored/logged.
+  **mock** (real 24-word seed, placeholder `utest1…` address) until shielded
+  (WASM) key derivation is added. Keys are generated server-side, never stored.
 - **Balance** — look up a **transparent** address balance live on-chain.
   Shielded balances are private by design and can't be queried from an address.
 - **Network** — live block height, sync status, consensus branch, lightwalletd
@@ -64,7 +64,9 @@ Aztec faucet:
 | lightwalletd gRPC client (failover) | `src/lib/zcash/grpc.ts`, `proto/service.proto` |
 | Backend status endpoint | `src/app/api/status/route.ts` |
 | Testnet address validation | `src/lib/zcash/address.ts` |
-| Send adapter (mock + WebZjs real path) | `src/lib/zcash/send.ts` |
+| Send adapter (mock + real) | `src/lib/zcash/send.ts` |
+| Real sender: transparent tx build/sign/broadcast | `src/lib/zcash/realsend.ts` |
+| Faucet transparent wallet derivation | `src/lib/zcash/wallet.ts` |
 | Atomic claim reserve (cooldown + daily cap, concurrency-safe) | `src/lib/db/` |
 | Ledger backends: local SQLite + Cloudflare D1 proxy | `src/lib/db/driver.ts` |
 | D1 proxy Worker (persistent ledger for ephemeral hosts) | `worker/` |
@@ -86,33 +88,33 @@ building and testing the UX before you have a funded wallet.
 
 ## Going live (real TAZ)
 
-1. **Get a faucet wallet + fund it.**
-   - Generate a testnet unified wallet (Zashi testnet build, `zallet`, or WebZjs).
-   - Fund it with TAZ from an existing faucet (e.g. `faucet.zecpages.com`,
-     `fauzec.com`) or the Zcash Discord `#testnet` channel. For volume, run a
-     `zebrad` testnet node and mine blocks (testnet difficulty is low).
+The real sender ([`realsend.ts`](src/lib/zcash/realsend.ts)) spends a funded
+**transparent** testnet wallet — transparent sends need no zk-proof, so they run
+on the free tier. Steps (full version in [DEPLOY.md](DEPLOY.md)):
 
-2. **Confirm a live testnet lightwalletd endpoint** in the Zcash community forum
-   / Discord and set `LIGHTWALLETD_ENDPOINT`.
+1. **Fund a transparent wallet.** Make a testnet account (the Account tab gives
+   you a `tm…` address + WIF) and fund the address from an existing faucet
+   (`faucet.zecpages.com`, `fauzec.com`) or the Zcash Discord `#testnet`.
 
-3. **Wire the real sender.** Implement the marked TODOs in
-   `src/lib/zcash/send.ts` → `WebzjsSender.send()` using the WASM wallet
-   (Zcash Foundation **WebZjs** / `zcash_client_backend`): init against the
-   endpoint, sync, `propose_transfer`, `create_proposed_transactions`, return
-   the txid. Then set:
+2. **Confirm a live `LIGHTWALLETD_ENDPOINT`** (the default list works today).
 
+3. **Switch to real mode:**
    ```bash
-   FAUCET_SENDER=webzjs
-   FAUCET_WALLET_SEED=<faucet testnet seed>   # server-side only, never commit
+   FAUCET_SENDER=real
+   FAUCET_WALLET_SEED=<the WIF>   # or a 64-hex key; server-side only, never commit
    ```
-
-   > Alternative backend: if you later stand up the **Z3 docker-compose**
-   > (`zebrad` + `zallet`) yourself, add a `ZalletSender` implementing the same
-   > `Sender` interface and call Zallet's shielded-send RPC instead.
+   The first claim to a `tm…` address is the acceptance test: check the returned
+   txid on a testnet explorer.
 
 4. **Enable anti-abuse.** Create a [Cloudflare Turnstile](https://dash.cloudflare.com/?to=/:account/turnstile)
    widget and set `NEXT_PUBLIC_TURNSTILE_SITE_KEY` + `TURNSTILE_SECRET_KEY`.
-   (Leave blank in dev to skip the captcha.)
+
+> **Shielded recipients in real mode are refused on purpose.** A shielded output
+> needs a zk-proof, and its change lands in an Orchard pool a transparent wallet
+> can't re-spend — the faucet would strand its own funds. Enable them via a
+> sweep-capable shielded wallet: run **Z3** (`zebrad` + `zallet`) and add a
+> `ZalletSender` on the same `Sender` interface, or sweep the Orchard change
+> periodically. Until then, point users at a `tm…` address for real TAZ.
 
 ## Configuration (`.env`)
 
@@ -122,8 +124,8 @@ building and testing the UX before you have a funded wallet.
 | `FAUCET_COOLDOWN_SECONDS` | `86400` | Per-address **and** per-IP cooldown |
 | `FAUCET_DAILY_CAP_TAZ` | `100` | Global 24h dispense ceiling |
 | `LIGHTWALLETD_ENDPOINT` | `testnet.zec.rocks:443` | Light client gRPC endpoint |
-| `FAUCET_SENDER` | `mock` | `mock` or `webzjs` |
-| `FAUCET_WALLET_SEED` | — | Faucet wallet seed (webzjs only) |
+| `FAUCET_SENDER` | `mock` | `mock` or `real` |
+| `FAUCET_WALLET_SEED` | — | Funded transparent wallet WIF/hex (`real` only) |
 | `NEXT_PUBLIC_TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY` | — | Anti-bot |
 
 ## Supported recipient types
