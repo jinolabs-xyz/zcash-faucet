@@ -1,0 +1,19 @@
+# Fires zsnap-export.service on a schedule. Install with the service, see
+# the header in zsnap-export.service.
+[Unit]
+Description=Scheduled Zebra chain-state snapshot export
+
+[Timer]
+# Every 6 hours. A faucet that loses at most 6h of chain state restores and
+# catches up in minutes. The default hot mode has no downtime at all. Cold
+# mode (the fallback) takes a short maintenance window per run, which the
+# faucet rides out fine: sends queue against zallet and the watchdog is
+# paused by the script so it does not page.
+OnCalendar=00/6:20
+# Spread the start so it never lines up exactly with other 6h jobs.
+RandomizedDelaySec=10m
+# Run a missed export at boot instead of waiting for the next slot.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

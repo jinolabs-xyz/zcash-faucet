@@ -1,0 +1,31 @@
+# Exports a snapshot of Zebra's chain state. See zsnap-export.sh for what it
+# does and SNAPSHOTS.md for the whole recovery story.
+# Install (alongside the watchdog):
+#   cp zsnap-export.sh zsnap-import.sh /opt/faucet/ && chmod +x /opt/faucet/zsnap-*.sh
+#   cp zsnap-export.service zsnap-export.timer /etc/systemd/system/
+#   # optional: ZSNAP_* overrides in /etc/faucet/zsnap.env
+#   systemctl daemon-reload && systemctl enable --now zsnap-export.timer
+[Unit]
+Description=Zebra chain-state snapshot export (zsnap)
+# Reads the chain volume that docker manages, and gates on zebra's health port.
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Optional overrides (ZSNAP_MODE, ZSNAP_NETWORK, ZSNAP_KEEP, ZSNAP_UPLOAD_CMD,
+# ...). The '-' means it is fine if the file does not exist.
+EnvironmentFile=-/etc/faucet/zsnap.env
+ExecStart=/opt/faucet/zsnap-export.sh
+# Runs even when the export is killed or times out: restarts zebra and the
+# watchdog if a cold-mode window was interrupted (reads the window marker).
+ExecStopPost=/opt/faucet/zsnap-export.sh recover
+# Give a cold-mode window enough rope: graceful zebra stop, export, restart.
+TimeoutStartSec=1h
+# Snapshotting is background maintenance. Never compete with the node for
+# CPU or disk (this matters in hot mode, where zebra keeps serving).
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

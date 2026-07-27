@@ -24,6 +24,7 @@ package_upgrade: true
 packages:
   - git
   - ufw
+  - zstd   # unpacks chain snapshots (deploy/z3/zsnap-import.sh)
 
 # zk-proving has short RAM spikes; swap keeps an 8 GB box comfortable.
 swap:
@@ -37,6 +38,20 @@ write_files:
   - path: /etc/docker/daemon.json
     content: |
       { "log-driver": "json-file", "log-opts": { "max-size": "10m", "max-file": "3" } }
+  # Optional: seed the chain from a zsnap snapshot instead of a day-long sync.
+  # Put a snapshot URL (or on-box path) on its own line below and the first
+  # boot imports it before zebra starts. Left as comments, this is a no-op and
+  # the box syncs from scratch. See deploy/z3/SNAPSHOTS.md.
+  - path: /etc/zsnap-restore-url
+    content: |
+      # https://snapshots.example.org/zsnap-testnet-latest.tar.zst
+  # Companion settings for the restore (and for zsnap-export.timer if you
+  # enable it): where to fetch the snapshot-capable zebrad on a box that does
+  # not have it, and the trusted manifest hash to authenticate the snapshot.
+  - path: /etc/faucet/zsnap.env
+    content: |
+      # ZSNAP_ZEBRAD_URL=https://snapshots.example.org/zebrad-miner
+      # ZSNAP_EXPECT_HASH=<manifest hash printed by the export>
   # Re-runnable bring-up wrapper; also used by the systemd unit below on reboot.
   - path: /usr/local/bin/faucet-up
     permissions: "0755"
@@ -44,6 +59,10 @@ write_files:
       #!/usr/bin/env bash
       set -euo pipefail
       cd /opt/zcash-faucet
+      # Seed the chain from a snapshot first when /etc/zsnap-restore-url names
+      # one (a no-op otherwise, and once state exists). If the restore fails we
+      # still bring the stack up: zebra just does a full sync instead.
+      ./deploy/z3/zsnap-import.sh || echo "snapshot restore failed, falling back to full sync"
       # Compose services are restart:unless-stopped, so this is only needed on
       # first boot — but it is idempotent, so running it again is harmless.
       NONINTERACTIVE=1 NETWORK="${NETWORK:-testnet}" \
