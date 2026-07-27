@@ -2,12 +2,47 @@
 #
 # FAUCET_DOMAIN is injected by the compose file:
 #   - a real hostname (faucet.example.org) → Caddy provisions a Let's Encrypt
-#     certificate automatically and serves HTTPS.
+#     certificate on first request and redirects HTTP to HTTPS itself.
 #   - ":80" → plain HTTP on port 80, for a quick localhost / IP smoke test.
 #
 # Caddy sets X-Forwarded-For for the upstream; the app trusts exactly one hop
 # (TRUSTED_PROXY_COUNT=1) so per-IP rate limiting sees the real client IP.
+#
+# See HTTPS.md for DNS, firewall and troubleshooting.
+{
+	# The admin API needs no listener on a single-box public deploy, and
+	# leaving it off removes a config-rewrite surface from the container.
+	admin off
+	# Certificate expiry notices go nowhere by default: Let's Encrypt accepts
+	# an account with no contact, and a fake address is worse than none. To
+	# get them, add a real one here:  email you@example.org
+}
+
 {$FAUCET_DOMAIN} {
 	encode zstd gzip
+
+	header {
+		# Once a browser has seen this over HTTPS it refuses plain HTTP for
+		# the domain. Ignored over HTTP, so the :80 smoke test is unaffected.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Nothing here is meant to be embedded, and a framed faucet is a
+		# clickjacking surface for the claim button.
+		X-Frame-Options "DENY"
+		# Don't advertise the proxy version to scanners.
+		-Server
+	}
+
 	reverse_proxy faucet:3000
+
+	# Access logs to stdout so they land in the same docker logging pipeline
+	# as the rest of the stack. The health and readiness probes are most of
+	# the traffic and say nothing, so they stay out of it.
+	@health path /api/health /api/ready
+	log_skip @health
+	log {
+		output stdout
+		format console
+	}
 }
