@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Stub systemctl: unit states are files under $STUB_SYSTEMD (active|inactive).
+# STUB_WD_STUCK=1 makes `stop` silently fail to stop, for the guard test.
+set -euo pipefail
+echo "systemctl $*" >> "${STUB_LOG:?}"
+
+args=()
+for a in "$@"; do [ "$a" = "--quiet" ] || args+=("$a"); done
+cmd="${args[0]}"; unit="${args[1]:-}"
+state_file="${STUB_SYSTEMD:?}/$unit"
+
+case "$cmd" in
+  is-active)
+    [ -f "$state_file" ] && [ "$(cat "$state_file")" = "active" ] && exit 0
+    exit 3
+    ;;
+  stop)
+    if [ "${STUB_WD_STUCK:-0}" = "1" ]; then exit 0; fi
+    echo inactive > "$state_file"
+    ;;
+  start)
+    echo active > "$state_file"
+    ;;
+  *) echo "stub systemctl: unsupported: $*" >&2; exit 64 ;;
+esac

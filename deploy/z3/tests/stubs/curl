@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Stub curl for the export script's ready gate. STUB_READY=0 simulates a
+# node that is not ready. Everything else falls through to the real curl.
+echo "curl $*" >> "${STUB_LOG:?}"
+case "$*" in
+  *"/ready"*)
+    [ "${STUB_READY:-1}" = "1" ] && exit 0 || exit 22 ;;
+  *)
+    exec /usr/bin/curl "$@" ;;
+esac

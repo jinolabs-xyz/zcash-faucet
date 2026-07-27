@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Stub docker: volumes are dirs under $STUB_VOLROOT, container states are
+# files under $STUB_CONTAINERS (content: running|exited). Logs to $STUB_LOG.
+set -euo pipefail
+echo "docker $*" >> "${STUB_LOG:?}"
+
+case "${1:-}" in
+  volume)
+    case "${2:-}" in
+      inspect)
+        shift 2
+        fmt=""; vol=""
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            -f) fmt="$2"; shift 2 ;;
+            *) vol="$1"; shift ;;
+          esac
+        done
+        dir="${STUB_VOLROOT:?}/$vol"
+        [ -d "$dir" ] || { echo "Error: no such volume: $vol" >&2; exit 1; }
+        case "$fmt" in
+          *Mountpoint*) echo "$dir" ;;
+          *) echo "[{}]" ;;
+        esac
+        ;;
+      create) mkdir -p "${STUB_VOLROOT:?}/$3"; echo "$3" ;;
+      *) echo "stub docker: unsupported volume op: $*" >&2; exit 64 ;;
+    esac
+    ;;
+  ps)
+    shift
+    name=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --filter) name="${2#name=}"; shift 2 ;;
+        --format) shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    for f in "${STUB_CONTAINERS:?}"/*; do
+      [ -e "$f" ] || continue
+      c="$(basename "$f")"
+      [ "$(cat "$f")" = "running" ] || continue
+      case "$c" in *"$name"*) echo "$c" ;; esac
+    done
+    ;;
+  stop)
+    shift
+    [ "${1:-}" = "-t" ] && shift 2
+    echo exited > "${STUB_CONTAINERS:?}/$1"
+    echo "$1"
+    ;;
+  start)
+    shift
+    [ -f "${STUB_CONTAINERS:?}/$1" ] || { echo "no such container: $1" >&2; exit 1; }
+    echo running > "${STUB_CONTAINERS:?}/$1"
+    echo "$1"
+    ;;
+  *) echo "stub docker: unsupported: $*" >&2; exit 64 ;;
+esac

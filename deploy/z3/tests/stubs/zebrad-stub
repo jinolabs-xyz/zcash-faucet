@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Stub of the zsnap-capable zebrad. Mimics the fork's export-snapshot and
+# import-snapshot CLI surface closely enough to exercise the wrapper scripts.
+# Logs every invocation to $STUB_LOG for assertions.
+set -euo pipefail
+echo "zebrad $*" >> "${STUB_LOG:?}"
+
+cmd="${1:?}"; shift
+case "$cmd" in
+  export-snapshot)
+    out="$1"; shift
+    # Failure injection: FAIL=1 always fails, FAIL_ONCE fails the first call.
+    if [ "${STUB_EXPORT_FAIL:-0}" = "1" ]; then
+      echo "failed to export snapshot: stub IOError" >&2; exit 101
+    fi
+    if [ -n "${STUB_EXPORT_FAIL_ONCE:-}" ] && [ ! -e "$STUB_EXPORT_FAIL_ONCE" ]; then
+      touch "$STUB_EXPORT_FAIL_ONCE"
+      echo "failed to export snapshot: stub transient secondary race" >&2; exit 101
+    fi
+    [ -e "$out/MANIFEST.json" ] && { echo "manifest already exists" >&2; exit 1; }
+    mkdir -p "$out/chunks"
+    head -c 300000 /dev/urandom > "$out/chunks/chunk-000001.bin"
+    echo '{"stub":true}' > "$out/MANIFEST.json"
+    # Same stdout shape as the real command, which the script parses.
+    echo "snapshot exported to: $out"
+    echo "network:              testnet"
+    echo "tip height:           3652108"
+    echo "tip hash:             00000000stub"
+    echo "total records:        12345"
+    echo "total bytes:          300000"
+    echo "manifest hash:        deadbeefcafe0123456789abcdef0123456789abcdef0123456789abcdef0123"
+    ;;
+  import-snapshot)
+    snapdir="$1"; shift
+    if [ "${STUB_IMPORT_FAIL:-0}" = "1" ]; then
+      # Simulate a hard kill mid-import: leave the tempdir the real zebrad
+      # would leave, then die.
+      mkdir -p "${STUB_CACHE_DIR:?}/zsnap-import-abc123"
+      echo "failed to import snapshot: stub failure" >&2
+      exit 1
+    fi
+    # A --url import downloads into snapdir first; otherwise MANIFEST must exist.
+    if [[ " $* " != *" --url "* ]]; then
+      [ -f "$snapdir/MANIFEST.json" ] || { echo "no MANIFEST.json in $snapdir" >&2; exit 1; }
+    fi
+    mkdir -p "${STUB_CACHE_DIR:?}/state/v27/testnet"
+    echo imported > "${STUB_CACHE_DIR}/state/v27/testnet/db.stub"
+    echo "snapshot imported from: $snapdir"
+    echo "tip height:             3652108"
+    echo "manifest hash:          deadbeefcafe..."
+    echo "verification:           expect-hash"
+    ;;
+  *)
+    echo "unknown subcommand $cmd" >&2; exit 64
+    ;;
+esac
