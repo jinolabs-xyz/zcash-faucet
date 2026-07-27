@@ -75,8 +75,14 @@ runcmd:
   - ufw allow 80/tcp
   - ufw allow 443/tcp
   - ufw --force enable
+  # Self-healing watchdog: keeps the stack up and recovers a fallen-over
+  # container on its own (see deploy/z3/watchdog.sh). Enabled now; it just logs
+  # "not found yet" until the stack finishes coming up.
+  - install -D -m 0755 /opt/zcash-faucet/deploy/z3/watchdog.sh /opt/faucet/watchdog.sh
+  - install -m 0644 /opt/zcash-faucet/deploy/z3/faucet-watchdog.service /etc/systemd/system/faucet-watchdog.service
   - systemctl daemon-reload
   - systemctl enable faucet.service
+  - systemctl enable --now faucet-watchdog.service
   # First bring-up in the background so cloud-init finishes fast; the log is
   # the operator's window into sync progress.
   - nohup /usr/local/bin/faucet-up > /var/log/faucet-deploy.log 2>&1 &

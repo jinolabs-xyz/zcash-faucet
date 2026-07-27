@@ -149,3 +149,25 @@ Then `docker compose -f docker-compose.faucet.yml up -d` to pick up the change.
   after a reboot, `docker compose … up -d` both projects.
 - **Monitoring (optional).** Add `--profile monitoring` to the z3 stack for
   Grafana/Prometheus dashboards.
+
+### Self-healing watchdog
+
+`watchdog.sh` plus `faucet-watchdog.service` keep the stack up without a human on
+SSH. It forces `restart=unless-stopped` on every container, restarts anything
+that has exited (this is what recovers Zallet when it drops on a mempool-stream
+close), restarts `faucet-web` if it hangs, and pages on sustained un-readiness.
+A fresh box installs and enables it automatically via `cloud-init.yaml`.
+
+Install it on a box that was set up before the watchdog existed:
+
+```bash
+install -D -m 0755 /opt/zcash-faucet/deploy/z3/watchdog.sh /opt/faucet/watchdog.sh
+install -m 0644 /opt/zcash-faucet/deploy/z3/faucet-watchdog.service /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now faucet-watchdog
+journalctl -u faucet-watchdog -f    # watch it work
+```
+
+Tune it with an optional `/etc/faucet/watchdog.env` (`WATCHDOG_ALERT_URL` for a
+Slack/Discord webhook, `WATCHDOG_INTERVAL`, the `WATCHDOG_*_MATCH` container name
+patterns). Readiness is `GET /api/ready` (200 can-serve, 503 with a reason);
+liveness is `GET /api/health`.
