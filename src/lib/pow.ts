@@ -15,7 +15,9 @@
  * instance deploy would move the used-challenge set to the shared ledger.
  */
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
-import { config } from "./config";
+// Explicit .ts extension so `node --test` (type stripping resolves literal
+// paths only) can load this module. Next's bundler accepts it too.
+import { config } from "./config.ts";
 
 const SALT = process.env.RATE_LIMIT_SALT ?? "";
 
