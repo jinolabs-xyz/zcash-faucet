@@ -57,10 +57,10 @@ docker compose $ENVF up -d zebra
 # the box sees live progress instead of a refused connection.
 
 # One owner for port 80. Earlier bring-ups ran a hand-started faucet-web
-# container that binds 80 and fights the overlay's Caddy for it. Retire it,
-# tightly scoped: only containers named faucet-web, and only when they carry
-# no compose project label, so anything compose-managed survives even if a
-# name happens to collide.
+# container that binds 80 and fights the overlay's Caddy for it. Retire it.
+# The name filter is a substring match, so the real guard is the label:
+# anything carrying a compose project label survives, only hand-started
+# containers whose name contains faucet-web are removed.
 for c in $(docker ps -aq --filter name=faucet-web); do
   if [ -z "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$c")" ]; then
     cname="$(docker inspect -f '{{.Name}}' "$c" | sed 's|^/||')"
@@ -93,7 +93,7 @@ overlay_up(){
 
 say "Writing faucet.env (RPC auth now, account wired in after sync)"
 write_env "" ""
-say "Starting the faucet + Caddy — the site serves its syncing state immediately"
+say "Starting the faucet + Caddy, the site serves its syncing state immediately"
 overlay_up
 
 say "Waiting for Zebra to finish syncing (Ctrl-C is safe; re-run to resume)"
