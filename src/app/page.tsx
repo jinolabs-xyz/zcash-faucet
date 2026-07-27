@@ -16,8 +16,10 @@ interface Status {
   backend: { reachable: boolean; endpoint: string };
   node?: { ready: boolean; syncPercent: number | null; height: number | null; nodeHeight: number | null };
   miner?: { active: boolean };
+  challenge?: "pow" | "turnstile" | "none";
 }
 interface Tx { txid: string; to: string; priv: boolean; explorerUrl?: string; at: number }
+interface PowSolution { seed: string; difficulty: number; exp: number; sig: string; nonce: string }
 
 /* ── Helpers ───────────────────────────────────────────────────────────── */
 const B32 = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
@@ -75,10 +77,12 @@ export default function Home() {
   const [lookupAddr, setLookupAddr] = useState("");
   const [lookupRes, setLookupRes] = useState("");
   const [elapsed, setElapsed] = useState(0);
+  const [powState, setPowState] = useState<{ hashes: number; difficulty: number } | null>(null);
 
   const inFlow = useRef(false); // in a claim flow → don't let polling override the phase
   const submitStart = useRef(0);
   const sending = useRef(false);
+  const powWorker = useRef<Worker | null>(null);
 
   const drip = status?.dripTaz ?? 0.1;
   const dripText = (drip % 1 === 0 ? drip.toFixed(0) : String(drip)) + " TAZ";
@@ -107,8 +111,34 @@ export default function Home() {
     const iv = setInterval(() => setElapsed(Date.now() - submitStart.current), 120);
     return () => clearInterval(iv);
   }, [phase]);
+  useEffect(() => () => { powWorker.current?.terminate(); powWorker.current = null; }, []);
   useEffect(() => { const t = localStorage.getItem("zfaucet_theme"); if (t === "paper" || t === "ink") setTheme(t); }, []);
   useEffect(() => { localStorage.setItem("zfaucet_theme", theme); }, [theme]);
+
+  // Solve the server's proof-of-work challenge in a worker so the tab never
+  // freezes. Resolves with the solution to hand back with the claim.
+  const solvePow = () =>
+    new Promise<PowSolution>((resolve, reject) => {
+      fetch("/api/pow/challenge")
+        .then((r) => r.json())
+        .then((ch) => {
+          if (!ch?.ok) { reject(new Error(ch?.error || "no challenge")); return; }
+          setPowState({ hashes: 0, difficulty: ch.difficulty });
+          const worker = new Worker("/pow-worker.js");
+          powWorker.current = worker;
+          worker.onmessage = (e: MessageEvent) => {
+            const m = e.data;
+            if (m.type === "progress") setPowState((s) => (s ? { ...s, hashes: m.hashes } : s));
+            else if (m.type === "found") {
+              worker.terminate(); powWorker.current = null;
+              resolve({ seed: ch.seed, difficulty: ch.difficulty, exp: ch.exp, sig: ch.sig, nonce: m.nonce });
+            }
+          };
+          worker.onerror = () => { worker.terminate(); powWorker.current = null; reject(new Error("worker error")); };
+          worker.postMessage({ seed: ch.seed, difficulty: ch.difficulty });
+        })
+        .catch(reject);
+    });
 
   const submit = async () => {
     const c = check(addr);
@@ -116,14 +146,31 @@ export default function Home() {
     if (sending.current) return;
     sending.current = true;
     inFlow.current = true;
-    submitStart.current = Date.now();
     setElapsed(0); setErrMsg(""); setTouched(false);
     setPhase("submitting");
+
+    // Anti-abuse gate: solve the browser proof-of-work before we ask for coins.
+    let pow: PowSolution | undefined;
+    if (status?.challenge === "pow") {
+      try {
+        pow = await solvePow();
+      } catch {
+        setPowState(null);
+        setErrMsg("Couldn't finish the human check. Refresh the page and try again.");
+        setPhase("error");
+        sending.current = false;
+        return;
+      }
+      setPowState(null);
+    }
+
+    submitStart.current = Date.now();
+    setElapsed(0);
     try {
       const res = await fetch("/api/faucet", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ address: addr.trim() }),
+        body: JSON.stringify({ address: addr.trim(), ...(pow ? { pow } : {}) }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok) {
@@ -314,7 +361,19 @@ export default function Home() {
           </div>
         )}
 
-        {phase === "submitting" && (
+        {phase === "submitting" && powState && (
+          <div style={{ border: "2px solid var(--color-text)", padding: "20px 16px", display: "flex", flexDirection: "column", gap: 13 }}>
+            <span style={kicker}>Human check — no CAPTCHA</span>
+            <h2 style={{ margin: 0, fontSize: 19, lineHeight: 1.25 }}>Checking you&apos;re human…</h2>
+            <div style={{ height: 10, border: "2px solid var(--color-text)", position: "relative", overflow: "hidden" }}>
+              <i style={{ position: "absolute", top: 0, bottom: 0, left: 0, right: 0, background: "repeating-linear-gradient(135deg,var(--color-accent) 0 3px,transparent 3px 7px)", backgroundSize: "26px 26px", animation: "hatch .9s linear infinite" }} />
+            </div>
+            <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.55, color: muted(62) }}>Your browser is solving a small cryptographic puzzle so bots cannot drain the faucet. Nothing to click, nothing tracked — it runs on its own.</p>
+            <p style={{ margin: 0, fontFamily: "var(--mono)", fontSize: 11, color: muted(50) }}>difficulty {powState.difficulty} bits · {powState.hashes.toLocaleString("en-US")} hashes</p>
+          </div>
+        )}
+
+        {phase === "submitting" && !powState && (
           <div style={{ border: "2px solid var(--color-text)", padding: "20px 16px", display: "flex", flexDirection: "column", gap: 13 }}>
             <span style={kicker}>Sending — keep this tab open</span>
             <h2 style={{ margin: 0, fontSize: 19, lineHeight: 1.25 }}>{steps[curStep][0]}…</h2>

@@ -22,6 +22,7 @@ export async function GET() {
     cooldownSeconds: config.cooldownSeconds,
     sender: config.sender,
     turnstileEnabled: config.turnstile.enabled,
+    challenge: config.challenge, // "pow" | "turnstile" | "none"
     balanceTaz, // null = unknown (backend not ready / still syncing)
     empty,
     donationAddress: config.donationAddress,

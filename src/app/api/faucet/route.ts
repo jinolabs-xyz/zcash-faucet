@@ -2,7 +2,7 @@
  * POST /api/faucet — the drip endpoint.
  * Order matters: cheap rejects first, expensive send last.
  *   1. parse + validate address
- *   2. verify Turnstile (anti-bot)
+ *   2. anti-abuse gate (proof-of-work or Turnstile, per config)
  *   3. low-balance guard
  *   4. atomically reserve the claim (cooldown + daily cap, concurrency-safe)
  *   5. send, then finalise the reservation
@@ -12,46 +12,28 @@ import { z } from "zod";
 import { config } from "@/lib/config";
 import { validateTestnetAddress } from "@/lib/zcash/address";
 import { verifyTurnstile } from "@/lib/turnstile";
+import { verifySolution } from "@/lib/pow";
 import { getSender, safeBalance } from "@/lib/zcash/send";
 import { getSendQueue, QueueFullError } from "@/lib/zcash/queue";
 import { reserveClaim, finalizeClaim } from "@/lib/db";
 import { fingerprintIp } from "@/lib/privacy";
+import { clientIp } from "@/lib/clientIp";
 
 export const runtime = "nodejs"; // better-sqlite3 needs Node, not Edge.
 
 const BodySchema = z.object({
   address: z.string().min(1).max(512),
   turnstileToken: z.string().optional(),
+  pow: z
+    .object({
+      seed: z.string(),
+      difficulty: z.number(),
+      exp: z.number(),
+      sig: z.string(),
+      nonce: z.string(),
+    })
+    .optional(),
 });
-
-/**
- * Best-effort client IP for rate-limiting.
- *
- * X-Forwarded-For is a client-writable header: a request can arrive with any
- * value already in it, and each proxy *appends* the peer it saw. So only the
- * rightmost `trustedProxyCount` entries — the ones our own infra added — are
- * trustworthy; everything to the left is attacker-controlled. Taking XFF[0]
- * (the old behaviour) let anyone rotate the header to dodge the per-IP cooldown.
- *
- * With no trusted proxy configured we ignore XFF entirely rather than trust a
- * spoofable value. IP limiting is only ever a secondary guard anyway — the
- * spoof-proof ceiling on total drain is FAUCET_DAILY_CAP_TAZ.
- */
-function clientIp(req: NextRequest): string | null {
-  const trusted = config.trustedProxyCount;
-  if (trusted > 0) {
-    const xff = req.headers.get("x-forwarded-for");
-    if (xff) {
-      const hops = xff
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
-      const idx = hops.length - trusted; // the hop our outermost proxy recorded
-      if (idx >= 0 && hops[idx]) return hops[idx];
-    }
-  }
-  return null; // unidentifiable → skip the IP layer rather than trust a spoof
-}
 
 export async function POST(req: NextRequest) {
   const now = Math.floor(Date.now() / 1000);
@@ -75,10 +57,22 @@ export async function POST(req: NextRequest) {
   }
   const address = body.address.trim();
 
-  // 2. Anti-bot
-  const human = await verifyTurnstile(body.turnstileToken, rawIp ?? undefined);
-  if (!human) {
-    return NextResponse.json({ ok: false, error: "Captcha verification failed." }, { status: 403 });
+  // 2. Anti-abuse gate — proof-of-work, Turnstile, or nothing, per config.
+  //    PoW is verified against the same salted IP fingerprint the challenge was
+  //    issued to, so a solution can't be reused from a different client.
+  if (config.challenge === "pow") {
+    if (!body.pow) {
+      return NextResponse.json({ ok: false, error: "Proof of work required." }, { status: 403 });
+    }
+    const verdict = verifySolution(body.pow, ipHash ?? "anon");
+    if (!verdict.ok) {
+      return NextResponse.json({ ok: false, error: verdict.reason ?? "Proof of work failed." }, { status: 403 });
+    }
+  } else if (config.challenge === "turnstile") {
+    const human = await verifyTurnstile(body.turnstileToken, rawIp ?? undefined);
+    if (!human) {
+      return NextResponse.json({ ok: false, error: "Captcha verification failed." }, { status: 403 });
+    }
   }
 
   // 3. Low-balance guard — protect the single hot wallet from being drained

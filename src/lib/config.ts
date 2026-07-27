@@ -99,5 +99,25 @@ export const config = {
     },
   },
 
+  // Anti-abuse gate before a claim: "pow" (browser proof-of-work / hashcash),
+  // "turnstile" (Cloudflare captcha), or "none". Default follows whatever is
+  // configured: Turnstile if its secret is set, else none.
+  challenge: (process.env.FAUCET_CHALLENGE ??
+    (process.env.TURNSTILE_SECRET_KEY ? "turnstile" : "none")) as "pow" | "turnstile" | "none",
+
+  pow: {
+    // Base difficulty in leading zero bits of sha256(challenge:nonce). ~20 bits
+    // is a couple seconds on a laptop, more on a phone — modest on purpose so a
+    // first-time real user barely waits. Repeat claims escalate above this.
+    baseBits: Math.max(8, Math.min(28, Math.floor(num("FAUCET_POW_BITS", 20)))),
+    // Each recent claim from the same client adds this many bits (quadratic cost
+    // for anyone hammering the faucet, unnoticeable for a one-off human).
+    escalateBits: Math.max(0, Math.floor(num("FAUCET_POW_ESCALATE_BITS", 2))),
+    // Hard cap so difficulty can't run away into a device-killing wait.
+    maxBits: Math.max(12, Math.min(30, Math.floor(num("FAUCET_POW_MAX_BITS", 26)))),
+    // How long a signed challenge is valid before the browser has to fetch a new one.
+    ttlSeconds: Math.max(30, Math.floor(num("FAUCET_POW_TTL_SECONDS", 180))),
+  },
+
   network: "testnet" as const,
 } as const;
