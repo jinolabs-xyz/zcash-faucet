@@ -3,7 +3,8 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Zcash Testnet Faucet (TAZ)",
-  description: "Get free Zcash testnet coins (TAZ) for development. Public lightwalletd backend.",
+  description:
+    "Get free testnet ZEC (TAZ), sent privately. A self-mining, shielded-by-default Zcash testnet faucet.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
