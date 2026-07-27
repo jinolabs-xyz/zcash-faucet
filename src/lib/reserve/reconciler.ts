@@ -21,7 +21,7 @@
 import { config, ZATOSHI_PER_TAZ } from "../config";
 import { safeBalance } from "../zcash/send";
 import { getSendQueue } from "../zcash/queue";
-import { decideRefilling } from "./decide";
+import { decideRefilling, shouldStartStep } from "./decide";
 import { getRefiller } from "./refiller";
 
 export interface ReserveStatus {
@@ -65,8 +65,12 @@ class ReserveReconciler {
         lowZat: config.reserve.lowZatoshi,
         targetZat: config.reserve.targetZatoshi,
       });
-      if (!this.refilling || this.stepInFlight) return;
-      if (getSendQueue().depth > 0) return; // user traffic first, refill can wait
+      const start = shouldStartStep({
+        refilling: this.refilling,
+        stepInFlight: this.stepInFlight,
+        queueDepth: getSendQueue().depth, // user traffic first, refill can wait
+      });
+      if (!start) return;
 
       this.stepInFlight = true;
       getSendQueue()

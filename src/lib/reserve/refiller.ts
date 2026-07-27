@@ -18,6 +18,7 @@
  */
 import { config } from "../config";
 import { creditMockBalance } from "../zcash/send";
+import { selectRefillerKind } from "./select";
 
 export interface Refiller {
   readonly name: string;
@@ -43,12 +44,15 @@ let cached: Refiller | null = null;
 
 export function getRefiller(): Refiller {
   if (cached) return cached;
-  if (!config.miner.active) {
-    cached = new NoopRefiller();
-  } else if (config.sender === "zallet") {
+  const kind = selectRefillerKind({
+    minerActive: config.miner.active,
+    sender: config.sender,
+    mockRefill: config.mockRefill,
+  });
+  if (kind === "zallet") {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     cached = new (require("./zalletRefiller").ZalletRefiller)() as Refiller;
-  } else if (config.sender === "mock" && config.mockRefill) {
+  } else if (kind === "mock") {
     cached = new MockRefiller();
   } else {
     cached = new NoopRefiller();

@@ -4,7 +4,9 @@
  * doing whatever we were doing. Two thresholds instead of one so the balance
  * hovering around a single line can't flap the miner on and off every tick.
  *
- * Pure function, no imports — the reconciler owns the state, this owns the rule.
+ * Pure functions with no imports. The reconciler owns the state, this owns the
+ * rules: when to be refilling (decideRefilling) and whether a given tick may
+ * enqueue a refill step (shouldStartStep).
  */
 
 export interface ReserveLevels {
@@ -28,4 +30,17 @@ export function decideRefilling(
   if (spendableZat < levels.lowZat) return true;
   if (spendableZat >= levels.targetZat) return false;
   return refilling;
+}
+
+/**
+ * Whether this tick may enqueue a refill step. Refill yields to everything:
+ * we must actually be refilling, with no step already in flight, and no user
+ * traffic waiting on the send queue.
+ */
+export function shouldStartStep(opts: {
+  refilling: boolean;
+  stepInFlight: boolean;
+  queueDepth: number;
+}): boolean {
+  return opts.refilling && !opts.stepInFlight && opts.queueDepth === 0;
 }
