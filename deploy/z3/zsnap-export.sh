@@ -53,6 +53,8 @@ ZSNAP_KEEP="${ZSNAP_KEEP:-2}"                 # archives to keep after a new one
 ZSNAP_FORCE="${ZSNAP_FORCE:-0}"               # 1 = skip the ready and space gates
 ZSNAP_RETRIES="${ZSNAP_RETRIES:-3}"           # export attempts before giving up
 ZSNAP_RETRY_WAIT="${ZSNAP_RETRY_WAIT:-30}"    # seconds between attempts
+ZSNAP_PREFLIGHT_TRIES="${ZSNAP_PREFLIGHT_TRIES:-3}"  # opens before preflight says NO-GO
+ZSNAP_PREFLIGHT_WAIT="${ZSNAP_PREFLIGHT_WAIT:-3}"    # seconds between those
 ZSNAP_UPLOAD_CMD="${ZSNAP_UPLOAD_CMD:-}"      # optional: run <cmd> <archive> after export
 # Container/service names for the cold-mode window. The zebra container is
 # matched by name substring, same convention as watchdog.sh.
@@ -111,12 +113,25 @@ if [ "${1:-}" = "preflight" ]; then
   # directory exists on a fresh box, and it should work there too.
   out="$(mktemp "${TMPDIR:-/tmp}/zsnap-preflight.XXXXXX")"
   trap 'rm -f "$out"' EXIT
-  if "$ZSNAP_ZEBRAD" tip-height --cache-dir "$cache_dir" --network "$ZSNAP_NETWORK" > "$out" 2>&1; then
-    log "GO: the export binary opened the state, tip height $(tail -n1 "$out")"
-    exit 0
-  fi
 
-  log "NO-GO: the export binary could not open this state"
+  # Retry before declaring NO-GO. A read-only open on a busy node can lose a
+  # race with the primary's WAL rotation and fail transiently, and that error
+  # looks like a format mismatch to anyone reading it. The whole point of
+  # preflight is to stop people guessing between those two, so it settles the
+  # question itself: a real mismatch fails every attempt, a race does not.
+  attempt=1
+  while :; do
+    if "$ZSNAP_ZEBRAD" tip-height --cache-dir "$cache_dir" --network "$ZSNAP_NETWORK" > "$out" 2>&1; then
+      log "GO: the export binary opened the state, tip height $(tail -n1 "$out")"
+      exit 0
+    fi
+    [ "$attempt" -lt "$ZSNAP_PREFLIGHT_TRIES" ] || break
+    log "attempt $attempt failed, retrying in ${ZSNAP_PREFLIGHT_WAIT}s (a busy node can fail one open transiently)"
+    attempt=$((attempt + 1))
+    sleep "$ZSNAP_PREFLIGHT_WAIT"
+  done
+
+  log "NO-GO: the export binary could not open this state in $ZSNAP_PREFLIGHT_TRIES attempts"
   sed 's/^/    /' "$out" | tail -n 20
   die "see SNAPSHOTS.md, 'When the export binary and the node disagree'"
 fi

@@ -163,11 +163,22 @@ check "says GO with the tip height" "grep -q 'GO: the export binary opened the s
 check "reports the on-disk state format" "grep -q 'state formats:.*v28' '$T/pf-go.log'"
 check "preflight never exports" "! grep -q 'export-snapshot' '$STUB_LOG'"
 
+# A busy node can fail one read-only open transiently, and that error reads
+# like a format mismatch. Preflight must not send an operator down the
+# rebuild path for it.
 fresh_env; with_chain
 mkdir -p "$STUB_CACHE_DIR/state/v28/testnet"
-STUB_TIP_FAIL=1 bash "$EXPORT" preflight > "$T/pf-nogo.log" 2>&1
+STUB_TIP_FAIL_ONCE="$T/tip-failed-once" ZSNAP_PREFLIGHT_WAIT=1 bash "$EXPORT" preflight > "$T/pf-transient.log" 2>&1
+check "transient open failure retries to GO, not NO-GO" "[ $? -eq 0 ] && grep -q 'GO: the export binary opened' '$T/pf-transient.log'"
+check "and says it is retrying" "grep -q 'retrying in' '$T/pf-transient.log'"
+check "never claims NO-GO on a transient" "! grep -q 'NO-GO' '$T/pf-transient.log'"
+
+fresh_env; with_chain
+mkdir -p "$STUB_CACHE_DIR/state/v28/testnet"
+STUB_TIP_FAIL=1 ZSNAP_PREFLIGHT_TRIES=2 ZSNAP_PREFLIGHT_WAIT=1 bash "$EXPORT" preflight > "$T/pf-nogo.log" 2>&1
 check "preflight exits nonzero when the binary cannot open it" "[ $? -ne 0 ]"
 check "says NO-GO" "grep -q 'NO-GO' '$T/pf-nogo.log'"
+check "NO-GO only after every attempt" "grep -q 'could not open this state in 2 attempts' '$T/pf-nogo.log'"
 check "surfaces the binary's own error" "grep -q 'Opening database failed' '$T/pf-nogo.log'"
 check "points at the SNAPSHOTS.md section" "grep -q 'When the export binary and the node disagree' '$T/pf-nogo.log'"
 

@@ -68,6 +68,13 @@ uses (`zebrad tip-height`), so it is safe on a live node and costs a second.
 Run it before the first export on a box, and after upgrading either the node
 image or the export binary.
 
+It opens up to `ZSNAP_PREFLIGHT_TRIES` times (default 3) before saying
+NO-GO, on purpose. A read-only open on a busy node can lose a race with the
+primary's WAL rotation and fail transiently, and that error reads exactly
+like a format mismatch. Preflight exists to stop people guessing between
+those two, so it settles it rather than reporting it: a real mismatch fails
+every attempt, a race does not.
+
 **Compatibility as it stands.** The deployed `/opt/zebrad-miner` is built
 from the fork at 6.0.0 and the node currently runs `zfnd/zebra:6.2.0`. Those
 are compatible: zebra v6.0.0, v6.2.0 and the fork all declare state format
