@@ -21,7 +21,6 @@ set -euo pipefail
 NETWORK="${NETWORK:-testnet}"
 FAUCET_DOMAIN="${FAUCET_DOMAIN:-}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"       # deploy/
-REPO="$(cd "$HERE/.." && pwd)"                             # repo root
 Z3="$HERE/z3-stack"                                        # where we clone z3
 ENVF="--env-file .env.$NETWORK"
 NETNAME="z3-$NETWORK"
