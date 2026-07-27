@@ -1,0 +1,178 @@
+// Route-level integration tests: boot the BUILT app (never dev, it does not
+// bundle) in two configurations and drive every API route over HTTP. This is
+// the layer that catches cross-route regressions unit tests cannot see.
+//
+//   npm run build && npm run test:api
+//
+// Server A (funded, pow gate): the happy paths plus every faucet rejection.
+// Server B (empty wallet):     the honest degraded states, ready 503 included.
+//
+// Fixtures are encoded at runtime with the same coders address.ts decodes
+// with (@scure/base is an app dependency), so they stay checksum-valid by
+// construction and cannot drift from the validator.
+import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
+import { bech32m } from "@scure/base";
+
+const PORT_A = 3210;
+const PORT_B = 3211;
+const BASE_A = `http://localhost:${PORT_A}`;
+const BASE_B = `http://localhost:${PORT_B}`;
+
+let failures = 0;
+const ok = (name, cond, detail = "") => {
+  console.log(`${cond ? "ok" : "FAIL"}: ${name}${detail ? ` (${detail})` : ""}`);
+  if (!cond) failures++;
+};
+
+/* ── fixtures ──────────────────────────────────────────────────────────── */
+const seq = (n, fill) => Uint8Array.from({ length: n }, (_, i) => (i * 7 + fill) & 0xff);
+const ua = (fill) => bech32m.encode("utest", bech32m.toWords(seq(96, fill)), 1023);
+const UNIFIED_A = ua(3);
+const UNIFIED_B = ua(41);
+// One flipped char in the data part breaks the bech32m checksum.
+const UNIFIED_BAD = UNIFIED_A.slice(0, -3) + (UNIFIED_A.at(-3) === "q" ? "p" : "q") + UNIFIED_A.slice(-2);
+
+/* ── tiny harness (same pattern as e2e-smoke) ──────────────────────────── */
+function leadingZeroBits(buf) {
+  let bits = 0;
+  for (const byte of buf) {
+    if (byte === 0) { bits += 8; continue; }
+    for (let m = 0x80; m > 0; m >>= 1) {
+      if (byte & m) return bits;
+      bits++;
+    }
+    return bits;
+  }
+  return bits;
+}
+function solve({ seed, difficulty }) {
+  for (let nonce = 0; ; nonce++) {
+    const digest = createHash("sha256").update(`${seed}:${nonce}`).digest();
+    if (leadingZeroBits(digest) >= difficulty) return String(nonce);
+  }
+}
+async function req(base, path, init) {
+  const res = await fetch(base + path, init);
+  return { status: res.status, body: await res.json().catch(() => ({})) };
+}
+const get = (base, path) => req(base, path);
+const post = (base, path, body) =>
+  req(base, path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+const claim = (base, address, pow) => post(base, "/api/faucet", { address, ...(pow ? { pow } : {}) });
+
+async function solvedChallenge(base) {
+  const { status, body } = await get(base, "/api/pow/challenge");
+  if (status !== 200 || !body.seed) throw new Error(`challenge fetch failed: ${status}`);
+  return { seed: body.seed, difficulty: body.difficulty, exp: body.exp, sig: body.sig, nonce: solve(body) };
+}
+
+/* ── server lifecycle ──────────────────────────────────────────────────── */
+function boot(port, env) {
+  const child = spawn("npm", ["run", "start"], {
+    env: { ...process.env, PORT: String(port), ...env },
+    stdio: "ignore",
+    detached: true, // own process group, so kill(-pid) reaps next too
+  });
+  return child;
+}
+async function waitReady(base, ms = 90_000) {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    try {
+      const res = await fetch(base + "/api/health", { signal: AbortSignal.timeout(2000) });
+      if (res.ok) return;
+    } catch { /* not up yet */ }
+    if (Date.now() > deadline) throw new Error(`server at ${base} did not come up`);
+    await new Promise((r) => setTimeout(r, 500));
+  }
+}
+function stop(child) {
+  try { process.kill(-child.pid, "SIGTERM"); } catch { /* already gone */ }
+}
+
+const serverA = boot(PORT_A, {
+  FAUCET_SENDER: "mock",
+  FAUCET_CHALLENGE: "pow",
+  RATE_LIMIT_SALT: "integration-test-salt",
+  FAUCET_POW_BITS: "8",
+  FAUCET_POW_ESCALATE_BITS: "0",
+  FAUCET_MOCK_BALANCE_TAZ: "10",
+});
+const serverB = boot(PORT_B, {
+  FAUCET_SENDER: "mock",
+  FAUCET_MOCK_BALANCE_TAZ: "0",
+  FAUCET_CHALLENGE: "none",
+});
+
+try {
+  await Promise.all([waitReady(BASE_A), waitReady(BASE_B)]);
+
+  /* ── A: /api/status shape ────────────────────────────────────────────── */
+  const status = await get(BASE_A, "/api/status");
+  ok("A GET /api/status is 200", status.status === 200);
+  const s = status.body;
+  ok("A status: mode is mock+pow", s.sender === "mock" && s.challenge === "pow", JSON.stringify({ sender: s.sender, challenge: s.challenge }));
+  ok("A status: core shape", typeof s.dripTaz === "number" && typeof s.cooldownSeconds === "number" && typeof s.balanceTaz === "number" && s.empty === false && typeof s.queueDepth === "number");
+  ok("A status: backend + miner blocks", typeof s.backend?.reachable === "boolean" && typeof s.miner?.active === "boolean");
+  ok("A status: reserve block shape", typeof s.reserve?.targetTaz === "number" && typeof s.reserve?.lowTaz === "number" && typeof s.reserve?.refilling === "boolean" && "spendableTaz" in (s.reserve ?? {}));
+
+  /* ── A: /api/ready 200 ───────────────────────────────────────────────── */
+  const readyA = await get(BASE_A, "/api/ready");
+  ok("A GET /api/ready is 200 with reason null", readyA.status === 200 && readyA.body.ready === true && readyA.body.reason === null, JSON.stringify(readyA.body.reason ?? null));
+
+  /* ── A: /api/pow/challenge shape ─────────────────────────────────────── */
+  const ch = await get(BASE_A, "/api/pow/challenge");
+  ok("A GET /api/pow/challenge is 200 with full shape", ch.status === 200 && !!(ch.body.seed && ch.body.difficulty && ch.body.exp && ch.body.sig));
+  ok("A challenge expiry is in the future", ch.body.exp > Math.floor(Date.now() / 1000));
+
+  /* ── A: /api/account generates a claimable address ───────────────────── */
+  const acct = await post(BASE_A, "/api/account", { type: "transparent" });
+  ok("A POST /api/account (transparent) is 200", acct.status === 200 && acct.body.ok === true);
+  const tmAddr = acct.body.account?.address ?? "";
+  ok("A generated address is a tm address", tmAddr.startsWith("tm"), tmAddr);
+
+  /* ── A: faucet happy path, then every rejection ──────────────────────── */
+  const sent = await claim(BASE_A, tmAddr, await solvedChallenge(BASE_A));
+  ok("A claim with pow to generated address is 200 + txid", sent.status === 200 && sent.body.ok === true && typeof sent.body.txid === "string" && sent.body.txid.length >= 32, `status ${sent.status} ${JSON.stringify(sent.body.error ?? "")}`);
+  ok("A claim reports transparent recipient", sent.body.to?.kind === "transparent");
+
+  const repeat = await claim(BASE_A, tmAddr, await solvedChallenge(BASE_A));
+  ok("A immediate repeat is 429 with retryAfterSeconds", repeat.status === 429 && typeof repeat.body.retryAfterSeconds === "number", `status ${repeat.status}`);
+
+  const bad = await claim(BASE_A, UNIFIED_BAD, await solvedChallenge(BASE_A));
+  ok("A checksum-broken address is 400", bad.status === 400, `status ${bad.status}`);
+  ok("A 400 names the checksum", /checksum/i.test(bad.body.error ?? ""), bad.body.error);
+
+  const noPow = await claim(BASE_A, UNIFIED_A, null);
+  ok("A claim without pow is 403", noPow.status === 403, `status ${noPow.status}`);
+
+  const forged = await solvedChallenge(BASE_A);
+  forged.sig = (forged.sig[0] === "0" ? "1" : "0") + forged.sig.slice(1);
+  const forgedRes = await claim(BASE_A, UNIFIED_A, forged);
+  ok("A claim with forged pow sig is 403", forgedRes.status === 403, `status ${forgedRes.status}`);
+
+  /* ── A: /api/balance ─────────────────────────────────────────────────── */
+  const balShielded = await get(BASE_A, "/api/balance?address=" + encodeURIComponent(UNIFIED_B));
+  ok("A balance for shielded address: 200, private, not queryable", balShielded.status === 200 && balShielded.body.shielded === true && balShielded.body.queryable === false);
+  const balBad = await get(BASE_A, "/api/balance?address=" + encodeURIComponent(UNIFIED_BAD));
+  ok("A balance for broken address is 400", balBad.status === 400, `status ${balBad.status}`);
+  // Transparent lookups hit the public lightwalletd, deliberately not asserted
+  // here: CI must not depend on an external chain endpoint.
+
+  /* ── B: honest degraded states on an empty wallet ────────────────────── */
+  const statusB = await get(BASE_B, "/api/status");
+  ok("B GET /api/status reports empty", statusB.status === 200 && statusB.body.empty === true && statusB.body.balanceTaz === 0);
+
+  const readyB = await get(BASE_B, "/api/ready");
+  ok("B GET /api/ready is 503 with a reason", readyB.status === 503 && readyB.body.ready === false && typeof readyB.body.reason === "string", JSON.stringify(readyB.body.reason ?? null));
+
+  const emptyClaim = await claim(BASE_B, UNIFIED_A, null);
+  ok("B claim on empty wallet is 503 with the empty message", emptyClaim.status === 503 && /empty/i.test(emptyClaim.body.error ?? ""), `status ${emptyClaim.status}`);
+} finally {
+  stop(serverA);
+  stop(serverB);
+}
+
+console.log(failures === 0 ? "\napi-integration: all green" : `\napi-integration: ${failures} FAILED`);
+process.exit(failures === 0 ? 0 : 1);
