@@ -99,7 +99,15 @@ faucet_misses=0
 unready_since=0
 alerted_unready=0
 
-log "starting: interval=${INTERVAL}s faucet=${FAUCET_URL} ready_grace=${READY_GRACE_SECS}s alert=${ALERT_URL:-none}"
+# An unrecognized format still sends (a watchdog that dies on a config typo
+# is worse than one that guesses), but say so, or a typo means alerts go out
+# in a shape the channel rejects and nobody hears anything.
+case "$ALERT_FORMAT" in
+  slack|discord) : ;;
+  *) log "WARNING: unknown WATCHDOG_ALERT_FORMAT '$ALERT_FORMAT', sending the slack shape (valid: slack, discord)" ;;
+esac
+
+log "starting: interval=${INTERVAL}s faucet=${FAUCET_URL} ready_grace=${READY_GRACE_SECS}s alert=${ALERT_URL:-none} format=${ALERT_FORMAT}"
 
 while true; do
   zebra="$(find_container "$ZEBRA_MATCH")"
