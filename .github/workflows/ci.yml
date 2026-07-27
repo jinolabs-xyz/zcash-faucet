@@ -1,5 +1,5 @@
 # CI: typecheck + tests + build for the app, shellcheck + harness for the infra scripts.
-# No secrets, no deploy — green here means main is buildable and the scripts parse.
+# No secrets, no deploy. Green here means main is buildable and the scripts parse.
 name: CI
 
 on:
@@ -37,9 +37,11 @@ jobs:
       - name: shellcheck deploy scripts
         run: shellcheck -S warning deploy/deploy.sh deploy/z3/*.sh
       - name: z3 test harness
-        # Single entrypoint only — deploy/z3/tests/stubs/ holds fake zebrad/docker
-        # binaries the runner puts on PATH, so never glob the tests dir.
-        # Guarded because the harness lands on a branch ahead of main.
+        # run-tests.sh is the single entrypoint and runs every suite under
+        # deploy/z3/tests/suites/ with one tally. Never glob the tests dir:
+        # stubs/ and deploy-stubs/ hold fake zebrad/docker binaries the
+        # suites put on PATH, not test files. Guarded so refs that predate
+        # the harness stay green.
         run: |
           if [ -f deploy/z3/tests/run-tests.sh ]; then
             bash deploy/z3/tests/run-tests.sh
@@ -48,3 +50,21 @@ jobs:
           fi
       - name: cloud-init parses
         run: python3 -c 'import yaml; yaml.safe_load(open("deploy/cloud-init.yaml"))'
+
+  miner:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Guarded the same way as the harness suites: green before the miner
+      # lands, active the moment it merges. Plain `cargo test` only, the
+      # ignored solve test needs a release build and ~144MB, it stays a
+      # local-run check (see MINING.md).
+      - name: cargo test + clippy
+        run: |
+          if [ -d deploy/z3/miner ]; then
+            cd deploy/z3/miner
+            cargo test
+            cargo clippy --all-targets -- -D warnings
+          else
+            echo "no deploy/z3/miner on this ref, skipping"
+          fi
