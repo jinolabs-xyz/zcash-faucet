@@ -294,7 +294,20 @@ export default function Home() {
           { k: "height", v: num(height) },
           { k: "balance", v: balance ? balance.toFixed(1) + " TAZ" : "0 TAZ" },
           { k: "miner", v: status?.miner?.active ? "on" : "off" },
-          ...(reserve ? [{ k: "reserve", v: refilling ? "topping up" : "ok" }] : []),
+          ...(reserve
+            ? [
+                {
+                  k: "reserve",
+                  // "ok" would be a lie under the low mark with no refill running
+                  // (miner off), so that case reads "low" instead.
+                  v: refilling
+                    ? "topping up"
+                    : reserve.spendableTaz != null && reserve.spendableTaz < reserve.lowTaz
+                      ? "low"
+                      : "ok",
+                },
+              ]
+            : []),
         ].map((it) => (
           <span key={it.k}>{it.k} <b style={{ color: "var(--color-text)", fontWeight: 700 }}>{it.v}</b></span>
         ))}
@@ -405,7 +418,7 @@ export default function Home() {
               {!addr.trim() && <button className="btn btn-ghost btn-sm" onClick={generate} style={{ padding: 0 }}>Generate a test address</button>}
             </div>
             <button className="btn btn-primary" onClick={submit} disabled={phase === "empty" || phase === "syncing"} style={{ width: "100%", justifyContent: "space-between" }}>
-              <span>{phase === "syncing" ? "Node syncing — check back soon" : phase === "empty" ? (refilling ? "Topping up, back in a moment" : "Waiting for a refill") : "Request " + dripText}</span>
+              <span>{phase === "syncing" ? "Node syncing, check back soon" : phase === "empty" ? (refilling ? "Topping up, back in a moment" : "Waiting for a refill") : "Request " + dripText}</span>
               <span aria-hidden="true">→</span>
             </button>
             <p style={{ margin: 0, fontSize: 11.5, letterSpacing: ".02em", color: muted(55), fontFamily: "var(--mono)" }}>{dripText} · once per address / 24h · shielded z→z</p>
