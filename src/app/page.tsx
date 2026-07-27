@@ -16,6 +16,7 @@ interface Status {
   backend: { reachable: boolean; endpoint: string };
   node?: { ready: boolean; syncPercent: number | null; height: number | null; nodeHeight: number | null };
   miner?: { active: boolean };
+  reserve?: { targetTaz: number; lowTaz: number; refilling: boolean; spendableTaz: number | null };
   challenge?: "pow" | "turnstile" | "none";
 }
 interface Tx { txid: string; to: string; priv: boolean; explorerUrl?: string; at: number }
@@ -235,6 +236,14 @@ export default function Home() {
   const height = node?.height ?? null;
   const nodeHeight = node?.nodeHeight ?? null;
   const balance = status?.balanceTaz ?? 0;
+  const reserve = status?.reserve;
+  // A refill running while we can still serve must read as healthy, not as an
+  // outage. It only changes the copy when the balance is genuinely too low.
+  const refilling = !!reserve?.refilling;
+  const refillPct =
+    reserve && reserve.spendableTaz != null && reserve.targetTaz > 0
+      ? Math.min(100, Math.round((reserve.spendableTaz / reserve.targetTaz) * 100))
+      : null;
   const c = check(addr);
   const badgeShow = c.ok || ("label" in c && !!c.label);
   const remain = Math.max(0, cooldownEnd - now);
@@ -255,7 +264,10 @@ export default function Home() {
   });
   if (proofFrac >= 1) curStep = steps.length - 1;
 
-  const statusText = phase === "syncing" ? "PREPARING" : phase === "empty" ? "REFILLING" : "LIVE";
+  // Honest badge: "TOPPING UP" only when a refill is actually running, "EMPTY"
+  // when it isn't. A refill with the balance still serviceable stays "LIVE".
+  const statusText =
+    phase === "syncing" ? "PREPARING" : phase === "empty" ? (refilling ? "TOPPING UP" : "EMPTY") : "LIVE";
   const dotBg = live && phase !== "empty" ? "var(--color-accent)" : "transparent";
 
   const pad = "clamp(16px,4vw,26px)";
@@ -282,6 +294,20 @@ export default function Home() {
           { k: "height", v: num(height) },
           { k: "balance", v: balance ? balance.toFixed(1) + " TAZ" : "0 TAZ" },
           { k: "miner", v: status?.miner?.active ? "on" : "off" },
+          ...(reserve
+            ? [
+                {
+                  k: "reserve",
+                  // "ok" would be a lie under the low mark with no refill running
+                  // (miner off), so that case reads "low" instead.
+                  v: refilling
+                    ? "topping up"
+                    : reserve.spendableTaz != null && reserve.spendableTaz < reserve.lowTaz
+                      ? "low"
+                      : "ok",
+                },
+              ]
+            : []),
         ].map((it) => (
           <span key={it.k}>{it.k} <b style={{ color: "var(--color-text)", fontWeight: 700 }}>{it.v}</b></span>
         ))}
@@ -296,6 +322,12 @@ export default function Home() {
               { k: "block height", v: num(height) + (nodeHeight ? " / " + num(nodeHeight) : "") },
               { k: "wallet balance", v: (status?.balanceTaz ?? 0).toFixed(2) + " TAZ" },
               { k: "miner", v: status?.miner?.active ? "on" : "off" },
+              ...(reserve
+                ? [
+                    { k: "reserve", v: (reserve.spendableTaz ?? 0).toFixed(1) + " / " + reserve.targetTaz.toFixed(0) + " TAZ" },
+                    { k: "refill", v: refilling ? "topping up" : "idle" },
+                  ]
+                : []),
               { k: "queue", v: (status?.queueDepth ?? 0) + " pending" },
               { k: "backend", v: status?.backend?.reachable ? "reachable" : "unreachable" },
             ].map((r) => (
@@ -335,11 +367,43 @@ export default function Home() {
           </div>
         )}
 
-        {phase === "empty" && (
+        {phase === "ready" && refilling && (
+          <div style={{ border: "1px solid var(--color-divider)", padding: "10px 14px", display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: "4px 12px", fontFamily: "var(--mono)", fontSize: 11.5 }}>
+            <span style={{ ...kicker, fontSize: 10 }}>Topping up</span>
+            <span style={{ color: muted(60) }}>The reserve is being topped up in the background. Claims are unaffected.</span>
+            {refillPct != null && <span style={{ fontWeight: 700, marginLeft: "auto" }}>{refillPct}%</span>}
+          </div>
+        )}
+
+        {phase === "empty" && refilling && (
+          <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 11 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
+              <span style={kicker}>Topping up</span>
+              {reserve && (
+                <span style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700 }}>
+                  {(reserve.spendableTaz ?? 0).toFixed(1)} / {reserve.targetTaz.toFixed(0)} TAZ
+                </span>
+              )}
+            </div>
+            <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>Topping up the reserve. Drips resume in a moment.</h2>
+            {refillPct != null && (
+              <div style={{ height: 10, border: "2px solid var(--color-divider)", position: "relative", overflow: "hidden" }}>
+                <i style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: refillPct + "%", background: "repeating-linear-gradient(135deg,var(--color-accent) 0 3px,transparent 3px 7px)", backgroundSize: "26px 26px", animation: "hatch 1.1s linear infinite" }} />
+              </div>
+            )}
+            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>The faucet is mining and shielding its own coins right now. Nothing is broken. The balance dipped below the reserve line and it is being restored automatically.</p>
+          </div>
+        )}
+
+        {phase === "empty" && !refilling && (
           <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 9 }}>
-            <span style={kicker}>Refilling</span>
+            <span style={kicker}>Empty</span>
             <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>The faucet is out of TAZ right now.</h2>
-            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>It mines its own coins, so this fixes itself: the next block reward lands in the wallet and drips resume automatically.</p>
+            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
+              {status?.miner?.active
+                ? "It mines its own coins, so this fixes itself: the refill loop tops the reserve back up and drips resume automatically."
+                : "Drips resume automatically once the reserve is topped up. Check back in a while."}
+            </p>
           </div>
         )}
 
@@ -354,7 +418,7 @@ export default function Home() {
               {!addr.trim() && <button className="btn btn-ghost btn-sm" onClick={generate} style={{ padding: 0 }}>Generate a test address</button>}
             </div>
             <button className="btn btn-primary" onClick={submit} disabled={phase === "empty" || phase === "syncing"} style={{ width: "100%", justifyContent: "space-between" }}>
-              <span>{phase === "syncing" ? "Node syncing — check back soon" : phase === "empty" ? "Waiting for the next block reward" : "Request " + dripText}</span>
+              <span>{phase === "syncing" ? "Node syncing, check back soon" : phase === "empty" ? (refilling ? "Topping up, back in a moment" : "Waiting for a refill") : "Request " + dripText}</span>
               <span aria-hidden="true">→</span>
             </button>
             <p style={{ margin: 0, fontSize: 11.5, letterSpacing: ".02em", color: muted(55), fontFamily: "var(--mono)" }}>{dripText} · once per address / 24h · shielded z→z</p>
