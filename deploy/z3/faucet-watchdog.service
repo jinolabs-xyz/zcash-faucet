@@ -1,0 +1,25 @@
+# Supervises the z3 faucet stack. See watchdog.sh for what it does.
+# Install:
+#   cp watchdog.sh /opt/faucet/watchdog.sh && chmod +x /opt/faucet/watchdog.sh
+#   cp faucet-watchdog.service /etc/systemd/system/
+#   # optional: put WATCHDOG_ALERT_URL=... etc in /etc/faucet/watchdog.env
+#   systemctl daemon-reload && systemctl enable --now faucet-watchdog
+[Unit]
+Description=Zcash faucet stack watchdog (self-healing supervision)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+# Optional overrides (WATCHDOG_ALERT_URL, WATCHDOG_INTERVAL, container matches).
+# The '-' means it is fine if the file does not exist.
+EnvironmentFile=-/etc/faucet/watchdog.env
+ExecStart=/opt/faucet/watchdog.sh
+# The watchdog must itself never stay down. Bring it back on any exit.
+Restart=always
+RestartSec=5
+# Don't let a bad loop hammer the box.
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=multi-user.target
