@@ -7,10 +7,14 @@ node plus a hot shielded wallet — so this is a single always-on box, **not** t
 free-tier serverless deploy the transparent faucet used.
 
 ```
-        internet ──HTTPS──▶ Caddy ──▶ faucet (Next.js) ──RPC──▶ zallet ◀──▶ zebra
-                            (this overlay)        │   http://zallet:28232/   (z3 stack)
-                                                  └── only Caddy is public; RPC stays on
-                                                      the private docker network
+    internet ─HTTPS─▶ Caddy ─▶ faucet (Next.js) ─┬─ send ──RPC──▶ zallet ◀──▶ zebra
+                      (this overlay)             │   (private docker network)   (z3 stack)
+                                                 │
+                                                 └─ read (balance/network lookups)
+                                                    ──▶ public Zaino  (testnet.zec.rocks)
+
+  Only Caddy is public. The wallet RPC never leaves the private network. The
+  read-side lookups use a public Zaino by default — self-host it with one toggle.
 ```
 
 ## Sizing
@@ -29,10 +33,17 @@ git clone https://github.com/ZcashFoundation/z3 && cd z3
 ./scripts/setup-network.sh testnet
 docker compose --env-file .env.testnet up -d zebra
 ./scripts/check-zebra-readiness.sh 18080     # waits until Zebra is synced
-docker compose --env-file .env.testnet up -d # starts zallet (+ zaino if you add --profile indexer)
+docker compose --env-file .env.testnet up -d # starts zallet
 ```
 
-Zebra must finish syncing before Zallet is useful — that's the long wait.
+This brings up **zebra + zallet only** — that's all the faucet needs. The
+standalone Zaino indexer is *not* started (no `--profile indexer`); the faucet
+uses a public Zaino for its read-side lookups by default (see below).
+
+Zebra must finish syncing before Zallet is useful — that's the long one-time wait.
+**Create the faucet account only after Zebra is synced** (step 3): the wallet's
+birthday is set to the chain tip at creation, so a synced-first order means it
+has essentially no history to scan and is usable immediately.
 
 ## 2. Authorize the faucet on Zallet's RPC
 
@@ -86,6 +97,34 @@ curl -s https://faucet.example.org/api/status | jq   # sender:"zallet", a real b
 ```
 
 Then request a drip to any `utest1…` from the site — it returns a real txid.
+
+## Light client (Zaino) — public by default
+
+The faucet needs a light-client (Zaino / lightwalletd) endpoint for the *read*
+side only: the "check this address" balance lookup and network status on the
+site (`/api/balance`, `/api/network`). Sending is done by Zallet and never
+touches this. So by default the overlay points at a **public Zaino**:
+
+```
+LIGHTWALLETD_ENDPOINT=https://testnet.zec.rocks:443   # in faucet.env
+```
+
+That's the whole wiring — nothing to run. Keep it this way unless you want zero
+external dependencies.
+
+**To self-host it** (fully sovereign, one extra container): start z3's bundled
+Zaino and point the faucet at it over the shared network:
+
+```bash
+# in the z3 dir — add the indexer profile
+docker compose --env-file .env.testnet --profile indexer up -d
+```
+```
+# in faucet.env — reach it by service name on the z3 network (gRPC port 8137)
+LIGHTWALLETD_ENDPOINT=http://zaino:8137
+```
+
+Then `docker compose -f docker-compose.faucet.yml up -d` to pick up the change.
 
 ## Operating notes
 
