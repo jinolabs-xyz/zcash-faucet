@@ -30,6 +30,37 @@ jobs:
       # so a real build is the only signal that the app actually ships.
       - run: npm run build
 
+  smoke:
+    runs-on: ubuntu-latest
+    env:
+      FAUCET_SENDER: mock
+      FAUCET_CHALLENGE: pow
+      FAUCET_POW_BITS: "16"
+      RATE_LIMIT_SALT: ci-smoke-not-a-secret
+      PORT: "3100"
+      SMOKE_URL: http://localhost:3100
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 23
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      # The real claim flow over HTTP: status, signed pow challenge, solve,
+      # claim -> txid, repeat -> 429, no pow -> 403. Integration coverage the
+      # unit tests cannot give, and the cutover validation script.
+      - name: e2e smoke
+        run: |
+          npm start &
+          server=$!
+          trap 'kill "$server" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 60); do
+            curl -sf "$SMOKE_URL/api/status" >/dev/null && break
+            sleep 1
+          done
+          npm run smoke
+
   shell:
     runs-on: ubuntu-latest
     steps:
