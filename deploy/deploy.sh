@@ -70,11 +70,13 @@ fi
 source "$ACCTFILE"
 
 # 3. Fund it -----------------------------------------------------------------
+# The faucet comes up fine unfunded (it reports "empty" until coins arrive), so
+# only pause for funding in an interactive shell — never under cloud-init.
 BAL="$(zrpc z_getbalanceforaccount "\"$UUID\"" 1 | python3 -c 'import sys,json;p=json.load(sys.stdin).get("pools",{});print(sum(int(v.get("valueZat",0)) for v in p.values()))' 2>/dev/null || echo 0)"
-if [ "${BAL:-0}" -eq 0 ]; then
-  say "Fund the faucet, then press Enter"
+if [ "${BAL:-0}" -eq 0 ] && [ -t 0 ] && [ "${NONINTERACTIVE:-0}" != "1" ]; then
+  say "Fund the faucet, then press Enter (or Ctrl-C — it also runs fine unfunded)"
   echo "    Send $NETWORK ZEC to:  $ADDR"
-  read -r _
+  read -r _ || true
 fi
 
 # 4. Faucet + Caddy overlay --------------------------------------------------
@@ -97,4 +99,6 @@ Z3_NETWORK_NAME="$NETNAME" FAUCET_DOMAIN="$FAUCET_DOMAIN" \
   docker compose -f docker-compose.faucet.yml up -d --build
 
 say "Done. The faucet is live${FAUCET_DOMAIN:+ at https://$FAUCET_DOMAIN}."
-echo "   Check:  curl -s ${FAUCET_DOMAIN:+https://$FAUCET_DOMAIN}${FAUCET_DOMAIN:-http://localhost}/api/status"
+echo "   Check:   curl -s ${FAUCET_DOMAIN:+https://$FAUCET_DOMAIN}${FAUCET_DOMAIN:-http://localhost}/api/status"
+echo "   Fund it: send $NETWORK ZEC to  $ADDR"
+echo "            (until funded, claims answer 'faucet empty' — everything else works)"

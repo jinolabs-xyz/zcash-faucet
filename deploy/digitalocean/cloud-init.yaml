@@ -1,0 +1,82 @@
+#cloud-config
+# Zcash shielded faucet — DigitalOcean user-data.
+#
+# Paste this whole file into "Advanced Options → Add Initialization scripts
+# (free)" when creating the Droplet, after editing the TWO placeholders in
+# runcmd below:
+#
+#   1. YOUR_REPO_URL      — the faucet repo's git URL
+#   2. FAUCET_DOMAIN=…    — your hostname (or delete the var for plain HTTP)
+#
+# Recommended Droplet: Ubuntu 24.04 LTS, Basic → Premium AMD/Intel,
+# 4 vCPU / 8 GB / 160 GB ($48/mo) — 2 vCPU / 8 GB works for light testnet use.
+#
+# The box then sets itself up unattended: Docker (with log rotation), firewall,
+# swap, clone, full stack bring-up. Zebra's initial sync takes a few hours;
+# the site is served as soon as the stack is up, and claims work the moment
+# you fund the printed address.
+#
+# Watch progress after boot:   ssh root@<ip>  then:
+#   tail -f /var/log/faucet-deploy.log
+
+package_update: true
+package_upgrade: true
+packages:
+  - git
+  - ufw
+
+# zk-proving has short RAM spikes; swap keeps an 8 GB box comfortable.
+swap:
+  filename: /swapfile
+  size: 4G
+  maxsize: 4G
+
+write_files:
+  # Bound container log growth (z3 leaves the log driver to the daemon default,
+  # which is exactly this file).
+  - path: /etc/docker/daemon.json
+    content: |
+      { "log-driver": "json-file", "log-opts": { "max-size": "10m", "max-file": "3" } }
+  # Re-runnable bring-up wrapper; also used by the systemd unit below on reboot.
+  - path: /usr/local/bin/faucet-up
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      cd /opt/zcash-faucet
+      # Compose services are restart:unless-stopped, so this is only needed on
+      # first boot — but it is idempotent, so running it again is harmless.
+      NONINTERACTIVE=1 NETWORK="${NETWORK:-testnet}" \
+        FAUCET_DOMAIN="$(cat /etc/faucet-domain 2>/dev/null || true)" \
+        ./deploy/deploy.sh
+  - path: /etc/systemd/system/faucet.service
+    content: |
+      [Unit]
+      Description=Zcash shielded faucet (docker compose stack)
+      After=docker.service network-online.target
+      Wants=network-online.target
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/bin/faucet-up
+      TimeoutStartSec=infinity
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  # ---- EDIT THESE TWO LINES ------------------------------------------------
+  - echo "faucet.example.org" > /etc/faucet-domain
+  - git clone https://github.com/YOUR_USER/zcash-faucet /opt/zcash-faucet
+  # --------------------------------------------------------------------------
+  - curl -fsSL https://get.docker.com | sh
+  - systemctl restart docker
+  # Only SSH + web reach the box; node/wallet RPC stay on the docker network.
+  - ufw allow OpenSSH
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
+  - ufw --force enable
+  - systemctl daemon-reload
+  - systemctl enable faucet.service
+  # First bring-up in the background so cloud-init finishes fast; the log is
+  # the operator's window into sync progress.
+  - nohup /usr/local/bin/faucet-up > /var/log/faucet-deploy.log 2>&1 &
