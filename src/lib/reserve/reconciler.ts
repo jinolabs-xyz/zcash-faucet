@@ -35,6 +35,7 @@ class ReserveReconciler {
   private refilling = false;
   private spendableZat: bigint | null = null;
   private stepInFlight = false;
+  private ticking = false;
   private timer: NodeJS.Timeout | null = null;
 
   /**
@@ -53,6 +54,11 @@ class ReserveReconciler {
 
   /** One reconcile pass. Exposed for tests; never throws. */
   async tick(): Promise<void> {
+    // Reentrancy guard: a balance read slower than checkSeconds would let the
+    // next interval fire into a still-running tick. Overlap is harmless (the
+    // queue serializes steps anyway) but there's no point stacking reads.
+    if (this.ticking) return;
+    this.ticking = true;
     try {
       this.spendableZat = await safeBalance();
       this.refilling = decideRefilling(this.refilling, this.spendableZat, {
@@ -74,6 +80,8 @@ class ReserveReconciler {
     } catch (err) {
       // safeBalance/decide can't realistically throw, but the loop must not die.
       console.error(`[reserve] tick failed: ${err instanceof Error ? err.message : err}`);
+    } finally {
+      this.ticking = false;
     }
   }
 

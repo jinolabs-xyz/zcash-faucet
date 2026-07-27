@@ -16,6 +16,11 @@
 import { config } from "../config";
 import type { Refiller } from "./refiller";
 
+// Cap coinbase UTXOs per shield tx (zcashd's old default). A long mining
+// backlog gets swept over several steps instead of one oversized tx, and it
+// keeps each queue-held step bounded so drips never wait long.
+const SHIELD_UTXO_LIMIT = 50;
+
 interface RpcError {
   code: number;
   message: string;
@@ -53,16 +58,22 @@ export class ZalletRefiller implements Refiller {
   }
 
   async step(): Promise<void> {
-    const { address } = this.z;
+    const { account, address } = this.z;
+    if (!account) throw new Error("ZALLET_ACCOUNT (account UUID) is required to shield coinbase.");
     if (!address) throw new Error("ZALLET_ADDRESS is required to shield coinbase.");
 
-    // z_shieldcoinbase "*" <toaddress> — sweep mature coinbase from any of the
-    // wallet's transparent addresses into the faucet UA. Errors like "no UTXOs
-    // to shield" just mean the miner hasn't produced anything spendable yet;
-    // the reconciler treats a failed step as "try again next tick".
+    // z_shieldcoinbase <account-uuid> <toaddress> <fee=null> <limit> — sweep
+    // mature coinbase from the account's transparent receivers into the faucet
+    // UA. This zallet rejects zcashd's "*" wildcard on purpose (it would link
+    // unrelated accounts on-chain), so we scope by our account UUID; the
+    // privacy policy then defaults to AllowLinkingAccountAddresses, the only
+    // one valid for a UUID sweep. Fee must be null (always ZIP 317). Errors
+    // like "no UTXOs to shield" just mean the miner hasn't produced anything
+    // spendable yet; the reconciler treats a failed step as "try again next
+    // tick".
     const op = await this.rpc<{ opid?: string; remainingUTXOs?: number }>(
       "z_shieldcoinbase",
-      `["*",${JSON.stringify(address)}]`,
+      `[${JSON.stringify(account)},${JSON.stringify(address)},null,${SHIELD_UTXO_LIMIT}]`,
     );
     if (!op?.opid) return; // nothing to shield this tick
     await this.awaitOperation(op.opid);
