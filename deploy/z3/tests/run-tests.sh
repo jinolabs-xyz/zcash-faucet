@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Exercises zsnap-export.sh / zsnap-import.sh against stub zebrad, docker,
-# curl and systemctl (tests/stubs/). Verifies the script logic (gating,
-# parsing, rotation, idempotence, both export modes, retries, window
-# recovery) without a chain, a real docker, or the fork binary.
+# Single entrypoint for the deploy/z3 shell-tooling tests: zsnap export and
+# import, then the wallet backup and restore pair. Docker (and for zsnap,
+# zebrad/systemctl/curl) come from tests/stubs/; sqlite, tar, gpg and the
+# hash checks in the backup tests run for real.
 #
-# Needs Linux (flock, GNU find) plus zstd. From a Mac or for a clean room:
+# Needs Linux (flock, GNU find) plus zstd, gnupg, python3. From a Mac or a
+# clean room:
 #   docker run --rm -v "$(git rev-parse --show-toplevel)":/repo:ro ubuntu:24.04 \
-#     bash -c 'apt-get update -qq && apt-get install -y -qq zstd curl \
+#     bash -c 'apt-get update -qq && apt-get install -y -qq zstd curl gnupg python3 \
 #              && bash /repo/deploy/z3/tests/run-tests.sh'
 # Scratch state goes under TMPDIR, never into the repo.
 set -uo pipefail
@@ -15,6 +16,8 @@ SCRATCH="${TEST_SCRATCH:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 REPO="${TEST_REPO:-$(cd "$SCRATCH/../../.." && pwd)}"
 EXPORT="$REPO/deploy/z3/zsnap-export.sh"
 IMPORT="$REPO/deploy/z3/zsnap-import.sh"
+BACKUP="$REPO/deploy/z3/backup.sh"
+RESTORE="$REPO/deploy/z3/restore-backup.sh"
 
 pass=0; fail=0
 ok()   { pass=$((pass+1)); echo "  ok: $1"; }
@@ -197,6 +200,100 @@ STUB_IMPORT_FAIL=1 bash "$IMPORT" "$T/plain" > "$T/fail.log" 2>&1
 check "failed import exits nonzero" "[ $? -ne 0 ]"
 check "zsnap-import-* tempdir swept" "! ls -d '$STUB_CACHE_DIR'/zsnap-import-* 2>/dev/null | grep -q ."
 check "no state dir left behind" "[ ! -d '$STUB_CACHE_DIR/state' ]"
+
+# ---------------------------------------------------------------------------
+# backup.sh / restore-backup.sh. Real sqlite dbs in fake volumes, real gpg.
+
+mkdb()   { python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute('create table t(v)'); c.executemany('insert into t values(?)',[(x,) for x in sys.argv[2:]]); c.commit()" "$@"; }
+dumpdb() { python3 -c "import sqlite3,sys; print(*[r[0] for r in sqlite3.connect(sys.argv[1]).execute('select v from t order by v')])" "$1"; }
+seed_wallet() {
+  mkdir -p "$STUB_VOLROOT/z3-testnet-zallet" "$STUB_VOLROOT/zcash-faucet_faucet_data"
+  echo "AGE-SECRET-KEY-STUB" > "$STUB_VOLROOT/z3-testnet-zallet/encryption-identity.txt"
+  mkdb "$STUB_VOLROOT/z3-testnet-zallet/wallet.db" note1 note2
+  mkdb "$STUB_VOLROOT/zcash-faucet_faucet_data/faucet.db" claim1
+}
+backup_env() {
+  unset BACKUP_KEEP BACKUP_UPLOAD_CMD 2>/dev/null
+  export BACKUP_DIR="$T/backups" BACKUP_PASSPHRASE="test-passphrase"
+}
+
+echo "== backup: happy path produces a decryptable, verified archive"
+fresh_env; backup_env; seed_wallet
+bash "$BACKUP" > "$T/b1.log" 2>&1
+check "backup exits 0" "[ $? -eq 0 ]"
+archive="$(find "$BACKUP_DIR/archives" -name '*.tar.gz.gpg' | head -1)"
+check "archive exists" "[ -n '$archive' ]"
+check "archive is mode 600" "[ \"\$(stat -c %a '$archive')\" = '600' ]"
+check "sha256 sidecar matches" "[ \"\$(cat \"\${archive%.tar.gz.gpg}.sha256\")\" = \"\$(sha256sum '$archive' | cut -d' ' -f1)\" ]"
+mkdir -p "$T/out"
+gpg --batch --quiet -d --passphrase-fd 3 3<<<"test-passphrase" "$archive" | tar -xzf - -C "$T/out"
+check "decrypts with the passphrase" "[ $? -eq 0 ]"
+check "identity in archive" "grep -q AGE-SECRET-KEY-STUB '$T/out/faucet-backup/encryption-identity.txt'"
+check "wallet content survived" "[ \"\$(dumpdb '$T/out/faucet-backup/wallet.db')\" = 'note1 note2' ]"
+check "ledger content survived" "[ \"\$(dumpdb '$T/out/faucet-backup/faucet.db')\" = 'claim1' ]"
+check "manifest verifies" "(cd '$T/out/faucet-backup' && grep -E '^[0-9a-f]{64} ' MANIFEST | sha256sum -c --quiet -)"
+
+echo "== backup: refusals and skips"
+fresh_env; backup_env; seed_wallet
+BACKUP_PASSPHRASE='' bash "$BACKUP" > "$T/nopass.log" 2>&1
+check "no passphrase -> refuses" "[ $? -ne 0 ] && grep -q 'refusing an unencrypted backup' '$T/nopass.log'"
+fresh_env; backup_env
+bash "$BACKUP" > "$T/fresh.log" 2>&1
+check "no zallet volume -> quiet exit 0" "[ $? -eq 0 ] && grep -q 'nothing to back up' '$T/fresh.log'"
+fresh_env; backup_env
+mkdir -p "$STUB_VOLROOT/z3-testnet-zallet"
+bash "$BACKUP" > "$T/nowallet.log" 2>&1
+check "volume without wallet.db -> loud failure" "[ $? -ne 0 ] && grep -q 'no wallet.db' '$T/nowallet.log'"
+fresh_env; backup_env
+mkdir -p "$STUB_VOLROOT/z3-testnet-zallet"
+echo id > "$STUB_VOLROOT/z3-testnet-zallet/encryption-identity.txt"
+mkdb "$STUB_VOLROOT/z3-testnet-zallet/wallet.db" n1
+bash "$BACKUP" > "$T/noledger.log" 2>&1
+check "missing ledger -> wallet-only backup, said so" "[ $? -eq 0 ] && grep -q 'wallet-only' '$T/noledger.log'"
+
+echo "== backup: rotation and upload hook"
+fresh_env; backup_env; seed_wallet
+export BACKUP_KEEP=2
+hook="$T/hook.log"
+# The $1 must land literally in the hook script, expansion happens when the
+# hook runs, not here.
+# shellcheck disable=SC2016
+printf '#!/usr/bin/env bash\necho "$1" >> %q\n' "$hook" > "$T/hook.sh" && chmod +x "$T/hook.sh"
+export BACKUP_UPLOAD_CMD="$T/hook.sh"
+for i in 1 2 3; do bash "$BACKUP" > "$T/rot-$i.log" 2>&1 || bad "rotation run $i failed"; sleep 1.1; done
+n="$(find "$BACKUP_DIR/archives" -name '*.tar.gz.gpg' | wc -l | tr -d ' ')"
+check "rotation keeps 2 (got $n)" "[ '$n' = '2' ]"
+check "sidecars rotated with archives" "[ \"\$(find '$BACKUP_DIR/archives' -name '*.sha256' | wc -l | tr -d ' ')\" = '2' ]"
+check "upload hook called every run" "[ \"\$(wc -l < '$hook' | tr -d ' ')\" = '3' ]"
+
+echo "== restore: roundtrip into empty volumes"
+fresh_env; backup_env; seed_wallet
+bash "$BACKUP" > /dev/null 2>&1
+rm -rf "$STUB_VOLROOT/z3-testnet-zallet" "$STUB_VOLROOT/zcash-faucet_faucet_data"
+bash "$RESTORE" > "$T/r1.log" 2>&1
+check "restore exits 0" "[ $? -eq 0 ]"
+check "identity restored" "grep -q AGE-SECRET-KEY-STUB '$STUB_VOLROOT/z3-testnet-zallet/encryption-identity.txt'"
+check "wallet restored intact" "[ \"\$(dumpdb '$STUB_VOLROOT/z3-testnet-zallet/wallet.db')\" = 'note1 note2' ]"
+check "ledger restored intact" "[ \"\$(dumpdb '$STUB_VOLROOT/zcash-faucet_faucet_data/faucet.db')\" = 'claim1' ]"
+
+echo "== restore: refusals"
+fresh_env; backup_env; seed_wallet
+bash "$BACKUP" > /dev/null 2>&1
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+bash "$RESTORE" > "$T/rrun.log" 2>&1
+check "refuses while zallet runs" "[ $? -ne 0 ] && grep -q 'stop the stack' '$T/rrun.log'"
+rm -f "$STUB_CONTAINERS/z3-testnet-zallet-1"
+bash "$RESTORE" > "$T/rclob.log" 2>&1
+check "refuses to clobber existing wallet.db" "[ $? -ne 0 ] && grep -q 'refusing to overwrite' '$T/rclob.log'"
+FORCE=1 bash "$RESTORE" > "$T/rforce.log" 2>&1
+check "FORCE=1 overrides" "[ $? -eq 0 ]"
+archive="$(find "$BACKUP_DIR/archives" -name '*.tar.gz.gpg' | head -1)"
+printf '0%.0s' {1..64} > "${archive%.tar.gz.gpg}.sha256"
+rm -rf "$STUB_VOLROOT/z3-testnet-zallet"
+bash "$RESTORE" > "$T/rtamper.log" 2>&1
+check "tampered sidecar -> refuses" "[ $? -ne 0 ] && grep -q 'does not match its .sha256' '$T/rtamper.log'"
+BACKUP_PASSPHRASE=wrong bash "$RESTORE" "$archive" > "$T/rwrong.log" 2>&1
+check "wrong passphrase -> fails" "[ $? -ne 0 ]"
 
 echo
 echo "$pass passed, $fail failed"

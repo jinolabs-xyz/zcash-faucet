@@ -1,0 +1,16 @@
+# Fires faucet-backup.service on a schedule. Install with the service, see
+# the header in faucet-backup.service.
+[Unit]
+Description=Scheduled faucet wallet and ledger backup
+
+[Timer]
+# Every 6 hours at :45, offset from zsnap's :20 so the two never contend.
+# The payload is tiny, the cost of a tighter cadence would also be tiny,
+# but 6h bounds ledger loss to one cooldown window's worth of history.
+OnCalendar=00/6:45
+RandomizedDelaySec=5m
+# Run a missed backup at boot instead of waiting for the next slot.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
