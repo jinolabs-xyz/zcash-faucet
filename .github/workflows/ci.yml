@@ -1,0 +1,50 @@
+# CI: typecheck + tests + build for the app, shellcheck + harness for the infra scripts.
+# No secrets, no deploy — green here means main is buildable and the scripts parse.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  app:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # 23 is a floor, not a preference: `npm test` runs .ts files through
+          # `node --test` and needs native type stripping. Don't drop to 22 LTS
+          # without also changing the test script (that's SDE-App's file).
+          node-version: 23
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      # `npm run dev` can't bundle the node: import in src/lib/zcash/t2z.ts,
+      # so a real build is the only signal that the app actually ships.
+      - run: npm run build
+
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck deploy scripts
+        run: shellcheck -S warning deploy/deploy.sh deploy/z3/*.sh
+      - name: z3 test harness
+        # Single entrypoint only — deploy/z3/tests/stubs/ holds fake zebrad/docker
+        # binaries the runner puts on PATH, so never glob the tests dir.
+        # Guarded because the harness lands on a branch ahead of main.
+        run: |
+          if [ -f deploy/z3/tests/run-tests.sh ]; then
+            bash deploy/z3/tests/run-tests.sh
+          else
+            echo "no deploy/z3/tests/run-tests.sh on this ref, skipping"
+          fi
+      - name: cloud-init parses
+        run: python3 -c 'import yaml; yaml.safe_load(open("deploy/cloud-init.yaml"))'
