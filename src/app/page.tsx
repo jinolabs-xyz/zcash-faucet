@@ -270,6 +270,19 @@ export default function Home() {
     phase === "syncing" ? "PREPARING" : phase === "empty" ? (refilling ? "TOPPING UP" : "EMPTY") : "LIVE";
   const dotBg = live && phase !== "empty" ? "var(--color-accent)" : "transparent";
 
+  // One persistent live region announces phase changes to screen readers. It
+  // exists from first render (live regions mounted later announce unreliably)
+  // and holds a stable sentence per state, so it never spams: no tick counters,
+  // no percentages.
+  const announce =
+    phase === "syncing" ? "Node is syncing. The faucet will be ready shortly."
+    : phase === "empty" ? (refilling ? "Topping up the reserve. Drips resume in a moment." : "The faucet is out of TAZ right now.")
+    : phase === "submitting" ? (powState ? "Checking you are human. Nothing to do, it runs on its own." : "Sending your testnet ZEC. Keep this tab open.")
+    : phase === "success" ? "Sent. Your testnet ZEC is on its way."
+    : phase === "cooldown" ? "Already claimed. This address got its drip in the last 24 hours."
+    : phase === "error" ? "The send failed. Nothing left the wallet."
+    : "Faucet ready.";
+
   const pad = "clamp(16px,4vw,26px)";
   const kicker: CSSProperties = { fontFamily: "var(--mono)", fontSize: 10, fontWeight: 700, letterSpacing: ".14em", textTransform: "uppercase", color: "var(--color-accent)" };
   const rowLine: CSSProperties = { display: "flex", justifyContent: "space-between", gap: 12, padding: "8px 0", borderBottom: "1px solid var(--color-divider)", fontFamily: "var(--mono)", fontSize: 11.5 };
@@ -282,7 +295,7 @@ export default function Home() {
       <header className="nav" style={{ padding: `14px ${pad}`, gap: 14, flexWrap: "wrap" }}>
         <div className="nav-brand" style={{ fontSize: "clamp(15px,4vw,18px)", letterSpacing: "-.01em", marginRight: "auto" }}>Zcash Testnet Faucet</div>
         <div aria-live="polite" style={{ display: "flex", alignItems: "center", gap: 7, border: "2px solid var(--color-divider)", padding: "5px 9px", fontFamily: "var(--mono)", fontSize: 10, fontWeight: 700, letterSpacing: ".1em" }}>
-          <span style={{ width: 9, height: 9, flex: "none", background: dotBg, border: "2px solid var(--color-accent)", animation: "pulse 2.6s ease-in-out infinite" }} />
+          <span aria-hidden="true" style={{ width: 9, height: 9, flex: "none", background: dotBg, border: "2px solid var(--color-accent)", animation: "pulse 2.6s ease-in-out infinite" }} />
           <span>{statusText}</span>
         </div>
       </header>
@@ -311,11 +324,11 @@ export default function Home() {
         ].map((it) => (
           <span key={it.k}>{it.k} <b style={{ color: "var(--color-text)", fontWeight: 700 }}>{it.v}</b></span>
         ))}
-        <button className="btn btn-ghost btn-sm" onClick={() => setPanel((p) => !p)} style={{ marginLeft: "auto", padding: 0 }}>{panel ? "Hide live panel ▴" : "Live panel ▾"}</button>
+        <button className="btn btn-ghost btn-sm" onClick={() => setPanel((p) => !p)} aria-expanded={panel} aria-controls="live-panel" style={{ marginLeft: "auto", padding: 0 }}>{panel ? "Hide live panel ▴" : "Live panel ▾"}</button>
       </div>
 
       {panel && (
-        <div style={{ borderBottom: "2px solid var(--color-divider)", background: "var(--color-surface)", padding: `16px ${pad}` }}>
+        <div id="live-panel" style={{ borderBottom: "2px solid var(--color-divider)", background: "var(--color-surface)", padding: `16px ${pad}` }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", gap: "0 26px", maxWidth: 820 }}>
             {[
               { k: "node", v: node?.ready ? "ready" : "syncing" + (syncPct != null ? " (" + Math.round(syncPct) + "%)" : "") },
@@ -344,6 +357,7 @@ export default function Home() {
       )}
 
       <main style={{ flex: 1, width: "100%", maxWidth: 620, margin: "0 auto", padding: `clamp(22px,5vw,46px) ${pad} 60px`, display: "flex", flexDirection: "column", gap: 20 }}>
+        <p className="sr-only" role="status">{announce}</p>
         {(phase === "ready" || phase === "syncing" || phase === "empty") && (
           <div>
             <h1 style={{ fontSize: "clamp(27px,7.4vw,40px)", lineHeight: 1.08, letterSpacing: "-.025em", margin: "0 0 10px" }}>Get free testnet ZEC, sent privately.</h1>
@@ -358,8 +372,8 @@ export default function Home() {
               <span style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700 }}>{syncPct != null ? Math.round(syncPct) + "%" : "starting…"}</span>
             </div>
             <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>Syncing the node. The faucet will be ready shortly.</h2>
-            <div style={{ height: 10, border: "2px solid var(--color-divider)", position: "relative", overflow: "hidden" }}>
-              <i style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: syncPct != null ? Math.round(syncPct) + "%" : "100%", background: "repeating-linear-gradient(135deg,var(--color-accent) 0 3px,transparent 3px 7px)", backgroundSize: "26px 26px", animation: "hatch 1.1s linear infinite", opacity: syncPct != null ? 1 : 0.55 }} />
+            <div role="progressbar" aria-label="Node sync progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={syncPct != null ? Math.round(syncPct) : undefined} style={{ height: 10, border: "2px solid var(--color-divider)", position: "relative", overflow: "hidden" }}>
+              <i aria-hidden="true" style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: syncPct != null ? Math.round(syncPct) + "%" : "100%", background: "repeating-linear-gradient(135deg,var(--color-accent) 0 3px,transparent 3px 7px)", backgroundSize: "26px 26px", animation: "hatch 1.1s linear infinite", opacity: syncPct != null ? 1 : 0.55 }} />
             </div>
             <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.5, color: muted(60) }}>
               {height != null ? "Block " + num(height) + (nodeHeight ? " of " + num(nodeHeight) : "") + " · " : "Bringing the node online · "}first sync takes a while, one time. It becomes the real faucet automatically.
@@ -387,8 +401,8 @@ export default function Home() {
             </div>
             <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>Topping up the reserve. Drips resume in a moment.</h2>
             {refillPct != null && (
-              <div style={{ height: 10, border: "2px solid var(--color-divider)", position: "relative", overflow: "hidden" }}>
-                <i style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: refillPct + "%", background: "repeating-linear-gradient(135deg,var(--color-accent) 0 3px,transparent 3px 7px)", backgroundSize: "26px 26px", animation: "hatch 1.1s linear infinite" }} />
+              <div role="progressbar" aria-label="Reserve refill progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={refillPct} style={{ height: 10, border: "2px solid var(--color-divider)", position: "relative", overflow: "hidden" }}>
+                <i aria-hidden="true" style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: refillPct + "%", background: "repeating-linear-gradient(135deg,var(--color-accent) 0 3px,transparent 3px 7px)", backgroundSize: "26px 26px", animation: "hatch 1.1s linear infinite" }} />
               </div>
             )}
             <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>The faucet is mining and shielding its own coins right now. Nothing is broken. The balance dipped below the reserve line and it is being restored automatically.</p>
@@ -490,7 +504,7 @@ export default function Home() {
         )}
 
         {phase === "error" && (
-          <div style={{ border: "2px solid var(--color-accent)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 11 }}>
+          <div role="alert" style={{ border: "2px solid var(--color-accent)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 11 }}>
             <span style={kicker}>Send failed, nothing left the wallet</span>
             <h2 style={{ margin: 0, fontSize: 19, lineHeight: 1.25 }}>That didn&apos;t go through.</h2>
             <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(70), maxWidth: "52ch" }}>{errMsg}</p>
@@ -504,13 +518,13 @@ export default function Home() {
         <div className="hr" style={{ margin: "6px 0 0" }} />
 
         <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 16px", alignItems: "center" }}>
-          <button className="btn btn-ghost btn-sm" onClick={() => { setTool((t) => (t === "lookup" ? null : "lookup")); setLookupRes(""); }} style={{ padding: 0 }}>Balance lookup</button>
+          <button className="btn btn-ghost btn-sm" onClick={() => { setTool((t) => (t === "lookup" ? null : "lookup")); setLookupRes(""); }} aria-expanded={tool === "lookup"} aria-controls="tool-lookup" style={{ padding: 0 }}>Balance lookup</button>
           <button className="btn btn-ghost btn-sm" onClick={generate} style={{ padding: 0 }}>Generate a test address</button>
-          <button className="btn btn-ghost btn-sm" onClick={() => setTool((t) => (t === "about" ? null : "about"))} style={{ padding: 0 }}>How it works</button>
+          <button className="btn btn-ghost btn-sm" onClick={() => setTool((t) => (t === "about" ? null : "about"))} aria-expanded={tool === "about"} aria-controls="tool-about" style={{ padding: 0 }}>How it works</button>
         </div>
 
         {tool === "lookup" && (
-          <div style={{ border: "2px solid var(--color-divider)", padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+          <div id="tool-lookup" style={{ border: "2px solid var(--color-divider)", padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
             <label htmlFor="lk" style={{ ...kicker, color: muted(60) }}>Balance lookup</label>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
               <input id="lk" className="input" type="text" spellCheck={false} placeholder="any testnet address" value={lookupAddr} onChange={(e) => { setLookupAddr(e.target.value); setLookupRes(""); }} style={{ flex: "1 1 220px", minHeight: 44, fontSize: 13 }} />
@@ -521,7 +535,7 @@ export default function Home() {
         )}
 
         {tool === "about" && (
-          <div style={{ border: "2px solid var(--color-divider)", padding: 14, display: "flex", flexDirection: "column", gap: 9 }}>
+          <div id="tool-about" style={{ border: "2px solid var(--color-divider)", padding: 14, display: "flex", flexDirection: "column", gap: 9 }}>
             <span style={{ ...kicker, color: muted(60) }}>How it works</span>
             <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: muted(72) }}>This faucet mines its own testnet blocks, so every TAZ it hands out is one it produced. It never has to queue at another faucet for a top-up, and it can tell you honestly when it is empty.</p>
             <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: muted(72) }}>Drips leave as shielded (z→z) transactions. The amount and the recipient never touch the public ledger, which is also why a send takes about ten seconds: it is building the zero-knowledge proof that makes that possible.</p>
@@ -533,7 +547,7 @@ export default function Home() {
 
       <div style={{ position: "sticky", bottom: 0, borderTop: "2px solid var(--color-divider)", background: "var(--color-surface)", padding: `10px ${pad}`, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
         <span style={{ fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".05em", color: muted(50) }}>{status?.network ?? "testnet"} · {status?.sender ?? "…"} backend</span>
-        <button className="btn btn-secondary btn-sm" onClick={() => setTheme((t) => (t === "ink" ? "paper" : "ink"))} style={{ marginLeft: "auto" }}>{theme === "ink" ? "Paper" : "Ink"}</button>
+        <button className="btn btn-secondary btn-sm" onClick={() => setTheme((t) => (t === "ink" ? "paper" : "ink"))} aria-label={theme === "ink" ? "Switch to paper (light) theme" : "Switch to ink (dark) theme"} style={{ marginLeft: "auto" }}>{theme === "ink" ? "Paper" : "Ink"}</button>
       </div>
     </div>
   );
