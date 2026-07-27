@@ -294,7 +294,9 @@ export default function Home() {
     >
       <header className="nav" style={{ padding: `14px ${pad}`, gap: 14, flexWrap: "wrap" }}>
         <div className="nav-brand" style={{ fontSize: "clamp(15px,4vw,18px)", letterSpacing: "-.01em", marginRight: "auto" }}>Zcash Testnet Faucet</div>
-        <div aria-live="polite" style={{ display: "flex", alignItems: "center", gap: 7, border: "2px solid var(--color-divider)", padding: "5px 9px", fontFamily: "var(--mono)", fontSize: 10, fontWeight: 700, letterSpacing: ".1em" }}>
+        {/* Not a live region: the sr-only status region in <main> owns phase
+            announcements, a live badge here would say everything twice. */}
+        <div style={{ display: "flex", alignItems: "center", gap: 7, border: "2px solid var(--color-divider)", padding: "5px 9px", fontFamily: "var(--mono)", fontSize: 10, fontWeight: 700, letterSpacing: ".1em" }}>
           <span aria-hidden="true" style={{ width: 9, height: 9, flex: "none", background: dotBg, border: "2px solid var(--color-accent)", animation: "pulse 2.6s ease-in-out infinite" }} />
           <span>{statusText}</span>
         </div>
@@ -527,7 +529,7 @@ export default function Home() {
           <div id="tool-lookup" style={{ border: "2px solid var(--color-divider)", padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
             <label htmlFor="lk" style={{ ...kicker, color: muted(60) }}>Balance lookup</label>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-              <input id="lk" className="input" type="text" spellCheck={false} placeholder="any testnet address" value={lookupAddr} onChange={(e) => { setLookupAddr(e.target.value); setLookupRes(""); }} style={{ flex: "1 1 220px", minHeight: 44, fontSize: 13 }} />
+              <input id="lk" className="input" type="text" spellCheck={false} placeholder="any testnet address" value={lookupAddr} onChange={(e) => { setLookupAddr(e.target.value); setLookupRes(""); }} style={{ flex: "1 1 220px", minHeight: 44 }} />
               <button className="btn btn-secondary btn-sm" onClick={doLookup} style={{ minHeight: 44 }}>Look up</button>
             </div>
             {lookupRes && <p style={{ margin: 0, fontFamily: "var(--mono)", fontSize: 12, lineHeight: 1.5 }}>{lookupRes}</p>}
