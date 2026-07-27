@@ -78,7 +78,7 @@ Config in `/etc/faucet/miner.env`:
 | `MINER_MODE` | `proposal` | `submit` goes live |
 | `MINER_RPC_URL` | `http://127.0.0.1:18232` | `http://zebra:18232` from inside the docker network |
 | `MINER_COOKIE_PATH` | `/var/run/auth/.cookie` | from the `z3-testnet-cookie` volume |
-| `MINER_THREADS` | `1` | 1 or 2, the CPU cap bounds it anyway |
+| `MINER_THREADS` | `1` | 1..=4. `CPUQuota=150%` makes past 2 pointless, and the ceiling is what `MemoryMax=1G` affords at ~144 MB per thread |
 | `MINER_TEMPLATE_SECS` | `60` | refetch the template after this long |
 | `MINER_POLL_SECS` | `5` | backoff after an RPC error |
 

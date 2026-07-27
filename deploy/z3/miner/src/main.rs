@@ -60,6 +60,24 @@ enum Mode {
     Submit,
 }
 
+/// Upper bound on solver threads, set by what the service unit's MemoryMax
+/// affords: ~144 MB per thread against MemoryMax=1G. Keep the two in step.
+const MAX_THREADS: usize = 4;
+
+/// Solver memory per thread, and the MemoryMax in zcash-testnet-miner.service.
+const SOLVER_MB_PER_THREAD: usize = 144;
+const UNIT_MEMORY_MAX_MB: usize = 1024;
+
+// The ceiling only means anything if the worst case fits under the unit's cap.
+// Raising MAX_THREADS without raising MemoryMax would trade a clear config
+// error for a cgroup kill in a 30s restart loop, so fail the build instead.
+// The 128 MB is headroom for the runtime itself, not just the solvers.
+const _: () = assert!(
+    MAX_THREADS * SOLVER_MB_PER_THREAD < UNIT_MEMORY_MAX_MB - 128,
+    "MAX_THREADS does not fit under MemoryMax in zcash-testnet-miner.service: \
+     raise both together or lower the ceiling"
+);
+
 fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
 }
@@ -81,8 +99,13 @@ fn load_config() -> Result<Config, String> {
     let threads: usize = env_or("MINER_THREADS", "1")
         .parse()
         .map_err(|e| format!("MINER_THREADS: {e}"))?;
-    if threads == 0 || threads > 8 {
-        return Err(format!("MINER_THREADS must be 1..=8, got {threads}"));
+    if threads == 0 || threads > MAX_THREADS {
+        return Err(format!(
+            "MINER_THREADS must be 1..={MAX_THREADS}, got {threads}. Each solver thread holds \
+             ~144 MB and the service unit caps MemoryMax=1G, so a higher count would be \
+             cgroup-killed in a restart loop instead of failing here. Raise both together if \
+             you really want more (CPUQuota=150% makes past 2 pointless anyway)."
+        ));
     }
     Ok(Config {
         rpc_url: env_or("MINER_RPC_URL", "http://127.0.0.1:18232"),

@@ -22,8 +22,11 @@ ExecStart=/opt/faucet/zcash-testnet-miner
 CPUQuota=150%
 Nice=15
 IOSchedulingClass=idle
-# The solver holds ~144 MB per thread. Cap well above that so a leak trips
-# the limit instead of the OOM killer picking zebra.
+# The solver holds ~144 MB per thread, and the binary caps MINER_THREADS at
+# 4 (MAX_THREADS in main.rs) precisely so the worst case fits here with room
+# to spare. Raising either one without the other buys a cgroup kill in a
+# restart loop. The cap exists so a leak trips this limit rather than the
+# OOM killer picking zebra.
 MemoryMax=1G
 # Mining is best-effort and long-running: always come back, but back off so
 # a misconfigured miner cannot spin.
