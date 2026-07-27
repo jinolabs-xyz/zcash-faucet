@@ -8,12 +8,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { generateTransparentAccount, type ThrowawayAccount } from "@/lib/zcash/keys";
 import { generateShieldedAccount } from "@/lib/zcash/t2z";
+import { withApi, apiError } from "@/lib/api";
 
 export const runtime = "nodejs";
 
 const BodySchema = z.object({ type: z.enum(["transparent", "shielded"]).default("shielded") });
 
-export async function POST(req: NextRequest) {
+export const POST = withApi("account", async (req: NextRequest, api) => {
   let type: "transparent" | "shielded";
   try {
     ({ type } = BodySchema.parse(await req.json().catch(() => ({}))));
@@ -39,9 +40,7 @@ export async function POST(req: NextRequest) {
     }
     return NextResponse.json({ ok: true, account: generateTransparentAccount() });
   } catch (err) {
-    return NextResponse.json(
-      { ok: false, error: `Account generation failed: ${err instanceof Error ? err.message : "error"}` },
-      { status: 500 },
-    );
+    api.logError(err, "account generation");
+    return apiError(500, "Account generation failed on our side. Try again in a moment.", api);
   }
-}
+});

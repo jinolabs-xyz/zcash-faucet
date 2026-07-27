@@ -8,15 +8,16 @@ import { config } from "@/lib/config";
 import { clientIp } from "@/lib/clientIp";
 import { fingerprintIp } from "@/lib/privacy";
 import { issueChallenge } from "@/lib/pow";
+import { withApi } from "@/lib/api";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest) {
+export const GET = withApi("pow-challenge", async (req: NextRequest) => {
   if (config.challenge !== "pow") {
     return NextResponse.json({ ok: false, error: "PoW challenge is not enabled." }, { status: 404 });
   }
   const raw = clientIp(req);
   const ipHash = raw ? fingerprintIp(raw) : "anon";
   return NextResponse.json({ ok: true, ...issueChallenge(ipHash) });
-}
+});

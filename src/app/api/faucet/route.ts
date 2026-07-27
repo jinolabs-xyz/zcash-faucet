@@ -18,6 +18,7 @@ import { getSendQueue, QueueFullError } from "@/lib/zcash/queue";
 import { reserveClaim, finalizeClaim } from "@/lib/db";
 import { fingerprintIp } from "@/lib/privacy";
 import { clientIp } from "@/lib/clientIp";
+import { withApi, apiError } from "@/lib/api";
 
 export const runtime = "nodejs"; // better-sqlite3 needs Node, not Edge.
 
@@ -35,7 +36,7 @@ const BodySchema = z.object({
     .optional(),
 });
 
-export async function POST(req: NextRequest) {
+export const POST = withApi("faucet", async (req: NextRequest, api) => {
   const now = Math.floor(Date.now() / 1000);
   // Raw IP stays local (only handed to Turnstile, which Cloudflare sees anyway).
   // Everything we persist uses the salted fingerprint instead. null = we can't
@@ -125,7 +126,9 @@ export async function POST(req: NextRequest) {
     if (err instanceof QueueFullError) {
       return NextResponse.json({ ok: false, error: err.message }, { status: 503 });
     }
-    const message = err instanceof Error ? err.message : "Send failed.";
-    return NextResponse.json({ ok: false, error: message }, { status: 502 });
+    // The raw send error can carry wallet/RPC internals. Log it under the
+    // request id, tell the user only what they need: nothing moved, retry.
+    api.logError(err, "send failed");
+    return apiError(502, "The send failed on our side. Nothing left the wallet. Try again in a moment.", api);
   }
-}
+});
