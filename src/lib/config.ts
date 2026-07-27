@@ -4,6 +4,11 @@
  * to avoid floating-point drift; TAZ values in env are converted here.
  */
 
+// Explicit .ts extension, same reason as pow.ts's config import: node --test
+// (type stripping) resolves literal paths only, and config sits on the import
+// chain of every test that touches pow or the senders.
+import { saltRejectionReason } from "./saltGuard.ts";
+
 export const ZATOSHI_PER_TAZ = 100_000_000n;
 
 function num(name: string, fallback: number): number {
@@ -147,3 +152,13 @@ if (config.reserve.lowZatoshi >= config.reserve.targetZatoshi) {
       `(got low=${config.reserve.lowZatoshi} zat, target=${config.reserve.targetZatoshi} zat).`,
   );
 }
+
+// A production faucet with an active challenge gate must not run on an empty
+// or template-placeholder RATE_LIMIT_SALT: the PoW gate signs challenges with
+// it, so a known salt makes the gate forgeable. Same fail-loud posture.
+const saltProblem = saltRejectionReason({
+  salt: process.env.RATE_LIMIT_SALT ?? "",
+  production: process.env.NODE_ENV === "production",
+  challenge: config.challenge,
+});
+if (saltProblem) throw new Error(saltProblem);
