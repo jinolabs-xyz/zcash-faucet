@@ -278,7 +278,7 @@ export default function Home() {
               <span style={kicker}>Getting ready</span>
               <span style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700 }}>{syncPct != null ? Math.round(syncPct) + "%" : "starting…"}</span>
             </div>
-            <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>Syncing the node — you can queue a request now.</h2>
+            <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>Syncing the node — the faucet will be ready shortly.</h2>
             <div style={{ height: 10, border: "2px solid var(--color-divider)", position: "relative", overflow: "hidden" }}>
               <i style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: syncPct != null ? Math.round(syncPct) + "%" : "100%", background: "repeating-linear-gradient(135deg,var(--color-accent) 0 3px,transparent 3px 7px)", backgroundSize: "26px 26px", animation: "hatch 1.1s linear infinite", opacity: syncPct != null ? 1 : 0.55 }} />
             </div>
@@ -306,8 +306,8 @@ export default function Home() {
               {touched && "err" in c && c.err && <span style={{ fontSize: 12.5, lineHeight: 1.45, color: "var(--color-accent-700)", fontWeight: 500, maxWidth: "52ch" }}>{c.err}</span>}
               {!addr.trim() && <button className="btn btn-ghost btn-sm" onClick={generate} style={{ padding: 0 }}>Generate a test address</button>}
             </div>
-            <button className="btn btn-primary" onClick={submit} disabled={phase === "empty"} style={{ width: "100%", justifyContent: "space-between" }}>
-              <span>{phase === "syncing" ? "Queue " + dripText + " — sends when ready" : phase === "empty" ? "Waiting for the next block reward" : "Request " + dripText}</span>
+            <button className="btn btn-primary" onClick={submit} disabled={phase === "empty" || phase === "syncing"} style={{ width: "100%", justifyContent: "space-between" }}>
+              <span>{phase === "syncing" ? "Node syncing — check back soon" : phase === "empty" ? "Waiting for the next block reward" : "Request " + dripText}</span>
               <span aria-hidden="true">→</span>
             </button>
             <p style={{ margin: 0, fontSize: 11.5, letterSpacing: ".02em", color: muted(55), fontFamily: "var(--mono)" }}>{dripText} · once per address / 24h · shielded z→z</p>
