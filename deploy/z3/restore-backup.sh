@@ -72,28 +72,45 @@ stage="$work/faucet-backup"
 (cd "$stage" && grep -E '^[0-9a-f]{64} ' MANIFEST | sha256sum -c --quiet -) \
   || die "decrypted contents do not match the archive MANIFEST, refusing"
 
-restore_file() { # $1 src, $2 volume, $3 dest name, $4 owner (uid:gid or "keep")
-  local vol_dir
-  docker volume inspect "$2" >/dev/null 2>&1 || docker volume create "$2" >/dev/null
-  vol_dir="$(docker volume inspect -f '{{.Mountpoint}}' "$2")"
-  if [ -f "$vol_dir/$3" ] && [ "$FORCE" != "1" ]; then
-    die "$2 already has $3, refusing to overwrite it (FORCE=1 if you really mean it)"
-  fi
-  install -m 600 "$1" "$vol_dir/$3"
-  if [ "$4" != "keep" ]; then
-    chown "$4" "$vol_dir/$3"
-  else
+prep_volume() { # $1 volume, echoes its mountpoint (creating the volume if absent)
+  docker volume inspect "$1" >/dev/null 2>&1 || docker volume create "$1" >/dev/null
+  docker volume inspect -f '{{.Mountpoint}}' "$1"
+}
+
+# Refuse BEFORE writing anything. A per-file check that fails halfway would
+# leave a freshly restored identity next to the old wallet.db, which is the
+# exact mismatched-keys state the refusal exists to prevent. All destinations
+# are checked up front, then all writes happen.
+zallet_dir="$(prep_volume "$BACKUP_ZALLET_VOLUME")"
+targets=("$zallet_dir/encryption-identity.txt" "$zallet_dir/wallet.db")
+faucet_dir=""
+if [ -f "$stage/faucet.db" ]; then
+  faucet_dir="$(prep_volume "$BACKUP_FAUCET_VOLUME")"
+  targets+=("$faucet_dir/faucet.db")
+fi
+if [ "$FORCE" != "1" ]; then
+  for t in "${targets[@]}"; do
+    [ ! -f "$t" ] \
+      || die "$t already exists, refusing to overwrite (nothing was written; FORCE=1 if you really mean it)"
+  done
+fi
+
+install_file() { # $1 src, $2 dest, $3 owner (uid:gid or "keep")
+  install -m 600 "$1" "$2"
+  if [ "$3" = "keep" ]; then
     # Match whatever owns the volume root, docker seeded it from the image.
-    chown --reference="$vol_dir" "$vol_dir/$3"
+    chown --reference="$(dirname "$2")" "$2"
+  else
+    chown "$3" "$2"
   fi
-  log "restored $3 into $2"
+  log "restored $(basename "$2") into $(dirname "$2")"
 }
 
 # zallet runs as uid 1000 (z3 contract).
-restore_file "$stage/encryption-identity.txt" "$BACKUP_ZALLET_VOLUME" encryption-identity.txt 1000:1000
-restore_file "$stage/wallet.db"               "$BACKUP_ZALLET_VOLUME" wallet.db               1000:1000
-if [ -f "$stage/faucet.db" ]; then
-  restore_file "$stage/faucet.db" "$BACKUP_FAUCET_VOLUME" faucet.db keep
+install_file "$stage/encryption-identity.txt" "$zallet_dir/encryption-identity.txt" 1000:1000
+install_file "$stage/wallet.db"               "$zallet_dir/wallet.db"               1000:1000
+if [ -n "$faucet_dir" ]; then
+  install_file "$stage/faucet.db" "$faucet_dir/faucet.db" keep
 else
   log "archive has no ledger, wallet-only restore"
 fi

@@ -292,8 +292,25 @@ printf '0%.0s' {1..64} > "${archive%.tar.gz.gpg}.sha256"
 rm -rf "$STUB_VOLROOT/z3-testnet-zallet"
 bash "$RESTORE" > "$T/rtamper.log" 2>&1
 check "tampered sidecar -> refuses" "[ $? -ne 0 ] && grep -q 'does not match its .sha256' '$T/rtamper.log'"
+# Clear the tampered sidecar so this run gets PAST the sidecar gate and
+# actually exercises gpg, and assert on gpg's own failure, not bare nonzero.
+rm -f "${archive%.tar.gz.gpg}.sha256"
 BACKUP_PASSPHRASE=wrong bash "$RESTORE" "$archive" > "$T/rwrong.log" 2>&1
-check "wrong passphrase -> fails" "[ $? -ne 0 ]"
+check "wrong passphrase -> gpg decryption fails" "[ $? -ne 0 ] && grep -qi 'decryption failed' '$T/rwrong.log'"
+
+echo "== restore: clobber refusal writes nothing at all"
+fresh_env; backup_env; seed_wallet
+bash "$BACKUP" > /dev/null 2>&1
+# Destination that would pass the identity write and fail on wallet.db: the
+# old per-file check restored the identity first, pairing new keys with the
+# old wallet. The refusal must fire before any write.
+rm -rf "$STUB_VOLROOT/z3-testnet-zallet"
+mkdir -p "$STUB_VOLROOT/z3-testnet-zallet"
+mkdb "$STUB_VOLROOT/z3-testnet-zallet/wallet.db" oldnote
+bash "$RESTORE" > "$T/rpartial.log" 2>&1
+check "refuses on the later-checked file" "[ $? -ne 0 ] && grep -q 'refusing to overwrite' '$T/rpartial.log'"
+check "identity was NOT written" "[ ! -f '$STUB_VOLROOT/z3-testnet-zallet/encryption-identity.txt' ]"
+check "old wallet untouched" "[ \"\$(dumpdb '$STUB_VOLROOT/z3-testnet-zallet/wallet.db')\" = 'oldnote' ]"
 
 echo
 echo "$pass passed, $fail failed"
