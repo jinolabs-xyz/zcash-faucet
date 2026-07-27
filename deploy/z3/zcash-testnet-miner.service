@@ -1,0 +1,42 @@
+# Solo CPU miner that funds the faucet with public testnet blocks.
+# See miner/ for the code and MINING.md for the whole story.
+# Install:
+#   cd /opt/zcash-faucet/deploy/z3/miner && cargo build --release
+#   cp target/release/zcash-testnet-miner /opt/faucet/
+#   cp ../zcash-testnet-miner.service /etc/systemd/system/
+#   # config (MINER_MODE, MINER_THREADS, ...) in /etc/faucet/miner.env
+#   systemctl daemon-reload && systemctl enable --now zcash-testnet-miner
+[Unit]
+Description=Zcash testnet solo CPU miner (faucet funding)
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+# MINER_MODE stays 'proposal' until the first live block is coordinated.
+EnvironmentFile=-/etc/faucet/miner.env
+Environment=MINER_MODE=proposal
+ExecStart=/opt/faucet/zcash-testnet-miner
+# The node and the wallet always win. 150% is one and a half cores of the
+# box, and idle IO plus a deep nice keep the solver out of their way.
+CPUQuota=150%
+Nice=15
+IOSchedulingClass=idle
+# The solver holds ~144 MB per thread, and the binary caps MINER_THREADS at
+# 4 (MAX_THREADS in main.rs) precisely so the worst case fits here with room
+# to spare. Raising either one without the other buys a cgroup kill in a
+# restart loop. The cap exists so a leak trips this limit rather than the
+# OOM killer picking zebra.
+MemoryMax=1G
+# Mining is best-effort and long-running: always come back, but back off so
+# a misconfigured miner cannot spin.
+Restart=always
+RestartSec=30
+# Reads only the cookie file and talks to the RPC port.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
