@@ -115,6 +115,20 @@ class CompositeRealSender implements Sender {
   }
 }
 
+/**
+ * Add funds to the simulated mock balance. Only the mock refiller uses this,
+ * so the reserve loop is testable end to end without a node. Throws in any
+ * other mode rather than silently pretending funds arrived.
+ */
+export function creditMockBalance(zat: bigint): void {
+  const s = getSender();
+  if (!(s instanceof MockSender)) {
+    throw new Error(`creditMockBalance is mock-only (sender is "${s.name}").`);
+  }
+  const g = globalThis as unknown as { __faucetMockBal: bigint };
+  g.__faucetMockBal += zat;
+}
+
 let cached: Sender | null = null;
 
 export function getSender(): Sender {

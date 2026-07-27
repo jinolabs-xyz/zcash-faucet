@@ -76,6 +76,19 @@ export const config = {
     pollMs: Math.max(250, Math.floor(num("ZALLET_POLL_MS", 1500))),
   },
 
+  // Reserve top-up loop (src/lib/reserve): start refilling when spendable
+  // drops below low, stop once it reaches target. The gap between the two is
+  // the hysteresis band that stops the miner flapping on and off.
+  reserve: {
+    targetZatoshi: tazToZatoshi(num("FAUCET_RESERVE_TARGET_TAZ", 15)),
+    lowZatoshi: tazToZatoshi(num("FAUCET_RESERVE_LOW_TAZ", 5)),
+    checkSeconds: Math.max(5, Math.floor(num("FAUCET_RESERVE_CHECK_SECONDS", 30))),
+  },
+
+  // Whether the refill loop may actually move funds (mine + shield). Off until
+  // tip cutover: mining against a still-syncing node would fork us off-chain.
+  miner: { active: process.env.FAUCET_MINER_ACTIVE === "true" },
+
   // Public address shown on the Donate tab so people can refill the faucet.
   donationAddress: process.env.FAUCET_DONATION_ADDRESS ?? "",
 
@@ -87,6 +100,10 @@ export const config = {
 
   // Simulated spendable balance for the mock sender (real sender reads on-chain).
   mockBalanceZatoshi: tazToZatoshi(num("FAUCET_MOCK_BALANCE_TAZ", 10)),
+
+  // Explicit opt-in for the mock refiller, so a mock-mode deploy never
+  // silently "mines" simulated funds. Tests and local runs turn it on.
+  mockRefill: process.env.FAUCET_MOCK_REFILL === "true",
 
   // Max sends waiting in the serial FIFO queue before we reject with "busy".
   sendQueueMaxPending: Math.max(1, Math.floor(num("SEND_QUEUE_MAX_PENDING", 20))),
@@ -121,3 +138,12 @@ export const config = {
 
   network: "testnet" as const,
 } as const;
+
+// A low mark at or above the target would make the hysteresis contradictory
+// (start and stop at once). Fail loud at boot, not weirdly at runtime.
+if (config.reserve.lowZatoshi >= config.reserve.targetZatoshi) {
+  throw new Error(
+    "FAUCET_RESERVE_LOW_TAZ must be below FAUCET_RESERVE_TARGET_TAZ " +
+      `(got low=${config.reserve.lowZatoshi} zat, target=${config.reserve.targetZatoshi} zat).`,
+  );
+}
