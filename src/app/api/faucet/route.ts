@@ -13,7 +13,7 @@ import { config } from "@/lib/config";
 import { validateTestnetAddress } from "@/lib/zcash/address";
 import { verifyTurnstile } from "@/lib/turnstile";
 import { verifySolution } from "@/lib/pow";
-import { getSender, safeBalance } from "@/lib/zcash/send";
+import { getSender, safeBalance, type SendResult } from "@/lib/zcash/send";
 import { getSendQueue, QueueFullError } from "@/lib/zcash/queue";
 import { reserveClaim, finalizeClaim } from "@/lib/db";
 import { fingerprintIp } from "@/lib/privacy";
@@ -48,13 +48,13 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
   try {
     body = BodySchema.parse(await req.json());
   } catch {
-    return NextResponse.json({ ok: false, error: "Invalid request body." }, { status: 400 });
+    return apiError(400, "Invalid request body.", api);
   }
 
   // 1. Address
   const info = validateTestnetAddress(body.address);
   if (!info.valid) {
-    return NextResponse.json({ ok: false, error: info.reason }, { status: 400 });
+    return apiError(400, info.reason ?? "Invalid address.", api);
   }
   const address = body.address.trim();
 
@@ -63,16 +63,16 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
   //    issued to, so a solution can't be reused from a different client.
   if (config.challenge === "pow") {
     if (!body.pow) {
-      return NextResponse.json({ ok: false, error: "Proof of work required." }, { status: 403 });
+      return apiError(403, "Proof of work required.", api);
     }
     const verdict = verifySolution(body.pow, ipHash ?? "anon");
     if (!verdict.ok) {
-      return NextResponse.json({ ok: false, error: verdict.reason ?? "Proof of work failed." }, { status: 403 });
+      return apiError(403, verdict.reason ?? "Proof of work failed.", api);
     }
   } else if (config.challenge === "turnstile") {
     const human = await verifyTurnstile(body.turnstileToken, rawIp ?? undefined);
     if (!human) {
-      return NextResponse.json({ ok: false, error: "Captcha verification failed." }, { status: 403 });
+      return apiError(403, "Captcha verification failed.", api);
     }
   }
 
@@ -81,10 +81,7 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
   //    yet (real sender not wired); we skip the guard and let send() surface it.
   const balance = await safeBalance();
   if (balance !== null && balance < config.dripZatoshi + config.minReserveZatoshi) {
-    return NextResponse.json(
-      { ok: false, error: "The faucet is empty right now. Please check back after it's refilled." },
-      { status: 503 },
-    );
+    return apiError(503, "The faucet is empty right now. Please check back after it's refilled.", api);
   }
 
   // 4. Reserve atomically (cooldown + daily cap in one transaction). This is the
@@ -99,36 +96,49 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     dailyCapZat: config.dailyCapZatoshi,
   });
   if (!reservation.ok) {
-    return NextResponse.json(
-      { ok: false, error: reservation.reason, retryAfterSeconds: reservation.retryAfterSeconds },
-      { status: reservation.kind === "cap" ? 503 : 429 },
-    );
+    return apiError(reservation.kind === "cap" ? 503 : 429, reservation.reason, api, {
+      retryAfterSeconds: reservation.retryAfterSeconds,
+    });
   }
 
   // 5. Send through the serial FIFO queue — one transaction touches the single
-  //    hot wallet at a time. Then finalise the reservation ('sent' commits the
-  //    cooldown; 'failed' releases it so the user can retry without waiting).
+  //    hot wallet at a time. The send and the ledger commit are separate try
+  //    blocks on purpose: "nothing left the wallet" may only ever be said when
+  //    the send itself failed.
+  let result: SendResult;
   try {
-    const result = await getSendQueue().run(() =>
+    result = await getSendQueue().run(() =>
       getSender().send({ toAddress: address, addressInfo: info, amountZat: config.dripZatoshi }),
     );
-    await finalizeClaim(reservation.claimId, "sent", result.txid);
-    return NextResponse.json({
-      ok: true,
-      txid: result.txid,
-      explorerUrl: result.explorerUrl,
-      amountTaz: config.dripTaz,
-      sender: config.sender,
-      to: { kind: info.kind, shielded: info.shielded },
-    });
   } catch (err) {
-    await finalizeClaim(reservation.claimId, "failed", null);
+    // Nothing moved. Release the reservation so the user can retry freely.
+    try {
+      await finalizeClaim(reservation.claimId, "failed", null);
+    } catch (finErr) {
+      api.logError(finErr, "finalize(failed) after failed send");
+    }
     if (err instanceof QueueFullError) {
-      return NextResponse.json({ ok: false, error: err.message }, { status: 503 });
+      return apiError(503, err.message, api);
     }
     // The raw send error can carry wallet/RPC internals. Log it under the
     // request id, tell the user only what they need: nothing moved, retry.
     api.logError(err, "send failed");
     return apiError(502, "The send failed on our side. Nothing left the wallet. Try again in a moment.", api);
   }
+
+  // The send is broadcast. If recording it fails, that is an operator problem
+  // (the cooldown may not commit), never a reason to tell the user it failed.
+  try {
+    await finalizeClaim(reservation.claimId, "sent", result.txid);
+  } catch (err) {
+    api.logError(err, "finalize(sent) failed AFTER broadcast, cooldown may be unrecorded");
+  }
+  return NextResponse.json({
+    ok: true,
+    txid: result.txid,
+    explorerUrl: result.explorerUrl,
+    amountTaz: config.dripTaz,
+    sender: config.sender,
+    to: { kind: info.kind, shielded: info.shielded },
+  });
 });

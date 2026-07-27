@@ -19,7 +19,7 @@ export const POST = withApi("account", async (req: NextRequest, api) => {
   try {
     ({ type } = BodySchema.parse(await req.json().catch(() => ({}))));
   } catch {
-    return NextResponse.json({ ok: false, error: "Invalid request." }, { status: 400 });
+    return apiError(400, "Invalid request.", api);
   }
 
   try {

@@ -17,7 +17,7 @@ export const GET = withApi("balance", async (req: NextRequest, api) => {
   const address = req.nextUrl.searchParams.get("address")?.trim() ?? "";
   const info = validateTestnetAddress(address);
   if (!info.valid) {
-    return NextResponse.json({ ok: false, error: info.reason }, { status: 400 });
+    return apiError(400, info.reason ?? "Invalid address.", api);
   }
 
   if (info.shielded) {
