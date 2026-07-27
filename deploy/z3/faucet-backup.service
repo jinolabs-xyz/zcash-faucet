@@ -1,0 +1,24 @@
+# Backs up the faucet's irreplaceable state (wallet identity + wallet.db +
+# rate-limit ledger), encrypted. See backup.sh and BACKUPS.md.
+# Install (alongside the watchdog and zsnap):
+#   cp backup.sh restore-backup.sh /opt/faucet/ && chmod +x /opt/faucet/*.sh
+#   cp faucet-backup.service faucet-backup.timer /etc/systemd/system/
+#   # required: BACKUP_PASSPHRASE in /etc/faucet/backup.env (chmod 600)
+#   systemctl daemon-reload && systemctl enable --now faucet-backup.timer
+[Unit]
+Description=Faucet wallet and ledger backup (encrypted)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# BACKUP_PASSPHRASE lives here, keep the file root-owned mode 600.
+EnvironmentFile=-/etc/faucet/backup.env
+ExecStart=/opt/faucet/backup.sh
+# The payload is small (two sqlite dbs and a key file), but never compete
+# with the node anyway.
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target
