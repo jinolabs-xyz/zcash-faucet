@@ -113,9 +113,10 @@ The cost is that you run a node: this is not a free-tier, no-node deploy.
 zk-proving is CPU/RAM-heavy (tens of seconds per send), so size the box
 accordingly — well above Render's 512 MB free instance.
 
-> **DigitalOcean, three steps:** [`deploy/digitalocean/`](deploy/digitalocean/) —
-> paste one cloud-init file at Droplet creation, point DNS, fund the printed
-> address. The box self-configures (Docker, firewall, swap, full stack).
+> **Linode / DigitalOcean, three steps:** paste [`deploy/cloud-init.yaml`](deploy/cloud-init.yaml)
+> at VM creation, point DNS, fund the printed address. The box self-configures
+> (Docker, firewall, swap, full stack). Click-paths: [`deploy/linode/`](deploy/linode/) ·
+> [`deploy/digitalocean/`](deploy/digitalocean/).
 >
 > **Turnkey deploy:** [`deploy/z3/`](deploy/z3/) is a Docker Compose overlay that
 > runs the faucet + a Caddy reverse proxy (auto-TLS) on top of the

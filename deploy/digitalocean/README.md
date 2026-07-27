@@ -2,7 +2,7 @@
 
 The goal: an operator does three things, and end users just paste an address on
 the site and receive shielded funds. Everything else is automated by
-[`cloud-init.yaml`](cloud-init.yaml) + [`../deploy.sh`](../deploy.sh).
+[`../cloud-init.yaml`](../cloud-init.yaml) + [`../deploy.sh`](../deploy.sh).
 
 ## 1. Create the Droplet (~2 min)
 
@@ -10,8 +10,8 @@ the site and receive shielded funds. Everything else is automated by
 - Size: Basic → Premium AMD/Intel, **4 vCPU / 8 GB / 160 GB** (~$48/mo).
   Light testnet duty runs on 2 vCPU / 8 GB (~$42) too — sends just queue longer.
 - **Advanced Options → Add Initialization scripts**: paste the whole of
-  [`cloud-init.yaml`](cloud-init.yaml), after editing its two marked lines
-  (your repo URL, your domain — or delete the domain line for plain HTTP).
+  [`../cloud-init.yaml`](../cloud-init.yaml), after editing its one marked line
+  (your domain — or delete that line for plain HTTP).
 - Add your SSH key → **Create Droplet**.
 
 The box then installs Docker (with log rotation), enables the firewall

@@ -1,15 +1,15 @@
 #cloud-config
-# Zcash shielded faucet — DigitalOcean user-data.
+# Zcash shielded faucet — cloud-init user-data (Linode, DigitalOcean, Vultr,
+# Hetzner… anything that takes cloud-init with an Ubuntu 24.04 image).
 #
-# Paste this whole file into "Advanced Options → Add Initialization scripts
-# (free)" when creating the Droplet, after editing the TWO placeholders in
-# runcmd below:
+# Paste this whole file into the provider's user-data box when creating the VM
+# (Linode: "Add User Data" · DigitalOcean: "Add Initialization scripts"),
+# after editing the ONE placeholder in runcmd below:
 #
-#   1. YOUR_REPO_URL      — the faucet repo's git URL
-#   2. FAUCET_DOMAIN=…    — your hostname (or delete the var for plain HTTP)
+#   faucet.example.org  →  your hostname (or delete that line for plain HTTP)
 #
-# Recommended Droplet: Ubuntu 24.04 LTS, Basic → Premium AMD/Intel,
-# 4 vCPU / 8 GB / 160 GB ($48/mo) — 2 vCPU / 8 GB works for light testnet use.
+# Recommended size: 4 vCPU / 8 GB / 160 GB (2 vCPU / 8 GB works for light
+# testnet duty — sends just queue a little longer).
 #
 # The box then sets itself up unattended: Docker (with log rotation), firewall,
 # swap, clone, full stack bring-up. Zebra's initial sync takes a few hours;
@@ -64,10 +64,10 @@ write_files:
       WantedBy=multi-user.target
 
 runcmd:
-  # ---- EDIT THESE TWO LINES ------------------------------------------------
+  # ---- EDIT THIS LINE: your domain (or delete it for plain-HTTP on :80) ----
   - echo "faucet.example.org" > /etc/faucet-domain
-  - git clone https://github.com/YOUR_USER/zcash-faucet /opt/zcash-faucet
   # --------------------------------------------------------------------------
+  - git clone https://github.com/jinolabs-xyz/zcash-faucet /opt/zcash-faucet
   - curl -fsSL https://get.docker.com | sh
   - systemctl restart docker
   # Only SSH + web reach the box; node/wallet RPC stay on the docker network.
