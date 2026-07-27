@@ -146,6 +146,13 @@ timer exports the synced chain state on a schedule (live-safe, read-only), and
 a fresh box imports the latest snapshot before zebra starts, via one URL in
 `cloud-init.yaml`.
 
+## Monitoring and alerts
+
+The watchdog can post to a Slack or Discord webhook when the faucet is
+genuinely un-servable, and `faucet-metrics.sh` writes balance, queue depth
+and sync state to a Prometheus textfile every 30 seconds.
+[OBSERVABILITY.md](OBSERVABILITY.md) covers both.
+
 ## Operating notes
 
 - **Hot wallet.** Zallet holds spending keys. Keep the box locked down, keep

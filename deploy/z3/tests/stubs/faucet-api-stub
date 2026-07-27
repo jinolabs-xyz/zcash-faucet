@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Serves canned /api/ready and /api/status bodies for the metrics tests.
+# STUB_API_DOWN=1 makes both endpoints unreachable.
+set -uo pipefail
+port="${1:?port}"
+python3 - "$port" <<'PY'
+import http.server, json, os, sys
+READY = {"ready": False, "reason": "below reserve, refilling",
+         "node": {"ready": True, "syncPercent": 99.98, "height": 4204726, "nodeHeight": 4204726},
+         "backend": {"reachable": True}, "balanceTaz": 3.5, "ts": 1785180000}
+STATUS = {"network": "testnet", "dripTaz": 0.1, "balanceTaz": 3.5, "empty": False,
+          "queueDepth": 2, "backend": "zallet",
+          "node": {"ready": True, "syncPercent": 99.98, "height": 4204726, "nodeHeight": 4204726},
+          "miner": {"active": True}}
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/api/ready":
+            body, code = READY, (200 if READY["ready"] else 503)
+        elif self.path == "/api/status":
+            body, code = STATUS, 200
+        else:
+            body, code = {"error": "nope"}, 404
+        raw = json.dumps(body).encode()
+        self.send_response(code); self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(raw))); self.end_headers(); self.wfile.write(raw)
+    def log_message(self, *a): pass
+http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+PY
