@@ -208,7 +208,7 @@ mkdb()   { python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.exe
 dumpdb() { python3 -c "import sqlite3,sys; print(*[r[0] for r in sqlite3.connect(sys.argv[1]).execute('select v from t order by v')])" "$1"; }
 seed_wallet() {
   mkdir -p "$STUB_VOLROOT/z3-testnet-zallet" "$STUB_VOLROOT/zcash-faucet_faucet_data"
-  echo "AGE-SECRET-KEY-STUB" > "$STUB_VOLROOT/z3-testnet-zallet/encryption-identity.txt"
+  echo "AGE-SECRET-KEY-STUB" > "$STUB_VOLROOT/z3-testnet-zallet/identity.txt"
   mkdb "$STUB_VOLROOT/z3-testnet-zallet/wallet.db" note1 note2
   mkdb "$STUB_VOLROOT/zcash-faucet_faucet_data/faucet.db" claim1
 }
@@ -246,7 +246,7 @@ bash "$BACKUP" > "$T/nowallet.log" 2>&1
 check "volume without wallet.db -> loud failure" "[ $? -ne 0 ] && grep -q 'no wallet.db' '$T/nowallet.log'"
 fresh_env; backup_env
 mkdir -p "$STUB_VOLROOT/z3-testnet-zallet"
-echo id > "$STUB_VOLROOT/z3-testnet-zallet/encryption-identity.txt"
+echo id > "$STUB_VOLROOT/z3-testnet-zallet/identity.txt"
 mkdb "$STUB_VOLROOT/z3-testnet-zallet/wallet.db" n1
 bash "$BACKUP" > "$T/noledger.log" 2>&1
 check "missing ledger -> wallet-only backup, said so" "[ $? -eq 0 ] && grep -q 'wallet-only' '$T/noledger.log'"
@@ -272,7 +272,7 @@ bash "$BACKUP" > /dev/null 2>&1
 rm -rf "$STUB_VOLROOT/z3-testnet-zallet" "$STUB_VOLROOT/zcash-faucet_faucet_data"
 bash "$RESTORE" > "$T/r1.log" 2>&1
 check "restore exits 0" "[ $? -eq 0 ]"
-check "identity restored" "grep -q AGE-SECRET-KEY-STUB '$STUB_VOLROOT/z3-testnet-zallet/encryption-identity.txt'"
+check "identity restored" "grep -q AGE-SECRET-KEY-STUB '$STUB_VOLROOT/z3-testnet-zallet/identity.txt'"
 check "wallet restored intact" "[ \"\$(dumpdb '$STUB_VOLROOT/z3-testnet-zallet/wallet.db')\" = 'note1 note2' ]"
 check "ledger restored intact" "[ \"\$(dumpdb '$STUB_VOLROOT/zcash-faucet_faucet_data/faucet.db')\" = 'claim1' ]"
 
@@ -309,7 +309,7 @@ mkdir -p "$STUB_VOLROOT/z3-testnet-zallet"
 mkdb "$STUB_VOLROOT/z3-testnet-zallet/wallet.db" oldnote
 bash "$RESTORE" > "$T/rpartial.log" 2>&1
 check "refuses on the later-checked file" "[ $? -ne 0 ] && grep -q 'refusing to overwrite' '$T/rpartial.log'"
-check "identity was NOT written" "[ ! -f '$STUB_VOLROOT/z3-testnet-zallet/encryption-identity.txt' ]"
+check "identity was NOT written" "[ ! -f '$STUB_VOLROOT/z3-testnet-zallet/identity.txt' ]"
 check "old wallet untouched" "[ \"\$(dumpdb '$STUB_VOLROOT/z3-testnet-zallet/wallet.db')\" = 'oldnote' ]"
 
 echo

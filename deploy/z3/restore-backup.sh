@@ -24,6 +24,10 @@ BACKUP_NETWORK="${BACKUP_NETWORK:-testnet}"
 BACKUP_ZALLET_VOLUME="${BACKUP_ZALLET_VOLUME:-z3-${BACKUP_NETWORK}-zallet}"
 BACKUP_FAUCET_VOLUME="${BACKUP_FAUCET_VOLUME:-zcash-faucet_faucet_data}"
 BACKUP_DIR="${BACKUP_DIR:-/var/lib/faucet-backups}"
+# Destination filename for the identity in the zallet volume. z3's shipped
+# config points keystore.encryption_identity at identity.txt (the archive
+# member name is constant, only this destination follows your config).
+BACKUP_IDENTITY_FILE="${BACKUP_IDENTITY_FILE:-identity.txt}"
 BACKUP_PASSPHRASE="${BACKUP_PASSPHRASE:-}"
 FORCE="${FORCE:-0}"
 
@@ -82,7 +86,7 @@ prep_volume() { # $1 volume, echoes its mountpoint (creating the volume if absen
 # exact mismatched-keys state the refusal exists to prevent. All destinations
 # are checked up front, then all writes happen.
 zallet_dir="$(prep_volume "$BACKUP_ZALLET_VOLUME")"
-targets=("$zallet_dir/encryption-identity.txt" "$zallet_dir/wallet.db")
+targets=("$zallet_dir/$BACKUP_IDENTITY_FILE" "$zallet_dir/wallet.db")
 faucet_dir=""
 if [ -f "$stage/faucet.db" ]; then
   faucet_dir="$(prep_volume "$BACKUP_FAUCET_VOLUME")"
@@ -107,8 +111,8 @@ install_file() { # $1 src, $2 dest, $3 owner (uid:gid or "keep")
 }
 
 # zallet runs as uid 1000 (z3 contract).
-install_file "$stage/encryption-identity.txt" "$zallet_dir/encryption-identity.txt" 1000:1000
-install_file "$stage/wallet.db"               "$zallet_dir/wallet.db"               1000:1000
+install_file "$stage/encryption-identity.txt" "$zallet_dir/$BACKUP_IDENTITY_FILE" 1000:1000
+install_file "$stage/wallet.db"               "$zallet_dir/wallet.db"              1000:1000
 if [ -n "$faucet_dir" ]; then
   install_file "$stage/faucet.db" "$faucet_dir/faucet.db" keep
 else

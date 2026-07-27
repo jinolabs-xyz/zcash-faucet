@@ -34,6 +34,11 @@ BACKUP_NETWORK="${BACKUP_NETWORK:-testnet}"
 BACKUP_ZALLET_VOLUME="${BACKUP_ZALLET_VOLUME:-z3-${BACKUP_NETWORK}-zallet}"
 BACKUP_FAUCET_VOLUME="${BACKUP_FAUCET_VOLUME:-zcash-faucet_faucet_data}"
 BACKUP_DIR="${BACKUP_DIR:-/var/lib/faucet-backups}"
+# The identity filename INSIDE the zallet volume. z3's shipped zallet.toml
+# sets keystore.encryption_identity to /var/lib/zallet/identity.txt, which
+# overrides zallet's own encryption-identity.txt default, so identity.txt is
+# what actually exists on a z3 box. Match your config if you changed it.
+BACKUP_IDENTITY_FILE="${BACKUP_IDENTITY_FILE:-identity.txt}"
 BACKUP_KEEP="${BACKUP_KEEP:-14}"              # archives kept after a new one lands
 BACKUP_PASSPHRASE="${BACKUP_PASSPHRASE:-}"    # required, see header
 BACKUP_UPLOAD_CMD="${BACKUP_UPLOAD_CMD:-}"    # optional: run <cmd> <archive> after backup
@@ -64,8 +69,8 @@ if ! zallet_dir="$(docker volume inspect -f '{{.Mountpoint}}' "$BACKUP_ZALLET_VO
 fi
 [ -f "$zallet_dir/wallet.db" ] \
   || die "$BACKUP_ZALLET_VOLUME exists but has no wallet.db, refusing a partial wallet backup"
-[ -f "$zallet_dir/encryption-identity.txt" ] \
-  || die "$BACKUP_ZALLET_VOLUME has no encryption-identity.txt, refusing a partial wallet backup"
+[ -f "$zallet_dir/$BACKUP_IDENTITY_FILE" ] \
+  || die "$BACKUP_ZALLET_VOLUME has no $BACKUP_IDENTITY_FILE, refusing a partial wallet backup (BACKUP_IDENTITY_FILE if yours is named differently)"
 
 work="$(mktemp -d "$BACKUP_DIR/work/backup.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
@@ -88,7 +93,9 @@ PY
 }
 
 log "backing up wallet from $BACKUP_ZALLET_VOLUME"
-cp "$zallet_dir/encryption-identity.txt" "$stage/encryption-identity.txt"
+# The member name inside the archive is constant regardless of what the box
+# config calls the file, so archives restore across config changes.
+cp "$zallet_dir/$BACKUP_IDENTITY_FILE" "$stage/encryption-identity.txt"
 sqlite_backup "$zallet_dir/wallet.db" "$stage/wallet.db"
 
 # The ledger is second-tier: losing it costs cooldown history, not funds.

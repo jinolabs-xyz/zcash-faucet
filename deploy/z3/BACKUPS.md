@@ -4,9 +4,13 @@ Chain state re-syncs (and [SNAPSHOTS.md](SNAPSHOTS.md) makes that fast).
 Containers rebuild. Config is in git. Exactly two things on this box exist
 nowhere else:
 
-1. **The wallet**: `encryption-identity.txt` and `wallet.db` in the
-   `z3-testnet-zallet` volume. Together they are the faucet's spending keys
-   and funds. Lose them and the faucet's balance is gone for good.
+1. **The wallet**: the age identity (`identity.txt`, the name z3's shipped
+   `zallet.toml` configures, override with `BACKUP_IDENTITY_FILE` if yours
+   differs) and `wallet.db`, both in the `z3-testnet-zallet` volume.
+   Together they are the faucet's spending keys and funds. Lose them and
+   the faucet's balance is gone for good. Inside the archive the identity
+   always travels under the constant name `encryption-identity.txt`, so
+   archives restore unchanged across config renames.
 2. **The rate-limit ledger**: `faucet.db` in the `zcash-faucet_faucet_data`
    volume. Cooldown and daily-cap history. Losing it costs nothing but a
    window where users can re-claim early, second tier but free to include.
