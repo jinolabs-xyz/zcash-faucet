@@ -13,7 +13,9 @@
 #          (FAUCET_DOMAIN optional; omit for a plain-HTTP :80 smoke test)
 #
 # Safe to re-run: it skips steps already done. The one unavoidable pauses are the
-# initial chain sync (hours, one time) and funding the faucet address.
+# initial chain sync (hours, one time) and funding the faucet address. The site
+# itself is served from the start: the overlay goes up before the sync wait and
+# shows an honest syncing state until the chain and account are ready.
 set -euo pipefail
 
 NETWORK="${NETWORK:-testnet}"
@@ -49,6 +51,52 @@ RPCPW="$(cat "$PWFILE")"
 
 say "Starting Zebra (the node) — first sync takes hours, one time"
 docker compose $ENVF up -d zebra
+
+# 2. Site up first, before the sync wait --------------------------------------
+# The web frontend serves an honest syncing state long before the chain is
+# usable, so the overlay goes up the moment Zebra is started. Anyone hitting
+# the box sees live progress instead of a refused connection.
+
+# One owner for port 80. Earlier bring-ups ran a hand-started faucet-web
+# container that binds 80 and fights the overlay's Caddy for it. Retire it,
+# tightly scoped: only containers named faucet-web, and only when they carry
+# no compose project label, so anything compose-managed survives even if a
+# name happens to collide.
+for c in $(docker ps -aq --filter name=faucet-web); do
+  if [ -z "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$c")" ]; then
+    cname="$(docker inspect -f '{{.Name}}' "$c" | sed 's|^/||')"
+    say "Retiring hand-started container $cname (port 80 belongs to the overlay)"
+    docker rm -f "$c" >/dev/null
+  fi
+done
+
+ENVOUT="$HERE/z3/faucet.env"
+# Fills faucet.env in place. Account args may be empty on the first pass:
+# the app treats an unset account as "not ready" and reports that honestly,
+# which is exactly the state we want served while the chain syncs.
+write_env(){  # $1 = account uuid, $2 = address
+  [ -f "$ENVOUT" ] || cp "$HERE/z3/faucet.env.example" "$ENVOUT"
+  python3 - "$ENVOUT" "$RPCPW" "$1" "$2" <<'PY'
+import re,sys
+f,pw,uuid,addr=sys.argv[1:5]; s=open(f).read()
+vals={"ZALLET_RPC_USER":"faucet","ZALLET_RPC_PASSWORD":pw}
+if uuid: vals["ZALLET_ACCOUNT"]=uuid
+if addr: vals["ZALLET_ADDRESS"]=addr
+for k,v in vals.items(): s=re.sub(rf'(?m)^{k}=.*$', f'{k}={v}', s)
+if "RATE_LIMIT_SALT=change" in s: s=s.replace("RATE_LIMIT_SALT=change-me-to-a-long-random-secret", "RATE_LIMIT_SALT=__FILL_ME__")
+open(f,"w").write(s)
+PY
+}
+overlay_up(){
+  ( cd "$HERE/z3" && Z3_NETWORK_NAME="$NETNAME" FAUCET_DOMAIN="$FAUCET_DOMAIN" \
+      docker compose -f docker-compose.faucet.yml up -d --build )
+}
+
+say "Writing faucet.env (RPC auth now, account wired in after sync)"
+write_env "" ""
+say "Starting the faucet + Caddy — the site serves its syncing state immediately"
+overlay_up
+
 say "Waiting for Zebra to finish syncing (Ctrl-C is safe; re-run to resume)"
 ./scripts/check-zebra-readiness.sh "$([ "$NETWORK" = testnet ] && echo 18080 || echo 8080)"
 
@@ -56,7 +104,7 @@ say "Starting Zallet (the wallet)"
 docker compose $ENVF up -d zallet
 sleep 5
 
-# 2. Faucet's shielded account ----------------------------------------------
+# 3. Faucet's shielded account ----------------------------------------------
 # Created AFTER sync so its birthday = chain tip → no historical rescan.
 zrpc(){ docker compose $ENVF exec -T zallet zallet-zaino -d /var/lib/zallet rpc "$@"; }
 ACCTFILE="$HERE/.faucet-account"
@@ -69,7 +117,7 @@ fi
 # shellcheck disable=SC1090
 source "$ACCTFILE"
 
-# 3. Fund it -----------------------------------------------------------------
+# 4. Fund it -----------------------------------------------------------------
 # The faucet comes up fine unfunded (it reports "empty" until coins arrive), so
 # only pause for funding in an interactive shell — never under cloud-init.
 BAL="$(zrpc z_getbalanceforaccount "\"$UUID\"" 1 | python3 -c 'import sys,json;p=json.load(sys.stdin).get("pools",{});print(sum(int(v.get("valueZat",0)) for v in p.values()))' 2>/dev/null || echo 0)"
@@ -79,24 +127,18 @@ if [ "${BAL:-0}" -eq 0 ] && [ -t 0 ] && [ "${NONINTERACTIVE:-0}" != "1" ]; then
   read -r _ || true
 fi
 
-# 4. Faucet + Caddy overlay --------------------------------------------------
-say "Writing faucet.env"
-ENVOUT="$HERE/z3/faucet.env"
-if [ ! -f "$ENVOUT" ]; then cp "$HERE/z3/faucet.env.example" "$ENVOUT"; fi
-python3 - "$ENVOUT" "$RPCPW" "$UUID" "$ADDR" <<'PY'
-import re,sys
-f,pw,uuid,addr=sys.argv[1:5]; s=open(f).read()
-vals={"ZALLET_RPC_USER":"faucet","ZALLET_RPC_PASSWORD":pw,"ZALLET_ACCOUNT":uuid,"ZALLET_ADDRESS":addr}
-for k,v in vals.items(): s=re.sub(rf'(?m)^{k}=.*$', f'{k}={v}', s)
-if "RATE_LIMIT_SALT=change" in s: s=s.replace("RATE_LIMIT_SALT=change-me-to-a-long-random-secret", "RATE_LIMIT_SALT=__FILL_ME__")
-open(f,"w").write(s)
-PY
-grep -q "__FILL_ME__" "$ENVOUT" && say "NOTE: set a real RATE_LIMIT_SALT in $ENVOUT before going live"
-
-say "Starting the faucet + Caddy"
-cd "$HERE/z3"
-Z3_NETWORK_NAME="$NETNAME" FAUCET_DOMAIN="$FAUCET_DOMAIN" \
-  docker compose -f docker-compose.faucet.yml up -d --build
+# 5. Wire the account into the running site -----------------------------------
+say "Wiring the faucet account into faucet.env"
+write_env "$UUID" "$ADDR"
+# Plain `grep -q && say` would trip set -e on a re-run where the operator
+# already set a real salt (grep returns 1), killing the script right here.
+if grep -q "__FILL_ME__" "$ENVOUT"; then
+  say "NOTE: set a real RATE_LIMIT_SALT in $ENVOUT before going live"
+fi
+# The env file changed, so compose recreates the app container with the
+# account wired. A no-op when nothing changed, this is what makes re-runs safe.
+say "Restarting the faucet with the account wired"
+overlay_up
 
 say "Done. The faucet is live${FAUCET_DOMAIN:+ at https://$FAUCET_DOMAIN}."
 echo "   Check:   curl -s ${FAUCET_DOMAIN:+https://$FAUCET_DOMAIN}${FAUCET_DOMAIN:-http://localhost}/api/status"
