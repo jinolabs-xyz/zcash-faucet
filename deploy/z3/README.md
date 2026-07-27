@@ -138,6 +138,14 @@ LIGHTWALLETD_ENDPOINT=http://zaino:8137
 
 Then `docker compose -f docker-compose.faucet.yml up -d` to pick up the change.
 
+## Production domain and HTTPS
+
+Set `FAUCET_DOMAIN` (or `/etc/faucet-domain` on a cloud-init box) and Caddy
+gets a Let's Encrypt certificate on its own, redirects HTTP to HTTPS, and
+renews without a cron job. [HTTPS.md](HTTPS.md) covers the DNS and firewall
+order that has to be right first, how to verify, and what to do about
+Let's Encrypt rate limits while debugging.
+
 ## Fast rebuild from a snapshot
 
 Zebra's initial sync is the only day-long step above. [SNAPSHOTS.md](SNAPSHOTS.md)
