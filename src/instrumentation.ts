@@ -10,6 +10,18 @@ export async function register() {
   // Node runtime only (skip Edge).
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
 
+  // Boot-time config validation (reserve levels, RATE_LIMIT_SALT guard) throws
+  // on fatal misconfig. Without this catch Next swallows the throw, keeps the
+  // port open, and 500s every request, a zombie the watchdog can only ping
+  // forever. Exit instead: the process dies visibly and supervision restarts
+  // it once the operator fixes the env.
+  try {
+    await import("@/lib/config");
+  } catch (err) {
+    console.error(`[boot] fatal config error: ${err instanceof Error ? err.message : err}`);
+    process.exit(1);
+  }
+
   const { getReserveReconciler } = await import("@/lib/reserve/reconciler");
   getReserveReconciler().start();
 
