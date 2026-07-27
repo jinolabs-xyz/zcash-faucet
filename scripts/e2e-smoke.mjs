@@ -17,10 +17,17 @@ const ok = (name, cond, detail = "") => {
   if (!cond) failures++;
 };
 
-// The validator checks prefix + charset + length, so a fixture drawn from the
-// bech32 charset is a valid unified testnet address for the mock sender.
-const B32 = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
-const addr = (tag) => "utest1" + (tag + B32.repeat(7)).slice(0, 207);
+// The validator does a real bech32m checksum decode (address.ts), so these
+// are genuinely encoded vectors, not charset padding. Built the same way
+// address.test.ts builds its fixtures, then pasted as literals to keep this
+// script dependency-free:
+//   bech32m.encode("utest", bech32m.toWords(seq(96, N)), 1023)  // N = 3, 41
+// Mock mode validates the format and never sends, so the payload bytes only
+// need to be correctly sized, not a spendable receiver.
+const ADDR_A =
+  "utest1qv9pzxqlyckngw6zf9g9whn9d3eh4qvg37tfmf9tk2uup37w6hww86h3lrlsvrg5rv3zjvph8ez5c566v95x7anasj9e9xdq57htt0xretga3hlxah60kqsfzqt3uffvxvayzjz02ewkg6mj0xqg0r54ns6ly2rh";
+const ADDR_C =
+  "utest19ycrw0j9f3f45ctgdam8mpytj2v6pfawkk7v8jk3mr07dm05lvpqjyqhrcjjcve6g9yy74jav34hy7vqs78ft89r42cm307xeh2dhchf7rmlupgvzvdzz2p0xc75gj6jt9sxwmn40jpc4yvcn7n2md9mcg8qj85s";
 
 function leadingZeroBits(buf) {
   let bits = 0;
@@ -82,7 +89,7 @@ ok("challenge has seed/difficulty/exp/sig", !!(first.body.seed && first.body.dif
 ok(`solved ${first.body.difficulty} bits`, true, `${first.ms}ms`);
 
 // 4. A claim with the solution goes through and returns a txid.
-const A = addr("aaaa");
+const A = ADDR_A;
 const sent = await claim(A, first.pow);
 ok("claim with pow returns 200 ok", sent.status === 200 && sent.body.ok === true, `status ${sent.status} ${JSON.stringify(sent.body.error ?? "")}`);
 ok("claim returned a txid", typeof sent.body.txid === "string" && sent.body.txid.length >= 32);
@@ -96,7 +103,7 @@ ok("429 carries retryAfterSeconds", typeof repeat.body.retryAfterSeconds === "nu
 
 // 6. No solution, different address: rejected by the pow gate before any
 // rate-limit or send work happens.
-const bare = await claim(addr("cccc"), null);
+const bare = await claim(ADDR_C, null);
 ok("claim without pow is 403", bare.status === 403, `status ${bare.status}`);
 
 console.log(failures === 0 ? "\nsmoke: all green" : `\nsmoke: ${failures} FAILED`);
