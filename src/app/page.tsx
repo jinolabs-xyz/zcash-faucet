@@ -40,11 +40,11 @@ function check(addr: string) {
   const d = detect(a);
   if (d.kind === "none") return { ok: false as const };
   if (d.kind === "mainnet")
-    return { ok: false as const, err: "That's a mainnet address. This faucet only sends testnet TAZ — testnet addresses start with utest1, ztestsapling or tm." };
+    return { ok: false as const, err: "That's a mainnet address. This faucet only sends testnet TAZ. Testnet addresses start with utest1, ztestsapling or tm." };
   if (d.kind === "unknown")
     return { ok: false as const, err: "Not a Zcash testnet address. It should start with utest1 (unified), ztestsapling (Sapling) or tm (transparent)." };
   if (a.length < d.min)
-    return { ...d, ok: false as const, err: "That address looks cut short — " + a.length + " of about " + d.min + " characters." };
+    return { ...d, ok: false as const, err: "That address looks cut short: " + a.length + " of about " + d.min + " characters." };
   return { ...d, ok: true as const };
 }
 function short(a: string, h: number, t: number) { return !a ? "" : a.length <= h + t + 1 ? a : a.slice(0, h) + "…" + a.slice(-t); }
@@ -55,7 +55,7 @@ function dur(ms: number) {
   if (m > 0) return m + "m " + s + "s";
   return s + "s";
 }
-function num(n: number | null | undefined) { return n == null ? "—" : n.toLocaleString("en-US"); }
+function num(n: number | null | undefined) { return n == null ? "–" : n.toLocaleString("en-US"); }
 function randB32(n: number) { let o = ""; for (let i = 0; i < n; i++) o += B32[Math.floor(Math.random() * B32.length)]; return o; }
 
 const muted = (pct: number): string => `color-mix(in srgb, var(--color-text) ${pct}%, transparent)`;
@@ -217,13 +217,13 @@ export default function Home() {
   };
   const doLookup = async () => {
     const a = lookupAddr.trim();
-    if (detect(a).kind !== "ok") { setLookupRes("Not a testnet address — nothing to look up."); return; }
+    if (detect(a).kind !== "ok") { setLookupRes("Not a testnet address, nothing to look up."); return; }
     setLookupRes("Looking up…");
     try {
       const r = await fetch("/api/balance?address=" + encodeURIComponent(a));
       const d = await r.json();
       if (d?.ok === false) setLookupRes(d.error || "Couldn't look that up.");
-      else if (d?.shielded && d?.queryable === false) setLookupRes(d.note || "Shielded balances are private — provide a viewing key in a wallet to see this.");
+      else if (d?.shielded && d?.queryable === false) setLookupRes(d.note || "Shielded balances are private. Provide a viewing key in a wallet to see this.");
       else if (typeof d?.balanceTaz === "number") setLookupRes(d.balanceTaz + " TAZ" + (d.kind ? " · " + d.kind : ""));
       else setLookupRes("No balance found for this address.");
     } catch { setLookupRes("Couldn't reach the backend."); }
@@ -290,7 +290,7 @@ export default function Home() {
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "4px 18px", padding: `9px ${pad}`, borderBottom: "1px solid var(--color-divider)", fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".05em", color: muted(55) }}>
         {[
           { k: "node", v: node?.ready ? "ready" : "syncing" },
-          { k: "sync", v: syncPct != null ? Math.round(syncPct) + "%" : "—" },
+          { k: "sync", v: syncPct != null ? Math.round(syncPct) + "%" : "–" },
           { k: "height", v: num(height) },
           { k: "balance", v: balance ? balance.toFixed(1) + " TAZ" : "0 TAZ" },
           { k: "miner", v: status?.miner?.active ? "on" : "off" },
@@ -337,7 +337,7 @@ export default function Home() {
             ))}
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginTop: 14 }}>
-            <span className="tag tag-outline">Self-funded — mines its own TAZ</span>
+            <span className="tag tag-outline">Self-funded, mines its own TAZ</span>
             <span style={{ fontSize: 11.5, color: muted(55) }}>Numbers come straight off the node. Refreshes every few seconds.</span>
           </div>
         </div>
@@ -357,7 +357,7 @@ export default function Home() {
               <span style={kicker}>Getting ready</span>
               <span style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700 }}>{syncPct != null ? Math.round(syncPct) + "%" : "starting…"}</span>
             </div>
-            <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>Syncing the node — the faucet will be ready shortly.</h2>
+            <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>Syncing the node. The faucet will be ready shortly.</h2>
             <div style={{ height: 10, border: "2px solid var(--color-divider)", position: "relative", overflow: "hidden" }}>
               <i style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: syncPct != null ? Math.round(syncPct) + "%" : "100%", background: "repeating-linear-gradient(135deg,var(--color-accent) 0 3px,transparent 3px 7px)", backgroundSize: "26px 26px", animation: "hatch 1.1s linear infinite", opacity: syncPct != null ? 1 : 0.55 }} />
             </div>
@@ -413,7 +413,7 @@ export default function Home() {
             <input id="zaddr" className="input" type="text" spellCheck={false} autoComplete="off" autoCapitalize="off" placeholder="utest1… / ztestsapling… / tm…" value={addr} onChange={(e) => { setAddr(e.target.value); setTouched(false); }} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} aria-describedby="addrmsg" />
             <div id="addrmsg" aria-live="polite" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 9, minHeight: 24 }}>
               {badgeShow && "label" in c && <span className="tag tag-outline">{c.label}</span>}
-              {"priv" in c && c.priv === false && <span style={{ fontSize: 12, lineHeight: 1.45, color: muted(62) }}>Transparent address — this drip will be visible on-chain.</span>}
+              {"priv" in c && c.priv === false && <span style={{ fontSize: 12, lineHeight: 1.45, color: muted(62) }}>Transparent address, so this drip will be visible on-chain.</span>}
               {touched && "err" in c && c.err && <span style={{ fontSize: 12.5, lineHeight: 1.45, color: "var(--color-accent-700)", fontWeight: 500, maxWidth: "52ch" }}>{c.err}</span>}
               {!addr.trim() && <button className="btn btn-ghost btn-sm" onClick={generate} style={{ padding: 0 }}>Generate a test address</button>}
             </div>
@@ -427,19 +427,19 @@ export default function Home() {
 
         {phase === "submitting" && powState && (
           <div style={{ border: "2px solid var(--color-text)", padding: "20px 16px", display: "flex", flexDirection: "column", gap: 13 }}>
-            <span style={kicker}>Human check — no CAPTCHA</span>
+            <span style={kicker}>Human check, no CAPTCHA</span>
             <h2 style={{ margin: 0, fontSize: 19, lineHeight: 1.25 }}>Checking you&apos;re human…</h2>
             <div style={{ height: 10, border: "2px solid var(--color-text)", position: "relative", overflow: "hidden" }}>
               <i style={{ position: "absolute", top: 0, bottom: 0, left: 0, right: 0, background: "repeating-linear-gradient(135deg,var(--color-accent) 0 3px,transparent 3px 7px)", backgroundSize: "26px 26px", animation: "hatch .9s linear infinite" }} />
             </div>
-            <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.55, color: muted(62) }}>Your browser is solving a small cryptographic puzzle so bots cannot drain the faucet. Nothing to click, nothing tracked — it runs on its own.</p>
+            <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.55, color: muted(62) }}>Your browser is solving a small cryptographic puzzle so bots cannot drain the faucet. Nothing to click, nothing tracked. It runs on its own.</p>
             <p style={{ margin: 0, fontFamily: "var(--mono)", fontSize: 11, color: muted(50) }}>difficulty {powState.difficulty} bits · {powState.hashes.toLocaleString("en-US")} hashes</p>
           </div>
         )}
 
         {phase === "submitting" && !powState && (
           <div style={{ border: "2px solid var(--color-text)", padding: "20px 16px", display: "flex", flexDirection: "column", gap: 13 }}>
-            <span style={kicker}>Sending — keep this tab open</span>
+            <span style={kicker}>Sending, keep this tab open</span>
             <h2 style={{ margin: 0, fontSize: 19, lineHeight: 1.25 }}>{steps[curStep][0]}…</h2>
             <div style={{ height: 10, border: "2px solid var(--color-text)", position: "relative", overflow: "hidden" }}>
               <i style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: Math.round(proofFrac * 100) + "%", background: "repeating-linear-gradient(135deg,var(--color-accent) 0 3px,transparent 3px 7px)", backgroundSize: "26px 26px", animation: "hatch .9s linear infinite" }} />
@@ -451,7 +451,7 @@ export default function Home() {
                 </div>
               ))}
             </div>
-            <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.55, color: muted(62) }}>A shielded send builds a zero-knowledge proof before it can be broadcast. That is the wait — it is doing the privacy work.</p>
+            <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.55, color: muted(62) }}>A shielded send builds a zero-knowledge proof before it can be broadcast. That is the wait. It is doing the privacy work.</p>
           </div>
         )}
 
@@ -469,7 +469,7 @@ export default function Home() {
               <div>
                 <div style={rowLine}><span style={{ color: muted(55) }}>to</span><span style={{ fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "60%" }}>{short(tx.to, 12, 6)}</span></div>
                 <div style={rowLine}><span style={{ color: muted(55) }}>txid</span><span style={{ fontWeight: 700 }}>{short(tx.txid, 10, 8)}</span></div>
-                <div style={rowLine}><span style={{ color: muted(55) }}>privacy</span><span style={{ fontWeight: 700, textAlign: "right", maxWidth: "62%" }}>{tx.priv ? "shielded — sent z→z ✓" : "transparent — public on-chain"}</span></div>
+                <div style={rowLine}><span style={{ color: muted(55) }}>privacy</span><span style={{ fontWeight: 700, textAlign: "right", maxWidth: "62%" }}>{tx.priv ? "shielded, sent z→z ✓" : "transparent, public on-chain"}</span></div>
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
                 <button className="btn btn-secondary btn-sm" onClick={copyTx}>{copied ? "Copied ✓" : "Copy txid"}</button>
@@ -491,7 +491,7 @@ export default function Home() {
 
         {phase === "error" && (
           <div style={{ border: "2px solid var(--color-accent)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 11 }}>
-            <span style={kicker}>Send failed — nothing left the wallet</span>
+            <span style={kicker}>Send failed, nothing left the wallet</span>
             <h2 style={{ margin: 0, fontSize: 19, lineHeight: 1.25 }}>That didn&apos;t go through.</h2>
             <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(70), maxWidth: "52ch" }}>{errMsg}</p>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
@@ -523,12 +523,12 @@ export default function Home() {
         {tool === "about" && (
           <div style={{ border: "2px solid var(--color-divider)", padding: 14, display: "flex", flexDirection: "column", gap: 9 }}>
             <span style={{ ...kicker, color: muted(60) }}>How it works</span>
-            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: muted(72) }}>This faucet mines its own testnet blocks, so every TAZ it hands out is one it produced — it never has to queue at another faucet for a top-up, and it can tell you honestly when it is empty.</p>
+            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: muted(72) }}>This faucet mines its own testnet blocks, so every TAZ it hands out is one it produced. It never has to queue at another faucet for a top-up, and it can tell you honestly when it is empty.</p>
             <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: muted(72) }}>Drips leave as shielded (z→z) transactions. The amount and the recipient never touch the public ledger, which is also why a send takes about ten seconds: it is building the zero-knowledge proof that makes that possible.</p>
           </div>
         )}
 
-        <p style={{ margin: 0, fontFamily: "var(--mono)", fontSize: 10.5, letterSpacing: ".05em", color: muted(45) }}>Testnet only — TAZ has no monetary value.</p>
+        <p style={{ margin: 0, fontFamily: "var(--mono)", fontSize: 10.5, letterSpacing: ".05em", color: muted(45) }}>Testnet only. TAZ has no monetary value.</p>
       </main>
 
       <div style={{ position: "sticky", bottom: 0, borderTop: "2px solid var(--color-divider)", background: "var(--color-surface)", padding: `10px ${pad}`, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
