@@ -154,3 +154,43 @@ STUB_IMPORT_FAIL=1 bash "$IMPORT" "$T/plain" > "$T/fail.log" 2>&1
 check "failed import exits nonzero" "[ $? -ne 0 ]"
 check "zsnap-import-* tempdir swept" "! ls -d '$STUB_CACHE_DIR'/zsnap-import-* 2>/dev/null | grep -q ."
 check "no state dir left behind" "[ ! -d '$STUB_CACHE_DIR/state' ]"
+echo "== export: preflight answers can-this-binary-open-this-state"
+fresh_env; with_chain
+mkdir -p "$STUB_CACHE_DIR/state/v28/testnet"
+bash "$EXPORT" preflight > "$T/pf-go.log" 2>&1
+check "preflight exits 0 when the binary can open the state" "[ $? -eq 0 ]"
+check "says GO with the tip height" "grep -q 'GO: the export binary opened the state, tip height 3652108' '$T/pf-go.log'"
+check "reports the on-disk state format" "grep -q 'state formats:.*v28' '$T/pf-go.log'"
+check "preflight never exports" "! grep -q 'export-snapshot' '$STUB_LOG'"
+
+# A busy node can fail one read-only open transiently, and that error reads
+# like a format mismatch. Preflight must not send an operator down the
+# rebuild path for it.
+fresh_env; with_chain
+mkdir -p "$STUB_CACHE_DIR/state/v28/testnet"
+STUB_TIP_FAIL_ONCE="$T/tip-failed-once" ZSNAP_PREFLIGHT_WAIT=1 bash "$EXPORT" preflight > "$T/pf-transient.log" 2>&1
+check "transient open failure retries to GO, not NO-GO" "[ $? -eq 0 ] && grep -q 'GO: the export binary opened' '$T/pf-transient.log'"
+check "and says it is retrying" "grep -q 'retrying in' '$T/pf-transient.log'"
+check "never claims NO-GO on a transient" "! grep -q 'NO-GO' '$T/pf-transient.log'"
+
+fresh_env; with_chain
+mkdir -p "$STUB_CACHE_DIR/state/v28/testnet"
+STUB_TIP_FAIL=1 ZSNAP_PREFLIGHT_TRIES=2 ZSNAP_PREFLIGHT_WAIT=1 bash "$EXPORT" preflight > "$T/pf-nogo.log" 2>&1
+check "preflight exits nonzero when the binary cannot open it" "[ $? -ne 0 ]"
+check "says NO-GO" "grep -q 'NO-GO' '$T/pf-nogo.log'"
+check "NO-GO only after every attempt" "grep -q 'could not open this state in 2 attempts' '$T/pf-nogo.log'"
+check "surfaces the binary's own error" "grep -q 'Opening database failed' '$T/pf-nogo.log'"
+check "points at the SNAPSHOTS.md section" "grep -q 'When the export binary and the node disagree' '$T/pf-nogo.log'"
+
+fresh_env
+bash "$EXPORT" preflight > "$T/pf-novol.log" 2>&1
+check "preflight without a chain volume fails clearly" "[ $? -ne 0 ] && grep -q 'z3-testnet-chain not found' '$T/pf-novol.log'"
+
+# Preflight must work before any export has ever run, i.e. before ZSNAP_DIR
+# exists. Regression for writing its scratch file into a missing directory.
+fresh_env; with_chain
+mkdir -p "$STUB_CACHE_DIR/state/v28/testnet"
+rm -rf "$ZSNAP_DIR"
+bash "$EXPORT" preflight > "$T/pf-fresh.log" 2>&1
+check "preflight works on a box with no ZSNAP_DIR yet" "[ $? -eq 0 ]"
+check "and leaves no scratch behind" "! ls ${TMPDIR:-/tmp}/zsnap-preflight.* >/dev/null 2>&1"

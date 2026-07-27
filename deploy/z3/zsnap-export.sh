@@ -53,6 +53,8 @@ ZSNAP_KEEP="${ZSNAP_KEEP:-2}"                 # archives to keep after a new one
 ZSNAP_FORCE="${ZSNAP_FORCE:-0}"               # 1 = skip the ready and space gates
 ZSNAP_RETRIES="${ZSNAP_RETRIES:-3}"           # export attempts before giving up
 ZSNAP_RETRY_WAIT="${ZSNAP_RETRY_WAIT:-30}"    # seconds between attempts
+ZSNAP_PREFLIGHT_TRIES="${ZSNAP_PREFLIGHT_TRIES:-3}"  # opens before preflight says NO-GO
+ZSNAP_PREFLIGHT_WAIT="${ZSNAP_PREFLIGHT_WAIT:-3}"    # seconds between those
 ZSNAP_UPLOAD_CMD="${ZSNAP_UPLOAD_CMD:-}"      # optional: run <cmd> <archive> after export
 # Container/service names for the cold-mode window. The zebra container is
 # matched by name substring, same convention as watchdog.sh.
@@ -84,6 +86,54 @@ if [ "${1:-}" = "recover" ]; then
   fi
   rm -f "$window_marker"
   exit 0
+fi
+
+# `zsnap-export.sh preflight` answers one question: can THIS export binary
+# open THIS node's chain state? That is the only real compatibility question,
+# and it has a cheap definitive answer, so nobody has to reason about version
+# numbers. `tip-height` opens the state read-only through the same code path
+# the export uses and prints the tip, so a clean run means an export can run,
+# and a format mismatch fails here in a second instead of mid-export.
+#
+# Run it before the first export on any box, and after upgrading either the
+# node image or the export binary. Exit 0 means go.
+if [ "${1:-}" = "preflight" ]; then
+  [ -x "$ZSNAP_ZEBRAD" ] || die "no snapshot-capable zebrad at $ZSNAP_ZEBRAD (set ZSNAP_ZEBRAD)"
+  cache_dir="$(docker volume inspect -f '{{.Mountpoint}}' "$ZSNAP_CHAIN_VOLUME" 2>/dev/null)" \
+    || die "chain volume $ZSNAP_CHAIN_VOLUME not found (is the z3 stack on this box?)"
+
+  # The state directory is state/v<major>/<network>, so the major format
+  # version the node wrote is visible without opening anything.
+  on_disk="$(find "$cache_dir/state" -maxdepth 1 -type d -name 'v*' -exec basename {} \; 2>/dev/null | tr '\n' ' ')"
+  log "chain volume:   $ZSNAP_CHAIN_VOLUME ($cache_dir)"
+  log "state formats:  ${on_disk:-none found}"
+  log "export binary:  $ZSNAP_ZEBRAD"
+
+  # Deliberately not under $ZSNAP_DIR: preflight runs before the snapshot
+  # directory exists on a fresh box, and it should work there too.
+  out="$(mktemp "${TMPDIR:-/tmp}/zsnap-preflight.XXXXXX")"
+  trap 'rm -f "$out"' EXIT
+
+  # Retry before declaring NO-GO. A read-only open on a busy node can lose a
+  # race with the primary's WAL rotation and fail transiently, and that error
+  # looks like a format mismatch to anyone reading it. The whole point of
+  # preflight is to stop people guessing between those two, so it settles the
+  # question itself: a real mismatch fails every attempt, a race does not.
+  attempt=1
+  while :; do
+    if "$ZSNAP_ZEBRAD" tip-height --cache-dir "$cache_dir" --network "$ZSNAP_NETWORK" > "$out" 2>&1; then
+      log "GO: the export binary opened the state, tip height $(tail -n1 "$out")"
+      exit 0
+    fi
+    [ "$attempt" -lt "$ZSNAP_PREFLIGHT_TRIES" ] || break
+    log "attempt $attempt failed, retrying in ${ZSNAP_PREFLIGHT_WAIT}s (a busy node can fail one open transiently)"
+    attempt=$((attempt + 1))
+    sleep "$ZSNAP_PREFLIGHT_WAIT"
+  done
+
+  log "NO-GO: the export binary could not open this state in $ZSNAP_PREFLIGHT_TRIES attempts"
+  sed 's/^/    /' "$out" | tail -n 20
+  die "see SNAPSHOTS.md, 'When the export binary and the node disagree'"
 fi
 
 command -v zstd >/dev/null || die "zstd is not installed (apt-get install zstd)"

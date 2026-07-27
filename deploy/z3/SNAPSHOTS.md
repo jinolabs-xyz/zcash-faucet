@@ -48,8 +48,55 @@ serving node.
 
 One caveat: the export reads the state through the fork's database code, so
 `/opt/zebrad-miner` must be format-compatible with the zebra writing the
-state (both are on state format v28). A major format bump in one without the
-other makes the export refuse to open, not corrupt anything.
+state. A major format bump in one without the other makes the export refuse
+to open, not corrupt anything. You do not have to reason about that from
+version numbers, `preflight` answers it directly (below).
+
+## When the export binary and the node disagree
+
+The export binary and the node are two separate builds, and only one thing
+about them matters: whether the binary can open the state the node wrote.
+Ask it directly rather than comparing release numbers:
+
+```bash
+/opt/faucet/zsnap-export.sh preflight
+```
+
+`GO` means an export will work. `NO-GO` prints the binary's own error and
+exits nonzero. It opens the state read-only through the same path the export
+uses (`zebrad tip-height`), so it is safe on a live node and costs a second.
+Run it before the first export on a box, and after upgrading either the node
+image or the export binary.
+
+It opens up to `ZSNAP_PREFLIGHT_TRIES` times (default 3) before saying
+NO-GO, on purpose. A read-only open on a busy node can lose a race with the
+primary's WAL rotation and fail transiently, and that error reads exactly
+like a format mismatch. Preflight exists to stop people guessing between
+those two, so it settles it rather than reporting it: a real mismatch fails
+every attempt, a race does not.
+
+**Compatibility as it stands.** The deployed `/opt/zebrad-miner` is built
+from the fork at 6.0.0 and the node currently runs `zfnd/zebra:6.2.0`. Those
+are compatible: zebra v6.0.0, v6.2.0 and the fork all declare state format
+`28.0.0` (`zebra-state/src/constants.rs` is byte-identical between v6.2.0 and
+the fork, as is `disk_format/upgrade.rs`), and their column family lists in
+`finalized_state.rs` match exactly, which is what a read-only secondary open
+actually requires. The state directory the node writes, `state/v28/testnet`,
+is the one the binary looks for. A different release number is not by itself
+a reason to rebuild.
+
+**What would break it.** Moving either side onto a zebra release that bumps
+the state format major version. At that point the export binary has to be
+rebuilt from a fork rebased onto the node's release, and `preflight` says
+`NO-GO` until it is. The rule is that the two move together, not that they
+carry the same version string.
+
+**If preflight says NO-GO.** Rebuild the export binary from the fork
+(`github.com/Giri-Aayush/zebra`, branch `feat/snapshot-sync`) rebased onto
+the node's zebra release, `cargo build --release -p zebrad`, drop it at
+`/opt/zebrad-miner`, and re-run preflight. Snapshots taken before the bump
+stay importable only by a binary of their own vintage, so take a fresh one
+after the upgrade rather than trusting the old archive.
 
 ## Where the state actually lives
 
@@ -75,6 +122,7 @@ symlinks, and rotates old archives. Install (same pattern as the watchdog):
 cd /opt/zcash-faucet/deploy/z3
 cp zsnap-export.sh zsnap-import.sh /opt/faucet/ && chmod +x /opt/faucet/zsnap-*.sh
 cp zsnap-export.service zsnap-export.timer /etc/systemd/system/
+/opt/faucet/zsnap-export.sh preflight     # confirm the binary can read this state
 systemctl daemon-reload && systemctl enable --now zsnap-export.timer
 ```
 
