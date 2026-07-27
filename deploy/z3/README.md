@@ -1,5 +1,17 @@
 # Deploying the shielded faucet on the z3 stack
 
+> **Shortcut:** [`../deploy.sh`](../deploy.sh) automates every step on this page
+> on a fresh Docker-equipped VM (DigitalOcean/Linode/Vultr/Hetzner):
+>
+> ```bash
+> NETWORK=testnet FAUCET_DOMAIN=faucet.example.org ./deploy/deploy.sh
+> ```
+>
+> It clones z3, syncs Zebra, starts Zallet, creates the faucet account *after*
+> sync (birthday = tip → no rescan), pauses for you to fund the printed address,
+> and brings up the faucet + Caddy. Re-runnable; it skips what's already done.
+> The manual walkthrough below is the same thing step by step.
+
 This runs the faucet in **shielded mode** (`FAUCET_SENDER=zallet`): it holds
 Orchard notes and pays recipients **z→z**. It stands on the
 [z3 stack](https://github.com/ZcashFoundation/z3) (Zebra + Zallet) — a real full

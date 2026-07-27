@@ -30,6 +30,9 @@ tsconfig.tsbuildinfo
 # faucet wallet secret — NEVER commit
 .faucet-wallet.local
 
-# deploy secrets — NEVER commit (keep the .example templates)
+# deploy secrets + generated artifacts — NEVER commit (keep the .example templates)
 deploy/**/faucet.env
 deploy/**/.env
+deploy/z3-stack/
+deploy/.zallet-rpc-password
+deploy/.faucet-account
