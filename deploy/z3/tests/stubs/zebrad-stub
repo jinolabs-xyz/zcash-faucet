@@ -7,6 +7,15 @@ echo "zebrad $*" >> "${STUB_LOG:?}"
 
 cmd="${1:?}"; shift
 case "$cmd" in
+  tip-height)
+    # Opens the state read-only and prints the tip. STUB_TIP_FAIL=1 mimics a
+    # binary that cannot open this state (the format-mismatch case).
+    if [ "${STUB_TIP_FAIL:-0}" = "1" ]; then
+      echo "Opening database failed. Hint: Try changing the state cache_dir" >&2
+      exit 1
+    fi
+    echo 3652108
+    ;;
   export-snapshot)
     out="$1"; shift
     # Failure injection: FAIL=1 always fails, FAIL_ONCE fails the first call.

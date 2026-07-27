@@ -86,6 +86,41 @@ if [ "${1:-}" = "recover" ]; then
   exit 0
 fi
 
+# `zsnap-export.sh preflight` answers one question: can THIS export binary
+# open THIS node's chain state? That is the only real compatibility question,
+# and it has a cheap definitive answer, so nobody has to reason about version
+# numbers. `tip-height` opens the state read-only through the same code path
+# the export uses and prints the tip, so a clean run means an export can run,
+# and a format mismatch fails here in a second instead of mid-export.
+#
+# Run it before the first export on any box, and after upgrading either the
+# node image or the export binary. Exit 0 means go.
+if [ "${1:-}" = "preflight" ]; then
+  [ -x "$ZSNAP_ZEBRAD" ] || die "no snapshot-capable zebrad at $ZSNAP_ZEBRAD (set ZSNAP_ZEBRAD)"
+  cache_dir="$(docker volume inspect -f '{{.Mountpoint}}' "$ZSNAP_CHAIN_VOLUME" 2>/dev/null)" \
+    || die "chain volume $ZSNAP_CHAIN_VOLUME not found (is the z3 stack on this box?)"
+
+  # The state directory is state/v<major>/<network>, so the major format
+  # version the node wrote is visible without opening anything.
+  on_disk="$(find "$cache_dir/state" -maxdepth 1 -type d -name 'v*' -exec basename {} \; 2>/dev/null | tr '\n' ' ')"
+  log "chain volume:   $ZSNAP_CHAIN_VOLUME ($cache_dir)"
+  log "state formats:  ${on_disk:-none found}"
+  log "export binary:  $ZSNAP_ZEBRAD"
+
+  # Deliberately not under $ZSNAP_DIR: preflight runs before the snapshot
+  # directory exists on a fresh box, and it should work there too.
+  out="$(mktemp "${TMPDIR:-/tmp}/zsnap-preflight.XXXXXX")"
+  trap 'rm -f "$out"' EXIT
+  if "$ZSNAP_ZEBRAD" tip-height --cache-dir "$cache_dir" --network "$ZSNAP_NETWORK" > "$out" 2>&1; then
+    log "GO: the export binary opened the state, tip height $(tail -n1 "$out")"
+    exit 0
+  fi
+
+  log "NO-GO: the export binary could not open this state"
+  sed 's/^/    /' "$out" | tail -n 20
+  die "see SNAPSHOTS.md, 'When the export binary and the node disagree'"
+fi
+
 command -v zstd >/dev/null || die "zstd is not installed (apt-get install zstd)"
 command -v flock >/dev/null || die "flock is not installed (util-linux)"
 [ -x "$ZSNAP_ZEBRAD" ] || die "no snapshot-capable zebrad at $ZSNAP_ZEBRAD (set ZSNAP_ZEBRAD)"
