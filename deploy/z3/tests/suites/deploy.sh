@@ -1,48 +1,9 @@
-#!/usr/bin/env bash
-# Exercises the reworked deploy.sh against a stub docker and a pre-seeded
-# fake z3 checkout. Focus: overlay before the sync wait, single owner of
-# port 80, idempotent re-runs, the salt-note errexit fix.
-set -uo pipefail
-
-SCRATCH="${TEST_SCRATCH:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
-REPO="${TEST_REPO:-$(cd "$SCRATCH/../../.." && pwd)}"
-
-pass=0; fail=0
-ok()   { pass=$((pass+1)); echo "  ok: $1"; }
-bad()  { fail=$((fail+1)); echo "  FAIL: $1"; }
-check(){ if eval "$2"; then ok "$1"; else bad "$1"; fi; }
-check_order() {
-  local a b
-  a="$(grep -n "$2" "$STUB_LOG" | head -1 | cut -d: -f1)"
-  b="$(grep -n "$3" "$STUB_LOG" | head -1 | cut -d: -f1)"
-  if [ -n "$a" ] && [ -n "$b" ] && [ "$a" -lt "$b" ]; then ok "$1"; else bad "$1 (got '$2'@${a:-none} vs '$3'@${b:-none})"; fi
-}
-
-fresh_env() {
-  T="$(mktemp -d "${TMPDIR:-/tmp}/deploy-test.XXXXXX")"
-  export STUB_LOG="$T/stub.log"; : > "$STUB_LOG"
-  export STUB_CONTAINERS="$T/containers"; mkdir -p "$STUB_CONTAINERS"
-  export STUB_VOLROOT="$T/volumes"; mkdir -p "$STUB_VOLROOT"
-  export PATH="$SCRATCH/deploy-stubs:$PATH"
-  # Writable copy of deploy/ so faucet.env, .zallet-rpc-password and the
-  # fake z3 checkout land outside the (read-only) repo mount.
-  cp -r "$REPO/deploy" "$T/deploy"
-  D="$T/deploy"
-  # Pre-seed the z3 clone so `git clone` and setup-network are skipped, and
-  # give it the two scripts deploy.sh calls. The readiness one logs a marker
-  # so tests can assert what came before the sync wait.
-  mkdir -p "$D/z3-stack/scripts" "$D/z3-stack/config/testnet"
-  touch "$D/z3-stack/config/testnet/zebra.toml" "$D/z3-stack/config/testnet/zallet.toml"
-  # $STUB_LOG must land literally, the stub expands it at run time.
-  # shellcheck disable=SC2016
-  printf '#!/usr/bin/env bash\necho "readiness-wait" >> "$STUB_LOG"\n' > "$D/z3-stack/scripts/check-zebra-readiness.sh"
-  printf '#!/usr/bin/env bash\nexit 0\n' > "$D/z3-stack/scripts/setup-network.sh"
-  chmod +x "$D/z3-stack/scripts/"*.sh
-}
-run_deploy() { NONINTERACTIVE=1 NETWORK=testnet bash "$D/deploy.sh"; }
+# shellcheck shell=bash
+# deploy.sh bring-up: ordering, the one-time wallet init, idempotent re-runs.
+# Sourced by run-tests.sh; uses deploy_fresh_env and the deploy-stubs docker.
 
 echo "== fresh box: site first, manual faucet-web retired, account wired after sync"
-fresh_env
+deploy_fresh_env
 # A hand-started faucet-web (no compose label) squatting on port 80, plus an
 # unrelated hand-run container that must be left alone.
 printf 'running\n\n' > "$STUB_CONTAINERS/faucet-web"
@@ -115,7 +76,3 @@ sed -i 's/^RATE_LIMIT_SALT=.*/RATE_LIMIT_SALT=a-real-salt/' "$D/z3/faucet.env"
 run_deploy > "$T/run3.log" 2>&1
 check "salt-fixed re-run exits 0" "[ $? -eq 0 ]"
 check "no salt nag once set" "! grep -q 'RATE_LIMIT_SALT' '$T/run3.log'"
-
-echo
-echo "$pass passed, $fail failed"
-[ "$fail" -eq 0 ]
