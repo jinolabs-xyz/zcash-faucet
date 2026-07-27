@@ -138,6 +138,13 @@ LIGHTWALLETD_ENDPOINT=http://zaino:8137
 
 Then `docker compose -f docker-compose.faucet.yml up -d` to pick up the change.
 
+## Monitoring and alerts
+
+The watchdog can post to a Slack or Discord webhook when the faucet is
+genuinely un-servable, and `faucet-metrics.sh` writes balance, queue depth
+and sync state to a Prometheus textfile every 30 seconds.
+[OBSERVABILITY.md](OBSERVABILITY.md) covers both.
+
 ## Fast rebuild from a snapshot
 
 Zebra's initial sync is the only day-long step above. [SNAPSHOTS.md](SNAPSHOTS.md)

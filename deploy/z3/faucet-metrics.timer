@@ -1,0 +1,13 @@
+# Fires faucet-metrics.service. Install with the service, see its header.
+[Unit]
+Description=Scheduled faucet metrics refresh
+
+[Timer]
+# Every 30s, matching the watchdog's sweep. Fine enough to catch a drained
+# wallet or a queue backing up, cheap enough to be invisible.
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

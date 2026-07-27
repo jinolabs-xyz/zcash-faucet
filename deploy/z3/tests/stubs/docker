@@ -56,5 +56,23 @@ case "${1:-}" in
     echo running > "${STUB_CONTAINERS:?}/$1"
     echo "$1"
     ;;
+  inspect)
+    # Container inspect (the volume form is handled above). Only the state
+    # format string is used, by faucet-metrics.sh.
+    shift
+    fmt=""; target=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -f) fmt="$2"; shift 2 ;;
+        *) target="$1"; shift ;;
+      esac
+    done
+    f="${STUB_CONTAINERS:?}/$target"
+    [ -f "$f" ] || { echo "Error: No such object: $target" >&2; exit 1; }
+    case "$fmt" in
+      *State.Status*) head -n1 "$f" ;;
+      *) echo "stub docker inspect: unsupported fmt $fmt" >&2; exit 64 ;;
+    esac
+    ;;
   *) echo "stub docker: unsupported: $*" >&2; exit 64 ;;
 esac

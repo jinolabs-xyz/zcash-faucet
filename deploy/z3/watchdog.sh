@@ -27,6 +27,7 @@ FAUCET_URL="${WATCHDOG_FAUCET_URL:-http://127.0.0.1:3000}"
 FAUCET_FAIL_LIMIT="${WATCHDOG_FAUCET_FAIL_LIMIT:-3}" # consecutive liveness misses before restart
 READY_GRACE_SECS="${WATCHDOG_READY_GRACE_SECS:-1800}" # 30 min un-ready before we page
 ALERT_URL="${WATCHDOG_ALERT_URL:-}"                 # optional webhook for alerts
+ALERT_FORMAT="${WATCHDOG_ALERT_FORMAT:-slack}"      # slack (default) or discord
 
 # Target containers, matched by name substring so exact compose prefixes and the
 # hand-run faucet-web container both resolve. Override any of these in the env.
@@ -36,12 +37,24 @@ ZALLET_MATCH="${WATCHDOG_ZALLET_MATCH:-zallet}"
 
 log() { echo "$(date -u +%FT%TZ) watchdog: $*"; }
 
+# Escapes the two characters that would break the JSON body. Alert text is
+# ours, not user input, but a container name with a quote in it should not
+# silently drop an alert.
+json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
 alert() {
-  local msg="$1"
-  log "ALERT: $msg"
+  local msg body
+  msg="[zcash-faucet watchdog] $(json_escape "$1")"
+  log "ALERT: $1"
   [ -n "$ALERT_URL" ] || return 0
+  # Slack and Discord take the same shape with a different key, and both
+  # reject the other one, so the channel type has to be explicit.
+  case "$ALERT_FORMAT" in
+    discord) body="{\"content\":\"$msg\"}" ;;
+    slack|*)  body="{\"text\":\"$msg\"}" ;;
+  esac
   curl -fsS --max-time 10 -H 'content-type: application/json' \
-    -d "{\"text\":\"[zcash-faucet watchdog] $msg\"}" "$ALERT_URL" >/dev/null 2>&1 \
+    -d "$body" "$ALERT_URL" >/dev/null 2>&1 \
     || log "alert webhook POST failed"
 }
 

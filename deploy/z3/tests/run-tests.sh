@@ -40,7 +40,7 @@ BASE_PATH="$PATH"
 # shellcheck source=lib.sh
 . "$SCRATCH/lib.sh"
 
-for suite in ${SUITES:-zsnap backup deploy}; do
+for suite in ${SUITES:-zsnap backup deploy metrics}; do
   file="$SCRATCH/suites/$suite.sh"
   [ -f "$file" ] || { bad "no such suite: $suite"; continue; }
   echo

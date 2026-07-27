@@ -1,0 +1,23 @@
+# Writes the faucet's Prometheus textfile. See faucet-metrics.sh and
+# OBSERVABILITY.md.
+# Install:
+#   cp faucet-metrics.sh /opt/faucet/ && chmod +x /opt/faucet/faucet-metrics.sh
+#   cp faucet-metrics.service faucet-metrics.timer /etc/systemd/system/
+#   # optional: METRICS_FILE, METRICS_FAUCET_URL in /etc/faucet/metrics.env
+#   systemctl daemon-reload && systemctl enable --now faucet-metrics.timer
+[Unit]
+Description=Faucet metrics textfile
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/faucet/metrics.env
+ExecStart=/opt/faucet/faucet-metrics.sh
+# Two HTTP calls and a couple of docker inspects. It must never be the
+# reason the node is slow.
+Nice=15
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target
