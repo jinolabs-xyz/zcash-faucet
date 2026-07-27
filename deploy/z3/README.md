@@ -138,6 +138,14 @@ LIGHTWALLETD_ENDPOINT=http://zaino:8137
 
 Then `docker compose -f docker-compose.faucet.yml up -d` to pick up the change.
 
+## Fast rebuild from a snapshot
+
+Zebra's initial sync is the only day-long step above. [SNAPSHOTS.md](SNAPSHOTS.md)
+documents the zsnap tooling that removes it from the recovery path: a systemd
+timer exports the synced chain state on a schedule (live-safe, read-only), and
+a fresh box imports the latest snapshot before zebra starts, via one URL in
+`cloud-init.yaml`.
+
 ## Operating notes
 
 - **Hot wallet.** Zallet holds spending keys. Keep the box locked down, keep
