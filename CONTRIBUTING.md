@@ -35,10 +35,14 @@ Every branch goes through the same pipeline, and nothing skips a step:
    back to you, the engineer.
 3. You fix your own findings, QA re-checks, and you iterate until clean.
 4. QA forwards the approved branch to the CTO.
-5. The CTO does the final review and merges.
+5. The CTO does the final audit and merges. Anything the audit finds comes
+   back to you the same way QA findings did. You wrote it, you fix it,
+   nobody else touches your branch.
 
-QA's own branches skip step 2 in the obvious way: nobody first-passes their
-own work, so those go straight to the CTO.
+The separation is the point: engineers write and fix, QA finds, the CTO
+audits and merges. Nobody reviews their own work and nobody fixes someone
+else's. QA's own branches skip step 2 in the obvious way and go straight to
+the CTO.
 
 "It works on my machine" is not a first pass. If it renders, drive it. If it
 executes, run it.
