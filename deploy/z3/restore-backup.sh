@@ -101,11 +101,18 @@ fi
 
 install_file() { # $1 src, $2 dest, $3 owner (uid:gid or "keep")
   install -m 600 "$1" "$2"
+  # Ownership matters (zallet runs as uid 1000 and will not read a file it
+  # does not own) but it is not worth aborting a restore over: the data is
+  # already written by this point, and dying here leaves a half-restored
+  # volume, which is strictly worse. Restoring as a non-root user is the
+  # normal way to hit this, including on a CI runner.
   if [ "$3" = "keep" ]; then
     # Match whatever owns the volume root, docker seeded it from the image.
-    chown --reference="$(dirname "$2")" "$2"
+    chown --reference="$(dirname "$2")" "$2" 2>/dev/null \
+      || log "WARNING: could not set ownership on $2, fix it with: sudo chown --reference='$(dirname "$2")' '$2'"
   else
-    chown "$3" "$2"
+    chown "$3" "$2" 2>/dev/null \
+      || log "WARNING: could not chown $2 to $3 (run as root?). Zallet will not read it until you fix this: sudo chown $3 '$2'"
   fi
   log "restored $(basename "$2") into $(dirname "$2")"
 }
