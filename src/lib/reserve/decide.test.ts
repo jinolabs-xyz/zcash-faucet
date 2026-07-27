@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decideRefilling } from "./decide.ts";
+import { decideRefilling, shouldStartStep } from "./decide.ts";
 
 const levels = { lowZat: 5_0000_0000n, targetZat: 15_0000_0000n }; // 5 / 15 TAZ
 
@@ -41,4 +41,21 @@ test("no flapping: balance oscillating around low stays in one refill run", () =
 
 test("zero balance starts a refill", () => {
   assert.equal(decideRefilling(false, 0n, levels), true);
+});
+
+test("a tick enqueues a step only when refilling with nothing in the way", () => {
+  assert.equal(shouldStartStep({ refilling: true, stepInFlight: false, queueDepth: 0 }), true);
+});
+
+test("no step when not refilling", () => {
+  assert.equal(shouldStartStep({ refilling: false, stepInFlight: false, queueDepth: 0 }), false);
+});
+
+test("no second step while one is in flight", () => {
+  assert.equal(shouldStartStep({ refilling: true, stepInFlight: true, queueDepth: 0 }), false);
+});
+
+test("refill yields whenever user traffic is queued", () => {
+  assert.equal(shouldStartStep({ refilling: true, stepInFlight: false, queueDepth: 1 }), false);
+  assert.equal(shouldStartStep({ refilling: true, stepInFlight: false, queueDepth: 20 }), false);
 });
