@@ -99,13 +99,43 @@ overlay_up
 say "Waiting for Zebra to finish syncing (Ctrl-C is safe; re-run to resume)"
 ./scripts/check-zebra-readiness.sh "$([ "$NETWORK" = testnet ] && echo 18080 || echo 8080)"
 
+# 3. Zallet wallet init (one-time) --------------------------------------------
+# A fresh zallet has no age identity and crash-loops with "Encryption identity
+# file could not be located", so initialize the wallet BEFORE starting it.
+# This is z3's documented flow (z3 docs/faq.md), run through one-off
+# containers against the zallet volume. Idempotence is per step:
+# generate-encryption-identity refuses to overwrite (so it is guarded on the
+# identity file, named identity.txt by z3's shipped zallet.toml),
+# init-wallet-encryption derives deterministically from the identity, but
+# generate-mnemonic stores a NEW seed on every run, so the whole block is
+# gated by a completion marker dropped in the volume after a full init.
+ZVOL="$NETNAME-zallet"
+ZIDFILE="${ZALLET_IDENTITY_FILE:-identity.txt}"
+zwallet(){ docker compose $ENVF run --rm --no-deps zallet \
+             --datadir /var/lib/zallet --config /etc/zallet/zallet.toml "$@"; }
+zvol_has(){ docker run --rm -v "$ZVOL:/data" busybox test -f "/data/$1"; }
+if ! zvol_has .faucet-wallet-initialized; then
+  say "Initializing the Zallet wallet (one-time: identity, encryption, mnemonic)"
+  # Docker creates the volume root-owned on first use; zallet runs as uid
+  # 1000 and must be able to write into it.
+  docker run --rm -v "$ZVOL:/data" busybox chown 1000:1000 /data
+  zvol_has "$ZIDFILE" || zwallet generate-encryption-identity
+  zwallet init-wallet-encryption
+  zwallet generate-mnemonic
+  docker run --rm -v "$ZVOL:/data" busybox touch /data/.faucet-wallet-initialized
+fi
+
 say "Starting Zallet (the wallet)"
 docker compose $ENVF up -d zallet
 sleep 5
 
-# 3. Faucet's shielded account ----------------------------------------------
+# 4. Faucet's shielded account ----------------------------------------------
 # Created AFTER sync so its birthday = chain tip → no historical rescan.
-zrpc(){ docker compose $ENVF exec -T zallet zallet-zaino -d /var/lib/zallet rpc "$@"; }
+# --config is required: the RPC client reads the server port from the same
+# config the server started with, and without it zallet looks for a config
+# in the datadir that does not exist ("No JSON-RPC port available").
+zrpc(){ docker compose $ENVF exec -T zallet zallet-zaino \
+          --datadir /var/lib/zallet --config /etc/zallet/zallet.toml rpc "$@"; }
 ACCTFILE="$HERE/.faucet-account"
 if [ ! -f "$ACCTFILE" ]; then
   say "Creating the faucet's shielded account"
@@ -116,7 +146,7 @@ fi
 # shellcheck disable=SC1090
 source "$ACCTFILE"
 
-# 4. Fund it -----------------------------------------------------------------
+# 5. Fund it -----------------------------------------------------------------
 # The faucet comes up fine unfunded (it reports "empty" until coins arrive), so
 # only pause for funding in an interactive shell — never under cloud-init.
 BAL="$(zrpc z_getbalanceforaccount "\"$UUID\"" 1 | python3 -c 'import sys,json;p=json.load(sys.stdin).get("pools",{});print(sum(int(v.get("valueZat",0)) for v in p.values()))' 2>/dev/null || echo 0)"
@@ -126,7 +156,7 @@ if [ "${BAL:-0}" -eq 0 ] && [ -t 0 ] && [ "${NONINTERACTIVE:-0}" != "1" ]; then
   read -r _ || true
 fi
 
-# 5. Wire the account into the running site -----------------------------------
+# 6. Wire the account into the running site -----------------------------------
 say "Wiring the faucet account into faucet.env"
 write_env "$UUID" "$ADDR"
 # Plain `grep -q && say` would trip set -e on a re-run where the operator

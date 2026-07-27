@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+# Stub docker for deploy.sh tests. Containers are files under $STUB_CONTAINERS,
+# line 1 = state (running|exited), line 2 = compose project label (may be
+# empty, meaning hand-started). Every call logs to $STUB_LOG.
+set -euo pipefail
+echo "docker $*" >> "${STUB_LOG:?}"
+
+mk() { printf '%s\n%s\n' "$2" "$3" > "${STUB_CONTAINERS:?}/$1"; }
+
+case "${1:-}" in
+  run)
+    # One-off containers: docker run --rm -v <vol>:/data busybox <cmd> <args>
+    shift
+    vol=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -v) vol="${2%%:*}"; shift 2 ;;
+        --rm|busybox) shift ;;
+        *) break ;;
+      esac
+    done
+    vdir="${STUB_VOLROOT:?}/$vol"
+    mkdir -p "$vdir"   # docker run auto-creates named volumes
+    cmd="${1:-}"; shift || true
+    case "$cmd" in
+      test)  [ "$1" = "-f" ] && { [ -f "$vdir/${2#/data/}" ]; exit $?; }; exit 64 ;;
+      chown) echo "vol-chown $vol" >> "$STUB_LOG" ;;
+      touch) touch "$vdir/${1#/data/}" ;;
+      *) echo "stub docker run: unsupported: $cmd" >&2; exit 64 ;;
+    esac
+    ;;
+  compose)
+    shift
+    # `docker compose version` (the capability probe at the top of deploy.sh)
+    for a in "$@"; do [ "$a" = "version" ] && { echo "Docker Compose version v2-stub"; exit 0; }; done
+    # run --rm --no-deps zallet <global flags> <subcommand>: the wallet init
+    # one-offs. Mimic the real semantics tests care about.
+    if printf '%s\n' "$@" | grep -qx "run"; then
+      vdir="${STUB_VOLROOT:?}/z3-testnet-zallet"; mkdir -p "$vdir"
+      sub=""
+      for a in "$@"; do case "$a" in generate-encryption-identity|init-wallet-encryption|generate-mnemonic) sub="$a";; esac; done
+      printf '%s\n' "$@" | grep -qx -- "--config" || { echo "stub: init missing --config" >&2; exit 1; }
+      case "$sub" in
+        generate-encryption-identity)
+          # noclobber, like the real command
+          [ -f "$vdir/identity.txt" ] && { echo "identity exists, refusing" >&2; exit 1; }
+          echo stub-age-identity > "$vdir/identity.txt" ;;
+        init-wallet-encryption)
+          [ -f "$vdir/identity.txt" ] || { echo "Encryption identity file could not be located" >&2; exit 1; }
+          echo stub-recipients > "$vdir/recipients.txt" ;;
+        generate-mnemonic)
+          # every invocation stores another seed, like the real command
+          echo "seed-$(date +%s%N)" >> "$vdir/seeds" ;;
+        *) echo "stub compose run: unknown subcommand" >&2; exit 64 ;;
+      esac
+      exit 0
+    fi
+    # exec ... rpc <method>: answer like zallet-zaino
+    if printf '%s\n' "$@" | grep -qx "exec"; then
+      method=""
+      prev=""
+      for a in "$@"; do [ "$prev" = "rpc" ] && { method="$a"; break; }; prev="$a"; done
+      case "$method" in
+        z_getnewaccount)        echo '{"account_uuid":"stub-uuid-1234"}' ;;
+        z_getaddressforaccount) echo '{"address":"utest1stubaddress"}' ;;
+        z_getbalanceforaccount) echo '{"pools":{}}' ;;
+        *) echo "stub: unknown rpc $method" >&2; exit 1 ;;
+      esac
+      exit 0
+    fi
+    # up -d [services...]
+    if printf '%s\n' "$@" | grep -qx "up"; then
+      if printf '%s\n' "$@" | grep -qx "docker-compose.faucet.yml"; then
+        mk zcash-faucet-faucet-1 running zcash-faucet
+        mk zcash-faucet-caddy-1  running zcash-faucet
+        echo "overlay-up" >> "$STUB_LOG"
+      else
+        for svc in zebra zallet; do
+          printf '%s\n' "$@" | grep -qx "$svc" && mk "z3-testnet-$svc-1" running z3-testnet
+        done
+      fi
+      exit 0
+    fi
+    echo "stub docker compose: unsupported: $*" >&2; exit 64
+    ;;
+  ps)
+    shift
+    name=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --filter) name="${2#name=}"; shift 2 ;;
+        -aq|--format) shift ;;
+        *) shift ;;
+      esac
+    done
+    for f in "${STUB_CONTAINERS:?}"/*; do
+      [ -e "$f" ] || continue
+      c="$(basename "$f")"
+      case "$c" in *"$name"*) echo "$c" ;; esac
+    done
+    ;;
+  inspect)
+    shift
+    fmt=""; target=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -f) fmt="$2"; shift 2 ;;
+        *) target="$1"; shift ;;
+      esac
+    done
+    f="${STUB_CONTAINERS:?}/$target"
+    [ -f "$f" ] || { echo "no such container: $target" >&2; exit 1; }
+    case "$fmt" in
+      *Labels*) sed -n 2p "$f" ;;
+      *.Name*)  echo "/$target" ;;
+      *State.Status*) sed -n 1p "$f" ;;
+      *) echo "stub inspect: unsupported fmt $fmt" >&2; exit 64 ;;
+    esac
+    ;;
+  rm)
+    shift
+    [ "${1:-}" = "-f" ] && shift
+    rm -f "${STUB_CONTAINERS:?}/$1"
+    echo "$1"
+    ;;
+  *) echo "stub docker: unsupported: $*" >&2; exit 64 ;;
+esac
