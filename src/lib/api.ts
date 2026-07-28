@@ -20,7 +20,9 @@ export interface ApiCtx {
   logError(err: unknown, note?: string): void;
 }
 
-const GENERIC_500 = "Something went wrong on our side. Nothing left the wallet. Try again in a moment.";
+// No wallet claim here: this fires for ANY route, and only the faucet handler
+// knows whether a send was in flight. It states its own wallet outcome itself.
+const GENERIC_500 = "Something went wrong on our side. Try again in a moment.";
 
 function logLine(fields: Record<string, unknown>): void {
   console.log(JSON.stringify({ ts: new Date().toISOString(), ...fields }));
