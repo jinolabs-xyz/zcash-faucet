@@ -27,6 +27,12 @@ vendor, no external dependency in the path that moves money.
 > project is built on what replaced it: **Zebra** (full node) and **Zallet**
 > (wallet, with the Zaino indexer embedded).
 
+> **Running post-Ironwood.** NU6.3 (Ironwood) is active on our testnet from
+> height 4,134,000, and the wallet's notes live in the corrected Ironwood pool,
+> not the sealed Orchard one. The faucet has minted and paid shielded drips on
+> the new pool for weeks, so it is proven on the corrected circuit ahead of
+> mainnet's own Ironwood activation on 2026-07-28.
+
 ## How it actually works
 
 One box runs four things:
@@ -34,12 +40,12 @@ One box runs four things:
 | Piece | What it does |
 | --- | --- |
 | **Zebra** | Full testnet node. Our own view of the chain, no trusted third party. |
-| **Zallet** | Shielded wallet holding the faucet's Orchard notes. Pays via `z_sendmany` over JSON-RPC. Zaino is embedded, so there is no separate indexer process. |
+| **Zallet** | Shielded wallet holding the faucet's Ironwood-pool notes. Pays via `z_sendmany` over JSON-RPC. Zaino is embedded, so there is no separate indexer process. |
 | **Next.js app** | The faucet itself: claim endpoint, anti-abuse gate, reserve loop, UI. |
 | **Caddy** | TLS and reverse proxy in front. |
 
-A drip is a real shielded transaction. The faucet holds Orchard notes and pays
-z2z, so the amount and the recipient stay off the public ledger, and so does the
+A drip is a real shielded transaction. The faucet holds Ironwood-pool notes and
+pays z2z, so the amount and the recipient stay off the public ledger, and so does the
 link between the faucet and whoever claimed. Transparent recipients still work,
 and the UI says plainly that those drips are public.
 
