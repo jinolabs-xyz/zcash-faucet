@@ -5,17 +5,16 @@
 
 [![CI](https://github.com/jinolabs-xyz/zcash-faucet/actions/workflows/ci.yml/badge.svg)](https://github.com/jinolabs-xyz/zcash-faucet/actions/workflows/ci.yml)
 ![network: testnet only](docs/badge-testnet.svg)
+[![license: MIT](docs/badge-license.svg)](LICENSE)
 
-Paste a Zcash testnet address, solve a small proof-of-work in the browser, get
-TAZ as a shielded z2z transaction. Next.js and TypeScript on the front, a
-self-hosted Zebra and Zallet stack behind it. No third-party wallet service and
-no captcha vendor.
+An open source Zcash testnet faucet you can run yourself. Paste an address,
+solve a small proof-of-work in the browser, receive TAZ as a shielded z2z
+transaction.
 
-It mines too, and the reserve loop is built to fund the wallet from what it
-mines. On public testnet that does not currently work: one dominant miner wins
-every block race, so ours are orphaned and mining income is zero. Measured, not
-guessed ([#42](https://github.com/jinolabs-xyz/zcash-faucet/issues/42)). The machinery is real, the revenue is not, so
-the wallet is topped up from elsewhere. See [donate](#keeping-it-funded).
+Most faucets are a wallet key and a form in front of somebody else's node. This
+one owns its whole stack: a Zebra full node, a Zallet shielded wallet, a solo
+miner, and a self-healing deployment. No third-party wallet service, no captcha
+vendor, no external dependency in the path that moves money.
 
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/ready-paper.png">
@@ -45,7 +44,7 @@ and the UI says plainly that those drips are public.
 The public lightwalletd endpoint (`LIGHTWALLETD_ENDPOINT`) is now only used for
 the read-side balance lookup tool. Nothing that moves money depends on it.
 
-### Mining and the reserve loop, and why funding does not work yet
+### Mining and the reserve loop
 
 A solo CPU Equihash miner (`deploy/z3/miner`, Rust) works `getblocktemplate`
 against our own Zebra, and a reserve loop (`src/lib/reserve/`) watches the
@@ -119,51 +118,37 @@ what the backend is doing:
     <td><b>Topping up.</b> A refill that can still serve keeps serving, and says so.</td>
     <td><b>Sent.</b> The receipt is the thing you paste into an issue.</td>
   </tr>
-  <tr>
-    <td><img src="docs/screenshots/mobile-360.png" width="280" alt="The faucet at 360 pixels wide: the address field, request button and status strip all wrap without horizontal scrolling."></td>
-    <td valign="top"><b>360px.</b> The narrowest phone still gets the whole flow, no horizontal scroll, 44px touch targets and a 16px input so iOS does not zoom on focus.</td>
-  </tr>
 </table>
 
-## Quick start (local, no node needed)
+## Running it
 
-Mock mode runs the whole flow with no keys, no chain, and no wallet.
+Deploy to a fresh box with cloud-init or reconcile an existing one with
+`deploy/deploy.sh`, both in [deploy/](deploy/). Every setting is an environment
+variable, listed in [CONFIGURATION.md](CONFIGURATION.md). To work on it, see
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
-```bash
-npm install
-npm run build
-FAUCET_SENDER=mock FAUCET_CHALLENGE=pow RATE_LIMIT_SALT=dev-salt npm start
-```
+## How the tank stays full
 
-Open http://localhost:3000, hit **Generate a test address**, and claim. The mock
-sender keeps a simulated balance, so the low-balance guard, the empty state, and
-the full claim path are all exercisable.
+The faucet is built to fund itself and to accept help, and it runs both legs at
+once.
 
-To watch the reserve loop work, add `FAUCET_MINER_ACTIVE=true
-FAUCET_MOCK_REFILL=true` and set the marks low
-(`FAUCET_RESERVE_LOW_TAZ=4 FAUCET_RESERVE_TARGET_TAZ=8`).
+**It mines.** A solo Equihash miner and the reserve loop are wired end to end:
+the miner works the chain, the loop watches the balance and shields matured
+coinbase into the wallet without ever pausing a drip. On public testnet today a
+dominant miner takes every block race, so that leg contributes nothing right now
+([the measurement](#mining-and-the-reserve-loop)). It costs almost nothing to
+run and starts contributing the day the network stops being one miner's.
 
-**`npm run dev` does not bundle.** A `node:` import in `src/lib/zcash/t2z.ts`
-breaks the dev webpack build. Use `npm run build && npm start`.
+**The community fills it.** Testnet TAZ has no market value, so topping up a
+shared faucet is a small thing that keeps a tool available for everyone building
+on Zcash. Donations arrive shielded at the unified address, and anyone with
+spare hashrate can point a miner at the transparent one, which helps for the
+same reason the race is currently lost: survival is about share.
 
-For a real deploy see [deploy/](deploy/): cloud-init for a fresh box, or
-`deploy/deploy.sh` to reconcile an existing one.
-
-## Configuration
-
-Every setting is an environment variable, read once at boot. The full table
-lives in [CONFIGURATION.md](CONFIGURATION.md), with a working example in
-[deploy/z3/faucet.env.example](deploy/z3/faucet.env.example).
-
-## Keeping it funded
-
-Because mining income is zero, the wallet is topped up by hand or by donation.
-Two env keys cover it, both optional and both surfaced on `/api/status`:
-`FAUCET_DONATION_ADDRESS` is the unified address donations go to, so they arrive
-shielded, and `FAUCET_MINING_ADDRESS` is the transparent address the miner pays
-its coinbase to, shown for anyone who wants to point spare hashrate at the
-faucet. Set either and the UI surfaces it. Set neither and the pages that would
-show them say so rather than rendering an empty box.
+Both addresses are optional config, surfaced on `/api/status` and on `/donate`.
+`FAUCET_DONATION_ADDRESS` is the shielded one, `FAUCET_MINING_ADDRESS` the
+transparent. Set neither and the pages that would show them say so rather than
+rendering an empty box.
 
 <img src="docs/screenshots/donate.png" alt="The donate page: the shielded unified address in full with a copy button, a tank gauge showing the reserve level, and the transparent address for anyone pointing a miner at the faucet.">
 
@@ -187,29 +172,18 @@ the map:
 - **Metrics and alerts**: [deploy/z3/OBSERVABILITY.md](deploy/z3/OBSERVABILITY.md)
 - **Redeploy with rollback**, and external live monitoring: [deploy/](deploy/)
 
-## Development
+## How it is kept honest
 
-Node 23 or newer. Tests run on the built-in runner with native type stripping, so
-there is no test framework to install.
+Every merge is gated: typecheck, unit tests, route-level integration tests that
+boot the built app and drive all six endpoints, an end-to-end smoke of the claim
+flow, shellcheck plus a harness over the deploy scripts, and the miner's own
+`cargo test` and clippy. Branch protection means nothing merges red.
 
-```bash
-npm run typecheck     # tsc --noEmit
-npm test              # unit tests, node --test over src/**/*.test.ts
-npm run build         # production build
-npm run smoke         # claim flow against an already-running server
-npm run test:api      # route-level integration tests, boots the built app itself
-```
-
-`npm run smoke` expects a server already up in mock plus pow mode.
-`npm run test:api` starts and stops its own servers, so it only needs a build
-first.
-
-CI gates every merge: the app job (typecheck, unit tests, build), the smoke job,
-shellcheck plus the deploy test harness, and the miner's `cargo test` and clippy.
-Branch protection means nothing merges red.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the branch, PR, and review flow, and
-[PRIVACY.md](PRIVACY.md) for exactly what the faucet stores.
+The money path carries the coverage it deserves. The send queue is proven to
+serialise under a concurrent burst, a proof-of-work challenge is proven to stay
+spent across a restart, and a send whose outcome we cannot observe is proven not
+to hand out a second drip. Tests that only pass are not enough on this repo:
+behaviour gets exercised, adversarially where funds or user trust are involved.
 
 ## Testnet only
 
