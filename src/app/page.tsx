@@ -389,7 +389,7 @@ export default function Home() {
     phase === "empty"
       ? refilling
         ? { fill: "var(--color-accent)", ring: "var(--color-accent)" } // topping up, calm
-        : { fill: "var(--color-accent-700)", ring: "var(--color-accent-700)" } // genuinely empty
+        : { fill: "var(--color-empty)", ring: "var(--color-empty)" } // genuinely empty
       : live
         ? { fill: "var(--color-live)", ring: "var(--color-live)" }
         : { fill: "transparent", ring: muted(45) }; // syncing, no alarm
