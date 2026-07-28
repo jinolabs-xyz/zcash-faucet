@@ -16,8 +16,10 @@
 # Exit codes, stable so a timer or a CI job can use them:
 #   0  no drift, the box matches the repo
 #   1  drift found, details on stdout
-#   2  could not audit (no repo, no systemctl), so the result is unknown
-#      rather than clean. An audit that cannot run must never look like a pass.
+#   2  could not audit, or could not audit EVERYTHING, so the result is
+#      unknown rather than clean. An audit that cannot run must never look
+#      like a pass, and neither must one that skipped a check. Anything it
+#      could not verify is listed under NOT VERIFIED and forces this code.
 #
 # It does NOT have an --apply flag on purpose. Reconciling a box to the repo
 # would delete exactly the hand work this is meant to protect. The fix for
@@ -37,14 +39,31 @@ VERBOSE=0
 [ "${1:-}" = "--verbose" ] && VERBOSE=1
 
 drift=0
+# Checks that could not be performed. A tool whose job is verification must
+# never let a skipped check read as a passed one, so these are collected and
+# reported explicitly, and they change the exit code.
+unverified=""
+note_unverified() { unverified="${unverified}${unverified:+
+}  - $1"; }
 say()   { echo "$*"; }
 ok()    { [ "$VERBOSE" = "1" ] && echo "  ok       $*"; return 0; }
-found() { drift=1; echo "  DRIFT    $*"; }
+# Every finding carries the command that fixes it, so acting on a report is a
+# paste rather than a puzzle. $2 is optional for findings whose fix is a
+# judgement call rather than a command.
+found() {
+  drift=1
+  echo "  DRIFT    $1"
+  [ -n "${2:-}" ] && echo "           fix: $2"
+  return 0
+}
 note()  { echo "  note     $*"; }
 
 [ -d "$OVERLAY_DIR" ] || { echo "cannot audit: no overlay dir at $OVERLAY_DIR (set AUDIT_REPO_DIR)"; exit 2; }
 have_systemctl=1
-command -v systemctl >/dev/null 2>&1 || have_systemctl=0
+if ! command -v systemctl >/dev/null 2>&1; then
+  have_systemctl=0
+  note_unverified "whether any unit is ENABLED: no systemctl on this host, so reboot-survival was not checked"
+fi
 
 say "auditing $(hostname 2>/dev/null || echo this box) against $REPO_DIR"
 say ""
@@ -59,19 +78,22 @@ for src in "$OVERLAY_DIR"/*.service "$OVERLAY_DIR"/*.timer; do
   unit="$(basename "$src")"
   installed="$UNIT_DIR/$unit"
   if [ ! -f "$installed" ]; then
-    found "$unit is not installed in $UNIT_DIR"
+    found "$unit is not installed in $UNIT_DIR" \
+      "cp $OVERLAY_DIR/$unit $UNIT_DIR/ && systemctl daemon-reload && systemctl enable --now $unit"
     continue
   fi
   if cmp -s "$src" "$installed"; then
     ok "$unit installed and matches the repo"
   else
-    found "$unit differs from the repo copy (diff $src $installed)"
+    found "$unit differs from the repo copy" \
+      "diff $src $installed   # then either cp the repo copy over it, or commit the box's version"
   fi
   if [ "$have_systemctl" = "1" ]; then
     if systemctl is-enabled --quiet "$unit" 2>/dev/null; then
       ok "$unit is enabled"
     else
-      found "$unit is installed but NOT enabled, so it will not survive a reboot"
+      found "$unit is installed but NOT enabled, so it will not survive a reboot" \
+        "systemctl enable --now $unit"
     fi
   fi
 done
@@ -90,7 +112,8 @@ for installed in "$UNIT_DIR"/*.service "$UNIT_DIR"/*.timer; do
     *) continue ;;
   esac
   [ -f "$OVERLAY_DIR/$unit" ] \
-    || found "$unit is installed but the repo has no copy of it, so a rebuild loses it"
+    || found "$unit is installed but the repo has no copy of it, so a rebuild loses it" \
+         "cp $installed $OVERLAY_DIR/ && git -C $REPO_DIR add deploy/z3/$unit   # then commit it"
 done
 for dropin_dir in "$UNIT_DIR"/*.d; do
   [ -d "$dropin_dir" ] || continue
@@ -101,7 +124,8 @@ for dropin_dir in "$UNIT_DIR"/*.d; do
   esac
   for conf in "$dropin_dir"/*.conf; do
     [ -e "$conf" ] || continue
-    found "drop-in $unit.d/$(basename "$conf") exists on the box and is not in the repo"
+    found "drop-in $unit.d/$(basename "$conf") exists on the box and is not in the repo" \
+      "fold its directives into $OVERLAY_DIR/$unit (or add the drop-in to the repo), then commit"
     # The values matter to whoever reads the report, and a drop-in is
     # configuration rather than a secret. Show the directives, not a diff.
     if [ "$VERBOSE" = "1" ]; then
@@ -119,7 +143,8 @@ for f in "$OVERLAY_DIR"/docker-compose.override.y*ml "$OVERLAY_DIR"/*.override.y
   if git -C "$REPO_DIR" ls-files --error-unmatch "deploy/z3/$name" >/dev/null 2>&1; then
     ok "$name is tracked in git"
   else
-    found "$name is untracked, so a rebuild will not have it"
+    found "$name is untracked, so a rebuild will not have it" \
+      "git -C $REPO_DIR add deploy/z3/$name   # then commit it"
   fi
 done
 say ""
@@ -135,11 +160,13 @@ for src in "$OVERLAY_DIR"/*.sh; do
   grep -qs "$INSTALL_DIR/$script" "$OVERLAY_DIR"/*.service || continue
   installed="$INSTALL_DIR/$script"
   if [ ! -f "$installed" ]; then
-    found "$script is referenced by a unit but missing from $INSTALL_DIR"
+    found "$script is referenced by a unit but missing from $INSTALL_DIR" \
+      "cp $src $INSTALL_DIR/ && chmod +x $installed"
   elif cmp -s "$src" "$installed"; then
     ok "$script matches the repo"
   else
-    found "$script in $INSTALL_DIR differs from the repo (the box is running unreviewed code)"
+    found "$script in $INSTALL_DIR differs from the repo (the box is running unreviewed code)" \
+      "diff $src $installed   # then cp the repo copy over it, or get the box's version reviewed"
   fi
 done
 say ""
@@ -159,7 +186,19 @@ for f in "$ENV_DIR/watchdog.env" "$ENV_DIR/zsnap.env" "$ENV_DIR/backup.env" \
 done
 say ""
 
+if [ -n "$unverified" ]; then
+  say "NOT VERIFIED"
+  say "$unverified"
+  say ""
+fi
+
 if [ "$drift" = "0" ]; then
+  if [ -n "$unverified" ]; then
+    # Not "clean": clean is a claim about everything, and something was
+    # skipped. Exit 2 so a scheduled check cannot read this as a pass.
+    say "no drift found in what could be checked, but the audit was INCOMPLETE (see NOT VERIFIED)"
+    exit 2
+  fi
   say "no drift: this box matches the repo"
   exit 0
 fi

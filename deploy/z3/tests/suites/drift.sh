@@ -108,3 +108,48 @@ check "no file on the box was touched" "[ \"\$before\" = \"\$after\" ]"
 # that would act on --apply. The word appears in a comment explaining why it
 # does not exist, hence matching the case branch rather than the word.
 check "there is no --apply branch" "! grep -qE -- '[-][-]apply[)\"]' '$REPO/deploy/z3/audit-drift.sh'"
+
+echo "== drift: every finding carries a paste-able fix command"
+drift_env; make_clean_box; rm -f "$T/units/faucet-thing.timer"
+bash "$AUDIT" > "$T/fix1.log" 2>&1
+check "missing unit prints an install command" "grep -A1 'faucet-thing.timer is not installed' '$T/fix1.log' | grep -q 'fix: cp .* && systemctl daemon-reload && systemctl enable --now faucet-thing.timer'"
+
+drift_env; make_clean_box; printf 'faucet-thing.service\n' > "$STUB_ENABLED"
+bash "$AUDIT" > "$T/fix2.log" 2>&1
+check "disabled unit prints the enable command" "grep -A1 'NOT enabled' '$T/fix2.log' | grep -q 'fix: systemctl enable --now faucet-thing.timer'"
+
+drift_env; make_clean_box
+printf '[Service]\nExecStart=/bin/true\n' > "$T/units/faucet-handmade.service"
+bash "$AUDIT" > "$T/fix3.log" 2>&1
+check "unit missing from the repo prints a git add" "grep -A1 'faucet-handmade.service is installed but the repo' '$T/fix3.log' | grep -q 'fix: cp .* git .* add deploy/z3/faucet-handmade.service'"
+
+drift_env; make_clean_box; echo "# hand edit" >> "$T/install/thing.sh"
+bash "$AUDIT" > "$T/fix4.log" 2>&1
+check "stale script prints a diff command" "grep -A1 'unreviewed code' '$T/fix4.log' | grep -q 'fix: diff '"
+
+# The fix line must never appear on a clean run, or the report teaches people
+# to ignore it.
+drift_env; make_clean_box
+bash "$AUDIT" --verbose > "$T/fix5.log" 2>&1
+check "no fix lines when there is no drift" "! grep -q 'fix:' '$T/fix5.log'"
+
+echo "== drift: a skipped check is never reported as clean (doctrine rule 1)"
+# No systemctl means enablement cannot be checked. Before this was fixed the
+# audit printed "this box matches the repo" and exited 0, having never looked
+# at whether a single unit would survive a reboot.
+drift_env; make_clean_box
+rm -f "$T/bin/systemctl"
+PATH="/usr/bin:/bin" bash "$AUDIT" > "$T/unver.log" 2>&1
+rc_unver=$?
+check "exits 2, not 0, when a check could not run" "[ $rc_unver -eq 2 ]"
+check "prints a NOT VERIFIED section" "grep -q 'NOT VERIFIED' '$T/unver.log'"
+check "names what was skipped" "grep -q 'whether any unit is ENABLED' '$T/unver.log'"
+check "never claims the box matches the repo" "! grep -q 'no drift: this box matches the repo' '$T/unver.log'"
+check "says the audit was incomplete" "grep -q 'INCOMPLETE' '$T/unver.log'"
+
+# Real drift still reports as drift (1) even when something was unverified,
+# because a confirmed finding is more actionable than an incomplete audit.
+drift_env; make_clean_box; rm -f "$T/units/faucet-thing.timer" "$T/bin/systemctl"
+PATH="/usr/bin:/bin" bash "$AUDIT" > "$T/unver2.log" 2>&1
+check "confirmed drift still exits 1" "[ $? -eq 1 ]"
+check "and still lists what was not verified" "grep -q 'NOT VERIFIED' '$T/unver2.log'"

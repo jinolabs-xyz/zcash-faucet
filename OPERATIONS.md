@@ -144,8 +144,14 @@ the person who typed it knows about.
 /opt/faucet/audit-drift.sh --verbose  # also show matches and drop-in contents
 ```
 
-Exit codes: `0` no drift, `1` drift found, `2` could not audit (so an audit
-that cannot run never looks like a pass).
+Exit codes: `0` no drift, `1` drift found, `2` the audit was incomplete. That
+last one covers both "could not run at all" and "ran but skipped a check", for
+example enablement when there is no `systemctl`. Anything it could not check
+is listed under `NOT VERIFIED`, and it never claims the box matches the repo
+on the strength of checks it did not perform.
+
+Every finding prints the command that fixes it, so acting on a report is a
+paste rather than a puzzle.
 
 It is **read-only and has no `--apply`**. Reconciling the box to the repo
 would delete the very hand work the audit exists to surface. The fix for
