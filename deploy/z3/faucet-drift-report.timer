@@ -1,0 +1,14 @@
+# Fires faucet-drift-report.service. Install with the service, see its header.
+[Unit]
+Description=Daily config drift and access audit
+
+[Timer]
+# Daily at 03:40. Drift accumulates over hours of hand work, not minutes, and a
+# daily report is read while a noisier one is filtered.
+OnCalendar=03:40
+RandomizedDelaySec=20m
+# A box that was off at 03:40 still gets audited on the next boot.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,23 @@
+# Runs the config-drift and access audits and alerts with the cause named.
+# See drift-report.sh and the Config drift section of OPERATIONS.md.
+# Install:
+#   cp audit-drift.sh audit-access.sh drift-report.sh /opt/faucet/ && chmod +x /opt/faucet/*.sh
+#   cp faucet-drift-report.service faucet-drift-report.timer /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now faucet-drift-report.timer
+[Unit]
+Description=Config drift and access audit
+# Reads docker volumes and container state, so docker should be up first.
+After=docker.service
+# Only an audit that could not RUN reaches here; findings alert themselves.
+OnFailure=faucet-alert@%n.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/faucet/alerts.env
+ExecStart=/opt/faucet/drift-report.sh
+# Read-only and cheap, but never worth competing with the node.
+Nice=15
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

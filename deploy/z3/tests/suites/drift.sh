@@ -206,3 +206,53 @@ check "the [Service] header does not print either" "! grep -q '| \[Service\]' '$
 check "Environment keeps its variable name" "grep -q 'Environment=MINER_MODE=<redacted>' '$T/leak.log'"
 check "ExecStart is named but its arguments are gone" "grep -q 'ExecStart=<redacted>' '$T/leak.log'"
 check "the drop-in is still reported as drift" "grep -q 'drop-in faucet-thing.service.d/override.conf' '$T/leak.log'"
+
+echo "== drift-report: the alert names WHICH outcome, not just that a unit failed"
+REPORT="$REPO/deploy/z3/drift-report.sh"
+report_env() {
+  T="$(mktemp -d "${TMPDIR:-/tmp}/report-test.XXXXXX")"
+  mkdir -p "$T/bin"
+  printf '#!/usr/bin/env bash\necho "ALERT: $*" >> %q\n' "$T/alerts.log" > "$T/alert.sh"
+  chmod +x "$T/alert.sh"
+  : > "$T/alerts.log"
+  export DRIFT_ALERT_SH="$T/alert.sh" DRIFT_RUN_ACCESS=0
+}
+fake_audit() { # $1 exit code
+  printf '#!/usr/bin/env bash\necho "  FINDING  something"\nexit %s\n' "$1" > "$T/audit.sh"
+  chmod +x "$T/audit.sh"; export DRIFT_AUDIT="$T/audit.sh"
+}
+
+report_env; fake_audit 0
+bash "$REPORT" > "$T/clean.log" 2>&1
+check "a clean audit exits 0" "[ $? -eq 0 ]"
+check "and pages nobody" "[ ! -s '$T/alerts.log' ]"
+check "and says clean in the journal" "grep -q 'config: clean' '$T/clean.log'"
+
+report_env; fake_audit 1
+bash "$REPORT" > "$T/drift.log" 2>&1
+check "drift found still exits 0, it reported successfully" "[ $? -eq 0 ]"
+check "the alert says DRIFT FOUND" "grep -q 'drift found' '$T/alerts.log'"
+check "the alert explains why it matters" "grep -q 'a rebuild would not reproduce it' '$T/alerts.log'"
+check "the alert says where to look" "grep -q 'journalctl -u faucet-drift-report' '$T/alerts.log'"
+check "the audit output is in the journal" "grep -q 'FINDING' '$T/drift.log'"
+
+report_env; fake_audit 2
+bash "$REPORT" > "$T/incomplete.log" 2>&1
+check "incomplete exits 0" "[ $? -eq 0 ]"
+check "the alert says INCOMPLETE, not drift" "grep -q 'INCOMPLETE' '$T/alerts.log' && ! grep -q 'drift found' '$T/alerts.log'"
+check "and warns drift may exist unseen" "grep -q 'drift may exist unseen' '$T/alerts.log'"
+
+report_env
+export DRIFT_AUDIT="$T/not-installed.sh"
+bash "$REPORT" > "$T/missing.log" 2>&1
+check "a missing audit exits NONZERO so OnFailure catches it" "[ $? -ne 0 ]"
+check "and says which script is missing" "grep -q 'audit missing or not executable' '$T/missing.log'"
+
+echo "== drift-report: the worse of the two audits decides the outcome"
+report_env; fake_audit 0
+export DRIFT_RUN_ACCESS=1
+printf '#!/usr/bin/env bash\nexit 1\n' > "$T/access.sh"; chmod +x "$T/access.sh"
+export DRIFT_ACCESS_AUDIT="$T/access.sh"
+bash "$REPORT" > "$T/both.log" 2>&1
+check "a clean config plus access drift still alerts" "grep -q 'access drift found' '$T/alerts.log'"
+check "and the clean one is reported clean" "grep -q 'config: clean' '$T/both.log'"
