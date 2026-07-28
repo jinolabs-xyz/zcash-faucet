@@ -42,8 +42,12 @@
   --radius-md: 0px;
 }
 
-/* Dark "ink" theme — applied as .app.ink */
-.app.ink {
+/* Dark "ink" theme, applied as .app.ink on the page shell and as data-theme on
+   the document element. Both selectors share one block so the values cannot
+   drift apart. html needs it because the overscroll region is painted from the
+   ROOT background, not from the app shell: without this, rubber-banding on iOS
+   and macOS showed a white band above a dark header (#143). */
+.app.ink, html[data-theme="ink"] {
   --color-bg: #171615;
   --color-surface: #201e1d;
   --color-text: #f3f2f2;
@@ -63,6 +67,9 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
+/* The overscroll/rubber-band area takes its colour from here, so this is what
+   stops the white flash at the top and bottom of a bounce. */
+html { background: var(--color-bg); }
 body {
   background: var(--color-bg);
   color: var(--color-text);

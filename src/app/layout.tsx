@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 const TITLE = "Zcash Testnet Faucet (TAZ)";
@@ -37,9 +37,28 @@ export const metadata: Metadata = {
   },
 };
 
+/**
+ * Paints the browser's own chrome (the iOS status bar, the Android toolbar) so it
+ * matches the page instead of sitting light above a dark header. Static ink,
+ * because that is the app's default state and the fixed theme of the two
+ * server-rendered pages. The home toggle rewrites this tag live, so a paper user
+ * does not keep a dark toolbar (#143).
+ *
+ * Deliberately NOT media-based: our theme is a manual toggle rather than
+ * prefers-color-scheme, so keying it to the OS setting would be wrong for anyone
+ * whose two disagree.
+ */
+export const viewport: Viewport = {
+  themeColor: "#171615",
+};
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    // data-theme defaults to ink because that is the app's default state and the
+    // fixed theme of /donate and the 404. The home toggle updates it live. It
+    // exists so the ROOT is theme-painted: the overscroll region is drawn from
+    // html, not from the app shell (#143).
+    <html lang="en" data-theme="ink">
       <body>{children}</body>
     </html>
   );
