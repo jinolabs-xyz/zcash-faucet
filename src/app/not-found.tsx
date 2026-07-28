@@ -7,6 +7,7 @@
  */
 import type { CSSProperties } from "react";
 import Link from "next/link";
+import { BrandMark } from "./BrandMark";
 
 export const metadata = {
   title: "Not found — Zcash Testnet Faucet",
@@ -27,10 +28,18 @@ export default function NotFound() {
       style={{ minHeight: "100vh", display: "flex", flexDirection: "column", background: "var(--color-bg)", color: "var(--color-text)", fontFamily: "var(--font-body)" }}
     >
       <header className="nav" style={{ padding: `14px ${pad}`, gap: 14, flexWrap: "wrap" }}>
-        <div className="nav-brand" style={{ fontSize: "clamp(15px,4vw,18px)", letterSpacing: "-.01em", marginRight: "auto" }}>
-          Zcash Testnet Faucet
+        <div className="nav-brand" style={{ fontSize: "clamp(15px,4vw,18px)", letterSpacing: "-.01em", marginRight: "auto", display: "flex", alignItems: "center", gap: ".44em" }}>
+          <BrandMark />
+          <span>Zcash Testnet Faucet</span>
         </div>
-        <Link className="btn btn-secondary btn-sm" href="/">Back to the faucet</Link>
+        <Link className="btn btn-secondary btn-sm" href="/" aria-label="Back to the faucet">
+          {/* The visible label shortens at narrow widths so the masthead stays on
+              one row once the mark is in it. aria-label carries the full
+              destination either way: a screen reader user at 360px gets the same
+              information a sighted user at 1200px does. */}
+          <span className="nav-back-long">Back to the faucet</span>
+          <span className="nav-back-short">Back</span>
+        </Link>
       </header>
 
       <main style={{ flex: 1, width: "100%", maxWidth: 620, margin: "0 auto", padding: `clamp(22px,5vw,46px) ${pad} 60px`, display: "flex", flexDirection: "column", gap: 20 }}>

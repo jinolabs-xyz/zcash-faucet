@@ -152,6 +152,29 @@ a:hover { color: var(--color-accent-800); }
 .nav { display: flex; align-items: center; gap: 16px; border-bottom: 2px solid var(--color-divider); }
 .nav-brand { font-family: var(--font-heading); font-weight: var(--font-heading-weight); margin-right: auto; }
 
+/* Below 340px the masthead cannot carry the mark AND the item beside it on one
+   row: home needs 297px of the 288px available, and the 9px shortfall is more
+   than the brand's own gap, so tightening that does not close it. One row beats
+   the mark at that width, and every specced floor is above it. The wordmark
+   never goes. */
+/* display lives here rather than on the element, because an inline style is a
+   normal author declaration and a plain rule cannot override one. Setting it
+   inline is what stopped the first version of this media query from working. */
+.nav-brand .brand-mark { display: block; }
+@media (max-width: 339px) {
+  .nav-brand .brand-mark { display: none; }
+}
+
+/* The masthead back-link shortens rather than letting the nav wrap to two rows
+   once the brand mark is in it. Measured: with the full label the row needs
+   347.3px of the 328px available at 360px. The accessible name stays complete
+   via aria-label on the link, so this is a visual truncation only. */
+.nav-back-short { display: none; }
+@media (max-width: 420px) {
+  .nav-back-long { display: none; }
+  .nav-back-short { display: inline; }
+}
+
 /* fingers need bigger targets than mice: 44px is the accessibility floor */
 @media (pointer: coarse) {
   .app .btn-sm { min-height: 44px; }

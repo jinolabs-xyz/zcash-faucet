@@ -1,6 +1,7 @@
 "use client";
 
 import { CSSProperties, useCallback, useEffect, useRef, useState } from "react";
+import { BrandMark } from "./BrandMark";
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 type Phase = "syncing" | "queued" | "empty" | "ready" | "submitting" | "success" | "cooldown" | "error";
@@ -418,7 +419,10 @@ export default function Home() {
       style={{ minHeight: "100vh", display: "flex", flexDirection: "column", background: "var(--color-bg)", color: "var(--color-text)", fontFamily: "var(--font-body)" }}
     >
       <header className="nav" style={{ padding: `14px ${pad}`, gap: 14, flexWrap: "wrap" }}>
-        <div className="nav-brand" style={{ fontSize: "clamp(15px,4vw,18px)", letterSpacing: "-.01em", marginRight: "auto" }}>Zcash Testnet Faucet</div>
+        <div className="nav-brand" style={{ fontSize: "clamp(15px,4vw,18px)", letterSpacing: "-.01em", marginRight: "auto", display: "flex", alignItems: "center", gap: ".44em" }}>
+          <BrandMark />
+          <span>Zcash Testnet Faucet</span>
+        </div>
         {/* Not a live region: the sr-only status region in <main> owns phase
             announcements, a live badge here would say everything twice. */}
         <div style={{ display: "flex", alignItems: "center", gap: 7, border: "2px solid var(--color-divider)", padding: "5px 9px", fontFamily: "var(--mono)", fontSize: 10, fontWeight: 700, letterSpacing: ".1em" }}>
