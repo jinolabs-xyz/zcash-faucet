@@ -5,7 +5,7 @@
  * yet — which is exactly the case while zebra does its first sync — this returns
  * null and the UI shows an indeterminate "bringing the node online" state.
  */
-import { config } from "../config";
+import { config } from "../config.ts";
 
 export interface NodeStatus {
   ready: boolean;

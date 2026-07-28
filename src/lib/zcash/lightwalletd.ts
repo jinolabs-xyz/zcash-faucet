@@ -8,7 +8,7 @@
  * reachability probe, and failover so a single dead endpoint doesn't sink the
  * faucet.
  */
-import { config } from "../config";
+import { config } from "../config.ts";
 
 export interface BackendStatus {
   endpoint: string; // the one we'd use (first reachable, else primary)
