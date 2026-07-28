@@ -29,6 +29,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      # Was a no-op before #73: no eslint dep and no config, so it dropped into
+      # Next's interactive setup prompt and could never have run here.
+      - run: npm run lint
       - run: npm test
       # `npm run dev` can't bundle the node: import in src/lib/zcash/t2z.ts,
       # so a real build is the only signal that the app actually ships.
