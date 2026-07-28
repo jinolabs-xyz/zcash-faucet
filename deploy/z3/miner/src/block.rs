@@ -279,6 +279,114 @@ mod tests {
         assert_eq!(hex::encode(header.serialize()), format!("{expected}00"));
     }
 
+    /// A template carrying a known coinbase and two distinguishable
+    /// transactions, so ordering and count are both visible in the bytes.
+    fn block_template(txs: &[&str]) -> Template {
+        Template {
+            transactions: txs
+                .iter()
+                .map(|d| TransactionTemplate { data: (*d).to_string() })
+                .collect(),
+            coinbase_txn: TransactionTemplate { data: "aa01".to_string() },
+            ..marked_template()
+        }
+    }
+
+    /// KNOWN-ANSWER TEST for the block wrapper around the header (#149).
+    ///
+    /// serialize_block is what submitblock receives, and nothing exercised it.
+    /// Both of the sabotages on the issue, a count missing the coinbase and a
+    /// coinbase emitted twice, produce a block the node rejects while every
+    /// other test stays green. That is the #142 signature again: cargo test
+    /// passes and the first real signal is a mined block that is never
+    /// accepted, which on a faucet that mines its own funds is silent lost
+    /// money rather than an error anyone sees.
+    ///
+    /// The expected bytes are composed from the format (header, then the
+    /// transaction count as CompactSize, then the coinbase, then the template's
+    /// transactions in order), not from this function's output.
+    #[test]
+    fn a_block_is_the_header_then_the_count_then_coinbase_first() {
+        let t = block_template(&["bb02", "cc03"]);
+        let header = Header::from_template(&t).unwrap();
+        let block = serialize_block(&header, &t).unwrap();
+
+        let expected = format!(
+            "{header}{count}{coinbase}{tx1}{tx2}",
+            header = hex::encode(header.serialize()),
+            count = "03",   // CompactSize(1 coinbase + 2 transactions)
+            coinbase = "aa01",
+            tx1 = "bb02",
+            tx2 = "cc03",
+        );
+        assert_eq!(hex::encode(&block), expected);
+    }
+
+    #[test]
+    fn the_count_includes_the_coinbase_and_an_empty_template_is_one_not_zero() {
+        // The sabotage on the issue was compact_size(len) instead of
+        // compact_size(1 + len). With no transactions that is 0 against 1, and
+        // with two it is 2 against 3, so both ends are pinned here.
+        let empty = block_template(&[]);
+        let h = Header::from_template(&empty).unwrap();
+        let block = serialize_block(&h, &empty).unwrap();
+        let tail = hex::encode(&block[header_len(&h)..]);
+        assert_eq!(tail, "01aa01", "one transaction, the coinbase, then its body");
+    }
+
+    #[test]
+    fn transaction_order_is_the_template_order() {
+        // Needs two DISTINGUISHABLE transactions: with identical bodies a
+        // reversed loop produces identical bytes and proves nothing.
+        let t = block_template(&["bb02", "cc03"]);
+        let h = Header::from_template(&t).unwrap();
+        let forward = hex::encode(serialize_block(&h, &t).unwrap());
+
+        let mut swapped = t.clone();
+        swapped.transactions.reverse();
+        let other = hex::encode(serialize_block(&h, &swapped).unwrap());
+        assert_ne!(forward, other, "swapping the template order must change the bytes");
+        assert!(forward.ends_with("bb02cc03"));
+        assert!(other.ends_with("cc03bb02"));
+    }
+
+    #[test]
+    fn the_count_crosses_the_compact_size_boundary_at_253() {
+        // 252 transactions plus the coinbase is 253, which is exactly where
+        // CompactSize stops being one byte and becomes fd + u16. An off-by-one
+        // in the count lands on the wrong side of that and changes the encoding
+        // length, not just its value.
+        let many: Vec<&str> = vec!["bb02"; 252];
+        let t = block_template(&many);
+        let h = Header::from_template(&t).unwrap();
+        let block = serialize_block(&h, &t).unwrap();
+        let tail = hex::encode(&block[header_len(&h)..]);
+        assert!(tail.starts_with("fdfd00"), "253 must encode as fd fd 00, got {}", &tail[..6]);
+    }
+
+    #[test]
+    fn a_bad_coinbase_hex_is_an_error_naming_the_coinbase() {
+        let mut t = block_template(&[]);
+        t.coinbase_txn.data = "zz".to_string();
+        let h = Header::from_template(&t).unwrap();
+        let err = serialize_block(&h, &t).unwrap_err();
+        assert!(err.contains("coinbasetxn"), "error should name the coinbase, got: {err}");
+    }
+
+    #[test]
+    fn a_bad_transaction_hex_is_an_error_naming_its_index() {
+        let t = block_template(&["bb02", "zz"]);
+        let h = Header::from_template(&t).unwrap();
+        let err = serialize_block(&h, &t).unwrap_err();
+        assert!(err.contains("transaction 1"), "error should name the index, got: {err}");
+    }
+
+    /// Length of the serialized header, so the block tests can assert on the
+    /// wrapper without restating the header bytes.
+    fn header_len(h: &Header) -> usize {
+        h.serialize().len()
+    }
+
     /// A REAL testnet header, pulled from our own zebra at a fixed height by the
     /// box owner. The two tests above pin our reading of the spec against
     /// itself; only this one can tell us that reading matches a real chain. If
