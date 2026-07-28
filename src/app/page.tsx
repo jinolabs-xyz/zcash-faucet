@@ -3,7 +3,7 @@
 import { CSSProperties, useCallback, useEffect, useRef, useState } from "react";
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
-type Phase = "syncing" | "empty" | "ready" | "submitting" | "success" | "cooldown" | "error";
+type Phase = "syncing" | "queued" | "empty" | "ready" | "submitting" | "success" | "cooldown" | "error";
 
 interface Status {
   network: string;
@@ -79,11 +79,15 @@ export default function Home() {
   const [elapsed, setElapsed] = useState(0);
   const [powState, setPowState] = useState<{ hashes: number; difficulty: number } | null>(null);
   const [genErr, setGenErr] = useState("");
+  // A claim held while the node syncs. Persisted so a reload (or coming back
+  // tomorrow) keeps the place in line; fires on its own when the node is ready.
+  const [queuedAddr, setQueuedAddr] = useState<string | null>(null);
 
   const inFlow = useRef(false); // in a claim flow → don't let polling override the phase
   const submitStart = useRef(0);
   const sending = useRef(false);
   const powWorker = useRef<Worker | null>(null);
+  const firing = useRef(false); // a queued claim mid-fire, don't fire twice
 
   const drip = status?.dripTaz ?? 0.1;
   const dripText = (drip % 1 === 0 ? drip.toFixed(0) : String(drip)) + " TAZ";
@@ -105,7 +109,39 @@ export default function Home() {
     return () => { alive = false; clearInterval(iv); };
   }, []);
 
-  useEffect(() => { if (!inFlow.current) setPhase(basePhase(status)); }, [status, basePhase]);
+  useEffect(() => {
+    if (inFlow.current) return;
+    const base = basePhase(status);
+    // A held claim shows as "queued" while the node syncs; anything else
+    // (ready, empty) falls through so the fire effect below can take over.
+    setPhase(queuedAddr && base === "syncing" ? "queued" : base);
+  }, [status, basePhase, queuedAddr]);
+
+  // Restore a held claim from a previous visit.
+  useEffect(() => {
+    const saved = localStorage.getItem("zfaucet_queued");
+    if (saved && check(saved).ok) setQueuedAddr(saved);
+  }, []);
+  useEffect(() => {
+    if (queuedAddr) localStorage.setItem("zfaucet_queued", queuedAddr);
+    else localStorage.removeItem("zfaucet_queued");
+  }, [queuedAddr]);
+
+  // The moment the node is ready, a held claim fires through the normal
+  // submit path (pow solved fresh here, a solution from queue time would
+  // have expired). Once-guarded: polling keeps re-running this effect.
+  useEffect(() => {
+    if (!queuedAddr || firing.current) return;
+    if (basePhase(status) !== "ready") return;
+    firing.current = true;
+    const target = queuedAddr;
+    setQueuedAddr(null);
+    setAddr(target);
+    void submit(target).finally(() => {
+      firing.current = false;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, queuedAddr, basePhase]);
   useEffect(() => { const iv = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(iv); }, []);
   useEffect(() => {
     if (phase !== "submitting") return;
@@ -141,10 +177,19 @@ export default function Home() {
         .catch(reject);
     });
 
-  const submit = async () => {
-    const c = check(addr);
+  const submit = async (target?: string) => {
+    const address = (target ?? addr).trim();
+    const c = check(address);
     if (!c.ok) { setTouched(true); return; }
     if (sending.current) return;
+    // Node still syncing: hold the claim instead of turning the user away.
+    // It fires on its own the moment the node is ready (the effect above).
+    // `target` set means we ARE the fire, never re-queue.
+    if (!target && basePhase(status) === "syncing") {
+      setQueuedAddr(address);
+      setPhase("queued");
+      return;
+    }
     sending.current = true;
     inFlow.current = true;
     setElapsed(0); setErrMsg(""); setTouched(false);
@@ -171,12 +216,12 @@ export default function Home() {
       const res = await fetch("/api/faucet", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ address: addr.trim(), ...(pow ? { pow } : {}) }),
+        body: JSON.stringify({ address, ...(pow ? { pow } : {}) }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok) {
-        const d = detect(addr);
-        setTx({ txid: data.txid, to: addr.trim(), priv: "priv" in d ? !!d.priv : true, explorerUrl: data.explorerUrl, at: Date.now() });
+        const d = detect(address);
+        setTx({ txid: data.txid, to: address, priv: "priv" in d ? !!d.priv : true, explorerUrl: data.explorerUrl, at: Date.now() });
         setPhase("success");
       } else if (res.status === 429) {
         setCooldownEnd(Date.now() + (data.retryAfterSeconds ?? status?.cooldownSeconds ?? 86400) * 1000);
@@ -199,6 +244,7 @@ export default function Home() {
   const again = () => {
     inFlow.current = false;
     setAddr(""); setTouched(false); setTx(null); setCopied(null); setErrMsg("");
+    setQueuedAddr(null);
     setPhase(basePhase(status));
   };
 
@@ -274,7 +320,9 @@ export default function Home() {
   };
 
   /* derived */
-  const live = phase !== "syncing";
+  // "queued" is still a syncing node, just with a claim held. The badge and the
+  // dot must keep saying so, or the header claims a readiness we do not have.
+  const live = phase !== "syncing" && phase !== "queued";
   const node = status?.node;
   const syncPct = node?.syncPercent ?? null;
   const height = node?.height ?? null;
@@ -310,8 +358,13 @@ export default function Home() {
 
   // Honest badge: "TOPPING UP" only when a refill is actually running, "EMPTY"
   // when it isn't. A refill with the balance still serviceable stays "LIVE".
+  // Queued is a syncing node with a claim held, so it reads PREPARING too.
   const statusText =
-    phase === "syncing" ? "PREPARING" : phase === "empty" ? (refilling ? "TOPPING UP" : "EMPTY") : "LIVE";
+    phase === "syncing" || phase === "queued"
+      ? "PREPARING"
+      : phase === "empty"
+        ? (refilling ? "TOPPING UP" : "EMPTY")
+        : "LIVE";
   const dotBg = live && phase !== "empty" ? "var(--color-accent)" : "transparent";
 
   // One persistent live region announces phase changes to screen readers. It
@@ -319,7 +372,8 @@ export default function Home() {
   // and holds a stable sentence per state, so it never spams: no tick counters,
   // no percentages.
   const announce =
-    phase === "syncing" ? "Node is syncing. The faucet will be ready shortly."
+    phase === "queued" ? "Your claim is queued. It sends on its own when the node is ready."
+    : phase === "syncing" ? "Node is syncing. The faucet will be ready shortly."
     : phase === "empty" ? (refilling ? "Topping up the reserve. Drips resume in a moment." : "The faucet is out of TAZ right now.")
     : phase === "submitting" ? (powState ? "Checking you are human. Nothing to do, it runs on its own." : "Sending your testnet ZEC. Keep this tab open.")
     : phase === "success" ? "Sent. Your testnet ZEC is on its way."
@@ -427,6 +481,22 @@ export default function Home() {
           </div>
         )}
 
+        {phase === "queued" && queuedAddr && (
+          <div style={{ border: "2px solid var(--color-text)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 11 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
+              <span style={kicker}>Queued</span>
+              <span style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700 }}>{syncPct != null ? Math.round(syncPct) + "%" : "syncing…"}</span>
+            </div>
+            <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>You&apos;re in line. It sends on its own.</h2>
+            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
+              The moment the node is ready, {dripText} goes to <span style={{ fontFamily: "var(--mono)", fontSize: 11.5 }}>{short(queuedAddr, 12, 6)}</span>. Keep this tab open or come back later, your place survives a reload.
+            </p>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+              <button className="btn btn-secondary btn-sm" onClick={() => { setQueuedAddr(null); setPhase(basePhase(status)); }}>Cancel and change address</button>
+            </div>
+          </div>
+        )}
+
         {phase === "ready" && refilling && (
           <div style={{ border: "1px solid var(--color-divider)", padding: "10px 14px", display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: "4px 12px", fontFamily: "var(--mono)", fontSize: 11.5 }}>
             <span style={{ ...kicker, fontSize: 10 }}>Topping up</span>
@@ -478,8 +548,8 @@ export default function Home() {
               {genErr && <span style={{ fontSize: 12.5, lineHeight: 1.45, color: "var(--color-accent-700)", fontWeight: 500, maxWidth: "52ch" }}>{genErr}</span>}
               {!addr.trim() && <button className="btn btn-ghost btn-sm" onClick={generate} style={{ padding: 0 }}>Generate a test address</button>}
             </div>
-            <button className="btn btn-primary" onClick={submit} disabled={phase === "empty" || phase === "syncing"} style={{ width: "100%", justifyContent: "space-between" }}>
-              <span>{phase === "syncing" ? "Node syncing, check back soon" : phase === "empty" ? (refilling ? "Topping up, back in a moment" : "Waiting for a refill") : "Request " + dripText}</span>
+            <button className="btn btn-primary" onClick={() => void submit()} disabled={phase === "empty"} style={{ width: "100%", justifyContent: "space-between" }}>
+              <span>{phase === "syncing" ? "Queue it, sends when the node is ready" : phase === "empty" ? (refilling ? "Topping up, back in a moment" : "Waiting for a refill") : "Request " + dripText}</span>
               <span aria-hidden="true">→</span>
             </button>
             <p style={{ margin: 0, fontSize: 11.5, letterSpacing: ".02em", color: muted(55), fontFamily: "var(--mono)" }}>{dripText} · once per address / 24h · shielded z→z</p>
@@ -571,7 +641,7 @@ export default function Home() {
             <h2 style={{ margin: 0, fontSize: 19, lineHeight: 1.25 }}>That didn&apos;t go through.</h2>
             <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(70), maxWidth: "52ch" }}>{errMsg}</p>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-              <button className="btn btn-primary btn-sm" onClick={submit}>Try again</button>
+              <button className="btn btn-primary btn-sm" onClick={() => void submit()}>Try again</button>
               <button className="btn btn-ghost btn-sm" onClick={again} style={{ padding: 0 }}>Start over</button>
             </div>
           </div>
