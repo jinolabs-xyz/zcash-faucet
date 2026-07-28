@@ -11,6 +11,8 @@ An open source Zcash testnet faucet you can run yourself. Paste an address,
 solve a small proof-of-work in the browser, receive TAZ as a shielded z2z
 transaction.
 
+Running instance: **[zcashfaucet.jinolabs.xyz](https://zcashfaucet.jinolabs.xyz)**
+
 Most faucets are a wallet key and a form in front of somebody else's node. This
 one owns its whole stack: a Zebra full node, a Zallet shielded wallet, a solo
 miner, and a self-healing deployment. No third-party wallet service, no captcha
