@@ -1,0 +1,38 @@
+# Advisories arrived by luck before this (#85). The audit job is the safety net:
+# it fails on any high npm advisory and any RustSec advisory, so a bump that
+# matters shows up as a red gate rather than as a quiet risk.
+#
+# Weekly, not daily: three ecosystems on a small team is a review load, and the
+# audit gate already catches the urgent case between runs.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    # Patch and minor arrive grouped so the queue is one review, not twenty.
+    # Majors stay separate because they need a person to read a changelog.
+    groups:
+      npm-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: cargo
+    directory: /deploy/z3/miner
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      cargo-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
