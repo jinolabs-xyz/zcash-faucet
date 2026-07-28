@@ -116,8 +116,27 @@ TLS material all live in named volumes and survive rebuilds.
 
 ## Rollback
 
-There is no dedicated rollback script. Roll back by building from the last
-good commit:
+`redeploy.sh` keeps the previously running image tagged `zcash-faucet:previous`
+and can put it back in one command:
+
+```bash
+/opt/faucet/redeploy.sh rollback
+```
+
+That is also what a failed deploy does on its own, so most of the time the
+rollback has already happened by the time you are reading logs. Check what is
+running and what is available to go back to:
+
+```bash
+/opt/faucet/redeploy.sh status
+```
+
+See [REDEPLOY.md](deploy/z3/REDEPLOY.md) for the exit codes. The short version
+while you are half awake: **2 means the faucet is serving and the change did
+not ship, so it can wait until morning. 1 means the faucet may be down.**
+
+If that image is gone, which happens on a freshly rebuilt box or if the tag
+was pruned, build from the last good commit instead:
 
 ```bash
 cd /opt/zcash-faucet
@@ -129,7 +148,8 @@ FAUCET_DOMAIN=$(cat /etc/faucet-domain) \
 ```
 
 Return to main with `git checkout main` and redeploy when fixed. Rolling back
-code never touches the volumes, so funds and the rate-limit ledger are safe.
+code never touches the volumes, so funds and the rate-limit ledger are safe,
+either way.
 
 ## Restore from backup
 
