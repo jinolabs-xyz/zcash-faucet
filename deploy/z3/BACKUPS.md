@@ -29,12 +29,60 @@ chmod 600 /etc/faucet/backup.env
 systemctl daemon-reload && systemctl enable --now faucet-backup.timer
 ```
 
-**Now copy the passphrase somewhere that survives this box** (team password
-store). The archives are AES256-encrypted with it and nothing else. An
-off-box backup plus an on-box-only passphrase equals no backup.
-
 Watch it: `journalctl -u faucet-backup -f`. Run one now: `systemctl start
 faucet-backup`.
+
+## Escrow the passphrase, then prove it works
+
+The archives are AES256-encrypted with `BACKUP_PASSPHRASE` and nothing else.
+There is no recovery path without it: not from us, not from the bucket, not
+from the box. A passphrase that exists only in `/etc/faucet/backup.env` on the
+machine being backed up is not a backup, it is a copy of your data you cannot
+open.
+
+So before you trust the first backup, do three things in order.
+
+**1. Read it out and store it off-box.**
+
+```bash
+sudo sed -n 's/^BACKUP_PASSPHRASE=//p' /etc/faucet/backup.env
+```
+
+Put that string in the team password store, in an entry named for this box, and
+record which store in the table below. One place that is not the box is the
+minimum; two is better, because a password store you cannot reach at 3am is the
+same failure with extra steps.
+
+**2. Prove the escrowed copy actually decrypts an archive.** Storing a string
+is not the test. Storing the *right* string is:
+
+```bash
+ARCHIVE=$(ls -t /var/lib/faucet-backups/archives/*.tar.gz.gpg | head -1)
+read -rsp 'paste the passphrase FROM THE PASSWORD STORE: ' ESCROWED; echo
+gpg --batch --quiet --decrypt --passphrase-fd 3 3<<<"$ESCROWED" "$ARCHIVE" \
+  | tar -tzf - | head -5
+```
+
+Five filenames means the escrowed copy is correct. An error means you saved
+the wrong thing, and you have found that out while the box is still alive,
+which is the entire point of doing this now.
+
+**3. Record where it lives**, so the next person does not have to guess:
+
+| What | Where |
+|---|---|
+| `BACKUP_PASSPHRASE` for this box | *fill this in: password store and entry name* |
+| Who can retrieve it | *fill this in* |
+| Last verified by step 2 | *fill this in: date* |
+
+Leave those blank and the escrow is folklore. Someone knew, once.
+
+### Rotating it
+
+Changing the passphrase does **not** re-encrypt existing archives. Old
+archives still need the old passphrase, so keep it in the store, marked with
+the date range it covers, until every archive it opens has rotated out of
+`BACKUP_KEEP`. Then update the entry, re-run step 2, and update the table.
 
 ## What a run does
 
