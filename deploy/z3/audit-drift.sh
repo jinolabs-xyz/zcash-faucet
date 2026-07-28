@@ -8,6 +8,9 @@ OVERLAY_DIR="${AUDIT_OVERLAY_DIR:-$REPO_DIR/deploy/z3}"
 UNIT_DIR="${AUDIT_UNIT_DIR:-/etc/systemd/system}"
 INSTALL_DIR="${AUDIT_INSTALL_DIR:-/opt/faucet}"
 ENV_DIR="${AUDIT_ENV_DIR:-/etc/faucet}"
+# Injectable so tests can simulate a host without systemd hermetically,
+# rather than by manipulating PATH on a runner that has it.
+SYSTEMCTL="${AUDIT_SYSTEMCTL:-systemctl}"
 VERBOSE=0
 [ "${1:-}" = "--verbose" ] && VERBOSE=1
 
@@ -29,7 +32,7 @@ note()  { echo "  note     $*"; }
 
 [ -d "$OVERLAY_DIR" ] || { echo "cannot audit: no overlay dir at $OVERLAY_DIR (set AUDIT_REPO_DIR)"; exit 2; }
 have_systemctl=1
-if ! command -v systemctl >/dev/null 2>&1; then
+if ! command -v "$SYSTEMCTL" >/dev/null 2>&1; then
   have_systemctl=0
   note_unverified "whether any unit is ENABLED: no systemctl on this host, so reboot-survival was not checked"
 fi
@@ -55,7 +58,7 @@ for src in "$OVERLAY_DIR"/*.service "$OVERLAY_DIR"/*.timer; do
       "diff $src $installed   # then either cp the repo copy over it, or commit the box's version"
   fi
   if [ "$have_systemctl" = "1" ]; then
-    if systemctl is-enabled --quiet "$unit" 2>/dev/null; then
+    if "$SYSTEMCTL" is-enabled --quiet "$unit" 2>/dev/null; then
       ok "$unit is enabled"
     else
       found "$unit is installed but NOT enabled, so it will not survive a reboot" \
@@ -65,16 +68,29 @@ for src in "$OVERLAY_DIR"/*.service "$OVERLAY_DIR"/*.timer; do
 done
 say ""
 
-# State nobody wrote down. A drop-in is how MINER_MODE=submit got set.
+# Union of two signals, because each misses what the other catches: the repo's
+# own unit names (so a rename cannot fall outside a prefix list) and our
+# conventions (so a hand-installed unit the repo never had is still seen).
+ours_re="$(for f in "$OVERLAY_DIR"/*.service "$OVERLAY_DIR"/*.timer; do
+             [ -e "$f" ] && basename "$f"; done | paste -sd'|' -)"
+in_repo()  { [ -n "$ours_re" ] && printf '%s' "$1" | grep -qxE "$ours_re"; }
+is_ours() {
+  in_repo "$1" && return 0
+  local stem="${1%.*}"
+  in_repo "$stem.service" || in_repo "$stem.timer" && return 0
+  case "$1" in faucet-*|zsnap-*|zcash-*) return 0 ;; esac
+  return 1
+}
+
 say "state on the box that the repo does not describe"
 for installed in "$UNIT_DIR"/*.service "$UNIT_DIR"/*.timer; do
   [ -e "$installed" ] || continue
   unit="$(basename "$installed")"
-  # Only ours; the box runs plenty of other units.
-  case "$unit" in
-    faucet-*|zsnap-*|zcash-*) ;;
-    *) continue ;;
-  esac
+  # A unit the repo ships is checked above. Anything else is only ours if it
+  # shares a stem with something we ship, e.g. a hand-added faucet-x.timer
+  # beside our faucet-x.service.
+  in_repo "$unit" && continue          # already checked above
+  is_ours "$unit" || continue
   [ -f "$OVERLAY_DIR/$unit" ] \
     || found "$unit is installed but the repo has no copy of it, so a rebuild loses it" \
          "cp $installed $OVERLAY_DIR/ && git -C $REPO_DIR add deploy/z3/$unit   # then commit it"
@@ -82,10 +98,8 @@ done
 for dropin_dir in "$UNIT_DIR"/*.d; do
   [ -d "$dropin_dir" ] || continue
   unit="$(basename "$dropin_dir" .d)"
-  case "$unit" in
-    faucet-*|zsnap-*|zcash-*) ;;
-    *) continue ;;
-  esac
+  # Drop-ins matter only for units we ship; the box has others of its own.
+  is_ours "$unit" || continue
   for conf in "$dropin_dir"/*.conf; do
     [ -e "$conf" ] || continue
     found "drop-in $unit.d/$(basename "$conf") exists on the box and is not in the repo" \

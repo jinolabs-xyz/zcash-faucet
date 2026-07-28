@@ -136,8 +136,7 @@ echo "== drift: a skipped check is never reported as clean (doctrine rule 1)"
 # Before the fix this printed "matches the repo" and exited 0 without ever
 # checking whether a unit would survive a reboot.
 drift_env; make_clean_box
-rm -f "$T/bin/systemctl"
-PATH="/usr/bin:/bin" bash "$AUDIT" > "$T/unver.log" 2>&1
+AUDIT_SYSTEMCTL="$T/no-such-systemctl" bash "$AUDIT" > "$T/unver.log" 2>&1
 rc_unver=$?
 check "exits 2, not 0, when a check could not run" "[ $rc_unver -eq 2 ]"
 check "prints a NOT VERIFIED section" "grep -q 'NOT VERIFIED' '$T/unver.log'"
@@ -147,7 +146,32 @@ check "says the audit was incomplete" "grep -q 'INCOMPLETE' '$T/unver.log'"
 
 # Real drift still reports as drift (1) even when something was unverified,
 # because a confirmed finding is more actionable than an incomplete audit.
-drift_env; make_clean_box; rm -f "$T/units/faucet-thing.timer" "$T/bin/systemctl"
-PATH="/usr/bin:/bin" bash "$AUDIT" > "$T/unver2.log" 2>&1
+drift_env; make_clean_box; rm -f "$T/units/faucet-thing.timer"
+AUDIT_SYSTEMCTL="$T/no-such-systemctl" bash "$AUDIT" > "$T/unver2.log" 2>&1
 check "confirmed drift still exits 1" "[ $? -eq 1 ]"
 check "and still lists what was not verified" "grep -q 'NOT VERIFIED' '$T/unver2.log'"
+
+echo "== drift: the audited set comes from the repo, not a name prefix"
+# A unit named outside faucet-*/zsnap-*/zcash-* must still be audited if the
+# repo ships it. The old prefix filter would have gone silently blind here.
+drift_env
+printf '[Service]\nExecStart=/bin/true\n' > "$T/repo/deploy/z3/mining-pool.service"
+bash "$AUDIT" > "$T/derived.log" 2>&1
+check "an oddly named repo unit is still audited" "[ $? -eq 1 ] && grep -q 'mining-pool.service is not installed' '$T/derived.log'"
+
+# And its hand-added drop-in is caught too, which the prefix list would miss.
+drift_env; make_clean_box
+printf '[Service]\nExecStart=/bin/true\n' > "$T/repo/deploy/z3/mining-pool.service"
+cp "$T/repo/deploy/z3/mining-pool.service" "$T/units/"
+printf 'faucet-thing.service\nfaucet-thing.timer\nmining-pool.service\n' > "$STUB_ENABLED"
+mkdir -p "$T/units/mining-pool.service.d"
+printf '[Service]\nEnvironment=POOL=x\n' > "$T/units/mining-pool.service.d/override.conf"
+bash "$AUDIT" > "$T/derived2.log" 2>&1
+check "its drop-in is reported" "grep -q 'drop-in mining-pool.service.d/override.conf' '$T/derived2.log'"
+
+# Units the repo does not ship at all stay out of the report.
+drift_env; make_clean_box
+printf '[Service]\nExecStart=/bin/true\n' > "$T/units/nginx.service"
+mkdir -p "$T/units/nginx.service.d"; printf '[Service]\n' > "$T/units/nginx.service.d/o.conf"
+bash "$AUDIT" > "$T/derived3.log" 2>&1
+check "unrelated units and their drop-ins stay out" "! grep -q 'nginx' '$T/derived3.log'"
