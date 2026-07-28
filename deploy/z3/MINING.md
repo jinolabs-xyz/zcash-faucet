@@ -1,10 +1,18 @@
-# Mining testnet blocks to fund the faucet
+# Mining testnet blocks
 
-The faucet pays out TAZ it does not otherwise have a source for. Public
-testnet faucets are unreliable and rate-limited, so we mine our own: the
-miner in [miner/](miner/) wins public testnet blocks, the coinbase pays the
-address zebra is configured to mine to, and that balance is what the faucet
-drips.
+> **Mining does not currently fund the faucet, and cannot while the network
+> looks like it does today.** We win blocks and a dominant miner orphans every
+> one of them, so expected income is zero rather than small. That is measured
+> and the arithmetic is in [Why our blocks were orphaned](#why-our-blocks-were-orphaned-issue-32)
+> below. Read that before planning around mining income. The wallet is funded
+> from elsewhere for now, and the miner keeps running as a lottery ticket
+> because it costs almost nothing.
+
+The intent was straightforward: the faucet pays out TAZ it has no other source
+for, public testnet faucets are unreliable and rate-limited, so we mine our own.
+The miner in [miner/](miner/) works public testnet blocks, and a coinbase that
+survives pays the address zebra mines to. The machinery all works. The survival
+is the part that does not.
 
 ## Why a CPU is enough (and only on testnet)
 
