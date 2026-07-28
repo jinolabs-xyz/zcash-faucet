@@ -21,6 +21,15 @@
   --color-accent-800: #7c1405;
   --color-accent-900: #4d170e;
 
+  /* The one non-accent hue in the palette, and only the status dot may use it.
+     Darker on paper so it holds contrast against a near-white background. */
+  --color-live: #1f7a3d;
+
+  /* The genuinely-empty dot. Its own token rather than --color-accent-700
+     because that one has no ink override, so on ink it kept this paper value
+     and measured 2.52:1, under the 3.0 non-text floor. 6.41:1 here. */
+  --color-empty: #ae1800;
+
   --font-heading: "Archivo", system-ui, sans-serif;
   --font-body: "Archivo", system-ui, sans-serif;
   --font-heading-weight: 800;
@@ -40,6 +49,11 @@
   --color-neutral-800: #eae7e7;
   --color-accent-100: #4d170e;
   --color-accent-800: #ffc4b8;
+  --color-live: #35c46a; /* lifted for ink, where the dark green would sink */
+  /* 6.39:1 on ink, matching paper's 6.41 so EMPTY carries the same weight in
+     both themes. Also stays clear of the topping-up accent's 4.30, so the two
+     empty states do not collapse into the same-looking dot. */
+  --color-empty: #ff6a4d;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
