@@ -21,6 +21,10 @@
   --color-accent-800: #7c1405;
   --color-accent-900: #4d170e;
 
+  /* The one non-accent hue in the palette, and only the status dot may use it.
+     Darker on paper so it holds contrast against a near-white background. */
+  --color-live: #1f7a3d;
+
   --font-heading: "Archivo", system-ui, sans-serif;
   --font-body: "Archivo", system-ui, sans-serif;
   --font-heading-weight: 800;
@@ -40,6 +44,7 @@
   --color-neutral-800: #eae7e7;
   --color-accent-100: #4d170e;
   --color-accent-800: #ffc4b8;
+  --color-live: #35c46a; /* lifted for ink, where the dark green would sink */
 }
 
 *, *::before, *::after { box-sizing: border-box; }

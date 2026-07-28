@@ -383,7 +383,16 @@ export default function Home() {
       : phase === "empty"
         ? (refilling ? "TOPPING UP" : "EMPTY")
         : "LIVE";
-  const dotBg = live && phase !== "empty" ? "var(--color-accent)" : "transparent";
+  // Colour carries the state, and red now means what red means. Redundant with
+  // the badge text and the status region, never the only signal.
+  const dot =
+    phase === "empty"
+      ? refilling
+        ? { fill: "var(--color-accent)", ring: "var(--color-accent)" } // topping up, calm
+        : { fill: "var(--color-accent-700)", ring: "var(--color-accent-700)" } // genuinely empty
+      : live
+        ? { fill: "var(--color-live)", ring: "var(--color-live)" }
+        : { fill: "transparent", ring: muted(45) }; // syncing, no alarm
 
   // One persistent live region announces phase changes to screen readers. It
   // exists from first render (live regions mounted later announce unreliably)
@@ -413,7 +422,7 @@ export default function Home() {
         {/* Not a live region: the sr-only status region in <main> owns phase
             announcements, a live badge here would say everything twice. */}
         <div style={{ display: "flex", alignItems: "center", gap: 7, border: "2px solid var(--color-divider)", padding: "5px 9px", fontFamily: "var(--mono)", fontSize: 10, fontWeight: 700, letterSpacing: ".1em" }}>
-          <span aria-hidden="true" style={{ width: 9, height: 9, flex: "none", background: dotBg, border: "2px solid var(--color-accent)", animation: "pulse 2.6s ease-in-out infinite" }} />
+          <span aria-hidden="true" style={{ width: 9, height: 9, flex: "none", background: dot.fill, border: `2px solid ${dot.ring}`, animation: "pulse 2.6s ease-in-out infinite" }} />
           <span>{statusText}</span>
         </div>
       </header>
