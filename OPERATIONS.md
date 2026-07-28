@@ -180,38 +180,80 @@ ufw status                              # confirm before closing that session
 ### Why ssh connections keep resetting
 
 `kex_exchange_identification: Connection closed by remote host` under
-connection churn is sshd dropping *unauthenticated* connections, not a network
-fault. Two causes, and the audit checks both:
+connection churn is sshd or the firewall dropping *unauthenticated*
+connections. It is not a network fault. Work through these in order, cheapest
+and least invasive first.
 
-**`ufw limit` on ssh.** That is 6 connections per 30 seconds per source. Ops
-loops that open several sessions in parallel exceed it instantly. `ufw allow
-OpenSSH` replaces the LIMIT rule.
-
-**`MaxStartups`.** The default is `10:30:100`: random early drop begins at 10
-concurrent unauthenticated connections and rises to certain at 100. A script
-opening a handful of parallel `ssh` calls, each spending a moment in key
-exchange, reaches 10 easily.
-
-The conservative change is to raise the *start* of the drop curve and leave the
-ceiling alone:
+**1. Fix it on your own machine, not the box.** Parallel ops calls each open a
+new TCP connection, and connection multiplexing makes them share one:
 
 ```
-MaxStartups 30:30:100
+# ~/.ssh/config
+Host 172.235.26.235 faucet.*
+    ControlMaster auto
+    ControlPath ~/.ssh/cm-%r@%h:%p
+    ControlPersist 10m
 ```
+
+Neither the ufw limit nor `MaxStartups` is approached, because there is one
+connection instead of ten. **This changes nothing on the box, needs no
+sign-off, and is reversible by deleting three lines.** Try it before anything
+below.
+
+**2. `ufw limit` on ssh, if the audit reports LIMIT.** That is a hardcoded 6
+connections per 30 seconds per source, with no gentler setting to tune, so the
+only ufw answer is `allow`. Be explicit about what that costs:
 
 ```bash
-sshd -t                    # validate the config BEFORE reloading
+ufw allow OpenSSH      # fixes the drops AND removes brute-force rate limiting
+```
+
+Only do that with the compensating controls in place, all three:
+keys-only authentication (`PasswordAuthentication no`), `fail2ban` installed and
+banning on ssh, and the audit confirming nothing else is publicly bound. A
+public ssh port with neither rate limiting nor fail2ban is worse than the
+resets.
+
+**3. `MaxStartups`, only if 1 and 2 did not settle it.** The default
+`10:30:100` starts random early drop at 10 concurrent unauthenticated
+connections. `30:30:100` raises the start of the curve and leaves the ceiling,
+so it cannot lock anyone out by being too strict.
+
+**Find out where it actually comes from first.** On Ubuntu 24.04 the first
+directive in `sshd_config` is `Include /etc/ssh/sshd_config.d/*.conf`, and sshd
+takes the **first** value it obtains, so a drop-in beats the main file:
+
+```bash
+sshd -T | grep -i maxstartups        # what sshd will really enforce
+grep -rn MaxStartups /etc/ssh/sshd_config /etc/ssh/sshd_config.d/   # where it is set
+```
+
+Editing the main file when a drop-in sets it does nothing: `sshd -t` passes,
+the reload succeeds, and the resets continue. That is the dangerous path,
+because it looks like the small safe change was tried and failed, and invites a
+bigger change on the only door.
+
+Then:
+
+```bash
+sshd -t                    # validate BEFORE reloading
 systemctl reload ssh       # reload, never restart: reload keeps live sessions
 ```
 
-**Keep a session open while doing this, and verify a new connection succeeds
-before closing it.** This box has one door. `reload` rather than `restart`
-because a restart drops existing sessions, so a bad config plus a restart is a
-box you cannot reach.
+**Keep a second session open and confirm a fresh connection works before
+closing it.** This box has one door.
 
-If resets continue after both, the next suspects are `fail2ban` banning the
-operator IP and per-source rate limiting upstream of the box, neither of which
-this audit can see.
+**Socket activation caveat, unverified.** Ubuntu 24.04 enables `ssh.socket` by
+default, and under socket activation systemd owns the listening socket, which
+is why `Port` and `ListenAddress` changes there are famously ignored.
+`MaxStartups` should still apply because sshd accepts connections itself, but
+we have not confirmed that a `reload` picks the change up on this box. The
+audit reports whether `ssh.socket` is enabled. **Confirm on the box and record
+the answer here**, rather than trusting this paragraph.
+
+If resets continue after all three, the remaining suspects are `fail2ban`
+banning the operator IP and per-source rate limiting upstream of the box.
+Neither is visible to this audit.
 
 ## Config drift
 

@@ -9,6 +9,8 @@ access_env() {
   export STUB_LISTEN="$T/listen" STUB_UFW_STATUS="$T/ufw"
   export ACCESS_SS="$SCRATCH/stubs/access-ss" ACCESS_UFW="$SCRATCH/stubs/access-ufw"
   export ACCESS_SSHD_CONFIG="$T/sshd_config"
+  export ACCESS_SSHD="$SCRATCH/stubs/access-sshd" STUB_SSHD_T="$T/sshd_effective"
+  : > "$T/sshd_effective"
   : > "$STUB_LISTEN"; : > "$STUB_UFW_STATUS"; : > "$ACCESS_SSHD_CONFIG"
   export PATH="$BASE_PATH"
 }
@@ -93,3 +95,39 @@ check "the firewall state was not touched" "[ \"\$before\" = \"\$(cat '$STUB_UFW
 # The fix strings mention ufw allow, which is correct. What must never appear
 # is a mutating verb actually invoked on the ufw binary.
 check "ufw is never invoked with a mutating verb" "! grep -qE '\"[$]ACCESS_UFW\"[[:space:]]+(allow|deny|enable|disable|reset|limit)' '$AUDIT_A'"
+
+echo "== access: the effective config wins over the main file (SDE-App's HIGH)"
+# On 24.04 sshd_config's first directive is Include sshd_config.d/*.conf and the
+# FIRST value wins, so grepping the main file can report unset when a drop-in
+# has set it, and would send an edit to a file that has no effect.
+access_env
+printf '0.0.0.0:22\n0.0.0.0:80\n0.0.0.0:443\n' > "$STUB_LISTEN"; ufw_active
+printf 'Include /etc/ssh/sshd_config.d/*.conf\n' > "$ACCESS_SSHD_CONFIG"   # main file: no MaxStartups
+printf 'maxstartups 30:30:100\nmaxsessions 10\nlogingracetime 120\n' > "$STUB_SSHD_T"
+bash "$AUDIT_A" > "$T/eff.log" 2>&1
+check "exits 0: the drop-in value is found" "[ $? -eq 0 ]"
+check "says the number came from sshd -T" "grep -q 'source: effective config from' '$T/eff.log'"
+check "reports the drop-in value, not unset" "grep -q 'MaxStartups=30:30:100' '$T/eff.log'"
+check "does NOT claim MaxStartups is unset" "! grep -q 'MaxStartups is unset' '$T/eff.log'"
+
+echo "== access: without sshd -T it says the value may be overridden"
+access_env
+printf '0.0.0.0:22\n0.0.0.0:80\n0.0.0.0:443\n' > "$STUB_LISTEN"; ufw_active
+printf 'Include /etc/ssh/sshd_config.d/*.conf\nMaxStartups 10:30:100\n' > "$ACCESS_SSHD_CONFIG"
+: > "$STUB_SSHD_T"        # sshd -T unavailable, forcing the fallback
+bash "$AUDIT_A" > "$T/fallback.log" 2>&1
+rc_fb=$?
+check "labels the weaker source" "grep -q 'Include directives NOT resolved' '$T/fallback.log'"
+check "warns an edit there may have no effect" "grep -q 'may have no effect' '$T/fallback.log'"
+check "exits 2, because the answer is not trustworthy" "[ $rc_fb -eq 2 ]"
+
+echo "== access: the ufw fix states what it costs"
+access_env
+printf '0.0.0.0:22\n0.0.0.0:80\n0.0.0.0:443\n' > "$STUB_LISTEN"
+printf 'Status: active\n\n22/tcp                     LIMIT       Anywhere\n80/tcp                     ALLOW       Anywhere\n443/tcp                    ALLOW       Anywhere\n' > "$STUB_UFW_STATUS"
+printf 'maxstartups 30:30:100\n' > "$STUB_SSHD_T"
+bash "$AUDIT_A" > "$T/trade.log" 2>&1
+check "names the hardcoded 6-per-30s limit" "grep -q '6 connections per 30s per source' '$T/trade.log'"
+check "recommends the client-side fix first" "grep -q 'prefer client-side multiplexing' '$T/trade.log'"
+check "says allow REMOVES brute-force limiting" "grep -q 'REMOVES brute-force limiting' '$T/trade.log'"
+check "names the compensating controls" "grep -q 'keys-only auth and fail2ban' '$T/trade.log'"

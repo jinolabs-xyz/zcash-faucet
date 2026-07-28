@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Stub sshd. -T prints $STUB_SSHD_T (the effective config) when that file
+# exists; absent, it fails so the audit must fall back to the main file.
+set -uo pipefail
+case "${1:-}" in
+  -T) [ -s "${STUB_SSHD_T:-/nonexistent}" ] && cat "$STUB_SSHD_T" || exit 1 ;;
+  -t) exit 0 ;;
+  *)  exit 0 ;;
+esac

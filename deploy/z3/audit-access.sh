@@ -7,6 +7,9 @@ set -uo pipefail
 # docker-internal, particularly the node and wallet RPC.
 ACCESS_PUBLIC_PORTS="${ACCESS_PUBLIC_PORTS:-22 80 443}"
 ACCESS_SSHD_CONFIG="${ACCESS_SSHD_CONFIG:-/etc/ssh/sshd_config}"
+# sshd -T resolves Include directives and reports what sshd will actually
+# enforce. Grepping the main file misses sshd_config.d drop-ins, which win.
+ACCESS_SSHD="${ACCESS_SSHD:-sshd}"
 ACCESS_SS="${ACCESS_SS:-ss}"
 ACCESS_UFW="${ACCESS_UFW:-ufw}"
 VERBOSE=0
@@ -56,8 +59,8 @@ if command -v "$ACCESS_UFW" >/dev/null 2>&1; then
     # `limit` is rate-limited SSH: 6 connections per 30s per source, which
     # drops parallel ops connections and looks exactly like a kex reset.
     if printf '%s' "$ufw_out" | grep -qiE '^(22|OpenSSH|ssh).*LIMIT'; then
-      found "ufw is rate-limiting SSH (LIMIT), which drops bursts of parallel connections and surfaces as kex_exchange_identification resets" \
-            "ufw allow OpenSSH   # replaces the LIMIT rule with a plain allow"
+      found "ufw is rate-limiting SSH (LIMIT, hardcoded 6 connections per 30s per source), which drops bursts of parallel connections and surfaces as kex_exchange_identification resets" \
+            "prefer client-side multiplexing, which needs no box change (see OPERATIONS.md). 'ufw allow OpenSSH' also fixes it but REMOVES brute-force limiting from a public port, so only with keys-only auth and fail2ban"
     fi
     for p in $ACCESS_PUBLIC_PORTS; do
       printf '%s' "$ufw_out" | grep -qE "(^|[^0-9])$p(/tcp)?[[:space:]]" \
@@ -76,19 +79,51 @@ say ""
 # drops unauthenticated connections early once MaxStartups is reached, and the
 # client reports it as kex_exchange_identification.
 say "sshd connection throttling"
-if [ -r "$ACCESS_SSHD_CONFIG" ]; then
+# Ask sshd, do not grep. On Ubuntu 24.04 sshd_config's first directive is
+# Include /etc/ssh/sshd_config.d/*.conf and the FIRST value obtained wins, so a
+# drop-in silently beats the main file. Reading the main file alone can report
+# unset when a drop-in has set it, and would send an edit to a file that has no
+# effect.
+sshd_source=""
+effective=""
+if command -v "$ACCESS_SSHD" >/dev/null 2>&1 && effective="$("$ACCESS_SSHD" -T 2>/dev/null)" && [ -n "$effective" ]; then
+  sshd_source="effective config from $ACCESS_SSHD -T"
+  startups="$(printf '%s\n' "$effective" | awk 'tolower($1)=="maxstartups"{print $2; exit}')"
+  sessions="$(printf '%s\n' "$effective" | awk 'tolower($1)=="maxsessions"{print $2; exit}')"
+  grace="$(printf '%s\n' "$effective" | awk 'tolower($1)=="logingracetime"{print $2; exit}')"
+elif [ -r "$ACCESS_SSHD_CONFIG" ]; then
+  sshd_source="$ACCESS_SSHD_CONFIG only, Include directives NOT resolved"
   startups="$(grep -iE '^[[:space:]]*MaxStartups' "$ACCESS_SSHD_CONFIG" | tail -1 | awk '{print $2}')"
   sessions="$(grep -iE '^[[:space:]]*MaxSessions' "$ACCESS_SSHD_CONFIG" | tail -1 | awk '{print $2}')"
   grace="$(grep -iE '^[[:space:]]*LoginGraceTime' "$ACCESS_SSHD_CONFIG" | tail -1 | awk '{print $2}')"
+  if grep -qiE '^[[:space:]]*Include' "$ACCESS_SSHD_CONFIG"; then
+    skip "whether a drop-in overrides these: $ACCESS_SSHD_CONFIG has an Include and $ACCESS_SSHD -T could not be run, so any value below may be overridden and an edit here may have no effect"
+  fi
+else
+  skip "sshd throttling: neither $ACCESS_SSHD -T nor $ACCESS_SSHD_CONFIG could be read (run as root)"
+fi
+
+if [ -n "$sshd_source" ]; then
+  say "  source: $sshd_source"
   say "  MaxStartups=${startups:-unset (default 10:30:100)} MaxSessions=${sessions:-unset (default 10)} LoginGraceTime=${grace:-unset (default 120)}"
   if [ -z "$startups" ]; then
     found "MaxStartups is unset, so the default 10:30:100 applies: random early drop begins at 10 concurrent unauthenticated connections, which parallel ops scripts reach easily" \
-          "MaxStartups 30:30:100 in $ACCESS_SSHD_CONFIG, then sshd -t && systemctl reload ssh   # keep a session open"
+          "first try client-side multiplexing (no box change, see OPERATIONS.md). If a server change is still wanted, set MaxStartups 30:30:100 where $ACCESS_SSHD -T says it comes from, then $ACCESS_SSHD -t && systemctl reload ssh, with a session already open"
   else
     ok "MaxStartups is set explicitly ($startups)"
   fi
+fi
+
+# Socket activation changes who owns the listening socket, and therefore
+# whether a reload picks a change up at all.
+if command -v systemctl >/dev/null 2>&1; then
+  if systemctl is-enabled --quiet ssh.socket 2>/dev/null; then
+    say "  ssh.socket is ENABLED: systemd owns the listening socket, so confirm a reload actually applies a change before trusting it"
+  else
+    ok "ssh.socket is not enabled, sshd owns its own socket"
+  fi
 else
-  skip "sshd config: $ACCESS_SSHD_CONFIG is not readable (run as root to check it)"
+  skip "socket activation: no systemctl on this host"
 fi
 say ""
 
