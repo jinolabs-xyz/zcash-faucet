@@ -3,7 +3,10 @@
  * The async shape is dictated by D1 (each query is an HTTPS round-trip); the
  * SQLite driver just wraps synchronous better-sqlite3 calls in resolved promises.
  */
-import { SCHEMA } from "./sql";
+import { createRequire } from "node:module";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { SCHEMA } from "./sql.ts";
 
 export interface Row {
   [k: string]: unknown;
@@ -23,13 +26,11 @@ export class SqliteDriver implements DbDriver {
   private db: any;
 
   constructor() {
-    // Import lazily so the native module isn't required when running on D1.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const Database = require("better-sqlite3");
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { mkdirSync } = require("node:fs");
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { join } = require("node:path");
+    // Load lazily so the native module is never pulled in on D1, and through
+    // createRequire so this works under plain ESM too (node --test) where a
+    // bare require() does not exist.
+    const req = createRequire(import.meta.url);
+    const Database = req("better-sqlite3");
     const dir = join(process.cwd(), "data");
     mkdirSync(dir, { recursive: true });
     this.db = new Database(join(dir, "faucet.db"));
@@ -50,11 +51,15 @@ export class SqliteDriver implements DbDriver {
 
 /** Cloudflare D1 via the proxy Worker (see worker/). Survives ephemeral disks. */
 export class D1Driver implements DbDriver {
-  constructor(
-    private url: string,
-    private secret: string,
-  ) {
+  // Plain fields, not constructor parameter properties: node --test runs on
+  // type stripping, which erases types but cannot rewrite that sugar.
+  private url: string;
+  private secret: string;
+
+  constructor(url: string, secret: string) {
     if (!url || !secret) throw new Error("DB_BACKEND=d1 requires D1_PROXY_URL and D1_PROXY_SECRET.");
+    this.url = url;
+    this.secret = secret;
   }
 
   private async query(sql: string, params: (string | number)[]) {

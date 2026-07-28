@@ -23,6 +23,32 @@ CREATE TABLE IF NOT EXISTS claims (
 CREATE INDEX IF NOT EXISTS idx_claims_addrhash ON claims(address_hash, created_at);
 CREATE INDEX IF NOT EXISTS idx_claims_iphash   ON claims(ip_hash, created_at);
 CREATE INDEX IF NOT EXISTS idx_claims_created  ON claims(created_at);
+
+CREATE TABLE IF NOT EXISTS used_challenges (
+  sig  TEXT    PRIMARY KEY,
+  exp  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_used_exp ON used_challenges(exp);
+`;
+
+/**
+ * Spend a proof-of-work challenge, atomically. The PRIMARY KEY on sig makes the
+ * insert itself the mutex: exactly one caller gets changes=1, everyone else
+ * gets 0 and is a replay. Same single-statement guarantee the claim reserve
+ * relies on, so it holds on D1-over-HTTP too where we cannot lean on Node being
+ * single-threaded.
+ *
+ * The signature already covers seed, difficulty, exp and the client fingerprint,
+ * so sig alone identifies the challenge. No need to store anything else, and
+ * nothing here is linkable to a person.
+ */
+export const SPEND_CHALLENGE_SQL = `
+INSERT OR IGNORE INTO used_challenges (sig, exp) VALUES (?, ?)
+`;
+
+/** Expired challenges can never be replayed, so their rows are dead weight. */
+export const PURGE_CHALLENGES_SQL = `
+DELETE FROM used_challenges WHERE exp < ?
 `;
 
 // A 'pending' row that never finalises (e.g. process died mid-send) shouldn't

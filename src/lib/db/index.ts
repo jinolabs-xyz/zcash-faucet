@@ -6,9 +6,9 @@
  * (see lib/privacy.ts) — and it purges rows past the retention window, so it
  * holds the minimum needed to enforce cooldowns and nothing more.
  */
-import { config } from "../config";
-import { fingerprintAddress } from "../privacy";
-import { SqliteDriver, D1Driver, type DbDriver } from "./driver";
+import { config } from "../config.ts";
+import { fingerprintAddress } from "../privacy.ts";
+import { SqliteDriver, D1Driver, type DbDriver } from "./driver.ts";
 import {
   RESERVE_SQL,
   reserveParams,
@@ -16,7 +16,9 @@ import {
   FINALIZE_SQL,
   PURGE_SQL,
   PENDING_LEASE_SECONDS,
-} from "./sql";
+  SPEND_CHALLENGE_SQL,
+  PURGE_CHALLENGES_SQL,
+} from "./sql.ts";
 
 const g = globalThis as unknown as { __faucetDriver?: DbDriver };
 function driver(): DbDriver {
@@ -99,4 +101,19 @@ export async function reserveClaim(opts: {
 /** Finalise a reserved claim once the send resolves. */
 export async function finalizeClaim(claimId: number, status: "sent" | "failed", txid: string | null) {
   await driver().run(FINALIZE_SQL, [status, txid ?? "", claimId]);
+}
+
+/**
+ * Spend a proof-of-work challenge. Returns true if this caller got it, false if
+ * it was already spent. In the ledger rather than in memory because the web
+ * process restarts (watchdog, every deploy) and an in-memory set would silently
+ * un-spend every live challenge inside its TTL.
+ *
+ * Prunes expired rows opportunistically, same best-effort pattern as the claim
+ * purge, so the table cannot grow without bound.
+ */
+export async function spendChallenge(sig: string, exp: number, now: number): Promise<boolean> {
+  driver().run(PURGE_CHALLENGES_SQL, [now]).catch(() => {});
+  const res = await driver().run(SPEND_CHALLENGE_SQL, [sig, exp]);
+  return res.changes === 1;
 }
