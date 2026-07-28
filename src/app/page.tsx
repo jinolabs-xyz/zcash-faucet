@@ -17,8 +17,10 @@ interface Status {
   node?: { ready: boolean; syncPercent: number | null; height: number | null; nodeHeight: number | null };
   miner?: { active: boolean };
   reserve?: { targetTaz: number; lowTaz: number; refilling: boolean; spendableTaz: number | null };
+  donationAddress?: string;
   challenge?: "pow" | "turnstile" | "none";
 }
+type CopyTarget = "txid" | "receipt" | "donation";
 interface Tx { txid: string; to: string; priv: boolean; explorerUrl?: string; at: number }
 interface PowSolution { seed: string; difficulty: number; exp: number; sig: string; nonce: string }
 
@@ -69,7 +71,7 @@ export default function Home() {
   const [panel, setPanel] = useState(false);
   const [theme, setTheme] = useState<"paper" | "ink">("ink");
   const [tx, setTx] = useState<Tx | null>(null);
-  const [copied, setCopied] = useState<"txid" | "receipt" | null>(null);
+  const [copied, setCopied] = useState<CopyTarget | null>(null);
   const [cooldownEnd, setCooldownEnd] = useState(0);
   const [now, setNow] = useState(Date.now());
   const [errMsg, setErrMsg] = useState("");
@@ -250,7 +252,7 @@ export default function Home() {
 
   // Clipboard is unavailable on http origins and in some in-app browsers, so
   // fall back to a hidden textarea rather than silently doing nothing.
-  const copy = async (what: "txid" | "receipt", text: string) => {
+  const copy = async (what: CopyTarget, text: string) => {
     try {
       if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
       else {
@@ -329,6 +331,7 @@ export default function Home() {
   const nodeHeight = node?.nodeHeight ?? null;
   const balance = status?.balanceTaz ?? 0;
   const reserve = status?.reserve;
+  const donation = status?.donationAddress?.trim() ?? "";
   // A refill running while we can still serve must read as healthy, not as an
   // outage. It only changes the copy when the balance is genuinely too low.
   const refilling = !!reserve?.refilling;
@@ -450,7 +453,7 @@ export default function Home() {
             ))}
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginTop: 14 }}>
-            <span className="tag tag-outline">Self-funded, mines its own TAZ</span>
+            <span className="tag tag-outline">Own node, own wallet, shielded drips</span>
             <span style={{ fontSize: 11.5, color: muted(55) }}>Numbers come straight off the node. Refreshes every few seconds.</span>
           </div>
         </div>
@@ -529,11 +532,24 @@ export default function Home() {
           <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 9 }}>
             <span style={kicker}>Empty</span>
             <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>The faucet is out of TAZ right now.</h2>
+            {/* Do not promise this fixes itself. The miner runs, but on public
+                testnet a dominant miner orphans every block we win, so mining
+                income is zero (#42) and the wallet is refilled by hand. Saying
+                otherwise sends people away expecting a recovery that is not
+                coming. */}
             <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
-              {status?.miner?.active
-                ? "It mines its own coins, so this fixes itself: the refill loop tops the reserve back up and drips resume automatically."
-                : "Drips resume automatically once the reserve is topped up. Check back in a while."}
+              It gets refilled by hand at the moment, so this can take a while. Nothing you did caused
+              it{donation ? ", and if you have spare TAZ the address below puts the faucet back up for everyone" : ""}.
             </p>
+            {donation && (
+              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: "4px 10px", fontFamily: "var(--mono)", fontSize: 11.5 }}>
+                <span style={{ color: muted(55) }}>top it up</span>
+                <span style={{ fontWeight: 700, wordBreak: "break-all" }}>{short(donation, 16, 8)}</span>
+                <button className="btn btn-ghost btn-sm" onClick={() => void copy("donation", donation)} style={{ padding: 0 }}>
+                  {copied === "donation" ? "Copied ✓" : "Copy address"}
+                </button>
+              </div>
+            )}
           </div>
         )}
 
