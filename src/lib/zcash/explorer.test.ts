@@ -5,7 +5,7 @@ import { explorerTxUrl } from "./explorer.ts";
 const TXID = "a".repeat(64);
 
 test("builds a testnet explorer link for a txid", () => {
-  assert.equal(explorerTxUrl(TXID), `https://blockexplorer.one/zcash/testnet/tx/${TXID}`);
+  assert.equal(explorerTxUrl(TXID), `https://testnet.cipherscan.app/tx/${TXID}`);
 });
 
 test("no txid means no link, never a link to nowhere", () => {
@@ -22,5 +22,5 @@ test("a deploy can point somewhere else without a code change", () => {
 });
 
 test("txids are url-encoded, a junk value cannot break out of the path", () => {
-  assert.equal(explorerTxUrl("../../evil?x=1"), "https://blockexplorer.one/zcash/testnet/tx/..%2F..%2Fevil%3Fx%3D1");
+  assert.equal(explorerTxUrl("../../evil?x=1"), "https://testnet.cipherscan.app/tx/..%2F..%2Fevil%3Fx%3D1");
 });
