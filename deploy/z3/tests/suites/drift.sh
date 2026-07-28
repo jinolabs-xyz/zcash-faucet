@@ -206,3 +206,128 @@ check "the [Service] header does not print either" "! grep -q '| \[Service\]' '$
 check "Environment keeps its variable name" "grep -q 'Environment=MINER_MODE=<redacted>' '$T/leak.log'"
 check "ExecStart is named but its arguments are gone" "grep -q 'ExecStart=<redacted>' '$T/leak.log'"
 check "the drop-in is still reported as drift" "grep -q 'drop-in faucet-thing.service.d/override.conf' '$T/leak.log'"
+
+echo "== drift-report: the alert names WHICH outcome, not just that a unit failed"
+REPORT="$REPO/deploy/z3/drift-report.sh"
+report_env() {
+  T="$(mktemp -d "${TMPDIR:-/tmp}/report-test.XXXXXX")"
+  mkdir -p "$T/bin"
+  printf '#!/usr/bin/env bash\necho "ALERT: $*" >> %q\n' "$T/alerts.log" > "$T/alert.sh"
+  chmod +x "$T/alert.sh"
+  : > "$T/alerts.log"
+  export DRIFT_ALERT_SH="$T/alert.sh" DRIFT_RUN_ACCESS=0
+}
+fake_audit() { # $1 exit code
+  printf '#!/usr/bin/env bash\necho "  FINDING  something"\nexit %s\n' "$1" > "$T/audit.sh"
+  chmod +x "$T/audit.sh"; export DRIFT_AUDIT="$T/audit.sh"
+}
+
+report_env; fake_audit 0
+bash "$REPORT" > "$T/clean.log" 2>&1
+check "a clean audit exits 0" "[ $? -eq 0 ]"
+check "and pages nobody" "[ ! -s '$T/alerts.log' ]"
+check "and says clean in the journal" "grep -q 'config: clean' '$T/clean.log'"
+
+report_env; fake_audit 1
+bash "$REPORT" > "$T/drift.log" 2>&1
+check "drift found still exits 0, it reported successfully" "[ $? -eq 0 ]"
+check "the alert says there are findings" "grep -q 'config findings' '$T/alerts.log'"
+check "the alert explains why it matters" "grep -q 'a rebuild would not reproduce this box' '$T/alerts.log'"
+check "the alert says where to look" "grep -q 'journalctl -u faucet-drift-report' '$T/alerts.log'"
+check "the audit output is in the journal" "grep -q 'FINDING' '$T/drift.log'"
+
+report_env; fake_audit 2
+bash "$REPORT" > "$T/incomplete.log" 2>&1
+check "incomplete exits 0" "[ $? -eq 0 ]"
+check "the alert says INCOMPLETE, not findings" "grep -q 'INCOMPLETE' '$T/alerts.log' && ! grep -q 'config findings' '$T/alerts.log'"
+check "and warns a problem may exist unseen" "grep -q 'may exist unseen' '$T/alerts.log'"
+
+report_env
+export DRIFT_AUDIT="$T/not-installed.sh"
+bash "$REPORT" > "$T/missing.log" 2>&1
+check "a missing audit exits NONZERO so OnFailure catches it" "[ $? -ne 0 ]"
+check "and says which script is missing" "grep -q 'audit missing or not executable' '$T/missing.log'"
+
+echo "== drift-report: a finding nobody could be told about is a FAILED unit"
+# The unit exists so that someone HEARS about drift. Discarding alert.sh's rc
+# left the worst state silent: drift found, journald has it, nobody paged, unit
+# green, operator sees a healthy timer. Audit-blind means we do not know.
+# Alert-failed means we DO know and the person who needs to does not.
+# The three codes below are alert.sh's own contract, pinned against the real
+# script in the alerts suite. Here we test what this wrapper does with each.
+alert_exiting() { # $1 exit code
+  printf '#!/usr/bin/env bash\nexit %s\n' "$1" > "$T/alert.sh"; chmod +x "$T/alert.sh"
+}
+
+report_env; fake_audit 1; alert_exiting 3
+bash "$REPORT" > "$T/undeliv-unconfigured.log" 2>&1; rc=$?
+check "drift found with no webhook configured FAILS the unit" "[ $rc -ne 0 ]"
+check "and names the fix, not just a failure" "grep -q 'no FAUCET_ALERT_URL configured' '$T/undeliv-unconfigured.log'"
+check "and says the unit is failing on purpose" "grep -q 'could NOT be delivered' '$T/undeliv-unconfigured.log'"
+check "and says systemctl is the remaining signal" "grep -q 'systemctl is the only signal left' '$T/undeliv-unconfigured.log'"
+
+report_env; fake_audit 1; alert_exiting 4
+bash "$REPORT" > "$T/undeliv-encoder.log" 2>&1; rc=$?
+check "a missing encoder fails the unit too" "[ $rc -ne 0 ]"
+check "and blames the encoder, not the webhook URL" \
+  "grep -q 'no jq and no python3' '$T/undeliv-encoder.log' && ! grep -q 'rejected the POST' '$T/undeliv-encoder.log'"
+
+report_env; fake_audit 1; alert_exiting 1
+bash "$REPORT" > "$T/undeliv-post.log" 2>&1; rc=$?
+check "a rejected POST fails the unit" "[ $rc -ne 0 ]"
+check "and blames the webhook, not the config" \
+  "grep -q 'webhook rejected the POST' '$T/undeliv-post.log' && ! grep -q 'no FAUCET_ALERT_URL' '$T/undeliv-post.log'"
+
+report_env; fake_audit 1
+export DRIFT_ALERT_SH="$T/no-such-alert.sh"
+bash "$REPORT" > "$T/undeliv-missing.log" 2>&1; rc=$?
+check "an alert script that is not there fails the unit" "[ $rc -ne 0 ]"
+check "and says no runnable alert script" "grep -q 'no runnable alert script' '$T/undeliv-missing.log'"
+
+# A broken alerter is only a problem when there was something to send. A clean
+# box must not page or fail just because nobody configured a webhook.
+report_env; fake_audit 0; alert_exiting 3
+bash "$REPORT" > "$T/clean-broken-alert.log" 2>&1; rc=$?
+check "a clean audit with a broken alerter stays GREEN" "[ $rc -eq 0 ]"
+
+# Everything above stubs alert.sh, so a wrong default path would leave all of
+# it passing while the real unit alerts nothing. This one runs the shipped
+# alert.sh for real: unconfigured, it must exit 3 and fail the unit.
+report_env; fake_audit 1
+unset DRIFT_ALERT_SH
+env -u FAUCET_ALERT_URL -u WATCHDOG_ALERT_URL bash "$REPORT" > "$T/real-alert.log" 2>&1; rc=$?
+check "the DEFAULT alert path is the shipped alert.sh, reached without env help" "[ $rc -ne 0 ]"
+check "and the real script reports itself unconfigured" "grep -q 'no FAUCET_ALERT_URL configured' '$T/real-alert.log'"
+
+echo "== drift-report: each audit explains its OWN finding (SDE-CI's copy finding)"
+# One shared sentence misdescribes whichever audit did not write it. An access
+# finding is not the box disagreeing with the repo, it is something reachable
+# that should not be, and a wrong explanation at 3am costs more than none.
+report_env; fake_audit 0
+export DRIFT_RUN_ACCESS=1
+printf '#!/usr/bin/env bash\nexit 1\n' > "$T/access.sh"; chmod +x "$T/access.sh"
+export DRIFT_ACCESS_AUDIT="$T/access.sh"
+bash "$REPORT" > "$T/wording.log" 2>&1
+check "the access alert does NOT claim the repo disagrees" \
+  "! grep -q 'repo disagree' '$T/alerts.log'"
+check "it says something is reachable that should not be" \
+  "grep -q 'reachable that should not be' '$T/alerts.log'"
+check "and points at the binding, since ufw cannot close a docker port" \
+  "grep -q 'BINDING' '$T/alerts.log'"
+
+report_env; fake_audit 1
+export DRIFT_RUN_ACCESS=0
+bash "$REPORT" > "$T/wording2.log" 2>&1
+check "the config alert keeps its own explanation" \
+  "grep -q 'repo disagree' '$T/alerts.log'"
+check "and does not borrow the access wording" \
+  "! grep -q 'reachable that should not be' '$T/alerts.log'"
+
+echo "== drift-report: the worse of the two audits decides the outcome"
+report_env; fake_audit 0
+export DRIFT_RUN_ACCESS=1
+printf '#!/usr/bin/env bash\nexit 1\n' > "$T/access.sh"; chmod +x "$T/access.sh"
+export DRIFT_ACCESS_AUDIT="$T/access.sh"
+bash "$REPORT" > "$T/both.log" 2>&1
+check "a clean config plus access drift still alerts" "grep -q 'access findings' '$T/alerts.log'"
+check "and the clean one is reported clean" "grep -q 'config: clean' '$T/both.log'"

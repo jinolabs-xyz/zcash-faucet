@@ -20,6 +20,7 @@ checked out at `/opt/zcash-faucet`.
 | encrypted backups | systemd `faucet-backup.timer` | `/opt/faucet/backup.sh` | [deploy/z3/BACKUPS.md](deploy/z3/BACKUPS.md) |
 | metrics textfile | systemd `faucet-metrics.timer` | `/opt/faucet/faucet-metrics.sh` | [deploy/z3/OBSERVABILITY.md](deploy/z3/OBSERVABILITY.md) |
 | alerting | `faucet-alert@.service`, wired as `OnFailure=` on every unit above | `/opt/faucet/alert.sh` | [deploy/z3/OBSERVABILITY.md](deploy/z3/OBSERVABILITY.md) |
+| drift and access audit | systemd `faucet-drift-report.timer` (daily 03:40) | `/opt/faucet/drift-report.sh` | [drift section](#config-drift) |
 
 Only caddy is public. Zebra and zallet RPC stay on the private docker
 network. Everything docker is `restart: unless-stopped`, so a reboot brings
@@ -313,6 +314,52 @@ on the strength of checks it did not perform.
 
 Every finding prints the command that fixes it, so acting on a report is a
 paste rather than a puzzle.
+
+### It runs itself, daily
+
+`faucet-drift-report.timer` runs both audits at 03:40 and alerts with the cause
+named, so nobody has to remember to check:
+
+```bash
+cp audit-drift.sh audit-access.sh drift-report.sh /opt/faucet/ && chmod +x /opt/faucet/*.sh
+cp faucet-drift-report.service faucet-drift-report.timer /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now faucet-drift-report.timer
+journalctl -u faucet-drift-report -n 200      # the last report, findings and fixes
+```
+
+Four outcomes, and the alert says which:
+
+| Outcome | Alert | Unit result |
+|---|---|---|
+| clean | none | success |
+| drift found | "drift found ... a rebuild would not reproduce it" | success, it reported |
+| incomplete | "INCOMPLETE ... drift may exist unseen" | success, it reported |
+| an audit could not be run at all | `OnFailure` pages | failure |
+| a finding could not be delivered | `OnFailure` pages, cause named in the journal | failure |
+
+Findings alert themselves rather than riding on a unit failure, because "unit
+failed" does not tell you whether the box drifted or whether the check could not
+see. What is left to `OnFailure` is the wrapper's own problems rather than facts
+about the box: an audit it could not run, and a finding it could not deliver.
+
+That last row is the one worth understanding. Audit-blind means we do not know.
+Alert-failed means we **do** know and the person who needs to does not, so the
+unit goes red on purpose: with the webhook broken, `systemctl` is the only
+signal left, and a green timer there would hide the drift. The journal names
+which of the three delivery failures it was, because they want different fixes:
+
+```
+journalctl -u faucet-drift-report -n 200 | grep 'ALERT NOT SENT'
+  no FAUCET_ALERT_URL configured    -> set one in /etc/faucet/alerts.env
+  no jq and no python3              -> install either one
+  alert.sh exited 1                 -> the webhook rejected the POST, check the URL
+```
+
+A box with no webhook configured stays green while it is clean. It only goes
+red once drift exists **and** there is no way to tell anyone.
+
+`Persistent=true`, so a box that was off at 03:40 gets audited on its next boot
+rather than skipping a day.
 
 It is **read-only and has no `--apply`**. Reconciling the box to the repo
 would delete the very hand work the audit exists to surface. The fix for
