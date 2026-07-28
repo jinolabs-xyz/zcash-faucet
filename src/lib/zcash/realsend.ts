@@ -17,11 +17,11 @@ import { faucetWallet } from "./wallet.ts";
 import { getAddressUtxos, getLatestBlock, getLightdInfo, sendRawTransaction, type Utxo } from "./grpc.ts";
 import { explorerTxUrl } from "./explorer.ts";
 
+// @bitgo/utxo-lib ships no usable types, so this is any by necessity.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let utxolib: any;
 function lib() {
   // Lazy require so the (large) lib only loads when real sends are configured.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   return (utxolib ??= require("@bitgo/utxo-lib"));
 }
 
@@ -99,7 +99,6 @@ export class RealSender implements Sender {
   }
 
   private buildTransparentTx(o: {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     wallet: { priv: Uint8Array; address: string };
     chosen: Utxo[];
     total: bigint;

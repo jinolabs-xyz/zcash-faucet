@@ -17,7 +17,6 @@ const FEE_CUSHION_ZAT = 20_000n;
 /** Compute the v5 (NU5) txid from the finalized hex for the explorer link. */
 function txidFromHex(hex: string): string {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const u = require("@bitgo/utxo-lib");
     const tx = u.bitgo.createTransactionFromHex(hex, u.networks.zcashTest);
     return tx.getId();

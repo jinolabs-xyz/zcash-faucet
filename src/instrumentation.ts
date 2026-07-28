@@ -25,7 +25,7 @@ export async function register() {
   const { getReserveReconciler } = await import("@/lib/reserve/reconciler");
   getReserveReconciler().start();
 
-  if ((process.env.FAUCET_SENDER ?? "mock") !== "real") return;
+  if (process.env.FAUCET_SENDER !== "real") return;
   const { warmT2z } = await import("@/lib/zcash/t2z");
   warmT2z();
 }

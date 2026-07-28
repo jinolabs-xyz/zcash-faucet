@@ -13,7 +13,7 @@ process.env.ZALLET_POLL_MS = "250";
 
 const { ZalletSender } = await import("./zalletsend.ts");
 const { ZalletRefiller } = await import("../reserve/zalletRefiller.ts");
-const { safeBalance, creditMockBalance } = await import("./send.ts");
+const { safeBalance } = await import("./send.ts");
 
 const UA_INFO: AddressInfo = { valid: true, kind: "unified", shielded: true };
 const TM_INFO: AddressInfo = { valid: true, kind: "transparent", shielded: false };
@@ -118,6 +118,3 @@ test("safeBalance is null, never a throw, when the wallet is unreachable", async
   assert.equal(await safeBalance(), null);
 });
 
-test("creditMockBalance refuses outside mock mode", () => {
-  assert.throws(() => creditMockBalance(1n), /mock-only/);
-});

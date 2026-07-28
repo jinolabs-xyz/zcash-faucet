@@ -11,6 +11,25 @@ import { saltRejectionReason } from "./saltGuard.ts";
 
 export const ZATOSHI_PER_TAZ = 100_000_000n;
 
+export const SENDERS = ["zallet", "real"] as const;
+export type SenderKind = (typeof SENDERS)[number];
+
+/**
+ * Refuse to guess. An unrecognised value used to fall through to the real
+ * transparent sender, so a stale FAUCET_SENDER=mock left in a box env would
+ * silently route drips at the hot wallet.
+ */
+function senderFromEnv(): SenderKind {
+  const raw = (process.env.FAUCET_SENDER ?? "zallet").trim();
+  if ((SENDERS as readonly string[]).includes(raw)) return raw as SenderKind;
+  throw new Error(
+    `FAUCET_SENDER must be one of ${SENDERS.join(" | ")}, got "${raw}". ` +
+      (raw === "mock"
+        ? "Mock mode was removed: point FAUCET_SENDER=zallet at a real wallet, or at scripts/fake-zallet.mjs for local work."
+        : "Refusing to start rather than pick a sender for you."),
+  );
+}
+
 function num(name: string, fallback: number): number {
   const raw = process.env[name];
   if (raw === undefined || raw === "") return fallback;
@@ -57,7 +76,7 @@ export const config = {
   get lightwalletdEndpoint() {
     return this.lightwalletdEndpoints[0]!;
   },
-  sender: (process.env.FAUCET_SENDER ?? "mock") as "mock" | "real" | "zallet",
+  sender: senderFromEnv(),
   walletSeed: process.env.FAUCET_WALLET_SEED ?? "",
 
   // Zallet backend (FAUCET_SENDER=zallet): a genuinely shielded faucet. Holds
@@ -109,12 +128,7 @@ export const config = {
   d1ProxyUrl: process.env.D1_PROXY_URL ?? "",
   d1ProxySecret: process.env.D1_PROXY_SECRET ?? "",
 
-  // Simulated spendable balance for the mock sender (real sender reads on-chain).
-  mockBalanceZatoshi: tazToZatoshi(num("FAUCET_MOCK_BALANCE_TAZ", 10)),
 
-  // Explicit opt-in for the mock refiller, so a mock-mode deploy never
-  // silently "mines" simulated funds. Tests and local runs turn it on.
-  mockRefill: process.env.FAUCET_MOCK_REFILL === "true",
 
   // Max sends waiting in the serial FIFO queue before we reject with "busy".
   sendQueueMaxPending: Math.max(1, Math.floor(num("SEND_QUEUE_MAX_PENDING", 20))),

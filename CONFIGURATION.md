@@ -10,7 +10,7 @@ with an anti-abuse gate on.
 
 | Variable | Default | What it controls |
 | --- | --- | --- |
-| `FAUCET_SENDER` | `mock` | `mock`, `real` (transparent), or `zallet` (shielded, production). |
+| `FAUCET_SENDER` | `zallet` | `zallet` (shielded, production) or `real` (transparent). |
 | `FAUCET_DRIP_TAZ` | `0.1` | Amount per claim. |
 | `FAUCET_COOLDOWN_SECONDS` | `86400` | Per-address cooldown. |
 | `FAUCET_DAILY_CAP_TAZ` | `100` | Ceiling across all claims in 24h. |
@@ -25,7 +25,6 @@ with an anti-abuse gate on.
 | `FAUCET_RESERVE_TARGET_TAZ` | `15` | Refill stops here. |
 | `FAUCET_RESERVE_LOW_TAZ` | `5` | Refill starts below here. Must be under target, checked at boot. |
 | `FAUCET_RESERVE_CHECK_SECONDS` | `30` | Reconciler interval. |
-| `FAUCET_MOCK_REFILL` | `false` | Explicit opt-in so a mock deploy never silently "mines". |
 | `ZALLET_RPC_URL` | `http://127.0.0.1:28232/` | Zallet JSON-RPC endpoint. |
 | `ZALLET_RPC_USER` / `ZALLET_RPC_PASSWORD` | none | Basic auth for that endpoint. |
 | `ZALLET_ACCOUNT` | none | Faucet account UUID. The shield sweep and the miner must both target this account. |
@@ -36,7 +35,6 @@ with an anti-abuse gate on.
 | `DB_BACKEND` | `sqlite` | `sqlite` for a normal box, `d1` to keep the claim ledger on Cloudflare D1 when the host disk is ephemeral. |
 | `FAUCET_DONATION_ADDRESS` | none | Shown in the UI so people can top the faucet up. |
 | `FAUCET_MINING_ADDRESS` | none | Transparent address the miner pays coinbase to. Shown on /donate for anyone pointing hashrate at us. Unset hides that block. |
-| `FAUCET_MOCK_BALANCE_TAZ` | `10` | Starting balance for the mock sender, so the empty state and low-balance guard are testable with no chain. |
 | `FAUCET_WALLET_SEED` | none | Funded transparent wallet, WIF or 64-hex. Only used by `FAUCET_SENDER=real`. Server side, never commit it. |
 | `SEND_QUEUE_MAX_PENDING` | `20` | Sends allowed to queue before the faucet sheds with a busy 503, so a surge cannot pile up unbounded work. |
 | `ZALLET_RPC_TIMEOUT_MS` | `15000` | Per-call RPC timeout. Floor of 1000. |

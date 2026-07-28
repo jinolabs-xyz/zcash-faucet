@@ -71,7 +71,7 @@ start` with an injected `PORT`) passes:
 - ✅ clean install from `package-lock.json`
 - ✅ production build
 - ✅ binds `0.0.0.0:$PORT` (Render's requirement), confirmed on an injected port
-- ✅ `/api/health` responds, and drip (mock), account gen, and live-gRPC balance/network all work
+- ✅ `/api/health` responds, and drip, account gen, and live-gRPC balance/network all work
 - ✅ `TRUSTED_PROXY_COUNT=1` correctly reads the client IP behind Render's proxy, and a spoofed `X-Forwarded-For` prepend is rejected
 
 ## 1. Deploy the web service on Render

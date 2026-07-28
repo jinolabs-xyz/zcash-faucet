@@ -22,7 +22,6 @@
     "@noble/hashes": "^2.2.0",
     "@noble/secp256k1": "^3.1.0",
     "@scure/base": "^2.2.0",
-    "@scure/bip39": "^2.2.0",
     "better-sqlite3": "^11.8.1",
     "next": "^15.5.22",
     "react": "^19.0.0",
@@ -34,10 +33,13 @@
     "@types/node": "^22.10.7",
     "@types/react": "^19.0.7",
     "@types/react-dom": "^19.0.3",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^15.5.22",
     "typescript": "^5.7.3"
   },
   "overrides": {
     "postcss": "^8.5.23",
-    "sharp": "^0.35.0"
+    "sharp": "^0.35.0",
+    "brace-expansion": "^5.0.8"
   }
 }
