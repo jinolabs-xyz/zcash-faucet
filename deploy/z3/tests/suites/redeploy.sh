@@ -36,7 +36,10 @@ echo "== redeploy: a build failure never touches the running faucet"
 redeploy_env
 touch "$STUB_HEALTH" "$STUB_READY"
 STUB_BUILD_FAIL=1 bash "$REDEPLOY" > "$T/bf.log" 2>&1
-check "exits nonzero" "[ $? -ne 0 ]"
+rc_bf=$?
+# 2, not 1. Nothing was swapped and the faucet is serving, so a broken build
+# must not page anyone. Exit 1 is reserved for "the faucet may be down".
+check "exits 2, the non-paging code" "[ $rc_bf -eq 2 ]"
 check "says the running faucet was left alone" "grep -q 'left alone' '$T/bf.log'"
 check "live image unchanged" "[ \"\$(img zcash-faucet:latest)\" = 'sha256:old' ]"
 check "nothing was started" "! grep -q 'compose.*up' '$STUB_LOG'"
@@ -87,7 +90,8 @@ echo "== redeploy: a failed git pull changes nothing on the box"
 redeploy_env
 touch "$STUB_HEALTH" "$STUB_READY"
 STUB_PULL_FAIL=1 bash "$REDEPLOY" > "$T/pf.log" 2>&1
-check "exits nonzero" "[ $? -ne 0 ]"
+rc_pf=$?
+check "exits 2, the non-paging code" "[ $rc_pf -eq 2 ]"
 check "says nothing changed" "grep -q 'nothing has changed' '$T/pf.log'"
 check "never built" "! grep -q 'compose.*build' '$STUB_LOG'"
 
@@ -117,3 +121,33 @@ touch "$STUB_HEALTH"
 bash "$REDEPLOY" --no-pull > "$T/first.log" 2>&1
 check "first deploy exits 0" "[ $? -eq 0 ]"
 check "warns there is no rollback target" "grep -q 'nothing to roll back to' '$T/first.log'"
+
+echo "== redeploy: exit 1 is reserved for a faucet that may be down"
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+# Every `up` fails, so the new image will not start AND the rollback cannot
+# either. That is the only shape that should page.
+STUB_UP_FAIL=1 bash "$REDEPLOY" > "$T/page.log" 2>&1
+rc_page=$?
+check "exits 1 when the rollback also fails" "[ $rc_page -eq 1 ]"
+check "says the faucet may be down" "grep -q 'may be down' '$T/page.log'"
+
+redeploy_env
+rm -f "$STUB_IMAGES/zcash-faucet_latest"     # first deploy, no rollback target
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_READY_MAX=1 bash "$REDEPLOY" --no-pull > "$T/page2.log" 2>&1
+rc_page2=$?
+check "exits 1 when unhealthy with nothing to roll back to" "[ $rc_page2 -eq 1 ]"
+check "and says the faucet is down" "grep -qi 'faucet is down' '$T/page2.log'"
+
+echo "== redeploy: every non-paging failure says so in the log"
+# Re-run the two cheap failures in one env so the assertions target real files
+# rather than globbing across earlier temp dirs.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_BUILD_FAIL=1 bash "$REDEPLOY" > "$T/say-build.log" 2>&1
+check "build failure says the change did not ship" "grep -q 'did NOT ship' '$T/say-build.log'"
+check "build failure does not claim the faucet is down" "! grep -qi 'may be down' '$T/say-build.log'"
+STUB_PULL_FAIL=1 bash "$REDEPLOY" > "$T/say-pull.log" 2>&1
+check "pull failure says the change did not ship" "grep -q 'did NOT ship' '$T/say-pull.log'"
+check "pull failure does not claim the faucet is down" "! grep -qi 'may be down' '$T/say-pull.log'"

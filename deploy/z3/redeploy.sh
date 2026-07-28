@@ -7,11 +7,14 @@
 #   redeploy.sh rollback     go back to the previous image by hand
 #   redeploy.sh status       what is running now and what is available to roll back to
 #
-# Exit codes matter for anything scripting this:
+# Exit codes matter for anything scripting this, and the split is about
+# whether to wake someone:
 #   0  the new build is live and healthy
-#   2  the deploy failed and the previous build was restored, so the faucet is
-#      serving but YOUR CHANGE DID NOT SHIP
-#   1  something worse: it failed and could not be put back, needs a human
+#   2  the change did NOT ship and the faucet is serving anyway, either
+#      because nothing was swapped (bad pull, failed build) or because the
+#      rollback put the old build back. Nobody needs to be paged for this.
+#   1  the faucet may be DOWN: the rollback itself failed, or there was no
+#      previous image to go back to. This one is a page.
 #
 # The safety property: the previously running image is tagged
 # zcash-faucet:previous BEFORE anything is rebuilt, so there is always
@@ -41,15 +44,19 @@ HEALTH_INTERVAL="${REDEPLOY_HEALTH_INTERVAL:-3}"
 Z3_NETWORK_NAME="${Z3_NETWORK_NAME:-z3-testnet}"
 
 log() { echo "$(date -u +%FT%TZ) redeploy: $*"; }
+# die is for the faucet-may-be-down cases only, because exit 1 is what a
+# pager should react to.
 die() { log "ERROR: $*"; exit 1; }
-# The service is fine but the change did not ship. A distinct code so
-# automation cannot read a rollback as a successful deploy.
-die_not_shipped() {
-  log "DEPLOY FAILED, previous build restored and serving. Your change did NOT ship."
+# The change did not ship but the faucet is serving. Distinct code so
+# automation cannot read it as a successful deploy, and so a broken build does
+# not wake anyone at 3am for a healthy faucet.
+not_shipped() {
+  log "DEPLOY FAILED: $1"
+  log "The faucet is serving. Your change did NOT ship."
   exit 2
 }
 
-command -v docker >/dev/null || die "docker is not installed"
+command -v docker >/dev/null || not_shipped "docker is not installed, nothing was attempted"
 
 compose() { ( cd "$OVERLAY_DIR" && Z3_NETWORK_NAME="$Z3_NETWORK_NAME" \
                 FAUCET_DOMAIN="${FAUCET_DOMAIN:-$(cat /etc/faucet-domain 2>/dev/null || true)}" \
@@ -110,10 +117,10 @@ case "${1:-deploy}" in
     exit 0
     ;;
   deploy|--no-pull) : ;;
-  *) die "usage: redeploy.sh [--no-pull|rollback|status]" ;;
+  *) not_shipped "unknown argument '${1:-}' (usage: redeploy.sh [--no-pull|rollback|status])" ;;
 esac
 
-[ -d "$OVERLAY_DIR" ] || die "no overlay dir at $OVERLAY_DIR (set REDEPLOY_OVERLAY_DIR)"
+[ -d "$OVERLAY_DIR" ] || not_shipped "no overlay dir at $OVERLAY_DIR (set REDEPLOY_OVERLAY_DIR)"
 
 # Was it serving before? That decides how strict the gate is afterwards.
 want_ready=0
@@ -128,7 +135,8 @@ fi
 # to, and a broken build would leave the box with no known-good faucet.
 current="$(image_id "$IMAGE")"
 if [ -n "$current" ]; then
-  docker tag "$IMAGE" "$PREVIOUS_TAG" || die "could not tag the current image as $PREVIOUS_TAG"
+  docker tag "$IMAGE" "$PREVIOUS_TAG" \
+    || not_shipped "could not tag the current image as $PREVIOUS_TAG, refusing to build without a rollback target"
   log "current image $current tagged $PREVIOUS_TAG for rollback"
 else
   log "no existing $IMAGE, this is a first deploy and there is nothing to roll back to"
@@ -138,7 +146,7 @@ if [ "${1:-deploy}" != "--no-pull" ]; then
   log "pulling the latest code in $REPO_DIR"
   before="$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   git -C "$REPO_DIR" pull --ff-only 2>&1 | sed 's/^/    /' \
-    || die "git pull failed, nothing has changed on the box"
+    || not_shipped "git pull failed, nothing has changed on the box"
   after="$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   log "code: $before -> $after"
 fi
@@ -146,14 +154,14 @@ fi
 # A build failure is the cheapest failure: nothing has been swapped yet.
 log "building the new image"
 if ! compose build faucet 2>&1 | tail -n 20 | sed 's/^/    /'; then
-  die "build failed, the running faucet was left alone"
+  not_shipped "build failed, the running faucet was left alone"
 fi
 
 log "starting the new image"
 if ! compose up -d faucet 2>&1 | sed 's/^/    /'; then
   log "the new image would not start, rolling back"
-  do_rollback || exit 1
-  die_not_shipped
+  do_rollback || die "rollback failed after the new image would not start, the faucet may be down"
+  not_shipped "the new image would not start"
 fi
 
 if wait_healthy "$want_ready"; then
@@ -164,7 +172,7 @@ fi
 
 log "the new build failed the health gate after ${HEALTH_TIMEOUT}s, rolling back"
 if [ -n "$current" ]; then
-  do_rollback || exit 1
-  die_not_shipped
+  do_rollback || die "rollback failed after the health gate, the faucet may be down"
+  not_shipped "the new build never became healthy"
 fi
 die "health gate failed and there is no previous image to roll back to, the faucet is down"

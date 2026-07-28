@@ -31,15 +31,24 @@ deploy, and a rollback rolls back code, not data.
 
 ## Read the exit code
 
-| Code | Means |
-|---|---|
-| 0 | the new build is live and healthy |
-| 2 | it failed, the old build is serving again, **your change did not ship** |
-| 1 | it failed and could not be put back, a human is needed now |
+| Code | Means | Page someone? |
+|---|---|---|
+| 0 | the new build is live and healthy | no |
+| 2 | **your change did not ship**, and the faucet is serving anyway | no |
+| 1 | the faucet **may be down**: the rollback failed, or there was nothing to roll back to | yes |
 
-The 2 matters if you script this. `redeploy.sh && echo shipped` must not
-print `shipped` after a rollback, so a rollback is deliberately not a
-success.
+The split is about whether to wake anyone. Everything that leaves the faucet
+serving is a 2, including the cheap failures where nothing was swapped at all
+(a bad `git pull`, a build that does not compile) as well as a successful
+rollback. A TypeScript error should not page anyone at 3am for a healthy
+faucet.
+
+Exit 1 is deliberately rare: the rollback itself failed, or the health gate
+failed on a first deploy with no previous image. Those are the only shapes
+where the faucet might not be answering.
+
+And 2 is not success. `redeploy.sh && echo shipped` must not print `shipped`
+after a rollback.
 
 ## Why the health gate is two-tier
 
