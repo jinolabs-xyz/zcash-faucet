@@ -134,13 +134,24 @@ say "scripts in $INSTALL_DIR"
 for src in "$OVERLAY_DIR"/*.sh; do
   [ -e "$src" ] || continue
   script="$(basename "$src")"
-  # Only scripts a unit runs from INSTALL_DIR.
-  grep -qs "$INSTALL_DIR/$script" "$OVERLAY_DIR"/*.service || continue
   installed="$INSTALL_DIR/$script"
+  referenced=0
+  grep -qs "$INSTALL_DIR/$script" "$OVERLAY_DIR"/*.service && referenced=1
+
   if [ ! -f "$installed" ]; then
-    found "$script is referenced by a unit but missing from $INSTALL_DIR" \
+    # Not installed is only drift when a unit expects to run it. An overlay
+    # script nobody deployed is just not deployed.
+    [ "$referenced" = "1" ] && found "$script is referenced by a unit but missing from $INSTALL_DIR" \
       "cp $src $INSTALL_DIR/ && chmod +x $installed"
-  elif cmp -s "$src" "$installed"; then
+    continue
+  fi
+
+  # It IS installed, so it has to match whether or not a .service names it.
+  # Keying this off unit references meant the scripts a unit calls INDIRECTLY
+  # were never compared: drift-report.sh runs audit-access.sh and
+  # audit-drift.sh, so stale copies of the auditors themselves were invisible
+  # to the auditor. The tool that reports staleness has to check itself.
+  if cmp -s "$src" "$installed"; then
     ok "$script matches the repo"
   else
     found "$script in $INSTALL_DIR differs from the repo (the box is running unreviewed code)" \
