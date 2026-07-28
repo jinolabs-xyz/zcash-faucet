@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Stub curl for the redeploy health gate. State files decide the answers, so
+# a test can make the app become live/ready partway through a wait.
+#   $STUB_HEALTH  file exists -> /api/health answers 200
+#   $STUB_READY   file exists -> /api/ready answers 200
+#   $STUB_READY_MAX  answer ready only for the first N calls, then refuse.
+#                    Models "was serving before the deploy, new build never
+#                    becomes ready", which needs ready true at the pre-deploy
+#                    check and false during the health gate.
+set -uo pipefail
+echo "curl $*" >> "${STUB_LOG:?}"
+case "$*" in
+  */api/health*) [ -e "${STUB_HEALTH:-/nonexistent}" ] && exit 0 || exit 22 ;;
+  */api/ready*)
+    [ -e "${STUB_READY:-/nonexistent}" ] || exit 22
+    if [ -n "${STUB_READY_MAX:-}" ]; then
+      count_file="${STUB_READY_COUNT:-${STUB_READY}.count}"
+      n=$(( $(cat "$count_file" 2>/dev/null || echo 0) + 1 ))
+      echo "$n" > "$count_file"
+      [ "$n" -le "$STUB_READY_MAX" ] || exit 22
+    fi
+    exit 0 ;;
+  *) exit 22 ;;
+esac

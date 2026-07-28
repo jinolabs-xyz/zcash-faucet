@@ -161,6 +161,12 @@ genuinely un-servable, and `faucet-metrics.sh` writes balance, queue depth
 and sync state to a Prometheus textfile every 30 seconds.
 [OBSERVABILITY.md](OBSERVABILITY.md) covers both.
 
+## Shipping a new build
+
+`redeploy.sh` pulls, builds, swaps and health-gates a new faucet build, and
+puts the previous image back automatically if the new one does not come up.
+[REDEPLOY.md](REDEPLOY.md) covers the two-tier health gate and the exit codes.
+
 ## Operating notes
 
 - **Hot wallet.** Zallet holds spending keys. Keep the box locked down, keep

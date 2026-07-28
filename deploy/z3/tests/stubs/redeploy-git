@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Stub git for the redeploy pull step. STUB_PULL_FAIL=1 makes the pull fail.
+set -uo pipefail
+echo "git $*" >> "${STUB_LOG:?}"
+for a in "$@"; do
+  case "$a" in
+    rev-parse) echo "abc1234"; exit 0 ;;
+    pull) [ "${STUB_PULL_FAIL:-0}" = "1" ] && { echo "pull failed (stub)" >&2; exit 1; }; echo "Already up to date."; exit 0 ;;
+  esac
+done
+exit 0

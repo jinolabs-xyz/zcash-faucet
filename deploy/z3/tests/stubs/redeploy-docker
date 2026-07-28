@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Stub docker for the redeploy tests. Image tags are files under
+# $STUB_IMAGES holding a fake image id; compose build/up are recorded and can
+# be made to fail. Everything is logged to $STUB_LOG.
+set -uo pipefail
+echo "docker $*" >> "${STUB_LOG:?}"
+IMG="${STUB_IMAGES:?}"
+
+case "${1:-}" in
+  image)
+    # image inspect -f '{{.Id}}' <tag>
+    shift; shift 2>/dev/null
+    tag=""
+    while [ $# -gt 0 ]; do case "$1" in -f) shift 2 ;; *) tag="$1"; shift ;; esac; done
+    f="$IMG/$(printf '%s' "$tag" | tr '/:' '__')"
+    [ -f "$f" ] || { echo "Error: No such image: $tag" >&2; exit 1; }
+    cat "$f"
+    ;;
+  tag)
+    src="$IMG/$(printf '%s' "$2" | tr '/:' '__')"
+    dst="$IMG/$(printf '%s' "$3" | tr '/:' '__')"
+    [ -f "$src" ] || { echo "Error: No such image: $2" >&2; exit 1; }
+    cp "$src" "$dst"
+    ;;
+  compose)
+    shift
+    sub=""
+    for a in "$@"; do case "$a" in build|up) sub="$a"; break ;; esac; done
+    case "$sub" in
+      build)
+        if [ "${STUB_BUILD_FAIL:-0}" = "1" ]; then echo "build failed (stub)" >&2; exit 1; fi
+        # A successful build produces a new image id under the live tag.
+        echo "sha256:new$(date +%s%N)" > "$IMG/zcash-faucet_latest"
+        echo "built" ;;
+      up)
+        if [ "${STUB_UP_FAIL:-0}" = "1" ]; then echo "up failed (stub)" >&2; exit 1; fi
+        # Fail only the first `up`, so the new image will not start but the
+        # rollback can. STUB_UP_FAIL_ONCE names the marker file.
+        if [ -n "${STUB_UP_FAIL_ONCE:-}" ] && [ ! -e "$STUB_UP_FAIL_ONCE" ]; then
+          touch "$STUB_UP_FAIL_ONCE"; echo "up failed (stub, first only)" >&2; exit 1
+        fi
+        echo "started" ;;
+      *) echo "stub: unsupported compose op: $*" >&2; exit 64 ;;
+    esac
+    ;;
+  *) echo "stub docker: unsupported: $*" >&2; exit 64 ;;
+esac
