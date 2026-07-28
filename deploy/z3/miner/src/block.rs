@@ -81,12 +81,24 @@ impl Header {
     /// Block hash as compared against the target: double SHA256 of the
     /// serialized header, in little-endian wire order.
     pub fn hash_le(&self) -> [u8; 32] {
-        let first = Sha256::digest(self.serialize());
-        let second = Sha256::digest(first);
-        let mut out = [0u8; 32];
-        out.copy_from_slice(&second);
-        out
+        double_sha256(&self.serialize())
     }
+}
+
+/// Double SHA-256, the hash Bitcoin-derived headers use.
+///
+/// Its own function so a known-answer test can pin it directly. This is
+/// consensus, not convenience: if a `sha2` bump ever changed what these two
+/// calls produce, every block we mined would be silently invalid and the first
+/// symptom would be a submitted block that is never accepted. `cargo test`
+/// would stay green throughout, so the test that guards this has to compare
+/// against an answer computed outside our code (#138).
+fn double_sha256(bytes: &[u8]) -> [u8; 32] {
+    let first = Sha256::digest(bytes);
+    let second = Sha256::digest(first);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&second);
+    out
 }
 
 /// Serializes the full block: header, transaction count, coinbase, then the
@@ -213,6 +225,170 @@ pub fn expand_target(bits_display_hex: &str) -> Result<[u8; 32], String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::template::{DefaultRoots, TransactionTemplate};
+
+    /// A template whose every header field carries a distinct marker, so a swap
+    /// between two same-length fields is visible in the bytes.
+    fn marked_template() -> Template {
+        Template {
+            version: 4,
+            previous_block_hash: "00".repeat(31) + "a1",
+            default_roots: DefaultRoots {
+                merkle_root: "00".repeat(31) + "a2",
+                block_commitments_hash: "00".repeat(31) + "a3",
+            },
+            transactions: vec![],
+            coinbase_txn: TransactionTemplate { data: String::new() },
+            bits: "1f2f93c0".to_string(),
+            cur_time: 0x1122_3344,
+            height: 1,
+        }
+    }
+
+    /// KNOWN-ANSWER TEST for the header BYTE LAYOUT, which the hash test cannot
+    /// cover: corrupt the field order and every hash assertion still passes,
+    /// because hashing is happy to digest whatever bytes it is handed. QA proved
+    /// exactly that by sabotaging the layout and watching all ten stay green.
+    ///
+    /// The expected string is written out from the Zcash protocol field order
+    /// (spec 7.6: version, prev hash, merkle root, block commitments, time, bits,
+    /// nonce) rather than pasted from this code's output. An expectation copied
+    /// from the thing it checks only proves the code agrees with itself.
+    ///
+    /// This pins the LAYOUT. It does not prove our reading of the spec matches a
+    /// real chain, which needs a header from a real node, so do not delete that
+    /// one on the strength of this.
+    #[test]
+    fn header_bytes_are_laid_out_in_protocol_order() {
+        let header = Header::from_template(&marked_template()).unwrap();
+        // Written out flat on purpose. A known-answer test should have as little
+        // machinery as possible between the spec and the assertion.
+        let expected = concat!(
+            "04000000",                                                       // version, u32 LE
+            "a1", "00000000000000000000000000000000000000000000000000000000000000",   // prev hash, display hex reversed to wire order
+            "a2", "00000000000000000000000000000000000000000000000000000000000000",   // merkle root, reversed
+            "a3", "00000000000000000000000000000000000000000000000000000000000000",   // block commitments, reversed
+            "44332211",                                                       // curtime, u32 LE
+            "c0932f1f",                                                       // bits, LE
+            "0000000000000000000000000000000000000000000000000000000000000000",   // nonce, unsolved
+        );
+        assert_eq!(hex::encode(header.equihash_input()), expected);
+
+        // serialize() is that input plus the solution's CompactSize length.
+        // Unsolved, that is a single zero byte and nothing after it.
+        assert_eq!(hex::encode(header.serialize()), format!("{expected}00"));
+    }
+
+    /// A REAL testnet header, pulled from our own zebra at a fixed height by the
+    /// box owner. The two tests above pin our reading of the spec against
+    /// itself; only this one can tell us that reading matches a real chain. If
+    /// we had misread the spec, those two would agree with each other and both
+    /// be wrong.
+    ///
+    /// Verified before it was committed, twice and independently: the hex double
+    /// hashes to the advertised block hash, and the 1487 bytes rebuild exactly
+    /// from the verbose field list. So the fixture is a genuine known-answer
+    /// pair rather than a transcription anybody has to trust.
+    const REAL_HEADER_HEX: &str = include_str!("../tests/fixtures/testnet-4200000-header.hex");
+    const REAL_SOLUTION_HEX: &str = include_str!("../tests/fixtures/testnet-4200000-solution.hex");
+    const REAL_HASH: &str = "000c0aab5b79f55ea78ee2f79c66195552c4775860c4d1150cc8501ff14ad742";
+    const REAL_COMMITMENTS: &str = "c1a494b1896682528f03e0527dcfa96b88525e6f67f28e9ee5d1f453181ec2e2";
+    const REAL_SAPLING_ROOT: &str = "6d9f80589b736262b052589afdc4101f15c4953f82aaf830a712a90cbbd68068";
+
+    fn real_header(commitments: &str) -> Header {
+        let t = Template {
+            version: 4,
+            previous_block_hash: "001da7c907b2ca3b09247869a60892ecd269479967a2aa3407d5c29f77cc4598"
+                .to_string(),
+            default_roots: DefaultRoots {
+                merkle_root: "89e3dafc7bdc934431218492fb34fe56638db441720045f41f39e875f3021262"
+                    .to_string(),
+                block_commitments_hash: commitments.to_string(),
+            },
+            transactions: vec![],
+            coinbase_txn: TransactionTemplate { data: String::new() },
+            bits: "1f3492b7".to_string(),
+            cur_time: 1_784_966_234,
+            height: 4_200_000,
+        };
+        let mut h = Header::from_template(&t).unwrap();
+        h.nonce
+            .copy_from_slice(&le32("020000000000000000000000000000000000000000000000000000016092e62c").unwrap());
+        h.solution = hex::decode(REAL_SOLUTION_HEX.trim()).unwrap();
+        h
+    }
+
+    /// The test that proves our serialization matches a real chain, not just
+    /// our own reading of the spec.
+    #[test]
+    fn serializes_a_real_testnet_header_to_the_bytes_the_node_produced() {
+        let h = real_header(REAL_COMMITMENTS);
+        assert_eq!(
+            hex::encode(h.serialize()),
+            REAL_HEADER_HEX.trim(),
+            "serialized bytes differ from what zebra produced for testnet block 4200000",
+        );
+
+        let mut display = h.hash_le();
+        display.reverse();
+        assert_eq!(hex::encode(display), REAL_HASH, "the bytes hash to the wrong block");
+    }
+
+    /// THE TRAP, asserted rather than merely avoided.
+    ///
+    /// `finalsaplingroot` and `blockcommitments` are different values on this
+    /// block and only the latter reproduces the hash. Both are 32 bytes, so a
+    /// swap changes no length and trips no other test. The older Zcash docs and
+    /// the more obvious field name both point at the wrong one, which makes this
+    /// exactly the kind of correct decision a plausible tidy-up would undo in
+    /// silence. See the note at `block_commitments_hash` in template.rs.
+    #[test]
+    fn the_sapling_root_is_not_the_commitment_field_and_using_it_breaks_the_hash() {
+        assert_ne!(REAL_COMMITMENTS, REAL_SAPLING_ROOT, "the fixture must exercise a real difference");
+
+        let mut wrong = real_header(REAL_SAPLING_ROOT).hash_le();
+        wrong.reverse();
+        assert_ne!(
+            hex::encode(wrong),
+            REAL_HASH,
+            "serializing finalsaplingroot produced the right hash, so this test has stopped proving anything",
+        );
+    }
+
+    /// KNOWN-ANSWER TEST for the hashing primitive, against a value this project
+    /// did not compute: the Bitcoin genesis block header and its hash are among
+    /// the most widely published constants in computing, and the hash IS a
+    /// double SHA-256 of that 80-byte header, which is exactly the operation
+    /// `hash_le` performs.
+    ///
+    /// It deliberately does not use a Zcash header. This pins the sha2 crate's
+    /// behaviour on its own, so it keeps its meaning across a 0.10 to 0.11 bump
+    /// even if our own serialization changes. A companion test pins the
+    /// serialization against a real testnet header.
+    #[test]
+    fn double_sha256_matches_the_published_bitcoin_genesis_hash() {
+        let header = hex::decode(concat!(
+            "01000000",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "3ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a",
+            "29ab5f49",
+            "ffff001d",
+            "1dac2b7c",
+        ))
+        .unwrap();
+        assert_eq!(header.len(), 80, "the genesis header is 80 bytes");
+
+        // hash_le returns wire (little-endian) order, and block hashes are
+        // displayed reversed, so reverse before comparing to the famous value.
+        let mut display = double_sha256(&header);
+        display.reverse();
+        assert_eq!(
+            hex::encode(display),
+            "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+            "double SHA-256 no longer produces the published genesis hash, so the \
+             hashing primitive changed under us and every mined block would be invalid",
+        );
+    }
 
     #[test]
     fn compact_size_boundaries() {
