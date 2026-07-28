@@ -8,7 +8,8 @@
 //   FAUCET_SENDER=zallet ZALLET_RPC_URL=http://127.0.0.1:28299/ ZALLET_ACCOUNT=fake-account \
 //   ZALLET_ADDRESS=utest1fake ZALLET_MIN_CONF=0 FAUCET_CHALLENGE=pow FAUCET_POW_BITS=12 \
 //   RATE_LIMIT_SALT=ui-smoke PORT=3120 npm start
-//   npm i --no-save playwright && npx playwright install chromium
+//   npm i --no-save playwright@1.62.0 && npx playwright install chromium
+//   (the same version ci.yml pins, so a local repro cannot diverge from CI)
 //   UI_SMOKE_URL=http://localhost:3120 node scripts/ui-smoke.mjs
 //
 // Playwright is installed with --no-save rather than living in package.json:
