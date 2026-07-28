@@ -151,7 +151,28 @@ before="$(find "$T/units" "$T/install" "$T/env" -type f -exec sha256sum {} \; | 
 bash "$AUDIT" > /dev/null 2>&1
 # shellcheck disable=SC2034
 after="$(find "$T/units" "$T/install" "$T/env" -type f -exec sha256sum {} \; | sort)"
+
+# Guard the guard, in two directions, because this assertion is the only
+# evidence for the read-only promise OPERATIONS.md makes in bold.
+#
+# With no sha256sum on the host, both listings come back EMPTY, compare equal,
+# and the check below reports ok having verified nothing. #164's preflight now
+# refuses such a host, but a test pinning a claim we state loudly should not
+# depend on a gate in another file to stay honest.
+check "the listing actually hashed something, empty would equal empty" \
+  "printf '%s' \"\$before\" | grep -qE '^[0-9a-f]{64} '"
+
 check "no file on the box was touched" "[ \"\$before\" = \"\$after\" ]"
+
+# Positive control: prove the comparison can FAIL. Equality is only evidence if
+# inequality is reachable, and a listing that never changes would pass this test
+# no matter what the audit did to the box.
+# shellcheck disable=SC2034
+echo "# a change the comparison must notice" >> "$T/units/faucet-thing.service"
+# shellcheck disable=SC2034
+perturbed="$(find "$T/units" "$T/install" "$T/env" -type f -exec sha256sum {} \; | sort)"
+check "and the comparison detects a real change, so equality means something" \
+  "[ \"\$before\" != \"\$perturbed\" ]"
 # Report-only is a commitment, so pin it. Matches the case branch, not the
 # word, which appears in the header explaining why the flag does not exist.
 check "there is no --apply branch" "! grep -qE -- '[-][-]apply[)\"]' '$REPO/deploy/z3/audit-drift.sh'"
