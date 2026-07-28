@@ -1,0 +1,39 @@
+# External monitoring of the live faucet: probes the public /api/status and
+# /api/ready from a runner every 15 minutes. The on-box watchdog cannot report
+# a dead box or broken DNS/TLS, an outside probe can. Read-only, never claims,
+# so it drains nothing and burns no cooldown slots.
+#
+# Setup: set the repository variable FAUCET_LIVE_URL (Settings -> Secrets and
+# variables -> Actions -> Variables) to the public origin, e.g.
+# https://faucet.example.org. Until it is set, runs skip green. A red run
+# means the faucet is unreachable or says it cannot drip, and the log carries
+# the app's own reason.
+name: live-smoke
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 23
+      # No npm ci: the probe has zero dependencies, checkout is enough.
+      - name: probe the live faucet
+        env:
+          SMOKE_URL: ${{ vars.FAUCET_LIVE_URL }}
+          SMOKE_ALLOW_UNREADY: ${{ vars.FAUCET_LIVE_ALLOW_UNREADY }}
+        run: |
+          if [ -z "$SMOKE_URL" ]; then
+            echo "FAUCET_LIVE_URL repository variable is not set, skipping"
+            exit 0
+          fi
+          node scripts/live-probe.mjs
