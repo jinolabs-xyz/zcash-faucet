@@ -8,15 +8,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { ZATOSHI_PER_TAZ } from "@/lib/config";
 import { validateTestnetAddress } from "@/lib/zcash/address";
 import { getTaddressBalance } from "@/lib/zcash/grpc";
+import { withApi, apiError } from "@/lib/api";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest) {
+export const GET = withApi("balance", async (req: NextRequest, api) => {
   const address = req.nextUrl.searchParams.get("address")?.trim() ?? "";
   const info = validateTestnetAddress(address);
   if (!info.valid) {
-    return NextResponse.json({ ok: false, error: info.reason }, { status: 400 });
+    return apiError(400, info.reason ?? "Invalid address.", api);
   }
 
   if (info.shielded) {
@@ -43,9 +44,7 @@ export async function GET(req: NextRequest) {
       balanceZat: zat.toString(),
     });
   } catch (err) {
-    return NextResponse.json(
-      { ok: false, error: `Balance lookup failed: ${err instanceof Error ? err.message : "backend error"}` },
-      { status: 502 },
-    );
+    api.logError(err, "taddress balance lookup");
+    return apiError(502, "Balance lookup failed. The chain backend is unreachable right now.", api);
   }
-}
+});

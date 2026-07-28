@@ -8,7 +8,8 @@
  * configured we ignore the header entirely rather than trust a spoofable value.
  */
 import type { NextRequest } from "next/server";
-import { config } from "./config";
+// .ts extension for node --test resolution, same pattern as pow.ts.
+import { config } from "./config.ts";
 
 export function clientIp(req: NextRequest): string | null {
   const trusted = config.trustedProxyCount;

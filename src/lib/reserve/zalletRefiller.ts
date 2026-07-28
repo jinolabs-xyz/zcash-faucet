@@ -13,7 +13,8 @@
  * mature coinbase). Kept deliberately self-contained: its own RPC round-trip
  * rather than a refactor of zalletsend.ts, to keep this slice reviewable.
  */
-import { config } from "../config";
+// .ts extension for node --test resolution, same pattern as pow.ts.
+import { config } from "../config.ts";
 import type { Refiller } from "./refiller";
 
 // Cap coinbase UTXOs per shield tx (zcashd's old default). A long mining
