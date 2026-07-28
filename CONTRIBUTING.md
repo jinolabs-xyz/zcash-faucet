@@ -24,6 +24,33 @@ Two hard rules:
 - Shared files need a heads-up before you touch them. `package.json` and the
   test script belong to everyone, so clear changes with the CTO first.
 
+### Rebasing while a merge drive is running
+
+Always `git fetch` and rebase onto `origin/main`, never onto a branch that is
+about to merge or has just merged. A squash merge gives main the same CONTENT
+under a new SHA, so a branch built on the pre-squash tip is right in content and
+wrong in ancestry, which is the state git calls DIRTY. One night produced eight
+rebases and seven were this, wearing three different costumes:
+
+- a branch carrying commits already squashed into main, whose PR then showed 23
+  files for a one-line change
+- a branch whose parent was rewritten under it, producing a conflict whose
+  incoming side was EMPTY, which is the shape that tempts you to resolve by
+  deleting something real
+- a branch that went dirty again each time the car ahead of it landed
+
+The fix for all three is the same. Replay only your own commits:
+
+```sh
+git fetch origin
+git rebase --onto origin/main <the-last-commit-you-do-not-own>
+```
+
+Read every conflict hunk rather than trusting a pattern. A dry run correctly
+predicted the same one-hunk conflict in the same file for three cars in a row,
+and the correct resolution was different each time: a union, then a rename where
+a union would have left a live token and a dead one with no error anywhere.
+
 ## The review gate
 
 Every branch goes through the same pipeline, and nothing skips a step:
@@ -135,6 +162,16 @@ Every correction came from the same few habits, so the habits are rules.
     connection alongside the listener, so an outage test looked like a crash;
     a stale `.next` from another branch's build failed a typecheck. Reproduce
     the author's number their way before writing the word FAIL.
+14. A test that can only pass ONCE is not a passing test. Rule 4 covers an
+    assertion that cannot fail. This is its twin, an assertion that cannot
+    fail twice. The integration suite's hang test claimed a fixed address, and
+    the unknown-outcome path it exercises holds the full cooldown on purpose,
+    so the first green run poisoned its own fixture and every run after it got
+    a cooldown 429. The failure read as broken deadline logic, so it pointed at
+    innocent code. The ledger is `$cwd/data/faucet.db` with no override, shared
+    by every app instance a test boots and surviving between runs, so anything
+    that writes a claim needs a fresh address per run. Run a suite twice before
+    you believe it once.
 
 Money paths (send, ledger, reservation, PoW verify) never skip review, no
 matter how urgent the window. Docs and pure test additions may fast-track
