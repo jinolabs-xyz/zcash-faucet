@@ -13,7 +13,7 @@ import { config } from "@/lib/config";
 import { validateTestnetAddress } from "@/lib/zcash/address";
 import { verifyTurnstile } from "@/lib/turnstile";
 import { verifySolution } from "@/lib/pow";
-import { getSender, safeBalance, type SendResult } from "@/lib/zcash/send";
+import { getSender, safeBalance, SendOutcomeUnknownError, type SendResult } from "@/lib/zcash/send";
 import { getSendQueue, QueueFullError } from "@/lib/zcash/queue";
 import { reserveClaim, finalizeClaim } from "@/lib/db";
 import { fingerprintIp } from "@/lib/privacy";
@@ -111,7 +111,24 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
       getSender().send({ toAddress: address, addressInfo: info, amountZat: config.dripZatoshi }),
     );
   } catch (err) {
-    // Nothing moved. Release the reservation so the user can retry freely.
+    // A submitted-but-unresolved send is NOT a failure. The wallet holds an
+    // opid and may still broadcast, so releasing the cooldown here would let
+    // the same address claim again and get paid twice, and telling the user
+    // nothing moved would be a lie. Keep the reservation, log the opid so an
+    // operator can reconcile it against z_getoperationresult, and say plainly
+    // that it is in flight.
+    if (err instanceof SendOutcomeUnknownError) {
+      api.logError(err, `send outcome UNKNOWN, opid ${err.opid}, claim ${reservation.claimId} left reserved`);
+      return apiError(
+        504,
+        "Your drip was submitted but we lost track of it before it confirmed. Do not retry yet: if it went " +
+          "through, the coins are on their way. Check the address in a few minutes.",
+        api,
+      );
+    }
+
+    // Everything else genuinely did not send. Release the reservation so the
+    // user can retry immediately.
     try {
       await finalizeClaim(reservation.claimId, "failed", null);
     } catch (finErr) {

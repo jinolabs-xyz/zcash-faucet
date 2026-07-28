@@ -35,6 +35,22 @@ export interface SendResult {
   explorerUrl?: string;
 }
 
+/**
+ * Thrown when a send was SUBMITTED but we lost track of how it ended. An opid
+ * exists, so the wallet may broadcast (or already has). The caller must not
+ * claim nothing moved and must not release the claimant's cooldown, or the
+ * faucet can pay twice for one entitlement.
+ */
+export class SendOutcomeUnknownError extends Error {
+  readonly opid: string;
+
+  constructor(opid: string, cause: string) {
+    super(`zallet send ${opid} outcome unknown: ${cause}`);
+    this.name = "SendOutcomeUnknownError";
+    this.opid = opid;
+  }
+}
+
 export interface Sender {
   readonly name: string;
   /** Spendable balance of the single faucet wallet, in zatoshi. */
