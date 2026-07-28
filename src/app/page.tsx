@@ -320,7 +320,9 @@ export default function Home() {
   };
 
   /* derived */
-  const live = phase !== "syncing";
+  // "queued" is still a syncing node, just with a claim held. The badge and the
+  // dot must keep saying so, or the header claims a readiness we do not have.
+  const live = phase !== "syncing" && phase !== "queued";
   const node = status?.node;
   const syncPct = node?.syncPercent ?? null;
   const height = node?.height ?? null;
@@ -356,8 +358,13 @@ export default function Home() {
 
   // Honest badge: "TOPPING UP" only when a refill is actually running, "EMPTY"
   // when it isn't. A refill with the balance still serviceable stays "LIVE".
+  // Queued is a syncing node with a claim held, so it reads PREPARING too.
   const statusText =
-    phase === "syncing" ? "PREPARING" : phase === "empty" ? (refilling ? "TOPPING UP" : "EMPTY") : "LIVE";
+    phase === "syncing" || phase === "queued"
+      ? "PREPARING"
+      : phase === "empty"
+        ? (refilling ? "TOPPING UP" : "EMPTY")
+        : "LIVE";
   const dotBg = live && phase !== "empty" ? "var(--color-accent)" : "transparent";
 
   // One persistent live region announces phase changes to screen readers. It
