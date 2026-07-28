@@ -9,13 +9,13 @@
 >
 > It clones z3, syncs Zebra, starts Zallet, creates the faucet account *after*
 > sync (birthday = tip → no rescan), pauses for you to fund the printed address,
-> and brings up the faucet + Caddy. Re-runnable; it skips what's already done.
+> and brings up the faucet + Caddy. It's re-runnable and skips what's already done.
 > The manual walkthrough below is the same thing step by step.
 
 This runs the faucet in **shielded mode** (`FAUCET_SENDER=zallet`): it holds
 Orchard notes and pays recipients **z→z**. It stands on the
-[z3 stack](https://github.com/ZcashFoundation/z3) (Zebra + Zallet) — a real full
-node plus a hot shielded wallet — so this is a single always-on box, **not** the
+[z3 stack](https://github.com/ZcashFoundation/z3) (Zebra + Zallet), a real full
+node plus a hot shielded wallet, so this is a single always-on box, **not** the
 free-tier serverless deploy the transparent faucet used.
 
 ```
@@ -26,7 +26,7 @@ free-tier serverless deploy the transparent faucet used.
                                                     ──▶ public Zaino  (testnet.zec.rocks)
 
   Only Caddy is public. The wallet RPC never leaves the private network. The
-  read-side lookups use a public Zaino by default — self-host it with one toggle.
+  read-side lookups use a public Zaino by default. Self-host it with one toggle.
 ```
 
 ## Sizing
@@ -48,11 +48,11 @@ docker compose --env-file .env.testnet up -d zebra
 docker compose --env-file .env.testnet up -d # starts zallet
 ```
 
-This brings up **zebra + zallet only** — that's all the faucet needs. The
-standalone Zaino indexer is *not* started (no `--profile indexer`); the faucet
+This brings up **zebra + zallet only**, which is all the faucet needs. The
+standalone Zaino indexer is *not* started (no `--profile indexer`). The faucet
 uses a public Zaino for its read-side lookups by default (see below).
 
-Zebra must finish syncing before Zallet is useful — that's the long one-time wait.
+Zebra must finish syncing before Zallet is useful. That's the long one-time wait.
 **Create the faucet account only after Zebra is synced** (step 3): the wallet's
 birthday is set to the chain tip at creation, so a synced-first order means it
 has essentially no history to scan and is usable immediately.
@@ -108,9 +108,9 @@ The app attaches to z3's `z3-testnet` network and reaches Zallet at
 curl -s https://faucet.example.org/api/status | jq   # sender:"zallet", a real balance, empty:false once funded
 ```
 
-Then request a drip to any `utest1…` from the site — it returns a real txid.
+Then request a drip to any `utest1…` from the site, and it returns a real txid.
 
-## Light client (Zaino) — public by default
+## Light client (Zaino): public by default
 
 The faucet needs a light-client (Zaino / lightwalletd) endpoint for the *read*
 side only: the "check this address" balance lookup and network status on the
@@ -121,18 +121,18 @@ touches this. So by default the overlay points at a **public Zaino**:
 LIGHTWALLETD_ENDPOINT=https://testnet.zec.rocks:443   # in faucet.env
 ```
 
-That's the whole wiring — nothing to run. Keep it this way unless you want zero
+That's the whole wiring: nothing to run. Keep it this way unless you want zero
 external dependencies.
 
 **To self-host it** (fully sovereign, one extra container): start z3's bundled
 Zaino and point the faucet at it over the shared network:
 
 ```bash
-# in the z3 dir — add the indexer profile
+# in the z3 dir, add the indexer profile
 docker compose --env-file .env.testnet --profile indexer up -d
 ```
 ```
-# in faucet.env — reach it by service name on the z3 network (gRPC port 8137)
+# in faucet.env, reach it by service name on the z3 network (gRPC port 8137)
 LIGHTWALLETD_ENDPOINT=http://zaino:8137
 ```
 
@@ -168,8 +168,8 @@ and sync state to a Prometheus textfile every 30 seconds.
   them), and hold only what the faucet needs.
 - **Backups.** Back up z3's `z3-<net>-zallet` volume (encrypted DB + identity)
   and this dir's `faucet_data` volume (rate-limit ledger).
-- **Keep it awake / restart-safe.** Everything is `restart: unless-stopped`;
-  after a reboot, `docker compose … up -d` both projects.
+- **Keep it awake / restart-safe.** Everything is `restart: unless-stopped`.
+  After a reboot, `docker compose … up -d` both projects.
 - **Monitoring (optional).** Add `--profile monitoring` to the z3 stack for
   Grafana/Prometheus dashboards.
 
@@ -192,5 +192,5 @@ journalctl -u faucet-watchdog -f    # watch it work
 
 Tune it with an optional `/etc/faucet/watchdog.env` (`WATCHDOG_ALERT_URL` for a
 Slack/Discord webhook, `WATCHDOG_INTERVAL`, the `WATCHDOG_*_MATCH` container name
-patterns). Readiness is `GET /api/ready` (200 can-serve, 503 with a reason);
-liveness is `GET /api/health`.
+patterns). Readiness is `GET /api/ready` (200 can-serve, 503 with a reason).
+Liveness is `GET /api/health`.
