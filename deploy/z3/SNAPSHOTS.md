@@ -139,7 +139,11 @@ latest.manifest-hash -> ...
 ```
 
 Two gates protect the box, both bypassed with `ZSNAP_FORCE=1`: zebra must
-report ready on its health port (a mid-sync snapshot would evict a better one
+report ready on its health port, **waited for rather than sampled once**
+(`ZSNAP_READY_TRIES`, default 10 probes 30s apart). A single un-ready reading
+used to abort the run and cost the whole six-hour cycle, and on testnet a
+momentary lag past `READY_MAX_BLOCKS_BEHIND` is normal during min-difficulty
+bursts (a mid-sync snapshot would evict a better one
 from rotation), and the snapshot filesystem must have about 1.5x the state
 size free (raw export plus archive at peak), so a full disk cannot wedge the
 node. `ZSNAP_KEEP` (default 2) bounds how many archives stay around. A flock

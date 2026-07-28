@@ -9,46 +9,63 @@ un-servable and posts to a webhook. That is the thing that wakes someone up.
 Prometheus textfile every 30 seconds, so you can graph balance, queue depth
 and sync progress, and answer "when did this start" instead of guessing.
 
-## Alerts to a real channel
+## Alerts: paste one URL
 
-The watchdog posts once per episode when the faucet has been un-ready past
-its grace window (30 minutes by default), and once more when it recovers. It
-deliberately does not page for un-readiness alone during a first sync or a
-refill, because those are un-ready on purpose.
+Every unit on the box alerts through one sender, so there is one thing to
+configure and one thing to test.
 
 Create an incoming webhook in the channel you actually watch:
 
-- **Slack**: Apps → Incoming Webhooks → Add to Workspace, pick the channel,
-  copy the `https://hooks.slack.com/services/...` URL.
-- **Discord**: Server Settings → Integrations → Webhooks → New Webhook, pick
-  the channel, Copy Webhook URL.
+- **Slack**: Apps, Incoming Webhooks, Add to Workspace, pick the channel.
+- **Discord**: Server Settings, Integrations, Webhooks, New Webhook, Copy
+  Webhook URL.
 
-Then, in `/etc/faucet/watchdog.env`:
+Then paste it into `/etc/faucet/alerts.env`:
 
 ```
-WATCHDOG_ALERT_URL=https://hooks.slack.com/services/T000/B000/xxxx
-WATCHDOG_ALERT_FORMAT=slack        # or: discord
+FAUCET_ALERT_URL=https://hooks.slack.com/services/T000/B000/xxxx
+FAUCET_ALERT_FORMAT=slack        # or: discord
 ```
 
 ```bash
-systemctl restart faucet-watchdog
-journalctl -u faucet-watchdog -f     # "starting: ... alert=https://..."
+cp alert.sh /opt/faucet/ && chmod +x /opt/faucet/alert.sh
+cp faucet-alert@.service /etc/systemd/system/
+chmod 600 /etc/faucet/alerts.env    # a webhook URL is a credential
+systemctl daemon-reload
+/opt/faucet/alert.sh --self-test
 ```
 
-The two services want different keys in the body (`text` for Slack,
-`content` for Discord) and each rejects the other's, so the format is
-explicit rather than guessed. Anything else that accepts a JSON POST works
-with the Slack shape.
+The self-test posts through the **same code path** that will page you, so a
+pass means the thing that matters works. A hand-written `curl` only proves the
+webhook exists. It exits 0 on success, 3 when nothing is configured, and 1 when
+the webhook rejects the POST, and it says which.
 
-Keep the file root-owned and `chmod 600`: a webhook URL is a credential,
-anyone holding it can post into your channel.
+`WATCHDOG_ALERT_URL` from earlier installs still works, so an upgrade cannot
+silently mute the box.
 
-Test it end to end before trusting it:
+**Rotate the webhook if you ran a self-test before this fix.** An earlier
+version logged the full URL, so the token may be sitting in the journal.
+Deleting the entry and creating a new webhook is the only reliable remedy.
 
-```bash
-curl -fsS -H 'content-type: application/json' \
-  -d '{"text":"[zcash-faucet watchdog] test alert, ignore"}' "$WATCHDOG_ALERT_URL"
-```
+Alerting needs `jq` or `python3` to encode the body. Without either it
+refuses and says so, rather than posting something the webhook silently
+drops.
+
+### What alerts, and what does not
+
+**Any unit failing.** Each unit carries
+`OnFailure=faucet-alert@%n.service`, so a failed backup, export, metrics run,
+watchdog or miner posts the unit name and its last 15 journal lines. Before
+this, a timer could fail every cycle in silence, which is exactly how
+`zsnap-export` sat producing nothing.
+
+**The faucet being un-servable.** The watchdog posts once per episode after the
+grace window (30 min), and once when it recovers. It deliberately does not page
+for un-readiness during a first sync or a refill, because those are un-ready on
+purpose.
+
+**Not** anything about disk, balance or drift yet. Those come from the metrics
+file below and are alerted by whatever scrapes it.
 
 ## Metrics
 

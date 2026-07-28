@@ -10,6 +10,7 @@ Description=Zebra chain-state snapshot export (zsnap)
 # Reads the chain volume that docker manages, and gates on zebra's health port.
 After=docker.service
 Requires=docker.service
+OnFailure=faucet-alert@%n.service
 
 [Service]
 Type=oneshot
@@ -21,7 +22,8 @@ ExecStart=/opt/faucet/zsnap-export.sh
 # watchdog if a cold-mode window was interrupted (reads the window marker).
 ExecStopPost=/opt/faucet/zsnap-export.sh recover
 # Give a cold-mode window enough rope: graceful zebra stop, export, restart.
-TimeoutStartSec=1h
+# Long enough for the ready wait (up to ~5 min) plus a cold-cache export.
+TimeoutStartSec=2h
 # Snapshotting is background maintenance. Never compete with the node for
 # CPU or disk (this matters in hot mode, where zebra keeps serving).
 Nice=10

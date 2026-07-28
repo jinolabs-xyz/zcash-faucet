@@ -10,6 +10,7 @@
 Description=Zcash testnet solo CPU miner (faucet funding)
 After=docker.service
 Wants=docker.service
+OnFailure=faucet-alert@%n.service
 
 [Service]
 Type=simple

@@ -55,6 +55,8 @@ ZSNAP_RETRIES="${ZSNAP_RETRIES:-3}"           # export attempts before giving up
 ZSNAP_RETRY_WAIT="${ZSNAP_RETRY_WAIT:-30}"    # seconds between attempts
 ZSNAP_PREFLIGHT_TRIES="${ZSNAP_PREFLIGHT_TRIES:-3}"  # opens before preflight says NO-GO
 ZSNAP_PREFLIGHT_WAIT="${ZSNAP_PREFLIGHT_WAIT:-3}"    # seconds between those
+ZSNAP_READY_TRIES="${ZSNAP_READY_TRIES:-10}"         # ready probes before giving up
+ZSNAP_READY_WAIT="${ZSNAP_READY_WAIT:-30}"           # seconds between those
 ZSNAP_UPLOAD_CMD="${ZSNAP_UPLOAD_CMD:-}"      # optional: run <cmd> <archive> after export
 # Container/service names for the cold-mode window. The zebra container is
 # matched by name substring, same convention as watchdog.sh.
@@ -152,8 +154,20 @@ cache_dir="$(docker volume inspect -f '{{.Mountpoint}}' "$ZSNAP_CHAIN_VOLUME" 2>
   || die "chain volume $ZSNAP_CHAIN_VOLUME not found (is the z3 stack on this box?)"
 
 if [ "$ZSNAP_FORCE" != "1" ]; then
-  curl -fsS --max-time 10 "$ZSNAP_READY_URL" >/dev/null 2>&1 \
-    || die "zebra is not ready ($ZSNAP_READY_URL), refusing a stale snapshot (ZSNAP_FORCE=1 overrides)"
+  # Wait for ready rather than sampling it once. A momentary lag past
+  # READY_MAX_BLOCKS_BEHIND (testnet mints bursts) read as un-ready and cost a
+  # whole 6h cycle, so this polls across the window instead of dying on one
+  # observation.
+  ready_attempt=1
+  until curl -fsS --max-time 10 "$ZSNAP_READY_URL" >/dev/null 2>&1; do
+    if [ "$ready_attempt" -ge "$ZSNAP_READY_TRIES" ]; then
+      die "zebra was not ready in $ZSNAP_READY_TRIES probes over ~$((ZSNAP_READY_TRIES * ZSNAP_READY_WAIT / 60)) min ($ZSNAP_READY_URL), refusing a stale snapshot (ZSNAP_FORCE=1 overrides)"
+    fi
+    log "zebra not ready, probe $ready_attempt/$ZSNAP_READY_TRIES, retrying in ${ZSNAP_READY_WAIT}s (a brief lag is normal on testnet)"
+    ready_attempt=$((ready_attempt + 1))
+    sleep "$ZSNAP_READY_WAIT"
+  done
+  [ "$ready_attempt" = "1" ] || log "zebra became ready after $ready_attempt probes"
 
   state_kb="$(du -sk "$cache_dir" | cut -f1)"
   free_kb="$(df -Pk "$ZSNAP_DIR" | awk 'NR==2 {print $4}')"
