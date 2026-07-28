@@ -16,7 +16,7 @@
     "icons": "node scripts/build-icons.mjs"
   },
   "dependencies": {
-    "@bitgo/utxo-lib": "^11.24.0",
+    "@bitgo/utxo-lib": "^11.24.1",
     "@d4mr/t2z-wasm": "^0.0.2",
     "@grpc/grpc-js": "^1.14.4",
     "@grpc/proto-loader": "^0.8.1",
