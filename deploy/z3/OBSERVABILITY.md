@@ -43,6 +43,14 @@ the webhook rejects the POST, and it says which.
 `WATCHDOG_ALERT_URL` from earlier installs still works, so an upgrade cannot
 silently mute the box.
 
+**Rotate the webhook if you ran a self-test before this fix.** An earlier
+version logged the full URL, so the token may be sitting in the journal.
+Deleting the entry and creating a new webhook is the only reliable remedy.
+
+Alerting needs `jq` or `python3` to encode the body. Without either it
+refuses and says so, rather than posting something the webhook silently
+drops.
+
 ### What alerts, and what does not
 
 **Any unit failing.** Each unit carries

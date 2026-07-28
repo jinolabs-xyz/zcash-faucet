@@ -18,9 +18,6 @@ alerts_env() {
 
 HOOK_PORT="${ALERT_TEST_PORT:-18921}"
 HOOK_LOG="${TMPDIR:-/tmp}/alert-hook.log"
-python3 - "$HOOK_PORT" "$HOOK_LOG" >/dev/null 2>&1 &
-HOOK_PID=$!
-sleep 0
 python3 - "$HOOK_PORT" "$HOOK_LOG" <<'PY' >/dev/null 2>&1 &
 import http.server,sys
 port,logf=int(sys.argv[1]),sys.argv[2]
@@ -99,3 +96,57 @@ bash "$ALERT" "legacy config" > /dev/null 2>&1
 check "legacy var honoured" "grep -q 'legacy config' '$HOOK_LOG'"
 
 kill "$HOOK_PID" 2>/dev/null
+
+echo "== alerts: the webhook URL never reaches the log (it is a credential)"
+alerts_env
+export FAUCET_ALERT_URL="http://127.0.0.1:$HOOK_PORT/hook?token=SUPERSECRETTOKEN"
+bash "$ALERT" --self-test > "$T/leak.log" 2>&1
+check "the token is absent from the log" "! grep -q 'SUPERSECRETTOKEN' '$T/leak.log'"
+check "it says set, not the value" "grep -q 'url=set' '$T/leak.log'"
+alerts_env; unset FAUCET_ALERT_URL
+bash "$ALERT" --self-test > "$T/leak2.log" 2>&1
+check "unconfigured still says UNSET" "grep -q 'url=UNSET' '$T/leak2.log'"
+
+echo "== alerts: a tab in the body is encoded, not silently mangled"
+# Journal output is full of tabs and JSON forbids raw control characters, so
+# this gets its own receiver rather than sharing the suite's.
+alerts_env
+TAB_PORT=$((HOOK_PORT + 1)); TAB_LOG="$T/tabhook.log"; : > "$TAB_LOG"
+python3 - "$TAB_PORT" "$TAB_LOG" <<'TABPY' >/dev/null 2>&1 &
+import http.server,sys
+port,logf=int(sys.argv[1]),sys.argv[2]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        n=int(self.headers.get('content-length',0))
+        open(logf,'a').write(self.rfile.read(n).decode()+"\n")
+        self.send_response(204); self.end_headers()
+    def log_message(self,*a): pass
+http.server.HTTPServer(("127.0.0.1",port),H).serve_forever()
+TABPY
+TAB_PID=$!
+for _ in $(seq 1 40); do curl -sf -o /dev/null -X POST -d '{}' "http://127.0.0.1:$TAB_PORT/up" && break; sleep 0.25; done
+: > "$TAB_LOG"
+export FAUCET_ALERT_URL="http://127.0.0.1:$TAB_PORT/hook"
+bash "$ALERT" "$(printf 'unit failed\ncolumn1\tcolumn2')" > "$T/tab.log" 2>&1
+check "the send succeeded" "[ $? -eq 0 ]"
+check "the tab and newline survive as real characters after decoding" "python3 -c \"import json;b=[json.loads(l) for l in open('$TAB_LOG') if l.strip()][-1];t=b.get('text','');assert chr(9) in t and chr(10) in t, repr(t)\""
+kill "$TAB_PID" 2>/dev/null
+
+echo "== alerts: with no JSON encoder it refuses loudly instead of sending junk"
+alerts_env
+mkdir -p "$T/nobin"
+# A PATH with neither jq nor python3, but with the tools alert.sh still needs.
+# bash itself must be reachable, plus what alert.sh actually calls.
+for b in bash curl date hostname sed tr cat; do
+  src="$(command -v $b 2>/dev/null)"; [ -n "$src" ] && ln -sf "$src" "$T/nobin/$b"
+done
+PATH="$T/nobin" bash "$ALERT" "would be malformed" > "$T/noenc.log" 2>&1
+check "exits nonzero" "[ $? -ne 0 ]"
+check "says it cannot encode" "grep -q 'CANNOT SEND' '$T/noenc.log'"
+check "explains the refusal is deliberate" "grep -q 'Refusing rather than sending a malformed body' '$T/noenc.log'"
+check "nothing reached the webhook" "! grep -q 'would be malformed' '$HOOK_LOG'"
+
+echo "== alerts: a quote in the operator prefix cannot break the body"
+alerts_env
+FAUCET_ALERT_PREFIX='[fau"cet]' bash "$ALERT" "hello" > /dev/null 2>&1
+check "body is still valid JSON" "python3 -c \"import json;[json.loads(l) for l in open('$HOOK_LOG') if l.strip()]\""

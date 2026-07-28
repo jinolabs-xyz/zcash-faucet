@@ -17,14 +17,25 @@ JOURNAL_LINES="${FAUCET_ALERT_JOURNAL_LINES:-15}"
 
 log() { echo "$(date -u +%FT%TZ) alert: $*"; }
 
+# JSON forbids raw control characters and journal output is full of tabs, so a
+# sed approximation produces bodies the webhook rejects with no trace. Refuse
+# instead: a muted channel is the failure this script exists to prevent.
 json_escape() {
-  printf '%s' "$1" | python3 -c 'import json,sys; sys.stdout.write(json.dumps(sys.stdin.read())[1:-1])' 2>/dev/null \
-    || printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\n'
+  if command -v jq >/dev/null 2>&1; then
+    printf '%s' "$1" | jq -Rs '.' | sed 's/^"//; s/"$//'
+  elif command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$1" | python3 -c 'import json,sys; sys.stdout.write(json.dumps(sys.stdin.read())[1:-1])'
+  else
+    log "CANNOT SEND: no jq and no python3, so the alert body cannot be encoded safely." >&2
+    log "Install either one. Refusing rather than sending a malformed body the webhook drops silently." >&2
+    return 1
+  fi
 }
 
 send() { # $1 = message text
-  local msg body
-  msg="$PREFIX $(json_escape "$1")"
+  local msg body escaped
+  escaped="$(json_escape "$PREFIX $1")" || return 4
+  msg="$escaped"
   if [ -z "$ALERT_URL" ]; then
     log "NOT SENT (no FAUCET_ALERT_URL configured): $1"
     return 3
@@ -49,7 +60,9 @@ case "${1:-}" in
   --self-test)
     # Exercises the real send path, not a hand-written curl, so it proves the
     # code that will page you actually works.
-    log "format=$ALERT_FORMAT url=${ALERT_URL:+set}${ALERT_URL:-UNSET}"
+    # Never interpolate the URL: it is a credential and this line goes to the
+    # journal on every setup run.
+    log "format=$ALERT_FORMAT url=$([ -n "$ALERT_URL" ] && echo set || echo UNSET)"
     # Capture send's status directly: a failed `if` with no `else` returns 0,
     # which made this exit 0 while printing FAILED.
     send "self-test from $(hostname 2>/dev/null || echo this box), ignore this message"
