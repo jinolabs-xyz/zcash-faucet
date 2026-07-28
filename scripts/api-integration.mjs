@@ -132,6 +132,22 @@ try {
   const tmAddr = acct.body.account?.address ?? "";
   ok("A generated address is a tm address", tmAddr.startsWith("tm"), tmAddr);
 
+  // Shape pin (#31): the address lives at account.address, NOT at the top
+  // level. The page read d.address, got undefined, and silently substituted a
+  // synthesized address that fails checksum validation. Assert both halves so
+  // the contract cannot drift back without a red test.
+  const shielded = await post(BASE_A, "/api/account", { type: "shielded" });
+  ok("A POST /api/account (shielded) is 200", shielded.status === 200 && shielded.body.ok === true);
+  ok("A address is nested under account, not top level", typeof shielded.body.account?.address === "string" && shielded.body.address === undefined, `top-level address: ${JSON.stringify(shielded.body.address)}`);
+  const uaAddr = shielded.body.account?.address ?? "";
+  ok("A generated UA is a real utest1 address", uaAddr.startsWith("utest1") && uaAddr.length > 100, `len ${uaAddr.length}`);
+  ok("A generated account carries its spending key and shielded flag", typeof shielded.body.account?.secret === "string" && shielded.body.account?.shielded === true);
+
+  // The whole point: a generated address must survive the validator. This is
+  // the Generate-then-Request flow that 400'd for every visitor.
+  const genClaim = await claim(BASE_A, uaAddr, await solvedChallenge(BASE_A));
+  ok("A generated UA is accepted by the claim endpoint", genClaim.status === 200 && genClaim.body.ok === true, `status ${genClaim.status} ${JSON.stringify(genClaim.body.error ?? "")}`);
+
   /* ── A: faucet happy path, then every rejection ──────────────────────── */
   const sent = await claim(BASE_A, tmAddr, await solvedChallenge(BASE_A));
   ok("A claim with pow to generated address is 200 + txid", sent.status === 200 && sent.body.ok === true && typeof sent.body.txid === "string" && sent.body.txid.length >= 32, `status ${sent.status} ${JSON.stringify(sent.body.error ?? "")}`);
