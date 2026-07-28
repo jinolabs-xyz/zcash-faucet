@@ -279,6 +279,82 @@ mod tests {
         assert_eq!(hex::encode(header.serialize()), format!("{expected}00"));
     }
 
+    /// A REAL testnet header, pulled from our own zebra at a fixed height by the
+    /// box owner. The two tests above pin our reading of the spec against
+    /// itself; only this one can tell us that reading matches a real chain. If
+    /// we had misread the spec, those two would agree with each other and both
+    /// be wrong.
+    ///
+    /// Verified before it was committed, twice and independently: the hex double
+    /// hashes to the advertised block hash, and the 1487 bytes rebuild exactly
+    /// from the verbose field list. So the fixture is a genuine known-answer
+    /// pair rather than a transcription anybody has to trust.
+    const REAL_HEADER_HEX: &str = include_str!("../tests/fixtures/testnet-4200000-header.hex");
+    const REAL_SOLUTION_HEX: &str = include_str!("../tests/fixtures/testnet-4200000-solution.hex");
+    const REAL_HASH: &str = "000c0aab5b79f55ea78ee2f79c66195552c4775860c4d1150cc8501ff14ad742";
+    const REAL_COMMITMENTS: &str = "c1a494b1896682528f03e0527dcfa96b88525e6f67f28e9ee5d1f453181ec2e2";
+    const REAL_SAPLING_ROOT: &str = "6d9f80589b736262b052589afdc4101f15c4953f82aaf830a712a90cbbd68068";
+
+    fn real_header(commitments: &str) -> Header {
+        let t = Template {
+            version: 4,
+            previous_block_hash: "001da7c907b2ca3b09247869a60892ecd269479967a2aa3407d5c29f77cc4598"
+                .to_string(),
+            default_roots: DefaultRoots {
+                merkle_root: "89e3dafc7bdc934431218492fb34fe56638db441720045f41f39e875f3021262"
+                    .to_string(),
+                block_commitments_hash: commitments.to_string(),
+            },
+            transactions: vec![],
+            coinbase_txn: TransactionTemplate { data: String::new() },
+            bits: "1f3492b7".to_string(),
+            cur_time: 1_784_966_234,
+            height: 4_200_000,
+        };
+        let mut h = Header::from_template(&t).unwrap();
+        h.nonce
+            .copy_from_slice(&le32("020000000000000000000000000000000000000000000000000000016092e62c").unwrap());
+        h.solution = hex::decode(REAL_SOLUTION_HEX.trim()).unwrap();
+        h
+    }
+
+    /// The test that proves our serialization matches a real chain, not just
+    /// our own reading of the spec.
+    #[test]
+    fn serializes_a_real_testnet_header_to_the_bytes_the_node_produced() {
+        let h = real_header(REAL_COMMITMENTS);
+        assert_eq!(
+            hex::encode(h.serialize()),
+            REAL_HEADER_HEX.trim(),
+            "serialized bytes differ from what zebra produced for testnet block 4200000",
+        );
+
+        let mut display = h.hash_le();
+        display.reverse();
+        assert_eq!(hex::encode(display), REAL_HASH, "the bytes hash to the wrong block");
+    }
+
+    /// THE TRAP, asserted rather than merely avoided.
+    ///
+    /// `finalsaplingroot` and `blockcommitments` are different values on this
+    /// block and only the latter reproduces the hash. Both are 32 bytes, so a
+    /// swap changes no length and trips no other test. The older Zcash docs and
+    /// the more obvious field name both point at the wrong one, which makes this
+    /// exactly the kind of correct decision a plausible tidy-up would undo in
+    /// silence. See the note at `block_commitments_hash` in template.rs.
+    #[test]
+    fn the_sapling_root_is_not_the_commitment_field_and_using_it_breaks_the_hash() {
+        assert_ne!(REAL_COMMITMENTS, REAL_SAPLING_ROOT, "the fixture must exercise a real difference");
+
+        let mut wrong = real_header(REAL_SAPLING_ROOT).hash_le();
+        wrong.reverse();
+        assert_ne!(
+            hex::encode(wrong),
+            REAL_HASH,
+            "serializing finalsaplingroot produced the right hash, so this test has stopped proving anything",
+        );
+    }
+
     /// KNOWN-ANSWER TEST for the hashing primitive, against a value this project
     /// did not compute: the Bitcoin genesis block header and its hash are among
     /// the most widely published constants in computing, and the hash IS a
