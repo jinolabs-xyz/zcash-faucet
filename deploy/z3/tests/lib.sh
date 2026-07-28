@@ -6,12 +6,25 @@
 
 pass=0; fail=0
 
-# Each fresh env gets a TMPDIR scratch dir. Register every one and remove them
-# all when the run exits, or a full suite leaks a dir per env, and once the disk
-# fills the stubs fail to write and real assertions turn into fake passes (#161).
+# Scratch-dir handling, both halves of #161. Register every dir and remove them
+# all on exit so a run stops leaking one per env. AND refuse to continue if a dir
+# cannot be created: an empty T (mktemp failed, e.g. a full disk) makes every
+# derived path absolute at / and the suite KEEPS SCORING, printing ok for
+# assertions whose redirect silently failed. Cleanup only makes ENOSPC rare;
+# this guard is what stops a fake green when the disk fills for reasons unrelated
+# to us. mk_scratch sets the global T directly rather than via $(...), so the
+# exit runs in the real shell instead of a command-substitution subshell.
 _TEST_TMPDIRS=()
 _cleanup_test_tmpdirs() { [ "${#_TEST_TMPDIRS[@]}" -gt 0 ] && rm -rf "${_TEST_TMPDIRS[@]}"; }
 trap _cleanup_test_tmpdirs EXIT
+mk_scratch() {  # sets global T
+  T="$(mktemp -d "$1")" || true
+  if [ -z "$T" ] || [ ! -d "$T" ]; then
+    echo "  FATAL: could not create scratch dir ($1), disk full? refusing to score" >&2
+    exit 1
+  fi
+  _TEST_TMPDIRS+=("$T")
+}
 
 ok()   { pass=$((pass+1)); echo "  ok: $1"; }
 bad()  { fail=$((fail+1)); echo "  FAIL: $1"; }
@@ -29,8 +42,7 @@ check_order() {
 # and curl on PATH, fake docker volumes on disk, everything under TMPDIR so a
 # read-only checkout works.
 fresh_env() {
-  T="$(mktemp -d "${TMPDIR:-/tmp}/zsnap-test.XXXXXX")"
-  _TEST_TMPDIRS+=("$T")
+  mk_scratch "${TMPDIR:-/tmp}/zsnap-test.XXXXXX"
   export STUB_LOG="$T/stub.log"; : > "$STUB_LOG"
   export STUB_VOLROOT="$T/volumes"; mkdir -p "$STUB_VOLROOT"
   export STUB_CONTAINERS="$T/containers"; mkdir -p "$STUB_CONTAINERS"
@@ -50,8 +62,7 @@ with_chain() { mkdir -p "$STUB_CACHE_DIR"; head -c 100000 /dev/urandom > "$STUB_
 # compose, one-off runs and container labels rather than zsnap's volumes), so
 # it gets its own PATH entry rather than sharing stubs/.
 deploy_fresh_env() {
-  T="$(mktemp -d "${TMPDIR:-/tmp}/deploy-test.XXXXXX")"
-  _TEST_TMPDIRS+=("$T")
+  mk_scratch "${TMPDIR:-/tmp}/deploy-test.XXXXXX"
   export STUB_LOG="$T/stub.log"; : > "$STUB_LOG"
   export STUB_CONTAINERS="$T/containers"; mkdir -p "$STUB_CONTAINERS"
   export STUB_VOLROOT="$T/volumes"; mkdir -p "$STUB_VOLROOT"

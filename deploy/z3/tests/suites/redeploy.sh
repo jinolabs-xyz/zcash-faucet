@@ -6,8 +6,7 @@
 REDEPLOY="$REPO/deploy/z3/redeploy.sh"
 
 redeploy_env() {
-  T="$(mktemp -d "${TMPDIR:-/tmp}/redeploy-test.XXXXXX")"
-  _TEST_TMPDIRS+=("$T")
+  mk_scratch "${TMPDIR:-/tmp}/redeploy-test.XXXXXX"
   export STUB_LOG="$T/stub.log"; : > "$STUB_LOG"
   export STUB_IMAGES="$T/images"; mkdir -p "$STUB_IMAGES"
   mkdir -p "$T/bin" "$T/overlay"

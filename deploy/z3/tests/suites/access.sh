@@ -5,8 +5,7 @@
 AUDIT_A="$REPO/deploy/z3/audit-access.sh"
 
 access_env() {
-  T="$(mktemp -d "${TMPDIR:-/tmp}/access-test.XXXXXX")"
-  _TEST_TMPDIRS+=("$T")
+  mk_scratch "${TMPDIR:-/tmp}/access-test.XXXXXX"
   export STUB_LISTEN="$T/listen" STUB_UFW_STATUS="$T/ufw"
   export ACCESS_SS="$SCRATCH/stubs/access-ss" ACCESS_UFW="$SCRATCH/stubs/access-ufw"
   export ACCESS_SSHD_CONFIG="$T/sshd_config"

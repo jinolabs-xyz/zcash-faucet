@@ -5,8 +5,7 @@
 AUDIT="$REPO/deploy/z3/audit-drift.sh"
 
 drift_env() {
-  T="$(mktemp -d "${TMPDIR:-/tmp}/drift-test.XXXXXX")"
-  _TEST_TMPDIRS+=("$T")
+  mk_scratch "${TMPDIR:-/tmp}/drift-test.XXXXXX"
   export STUB_LOG="$T/stub.log"; : > "$STUB_LOG"
   mkdir -p "$T/bin" "$T/units" "$T/install" "$T/env" "$T/repo/deploy/z3"
   ln -sf "$SCRATCH/stubs/audit-systemctl" "$T/bin/systemctl"
@@ -259,7 +258,7 @@ check "the drop-in is still reported as drift" "grep -q 'drop-in faucet-thing.se
 echo "== drift-report: the alert names WHICH outcome, not just that a unit failed"
 REPORT="$REPO/deploy/z3/drift-report.sh"
 report_env() {
-  T="$(mktemp -d "${TMPDIR:-/tmp}/report-test.XXXXXX")"
+  mk_scratch "${TMPDIR:-/tmp}/report-test.XXXXXX"
   mkdir -p "$T/bin"
   printf '#!/usr/bin/env bash\necho "ALERT: $*" >> %q\n' "$T/alerts.log" > "$T/alert.sh"
   chmod +x "$T/alert.sh"

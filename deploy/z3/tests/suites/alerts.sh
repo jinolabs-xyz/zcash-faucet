@@ -6,8 +6,7 @@
 ALERT="$REPO/deploy/z3/alert.sh"
 
 alerts_env() {
-  T="$(mktemp -d "${TMPDIR:-/tmp}/alerts-test.XXXXXX")"
-  _TEST_TMPDIRS+=("$T")
+  mk_scratch "${TMPDIR:-/tmp}/alerts-test.XXXXXX"
   export STUB_LOG="$T/stub.log"; : > "$STUB_LOG"
   mkdir -p "$T/bin"
   export PATH="$T/bin:$BASE_PATH"
