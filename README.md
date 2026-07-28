@@ -1,218 +1,192 @@
 # Zcash Testnet Faucet (TAZ)
 
-A Next.js / TypeScript faucet that dispenses **TAZ** (Zcash testnet coins) to
-developers. Uses a **public lightwalletd/Zaino testnet endpoint** as the
-backend — no full node to run.
+A shielded Zcash **testnet** faucet that runs its own chain infrastructure and
+mines the coins it hands out. Paste a testnet address, solve a small
+proof-of-work in the browser, get TAZ as a shielded z2z transaction.
 
-> **2026 context:** `zcashd` reached End-of-Life on **2026-07-18** and every node
-> auto-halted. The current stack is the **Z3 unification** (Zebra + Zallet + Zaino).
-> This faucet talks to a lightwalletd-compatible gRPC endpoint via a WASM
-> light-wallet, so it doesn't depend on the retired `zcashd`.
+Next.js and TypeScript on the front, a self-hosted z3 stack behind it. No
+third-party wallet service, no captcha vendor required, no queueing at another
+faucet for a top-up.
 
-## Design principles: decentralization & privacy
+> `zcashd` reached end of life on 2026-07-18 and every node auto-halted. This
+> project is built on what replaced it: **Zebra** (full node) and **Zallet**
+> (wallet, with the Zaino indexer embedded).
 
-This is a Zcash tool, so it tries to act like one:
+## How it actually works
 
-- **No raw PII stored.** Rate-limiting is keyed on a **salted hash** of the IP
-  (`lib/privacy.ts`), never the IP itself. Set `RATE_LIMIT_SALT` in prod. The
-  claim ledger holds no addresses-to-identity linkage beyond what's needed to
-  enforce cooldowns.
-- **Configurable, self-hostable backend.** `LIGHTWALLETD_ENDPOINT` takes a list
-  with failover. Point it at **your own** Zebra + Zaino/lightwalletd (the Z3
-  docker-compose stack) to drop the third-party dependency entirely.
-- **Durable ledger on ephemeral hosts.** On a host whose disk is wiped on
-  restart (e.g. Render free), local SQLite would reset the rate-limit ledger and
-  make the faucet drainable across redeploys. Setting `DB_BACKEND=d1` routes the
-  ledger to Cloudflare D1 via `worker/`, so cooldowns/caps persist — verified by
-  a fresh process still seeing prior claims.
-- **Shielded-first.** Shielded transfers are private; transparent recipients get
-  an explicit "this is public" warning.
-- **Honest about the soft spots.** Two centralized touchpoints remain, by choice,
-  and both are swappable:
-  - *Public lightwalletd* — replace with a self-hosted node (above).
-  - *Cloudflare Turnstile* — convenient anti-bot, but it's a third party. For a
-    fully self-sovereign deploy, swap it for a **proof-of-work / hashcash**
-    challenge (no external calls, nothing to track). The Turnstile check lives
-    behind one function (`lib/turnstile.ts`), so it's a clean swap.
+One box runs four things:
 
-## Tabs
-
-A tabbed UI (`src/app/page.tsx` + `src/app/tabs/*`), inspired by the Nethermind
-Aztec faucet:
-
-- **Faucet** — request TAZ to a shielded or transparent address.
-- **Account** — generate a throwaway testnet account. Transparent accounts are
-  **real & usable now** (secp256k1 → `tm…` address + testnet WIF); shielded is a
-  **mock** (real 24-word seed, placeholder `utest1…` address) until shielded
-  (WASM) key derivation is added. Keys are generated server-side, never stored.
-- **Balance** — look up a **transparent** address balance live on-chain.
-  Shielded balances are private by design and can't be queried from an address.
-- **Network** — live block height, sync status, consensus branch, lightwalletd
-  version/endpoint; auto-refreshes every 15s.
-- **Donate / FAQ** — the faucet's receive address (`FAUCET_DONATION_ADDRESS`) +
-  a short FAQ.
-
-## What's in the box
-
-| Piece | File |
+| Piece | What it does |
 | --- | --- |
-| Tab shell + shared status | `src/app/page.tsx`, `src/app/tabs/*` |
-| Drip endpoint (validate → captcha → rate-limit → balance guard → send) | `src/app/api/faucet/route.ts` |
-| Throwaway account generation | `src/app/api/account/route.ts`, `src/lib/zcash/keys.ts` |
-| Balance lookup (transparent, live) | `src/app/api/balance/route.ts` |
-| Network status | `src/app/api/network/route.ts` |
-| lightwalletd gRPC client (failover) | `src/lib/zcash/grpc.ts`, `proto/service.proto` |
-| Backend status endpoint | `src/app/api/status/route.ts` |
-| Testnet address validation | `src/lib/zcash/address.ts` |
-| Send adapter (mock + real) | `src/lib/zcash/send.ts` |
-| Real sender: transparent tx build/sign/broadcast | `src/lib/zcash/realsend.ts` |
-| Faucet transparent wallet derivation | `src/lib/zcash/wallet.ts` |
-| Atomic claim reserve (cooldown + daily cap, concurrency-safe) | `src/lib/db/` |
-| Ledger backends: local SQLite + Cloudflare D1 proxy | `src/lib/db/driver.ts` |
-| D1 proxy Worker (persistent ledger for ephemeral hosts) | `worker/` |
-| Serial FIFO send queue (one wallet tx at a time) | `src/lib/zcash/queue.ts` |
-| Turnstile server verify | `src/lib/turnstile.ts` |
-| SQLite claim ledger | `src/lib/db.ts` |
+| **Zebra** | Full testnet node. Our own view of the chain, no trusted third party. |
+| **Zallet** | Shielded wallet holding the faucet's Orchard notes. Pays via `z_sendmany` over JSON-RPC. Zaino is embedded, so there is no separate indexer process. |
+| **Next.js app** | The faucet itself: claim endpoint, anti-abuse gate, reserve loop, UI. |
+| **Caddy** | TLS and reverse proxy in front. |
 
-## Quick start (mock mode — works immediately)
+A drip is a real shielded transaction. The faucet holds Orchard notes and pays
+z2z, so the amount and the recipient stay off the public ledger, and so does the
+link between the faucet and whoever claimed. Transparent recipients still work,
+and the UI says plainly that those drips are public.
+
+The public lightwalletd endpoint (`LIGHTWALLETD_ENDPOINT`) is now only used for
+the read-side balance lookup tool. Nothing that moves money depends on it.
+
+### Self-mining, and the honest caveat
+
+The faucet funds itself. A solo CPU Equihash miner (`deploy/z3/miner`, Rust)
+works `getblocktemplate` against our own Zebra, and a reserve loop
+(`src/lib/reserve/`) watches the spendable balance: below the low-water mark it
+starts shielding mined coinbase into the faucet's account, and it stops once the
+balance reaches target. Two marks instead of one means the miner does not flap
+on and off. Refill work goes through the same serial send queue as drips, one
+bounded step at a time, and skips its turn whenever a real claim is waiting, so
+**topping up never pauses service**.
+
+Where this genuinely stands: the miner solves real blocks and our node accepts
+them, but on public testnet a dominant miner with far more hashrate wins the
+propagation race and ours get reorged out. Winning locally is not the same as
+funding the wallet. That race is [issue #32](../../issues/32) and it is open.
+Mining costs almost nothing to leave running, so it runs, but do not assume it
+alone will keep a production wallet topped up.
+
+### Anti-abuse
+
+The **proof-of-work gate is built and live**, not a plan for later:
+
+- The server issues a challenge signed with HMAC over `RATE_LIMIT_SALT`, so any
+  instance can verify one with no shared store.
+- The browser finds a nonce whose `sha256(seed:nonce)` has enough leading zero
+  bits, in a worker so the tab never freezes.
+- Difficulty adapts: a modest base, more bits for a client that keeps hammering,
+  more again when the whole faucet is under load, hard-capped so a phone never
+  gets a punishing wait.
+- Each signed challenge is single use and bound to the salted IP fingerprint it
+  was issued to, so a solution cannot be replayed or handed to someone else.
+
+Cloudflare Turnstile is still supported for anyone who prefers it.
+`FAUCET_CHALLENGE` picks: `pow`, `turnstile`, or `none`. PoW is the choice for a
+self-sovereign deploy because it calls nobody and tracks no one.
+
+Under the gate sit a per-address cooldown and a daily cap, enforced atomically in
+one transaction so a burst of simultaneous requests cannot slip past. Rate
+limiting is keyed on a **salted hash** of the IP (`src/lib/privacy.ts`), never
+the raw address, and the raw IP never reaches a log line.
+
+### The UI
+
+One page (`src/app/page.tsx`), no tabs, with states that tell the truth about
+what the backend is doing:
+
+- **Preparing** while the node syncs, with real progress. You can queue a claim
+  here and it sends itself once the node is ready.
+- **Topping up** while the reserve loop refills. If the faucet can still serve it
+  keeps serving and says so, because a healthy background refill must never look
+  like an outage.
+- **Empty** only when it genuinely cannot pay, and it only promises to fix itself
+  when the miner is actually on.
+- **Ready**, then a receipt with the txid, a working explorer link, and a
+  copyable plain-text summary.
+
+## Quick start (local, no node needed)
+
+Mock mode runs the whole flow with no keys, no chain, and no wallet.
 
 ```bash
 npm install
-cp .env.example .env
-npm run dev      # http://localhost:3000
+npm run build
+FAUCET_SENDER=mock FAUCET_CHALLENGE=pow RATE_LIMIT_SALT=dev-salt npm start
 ```
 
-Out of the box `FAUCET_SENDER=mock`: the full flow runs (validation, cooldown,
-captcha, DB ledger) but returns a **fake txid** — no real coins move. Perfect for
-building and testing the UX before you have a funded wallet.
+Open http://localhost:3000, hit **Generate a test address**, and claim. The mock
+sender keeps a simulated balance, so the low-balance guard, the empty state, and
+the full claim path are all exercisable.
 
-## Going live (real TAZ)
+To watch the reserve loop work, add `FAUCET_MINER_ACTIVE=true
+FAUCET_MOCK_REFILL=true` and set the marks low
+(`FAUCET_RESERVE_LOW_TAZ=4 FAUCET_RESERVE_TARGET_TAZ=8`).
 
-The real sender ([`realsend.ts`](src/lib/zcash/realsend.ts)) spends a funded
-**transparent** testnet wallet — transparent sends need no zk-proof, so they run
-on the free tier. Steps (full version in [DEPLOY.md](DEPLOY.md)):
+**`npm run dev` does not bundle.** A `node:` import in `src/lib/zcash/t2z.ts`
+breaks the dev webpack build. Use `npm run build && npm start`.
 
-1. **Fund a transparent wallet.** Make a testnet account (the Account tab gives
-   you a `tm…` address + WIF) and fund the address from an existing faucet
-   (`faucet.zecpages.com`, `fauzec.com`) or the Zcash Discord `#testnet`.
+For a real deploy see [deploy/](deploy/): cloud-init for a fresh box, or
+`deploy/deploy.sh` to reconcile an existing one.
 
-2. **Confirm a live `LIGHTWALLETD_ENDPOINT`** (the default list works today).
+## Configuration
 
-3. **Switch to real mode:**
-   ```bash
-   FAUCET_SENDER=real
-   FAUCET_WALLET_SEED=<the WIF>   # or a 64-hex key; server-side only, never commit
-   ```
-   The first claim to a `tm…` address is the acceptance test: check the returned
-   txid on a testnet explorer.
+Everything is env-driven and read once at boot (`src/lib/config.ts`). Amounts are
+handled internally in zatoshi to avoid float drift.
 
-4. **Enable anti-abuse.** Create a [Cloudflare Turnstile](https://dash.cloudflare.com/?to=/:account/turnstile)
-   widget and set `NEXT_PUBLIC_TURNSTILE_SITE_KEY` + `TURNSTILE_SECRET_KEY`.
-
-### Shielded sends — two backends
-
-**`real` mode — transparent wallet + t2z.** The faucet spends a funded
-transparent wallet. Unified recipients (`utest1…`, Orchard) are paid via a
-transparent→shielded t2z tx ([`t2z.ts`](src/lib/zcash/t2z.ts) +
-[`workers/t2z-worker.mjs`](workers/t2z-worker.mjs)): the recipient gets a private
-Orchard note and **change returns to the faucet's own t-address** (verified via
-`inspect_pczt`) so nothing strands. The Halo2 proof (~15–26s) runs in a
-worker_thread behind the FIFO queue.
-
-- `tm…` (transparent) → transparent tx (`RealSender`).
-- `utest1…` (unified/Orchard) → t2z shielded send (`T2zSender`).
-- `ztestsapling1…` (Sapling-only) → refused; t2z emits Orchard outputs only.
-
-The catch: the faucet's own funds are transparent, so its balance and every
-drip's origin are **public**.
-
-**`zallet` mode — a genuinely shielded faucet (Z3 stack).** The faucet holds
-**Orchard notes** and pays **z→z** through a running Zallet wallet (zebrad +
-`zallet-zaino`) over JSON-RPC ([`zalletsend.ts`](src/lib/zcash/zalletsend.ts)):
-`z_getbalanceforaccount` for the guard, `z_sendmany` (ZIP-317 fees, async opid →
-polled to a txid) per drip. Faucet holdings and the faucet↔claimant link stay
-private, and it can pay Sapling recipients too. This trades the no-node,
-free-tier deploy for running a full node — see DEPLOY.md §5. Verified end to end
-locally (build, live RPC balance, empty-guard) except one *funded* z→z send.
-
-## Configuration (`.env`)
-
-| Var | Default | Meaning |
+| Variable | Default | What it controls |
 | --- | --- | --- |
-| `FAUCET_DRIP_TAZ` | `0.1` | TAZ sent per claim |
-| `FAUCET_COOLDOWN_SECONDS` | `86400` | Per-address **and** per-IP cooldown |
-| `FAUCET_DAILY_CAP_TAZ` | `100` | Global 24h dispense ceiling |
-| `LIGHTWALLETD_ENDPOINT` | `testnet.zec.rocks:443` | Light client gRPC endpoint |
-| `FAUCET_SENDER` | `mock` | `mock`, `real` (transparent + t2z), or `zallet` (shielded) |
-| `FAUCET_WALLET_SEED` | — | Funded transparent wallet WIF/hex (`real` only) |
-| `ZALLET_RPC_URL` / `ZALLET_RPC_USER` / `ZALLET_RPC_PASSWORD` | — | Zallet JSON-RPC (`zallet` only) |
-| `ZALLET_ACCOUNT` / `ZALLET_ADDRESS` | — | Faucet's shielded account UUID + unified address (`zallet` only) |
-| `NEXT_PUBLIC_TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY` | — | Anti-bot |
+| `FAUCET_SENDER` | `mock` | `mock`, `real` (transparent), or `zallet` (shielded, production). |
+| `FAUCET_DRIP_TAZ` | `0.1` | Amount per claim. |
+| `FAUCET_COOLDOWN_SECONDS` | `86400` | Per-address cooldown. |
+| `FAUCET_DAILY_CAP_TAZ` | `100` | Ceiling across all claims in 24h. |
+| `FAUCET_MIN_RESERVE_TAZ` | `0` | Floor the faucet refuses to spend below. |
+| `FAUCET_CHALLENGE` | `turnstile` if its secret is set, else `none` | Anti-abuse gate: `pow`, `turnstile`, `none`. |
+| `RATE_LIMIT_SALT` | none | **Required in production** with a gate on. Signs PoW challenges and salts IP hashes. Boot fails on an empty or placeholder value. |
+| `FAUCET_POW_BITS` | `20` | Base difficulty in leading zero bits. |
+| `FAUCET_POW_ESCALATE_BITS` | `2` | Extra bits per recent claim from the same client. |
+| `FAUCET_POW_MAX_BITS` | `26` | Hard difficulty cap. |
+| `FAUCET_POW_TTL_SECONDS` | `180` | How long a challenge stays valid. |
+| `FAUCET_MINER_ACTIVE` | `false` | Whether the reserve loop may move funds. Off means it arms nothing at all. |
+| `FAUCET_RESERVE_TARGET_TAZ` | `15` | Refill stops here. |
+| `FAUCET_RESERVE_LOW_TAZ` | `5` | Refill starts below here. Must be under target, checked at boot. |
+| `FAUCET_RESERVE_CHECK_SECONDS` | `30` | Reconciler interval. |
+| `FAUCET_MOCK_REFILL` | `false` | Explicit opt-in so a mock deploy never silently "mines". |
+| `ZALLET_RPC_URL` | `http://127.0.0.1:28232/` | Zallet JSON-RPC endpoint. |
+| `ZALLET_RPC_USER` / `ZALLET_RPC_PASSWORD` | none | Basic auth for that endpoint. |
+| `ZALLET_ACCOUNT` | none | Faucet account UUID. The shield sweep and the miner must both target this account. |
+| `ZALLET_ADDRESS` | none | Faucet unified address, the spend-from for `z_sendmany`. |
+| `ZALLET_MIN_CONF` | `10` | Confirmations before a note is spendable. |
+| `TRUSTED_PROXY_COUNT` | `0` | How many proxies **you** run. Only that many rightmost `X-Forwarded-For` hops are trusted. `0` ignores the header, which is the safe default. |
+| `LIGHTWALLETD_ENDPOINT` | `https://testnet.zec.rocks:443` | Read-side balance lookups only. Comma-separated list, tried in order. |
+| `DB_BACKEND` | `sqlite` | `sqlite` for a normal box, `d1` to keep the claim ledger on Cloudflare D1 when the host disk is ephemeral. |
+| `FAUCET_DONATION_ADDRESS` | none | Shown in the UI so people can top the faucet up. |
 
-## Supported recipient types
+Full deploy example: [deploy/z3/faucet.env.example](deploy/z3/faucet.env.example).
 
-A user pastes **their** address and receives TAZ. All current testnet formats
-are accepted and classified ([`address.ts`](src/lib/zcash/address.ts)):
+## Operations
 
-| They send in… | Prefix | Result |
-| --- | --- | --- |
-| Unified (shielded) | `utest1…` | shielded-to-shielded (private) |
-| Sapling (shielded) | `ztestsapling1…` | shielded-to-shielded (private) |
-| Transparent | `tm…` / `t2…` | deshielding tx → **public** output |
+The box is meant to look after itself. Details live next to the scripts, this is
+the map:
 
-The API response and UI echo back which type was detected, and transparent
-recipients get a "this transfer is not shielded" notice. Mainnet addresses
-(`u1…`, `zs…`, `t1…`) are rejected with a clear message.
+- **Self-healing.** A watchdog restarts wedged services. `/api/health` is
+  liveness (is the process answering), `/api/ready` is readiness (can it actually
+  serve a drip, with the reason when it cannot). Keeping those separate is what
+  stops a normal first sync from looking like an outage.
+- **Mining** and its tuning: [deploy/z3/MINING.md](deploy/z3/MINING.md)
+- **Encrypted backups** of wallet and ledger: [deploy/z3/BACKUPS.md](deploy/z3/BACKUPS.md)
+- **Snapshots** for a fast chain rebuild: [deploy/z3/SNAPSHOTS.md](deploy/z3/SNAPSHOTS.md)
+- **TLS and domain**: [deploy/z3/HTTPS.md](deploy/z3/HTTPS.md)
+- **Metrics and alerts**: [deploy/z3/OBSERVABILITY.md](deploy/z3/OBSERVABILITY.md)
+- **Redeploy with rollback**, and external live monitoring: [deploy/](deploy/)
 
-## Single-wallet model (the "one funded address" approach)
+## Development
 
-The faucet is backed by **one funded testnet hot wallet** (`FAUCET_WALLET_SEED`).
-This is the standard faucet design, hardened here with:
-
-- **Reserve floor** (`FAUCET_MIN_RESERVE_TAZ`) — the faucet reports **empty** and
-  refuses drips once the balance would drop below drip + reserve, instead of
-  erroring mid-send. The UI disables the button and shows a refill notice.
-- **Live balance** — `GET /api/status` returns `balanceTaz` + `empty`; the send
-  path re-checks the balance before every drip (`safeBalance()` in `send.ts`).
-- **Endpoint failover** — `LIGHTWALLETD_ENDPOINT` takes a comma-separated list;
-  endpoints are tried in order and the first reachable one is used.
-
-Recommended operating pattern: keep the hot wallet **intentionally low**, hold a
-larger **cold reserve** you control, and top the hot wallet up periodically (or
-watch `balanceTaz` and refill when it nears the floor). In mock mode the balance
-is simulated via `FAUCET_MOCK_BALANCE_TAZ` so the whole empty/refill flow is
-testable without real coins.
-
-## Security notes
-
-- The faucet seed is a hot wallet — keep the balance low and top it up; never
-  expose the seed to the browser or commit it.
-- Rate-limit + daily cap + reserve floor are the guardrails against draining.
-  Tune them and keep Turnstile on in production.
-- **Concurrency-safe by construction.** Multiple developers can hit the faucet
-  at once. Each claim is reserved in a single synchronous SQLite transaction
-  (cooldown + daily cap checked and a `pending` row inserted atomically) *before*
-  the send, so N simultaneous requests from the same address/IP can't all pass
-  the check and double-drip — load-tested with 5 concurrent requests.
-- **Sends run through a serial FIFO queue** (`src/lib/zcash/queue.ts`). The front
-  door is concurrent, but the actual send is processed one at a time: the faucet
-  is a single hot wallet, so parallel sends would race on the same notes
-  (double-spend), and parallel WebZjs proofs would OOM a small instance. A bounded
-  backlog (`SEND_QUEUE_MAX_PENDING`) fast-rejects a surge with a "busy" response
-  instead of queueing unbounded work. Verified: 5 concurrent sends process
-  serially and all succeed; an over-cap burst serves the cap and rejects the rest.
-- **Trust your proxy, not the client.** `X-Forwarded-For` is client-writable, so
-  per-IP limiting only trusts the last `TRUSTED_PROXY_COUNT` hops (the ones your
-  own infra adds). Set it to your real proxy depth (usually `1`); leave it `0`
-  and the header is ignored entirely. The spoof-proof backstop regardless of IP
-  tricks is `FAUCET_DAILY_CAP_TAZ`.
-- SQLite is fine for a single instance. For multi-instance, move the ledger to
-  Postgres (swap `src/lib/db.ts`).
-
-## Scripts
+Node 23 or newer. Tests run on the built-in runner with native type stripping, so
+there is no test framework to install.
 
 ```bash
-npm run dev        # local dev
-npm run build      # production build
-npm run typecheck  # tsc --noEmit
+npm run typecheck     # tsc --noEmit
+npm test              # unit tests, node --test over src/**/*.test.ts
+npm run build         # production build
+npm run smoke         # claim flow against an already-running server
+npm run test:api      # route-level integration tests, boots the built app itself
 ```
+
+`npm run smoke` expects a server already up in mock plus pow mode.
+`npm run test:api` starts and stops its own servers, so it only needs a build
+first.
+
+CI gates every merge: the app job (typecheck, unit tests, build), the smoke job,
+shellcheck plus the deploy test harness, and the miner's `cargo test` and clippy.
+Branch protection means nothing merges red.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the branch, PR, and review flow, and
+[PRIVACY.md](PRIVACY.md) for exactly what the faucet stores.
+
+## Testnet only
+
+TAZ has no monetary value. Never point this at mainnet, and never reuse a testnet
+key anywhere real.
