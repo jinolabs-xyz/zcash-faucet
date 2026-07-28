@@ -195,10 +195,12 @@ the newest `ZSNAP_KEEP`.
 
 ## Miner
 
-The miner works public testnet blocks. It does **not** currently fund the
-faucet: a dominant miner orphans every block we win, so mining income is zero
-and the wallet is topped up from elsewhere. Do not treat a quiet miner as an
-outage, and do not expect an empty faucet to refill itself. The measurement and
+The miner works public testnet blocks, and one has survived: block 4208641,
+whose coinbase the reserve loop shielded on its own. A dominant miner takes
+most races though, so mining is upside rather than a supply you can plan
+around, and the wallet is topped up from elsewhere. Do not treat a quiet miner
+as an outage, and do not expect an empty faucet to refill itself in any useful
+time. The measurement and
 the reasoning are in [deploy/z3/MINING.md](deploy/z3/MINING.md), along with
 everything else about running it.
 
@@ -263,11 +265,10 @@ curl -s "https://$(cat /etc/faucet-domain)/api/ready" | jq
    `docker logs <zallet container>` and check the RPC auth in
    `z3-stack/config/testnet/zallet.toml` matches `faucet.env`.
 5. **`below reserve, refilling`.** Not broken, broke. **Fund the faucet
-   address.** That is the fix, not a fallback: mining income is zero while a
-   dominant miner orphans our blocks, so checking whether the miner is running
-   will not tell you anything useful at 3am and a winning miner will not refill
-   you either. If a coinbase did survive, it still needs 100 confirmations plus
-   a shielding step before the balance moves, so it is never the fast path
+   address.** That is the fix, not a fallback. Mining lands a block rarely
+   enough that it is not the answer at 3am, and even a block won right now
+   needs 100 confirmations plus a shielding step before the balance moves, so
+   it is never the fast path
    back. Confirm with `curl -s .../api/status`.
 
 If the reason is none of these and the site is dark to users, check
