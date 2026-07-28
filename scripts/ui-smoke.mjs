@@ -40,6 +40,82 @@ async function freshAddress() {
   return address;
 }
 
+// The visual and accessibility checks the retired QA seat used to eyeball by hand.
+// Scripted here so a regression is caught by CI rather than noticed on prod. The
+// native rubber-band overscroll bounce is the one thing still not scriptable, so
+// it stays a manual check after deploys.
+async function checkAppearance(page) {
+  // The masthead mark, same identity as the favicon. aria-hidden by design, so
+  // assert its presence, not an accessible name.
+  ok("the masthead mark renders", await page.locator("svg.brand-mark").first().isVisible());
+
+  // The LIVE dot paints the state, not a fixed colour: --color-live only when the
+  // faucet is serviceable. Compare the dot's resolved background to the token
+  // itself, not a hardcoded rgb, so a theme edit cannot make this assertion lie.
+  const [dotBg, liveToken] = await page.evaluate(() => {
+    const dot = [...document.querySelectorAll("span[aria-hidden]")].find((el) => el.style.animation.includes("pulse"));
+    // Resolve the token in the DOT's own context, not on body: the theme tokens
+    // are scoped to the .app wrapper, so a body-level probe reads the :root
+    // default and would compare the dot against the wrong theme's value.
+    const probe = document.createElement("span");
+    probe.style.color = "var(--color-live)";
+    (dot?.parentElement ?? document.body).appendChild(probe);
+    const token = getComputedStyle(probe).color;
+    probe.remove();
+    return [dot ? getComputedStyle(dot).backgroundColor : "no dot", token];
+  });
+  ok("the LIVE dot carries the --color-live state colour", dotBg === liveToken, `${dotBg} vs ${liveToken}`);
+
+  // Reduced-motion, BOTH directions. `reduce == halted` alone would also pass if
+  // the animation had simply stopped existing, a live risk since the dot was
+  // refactored, so the pair pins it: animated by default, none under reduce. The
+  // global `* { animation: none !important }` beats the inline style here, which
+  // is the exact cascade fact this proves is still working.
+  const dotAnim = () =>
+    page.evaluate(() => {
+      const dot = [...document.querySelectorAll("span[aria-hidden]")].find((el) => el.style.animation.includes("pulse"));
+      return dot ? getComputedStyle(dot).animationName : "no dot";
+    });
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  ok("the dot animates by default", (await dotAnim()) === "pulse");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  ok("reduced-motion halts the dot", (await dotAnim()) === "none");
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+
+  // Text contrast: sample a resting link and compute its WCAG ratio against the
+  // first opaque background behind it. 4.5 is the AA floor for body text, and
+  // resting accent links were under it until the per-theme token landed (#96/#99).
+  const ratio = await page.evaluate(() => {
+    const a = document.querySelector("a");
+    if (!a) return null;
+    const lum = (c) => {
+      const [r, g, b] = (c.match(/[\d.]+/g) ?? []).slice(0, 3).map((n) => {
+        const s = Number(n) / 255;
+        return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const opaque = (c) => c && !/rgba\(.*,\s*0\)$|transparent/.test(c);
+    let el = a;
+    let bg = getComputedStyle(el).backgroundColor;
+    while (el && !opaque(bg)) {
+      el = el.parentElement;
+      bg = el ? getComputedStyle(el).backgroundColor : "rgb(255, 255, 255)";
+    }
+    const [hi, lo] = [lum(getComputedStyle(a).color), lum(bg)].sort((x, y) => y - x);
+    return (hi + 0.05) / (lo + 0.05);
+  });
+  ok("resting link text meets WCAG AA", ratio != null && ratio >= 4.5, ratio ? `${ratio.toFixed(2)}:1` : "no link found");
+}
+
+// The 404 must wear the site chrome, not Next's bare default. A broken not-found
+// route renders as the framework default, which has no mark, so this fails on it.
+async function check404(page, base) {
+  const res = await page.goto(`${base}/this-route-does-not-exist`, { waitUntil: "networkidle" });
+  ok("an unknown path returns a real 404", res?.status() === 404, String(res?.status()));
+  ok("the 404 wears the site chrome", await page.locator("svg.brand-mark").first().isVisible());
+}
+
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ permissions: ["clipboard-read", "clipboard-write"] });
 const page = await ctx.newPage();
@@ -55,6 +131,9 @@ try {
   await page.goto(BASE, { waitUntil: "networkidle", timeout: 60_000 });
   ok("page renders its heading", (await page.textContent("body")).includes("Get free testnet ZEC"));
   ok("status bar reached the API", /balance\s/.test(await page.textContent("body")));
+
+  // Visual + a11y checks before the claim flow, while the home page is loaded.
+  await checkAppearance(page);
 
   // Generate-then-claim, the flow #31 broke for every visitor: the button read
   // the address from the wrong field and substituted a synthesized one that
@@ -98,7 +177,12 @@ try {
   const copied = String(await page.evaluate(() => navigator.clipboard.readText().catch(() => "")));
   ok("copy txid puts a 64-hex txid on the clipboard", /^[0-9a-f]{64}$/.test(copied), copied.slice(0, 16));
 
+  // Assert the clean-console guarantee on the whole claim flow BEFORE the 404
+  // check, which deliberately loads a 404 and would otherwise pollute this.
   ok("no page errors, console errors or failed requests", problems.length === 0, problems.slice(0, 3).join(" | "));
+
+  // Last, because it navigates away and intentionally hits a 404.
+  await check404(page, BASE);
 } catch (err) {
   ok("browser smoke ran to completion", false, err instanceof Error ? err.message : String(err));
   if (problems.length) console.log(`  page problems seen: ${problems.slice(0, 3).join(" | ")}`);
