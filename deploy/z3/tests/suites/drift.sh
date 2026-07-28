@@ -231,16 +231,16 @@ check "and says clean in the journal" "grep -q 'config: clean' '$T/clean.log'"
 report_env; fake_audit 1
 bash "$REPORT" > "$T/drift.log" 2>&1
 check "drift found still exits 0, it reported successfully" "[ $? -eq 0 ]"
-check "the alert says DRIFT FOUND" "grep -q 'drift found' '$T/alerts.log'"
-check "the alert explains why it matters" "grep -q 'a rebuild would not reproduce it' '$T/alerts.log'"
+check "the alert says there are findings" "grep -q 'config findings' '$T/alerts.log'"
+check "the alert explains why it matters" "grep -q 'a rebuild would not reproduce this box' '$T/alerts.log'"
 check "the alert says where to look" "grep -q 'journalctl -u faucet-drift-report' '$T/alerts.log'"
 check "the audit output is in the journal" "grep -q 'FINDING' '$T/drift.log'"
 
 report_env; fake_audit 2
 bash "$REPORT" > "$T/incomplete.log" 2>&1
 check "incomplete exits 0" "[ $? -eq 0 ]"
-check "the alert says INCOMPLETE, not drift" "grep -q 'INCOMPLETE' '$T/alerts.log' && ! grep -q 'drift found' '$T/alerts.log'"
-check "and warns drift may exist unseen" "grep -q 'drift may exist unseen' '$T/alerts.log'"
+check "the alert says INCOMPLETE, not findings" "grep -q 'INCOMPLETE' '$T/alerts.log' && ! grep -q 'config findings' '$T/alerts.log'"
+check "and warns a problem may exist unseen" "grep -q 'may exist unseen' '$T/alerts.log'"
 
 report_env
 export DRIFT_AUDIT="$T/not-installed.sh"
@@ -299,11 +299,35 @@ env -u FAUCET_ALERT_URL -u WATCHDOG_ALERT_URL bash "$REPORT" > "$T/real-alert.lo
 check "the DEFAULT alert path is the shipped alert.sh, reached without env help" "[ $rc -ne 0 ]"
 check "and the real script reports itself unconfigured" "grep -q 'no FAUCET_ALERT_URL configured' '$T/real-alert.log'"
 
+echo "== drift-report: each audit explains its OWN finding (SDE-CI's copy finding)"
+# One shared sentence misdescribes whichever audit did not write it. An access
+# finding is not the box disagreeing with the repo, it is something reachable
+# that should not be, and a wrong explanation at 3am costs more than none.
+report_env; fake_audit 0
+export DRIFT_RUN_ACCESS=1
+printf '#!/usr/bin/env bash\nexit 1\n' > "$T/access.sh"; chmod +x "$T/access.sh"
+export DRIFT_ACCESS_AUDIT="$T/access.sh"
+bash "$REPORT" > "$T/wording.log" 2>&1
+check "the access alert does NOT claim the repo disagrees" \
+  "! grep -q 'repo disagree' '$T/alerts.log'"
+check "it says something is reachable that should not be" \
+  "grep -q 'reachable that should not be' '$T/alerts.log'"
+check "and points at the binding, since ufw cannot close a docker port" \
+  "grep -q 'BINDING' '$T/alerts.log'"
+
+report_env; fake_audit 1
+export DRIFT_RUN_ACCESS=0
+bash "$REPORT" > "$T/wording2.log" 2>&1
+check "the config alert keeps its own explanation" \
+  "grep -q 'repo disagree' '$T/alerts.log'"
+check "and does not borrow the access wording" \
+  "! grep -q 'reachable that should not be' '$T/alerts.log'"
+
 echo "== drift-report: the worse of the two audits decides the outcome"
 report_env; fake_audit 0
 export DRIFT_RUN_ACCESS=1
 printf '#!/usr/bin/env bash\nexit 1\n' > "$T/access.sh"; chmod +x "$T/access.sh"
 export DRIFT_ACCESS_AUDIT="$T/access.sh"
 bash "$REPORT" > "$T/both.log" 2>&1
-check "a clean config plus access drift still alerts" "grep -q 'access drift found' '$T/alerts.log'"
+check "a clean config plus access drift still alerts" "grep -q 'access findings' '$T/alerts.log'"
 check "and the clean one is reported clean" "grep -q 'config: clean' '$T/both.log'"
