@@ -159,4 +159,19 @@ a:hover { color: var(--color-accent-800); }
 
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.2; } }
 @keyframes hatch { to { background-position: 26px 0; } }
+
+/* This one line is the WHOLE reduced-motion story. It looks like it cannot be,
+   because every animation in the app is an inline style (the dot's pulse, the
+   hatch meters), and an inline style normally outranks a selector. It does not
+   outrank this one: style-attribute declarations are NORMAL author declarations,
+   and important author declarations beat them (CSS Cascade 4). !important also
+   outranks animation declarations themselves.
+
+   Measured in Chromium, not argued: with no-preference two animations run
+   (span:pulse, i:hatch), with reduce zero do. #105 was filed to add per-element
+   handling on top of this and closed once that was demonstrated. Don't add it.
+
+   The `*` selector does not match ::before or ::after, so keep animations off
+   pseudo-elements, and SMIL inside an inline SVG would also escape this. Neither
+   exists today. */
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
