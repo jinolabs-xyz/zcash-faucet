@@ -327,7 +327,7 @@ systemctl daemon-reload && systemctl enable --now faucet-drift-report.timer
 journalctl -u faucet-drift-report -n 200      # the last report, findings and fixes
 ```
 
-Three outcomes, and the alert says which:
+Four outcomes, and the alert says which:
 
 | Outcome | Alert | Unit result |
 |---|---|---|
@@ -335,11 +335,28 @@ Three outcomes, and the alert says which:
 | drift found | "drift found ... a rebuild would not reproduce it" | success, it reported |
 | incomplete | "INCOMPLETE ... drift may exist unseen" | success, it reported |
 | an audit could not be run at all | `OnFailure` pages | failure |
+| a finding could not be delivered | `OnFailure` pages, cause named in the journal | failure |
 
 Findings alert themselves rather than riding on a unit failure, because "unit
 failed" does not tell you whether the box drifted or whether the check could not
-see. A missing script is the only case left to `OnFailure`, since that is the
-wrapper's own problem and not a finding.
+see. What is left to `OnFailure` is the wrapper's own problems rather than facts
+about the box: an audit it could not run, and a finding it could not deliver.
+
+That last row is the one worth understanding. Audit-blind means we do not know.
+Alert-failed means we **do** know and the person who needs to does not, so the
+unit goes red on purpose: with the webhook broken, `systemctl` is the only
+signal left, and a green timer there would hide the drift. The journal names
+which of the three delivery failures it was, because they want different fixes:
+
+```
+journalctl -u faucet-drift-report -n 200 | grep 'ALERT NOT SENT'
+  no FAUCET_ALERT_URL configured    -> set one in /etc/faucet/alerts.env
+  no jq and no python3              -> install either one
+  alert.sh exited 1                 -> the webhook rejected the POST, check the URL
+```
+
+A box with no webhook configured stays green while it is clean. It only goes
+red once drift exists **and** there is no way to tell anyone.
 
 `Persistent=true`, so a box that was off at 03:40 gets audited on its next boot
 rather than skipping a day.

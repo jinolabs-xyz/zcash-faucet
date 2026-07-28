@@ -248,6 +248,57 @@ bash "$REPORT" > "$T/missing.log" 2>&1
 check "a missing audit exits NONZERO so OnFailure catches it" "[ $? -ne 0 ]"
 check "and says which script is missing" "grep -q 'audit missing or not executable' '$T/missing.log'"
 
+echo "== drift-report: a finding nobody could be told about is a FAILED unit"
+# The unit exists so that someone HEARS about drift. Discarding alert.sh's rc
+# left the worst state silent: drift found, journald has it, nobody paged, unit
+# green, operator sees a healthy timer. Audit-blind means we do not know.
+# Alert-failed means we DO know and the person who needs to does not.
+# The three codes below are alert.sh's own contract, pinned against the real
+# script in the alerts suite. Here we test what this wrapper does with each.
+alert_exiting() { # $1 exit code
+  printf '#!/usr/bin/env bash\nexit %s\n' "$1" > "$T/alert.sh"; chmod +x "$T/alert.sh"
+}
+
+report_env; fake_audit 1; alert_exiting 3
+bash "$REPORT" > "$T/undeliv-unconfigured.log" 2>&1; rc=$?
+check "drift found with no webhook configured FAILS the unit" "[ $rc -ne 0 ]"
+check "and names the fix, not just a failure" "grep -q 'no FAUCET_ALERT_URL configured' '$T/undeliv-unconfigured.log'"
+check "and says the unit is failing on purpose" "grep -q 'could NOT be delivered' '$T/undeliv-unconfigured.log'"
+check "and says systemctl is the remaining signal" "grep -q 'systemctl is the only signal left' '$T/undeliv-unconfigured.log'"
+
+report_env; fake_audit 1; alert_exiting 4
+bash "$REPORT" > "$T/undeliv-encoder.log" 2>&1; rc=$?
+check "a missing encoder fails the unit too" "[ $rc -ne 0 ]"
+check "and blames the encoder, not the webhook URL" \
+  "grep -q 'no jq and no python3' '$T/undeliv-encoder.log' && ! grep -q 'rejected the POST' '$T/undeliv-encoder.log'"
+
+report_env; fake_audit 1; alert_exiting 1
+bash "$REPORT" > "$T/undeliv-post.log" 2>&1; rc=$?
+check "a rejected POST fails the unit" "[ $rc -ne 0 ]"
+check "and blames the webhook, not the config" \
+  "grep -q 'webhook rejected the POST' '$T/undeliv-post.log' && ! grep -q 'no FAUCET_ALERT_URL' '$T/undeliv-post.log'"
+
+report_env; fake_audit 1
+export DRIFT_ALERT_SH="$T/no-such-alert.sh"
+bash "$REPORT" > "$T/undeliv-missing.log" 2>&1; rc=$?
+check "an alert script that is not there fails the unit" "[ $rc -ne 0 ]"
+check "and says no runnable alert script" "grep -q 'no runnable alert script' '$T/undeliv-missing.log'"
+
+# A broken alerter is only a problem when there was something to send. A clean
+# box must not page or fail just because nobody configured a webhook.
+report_env; fake_audit 0; alert_exiting 3
+bash "$REPORT" > "$T/clean-broken-alert.log" 2>&1; rc=$?
+check "a clean audit with a broken alerter stays GREEN" "[ $rc -eq 0 ]"
+
+# Everything above stubs alert.sh, so a wrong default path would leave all of
+# it passing while the real unit alerts nothing. This one runs the shipped
+# alert.sh for real: unconfigured, it must exit 3 and fail the unit.
+report_env; fake_audit 1
+unset DRIFT_ALERT_SH
+env -u FAUCET_ALERT_URL -u WATCHDOG_ALERT_URL bash "$REPORT" > "$T/real-alert.log" 2>&1; rc=$?
+check "the DEFAULT alert path is the shipped alert.sh, reached without env help" "[ $rc -ne 0 ]"
+check "and the real script reports itself unconfigured" "grep -q 'no FAUCET_ALERT_URL configured' '$T/real-alert.log'"
+
 echo "== drift-report: the worse of the two audits decides the outcome"
 report_env; fake_audit 0
 export DRIFT_RUN_ACCESS=1
