@@ -12,7 +12,7 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { ripemd160 } from "@noble/hashes/legacy.js";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { base58check as base58checkFactory } from "@scure/base";
-import { config } from "../config";
+import { config } from "../config.ts";
 
 const base58check = base58checkFactory(sha256);
 const TESTNET_P2PKH = Uint8Array.from([0x1d, 0x25]);

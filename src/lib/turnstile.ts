@@ -2,7 +2,7 @@
  * Cloudflare Turnstile server-side verification (siteverify).
  * If no secret key is configured, verification is skipped (dev convenience).
  */
-import { config } from "./config";
+import { config } from "./config.ts";
 
 const SITEVERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
 

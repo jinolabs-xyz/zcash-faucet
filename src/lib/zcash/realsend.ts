@@ -12,9 +12,9 @@
  * re-spend — the faucet would slowly strand its own funds. Enabling shielded
  * properly needs a sweep-capable shielded wallet (Zallet/Z3). See DEPLOY.md.
  */
-import type { Sender, SendRequest, SendResult } from "./send";
-import { faucetWallet } from "./wallet";
-import { getAddressUtxos, getLatestBlock, getLightdInfo, sendRawTransaction, type Utxo } from "./grpc";
+import type { Sender, SendRequest, SendResult } from "./send.ts";
+import { faucetWallet } from "./wallet.ts";
+import { getAddressUtxos, getLatestBlock, getLightdInfo, sendRawTransaction, type Utxo } from "./grpc.ts";
 import { explorerTxUrl } from "./explorer.ts";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -27,7 +27,7 @@ function lib() {
 
 // Conservative flat fee (ZIP-317's floor for a small transparent tx is well
 // under this). 10_000 zatoshi = 0.0001 TAZ.
-const FEE_ZAT = 10_000n;
+export const FEE_ZAT = 10_000n;
 const ZCASH_SAPLING_VERSION = 4;
 const SAPLING_VERSION_GROUP_ID = 0x892f2085;
 const SIGHASH_ALL = 0x01;
@@ -37,7 +37,7 @@ function explorerUrl(txid: string): string {
 }
 
 /** Greedily pick UTXOs to cover amount + fee; returns the chosen set + total. */
-function selectInputs(utxos: Utxo[], need: bigint): { chosen: Utxo[]; total: bigint } {
+export function selectInputs(utxos: Utxo[], need: bigint): { chosen: Utxo[]; total: bigint } {
   const chosen: Utxo[] = [];
   let total = 0n;
   for (const u of utxos) {

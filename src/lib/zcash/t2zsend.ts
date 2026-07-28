@@ -3,10 +3,10 @@
  * transparent UTXOs via t2z. Change returns to the faucet's own t-address, so
  * funds re-circulate — see ./t2z.ts for why that matters.
  */
-import type { Sender, SendRequest, SendResult } from "./send";
-import { faucetWallet } from "./wallet";
-import { getAddressUtxos, getLatestBlock, sendRawTransaction, type Utxo } from "./grpc";
-import { buildT2zTx } from "./t2z";
+import type { Sender, SendRequest, SendResult } from "./send.ts";
+import { faucetWallet } from "./wallet.ts";
+import { getAddressUtxos, getLatestBlock, sendRawTransaction, type Utxo } from "./grpc.ts";
+import { buildT2zTx } from "./t2z.ts";
 import { explorerTxUrl } from "./explorer.ts";
 import { bytesToHex } from "@noble/hashes/utils.js";
 

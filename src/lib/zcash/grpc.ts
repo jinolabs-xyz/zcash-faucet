@@ -7,7 +7,7 @@
 import * as grpc from "@grpc/grpc-js";
 import * as protoLoader from "@grpc/proto-loader";
 import path from "node:path";
-import { config } from "../config";
+import { config } from "../config.ts";
 
 // Load the trimmed proto once from the repo (readable at runtime under Node).
 const pkgDef = protoLoader.loadSync(path.join(process.cwd(), "proto", "service.proto"), {

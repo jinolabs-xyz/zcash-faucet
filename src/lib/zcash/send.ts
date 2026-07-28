@@ -43,6 +43,12 @@ export interface Sender {
 }
 
 import { explorerTxUrl } from "./explorer.ts";
+import { createRequire } from "node:module";
+
+// Backends load lazily so an unused one never drags its dependencies in, and
+// through createRequire because a bare require() does not exist under plain
+// ESM (node --test), only inside the bundler.
+const req = createRequire(import.meta.url);
 
 class MockSender implements Sender {
   readonly name = "mock";
@@ -88,19 +94,20 @@ class CompositeRealSender implements Sender {
   private _t2z: any;
 
   private real() {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    return (this._real ??= new (require("./realsend").RealSender)());
+    return (this._real ??= new (req("./realsend").RealSender)());
   }
   private t2z() {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    return (this._t2z ??= new (require("./t2zsend").T2zSender)());
+    return (this._t2z ??= new (req("./t2zsend").T2zSender)());
   }
 
   balance(): Promise<bigint> {
     return this.real().balance(); // both spend the same transparent wallet
   }
 
-  send(req: SendRequest): Promise<SendResult> {
+  // async, not a bare throw: the Sender contract promises a Promise, and a
+  // synchronous throw from something declared async surprises any caller that
+  // reaches for .catch() instead of try/catch.
+  async send(req: SendRequest): Promise<SendResult> {
     const kind = req.addressInfo.kind;
     if (kind === "unified") return this.t2z().send(req);
     if (kind === "sapling") {
@@ -134,8 +141,7 @@ export function getSender(): Sender {
   if (cached) return cached;
   let s: Sender;
   if (config.sender === "zallet") {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    s = new (require("./zalletsend").ZalletSender)() as Sender;
+    s = new (req("./zalletsend").ZalletSender)() as Sender;
   } else if (config.sender === "real") {
     s = new CompositeRealSender();
   } else {
