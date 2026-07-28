@@ -18,7 +18,7 @@
  * are ZIP-317, set by the wallet. See the Zallet book:
  *   https://zcash.github.io/wallet/guide/first-wallet.html
  */
-import type { Sender, SendRequest, SendResult } from "./send";
+import { SendOutcomeUnknownError, type Sender, type SendRequest, type SendResult } from "./send.ts";
 // .ts extension for node --test resolution, same pattern as pow.ts.
 import { config, ZATOSHI_PER_TAZ } from "../config.ts";
 import { explorerTxUrl } from "./explorer.ts";
@@ -29,6 +29,9 @@ function zatToZecLiteral(zat: bigint): string {
   const frac = (zat % ZATOSHI_PER_TAZ).toString().padStart(8, "0").replace(/0+$/, "");
   return frac ? `${whole}.${frac}` : `${whole}`;
 }
+
+/** Transient RPC blips should not kill a send that is otherwise progressing. */
+const POLL_RETRIES = 3;
 
 interface RpcError {
   code: number;
@@ -117,24 +120,67 @@ export class ZalletSender implements Sender {
     };
   }
 
-  /** Poll the async operation until it lands, then return the broadcast txid. */
+  /**
+   * Poll the async operation until it lands, then return the broadcast txid.
+   *
+   * Everything that goes wrong in here is AMBIGUOUS, never a clean failure: the
+   * opid already exists, so the wallet may broadcast regardless of what we can
+   * observe. Hence SendOutcomeUnknownError rather than a plain throw. The one
+   * exception is the wallet telling us outright that the operation failed,
+   * which is a definite no-send.
+   */
   private async awaitOperation(opid: string): Promise<string> {
     const deadline = Date.now() + this.z.opTimeoutMs;
     const idJson = `[[${JSON.stringify(opid)}]]`;
     // Loop on z_getoperationstatus (non-destructive) so a slow proof doesn't get
     // silently reaped; collect the final result once, which also clears it.
     for (;;) {
-      const [status] = await this.rpc<OperationResult[]>("z_getoperationstatus", idJson);
+      const status = await this.pollStatus(opid, idJson);
       if (status && status.status !== "queued" && status.status !== "executing") break;
-      if (Date.now() > deadline) throw new Error(`zallet operation ${opid} timed out (still ${status?.status ?? "pending"}).`);
+      if (Date.now() > deadline) {
+        throw new SendOutcomeUnknownError(opid, `still ${status?.status ?? "pending"} after ${this.z.opTimeoutMs}ms`);
+      }
       await new Promise((r) => setTimeout(r, this.z.pollMs));
     }
-    const [done] = await this.rpc<OperationResult[]>("z_getoperationresult", idJson);
+
+    let done: OperationResult | undefined;
+    try {
+      [done] = await this.rpc<OperationResult[]>("z_getoperationresult", idJson);
+    } catch (err) {
+      // The operation finished, we just could not read how. Coins may be gone.
+      throw new SendOutcomeUnknownError(opid, `result unreadable: ${err instanceof Error ? err.message : err}`);
+    }
+    if (done?.status === "failed" || done?.status === "cancelled") {
+      // The wallet is telling us it did not send. This one is definite.
+      throw new Error(`zallet send failed: ${done.error?.message ?? done.status}`);
+    }
     if (!done || done.status !== "success") {
-      throw new Error(`zallet send failed: ${done?.error?.message ?? done?.status ?? "unknown error"}`);
+      throw new SendOutcomeUnknownError(opid, `unexpected final status ${done?.status ?? "missing"}`);
     }
     const txid = done.result?.txid;
-    if (!txid) throw new Error("zallet send succeeded but returned no txid.");
+    if (!txid) throw new SendOutcomeUnknownError(opid, "succeeded but returned no txid");
     return txid;
+  }
+
+  /**
+   * One status poll, retried through transient RPC failures. Without this a
+   * single blip aborts a send that is building perfectly well. Gives up once
+   * the retries are spent, and that give-up is still ambiguous.
+   */
+  private async pollStatus(opid: string, idJson: string): Promise<OperationResult | undefined> {
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < POLL_RETRIES; attempt++) {
+      try {
+        const [status] = await this.rpc<OperationResult[]>("z_getoperationstatus", idJson);
+        return status;
+      } catch (err) {
+        lastErr = err;
+        await new Promise((r) => setTimeout(r, this.z.pollMs * (attempt + 1)));
+      }
+    }
+    throw new SendOutcomeUnknownError(
+      opid,
+      `status unreadable after ${POLL_RETRIES} tries: ${lastErr instanceof Error ? lastErr.message : lastErr}`,
+    );
   }
 }
