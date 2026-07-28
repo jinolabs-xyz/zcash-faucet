@@ -28,6 +28,7 @@ export const GET = withApi("status", async () => {
     balanceTaz, // null = unknown (backend not ready / still syncing)
     empty,
     donationAddress: config.donationAddress,
+    miningAddress: config.miningAddress,
     queueDepth: getSendQueue().depth,
     backend,
     node, // { ready, syncPercent, height, nodeHeight } or null while the wallet is down

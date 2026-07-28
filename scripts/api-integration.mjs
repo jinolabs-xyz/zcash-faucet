@@ -30,6 +30,12 @@ const seq = (n, fill) => Uint8Array.from({ length: n }, (_, i) => (i * 7 + fill)
 const ua = (fill) => bech32m.encode("utest", bech32m.toWords(seq(96, fill)), 1023);
 const UNIFIED_A = ua(3);
 const UNIFIED_B = ua(41);
+// Donate-page fixtures at REAL length. A short stand-in would pass a
+// truncation bug straight through, and a truncated address on a donate page
+// loses donations silently with nothing in any log.
+const DONATION_UA = ua(7);
+const MINING_TADDR = "tmUiVxo1bbZLP5z6KYfM4dh3PcX5wkd7on8"; // 35 chars, the real shape
+
 // One flipped char in the data part breaks the bech32m checksum.
 const UNIFIED_BAD = UNIFIED_A.slice(0, -3) + (UNIFIED_A.at(-3) === "q" ? "p" : "q") + UNIFIED_A.slice(-2);
 
@@ -98,6 +104,8 @@ const serverA = boot(PORT_A, {
   FAUCET_POW_BITS: "8",
   FAUCET_POW_ESCALATE_BITS: "0",
   FAUCET_MOCK_BALANCE_TAZ: "10",
+  FAUCET_DONATION_ADDRESS: DONATION_UA,
+  FAUCET_MINING_ADDRESS: MINING_TADDR,
 });
 const serverB = boot(PORT_B, {
   FAUCET_SENDER: "mock",
@@ -148,6 +156,31 @@ try {
   const genClaim = await claim(BASE_A, uaAddr, await solvedChallenge(BASE_A));
   ok("A generated UA is accepted by the claim endpoint", genClaim.status === 200 && genClaim.body.ok === true, `status ${genClaim.status} ${JSON.stringify(genClaim.body.error ?? "")}`);
 
+  /* ── donate page wiring (#55) ────────────────────────────────────────── */
+  // The page renders entirely from /api/status, so pinning these fields is
+  // what stops the donate page silently going blank on a status change.
+  ok("A status carries the donation address byte for byte", s.donationAddress === DONATION_UA, `len ${s.donationAddress?.length}`);
+  ok("A status carries the mining address byte for byte", s.miningAddress === MINING_TADDR, `len ${s.miningAddress?.length}`);
+
+  const donatePage = await fetch(BASE_A + "/donate");
+  const donateHtml = await donatePage.text();
+  ok("A GET /donate is 200", donatePage.status === 200, `status ${donatePage.status}`);
+  ok("A /donate is the donate page, not a 404 shell", /Keep the tank full/.test(donateHtml));
+  ok("A /donate says plainly that mining income is zero", /rounds to zero|orphaned/i.test(donateHtml));
+
+  // The assertion that actually protects donations: the address a human SEES
+  // must be the env value character for character.
+  //
+  // Checking the raw HTML is not enough and I proved it: with the visible span
+  // deliberately truncated, `html.includes(address)` still passed, because
+  // React serializes the untruncated value into the client component's props.
+  // So strip everything a reader cannot see first, then assert.
+  const visible = donateHtml.replace(/<script[\s\S]*?<\/script>/g, "");
+  ok(`A /donate SHOWS the ${DONATION_UA.length}-char donation address exactly`, visible.includes(DONATION_UA));
+  ok(`A /donate SHOWS the ${MINING_TADDR.length}-char mining address exactly`, visible.includes(MINING_TADDR));
+  ok("A /donate shows no truncated form of either address", !visible.includes("\u2026"));
+  ok("A main page links to /donate", /href="\/donate"/.test(await (await fetch(BASE_A + "/")).text()));
+
   /* ── A: faucet happy path, then every rejection ──────────────────────── */
   const sent = await claim(BASE_A, tmAddr, await solvedChallenge(BASE_A));
   ok("A claim with pow to generated address is 200 + txid", sent.status === 200 && sent.body.ok === true && typeof sent.body.txid === "string" && sent.body.txid.length >= 32, `status ${sent.status} ${JSON.stringify(sent.body.error ?? "")}`);
@@ -182,6 +215,15 @@ try {
 
   const readyB = await get(BASE_B, "/api/ready");
   ok("B GET /api/ready is 503 with a reason", readyB.status === 503 && readyB.body.ready === false && typeof readyB.body.reason === "string", JSON.stringify(readyB.body.reason ?? null));
+
+  // Unset donation address: the page must still render and say so, rather
+  // than showing an empty box or 500ing.
+  const statusBBody = statusB.body;
+  ok("B status reports no donation address", !statusBBody.donationAddress, JSON.stringify(statusBBody.donationAddress));
+  const donateB = await fetch(BASE_B + "/donate");
+  const donateBHtml = await donateB.text();
+  ok("B GET /donate still renders without a configured address", donateB.status === 200, `status ${donateB.status}`);
+  ok("B /donate says there is nothing to send to", /No address configured|not published a donation address/i.test(donateBHtml));
 
   const emptyClaim = await claim(BASE_B, UNIFIED_A, null);
   ok("B claim on empty wallet is 503 with the empty message", emptyClaim.status === 503 && /empty/i.test(emptyClaim.body.error ?? ""), `status ${emptyClaim.status}`);

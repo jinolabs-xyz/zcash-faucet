@@ -94,8 +94,14 @@ export const config = {
   // tip cutover: mining against a still-syncing node would fork us off-chain.
   miner: { active: process.env.FAUCET_MINER_ACTIVE === "true" },
 
-  // Public address shown on the Donate tab so people can refill the faucet.
+  // Public address shown on /donate so people can refill the faucet. Unified,
+  // so donations arrive shielded.
   donationAddress: process.env.FAUCET_DONATION_ADDRESS ?? "",
+  // Transparent address the miner pays its coinbase to. Shown on /donate for
+  // anyone who wants to point spare hashrate at us. Optional: unset just hides
+  // that block, and it is a different address from the donation UA because a
+  // coinbase cannot pay a shielded output directly.
+  miningAddress: process.env.FAUCET_MINING_ADDRESS ?? "",
 
   // Ledger backend. "sqlite" = local file (dev / single box). "d1" = Cloudflare
   // D1 via the proxy Worker (survives Render's ephemeral disk). See worker/.
