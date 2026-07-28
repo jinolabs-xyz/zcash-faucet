@@ -58,25 +58,32 @@ SELECTED="${SUITES:-zsnap backup deploy metrics redeploy drift alerts access}"
 # suspect. Commands assumed present: coreutils, tar, flock, sed, awk.
 suite_deps() { # $1 suite name -> commands it needs beyond the base set
   case "$1" in
-    zsnap)    echo "zstd python3 curl" ;;
+    # Only suites that reach the REAL command are listed. Declaring one a suite
+    # stubs is not harmless: it refuses to run a suite that would have passed,
+    # withholding green tests while printing no numbers, which is the same
+    # dishonesty as a phantom failure pointing the other way.
+    #
+    # curl is the trap. stubs/curl is first on PATH under fresh_env and
+    # redeploy symlinks stubs/redeploy-curl over it, so most suites never touch
+    # the real one. Only metrics and alerts deliberately step past the stub.
+    zsnap)    echo "zstd python3" ;;   # stubs/curl fakes the readiness gate
     backup)   echo "gpg zstd python3" ;;
-    redeploy) echo "curl" ;;
-    # Both stand up a real python http server and talk to it with the real
-    # curl, past the stub. Derived by running each suite alone with nothing
-    # installed and adding deps until it went green, not by reading the code:
-    # deploy 8/26 with curl alone, 34/0 with curl and python3.
-    deploy)   echo "curl python3" ;;
-    metrics)  echo "curl python3" ;;
+    redeploy) echo "" ;;               # stubs/redeploy-curl stands in for curl
+    deploy)   echo "python3" ;;        # readiness is a stub script, lib.sh:60
+    metrics)  echo "curl python3" ;;   # metrics.sh:16 builds a bin dir with
+                                       # ONLY docker, so it gets the real curl
     # audit-access.sh asks sshd what it enforces. Without sshd the audit is
     # right to report NOT VERIFIED, but the suite asserts the resolved path.
     access)   echo "sshd" ;;
-    # curl because alert.sh POSTs with it, and the suites assert on a webhook
-    # actually receiving the body. drift inherits it through the wording tests,
-    # which drive the real alert.sh rather than a stub.
+    alerts)   echo "python3 curl" ;;   # POSTs to a real local server
+    # drift does NOT need curl, though I first thought it inherited the need.
+    # report_env points DRIFT_ALERT_SH at its own stub, and the one test that
+    # runs the shipped alert.sh runs it unconfigured, where send() returns 3
+    # before reaching curl. Stubbed everywhere, early-exit in the one real case.
     #
     # jq is NOT listed: alert.sh encodes with jq OR python3, either one, and the
     # suites exercise the refusal path when neither exists.
-    drift|alerts) echo "python3 curl" ;;
+    drift)    echo "python3" ;;
     *)        echo "" ;;
   esac
 }
