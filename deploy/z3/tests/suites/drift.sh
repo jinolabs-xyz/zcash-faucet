@@ -80,6 +80,32 @@ drift_env; make_clean_box; rm -f "$T/install/thing.sh"
 bash "$AUDIT" > "$T/noscript.log" 2>&1
 check "a missing referenced script is drift" "[ $? -eq 1 ] && grep -q 'missing from' '$T/noscript.log'"
 
+echo "== drift: an installed script must match even if no unit names it (SDE-CI)"
+# The freshness check keyed off "does a .service reference this path", so any
+# overlay script a unit runs INDIRECTLY was never compared. drift-report.sh
+# invokes audit-access.sh and audit-drift.sh, so a hand-edited copy of the
+# auditors themselves was invisible to the auditor. Verified by sabotage before
+# the fix: this box reported "no drift" and exited 0.
+drift_env; make_clean_box
+printf '#!/usr/bin/env bash\necho helper\n' > "$T/repo/deploy/z3/helper.sh"
+cp "$T/repo/deploy/z3/helper.sh" "$T/install/"
+bash "$AUDIT" > "$T/unref-clean.log" 2>&1
+check "an unreferenced script that matches is still clean" "[ $? -eq 0 ]"
+
+echo "# hand edit on the box" >> "$T/install/helper.sh"
+bash "$AUDIT" > "$T/unref-stale.log" 2>&1
+check "a stale unreferenced script IS drift" "[ $? -eq 1 ]"
+check "and says the box runs unreviewed code" \
+  "grep -q 'helper.sh in .* differs from the repo' '$T/unref-stale.log'"
+
+# The other half of the rule: never deployed is not drift, or every box would
+# be permanently dirty for shipping scripts it does not install.
+drift_env; make_clean_box
+printf '#!/usr/bin/env bash\necho helper\n' > "$T/repo/deploy/z3/helper.sh"
+bash "$AUDIT" > "$T/unref-absent.log" 2>&1
+check "an unreferenced script that was never installed is NOT drift" "[ $? -eq 0 ]"
+check "and is not mentioned as missing" "! grep -q 'helper.sh is referenced' '$T/unref-absent.log'"
+
 echo "== drift: env files report presence only, never values"
 drift_env; make_clean_box
 printf 'BACKUP_PASSPHRASE=hunter2-should-never-appear\n' > "$T/env/backup.env"
