@@ -34,10 +34,11 @@ export function BrandMark() {
     <svg
       aria-hidden="true"
       focusable="false"
+      className="brand-mark"
       width={`${CAP_MATCHED_EM}em`}
       height={`${CAP_MATCHED_EM}em`}
       viewBox="0 0 64 64"
-      style={{ flex: "none", display: "block", position: "relative", top: `${CAP_NUDGE_EM}em` }}
+      style={{ flex: "none", position: "relative", top: `${CAP_NUDGE_EM}em` }}
     >
       <path d="M11,14 H53 V23 L29,41 H53 V50 H11 V41 L35,23 H11 Z" fill="currentColor" />
       <rect x="0" y="56" width="64" height="8" fill="var(--color-accent)" />
