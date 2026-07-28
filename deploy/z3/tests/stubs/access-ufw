@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Stub ufw. $STUB_UFW_STATUS holds the text `ufw status` should print.
+set -uo pipefail
+[ "${1:-}" = "status" ] && cat "${STUB_UFW_STATUS:-/dev/null}"

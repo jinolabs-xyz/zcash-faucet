@@ -151,6 +151,68 @@ Return to main with `git checkout main` and redeploy when fixed. Rolling back
 code never touches the volumes, so funds and the rate-limit ledger are safe,
 either way.
 
+## Box access: what is exposed, and the ssh resets
+
+```bash
+/opt/faucet/audit-access.sh            # what is reachable, and how sshd throttles
+/opt/faucet/audit-access.sh --verbose  # also list what matched
+```
+
+Read-only, applies nothing. Exit `0` clean, `1` findings, `2` the audit was
+incomplete (so it never reports clean on checks it could not run).
+
+### The intended exposure
+
+Public: **22, 80, 443**. Nothing else. The node and wallet RPC are reachable
+only on the docker network, and the app's own port is `expose`-only. Anything
+else on a wildcard address is a finding, with `18232` (Zebra RPC) and `28232`
+(Zallet RPC) the ones that would matter most.
+
+Applying firewall changes, **with a second session already open** so a mistake
+is recoverable:
+
+```bash
+ufw allow OpenSSH && ufw allow 80/tcp && ufw allow 443/tcp
+ufw --force enable
+ufw status                              # confirm before closing that session
+```
+
+### Why ssh connections keep resetting
+
+`kex_exchange_identification: Connection closed by remote host` under
+connection churn is sshd dropping *unauthenticated* connections, not a network
+fault. Two causes, and the audit checks both:
+
+**`ufw limit` on ssh.** That is 6 connections per 30 seconds per source. Ops
+loops that open several sessions in parallel exceed it instantly. `ufw allow
+OpenSSH` replaces the LIMIT rule.
+
+**`MaxStartups`.** The default is `10:30:100`: random early drop begins at 10
+concurrent unauthenticated connections and rises to certain at 100. A script
+opening a handful of parallel `ssh` calls, each spending a moment in key
+exchange, reaches 10 easily.
+
+The conservative change is to raise the *start* of the drop curve and leave the
+ceiling alone:
+
+```
+MaxStartups 30:30:100
+```
+
+```bash
+sshd -t                    # validate the config BEFORE reloading
+systemctl reload ssh       # reload, never restart: reload keeps live sessions
+```
+
+**Keep a session open while doing this, and verify a new connection succeeds
+before closing it.** This box has one door. `reload` rather than `restart`
+because a restart drops existing sessions, so a bad config plus a restart is a
+box you cannot reach.
+
+If resets continue after both, the next suspects are `fail2ban` banning the
+operator IP and per-source rate limiting upstream of the box, neither of which
+this audit can see.
+
 ## Config drift
 
 The repo is supposed to describe the box. In practice a box accumulates hand
