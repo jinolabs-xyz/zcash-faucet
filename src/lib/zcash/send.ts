@@ -54,7 +54,6 @@ export interface Sender {
   send(req: SendRequest): Promise<SendResult>;
 }
 
-import { explorerTxUrl } from "./explorer.ts";
 import { createRequire } from "node:module";
 import { ZalletSender } from "./zalletsend.ts";
 

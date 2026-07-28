@@ -32,7 +32,6 @@ export function getRefiller(): Refiller {
   if (cached) return cached;
   const kind = selectRefillerKind({ minerActive: config.miner.active, sender: config.sender });
   if (kind === "zallet") {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     cached = new (require("./zalletRefiller").ZalletRefiller)() as Refiller;
   } else {
     cached = new NoopRefiller();

@@ -14,6 +14,7 @@
  * you open it.
  */
 import type { CSSProperties } from "react";
+import Link from "next/link";
 import { config, ZATOSHI_PER_TAZ } from "@/lib/config";
 import { safeBalance } from "@/lib/zcash/send";
 import { CopyAddress } from "./CopyAddress";
@@ -61,7 +62,7 @@ export default async function Donate() {
         <div className="nav-brand" style={{ fontSize: "clamp(15px,4vw,18px)", letterSpacing: "-.01em", marginRight: "auto" }}>
           Zcash Testnet Faucet
         </div>
-        <a className="btn btn-secondary btn-sm" href="/">Back to the faucet</a>
+        <Link className="btn btn-secondary btn-sm" href="/">Back to the faucet</Link>
       </header>
 
       <main style={{ flex: 1, width: "100%", maxWidth: 620, margin: "0 auto", padding: `clamp(22px,5vw,46px) ${pad} 60px`, display: "flex", flexDirection: "column", gap: 20 }}>
@@ -147,7 +148,7 @@ export default async function Donate() {
 
       <div style={{ position: "sticky", bottom: 0, borderTop: "2px solid var(--color-divider)", background: "var(--color-surface)", padding: `10px ${pad}`, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
         <span style={{ fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".05em", color: muted(50) }}>{config.network}</span>
-        <a className="btn btn-ghost btn-sm" href="/" style={{ marginLeft: "auto", padding: 0 }}>Get TAZ →</a>
+        <Link className="btn btn-ghost btn-sm" href="/" style={{ marginLeft: "auto", padding: 0 }}>Get TAZ →</Link>
       </div>
     </div>
   );

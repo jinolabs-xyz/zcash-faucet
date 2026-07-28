@@ -25,7 +25,6 @@ interface Tx { txid: string; to: string; priv: boolean; explorerUrl?: string; at
 interface PowSolution { seed: string; difficulty: number; exp: number; sig: string; nonce: string }
 
 /* ── Helpers ───────────────────────────────────────────────────────────── */
-const B32 = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"; // bech32 charset, for prefix detection
 
 function detect(raw: string) {
   const a = (raw || "").trim();
