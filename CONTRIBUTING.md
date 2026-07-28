@@ -127,6 +127,14 @@ Every correction came from the same few habits, so the habits are rules.
 12. Correct it before the reviewer finds it. A `--force-with-lease` and a
     message naming the old and new SHA costs a minute. Being caught later
     costs the reviewer's trust in everything else in the branch.
+13. When your measurement disagrees with the author's claim, suspect your
+    instrument first. Three near-miss findings in one night were all the
+    harness: a contrast probe read its reference colour from `body`, which is
+    transparent because the theme paints a wrapper, and reported 2.03:1 where
+    the author said 7.96; an `lsof -ti :PORT` kill took down the client
+    connection alongside the listener, so an outage test looked like a crash;
+    a stale `.next` from another branch's build failed a typecheck. Reproduce
+    the author's number their way before writing the word FAIL.
 
 Money paths (send, ledger, reservation, PoW verify) never skip review, no
 matter how urgent the window. Docs and pure test additions may fast-track
