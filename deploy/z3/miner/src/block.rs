@@ -7,7 +7,7 @@
 
 use sha2::{Digest, Sha256};
 
-use crate::template::{DefaultRoots, Template, TransactionTemplate};
+use crate::template::Template;
 
 /// Bytes of a Zcash block header before the nonce: version, previous block
 /// hash, merkle root, block commitments, time, bits.
@@ -225,6 +225,7 @@ pub fn expand_target(bits_display_hex: &str) -> Result<[u8; 32], String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::template::{DefaultRoots, TransactionTemplate};
 
     /// A template whose every header field carries a distinct marker, so a swap
     /// between two same-length fields is visible in the bytes.
@@ -260,16 +261,16 @@ mod tests {
     #[test]
     fn header_bytes_are_laid_out_in_protocol_order() {
         let header = Header::from_template(&marked_template()).unwrap();
-        let zeros31 = "00".repeat(31);
-        let expected = format!(
-            "{version}{prev}{merkle}{commitments}{time}{bits}{nonce}",
-            version = "04000000",              // u32 little-endian
-            prev = format!("a1{zeros31}"),     // display hex reversed to wire order
-            merkle = format!("a2{zeros31}"),
-            commitments = format!("a3{zeros31}"),
-            time = "44332211",                 // u32 little-endian
-            bits = "c0932f1f",                 // compact bits, little-endian
-            nonce = "00".repeat(32),           // unsolved
+        // Written out flat on purpose. A known-answer test should have as little
+        // machinery as possible between the spec and the assertion.
+        let expected = concat!(
+            "04000000",                                                       // version, u32 LE
+            "a1", "00000000000000000000000000000000000000000000000000000000000000",   // prev hash, display hex reversed to wire order
+            "a2", "00000000000000000000000000000000000000000000000000000000000000",   // merkle root, reversed
+            "a3", "00000000000000000000000000000000000000000000000000000000000000",   // block commitments, reversed
+            "44332211",                                                       // curtime, u32 LE
+            "c0932f1f",                                                       // bits, LE
+            "0000000000000000000000000000000000000000000000000000000000000000",   // nonce, unsolved
         );
         assert_eq!(hex::encode(header.equihash_input()), expected);
 
