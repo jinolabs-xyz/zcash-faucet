@@ -173,6 +173,20 @@ Every correction came from the same few habits, so the habits are rules.
     that writes a claim needs a fresh address per run. Run a suite twice before
     you believe it once.
 
+15. Assert against the shipped code path, never a copy of its logic. Rule 4
+    cannot catch this class: sabotaging the code changes nothing when the test
+    never runs it. My snapshot suite reported 351/351 while every
+    pointer-driven restore silently rebuilt from a day-old archive. The test
+    reimplemented the parse loop, and the copy happened to omit the single
+    guard line that caused the failure, so it certified a paraphrase. The
+    fixture was right, the format matched production exactly, and none of that
+    mattered because the shipped parser never ran. If asserting against the
+    real path needs a server, a socket or a subprocess, stand one up: the
+    pointer path is now a real HTTP server and real archives with the script
+    invoked, and every assertion reads the script's own output. When a test
+    contains a second implementation of the thing it checks, it has stopped
+    being a test.
+
 Money paths (send, ledger, reservation, PoW verify) never skip review, no
 matter how urgent the window. Docs and pure test additions may fast-track
 at the CTO's discretion.

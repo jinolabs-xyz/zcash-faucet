@@ -19,10 +19,30 @@ checked out at `/opt/zcash-faucet`.
 | chain snapshot export | systemd `zsnap-export.timer` | `/opt/faucet/zsnap-export.sh` | [deploy/z3/SNAPSHOTS.md](deploy/z3/SNAPSHOTS.md) |
 | encrypted backups | systemd `faucet-backup.timer` | `/opt/faucet/backup.sh` | [deploy/z3/BACKUPS.md](deploy/z3/BACKUPS.md) |
 | metrics textfile | systemd `faucet-metrics.timer` | `/opt/faucet/faucet-metrics.sh` | [deploy/z3/OBSERVABILITY.md](deploy/z3/OBSERVABILITY.md) |
+| alerting | `faucet-alert@.service`, wired as `OnFailure=` on every unit above | `/opt/faucet/alert.sh` | [deploy/z3/OBSERVABILITY.md](deploy/z3/OBSERVABILITY.md) |
 
 Only caddy is public. Zebra and zallet RPC stay on the private docker
 network. Everything docker is `restart: unless-stopped`, so a reboot brings
 the containers back without help.
+
+Any unit above failing posts to the alert webhook with its last journal lines,
+so a timer cannot fail silently. That is what `OnFailure` buys.
+
+### Tools you run by hand
+
+Nothing schedules these. All are read-only except `redeploy.sh` and
+`restore-backup.sh`.
+
+| Tool | Answers | Deep doc |
+|---|---|---|
+| `redeploy.sh` | ship a build, health-gated, auto-rollback | [REDEPLOY.md](deploy/z3/REDEPLOY.md) |
+| `redeploy.sh rollback` / `status` | go back; what is running | [REDEPLOY.md](deploy/z3/REDEPLOY.md) |
+| `audit-drift.sh` | what is on the box that the repo does not describe | [drift section](#config-drift) |
+| `audit-access.sh` | what is exposed, and how sshd throttles | [box access](#box-access-what-is-exposed-and-the-ssh-resets) |
+| `zsnap-export.sh preflight` | can the export binary read this chain state | [SNAPSHOTS.md](deploy/z3/SNAPSHOTS.md) |
+| `zsnap-publish.sh` | put a snapshot where a replacement box can fetch it | [SNAPSHOTS.md](deploy/z3/SNAPSHOTS.md) |
+| `restore-backup.sh` | put the wallet and ledger back | [BACKUPS.md](deploy/z3/BACKUPS.md) |
+| `alert.sh --self-test` | does paging actually work | [OBSERVABILITY.md](deploy/z3/OBSERVABILITY.md) |
 
 ## Start, stop, status
 
@@ -150,6 +170,127 @@ FAUCET_DOMAIN=$(cat /etc/faucet-domain) \
 Return to main with `git checkout main` and redeploy when fixed. Rolling back
 code never touches the volumes, so funds and the rate-limit ledger are safe,
 either way.
+
+## Box access: what is exposed, and the ssh resets
+
+```bash
+/opt/faucet/audit-access.sh            # what is reachable, and how sshd throttles
+/opt/faucet/audit-access.sh --verbose  # also list what matched
+```
+
+Read-only, applies nothing. Exit `0` clean, `1` findings, `2` the audit was
+incomplete (so it never reports clean on checks it could not run).
+
+### The intended exposure
+
+Public: **22, 80, 443**. Nothing else. The node and wallet RPC are reachable
+only on the docker network, and the app's own port is `expose`-only. Anything
+else on a wildcard address is a finding, with `18232` (Zebra RPC) and `28232`
+(Zallet RPC) the ones that would matter most.
+
+Applying firewall changes, **with a second session already open** so a mistake
+is recoverable:
+
+```bash
+ufw allow OpenSSH && ufw allow 80/tcp && ufw allow 443/tcp
+ufw --force enable
+ufw status                              # confirm before closing that session
+```
+
+### Why ssh connections keep resetting
+
+`kex_exchange_identification: Connection closed by remote host` under
+connection churn is sshd or the firewall dropping *unauthenticated*
+connections. It is not a network fault. Work through these in order, cheapest
+and least invasive first.
+
+**1. Fix it on your own machine, not the box.** Parallel ops calls each open a
+new TCP connection, and connection multiplexing makes them share one:
+
+```
+# ~/.ssh/config
+Host 172.235.26.235 faucet.*
+    ControlMaster auto
+    ControlPath ~/.ssh/cm-%r@%h:%p
+    ControlPersist 10m
+```
+
+Neither the ufw limit nor `MaxStartups` is approached, because there is one
+connection instead of ten. **This changes nothing on the box, needs no
+sign-off, and is reversible by deleting three lines.** Try it before anything
+below. (Finding credited to SDE-App, who proposed it over the server-side
+change.)
+
+Proven on this box: six parallel connections, zero resets, nothing altered
+server-side.
+
+One gotcha from that run. The **first** parallel burst can still fail, because
+several clients race to become the master before the control socket exists. Warm
+it once, then fan out:
+
+```bash
+ssh -o ControlMaster=yes -o ControlPersist=10m -fN root@<box>   # open the master
+ssh -O check root@<box>                                        # confirm it is up
+# now run the parallel work
+```
+
+A wrapper that opens the master before any loop is worth more than retry logic
+in every script.
+
+**2. `ufw limit` on ssh, if the audit reports LIMIT.** That is a hardcoded 6
+connections per 30 seconds per source, with no gentler setting to tune, so the
+only ufw answer is `allow`. Be explicit about what that costs:
+
+```bash
+ufw allow OpenSSH      # fixes the drops AND removes brute-force rate limiting
+```
+
+Only do that with the compensating controls in place, all three:
+keys-only authentication (`PasswordAuthentication no`), `fail2ban` installed and
+banning on ssh, and the audit confirming nothing else is publicly bound. A
+public ssh port with neither rate limiting nor fail2ban is worse than the
+resets.
+
+**3. `MaxStartups`, only if 1 and 2 did not settle it.** The default
+`10:30:100` starts random early drop at 10 concurrent unauthenticated
+connections. `30:30:100` raises the start of the curve and leaves the ceiling,
+so it cannot lock anyone out by being too strict.
+
+**Find out where it actually comes from first.** On Ubuntu 24.04 the first
+directive in `sshd_config` is `Include /etc/ssh/sshd_config.d/*.conf`, and sshd
+takes the **first** value it obtains, so a drop-in beats the main file:
+
+```bash
+sshd -T | grep -i maxstartups        # what sshd will really enforce
+grep -rn MaxStartups /etc/ssh/sshd_config /etc/ssh/sshd_config.d/   # where it is set
+```
+
+Editing the main file when a drop-in sets it does nothing: `sshd -t` passes,
+the reload succeeds, and the resets continue. That is the dangerous path,
+because it looks like the small safe change was tried and failed, and invites a
+bigger change on the only door.
+
+Then:
+
+```bash
+sshd -t                    # validate BEFORE reloading
+systemctl reload ssh       # reload, never restart: reload keeps live sessions
+```
+
+**Keep a second session open and confirm a fresh connection works before
+closing it.** This box has one door.
+
+**Socket activation caveat, unverified.** Ubuntu 24.04 enables `ssh.socket` by
+default, and under socket activation systemd owns the listening socket, which
+is why `Port` and `ListenAddress` changes there are famously ignored.
+`MaxStartups` should still apply because sshd accepts connections itself, but
+we have not confirmed that a `reload` picks the change up on this box. The
+audit reports whether `ssh.socket` is enabled. **Confirm on the box and record
+the answer here**, rather than trusting this paragraph.
+
+If resets continue after all three, the remaining suspects are `fail2ban`
+banning the operator IP and per-source rate limiting upstream of the box.
+Neither is visible to this audit.
 
 ## Config drift
 

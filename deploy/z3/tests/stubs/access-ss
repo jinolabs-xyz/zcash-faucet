@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Stub ss. $STUB_LISTEN holds lines of "addr:port" as `ss -Hltn` column 4.
+set -uo pipefail
+awk '{print "LISTEN 0 0", $0, "*:*"}' "${STUB_LISTEN:-/dev/null}"

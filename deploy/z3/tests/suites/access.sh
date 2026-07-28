@@ -1,0 +1,133 @@
+# shellcheck shell=bash
+# audit-access.sh: what this box exposes, and how sshd throttles. Read-only.
+# ss, ufw and the sshd config are all injected, so no privileges are needed.
+
+AUDIT_A="$REPO/deploy/z3/audit-access.sh"
+
+access_env() {
+  T="$(mktemp -d "${TMPDIR:-/tmp}/access-test.XXXXXX")"
+  export STUB_LISTEN="$T/listen" STUB_UFW_STATUS="$T/ufw"
+  export ACCESS_SS="$SCRATCH/stubs/access-ss" ACCESS_UFW="$SCRATCH/stubs/access-ufw"
+  export ACCESS_SSHD_CONFIG="$T/sshd_config"
+  export ACCESS_SSHD="$SCRATCH/stubs/access-sshd" STUB_SSHD_T="$T/sshd_effective"
+  : > "$T/sshd_effective"
+  : > "$STUB_LISTEN"; : > "$STUB_UFW_STATUS"; : > "$ACCESS_SSHD_CONFIG"
+  export PATH="$BASE_PATH"
+}
+ufw_active() { printf 'Status: active\n\nTo                         Action      From\n--                         ------      ----\n22/tcp                     ALLOW       Anywhere\n80/tcp                     ALLOW       Anywhere\n443/tcp                    ALLOW       Anywhere\n' > "$STUB_UFW_STATUS"; }
+
+echo "== access: a box matching the intended exposure reports nothing"
+access_env
+printf '0.0.0.0:22\n0.0.0.0:80\n0.0.0.0:443\n127.0.0.1:3000\n127.0.0.1:18232\n' > "$STUB_LISTEN"
+ufw_active
+echo 'MaxStartups 30:30:100' > "$ACCESS_SSHD_CONFIG"
+bash "$AUDIT_A" > "$T/clean.log" 2>&1
+check "exits 0" "[ $? -eq 0 ]"
+check "says no findings" "grep -q 'no findings' '$T/clean.log'"
+check "loopback-only ports are not flagged" "! grep -q '3000' '$T/clean.log'"
+check "the node RPC on loopback is not flagged" "! grep -q '18232' '$T/clean.log'"
+
+echo "== access: a publicly bound RPC port is the finding that matters"
+access_env
+printf '0.0.0.0:22\n0.0.0.0:80\n0.0.0.0:443\n0.0.0.0:18232\n' > "$STUB_LISTEN"
+ufw_active; echo 'MaxStartups 30:30:100' > "$ACCESS_SSHD_CONFIG"
+bash "$AUDIT_A" > "$T/rpc.log" 2>&1
+check "exits 1" "[ $? -eq 1 ]"
+check "names the exposed port" "grep -q 'port 18232 is bound on 0.0.0.0' '$T/rpc.log'"
+check "offers a fix" "grep -q 'ufw deny 18232/tcp' '$T/rpc.log'"
+
+echo "== access: ufw installed but inactive means nothing is filtered"
+access_env
+printf '0.0.0.0:22\n' > "$STUB_LISTEN"
+printf 'Status: inactive\n' > "$STUB_UFW_STATUS"
+echo 'MaxStartups 30:30:100' > "$ACCESS_SSHD_CONFIG"
+bash "$AUDIT_A" > "$T/inactive.log" 2>&1
+check "exits 1" "[ $? -eq 1 ]"
+check "says nothing is filtered" "grep -q 'NOT active, so nothing is filtered' '$T/inactive.log'"
+check "the fix keeps a session open" "grep -q 'keep a session open' '$T/inactive.log'"
+
+echo "== access: ufw LIMIT on ssh is named as a cause of kex resets"
+access_env
+printf '0.0.0.0:22\n0.0.0.0:80\n0.0.0.0:443\n' > "$STUB_LISTEN"
+printf 'Status: active\n\n22/tcp                     LIMIT       Anywhere\n80/tcp                     ALLOW       Anywhere\n443/tcp                    ALLOW       Anywhere\n' > "$STUB_UFW_STATUS"
+echo 'MaxStartups 30:30:100' > "$ACCESS_SSHD_CONFIG"
+bash "$AUDIT_A" > "$T/limit.log" 2>&1
+check "exits 1" "[ $? -eq 1 ]"
+check "connects LIMIT to the reset symptom" "grep -q 'kex_exchange_identification' '$T/limit.log'"
+check "the fix replaces LIMIT with allow" "grep -q 'ufw allow OpenSSH' '$T/limit.log'"
+
+echo "== access: an intended port with no rule is a finding"
+access_env
+printf '0.0.0.0:22\n0.0.0.0:80\n0.0.0.0:443\n' > "$STUB_LISTEN"
+printf 'Status: active\n\n22/tcp                     ALLOW       Anywhere\n80/tcp                     ALLOW       Anywhere\n' > "$STUB_UFW_STATUS"
+echo 'MaxStartups 30:30:100' > "$ACCESS_SSHD_CONFIG"
+bash "$AUDIT_A" > "$T/missing.log" 2>&1
+check "443 with no rule is reported" "grep -q 'port 443 is intended to be public but has no ufw rule' '$T/missing.log'"
+
+echo "== access: an unset MaxStartups is reported with the real default"
+access_env
+printf '0.0.0.0:22\n0.0.0.0:80\n0.0.0.0:443\n' > "$STUB_LISTEN"
+ufw_active
+: > "$ACCESS_SSHD_CONFIG"
+bash "$AUDIT_A" > "$T/startups.log" 2>&1
+check "exits 1" "[ $? -eq 1 ]"
+check "names the 10:30:100 default" "grep -q '10:30:100' '$T/startups.log'"
+check "explains parallel ops connections reach it" "grep -q 'parallel ops scripts reach easily' '$T/startups.log'"
+check "the fix reloads rather than restarts" "grep -q 'systemctl reload ssh' '$T/startups.log'"
+
+echo "== access: what cannot be checked is NOT VERIFIED, never a pass"
+access_env
+export ACCESS_SS="$T/no-such-ss" ACCESS_UFW="$T/no-such-ufw"
+export ACCESS_SSHD_CONFIG="$T/no-such-config"
+bash "$AUDIT_A" > "$T/unver.log" 2>&1
+check "exits 2, not 0" "[ $? -eq 2 ]"
+check "prints NOT VERIFIED" "grep -q 'NOT VERIFIED' '$T/unver.log'"
+check "names all three skipped checks" "[ \"\$(grep -c '^  - ' '$T/unver.log')\" = '3' ]"
+check "never claims exposure matches intent" "! grep -q 'no findings: exposure matches intent' '$T/unver.log'"
+
+echo "== access: it is read-only, it applies nothing"
+access_env
+printf '0.0.0.0:18232\n' > "$STUB_LISTEN"; ufw_active
+# shellcheck disable=SC2034
+before="$(cat "$STUB_UFW_STATUS")"
+bash "$AUDIT_A" > /dev/null 2>&1
+check "the firewall state was not touched" "[ \"\$before\" = \"\$(cat '$STUB_UFW_STATUS')\" ]"
+# The fix strings mention ufw allow, which is correct. What must never appear
+# is a mutating verb actually invoked on the ufw binary.
+check "ufw is never invoked with a mutating verb" "! grep -qE '\"[$]ACCESS_UFW\"[[:space:]]+(allow|deny|enable|disable|reset|limit)' '$AUDIT_A'"
+
+echo "== access: the effective config wins over the main file (SDE-App's HIGH)"
+# On 24.04 sshd_config's first directive is Include sshd_config.d/*.conf and the
+# FIRST value wins, so grepping the main file can report unset when a drop-in
+# has set it, and would send an edit to a file that has no effect.
+access_env
+printf '0.0.0.0:22\n0.0.0.0:80\n0.0.0.0:443\n' > "$STUB_LISTEN"; ufw_active
+printf 'Include /etc/ssh/sshd_config.d/*.conf\n' > "$ACCESS_SSHD_CONFIG"   # main file: no MaxStartups
+printf 'maxstartups 30:30:100\nmaxsessions 10\nlogingracetime 120\n' > "$STUB_SSHD_T"
+bash "$AUDIT_A" > "$T/eff.log" 2>&1
+check "exits 0: the drop-in value is found" "[ $? -eq 0 ]"
+check "says the number came from sshd -T" "grep -q 'source: effective config from' '$T/eff.log'"
+check "reports the drop-in value, not unset" "grep -q 'MaxStartups=30:30:100' '$T/eff.log'"
+check "does NOT claim MaxStartups is unset" "! grep -q 'MaxStartups is unset' '$T/eff.log'"
+
+echo "== access: without sshd -T it says the value may be overridden"
+access_env
+printf '0.0.0.0:22\n0.0.0.0:80\n0.0.0.0:443\n' > "$STUB_LISTEN"; ufw_active
+printf 'Include /etc/ssh/sshd_config.d/*.conf\nMaxStartups 10:30:100\n' > "$ACCESS_SSHD_CONFIG"
+: > "$STUB_SSHD_T"        # sshd -T unavailable, forcing the fallback
+bash "$AUDIT_A" > "$T/fallback.log" 2>&1
+rc_fb=$?
+check "labels the weaker source" "grep -q 'Include directives NOT resolved' '$T/fallback.log'"
+check "warns an edit there may have no effect" "grep -q 'may have no effect' '$T/fallback.log'"
+check "exits 2, because the answer is not trustworthy" "[ $rc_fb -eq 2 ]"
+
+echo "== access: the ufw fix states what it costs"
+access_env
+printf '0.0.0.0:22\n0.0.0.0:80\n0.0.0.0:443\n' > "$STUB_LISTEN"
+printf 'Status: active\n\n22/tcp                     LIMIT       Anywhere\n80/tcp                     ALLOW       Anywhere\n443/tcp                    ALLOW       Anywhere\n' > "$STUB_UFW_STATUS"
+printf 'maxstartups 30:30:100\n' > "$STUB_SSHD_T"
+bash "$AUDIT_A" > "$T/trade.log" 2>&1
+check "names the hardcoded 6-per-30s limit" "grep -q '6 connections per 30s per source' '$T/trade.log'"
+check "recommends the client-side fix first" "grep -q 'prefer client-side multiplexing' '$T/trade.log'"
+check "says allow REMOVES brute-force limiting" "grep -q 'REMOVES brute-force limiting' '$T/trade.log'"
+check "names the compensating controls" "grep -q 'keys-only auth and fail2ban' '$T/trade.log'"
