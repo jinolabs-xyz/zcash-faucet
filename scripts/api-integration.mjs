@@ -131,6 +131,14 @@ const serverA = boot(PORT_A, {
 const serverB = boot(PORT_B, {
   ...zallet(WALLET_B),
   FAUCET_CHALLENGE: "none",
+  // Pinned low so the /api/tx limiter is reachable in a test. The shipped
+  // default is 60/min, which exists to NOT limit our own receipt poll.
+  TX_LOOKUP_RATE_WINDOW_SECONDS: "60",
+  TX_LOOKUP_RATE_MAX: "3",
+  // The limiter keys on the client IP, and clientIp() only trusts XFF when we
+  // say a proxy is in front. deploy/z3 runs Caddy and sets this to 1, so the
+  // test mirrors production rather than the default no-proxy case.
+  TRUSTED_PROXY_COUNT: "1",
 });
 
 try {
@@ -244,6 +252,24 @@ try {
   const donateBHtml = await donateB.text();
   ok("B GET /donate still renders without a configured address", donateB.status === 200, `status ${donateB.status}`);
   ok("B /donate says there is nothing to send to", /No address configured|not published a donation address/i.test(donateBHtml));
+
+  /* ── B: /api/tx per-IP limiter (#90) ─────────────────────────────────── */
+  // TX_LOOKUP_RATE_MAX is 3 on this app. A real txid is not needed: the limiter
+  // runs before the lookup, which is the ordering we want (a limited caller
+  // must not cost us a wallet RPC).
+  const TXID = "a".repeat(64);
+  const lookupAs = async (ip) => {
+    const res = await fetch(`${BASE_B}/api/tx?txid=${TXID}`, { headers: { "x-forwarded-for": ip } });
+    return { status: res.status, body: await res.json().catch(() => ({})) };
+  };
+  const lookups = [];
+  for (let i = 0; i < 4; i++) lookups.push(await lookupAs("203.0.113.7"));
+  ok("B the first 3 lookups inside the window are served", lookups.slice(0, 3).every((r) => r.status === 200), lookups.map((r) => r.status).join(","));
+  ok("B the 4th lookup is 429", lookups[3].status === 429, `status ${lookups[3].status}`);
+  ok("B the 429 carries retryAfterSeconds so a client knows when to come back", typeof lookups[3].body.retryAfterSeconds === "number" && lookups[3].body.retryAfterSeconds > 0, JSON.stringify(lookups[3].body.retryAfterSeconds));
+
+  const otherClient = await lookupAs("203.0.113.8");
+  ok("B a different client is unaffected by the limited one", otherClient.status === 200, `status ${otherClient.status}`);
 
   const emptyClaim = await claim(BASE_B, UNIFIED_A, null);
   ok("B claim on empty wallet is 503 with the empty message", emptyClaim.status === 503 && /empty/i.test(emptyClaim.body.error ?? ""), `status ${emptyClaim.status}`);

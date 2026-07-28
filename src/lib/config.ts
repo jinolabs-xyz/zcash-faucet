@@ -133,6 +133,17 @@ export const config = {
   // Max sends waiting in the serial FIFO queue before we reject with "busy".
   sendQueueMaxPending: Math.max(1, Math.floor(num("SEND_QUEUE_MAX_PENDING", 20))),
 
+  // Per-IP limit on /api/tx (#90). Each lookup costs a wallet RPC.
+  //
+  // The default is set from what our OWN page needs, not picked round: a visible
+  // receipt polls every 10s, so 6/min per open tab. 60 leaves room for ten of
+  // those behind one NAT, which a shared office or university exit needs, while
+  // still stopping a scraper walking txids.
+  txLookup: {
+    windowSeconds: Math.max(1, Math.floor(num("TX_LOOKUP_RATE_WINDOW_SECONDS", 60))),
+    max: Math.max(1, Math.floor(num("TX_LOOKUP_RATE_MAX", 60))),
+  },
+
   turnstile: {
     siteKey: process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? "",
     secretKey: process.env.TURNSTILE_SECRET_KEY ?? "",

@@ -37,6 +37,8 @@ with an anti-abuse gate on.
 | `FAUCET_MINING_ADDRESS` | none | Transparent address the miner pays coinbase to. Shown on /donate for anyone pointing hashrate at us. Unset hides that block. |
 | `FAUCET_WALLET_SEED` | none | Funded transparent wallet, WIF or 64-hex. Only used by `FAUCET_SENDER=real`. Server side, never commit it. |
 | `SEND_QUEUE_MAX_PENDING` | `20` | Sends allowed to queue before the faucet sheds with a busy 503, so a surge cannot pile up unbounded work. |
+| `TX_LOOKUP_RATE_WINDOW_SECONDS` | `60` | Window for the per-IP limit on `/api/tx`. |
+| `TX_LOOKUP_RATE_MAX` | `60` | Lookups per IP per window on `/api/tx`, each of which costs a wallet RPC. The default is set from what our own page needs: a visible receipt polls every 10s, so 6/min per tab, and 60 leaves room for ten tabs behind one NAT. Needs `TRUSTED_PROXY_COUNT` set, since with no trusted proxy there is no client IP to key on and the limit is skipped. |
 | `ZALLET_RPC_TIMEOUT_MS` | `15000` | Per-call RPC timeout. Floor of 1000. |
 | `ZALLET_OP_TIMEOUT_MS` | `180000` | How long to wait for a shielded build and prove to land. Floor of 5000. Past this the outcome is unknown, not failed. |
 | `ZALLET_POLL_MS` | `1500` | Gap between operation-status polls. Floor of 250. |
