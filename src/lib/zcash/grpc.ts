@@ -8,6 +8,7 @@ import * as grpc from "@grpc/grpc-js";
 import * as protoLoader from "@grpc/proto-loader";
 import path from "node:path";
 import { config } from "../config.ts";
+import { createFailoverBudget } from "./failover.ts";
 
 // Load the trimmed proto once from the repo (readable at runtime under Node).
 const pkgDef = protoLoader.loadSync(path.join(process.cwd(), "proto", "service.proto"), {
@@ -41,7 +42,15 @@ async function callFirst<T>(
   timeoutMs = 6000,
 ): Promise<{ result: T; endpoint: string }> {
   let lastErr: unknown;
+  // timeoutMs is per attempt, and it used to be the ONLY bound, so the real
+  // ceiling was timeoutMs times the endpoint count (#89). Bound the whole loop.
+  const budget = createFailoverBudget(timeoutMs);
   for (const endpoint of config.lightwalletdEndpoints) {
+    const attemptMs = budget.next();
+    if (attemptMs === 0) {
+      lastErr ??= new Error(`lightwalletd ${method} ran out of time before every endpoint was tried.`);
+      break;
+    }
     const { target, creds } = targetFor(endpoint);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const client: any = new CompactTxStreamer(target, creds);
@@ -49,7 +58,7 @@ async function callFirst<T>(
       const result = await new Promise<T>((resolve, reject) => {
         client[method](
           request,
-          { deadline: deadline(timeoutMs) },
+          { deadline: deadline(attemptMs) },
           (err: grpc.ServiceError | null, res: T) => (err ? reject(err) : resolve(res)),
         );
       });
