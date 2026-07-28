@@ -19,7 +19,7 @@ jobs:
   app:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           # 23 is a floor, not a preference: `npm test` runs .ts files through
@@ -54,7 +54,7 @@ jobs:
       PORT: "3100"
       SMOKE_URL: http://localhost:3100
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 23
@@ -94,7 +94,7 @@ jobs:
       PORT: "3120"
       UI_SMOKE_URL: http://localhost:3120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 23
@@ -136,7 +136,7 @@ jobs:
   api-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 23
@@ -157,7 +157,7 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 23
@@ -181,7 +181,7 @@ jobs:
   shell:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: shellcheck deploy scripts
         run: shellcheck -S warning deploy/deploy.sh deploy/z3/*.sh
       - name: z3 test harness
@@ -202,7 +202,7 @@ jobs:
   miner:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Guarded the same way as the harness suites: green before the miner
       # lands, active the moment it merges. Plain `cargo test` only, the
       # ignored solve test needs a release build and ~144MB, it stays a
