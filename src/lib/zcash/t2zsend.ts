@@ -7,6 +7,7 @@ import type { Sender, SendRequest, SendResult } from "./send";
 import { faucetWallet } from "./wallet";
 import { getAddressUtxos, getLatestBlock, sendRawTransaction, type Utxo } from "./grpc";
 import { buildT2zTx } from "./t2z";
+import { explorerTxUrl } from "./explorer.ts";
 import { bytesToHex } from "@noble/hashes/utils.js";
 
 // Fee is read from the PCZT before proving; this is only a selection cushion so
@@ -73,7 +74,7 @@ export class T2zSender implements Sender {
     const txid = txidFromHex(hex);
     return {
       txid,
-      explorerUrl: txid ? `https://blockexplorer.one/zcash/testnet/tx/${txid}` : undefined,
+      explorerUrl: explorerTxUrl(txid),
     };
   }
 }

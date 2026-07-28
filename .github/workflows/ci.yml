@@ -61,6 +61,51 @@ jobs:
           done
           npm run smoke
 
+  api-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 23
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      # Route-level integration suite (scripts/api-integration.mjs): boots the
+      # built app in two configs and drives every API route. Guarded so refs
+      # that predate the suite stay green.
+      - name: api integration tests
+        run: |
+          if [ -f scripts/api-integration.mjs ]; then
+            npm run test:api
+          else
+            echo "no scripts/api-integration.mjs on this ref, skipping"
+          fi
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 23
+          cache: npm
+      # High or critical advisories fail the build. Lows are visible in the
+      # log but do not gate: for a hot-wallet faucet the bar is no known-bad
+      # crypto or parser in the tree, not zero noise.
+      - name: npm audit (fail on high)
+        run: |
+          npm audit || true
+          npm audit --audit-level=high >/dev/null
+      - name: cargo audit (fail on any advisory)
+        run: |
+          if [ -d deploy/z3/miner ]; then
+            cargo install cargo-audit --locked
+            cargo audit --file deploy/z3/miner/Cargo.lock
+          else
+            echo "no deploy/z3/miner on this ref, skipping"
+          fi
+
   shell:
     runs-on: ubuntu-latest
     steps:

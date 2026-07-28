@@ -1,11 +1,12 @@
 /** GET /api/network — live testnet chain info via lightwalletd (Network tab). */
 import { NextResponse } from "next/server";
 import { getLightdInfo, getLatestBlock } from "@/lib/zcash/grpc";
+import { withApi } from "@/lib/api";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export const GET = withApi("network", async (_req, api) => {
   try {
     const [{ info, endpoint }, latest] = await Promise.all([getLightdInfo(), getLatestBlock()]);
     const tip = Number(latest.height);
@@ -26,10 +27,13 @@ export async function GET() {
       consensusBranchId: info.consensusBranchId,
     });
   } catch (err) {
+    // gRPC errors can embed endpoint internals; log them, keep the body plain.
+    api.logError(err, "lightwalletd unreachable");
     return NextResponse.json({
       ok: false,
       reachable: false,
-      error: err instanceof Error ? err.message : "All lightwalletd endpoints unreachable.",
+      error: "All lightwalletd endpoints are unreachable right now.",
+      requestId: api.requestId,
     });
   }
-}
+});

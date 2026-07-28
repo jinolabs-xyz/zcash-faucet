@@ -6,11 +6,12 @@ import { safeBalance } from "@/lib/zcash/send";
 import { getSendQueue } from "@/lib/zcash/queue";
 import { getNodeStatus } from "@/lib/zcash/nodeStatus";
 import { getReserveReconciler } from "@/lib/reserve/reconciler";
+import { withApi } from "@/lib/api";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export const GET = withApi("status", async () => {
   const [backend, balanceZat, node] = await Promise.all([pingBackend(), safeBalance(), getNodeStatus()]);
 
   const balanceTaz = balanceZat === null ? null : Number(balanceZat) / Number(ZATOSHI_PER_TAZ);
@@ -35,4 +36,4 @@ export async function GET() {
     // than the reconciler's last tick); refilling is the reconciler's decision.
     reserve: { ...getReserveReconciler().status, spendableTaz: balanceTaz },
   });
-}
+});

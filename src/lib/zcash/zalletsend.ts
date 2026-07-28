@@ -19,7 +19,9 @@
  *   https://zcash.github.io/wallet/guide/first-wallet.html
  */
 import type { Sender, SendRequest, SendResult } from "./send";
-import { config, ZATOSHI_PER_TAZ } from "../config";
+// .ts extension for node --test resolution, same pattern as pow.ts.
+import { config, ZATOSHI_PER_TAZ } from "../config.ts";
+import { explorerTxUrl } from "./explorer.ts";
 
 /** Render zatoshi as an exact ZEC decimal literal (no float drift). */
 function zatToZecLiteral(zat: bigint): string {
@@ -111,7 +113,7 @@ export class ZalletSender implements Sender {
     const txid = await this.awaitOperation(opid);
     return {
       txid,
-      explorerUrl: txid ? `https://blockexplorer.one/zcash/testnet/tx/${txid}` : undefined,
+      explorerUrl: explorerTxUrl(txid),
     };
   }
 
