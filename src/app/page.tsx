@@ -732,7 +732,26 @@ export default function Home() {
         <p style={{ margin: 0, fontFamily: "var(--mono)", fontSize: 10.5, letterSpacing: ".05em", color: muted(45) }}>Testnet only. TAZ has no monetary value.</p>
       </main>
 
-      <div style={{ position: "sticky", bottom: 0, borderTop: "2px solid var(--color-divider)", background: "var(--color-surface)", padding: `10px ${pad}`, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+      <div style={{ position: "sticky", bottom: 0, borderTop: "2px solid var(--color-divider)", background: "var(--color-surface)", padding: `10px ${pad}`, display: "flex", flexWrap: "wrap", gap: "8px 14px", alignItems: "center" }}>
+        {/* Canonical Jino Labs attribution lockup, committed verbatim from the
+            brand kit. Do not restyle it toward our palette or resize it below
+            native: the kit sets a 16px mark and 11px cap-height minimum, and the
+            badge is supposed to read as Jino Labs rather than as this app.
+
+            The variant follows OUR theme state, which is client state and not
+            prefers-color-scheme, so <picture> with a media query cannot do it. */}
+        <a href="https://jinolabs.xyz" style={{ display: "inline-flex", flex: "none", lineHeight: 0 }}>
+          {/* eslint-disable-next-line @next/next/no-img-element -- a fixed-size
+              SVG from public/ has nothing for next/image to optimise, and Next
+              declines to optimise SVG anyway, so Image would just need
+              unoptimized. The alt text is the accessible name the kit specifies. */}
+          <img
+            src={theme === "ink" ? "/brand/powered-by-dark.svg" : "/brand/powered-by-light.svg"}
+            alt="Powered by Jino Labs"
+            width={218}
+            height={36}
+          />
+        </a>
         <span style={{ fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".05em", color: muted(50) }}>{status?.network ?? "testnet"} · {status?.sender ?? "…"} backend</span>
         <a className="btn btn-ghost btn-sm" href="/donate" style={{ padding: 0 }}>Donate TAZ</a>
         <button className="btn btn-secondary btn-sm" onClick={() => setTheme((t) => (t === "ink" ? "paper" : "ink"))} aria-label={theme === "ink" ? "Switch to paper (light) theme" : "Switch to ink (dark) theme"} style={{ marginLeft: "auto" }}>{theme === "ink" ? "Paper" : "Ink"}</button>

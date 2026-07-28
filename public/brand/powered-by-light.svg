@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="218" height="36" viewBox="0 0 218 36" role="img" aria-label="Powered by Jino Labs">
+  <title>Powered by Jino Labs</title>
+  <!-- Same badge on paper. Middle rule flips to ink, bottom to ink at 30%. -->
+  <rect x="0.5" y="0.5" width="217" height="35" fill="#ffffff" stroke="#0d0d0d" stroke-opacity="0.14"/>
+  <g transform="translate(25.5 18) skewY(-12) translate(-25.5 -18)">
+    <rect x="14" y="9.5" width="23" height="4" fill="#e04e18"/>
+    <rect x="14" y="16" width="23" height="4" fill="#0d0d0d"/>
+    <rect x="14" y="22.5" width="23" height="4" fill="#0d0d0d" fill-opacity="0.30"/>
+  </g>
+  <text x="49" y="21.5" textLength="78" lengthAdjust="spacingAndGlyphs"
+        font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="10.5" letter-spacing="1.4" fill="#0d0d0d" fill-opacity="0.62">POWERED BY</text>
+  <text x="134" y="21.5" textLength="70" lengthAdjust="spacingAndGlyphs"
+        font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="10.5" letter-spacing="1.4" fill="#0d0d0d">JINO LABS</text>
+</svg>
