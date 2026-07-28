@@ -61,6 +61,13 @@ function num(n: number | null | undefined) { return n == null ? "–" : n.toLoca
 const muted = (pct: number): string => `color-mix(in srgb, var(--color-text) ${pct}%, transparent)`;
 const PROOF_SECONDS = 12; // estimated shielded-proof build time, for the progress feel
 
+// Receipt confirmation poll. 10s is 6/min per open receipt, which is what the
+// /api/tx limiter's 60/min default was sized around (#101), so two or three tabs
+// behind one NAT still fit. Deep enough to stop at: a drip is not a large payment
+// and the number only goes up from here.
+const TX_POLL_MS = 10_000;
+const CONFIRMATIONS_ENOUGH = 6;
+
 /* ── Component ─────────────────────────────────────────────────────────── */
 export default function Home() {
   const [status, setStatus] = useState<Status | null>(null);
@@ -152,17 +159,29 @@ export default function Home() {
   }, [phase]);
   // Ask OUR node whether the drip landed. A public explorer renders a page for
   // any hash, so it cannot answer this (#71).
+  //
+  // Stops once the drip is buried: a confirmed transaction does not become less
+  // confirmed, and every poll spends a wallet RPC and a slice of the /api/tx
+  // budget (#101). It deliberately keeps polling on "not seen" and on "cannot
+  // say", because both of those can still change.
   useEffect(() => {
     if (!tx?.txid) { setTxSeen(null); return; }
     let alive = true;
+    let iv: ReturnType<typeof setInterval> | undefined;
+    const stop = () => { clearInterval(iv); iv = undefined; };
     const check = () =>
       fetch("/api/tx?txid=" + encodeURIComponent(tx.txid))
         .then((r) => r.json())
-        .then((d) => { if (alive) setTxSeen({ known: d.known ?? null, confirmations: d.confirmations ?? null }); })
+        .then((d) => {
+          if (!alive) return;
+          const seen = { known: d.known ?? null, confirmations: d.confirmations ?? null };
+          setTxSeen(seen);
+          if ((seen.confirmations ?? 0) >= CONFIRMATIONS_ENOUGH) stop();
+        })
         .catch(() => {});
     check();
-    const iv = setInterval(check, 10_000);
-    return () => { alive = false; clearInterval(iv); };
+    iv = setInterval(check, TX_POLL_MS);
+    return () => { alive = false; stop(); };
   }, [tx?.txid]);
 
   useEffect(() => () => { powWorker.current?.terminate(); powWorker.current = null; }, []);
