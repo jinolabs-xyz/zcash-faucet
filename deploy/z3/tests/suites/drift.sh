@@ -106,6 +106,28 @@ bash "$AUDIT" > "$T/unref-absent.log" 2>&1
 check "an unreferenced script that was never installed is NOT drift" "[ $? -eq 0 ]"
 check "and is not mentioned as missing" "! grep -q 'helper.sh is referenced' '$T/unref-absent.log'"
 
+echo "== drift: a script installed with NO repo copy is drift (the other direction)"
+# The overlay loop walks the REPO, so it can only ask what the box did with each
+# script we ship. A script existing only on the box is invisible to it, and that
+# is the worse case: entirely unreviewed code that a rebuild silently drops.
+# Units and drop-ins were already checked both ways.
+drift_env; make_clean_box
+printf '#!/usr/bin/env bash\necho hand-written\n' > "$T/install/operator-hack.sh"
+bash "$AUDIT" > "$T/rev-extra.log" 2>&1
+check "exits 1" "[ $? -eq 1 ]"
+check "names the box-only script and says a rebuild loses it" \
+  "grep -q 'operator-hack.sh is in .* but the repo has no copy of it, so a rebuild loses it' '$T/rev-extra.log'"
+check "the fix commits it to the repo rather than deleting it" \
+  "grep -A1 'operator-hack.sh is in' '$T/rev-extra.log' | grep -q 'git .* add deploy/z3/operator-hack.sh'"
+
+# Symmetry must not become noise: a box holding exactly what the repo ships is
+# still clean, and the script the unit runs is not reported twice.
+drift_env; make_clean_box
+bash "$AUDIT" --verbose > "$T/rev-clean.log" 2>&1
+check "a matching box is still clean" "[ $? -eq 0 ]"
+check "and thing.sh is not double-reported" \
+  "[ \"\$(grep -c 'thing.sh' '$T/rev-clean.log')\" = '1' ]"
+
 echo "== drift: env files report presence only, never values"
 drift_env; make_clean_box
 printf 'BACKUP_PASSPHRASE=hunter2-should-never-appear\n' > "$T/env/backup.env"

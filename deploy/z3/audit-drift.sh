@@ -158,6 +158,19 @@ for src in "$OVERLAY_DIR"/*.sh; do
       "diff $src $installed   # then cp the repo copy over it, or get the box's version reviewed"
   fi
 done
+
+# The other direction. The loop above walks the REPO, so it can only ask what the
+# box did with each script we ship, and a script that exists ONLY on the box is
+# invisible to it. That is the worst case of the two: entirely unreviewed code
+# that a rebuild silently drops. Units and drop-ins are already checked both
+# ways, so this is the missing symmetry rather than a new idea.
+for installed in "$INSTALL_DIR"/*.sh; do
+  [ -e "$installed" ] || continue
+  script="$(basename "$installed")"
+  [ -f "$OVERLAY_DIR/$script" ] \
+    || found "$script is in $INSTALL_DIR but the repo has no copy of it, so a rebuild loses it" \
+         "cp $installed $OVERLAY_DIR/ && git -C $REPO_DIR add deploy/z3/$script   # then commit it"
+done
 say ""
 
 # These hold secrets, so presence only. Values are never read.
