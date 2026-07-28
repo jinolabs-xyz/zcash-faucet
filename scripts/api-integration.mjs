@@ -295,7 +295,17 @@ try {
   /* ── C: a send that hangs forever (#88) ──────────────────────────────── */
   // The wallet took the send and will never resolve the operation. The queue
   // deadline must answer the caller, and it must answer "unknown", not "failed".
-  const hung = await claim(BASE_C, UNIFIED_A, null);
+  // A FRESH address per run, the same reason server A generates one. The
+  // unknown-outcome path this exercises records the claim as sent and holds the
+  // FULL cooldown by design (#88), so a fixed address makes this test pass
+  // exactly once per day and then fail with a 429 that looks like a real bug.
+  // The ledger is $cwd/data/faucet.db with no override, shared by all three apps
+  // and surviving between runs.
+  const genC = await post(BASE_C, "/api/account", { type: "shielded" });
+  const addrC = genC.body?.account?.address;
+  ok("C generated a fresh address to claim with", typeof addrC === "string" && addrC.startsWith("utest1"), String(addrC).slice(0, 12));
+
+  const hung = await claim(BASE_C, addrC, null);
   ok("C a hung send is 504, not a 500 or a hang", hung.status === 504, `status ${hung.status}`);
   ok(
     "C the 504 tells the user NOT to retry, because coins may be moving",
@@ -306,7 +316,7 @@ try {
   // The money-safety property. A deadline is not a failure, so the claim must
   // still be held. If the deadline released it, this retry would be allowed and
   // one entitlement could be paid twice.
-  const retryAfterHang = await claim(BASE_C, UNIFIED_A, null);
+  const retryAfterHang = await claim(BASE_C, addrC, null);
   ok(
     "C the claim is HELD after a deadline, so the same address cannot be paid twice",
     retryAfterHang.status === 429,
