@@ -11,7 +11,7 @@ publish = false
 # same crate and entry point zebra's own internal miner uses, so we are not
 # hand-rolling any proof of work.
 equihash = { version = "0.3", features = ["solver"] }
-ureq = { version = "2", features = ["json"] }
+ureq = { version = "3", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hex = "0.4"
