@@ -585,8 +585,8 @@ export default function Home() {
             <div id="addrmsg" aria-live="polite" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 9, minHeight: 24 }}>
               {badgeShow && "label" in c && <span className="tag tag-outline">{c.label}</span>}
               {"priv" in c && c.priv === false && <span style={{ fontSize: 12, lineHeight: 1.45, color: muted(62) }}>Transparent address, so this drip will be visible on-chain.</span>}
-              {touched && "err" in c && c.err && <span style={{ fontSize: 12.5, lineHeight: 1.45, color: "var(--color-accent-700)", fontWeight: 500, maxWidth: "52ch" }}>{c.err}</span>}
-              {genErr && <span style={{ fontSize: 12.5, lineHeight: 1.45, color: "var(--color-accent-700)", fontWeight: 500, maxWidth: "52ch" }}>{genErr}</span>}
+              {touched && "err" in c && c.err && <span style={{ fontSize: 12.5, lineHeight: 1.45, color: "var(--color-accent-800)", fontWeight: 500, maxWidth: "52ch" }}>{c.err}</span>}
+              {genErr && <span style={{ fontSize: 12.5, lineHeight: 1.45, color: "var(--color-accent-800)", fontWeight: 500, maxWidth: "52ch" }}>{genErr}</span>}
               {!addr.trim() && <button className="btn btn-ghost btn-sm" onClick={generate} style={{ padding: 0 }}>Generate a test address</button>}
             </div>
             <button className="btn btn-primary" onClick={() => void submit()} disabled={phase === "empty"} style={{ width: "100%", justifyContent: "space-between" }}>
