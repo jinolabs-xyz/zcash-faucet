@@ -1,0 +1,9 @@
+# OnFailure handler: alerts when the named unit fails. Add to any unit with
+#   OnFailure=faucet-alert@%n.service
+[Unit]
+Description=Alert that %i failed
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/faucet/alerts.env
+ExecStart=/opt/faucet/alert.sh --unit %i

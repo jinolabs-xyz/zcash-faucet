@@ -4,6 +4,11 @@
 echo "curl $*" >> "${STUB_LOG:?}"
 case "$*" in
   *"/ready"*)
+    # STUB_READY_FAIL_UNTIL names a marker: fail once, then pass, which is how
+    # a node lagging a couple of blocks behaves.
+    if [ -n "${STUB_READY_FAIL_UNTIL:-}" ] && [ ! -e "$STUB_READY_FAIL_UNTIL" ]; then
+      touch "$STUB_READY_FAIL_UNTIL"; exit 22
+    fi
     [ "${STUB_READY:-1}" = "1" ] && exit 0 || exit 22 ;;
   *)
     exec /usr/bin/curl "$@" ;;

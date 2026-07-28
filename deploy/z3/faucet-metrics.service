@@ -9,6 +9,7 @@
 Description=Faucet metrics textfile
 After=docker.service
 Wants=docker.service
+OnFailure=faucet-alert@%n.service
 
 [Service]
 Type=oneshot

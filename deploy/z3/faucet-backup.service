@@ -9,6 +9,7 @@
 Description=Faucet wallet and ledger backup (encrypted)
 After=docker.service
 Requires=docker.service
+OnFailure=faucet-alert@%n.service
 
 [Service]
 Type=oneshot

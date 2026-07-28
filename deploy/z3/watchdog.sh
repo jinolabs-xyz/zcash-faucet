@@ -42,20 +42,24 @@ log() { echo "$(date -u +%FT%TZ) watchdog: $*"; }
 # silently drop an alert.
 json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
+# Delegates to the shared sender so one URL covers every unit. Falls back to
+# posting inline if alert.sh is not installed yet, so an upgrade cannot mute us.
+ALERT_SH="${WATCHDOG_ALERT_SH:-$(dirname "$0")/alert.sh}"
 alert() {
+  log "ALERT: $1"
+  if [ -x "$ALERT_SH" ]; then
+    "$ALERT_SH" "$1" >/dev/null 2>&1 || log "alert send failed via $ALERT_SH"
+    return 0
+  fi
+  [ -n "$ALERT_URL" ] || return 0
   local msg body
   msg="[zcash-faucet watchdog] $(json_escape "$1")"
-  log "ALERT: $1"
-  [ -n "$ALERT_URL" ] || return 0
-  # Slack and Discord take the same shape with a different key, and both
-  # reject the other one, so the channel type has to be explicit.
   case "$ALERT_FORMAT" in
     discord) body="{\"content\":\"$msg\"}" ;;
     slack|*)  body="{\"text\":\"$msg\"}" ;;
   esac
   curl -fsS --max-time 10 -H 'content-type: application/json' \
-    -d "$body" "$ALERT_URL" >/dev/null 2>&1 \
-    || log "alert webhook POST failed"
+    -d "$body" "$ALERT_URL" >/dev/null 2>&1 || log "alert webhook POST failed"
 }
 
 # First running-or-stopped container id whose name contains $1 (empty if none).

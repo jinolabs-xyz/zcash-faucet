@@ -268,3 +268,20 @@ bash "$PUBLISH" > "$T/upfail.log" 2>&1
 check "exits nonzero" "[ $? -ne 0 ]"
 check "says nothing was published" "grep -q 'nothing was published' '$T/upfail.log'"
 check "no pointer in the remote" "[ ! -f '$T/remote/latest-testnet.txt' ]"
+
+echo "== export: a transient un-ready waits instead of losing the whole cycle"
+# One un-ready probe used to die and cost a 6h cycle. STUB_READY_MAX makes the
+# gate fail its first probes and then pass, as a burst-lagging node does.
+fresh_env; with_chain
+STUB_READY_FAIL_UNTIL="$T/ready-after" ZSNAP_READY_WAIT=1 bash "$EXPORT" > "$T/tready.log" 2>&1
+check "export still succeeds" "[ $? -eq 0 ]"
+check "says it is retrying, not refusing" "grep -q 'zebra not ready, probe 1/' '$T/tready.log'"
+check "notes when it became ready" "grep -q 'became ready after' '$T/tready.log'"
+check "never claims a stale snapshot refusal" "! grep -q 'refusing a stale snapshot' '$T/tready.log'"
+
+echo "== export: a genuinely un-ready node still refuses, after waiting"
+fresh_env; with_chain
+STUB_READY=0 ZSNAP_READY_TRIES=2 ZSNAP_READY_WAIT=1 bash "$EXPORT" > "$T/nready.log" 2>&1
+check "exits nonzero" "[ $? -ne 0 ]"
+check "refusal names the probe count" "grep -q 'not ready in 2 probes' '$T/nready.log'"
+check "no export attempted" "! grep -q 'zebrad export-snapshot' '$STUB_LOG'"

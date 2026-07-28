@@ -8,6 +8,7 @@
 Description=Zcash faucet stack watchdog (self-healing supervision)
 After=docker.service
 Requires=docker.service
+OnFailure=faucet-alert@%n.service
 
 [Service]
 Type=simple
