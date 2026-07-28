@@ -15,6 +15,7 @@
 import type { Sender, SendRequest, SendResult } from "./send";
 import { faucetWallet } from "./wallet";
 import { getAddressUtxos, getLatestBlock, getLightdInfo, sendRawTransaction, type Utxo } from "./grpc";
+import { explorerTxUrl } from "./explorer.ts";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let utxolib: any;
@@ -32,7 +33,7 @@ const SAPLING_VERSION_GROUP_ID = 0x892f2085;
 const SIGHASH_ALL = 0x01;
 
 function explorerUrl(txid: string): string {
-  return `https://blockexplorer.one/zcash/testnet/tx/${txid}`;
+  return explorerTxUrl(txid) ?? "";
 }
 
 /** Greedily pick UTXOs to cover amount + fee; returns the chosen set + total. */
