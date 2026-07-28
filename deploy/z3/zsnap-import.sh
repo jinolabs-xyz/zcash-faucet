@@ -186,13 +186,18 @@ elif printf '%s' "$source" | grep -q '^https\?://.*latest-.*\.txt$'; then
   # is verified against ITS OWN hash rather than the newest one's.
   base="${source%/*}"
   pointer_body="$(curl -fsSL --max-time 60 "$source" 2>/dev/null)"
-  while read -r idx || [ -n "$idx" ]; do
-    [ -n "$idx" ] || continue
-    f="$(printf '%s' "$pointer_body" | sed -n "s/^file${idx}=//p" | head -1)"
+  # Read the file lines themselves. The newest generation is written as
+  # "file=" with no digits, so extracting an index first yields an empty
+  # string for it and any non-empty guard silently drops the freshest
+  # snapshot. The suffix comes off the key instead: "" for the newest.
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in file=*|file[0-9]*=*) ;; *) continue ;; esac
+    suffix="${line%%=*}"; suffix="${suffix#file}"
+    f="${line#*=}"
     [ -n "$f" ] || continue
     candidates+=("$base/$f")
-    hashes+=("$(printf '%s' "$pointer_body" | sed -n "s/^manifest_hash${idx}=//p" | head -1)")
-  done < <(printf '%s' "$pointer_body" | sed -n 's/^file\([0-9]*\)=.*/\1/p')
+    hashes+=("$(printf '%s' "$pointer_body" | sed -n "s/^manifest_hash${suffix}=//p" | head -1)")
+  done < <(printf '%s' "$pointer_body" | grep -E '^file[0-9]*=')
   [ "${#candidates[@]}" -gt 0 ] || { candidates=("$source"); hashes=(""); }
 else
   candidates=("$source"); hashes=("")

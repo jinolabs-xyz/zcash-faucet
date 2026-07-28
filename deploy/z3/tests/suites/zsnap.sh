@@ -362,9 +362,85 @@ ZSNAP_EXPECT_HASH="pinned-for-one" bash "$IMPORT" "$T/gens/zsnap-testnet-900-dea
 check "a single candidate still honours the pin" "grep -q -- '--expect-hash pinned-for-one' '$STUB_LOG'"
 check "and does not warn about a chain" "! grep -q 'per-generation hashes' '$T/pin1.log'"
 
+echo "== import: the published-pointer path, exercised end to end"
+# The previous test for this REIMPLEMENTED the parsing loop and its copy
+# omitted the guard that caused the bug, so it passed while production dropped
+# the newest generation. This serves a real pointer and real archives over HTTP
+# and runs zsnap-import.sh, so only the shipped code decides the result.
+fresh_env
+mkdir -p "$T/pub"
+for h in 100 200 300; do
+  mkdir -p "$T/build/snapshot"; echo '{"stub":true}' > "$T/build/snapshot/MANIFEST.json"
+  ( cd "$T/build" && tar -cf - snapshot | zstd -q -o "$T/pub/zsnap-testnet-$h-deadbeefcafe.tar.zst" )
+  echo "hash-$h" > "$T/pub/zsnap-testnet-$h-deadbeefcafe.tar.zst.manifest-hash"
+  rm -rf "$T/build"
+done
+# Newest first, exactly the format zsnap-publish.sh writes: file= then fileN=.
+{
+  echo "file=zsnap-testnet-300-deadbeefcafe.tar.zst"
+  echo "height=300"
+  echo "manifest_hash=hash-300"
+  echo "file2=zsnap-testnet-200-deadbeefcafe.tar.zst"
+  echo "manifest_hash2=hash-200"
+  echo "file3=zsnap-testnet-100-deadbeefcafe.tar.zst"
+  echo "manifest_hash3=hash-100"
+} > "$T/pub/latest-testnet.txt"
+
+PUB_PORT=$((18940 + (RANDOM % 40)))
+( cd "$T/pub" && python3 -m http.server "$PUB_PORT" --bind 127.0.0.1 ) >/dev/null 2>&1 &
+PUB_PID=$!
+for _ in $(seq 1 40); do curl -sf -o /dev/null "http://127.0.0.1:$PUB_PORT/latest-testnet.txt" && break; sleep 0.25; done
+
+bash "$IMPORT" "http://127.0.0.1:$PUB_PORT/latest-testnet.txt" > "$T/ptr.log" 2>&1
+check "pointer restore succeeds" "[ $? -eq 0 ]"
+check "ALL THREE generations were collected, newest included" "grep -q '3 candidate(s) to try' '$T/ptr.log'"
+check "the newest (file=, no digits) is generation 1" "grep -q 'generation 1/3: zsnap-testnet-300' '$T/ptr.log'"
+check "its own hash was used, not another generation's" "grep -q -- '--expect-hash hash-300' '$STUB_LOG'"
+check "no older generation was needed" "! grep -q 'generation 2/3' '$T/ptr.log'"
+
+# And the pairing must hold deeper in the chain: break the newest, the walk
+# must use generation 2's OWN hash.
+fresh_env
+cp -r "$T/../$(basename "$T")/pub" "$T/pub" 2>/dev/null || { mkdir -p "$T/pub"; }
+for h in 100 200 300; do
+  mkdir -p "$T/build/snapshot"; echo '{"stub":true}' > "$T/build/snapshot/MANIFEST.json"
+  ( cd "$T/build" && tar -cf - snapshot | zstd -q -o "$T/pub/zsnap-testnet-$h-deadbeefcafe.tar.zst" )
+  echo "hash-$h" > "$T/pub/zsnap-testnet-$h-deadbeefcafe.tar.zst.manifest-hash"
+  rm -rf "$T/build"
+done
+printf 'not a zstd stream' > "$T/pub/zsnap-testnet-300-deadbeefcafe.tar.zst"
+{
+  echo "file=zsnap-testnet-300-deadbeefcafe.tar.zst"
+  echo "manifest_hash=hash-300"
+  echo "file2=zsnap-testnet-200-deadbeefcafe.tar.zst"
+  echo "manifest_hash2=hash-200"
+} > "$T/pub/latest-testnet.txt"
+PUB_PORT2=$((PUB_PORT + 1))
+( cd "$T/pub" && python3 -m http.server "$PUB_PORT2" --bind 127.0.0.1 ) >/dev/null 2>&1 &
+PUB_PID2=$!
+for _ in $(seq 1 40); do curl -sf -o /dev/null "http://127.0.0.1:$PUB_PORT2/latest-testnet.txt" && break; sleep 0.25; done
+bash "$IMPORT" "http://127.0.0.1:$PUB_PORT2/latest-testnet.txt" > "$T/ptr2.log" 2>&1
+check "falls back when the newest is corrupt" "[ $? -eq 0 ]"
+check "generation 2 was verified with ITS hash" "grep -q -- '--expect-hash hash-200' '$STUB_LOG'"
+check "not with the newest generation's hash" "! grep -q -- '--expect-hash hash-300' '$STUB_LOG'"
+kill "$PUB_PID" "$PUB_PID2" 2>/dev/null
+
 echo "== import: a pointer without a trailing newline keeps its oldest generation"
 # read -r drops a final unterminated line, which silently lost a generation.
+# Served without a trailing newline, and counted by the SHIPPED parser via the
+# script's own log line rather than by a copy of the loop.
 fresh_env
-printf 'file=a.tar.zst\nmanifest_hash=h1\nfile2=b.tar.zst\nmanifest_hash2=h2\nfile3=c.tar.zst\nmanifest_hash3=h3' > "$T/ptr.txt"
-n_files="$(sed -n 's/^file\([0-9]*\)=.*/\1/p' "$T/ptr.txt" | while read -r i || [ -n "$i" ]; do echo "$i"; done | wc -l | tr -d ' ')"
-check "all three generations are read from an unterminated pointer" "[ '$n_files' = '3' ]"
+mkdir -p "$T/pub2"
+for h in 10 20 30; do
+  mkdir -p "$T/b/snapshot"; echo '{"stub":true}' > "$T/b/snapshot/MANIFEST.json"
+  ( cd "$T/b" && tar -cf - snapshot | zstd -q -o "$T/pub2/zsnap-testnet-$h-deadbeefcafe.tar.zst" )
+  echo "h$h" > "$T/pub2/zsnap-testnet-$h-deadbeefcafe.tar.zst.manifest-hash"; rm -rf "$T/b"
+done
+printf 'file=zsnap-testnet-30-deadbeefcafe.tar.zst\nmanifest_hash=h30\nfile2=zsnap-testnet-20-deadbeefcafe.tar.zst\nmanifest_hash2=h20\nfile3=zsnap-testnet-10-deadbeefcafe.tar.zst\nmanifest_hash3=h10' > "$T/pub2/latest-testnet.txt"
+PUB_PORT3=$((18990 + (RANDOM % 8)))
+( cd "$T/pub2" && python3 -m http.server "$PUB_PORT3" --bind 127.0.0.1 ) >/dev/null 2>&1 &
+PUB_PID3=$!
+for _ in $(seq 1 40); do curl -sf -o /dev/null "http://127.0.0.1:$PUB_PORT3/latest-testnet.txt" && break; sleep 0.25; done
+bash "$IMPORT" "http://127.0.0.1:$PUB_PORT3/latest-testnet.txt" > "$T/ptr3.log" 2>&1
+check "the shipped parser reads all three from an unterminated pointer" "grep -q '3 candidate(s) to try' '$T/ptr3.log'"
+kill "$PUB_PID3" 2>/dev/null
