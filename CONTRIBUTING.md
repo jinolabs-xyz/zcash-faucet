@@ -74,6 +74,22 @@ the CTO.
 "It works on my machine" is not a first pass. If it renders, drive it. If it
 executes, run it.
 
+### Where a verdict is written down
+
+Findings and verdicts go in a **PR comment**, not a GitHub review. The team
+pushes under one GitHub account, so from GitHub's side every PR on this repo is
+self-authored, and `gh pr review --approve` fails outright with "Can not approve
+your own pull request". CHANGES_REQUESTED is refused for the same reason.
+
+The consequence that matters when you are reading the board: **on this repo
+`MERGEABLE BLOCKED` never means a PR is waiting on a person. It means CI.** That
+inference is wrong here and the UI gives you no hint, which cost a full day of a
+wrong mental model before anybody tried to file an approval and got told why.
+
+So the gate is the IPC verdict plus the CTO's audit, and it always was. Write
+the verdict into a PR comment anyway: IPC scrolls away with the session, and
+the next person reading `git log` deserves to find out why something merged.
+
 ## Build and test, the local loop
 
 ```sh
