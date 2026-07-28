@@ -10,14 +10,17 @@
  * This is one layer. It sits on top of the per-address cooldown and the daily
  * cap. Browser PoW is a speed bump, not a wall.
  *
- * v1 replay protection + the escalation/pressure counters are in-memory, so
- * they're per-instance. On a single box (our deploy) that's fine; a multi-
- * instance deploy would move the used-challenge set to the shared ledger.
+ * Replay protection is persistent: a spent challenge is recorded in the ledger,
+ * so a restart cannot un-spend it (see spendChallenge). That matters because
+ * the watchdog restarts this process on a hang and every deploy restarts it on
+ * purpose, and an in-memory set would hand every live challenge back inside its
+ * TTL.
  */
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 // Explicit .ts extension so `node --test` (type stripping resolves literal
 // paths only) can load this module. Next's bundler accepts it too.
 import { config } from "./config.ts";
+import { spendChallenge } from "./db/index.ts";
 
 const SALT = process.env.RATE_LIMIT_SALT ?? "";
 
@@ -48,7 +51,17 @@ function leadingZeroBits(buf: Buffer): number {
   return bits;
 }
 
-/* ── adaptive difficulty (in-memory sliding windows) ────────────────────── */
+/* ── adaptive difficulty (in-memory sliding windows) ─────────────────────
+ * These stay in memory on purpose, unlike the replay set. Persisting them
+ * would mean a ledger write on every challenge ISSUE, the cheapest and most
+ * spammable endpoint we have, to protect a signal that only tunes difficulty.
+ * A restart therefore hands a hammering client a fresh slate, which costs them
+ * a few bits of work. What a restart does NOT reset is the ledger: the
+ * per-address cooldown and the daily cap are the real ceiling on how much
+ * anyone can take, and those are durable. Escalation is a speed bump on top of
+ * a wall, so a bump that resets is an acceptable trade for keeping the hot
+ * path free of writes.
+ */
 const REQ_WINDOW_MS = 10 * 60_000; // remember a client's requests for 10 min
 const perIp = new Map<string, number[]>(); // ipHash -> request timestamps
 const globalReqs: number[] = []; // all request timestamps (pressure signal)
@@ -86,20 +99,16 @@ export function issueChallenge(ipHash: string): Challenge {
   return { seed, difficulty, exp, sig: sign(seed, difficulty, exp, ipHash) };
 }
 
-/* ── replay protection: each signed challenge is single-use ─────────────── */
-const used = new Map<string, number>(); // sig -> exp (seconds)
-function markUsed(sig: string, exp: number): boolean {
-  const now = Math.floor(Date.now() / 1000);
-  if (used.size > 20000) for (const [k, e] of used) if (e < now) used.delete(k);
-  if (used.has(sig)) return false; // already spent
-  used.set(sig, exp);
-  return true;
-}
-
 export interface Verdict { ok: boolean; reason?: string }
 
-/** Verify a solved challenge. Same ipHash the challenge was issued to. */
-export function verifySolution(s: Solution, ipHash: string): Verdict {
+/**
+ * Verify a solved challenge. Same ipHash the challenge was issued to.
+ *
+ * Async because replay protection lives in the ledger: the spend has to survive
+ * a restart, and the D1 backend is an HTTP round-trip. The cheap checks run
+ * first so a junk solution never reaches the database.
+ */
+export async function verifySolution(s: Solution, ipHash: string): Promise<Verdict> {
   if (!s || !s.seed || typeof s.nonce !== "string") return { ok: false, reason: "Missing challenge solution." };
   const now = Math.floor(Date.now() / 1000);
   if (s.exp < now) return { ok: false, reason: "Challenge expired — refresh and try again." };
@@ -112,6 +121,11 @@ export function verifySolution(s: Solution, ipHash: string): Verdict {
   const digest = createHash("sha256").update(`${s.seed}:${s.nonce}`).digest();
   if (leadingZeroBits(digest) < s.difficulty) return { ok: false, reason: "Proof of work does not meet the difficulty." };
 
-  if (!markUsed(s.sig, s.exp)) return { ok: false, reason: "Challenge already used." };
+  // Last, because it is the only check that writes: burn the challenge. The
+  // insert is the mutex, so two requests racing the same solution cannot both
+  // win, on either ledger backend.
+  if (!(await spendChallenge(s.sig, s.exp, now))) {
+    return { ok: false, reason: "Challenge already used." };
+  }
   return { ok: true };
 }
