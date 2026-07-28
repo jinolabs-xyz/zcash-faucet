@@ -5,6 +5,14 @@
 # and share one pass/fail tally so the runner can report a single total.
 
 pass=0; fail=0
+
+# Each fresh env gets a TMPDIR scratch dir. Register every one and remove them
+# all when the run exits, or a full suite leaks a dir per env, and once the disk
+# fills the stubs fail to write and real assertions turn into fake passes (#161).
+_TEST_TMPDIRS=()
+_cleanup_test_tmpdirs() { [ "${#_TEST_TMPDIRS[@]}" -gt 0 ] && rm -rf "${_TEST_TMPDIRS[@]}"; }
+trap _cleanup_test_tmpdirs EXIT
+
 ok()   { pass=$((pass+1)); echo "  ok: $1"; }
 bad()  { fail=$((fail+1)); echo "  FAIL: $1"; }
 check(){ if eval "$2"; then ok "$1"; else bad "$1"; fi; }
@@ -22,6 +30,7 @@ check_order() {
 # read-only checkout works.
 fresh_env() {
   T="$(mktemp -d "${TMPDIR:-/tmp}/zsnap-test.XXXXXX")"
+  _TEST_TMPDIRS+=("$T")
   export STUB_LOG="$T/stub.log"; : > "$STUB_LOG"
   export STUB_VOLROOT="$T/volumes"; mkdir -p "$STUB_VOLROOT"
   export STUB_CONTAINERS="$T/containers"; mkdir -p "$STUB_CONTAINERS"
@@ -42,6 +51,7 @@ with_chain() { mkdir -p "$STUB_CACHE_DIR"; head -c 100000 /dev/urandom > "$STUB_
 # it gets its own PATH entry rather than sharing stubs/.
 deploy_fresh_env() {
   T="$(mktemp -d "${TMPDIR:-/tmp}/deploy-test.XXXXXX")"
+  _TEST_TMPDIRS+=("$T")
   export STUB_LOG="$T/stub.log"; : > "$STUB_LOG"
   export STUB_CONTAINERS="$T/containers"; mkdir -p "$STUB_CONTAINERS"
   export STUB_VOLROOT="$T/volumes"; mkdir -p "$STUB_VOLROOT"

@@ -72,7 +72,11 @@ fi
 unset HAS_INIT
 
 echo "== re-run after the operator fixed the salt (the old errexit trap)"
-sed -i 's/^RATE_LIMIT_SALT=.*/RATE_LIMIT_SALT=a-real-salt/' "$D/z3/faucet.env"
+# Portable in-place edit: `sed -i` takes a backup suffix on BSD/macOS, so the
+# GNU no-suffix form fails there and leaves the file unchanged (#160). Write to
+# a temp and move instead, which behaves the same on both.
+sed 's/^RATE_LIMIT_SALT=.*/RATE_LIMIT_SALT=a-real-salt/' "$D/z3/faucet.env" > "$D/z3/faucet.env.tmp" \
+  && mv "$D/z3/faucet.env.tmp" "$D/z3/faucet.env"
 run_deploy > "$T/run3.log" 2>&1
 check "salt-fixed re-run exits 0" "[ $? -eq 0 ]"
 check "no salt nag once set" "! grep -q 'RATE_LIMIT_SALT' '$T/run3.log'"
