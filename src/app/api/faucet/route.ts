@@ -112,13 +112,27 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     );
   } catch (err) {
     // A submitted-but-unresolved send is NOT a failure. The wallet holds an
-    // opid and may still broadcast, so releasing the cooldown here would let
-    // the same address claim again and get paid twice, and telling the user
-    // nothing moved would be a lie. Keep the reservation, log the opid so an
-    // operator can reconcile it against z_getoperationresult, and say plainly
-    // that it is in flight.
+    // opid and may still broadcast, so releasing the claim would let the same
+    // address get paid twice, and telling the user nothing moved would be a lie.
     if (err instanceof SendOutcomeUnknownError) {
-      api.logError(err, `send outcome UNKNOWN, opid ${err.opid}, claim ${reservation.claimId} left reserved`);
+      // Record it as sent, which is the only safe assumption for a payout we
+      // cannot observe. Leaving the row 'pending' looked like it held the
+      // claim, but pending only blocks for PENDING_LEASE_SECONDS, and an
+      // unknown outcome BY DEFINITION means the send outlived the poll window,
+      // so the lease would expire and hand out a second drip (#51). Sent rows
+      // block for the full cooldown and keep counting toward the daily cap.
+      //
+      // The opid goes in the txid column (write-only, forensic) so an operator
+      // can reconcile against z_getoperationresult and flip this to 'failed' if
+      // nothing actually went out. Erring toward not paying twice: the cost of
+      // being wrong here is one user waiting out a cooldown for a drip they did
+      // not get, against the faucet paying twice for one entitlement.
+      try {
+        await finalizeClaim(reservation.claimId, "sent", `unknown:${err.opid}`);
+      } catch (finErr) {
+        api.logError(finErr, `finalize(unknown) failed, claim ${reservation.claimId} will release on the lease`);
+      }
+      api.logError(err, `send outcome UNKNOWN, opid ${err.opid}, claim ${reservation.claimId} held for the full cooldown`);
       return apiError(
         504,
         "Your drip was submitted but we lost track of it before it confirmed. Do not retry yet: if it went " +
