@@ -7,7 +7,7 @@
 
 use sha2::{Digest, Sha256};
 
-use crate::template::Template;
+use crate::template::{DefaultRoots, Template, TransactionTemplate};
 
 /// Bytes of a Zcash block header before the nonce: version, previous block
 /// hash, merkle root, block commitments, time, bits.
@@ -225,6 +225,58 @@ pub fn expand_target(bits_display_hex: &str) -> Result<[u8; 32], String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A template whose every header field carries a distinct marker, so a swap
+    /// between two same-length fields is visible in the bytes.
+    fn marked_template() -> Template {
+        Template {
+            version: 4,
+            previous_block_hash: "00".repeat(31) + "a1",
+            default_roots: DefaultRoots {
+                merkle_root: "00".repeat(31) + "a2",
+                block_commitments_hash: "00".repeat(31) + "a3",
+            },
+            transactions: vec![],
+            coinbase_txn: TransactionTemplate { data: String::new() },
+            bits: "1f2f93c0".to_string(),
+            cur_time: 0x1122_3344,
+            height: 1,
+        }
+    }
+
+    /// KNOWN-ANSWER TEST for the header BYTE LAYOUT, which the hash test cannot
+    /// cover: corrupt the field order and every hash assertion still passes,
+    /// because hashing is happy to digest whatever bytes it is handed. QA proved
+    /// exactly that by sabotaging the layout and watching all ten stay green.
+    ///
+    /// The expected string is written out from the Zcash protocol field order
+    /// (spec 7.6: version, prev hash, merkle root, block commitments, time, bits,
+    /// nonce) rather than pasted from this code's output. An expectation copied
+    /// from the thing it checks only proves the code agrees with itself.
+    ///
+    /// This pins the LAYOUT. It does not prove our reading of the spec matches a
+    /// real chain, which needs a header from a real node, so do not delete that
+    /// one on the strength of this.
+    #[test]
+    fn header_bytes_are_laid_out_in_protocol_order() {
+        let header = Header::from_template(&marked_template()).unwrap();
+        let zeros31 = "00".repeat(31);
+        let expected = format!(
+            "{version}{prev}{merkle}{commitments}{time}{bits}{nonce}",
+            version = "04000000",              // u32 little-endian
+            prev = format!("a1{zeros31}"),     // display hex reversed to wire order
+            merkle = format!("a2{zeros31}"),
+            commitments = format!("a3{zeros31}"),
+            time = "44332211",                 // u32 little-endian
+            bits = "c0932f1f",                 // compact bits, little-endian
+            nonce = "00".repeat(32),           // unsolved
+        );
+        assert_eq!(hex::encode(header.equihash_input()), expected);
+
+        // serialize() is that input plus the solution's CompactSize length.
+        // Unsolved, that is a single zero byte and nothing after it.
+        assert_eq!(hex::encode(header.serialize()), format!("{expected}00"));
+    }
 
     /// KNOWN-ANSWER TEST for the hashing primitive, against a value this project
     /// did not compute: the Bitcoin genesis block header and its hash are among
