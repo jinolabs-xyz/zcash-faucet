@@ -150,3 +150,16 @@ echo "== alerts: a quote in the operator prefix cannot break the body"
 alerts_env
 FAUCET_ALERT_PREFIX='[fau"cet]' bash "$ALERT" "hello" > /dev/null 2>&1
 check "body is still valid JSON" "python3 -c \"import json;[json.loads(l) for l in open('$HOOK_LOG') if l.strip()]\""
+
+echo "== alerts: self-test names the real cause, not a plausible one"
+# rc=4 (no encoder) used to print "the webhook rejected the POST", sending an
+# operator to debug Slack when the fix is installing jq.
+alerts_env
+mkdir -p "$T/nobin2"
+for b in bash curl date hostname sed tr cat; do
+  src="$(command -v $b 2>/dev/null)"; [ -n "$src" ] && ln -sf "$src" "$T/nobin2/$b"
+done
+PATH="$T/nobin2" bash "$ALERT" --self-test > "$T/st4.log" 2>&1
+check "exits 4, distinct from a rejected webhook" "[ $? -eq 4 ]"
+check "blames the missing encoder" "grep -q 'no jq and no python3' '$T/st4.log'"
+check "does NOT blame the webhook" "! grep -q 'webhook rejected' '$T/st4.log'"

@@ -71,8 +71,13 @@ case "${1:-}" in
       log "SELF-TEST PASSED: check the channel for the message above"
       exit 0
     fi
-    [ "$rc" = "3" ] && log "SELF-TEST FAILED: nothing is configured, put FAUCET_ALERT_URL in /etc/faucet/alerts.env" \
-                    || log "SELF-TEST FAILED: the webhook rejected the POST, check the URL"
+    # One branch per cause. A verification tool that misnames the fault sends
+    # someone to debug their Slack URL when the answer is: install jq.
+    case "$rc" in
+      3) log "SELF-TEST FAILED: nothing is configured, put FAUCET_ALERT_URL in /etc/faucet/alerts.env" ;;
+      4) log "SELF-TEST FAILED: no jq and no python3, so the body cannot be encoded. Install either one." ;;
+      *) log "SELF-TEST FAILED: the webhook rejected the POST, check the URL" ;;
+    esac
     exit "$rc"
     ;;
   --unit)
