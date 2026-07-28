@@ -14,7 +14,7 @@ no captcha vendor.
 It mines too, and the reserve loop is built to fund the wallet from what it
 mines. On public testnet that does not currently work: one dominant miner wins
 every block race, so ours are orphaned and mining income is zero. Measured, not
-guessed ([#42](../../issues/42)). The machinery is real, the revenue is not, so
+guessed ([#42](https://github.com/jinolabs-xyz/zcash-faucet/issues/42)). The machinery is real, the revenue is not, so
 the wallet is topped up from elsewhere. See [donate](#keeping-it-funded).
 
 <picture>
@@ -64,7 +64,7 @@ chain advances only when you find a block and theirs advances when they do.
 Below half their hashrate the long-run survival of any block you mine is **zero,
 not merely small**, so no amount of tuning propagation or template freshness
 changes the outcome. The measurement and the maths are in
-[#42](../../issues/42).
+[#42](https://github.com/jinolabs-xyz/zcash-faucet/issues/42).
 
 What that means in practice: treat mining as machinery that is ready rather than
 as an income stream. A deploy that needs a funded wallet has to get TAZ from
