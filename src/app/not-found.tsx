@@ -7,6 +7,7 @@
  */
 import type { CSSProperties } from "react";
 import Link from "next/link";
+import { BrandMark } from "./BrandMark";
 
 export const metadata = {
   title: "Not found — Zcash Testnet Faucet",
@@ -27,8 +28,9 @@ export default function NotFound() {
       style={{ minHeight: "100vh", display: "flex", flexDirection: "column", background: "var(--color-bg)", color: "var(--color-text)", fontFamily: "var(--font-body)" }}
     >
       <header className="nav" style={{ padding: `14px ${pad}`, gap: 14, flexWrap: "wrap" }}>
-        <div className="nav-brand" style={{ fontSize: "clamp(15px,4vw,18px)", letterSpacing: "-.01em", marginRight: "auto" }}>
-          Zcash Testnet Faucet
+        <div className="nav-brand" style={{ fontSize: "clamp(15px,4vw,18px)", letterSpacing: "-.01em", marginRight: "auto", display: "flex", alignItems: "center", gap: ".44em" }}>
+          <BrandMark />
+          <span>Zcash Testnet Faucet</span>
         </div>
         <Link className="btn btn-secondary btn-sm" href="/">Back to the faucet</Link>
       </header>

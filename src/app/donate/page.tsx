@@ -18,6 +18,7 @@ import Link from "next/link";
 import { config, ZATOSHI_PER_TAZ } from "@/lib/config";
 import { safeBalance } from "@/lib/zcash/send";
 import { CopyAddress } from "./CopyAddress";
+import { BrandMark } from "../BrandMark";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -59,8 +60,9 @@ export default async function Donate() {
       style={{ minHeight: "100vh", display: "flex", flexDirection: "column", background: "var(--color-bg)", color: "var(--color-text)", fontFamily: "var(--font-body)" }}
     >
       <header className="nav" style={{ padding: `14px ${pad}`, gap: 14, flexWrap: "wrap" }}>
-        <div className="nav-brand" style={{ fontSize: "clamp(15px,4vw,18px)", letterSpacing: "-.01em", marginRight: "auto" }}>
-          Zcash Testnet Faucet
+        <div className="nav-brand" style={{ fontSize: "clamp(15px,4vw,18px)", letterSpacing: "-.01em", marginRight: "auto", display: "flex", alignItems: "center", gap: ".44em" }}>
+          <BrandMark />
+          <span>Zcash Testnet Faucet</span>
         </div>
         <Link className="btn btn-secondary btn-sm" href="/">Back to the faucet</Link>
       </header>
