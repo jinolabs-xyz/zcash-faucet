@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="218" height="36" viewBox="0 0 218 36" role="img" aria-label="Powered by Jino Labs">
+  <title>Powered by Jino Labs</title>
+  <!-- Hairline box on ink. The brand's default attribution badge.
+       textLength is pinned so the badge keeps its width in whatever mono
+       font the viewer's machine resolves, which is how this survives being
+       rendered by GitHub as a plain img. -->
+  <rect x="0.5" y="0.5" width="217" height="35" fill="#0a0a0a" stroke="#ffffff" stroke-opacity="0.14"/>
+  <g transform="translate(25.5 18) skewY(-12) translate(-25.5 -18)">
+    <rect x="14" y="9.5" width="23" height="4" fill="#e04e18"/>
+    <rect x="14" y="16" width="23" height="4" fill="#ffffff"/>
+    <rect x="14" y="22.5" width="23" height="4" fill="#ffffff" fill-opacity="0.35"/>
+  </g>
+  <text x="49" y="21.5" textLength="78" lengthAdjust="spacingAndGlyphs"
+        font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="10.5" letter-spacing="1.4" fill="#ffffff" fill-opacity="0.62">POWERED BY</text>
+  <text x="134" y="21.5" textLength="70" lengthAdjust="spacingAndGlyphs"
+        font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="10.5" letter-spacing="1.4" fill="#ffffff">JINO LABS</text>
+</svg>
