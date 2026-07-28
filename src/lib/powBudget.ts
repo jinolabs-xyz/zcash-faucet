@@ -25,6 +25,16 @@
  * Deliberately pessimistic. Being wrong high here does not cost performance, it
  * costs a real person on a real phone their claim, and they cannot tell the
  * difference between "too hard" and "broken".
+ *
+ * THE HONEST LEVER. If the gate needs to be harder, buy it with a longer TTL.
+ * Do NOT raise it by inflating this number and do NOT raise maxBits past the
+ * ceiling, because neither makes anyone's phone faster: both just move the
+ * ceiling above what a browser can answer, which is how #132 happened.
+ *
+ * Worth knowing what this constant is: the ONE input to the ceiling that cannot
+ * be derived from the code or checked at runtime. It is a claim about hardware
+ * we do not own and cannot measure from here, so it is the number most likely to
+ * be quietly wrong, and the only defence is keeping it pessimistic on purpose.
  */
 export const SLOW_BROWSER_HASHES_PER_SEC = 100_000;
 
