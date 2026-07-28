@@ -12,7 +12,7 @@ ownership over HTTP, so a name that does not resolve yet means a failed
 challenge and a retry backoff.
 
 ```
-A     faucet.example.org    172.235.26.235
+A     faucet.example.org    <the box's IPv4>
 AAAA  faucet.example.org    <the box's IPv6, if it has one>
 ```
 
