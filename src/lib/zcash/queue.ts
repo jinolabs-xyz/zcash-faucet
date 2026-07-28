@@ -16,7 +16,8 @@
  * `maxPending` bounds the backlog so a surge doesn't queue unbounded work (and
  * make the 20th person wait forever) — past it we reject fast with "busy".
  */
-import { config } from "../config";
+// .ts extension for node --test resolution, same pattern as pow.ts.
+import { config } from "../config.ts";
 
 export class QueueFullError extends Error {
   constructor() {
@@ -28,8 +29,13 @@ export class QueueFullError extends Error {
 class SerialQueue {
   private tail: Promise<unknown> = Promise.resolve();
   private pending = 0;
+  // Plain field, not a constructor parameter property: node --test runs on
+  // type stripping, which only erases types and cannot rewrite that sugar.
+  private readonly maxPending: number;
 
-  constructor(private readonly maxPending: number) {}
+  constructor(maxPending: number) {
+    this.maxPending = maxPending;
+  }
 
   /** Tasks currently waiting or running. */
   get depth(): number {
