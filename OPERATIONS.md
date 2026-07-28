@@ -151,6 +151,40 @@ Return to main with `git checkout main` and redeploy when fixed. Rolling back
 code never touches the volumes, so funds and the rate-limit ledger are safe,
 either way.
 
+## Config drift
+
+The repo is supposed to describe the box. In practice a box accumulates hand
+work (a drop-in, an override, a unit copied straight into
+`/etc/systemd/system`) and a rebuild silently loses it. Nothing breaks
+loudly: the new box comes up, serves, and is quietly missing something only
+the person who typed it knows about.
+
+```bash
+/opt/faucet/audit-drift.sh            # what is here that the repo does not describe
+/opt/faucet/audit-drift.sh --verbose  # also show matches and drop-in contents
+```
+
+Exit codes: `0` no drift, `1` drift found, `2` the audit was incomplete. That
+last one covers both "could not run at all" and "ran but skipped a check", for
+example enablement when there is no `systemctl`. Anything it could not check
+is listed under `NOT VERIFIED`, and it never claims the box matches the repo
+on the strength of checks it did not perform.
+
+Every finding prints the command that fixes it, so acting on a report is a
+paste rather than a puzzle.
+
+It is **read-only and has no `--apply`**. Reconciling the box to the repo
+would delete the very hand work the audit exists to surface. The fix for
+drift is putting the change into the repo: a hand-installed unit or drop-in
+belongs in `deploy/z3/` and in the install docs, an untracked override
+belongs in git, and a stale script in `/opt/faucet` means re-copying it or
+admitting the box is ahead of review.
+
+Env files are reported as present or absent only. Drop-ins print on an
+allowlist: `KEY=<redacted>` lines and nothing else, so a continuation line
+carrying `--rpc-password` or a comment carrying a webhook cannot leak. You
+learn which key was set by hand, not its value.
+
 ## Restore from backup
 
 The backup covers the two things the box cannot regrow: the wallet (keys and
