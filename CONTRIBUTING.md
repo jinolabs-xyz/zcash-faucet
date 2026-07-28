@@ -100,12 +100,33 @@ Every correction came from the same few habits, so the habits are rules.
    from reading the code, every wrong one came from remembering it or
    trusting a summary of it.
 7. Error messages are claims, not facts. Treat the message as a lead and
-   confirm the cause before acting on it. This includes tooling: `gh pr
-   edit` has failed here while printing only a deprecation warning, so
-   read the state back after any mutating command.
+   confirm the cause before acting on it. This includes tooling, and the
+   instance to know by name: any `gh` command that walks the classic-Projects
+   GraphQL path fails on `repository.issue.projectCards`. `gh pr edit` has
+   silently left a title and body unchanged, and `gh issue view` refuses
+   outright. Route around it with `gh api` (`-X PATCH` to write, `--jq` to
+   read) and read the state back after any mutating command.
 8. Uncertainty is cheap, confident wrongness is expensive. "I could not
    verify X" is always an acceptable report. "X is done" when it is not is
    the one unforgivable one.
+9. Read first, compose second, in that order. Rule 1 is not enough on its
+   own: a status report written before its `gh` read and sent after it
+   carried a VERIFIED label on an issue that had already merged. Every fact
+   in a report has to be younger than the sentence that states it.
+10. "Main passes, my branch fails, therefore the environment" is not a
+    diagnosis. It is the shape of a conclusion you want to be true. A red
+    audit job on a green `main` was a dependency pin this branch had deleted,
+    and the difference between the two branches was the evidence, not the
+    alibi.
+11. No bulk operations on a shared surface. Name the paths on `git add`, and
+    merge into a structured key instead of assigning it. Both halves of that
+    rule come from a real loss: a script wrote the whole `overrides` key and
+    deleted the security pins inside it, and `git add -A` swept an unrelated
+    file into a PR already under review. `git checkout <ref> -- .` belongs on
+    the same list. The safe version of each costs one extra word.
+12. Correct it before the reviewer finds it. A `--force-with-lease` and a
+    message naming the old and new SHA costs a minute. Being caught later
+    costs the reviewer's trust in everything else in the branch.
 
 Money paths (send, ledger, reservation, PoW verify) never skip review, no
 matter how urgent the window. Docs and pure test additions may fast-track
