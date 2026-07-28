@@ -72,6 +72,52 @@ Gotchas that have already bitten us once each:
 CI runs all of this on every PR and on pushes to main. Green on CI is the
 floor, not the bar. The bar is that you exercised your change for real.
 
+## Verification
+
+One night produced several false positives: locally accepted blocks reported
+as funding, a merge reported from memory, an error string trusted over the
+source, and a money-path PR that skipped review and carried a funds bug.
+Every correction came from the same few habits, so the habits are rules.
+
+1. Never report a state you have not verified with a fresh command in this
+   session. Board states come from `gh`, balances come from the node, never
+   from memory or from your own earlier message.
+2. Label every claim in a report: VERIFIED (the command and what it said),
+   INFERRED (from what), or ASSUMED (say so). A reader must be able to tell
+   which is which without asking.
+3. Compiles and tests-pass are not works. Acceptance means the behavior was
+   exercised: in a browser for UI, against a running server for routes,
+   adversarially for anything touching money.
+4. Break your own test before trusting it. An assertion that cannot fail
+   when the code is sabotaged is not a test. Canonical trap: on a
+   server-rendered React page, `html.includes(x)` passes on the serialized
+   props alone, so assert on visible text and prove it fails on a broken
+   render.
+5. Local acceptance is not network truth. Our node accepted eight mined
+   blocks and the chain orphaned all eight. The same gap exists for anything
+   with an external party on the other side.
+6. Read the source, do not recall it. Every correct call that night came
+   from reading the code, every wrong one came from remembering it or
+   trusting a summary of it.
+7. Error messages are claims, not facts. Treat the message as a lead and
+   confirm the cause before acting on it. This includes tooling: `gh pr
+   edit` has failed here while printing only a deprecation warning, so
+   read the state back after any mutating command.
+8. Uncertainty is cheap, confident wrongness is expensive. "I could not
+   verify X" is always an acceptable report. "X is done" when it is not is
+   the one unforgivable one.
+
+Money paths (send, ledger, reservation, PoW verify) never skip review, no
+matter how urgent the window. Docs and pure test additions may fast-track
+at the CTO's discretion.
+
+## Comments
+
+One or two lines, and they say why, never what the next line does. Anything
+longer moves to a doc and the comment points at it. The repo is public and
+every file is a writing sample. Existing long comments get trimmed when you
+touch the file, no dedicated sweep.
+
 ## House voice
 
 Everything a human reads is written like a senior engineer talking to peers:
