@@ -129,6 +129,23 @@ redeploy is a pull plus a re-run:
 cd /opt/zcash-faucet
 git pull
 NETWORK=testnet FAUCET_DOMAIN=$(cat /etc/faucet-domain) ./deploy/deploy.sh
+
+### Where mining rewards go
+
+`FAUCET_MINER_ADDRESS` is what funds this faucet. `deploy.sh` writes it into
+`deploy/z3-stack/docker-compose.override.yml` and passes `COMPOSE_FILE` through
+the shell, so z3's own tracked files stay pristine and the clone can be thrown
+away and re-cloned.
+
+It used to live only as a hand-written override inside that gitignored clone,
+plus a hand edit to z3's `.env.testnet` to load it. Both are invisible to
+`git status` and to `audit-drift.sh`, which reads units and `/opt/faucet`, not a
+vendor clone. A rebuild therefore produced a box that came up with **no miner
+address**, mining nothing, with nothing in the repo explaining why.
+
+If the file exists and the variable is unset, `deploy.sh` keeps the file rather
+than unfunding a running box, and says out loud that the box is not reproducible.
+
 ```
 
 For a web-app-only change, rebuilding the overlay is enough (the compose
@@ -184,10 +201,36 @@ incomplete (so it never reports clean on checks it could not run).
 
 ### The intended exposure
 
-Public: **22, 80, 443**. Nothing else. The node and wallet RPC are reachable
-only on the docker network, and the app's own port is `expose`-only. Anything
-else on a wildcard address is a finding, with `18232` (Zebra RPC) and `28232`
-(Zallet RPC) the ones that would matter most.
+Public: **22, 80, 443**, plus **18233** (Zebra P2P, where inbound peers are the
+point). Nothing else. The app's own port is `expose`-only, and the node and
+wallet RPC are bound to loopback on the host.
+
+**ufw cannot close a docker-published port.** Docker writes its own iptables
+chain, which is consulted before ufw's rules, so `ufw deny 18232` does nothing
+to a container publishing 18232. The host **binding** is the only control, which
+is why `deploy.sh` passes loopback host bindings when it brings up the z3 stack:
+
+| Port | Was | Now | Why |
+|---|---|---|---|
+| 18232 | `0.0.0.0` | `127.0.0.1` | Zebra RPC, can read the chain and submit blocks |
+| 18080 | `0.0.0.0` | `127.0.0.1` | Zebra health, still reachable by our own probes |
+| 40232 | `0.0.0.0` | `127.0.0.1` | **Zallet RPC, this one can move funds** |
+| 18137, 18237 | not published | `127.0.0.1` | Zaino, only under the indexer profile |
+| 18233 | `0.0.0.0` | unchanged | P2P needs inbound peers |
+
+Those are shell values, which take precedence over `--env-file`, so nothing in
+z3's own files is edited and the change survives a `git pull` of z3.
+
+Loopback binding does not affect the faucet: it reaches zallet over the shared
+docker network, not the host. Our own host-side probes (`zsnap-export.sh`'s
+ready gate on `127.0.0.1:18080`) keep working for the same reason.
+
+Verify after a bring-up:
+
+```bash
+ss -Hltn | awk '{print $4}' | sort -u       # 18232/18080/40232 should show 127.0.0.1
+/opt/faucet/audit-access.sh
+```
 
 Applying firewall changes, **with a second session already open** so a mistake
 is recoverable:

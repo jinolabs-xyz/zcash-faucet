@@ -3,9 +3,10 @@
 # nothing: the box has one door and a lockout is a dead box. See OPERATIONS.md.
 set -uo pipefail
 
-# Public by intent: ssh, http, https. Everything else must be loopback or
-# docker-internal, particularly the node and wallet RPC.
-ACCESS_PUBLIC_PORTS="${ACCESS_PUBLIC_PORTS:-22 80 443}"
+# Public by intent: ssh, http, https, and Zebra's P2P port, where inbound peers
+# are the point. Everything else must be loopback or docker-internal, above all
+# the node RPC and the wallet RPC.
+ACCESS_PUBLIC_PORTS="${ACCESS_PUBLIC_PORTS:-22 80 443 18233 8233}"
 ACCESS_SSHD_CONFIG="${ACCESS_SSHD_CONFIG:-/etc/ssh/sshd_config}"
 # sshd -T resolves Include directives and reports what sshd will actually
 # enforce. Grepping the main file misses sshd_config.d drop-ins, which win.
@@ -17,6 +18,10 @@ VERBOSE=0
 
 findings=0
 unverified=""
+# Ports that are BOTH intended-public and actually listening. A ufw rule for a
+# port nothing serves is not a finding, and the mainnet P2P port on a testnet
+# box is exactly that case.
+listening_public=""
 say()   { echo "$*"; }
 ok()    { [ "$VERBOSE" = "1" ] && echo "  ok       $*"; return 0; }
 found() { findings=$((findings + 1)); echo "  FINDING  $1"; [ -n "${2:-}" ] && echo "           fix: $2"; return 0; }
@@ -37,10 +42,11 @@ if command -v "$ACCESS_SS" >/dev/null 2>&1; then
       127.0.0.1|::1|localhost) continue ;;
     esac
     if is_public_port "$port"; then
+      case " $listening_public " in *" $port "*) ;; *) listening_public="$listening_public $port" ;; esac
       ok "port $port on $addr is public by intent"
     else
       found "port $port is bound on $addr, which is off-box reachable and not in the intended set ($ACCESS_PUBLIC_PORTS)" \
-            "bind it to 127.0.0.1, or block it: ufw deny $port/tcp"
+            "if it is a docker-published port, REBIND it to 127.0.0.1 (docker writes its own iptables chain, so ufw deny will not close it). Host services: bind to 127.0.0.1 or ufw deny $port/tcp"
     fi
   done < <("$ACCESS_SS" -Hltn 2>/dev/null \
              | awk '{print $4}' \
@@ -62,10 +68,11 @@ if command -v "$ACCESS_UFW" >/dev/null 2>&1; then
       found "ufw is rate-limiting SSH (LIMIT, hardcoded 6 connections per 30s per source), which drops bursts of parallel connections and surfaces as kex_exchange_identification resets" \
             "prefer client-side multiplexing, which needs no box change (see OPERATIONS.md). 'ufw allow OpenSSH' also fixes it but REMOVES brute-force limiting from a public port, so only with keys-only auth and fail2ban"
     fi
-    for p in $ACCESS_PUBLIC_PORTS; do
+    for p in $listening_public; do
       printf '%s' "$ufw_out" | grep -qE "(^|[^0-9])$p(/tcp)?[[:space:]]" \
-        || found "port $p is intended to be public but has no ufw rule" "ufw allow $p/tcp"
+        || found "port $p is serving and intended to be public but has no ufw rule" "ufw allow $p/tcp"
     done
+    [ -n "$listening_public" ] || skip "which public ports need a ufw rule: no listening sockets were read, so rules were not cross-checked"
   else
     found "ufw is installed but NOT active, so nothing is filtered" \
           "ufw allow OpenSSH && ufw allow 80/tcp && ufw allow 443/tcp && ufw --force enable   # keep a session open while doing this"
