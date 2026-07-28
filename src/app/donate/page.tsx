@@ -32,7 +32,7 @@ const muted = (pct: number): string => `color-mix(in srgb, var(--color-text) ${p
 const pad = "clamp(16px,4vw,26px)";
 const kicker: CSSProperties = {
   fontFamily: "var(--mono)", fontSize: 10, fontWeight: 700,
-  letterSpacing: ".14em", textTransform: "uppercase", color: "var(--color-accent)",
+  letterSpacing: ".14em", textTransform: "uppercase", color: "var(--color-accent-text)",
 };
 const addrBox: CSSProperties = {
   border: "2px solid var(--color-divider)", padding: "12px 14px",
