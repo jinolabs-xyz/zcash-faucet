@@ -128,6 +128,23 @@ redeploy is a pull plus a re-run:
 cd /opt/zcash-faucet
 git pull
 NETWORK=testnet FAUCET_DOMAIN=$(cat /etc/faucet-domain) ./deploy/deploy.sh
+
+### Where mining rewards go
+
+`FAUCET_MINER_ADDRESS` is what funds this faucet. `deploy.sh` writes it into
+`deploy/z3-stack/docker-compose.override.yml` and passes `COMPOSE_FILE` through
+the shell, so z3's own tracked files stay pristine and the clone can be thrown
+away and re-cloned.
+
+It used to live only as a hand-written override inside that gitignored clone,
+plus a hand edit to z3's `.env.testnet` to load it. Both are invisible to
+`git status` and to `audit-drift.sh`, which reads units and `/opt/faucet`, not a
+vendor clone. A rebuild therefore produced a box that came up with **no miner
+address**, mining nothing, with nothing in the repo explaining why.
+
+If the file exists and the variable is unset, `deploy.sh` keeps the file rather
+than unfunding a running box, and says out loud that the box is not reproducible.
+
 ```
 
 For a web-app-only change, rebuilding the overlay is enough (the compose
