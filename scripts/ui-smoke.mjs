@@ -54,15 +54,19 @@ async function checkAppearance(page) {
   // itself, not a hardcoded rgb, so a theme edit cannot make this assertion lie.
   const [dotBg, liveToken] = await page.evaluate(() => {
     const dot = [...document.querySelectorAll("span[aria-hidden]")].find((el) => el.style.animation.includes("pulse"));
-    // Resolve the token in the DOT's own context, not on body: the theme tokens
-    // are scoped to the .app wrapper, so a body-level probe reads the :root
-    // default and would compare the dot against the wrong theme's value.
+    // No dot is its own failure, not a theme mismatch: falling back to body here
+    // resolves the :root default and would report a misleading wrong-theme colour
+    // for a problem that is actually a missing dot.
+    if (!dot) return ["no dot", "no dot to probe"];
+    // Resolve the token in the DOT's own context: the theme tokens are scoped to
+    // the .app wrapper, so a body-level probe reads the :root default and would
+    // compare the dot against the wrong theme's value.
     const probe = document.createElement("span");
     probe.style.color = "var(--color-live)";
-    (dot?.parentElement ?? document.body).appendChild(probe);
+    dot.parentElement.appendChild(probe);
     const token = getComputedStyle(probe).color;
     probe.remove();
-    return [dot ? getComputedStyle(dot).backgroundColor : "no dot", token];
+    return [getComputedStyle(dot).backgroundColor, token];
   });
   ok("the LIVE dot carries the --color-live state colour", dotBg === liveToken, `${dotBg} vs ${liveToken}`);
 
@@ -82,30 +86,58 @@ async function checkAppearance(page) {
   ok("reduced-motion halts the dot", (await dotAnim()) === "none");
   await page.emulateMedia({ reducedMotion: "no-preference" });
 
-  // Text contrast: sample a resting link and compute its WCAG ratio against the
-  // first opaque background behind it. 4.5 is the AA floor for body text, and
-  // resting accent links were under it until the per-theme token landed (#96/#99).
-  const ratio = await page.evaluate(() => {
-    const a = document.querySelector("a");
-    if (!a) return null;
-    const lum = (c) => {
-      const [r, g, b] = (c.match(/[\d.]+/g) ?? []).slice(0, 3).map((n) => {
-        const s = Number(n) / 255;
-        return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  // Text contrast, worst readable link, in BOTH themes. Two corrections earned
+  // by review: (1) the FIRST anchor is the textless logo, whose colour is the
+  // colour of text that does not exist, so only links with real text and a real
+  // box count, and we take the WORST rather than the first; (2) --color-accent-text
+  // is per-theme (#96/#99) and one value is unusable in the other theme, so the
+  // theme the page does not render at test time is exactly the one worth checking.
+  const worstReadableLink = () =>
+    page.evaluate(() => {
+      const lum = (c) => {
+        const [r, g, b] = (c.match(/[\d.]+/g) ?? []).slice(0, 3).map((n) => {
+          const s = Number(n) / 255;
+          return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+        });
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      };
+      const opaque = (c) => c && !/rgba\(.*,\s*0\)$|transparent/.test(c);
+      const bgBehind = (el) => {
+        let bg = getComputedStyle(el).backgroundColor;
+        while (el && !opaque(bg)) { el = el.parentElement; bg = el ? getComputedStyle(el).backgroundColor : "rgb(255, 255, 255)"; }
+        return bg;
+      };
+      const links = [...document.querySelectorAll("a")].filter((a) => {
+        const r = a.getBoundingClientRect();
+        return a.textContent.trim() && r.width > 0 && r.height > 0;
       });
-      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    };
-    const opaque = (c) => c && !/rgba\(.*,\s*0\)$|transparent/.test(c);
-    let el = a;
-    let bg = getComputedStyle(el).backgroundColor;
-    while (el && !opaque(bg)) {
-      el = el.parentElement;
-      bg = el ? getComputedStyle(el).backgroundColor : "rgb(255, 255, 255)";
-    }
-    const [hi, lo] = [lum(getComputedStyle(a).color), lum(bg)].sort((x, y) => y - x);
-    return (hi + 0.05) / (lo + 0.05);
-  });
-  ok("resting link text meets WCAG AA", ratio != null && ratio >= 4.5, ratio ? `${ratio.toFixed(2)}:1` : "no link found");
+      if (!links.length) return null;
+      let worst = null;
+      for (const a of links) {
+        const [hi, lo] = [lum(getComputedStyle(a).color), lum(bgBehind(a))].sort((x, y) => y - x);
+        const ratio = (hi + 0.05) / (lo + 0.05);
+        if (!worst || ratio < worst.ratio) worst = { ratio, link: a.textContent.trim().slice(0, 24) };
+      }
+      return worst;
+    });
+  // Toggle to a target theme via the real footer control and wait for it to apply.
+  const setTheme = async (want) => {
+    const isInk = () => page.evaluate(() => document.querySelector(".app")?.classList.contains("ink") ?? false);
+    if ((want === "ink") !== (await isInk())) await page.getByRole("button", { name: /Switch to/ }).click();
+    await page.waitForFunction((w) => (document.querySelector(".app")?.classList.contains("ink") ?? false) === (w === "ink"), want);
+  };
+  await setTheme("ink");
+  const ink = await worstReadableLink();
+  await setTheme("paper");
+  const paper = await worstReadableLink();
+  await setTheme("ink"); // restore for the claim flow
+  const both = [ink, paper].filter(Boolean);
+  const worst = both.sort((a, b) => a.ratio - b.ratio)[0];
+  ok(
+    "worst readable link meets WCAG AA in both themes",
+    ink != null && paper != null && worst != null && worst.ratio >= 4.5,
+    worst ? `${worst.ratio.toFixed(2)}:1 "${worst.link}"` : "no readable link found in a theme",
+  );
 }
 
 // The 404 must wear the site chrome, not Next's bare default. A broken not-found
