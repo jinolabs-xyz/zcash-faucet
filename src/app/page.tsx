@@ -23,7 +23,7 @@ interface Tx { txid: string; to: string; priv: boolean; explorerUrl?: string; at
 interface PowSolution { seed: string; difficulty: number; exp: number; sig: string; nonce: string }
 
 /* ── Helpers ───────────────────────────────────────────────────────────── */
-const B32 = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+const B32 = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"; // bech32 charset, for prefix detection
 
 function detect(raw: string) {
   const a = (raw || "").trim();
@@ -56,7 +56,6 @@ function dur(ms: number) {
   return s + "s";
 }
 function num(n: number | null | undefined) { return n == null ? "–" : n.toLocaleString("en-US"); }
-function randB32(n: number) { let o = ""; for (let i = 0; i < n; i++) o += B32[Math.floor(Math.random() * B32.length)]; return o; }
 
 const muted = (pct: number): string => `color-mix(in srgb, var(--color-text) ${pct}%, transparent)`;
 const PROOF_SECONDS = 12; // estimated shielded-proof build time, for the progress feel
@@ -79,6 +78,7 @@ export default function Home() {
   const [lookupRes, setLookupRes] = useState("");
   const [elapsed, setElapsed] = useState(0);
   const [powState, setPowState] = useState<{ hashes: number; difficulty: number } | null>(null);
+  const [genErr, setGenErr] = useState("");
 
   const inFlow = useRef(false); // in a claim flow → don't let polling override the phase
   const submitStart = useRef(0);
@@ -237,13 +237,27 @@ export default function Home() {
     ]
       .filter(Boolean)
       .join("\n");
+
+  // /api/account answers { ok, account: { address, … } }. Reading d.address
+  // instead of d.account.address is what put a fake address in the box and
+  // 400'd the most obvious try-it-now flow. There is no sample fallback any
+  // more: a synthesized string cannot pass checksum validation, so handing one
+  // out only moves the failure somewhere more confusing.
   const generate = async () => {
+    setGenErr("");
     try {
       const r = await fetch("/api/account", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: "shielded" }) });
       const d = await r.json();
-      if (d?.address) { setAddr(d.address); return; }
-    } catch { /* fall through to a sample */ }
-    setAddr("utest1" + randB32(58));
+      const generated = d?.account?.address;
+      if (d?.ok && typeof generated === "string" && check(generated).ok) {
+        setAddr(generated);
+        setTouched(false);
+        return;
+      }
+      setGenErr(d?.error ?? "Couldn't generate an address just now. Paste one from your wallet, or try again.");
+    } catch {
+      setGenErr("Couldn't reach the faucet to generate an address. Try again in a moment.");
+    }
   };
   const doLookup = async () => {
     const a = lookupAddr.trim();
@@ -461,6 +475,7 @@ export default function Home() {
               {badgeShow && "label" in c && <span className="tag tag-outline">{c.label}</span>}
               {"priv" in c && c.priv === false && <span style={{ fontSize: 12, lineHeight: 1.45, color: muted(62) }}>Transparent address, so this drip will be visible on-chain.</span>}
               {touched && "err" in c && c.err && <span style={{ fontSize: 12.5, lineHeight: 1.45, color: "var(--color-accent-700)", fontWeight: 500, maxWidth: "52ch" }}>{c.err}</span>}
+              {genErr && <span style={{ fontSize: 12.5, lineHeight: 1.45, color: "var(--color-accent-700)", fontWeight: 500, maxWidth: "52ch" }}>{genErr}</span>}
               {!addr.trim() && <button className="btn btn-ghost btn-sm" onClick={generate} style={{ padding: 0 }}>Generate a test address</button>}
             </div>
             <button className="btn btn-primary" onClick={submit} disabled={phase === "empty" || phase === "syncing"} style={{ width: "100%", justifyContent: "space-between" }}>
