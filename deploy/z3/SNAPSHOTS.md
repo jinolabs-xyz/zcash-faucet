@@ -188,6 +188,61 @@ mean it):
 /opt/faucet/zsnap-import.sh /var/lib/zsnap/snapshots/latest.tar.zst
 ```
 
+## Publishing a snapshot so a replacement box can find it
+
+`ZSNAP_UPLOAD_CMD` copies an archive off-box, but a pile of timestamped
+archives in a bucket is not a recovery path: whoever rebuilds the box has to
+know which file to take and which hash to trust, and usually only the person
+who set it up does.
+
+`zsnap-publish.sh` uploads the whole set a stranger needs, and a pointer:
+
+```bash
+cp zsnap-publish.sh /opt/faucet/ && chmod +x /opt/faucet/zsnap-publish.sh
+# in /etc/faucet/zsnap.env
+ZSNAP_PUBLISH_CMD=rclone copyto
+ZSNAP_PUBLISH_BASE=linode:zcash-faucet-snapshots
+
+/opt/faucet/zsnap-publish.sh --dry-run    # see exactly what it would do
+/opt/faucet/zsnap-publish.sh              # publish the newest local snapshot
+```
+
+That puts four things in the remote: the archive, its `.manifest-hash`, a
+`.sha256` for transport integrity, and `latest-<net>.txt`:
+
+```
+file=zsnap-testnet-4204800-deadbeefcafe.tar.zst
+height=4204800
+manifest_hash=<the hash import verifies against>
+sha256=<of the archive>
+published=2026-07-28T09:14:02Z
+```
+
+Three lines of plain text on purpose. Someone rebuilding a dead box at 3am
+reads it with `curl` and knows what to fetch and what `--expect-hash` to
+pass, without parsing anything or asking anyone.
+
+The pointer is uploaded **last**, after the archive and both hashes have
+landed. A pointer naming a half-uploaded archive is worse than a stale
+pointer, so the ordering is deliberate and tested. Any upload failing aborts
+with a message saying what did and did not make it up, and a rerun is safe.
+
+Restoring from it on a fresh box:
+
+```bash
+curl -fsS https://<bucket>/latest-testnet.txt          # read file= and manifest_hash=
+ZSNAP_EXPECT_HASH=<manifest_hash> /opt/faucet/zsnap-import.sh https://<bucket>/<file>
+```
+
+Or wire both values into `cloud-init.yaml` (`/etc/zsnap-restore-url` and
+`ZSNAP_EXPECT_HASH` in `/etc/faucet/zsnap.env`) and a new box restores itself
+on first boot with no operator at all.
+
+Chain state is public, so nothing here is sensitive and the bucket can be
+world-readable. The manifest hash is what makes a downloaded snapshot
+trustworthy rather than merely present, which is why it belongs in your team
+notes as well as next to the archive.
+
 ## Where snapshots live, and real disaster recovery
 
 Locally: `/var/lib/zsnap/snapshots` on the box, rotated to the newest
