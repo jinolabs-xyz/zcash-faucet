@@ -10,7 +10,8 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test": "node --test \"src/**/*.test.ts\"",
-    "smoke": "node scripts/e2e-smoke.mjs"
+    "smoke": "node scripts/e2e-smoke.mjs",
+    "test:api": "node scripts/api-integration.mjs"
   },
   "dependencies": {
     "@bitgo/utxo-lib": "^11.24.0",
