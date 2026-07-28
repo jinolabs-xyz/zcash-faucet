@@ -122,20 +122,35 @@ there to check rather than assume.
 
 **It is hashrate share, and the consensus rule does the rest.** A miner that
 ignores our blocks means our chain only ever advances when *we* find a block,
-while theirs advances when *they* do. That is a biased random walk, and with
-share `q` below theirs the outcome is not close:
+while theirs advances when *they* do. Once we mine a block our chain leads by
+one, and it survives only if their chain never overtakes ours. That is
+gambler's ruin from a lead of 1, so the survival probability has a closed
+form:
 
-| Our share `q` | We win one race | Three in a row | Long-run survival |
-|---|---|---|---|
-| 2% | 0.02 | 0.000008 | 0 |
-| 10% | 0.10 | 0.001 | 0 |
-| 33% | 0.33 | 0.036 | 0 |
-| 50% | 0.50 | 0.125 | 1 |
+    survival(q) = 1 - (1 - q) / q   for q > 1/2,  and 0 otherwise
 
-Below 50% of the hashrate that miner brings, long-run survival of any given
-block is zero, not merely low. Eight orphans out of eight is exactly the
-expected result, not bad luck. Our own share is a single CPU capped at 150%
-of one box against a miner winning every height, so `q` is very small.
+where `q` is our share of the combined hashrate.
+
+| Our share `q` of combined | Long-run survival |
+|---|---|
+| 10% | 0 |
+| 33% | 0 |
+| 45% | 0 |
+| 50% (exact parity) | 0 |
+| 60% | 0.33 |
+| 75% | 0.67 |
+
+The threshold is parity, and it is a hard one. Survival is zero for every
+`q` at or below one half, including exactly one half: at parity the walk is
+recurrent, so their chain is certain to catch up eventually. It only becomes
+positive once our hashrate **exceeds** theirs, and even then it is far from
+1. Verified two ways, the closed form above and a random-walk simulation
+that agrees with it (0.3397 against 0.3333 at `q` = 0.6, and decaying toward
+0 at parity as the horizon grows).
+
+Eight orphans out of eight is the expected result, not bad luck. Our share is
+a single CPU capped at 150% of one box against a miner that wins every
+height, so `q` is far below parity and survival is not "low", it is zero.
 
 **What follows.** Mining cannot fund the faucet while that miner is active.
 Not "funds it slowly", cannot: expected revenue is `q^k`-shaped and rounds to
@@ -145,9 +160,11 @@ zero. So:
   a block whenever the dominant miner pauses or a min-difficulty gap favours
   us, and those coinbases are real when they survive. It is a lottery ticket,
   not a budget line.
-- **Do not spend effort on latency.** Template freshness, faster submits and
-  more solver threads all multiply a number whose ceiling is set by hashrate
-  share. The measurement exists so this stays a decision rather than an
+- **Do not spend effort on latency, or on buying a bit more hashrate.** Both
+  multiply a number whose ceiling is zero until our share passes parity with
+  that miner. Anything short of overtaking them buys nothing, which is a much
+  stronger statement than "diminishing returns" and the reason not to spend
+  on either. The measurements exist so this stays a decision rather than an
   argument.
 - **Fund the faucet from a source that does not race.** External testnet
   faucets, an ask to the Zcash Foundation or ECC for testnet TAZ, or an
