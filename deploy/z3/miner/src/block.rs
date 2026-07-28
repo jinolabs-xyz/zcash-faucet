@@ -81,12 +81,24 @@ impl Header {
     /// Block hash as compared against the target: double SHA256 of the
     /// serialized header, in little-endian wire order.
     pub fn hash_le(&self) -> [u8; 32] {
-        let first = Sha256::digest(self.serialize());
-        let second = Sha256::digest(first);
-        let mut out = [0u8; 32];
-        out.copy_from_slice(&second);
-        out
+        double_sha256(&self.serialize())
     }
+}
+
+/// Double SHA-256, the hash Bitcoin-derived headers use.
+///
+/// Its own function so a known-answer test can pin it directly. This is
+/// consensus, not convenience: if a `sha2` bump ever changed what these two
+/// calls produce, every block we mined would be silently invalid and the first
+/// symptom would be a submitted block that is never accepted. `cargo test`
+/// would stay green throughout, so the test that guards this has to compare
+/// against an answer computed outside our code (#138).
+fn double_sha256(bytes: &[u8]) -> [u8; 32] {
+    let first = Sha256::digest(bytes);
+    let second = Sha256::digest(first);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&second);
+    out
 }
 
 /// Serializes the full block: header, transaction count, coinbase, then the
@@ -213,6 +225,41 @@ pub fn expand_target(bits_display_hex: &str) -> Result<[u8; 32], String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// KNOWN-ANSWER TEST for the hashing primitive, against a value this project
+    /// did not compute: the Bitcoin genesis block header and its hash are among
+    /// the most widely published constants in computing, and the hash IS a
+    /// double SHA-256 of that 80-byte header, which is exactly the operation
+    /// `hash_le` performs.
+    ///
+    /// It deliberately does not use a Zcash header. This pins the sha2 crate's
+    /// behaviour on its own, so it keeps its meaning across a 0.10 to 0.11 bump
+    /// even if our own serialization changes. A companion test pins the
+    /// serialization against a real testnet header.
+    #[test]
+    fn double_sha256_matches_the_published_bitcoin_genesis_hash() {
+        let header = hex::decode(concat!(
+            "01000000",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "3ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a",
+            "29ab5f49",
+            "ffff001d",
+            "1dac2b7c",
+        ))
+        .unwrap();
+        assert_eq!(header.len(), 80, "the genesis header is 80 bytes");
+
+        // hash_le returns wire (little-endian) order, and block hashes are
+        // displayed reversed, so reverse before comparing to the famous value.
+        let mut display = double_sha256(&header);
+        display.reverse();
+        assert_eq!(
+            hex::encode(display),
+            "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+            "double SHA-256 no longer produces the published genesis hash, so the \
+             hashing primitive changed under us and every mined block would be invalid",
+        );
+    }
 
     #[test]
     fn compact_size_boundaries() {
