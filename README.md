@@ -17,6 +17,11 @@ every block race, so ours are orphaned and mining income is zero. Measured, not
 guessed ([#42](../../issues/42)). The machinery is real, the revenue is not, so
 the wallet is topped up from elsewhere. See [donate](#keeping-it-funded).
 
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/ready-paper.png">
+  <img src="docs/screenshots/ready-ink.png" alt="The faucet ready to serve: address field, Request 0.1 TAZ button, and the live status strip showing node, sync, balance and reserve.">
+</picture>
+
 > `zcashd` reached end of life on 2026-07-18 and every node auto-halted. This
 > project is built on what replaced it: **Zebra** (full node) and **Zallet**
 > (wallet, with the Zaino indexer embedded).
@@ -100,10 +105,25 @@ what the backend is doing:
 - **Topping up** while the reserve loop refills. If the faucet can still serve it
   keeps serving and says so, because a healthy background refill must never look
   like an outage.
-- **Empty** only when it genuinely cannot pay, and it only promises to fix itself
-  when the miner is actually on.
+- **Empty** only when it genuinely cannot pay, and it says the wallet is refilled
+  by hand rather than promising a self-heal that mining cannot deliver.
 - **Ready**, then a receipt with the txid, a working explorer link, and a
   copyable plain-text summary.
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/topping-up.png" alt="The topping-up card: a determinate meter showing spendable against the reserve target, and copy saying the faucet is still serving while it refills."></td>
+    <td width="50%"><img src="docs/screenshots/success-receipt.png" alt="The success receipt: amount, recipient, txid, a shielded z to z badge, and buttons to copy the txid or the whole receipt."></td>
+  </tr>
+  <tr>
+    <td><b>Topping up.</b> A refill that can still serve keeps serving, and says so.</td>
+    <td><b>Sent.</b> The receipt is the thing you paste into an issue.</td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/mobile-360.png" width="280" alt="The faucet at 360 pixels wide: the address field, request button and status strip all wrap without horizontal scrolling."></td>
+    <td valign="top"><b>360px.</b> The narrowest phone still gets the whole flow, no horizontal scroll, 44px touch targets and a 16px input so iOS does not zoom on focus.</td>
+  </tr>
+</table>
 
 ## Quick start (local, no node needed)
 
@@ -173,6 +193,12 @@ shielded, and `FAUCET_MINING_ADDRESS` is the transparent address the miner pays
 its coinbase to, shown for anyone who wants to point spare hashrate at the
 faucet. Set either and the UI surfaces it. Set neither and the pages that would
 show them say so rather than rendering an empty box.
+
+<img src="docs/screenshots/donate.png" alt="The donate page: the shielded unified address in full with a copy button, a tank gauge showing the reserve level, and the transparent address for anyone pointing a miner at the faucet.">
+
+`/donate` is server rendered, so both addresses are readable with JavaScript
+off. That is deliberate for a page whose only job is handing over an address
+correctly.
 
 ## Operations
 
