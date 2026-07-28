@@ -202,6 +202,20 @@ Every correction came from the same few habits, so the habits are rules.
     invoked, and every assertion reads the script's own output. When a test
     contains a second implementation of the thing it checks, it has stopped
     being a test.
+16. Know which of your numbers the system cannot check about itself. Most
+    constants are derivable or assertable, and a test pins them honestly. A few
+    are claims about the world outside the process, and for those a test can
+    only prove the arithmetic around them is consistent, never that the input is
+    true. Three shipped examples. The 100k H/s browser hashrate that sets the
+    PoW ceiling is a claim about a phone we do not own. The 279s zallet worst
+    case behind the send deadline was derived by reading the sender's control
+    flow and never measured against a real wallet under load. And
+    `ZSNAP_EXPECT_HASH` was a claim about an archive nobody re-checked. Each is
+    a single value that decides whether a safety mechanism is real. Write down
+    what it was measured against and when, next to the value rather than in a
+    commit message, and choose units so the pessimistic direction is the cheap
+    one. Being wrong toward caution costs latency. Being wrong toward optimism
+    cost a live user their claim in #132.
 
 Money paths (send, ledger, reservation, PoW verify) never skip review, no
 matter how urgent the window. Docs and pure test additions may fast-track
