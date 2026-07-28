@@ -81,6 +81,7 @@ export default function Home() {
   const [elapsed, setElapsed] = useState(0);
   const [powState, setPowState] = useState<{ hashes: number; difficulty: number } | null>(null);
   const [genErr, setGenErr] = useState("");
+  const [txSeen, setTxSeen] = useState<{ known: boolean | null; confirmations: number | null } | null>(null);
   // A claim held while the node syncs. Persisted so a reload (or coming back
   // tomorrow) keeps the place in line; fires on its own when the node is ready.
   const [queuedAddr, setQueuedAddr] = useState<string | null>(null);
@@ -150,6 +151,21 @@ export default function Home() {
     const iv = setInterval(() => setElapsed(Date.now() - submitStart.current), 120);
     return () => clearInterval(iv);
   }, [phase]);
+  // Ask OUR node whether the drip landed. A public explorer renders a page for
+  // any hash, so it cannot answer this (#71).
+  useEffect(() => {
+    if (!tx?.txid) { setTxSeen(null); return; }
+    let alive = true;
+    const check = () =>
+      fetch("/api/tx?txid=" + encodeURIComponent(tx.txid))
+        .then((r) => r.json())
+        .then((d) => { if (alive) setTxSeen({ known: d.known ?? null, confirmations: d.confirmations ?? null }); })
+        .catch(() => {});
+    check();
+    const iv = setInterval(check, 10_000);
+    return () => { alive = false; clearInterval(iv); };
+  }, [tx?.txid]);
+
   useEffect(() => () => { powWorker.current?.terminate(); powWorker.current = null; }, []);
   useEffect(() => { const t = localStorage.getItem("zfaucet_theme"); if (t === "paper" || t === "ink") setTheme(t); }, []);
   useEffect(() => { localStorage.setItem("zfaucet_theme", theme); }, [theme]);
@@ -620,6 +636,20 @@ export default function Home() {
                 <div style={rowLine}><span style={{ color: muted(55) }}>to</span><span title={tx.to} style={{ fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "60%" }}>{short(tx.to, 12, 6)}</span></div>
                 <div style={rowLine}><span style={{ color: muted(55) }}>txid</span><span title={tx.txid} style={{ fontWeight: 700 }}>{short(tx.txid, 10, 8)}</span></div>
                 <div style={rowLine}>
+                  <span style={{ color: muted(55) }}>our node</span>
+                  <span style={{ fontWeight: 700, textAlign: "right", maxWidth: "62%" }}>
+                    {txSeen === null
+                      ? "checking…"
+                      : txSeen.known === true
+                        ? txSeen.confirmations
+                          ? `seen it, ${txSeen.confirmations} confirmation${txSeen.confirmations === 1 ? "" : "s"}`
+                          : "seen it, in the mempool"
+                        : txSeen.known === false
+                          ? "not seen yet"
+                          : "cannot say right now"}
+                  </span>
+                </div>
+                <div style={rowLine}>
                   <span style={{ color: muted(55) }}>privacy</span>
                   <span style={{ fontWeight: 700, textAlign: "right", maxWidth: "62%" }}>
                     {tx.priv ? <span className="tag tag-outline" style={{ fontSize: 9 }}>shielded z→z</span> : "transparent, public on-chain"}
@@ -630,7 +660,7 @@ export default function Home() {
               <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
                 <button className="btn btn-secondary btn-sm" onClick={() => void copy("txid", tx.txid)}>{copied === "txid" ? "Copied ✓" : "Copy txid"}</button>
                 <button className="btn btn-secondary btn-sm" onClick={() => void copy("receipt", receiptText(tx))}>{copied === "receipt" ? "Copied ✓" : "Copy receipt"}</button>
-                {tx.explorerUrl && <a className="btn btn-secondary btn-sm" href={tx.explorerUrl} target="_blank" rel="noreferrer">View in explorer ↗</a>}
+                {tx.explorerUrl && <a className="btn btn-secondary btn-sm" href={tx.explorerUrl} target="_blank" rel="noreferrer">Open in explorer ↗</a>}
                 <button className="btn btn-ghost btn-sm" onClick={again} style={{ padding: 0 }}>Another address</button>
               </div>
               <p aria-live="polite" className="sr-only">{copied === "txid" ? "Transaction id copied." : copied === "receipt" ? "Receipt copied." : ""}</p>
