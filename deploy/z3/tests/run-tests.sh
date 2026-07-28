@@ -10,14 +10,22 @@
 # backup, tests/deploy-stubs for deploy, which needs a different docker
 # model). sqlite, tar, gpg and every hash check run for real.
 #
-# Needs Linux (flock, GNU find) plus zstd, gnupg, python3. From a Mac or a
-# clean room:
+# Needs Linux (flock, GNU find) plus zstd, gnupg, python3, curl, and openssh-server
+# for the access suite. Missing ones are named and refused rather than reported as
+# failures, so trust the refusal over guessing. From a Mac or a clean room:
 #   docker run --rm -v "$(git rev-parse --show-toplevel)":/repo:ro ubuntu:24.04 \
-#     bash -c 'apt-get update -qq && apt-get install -y -qq zstd curl gnupg python3 \
-#              && bash /repo/deploy/z3/tests/run-tests.sh'
+#     bash -c 'set -e; apt-get update -qq
+#              apt-get install -y -qq zstd curl gnupg python3 openssh-server
+#              bash /repo/deploy/z3/tests/run-tests.sh'
+# The `set -e` matters. An install that fails behind >/dev/null looks like the
+# suite found real bugs.
 # Scratch state goes under TMPDIR, never into the repo.
 #
-# Run one suite while iterating:  SUITES=deploy ./run-tests.sh
+# Suites are chosen with the SUITES env var, NOT positional arguments:
+#   SUITES=deploy ./run-tests.sh          one suite
+#   SUITES="drift alerts" ./run-tests.sh  a few
+# `./run-tests.sh drift` silently runs all of them, which is easy to misread as
+# a huge failure count from one suite.
 set -uo pipefail
 
 SCRATCH="${TEST_SCRATCH:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
@@ -40,7 +48,129 @@ BASE_PATH="$PATH"
 # shellcheck source=lib.sh
 . "$SCRATCH/lib.sh"
 
-for suite in ${SUITES:-zsnap backup deploy metrics redeploy drift alerts access}; do
+SELECTED="${SUITES:-zsnap backup deploy metrics redeploy drift alerts access}"
+
+# A missing dependency used to look exactly like broken code. With no sshd on
+# PATH the access suite reports 3 plain FAILs, and an `apt-get install` that
+# quietly failed behind >/dev/null reported 25 at me, none of which named a
+# cause. So refuse up front and say what to install, because a harness that
+# cannot tell "not installed" from "defect" makes every number it prints
+# suspect. Commands assumed present: coreutils, tar, flock, sed, awk.
+suite_deps() { # $1 suite name -> commands it needs beyond the base set
+  case "$1" in
+    # Only suites that reach the REAL command are listed. Declaring one a suite
+    # stubs is not harmless: it refuses to run a suite that would have passed,
+    # withholding green tests while printing no numbers, which is the same
+    # dishonesty as a phantom failure pointing the other way.
+    #
+    # curl is the trap. stubs/curl is first on PATH under fresh_env and
+    # redeploy symlinks stubs/redeploy-curl over it, so most suites never touch
+    # the real one. Only metrics and alerts deliberately step past the stub.
+    zsnap)    echo "zstd python3" ;;   # stubs/curl fakes the readiness gate
+    backup)   echo "gpg zstd python3" ;;
+    redeploy) echo "" ;;               # stubs/redeploy-curl stands in for curl
+    deploy)   echo "python3" ;;        # readiness is a stub script, lib.sh:60
+    metrics)  echo "curl python3" ;;   # metrics.sh:16 builds a bin dir with
+                                       # ONLY docker, so it gets the real curl
+    # audit-access.sh asks sshd what it enforces. Without sshd the audit is
+    # right to report NOT VERIFIED, but the suite asserts the resolved path.
+    access)   echo "sshd" ;;
+    alerts)   echo "python3 curl" ;;   # POSTs to a real local server
+    # drift does NOT need curl, though I first thought it inherited the need.
+    # report_env points DRIFT_ALERT_SH at its own stub, and the one test that
+    # runs the shipped alert.sh runs it unconfigured, where send() returns 3
+    # before reaching curl. Stubbed everywhere, early-exit in the one real case.
+    #
+    # jq is NOT listed: alert.sh encodes with jq OR python3, either one, and the
+    # suites exercise the refusal path when neither exists.
+    drift)    echo "python3" ;;
+    *)        echo "" ;;
+  esac
+}
+
+# A name check is not enough. macOS ships a `stat` and a `find` of the right
+# name that lack `-c` and `-printf`, so the command resolves, the suite runs, and
+# ~85 assertions fail as though the code were broken (#164).
+#
+# One of them is worse than a false failure. drift's read-only assertion compares
+# two `sha256sum` listings, and with no sha256sum BOTH are empty, so they compare
+# equal and the test reports ok while proving nothing. Verified: a file modified
+# between the two listings is not detected. That test is what pins the audit's
+# read-only promise, so a silent pass there is the worst outcome in this file.
+#
+# So probe the CAPABILITY, by running the flag, not by asking for the name.
+suite_caps() { # $1 suite -> capability keys it needs
+  case "$1" in
+    backup)   echo "stat_c find_printf sha256sum" ;;
+    zsnap)    echo "find_printf sha256sum" ;;
+    metrics)  echo "stat_c" ;;
+    drift)    echo "sha256sum" ;;
+    *)        echo "" ;;
+  esac
+}
+
+cap_probe() { # $1 key -> 0 when this host really has it
+  case "$1" in
+    stat_c)      stat -c %a . >/dev/null 2>&1 ;;
+    find_printf) find . -maxdepth 0 -printf '' >/dev/null 2>&1 ;;
+    sha256sum)   command -v sha256sum >/dev/null 2>&1 ;;
+    *)           return 0 ;;
+  esac
+}
+
+cap_reason() { # $1 key -> what is missing, in the operator's terms
+  case "$1" in
+    stat_c)      echo "stat -c        GNU coreutils. BSD/macOS stat uses -f instead." ;;
+    find_printf) echo "find -printf   GNU findutils. BSD/macOS find has no -printf." ;;
+    sha256sum)   echo "sha256sum      GNU coreutils. macOS ships shasum instead." ;;
+  esac
+}
+
+missing=""
+missing_caps=""
+for suite in $SELECTED; do
+  [ -f "$SCRATCH/suites/$suite.sh" ] || continue
+  for cmd in $(suite_deps "$suite"); do
+    command -v "$cmd" >/dev/null 2>&1 && continue
+    case " $missing " in *" $cmd "*) ;; *) missing="$missing $cmd" ;; esac
+  done
+  for cap in $(suite_caps "$suite"); do
+    cap_probe "$cap" && continue
+    case " $missing_caps " in *" $cap "*) ;; *) missing_caps="$missing_caps $cap" ;; esac
+  done
+done
+
+if [ -n "$missing_caps" ]; then
+  echo "REFUSING TO RUN: this host has the commands but not the GNU behaviour these" >&2
+  echo "suites depend on. This is a Linux harness. Run it in the container." >&2
+  echo >&2
+  for cap in $missing_caps; do echo "  missing: $(cap_reason "$cap")" >&2; done
+  echo >&2
+  echo "Running anyway is worse than a failure: most of those assertions go red as" >&2
+  echo "though the code were broken, and drift's read-only check goes GREEN without" >&2
+  echo "checking anything, because two empty sha256sum listings compare equal." >&2
+  echo >&2
+  echo "  docker run --rm -v \"\$PWD:/repo:ro\" ubuntu:24.04 bash -c '" >&2
+  echo "    set -e; apt-get update -qq" >&2
+  echo "    apt-get install -y -qq zstd curl gnupg python3 openssh-server" >&2
+  echo "    bash /repo/deploy/z3/tests/run-tests.sh'" >&2
+  exit 2
+fi
+
+if [ -n "$missing" ]; then
+  echo "REFUSING TO RUN: these suites need commands this host does not have:" >&2
+  for cmd in $missing; do echo "  missing: $cmd" >&2; done
+  echo >&2
+  echo "Running anyway would report them as test failures, which reads as broken" >&2
+  echo "code rather than a missing package. On Ubuntu:" >&2
+  echo "  apt-get update && apt-get install -y zstd curl gnupg python3 openssh-server" >&2
+  echo >&2
+  echo "Use 'set -e' on that install. A silently failed one is how 25 phantom" >&2
+  echo "failures happen. Narrow the run instead with SUITES=\"drift alerts\"." >&2
+  exit 2
+fi
+
+for suite in $SELECTED; do
   file="$SCRATCH/suites/$suite.sh"
   [ -f "$file" ] || { bad "no such suite: $suite"; continue; }
   echo
