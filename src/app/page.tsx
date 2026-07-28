@@ -548,6 +548,7 @@ export default function Home() {
                 <button className="btn btn-ghost btn-sm" onClick={() => void copy("donation", donation)} style={{ padding: 0 }}>
                   {copied === "donation" ? "Copied ✓" : "Copy address"}
                 </button>
+                <a className="btn btn-ghost btn-sm" href="/donate" style={{ padding: 0 }}>Why, and how it helps →</a>
               </div>
             )}
           </div>
