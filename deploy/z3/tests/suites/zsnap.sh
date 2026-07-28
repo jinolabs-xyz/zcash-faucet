@@ -340,3 +340,31 @@ fresh_env
 mkdir -p "$T/gens"; mkgen "$T/gens" 500 good; mkgen "$T/gens" 600 good
 bash "$IMPORT" "$T/gens/zsnap-testnet-600-deadbeefcafe.tar.zst" > "$T/one.log" 2>&1
 check "explicit archive is a single candidate" "grep -q '1 candidate(s) to try' '$T/one.log'"
+
+echo "== import: a pinned hash cannot break the fallback chain (SDE-App's HIGH)"
+# ZSNAP_EXPECT_HASH is the DOCUMENTED path. Applying it to every generation
+# verified gen 2 against gen 1's hash, so the walk could never succeed and the
+# log blamed the archives rather than the pin.
+fresh_env
+mkdir -p "$T/gens"
+mkgen "$T/gens" 700 good; sleep 1.1
+mkgen "$T/gens" 800 corrupt
+ZSNAP_EXPECT_HASH="hash-that-only-matches-generation-1" bash "$IMPORT" "$T/gens" > "$T/pin.log" 2>&1
+check "the walk still succeeds with a pin set" "[ $? -eq 0 ]"
+check "says the pin is ignored for a chain" "grep -q 'per-generation hashes are used instead' '$T/pin.log'"
+check "the pin was NOT passed to the surviving generation" "! grep -q -- '--expect-hash hash-that-only-matches-generation-1' '$STUB_LOG'"
+check "the good generation was imported" "[ -f '$STUB_CACHE_DIR/state/v27/testnet/db.stub' ]"
+
+# One candidate: the pin is exactly what it is for, so it must still apply.
+fresh_env
+mkdir -p "$T/gens"; mkgen "$T/gens" 900 good
+ZSNAP_EXPECT_HASH="pinned-for-one" bash "$IMPORT" "$T/gens/zsnap-testnet-900-deadbeefcafe.tar.zst" > "$T/pin1.log" 2>&1
+check "a single candidate still honours the pin" "grep -q -- '--expect-hash pinned-for-one' '$STUB_LOG'"
+check "and does not warn about a chain" "! grep -q 'per-generation hashes' '$T/pin1.log'"
+
+echo "== import: a pointer without a trailing newline keeps its oldest generation"
+# read -r drops a final unterminated line, which silently lost a generation.
+fresh_env
+printf 'file=a.tar.zst\nmanifest_hash=h1\nfile2=b.tar.zst\nmanifest_hash2=h2\nfile3=c.tar.zst\nmanifest_hash3=h3' > "$T/ptr.txt"
+n_files="$(sed -n 's/^file\([0-9]*\)=.*/\1/p' "$T/ptr.txt" | while read -r i || [ -n "$i" ]; do echo "$i"; done | wc -l | tr -d ' ')"
+check "all three generations are read from an unterminated pointer" "[ '$n_files' = '3' ]"

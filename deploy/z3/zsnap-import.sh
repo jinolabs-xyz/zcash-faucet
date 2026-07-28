@@ -107,8 +107,8 @@ fetch_sidecar() { # $1 = sidecar path or url, best effort
 
 # Resolves one candidate and imports it. Returns nonzero on any failure so the
 # caller can try the next generation instead of giving up.
-try_candidate() { # $1 = archive path, directory, or url
-  local cand="$1" expect_hash="$ZSNAP_EXPECT_HASH" snapshot_dir="" manifest
+try_candidate() { # $1 = archive path, directory, or url; $2 = its expected hash
+  local cand="$1" expect_hash="${2:-}" snapshot_dir="" manifest
   local attempt_dir url_arg=() verify_args=()
   attempt_dir="$(mktemp -d "$work/attempt.XXXXXX")" || return 1
 
@@ -170,22 +170,42 @@ try_candidate() { # $1 = archive path, directory, or url
 # fallback chain even when named explicitly, while a single archive is one
 # candidate even when it came from config.
 candidates=()
+hashes=()
 if [ -d "$source" ] && [ -f "$source/MANIFEST.json" ]; then
-  candidates=("$source")                       # already an unpacked snapshot
+  candidates=("$source"); hashes=("")          # already an unpacked snapshot
 elif [ -d "$source" ]; then
-  while read -r f; do [ -n "$f" ] && candidates+=("$f"); done < <(
-    find "$source" -maxdepth 1 -name "zsnap-$ZSNAP_NETWORK-*.tar.zst" -printf '%T@ %p\n' 2>/dev/null \
-      | sort -rn | cut -d' ' -f2-)
+  # Each archive carries its own sidecar, fetched per candidate below.
+  while read -r f || [ -n "$f" ]; do
+    [ -n "$f" ] && { candidates+=("$f"); hashes+=(""); }
+  done < <(find "$source" -maxdepth 1 -name "zsnap-$ZSNAP_NETWORK-*.tar.zst" -printf '%T@ %p\n' 2>/dev/null \
+             | sort -rn | cut -d' ' -f2-)
   [ "${#candidates[@]}" -gt 0 ] \
     || die "$source holds no zsnap-$ZSNAP_NETWORK-*.tar.zst archives"
 elif printf '%s' "$source" | grep -q '^https\?://.*latest-.*\.txt$'; then
-  # A published pointer lists every generation; take them in its order.
+  # A published pointer pairs fileN= with manifest_hashN=, so each generation
+  # is verified against ITS OWN hash rather than the newest one's.
   base="${source%/*}"
-  while read -r f; do [ -n "$f" ] && candidates+=("$base/$f"); done < <(
-    curl -fsSL --max-time 60 "$source" 2>/dev/null | sed -n 's/^file[0-9]*=//p')
-  [ "${#candidates[@]}" -gt 0 ] || candidates=("$source")
+  pointer_body="$(curl -fsSL --max-time 60 "$source" 2>/dev/null)"
+  while read -r idx || [ -n "$idx" ]; do
+    [ -n "$idx" ] || continue
+    f="$(printf '%s' "$pointer_body" | sed -n "s/^file${idx}=//p" | head -1)"
+    [ -n "$f" ] || continue
+    candidates+=("$base/$f")
+    hashes+=("$(printf '%s' "$pointer_body" | sed -n "s/^manifest_hash${idx}=//p" | head -1)")
+  done < <(printf '%s' "$pointer_body" | sed -n 's/^file\([0-9]*\)=.*/\1/p')
+  [ "${#candidates[@]}" -gt 0 ] || { candidates=("$source"); hashes=(""); }
 else
-  candidates=("$source")
+  candidates=("$source"); hashes=("")
+fi
+
+# A pinned hash describes ONE archive, so it only applies when there is one
+# candidate. With a chain, per-generation hashes (pointer or sidecar) decide.
+if [ -n "$ZSNAP_EXPECT_HASH" ]; then
+  if [ "${#candidates[@]}" = "1" ]; then
+    hashes[0]="$ZSNAP_EXPECT_HASH"
+  else
+    log "ZSNAP_EXPECT_HASH is set but there are ${#candidates[@]} generations, so per-generation hashes are used instead (a single pin cannot verify a fallback chain)"
+  fi
 fi
 
 log "${#candidates[@]} candidate(s) to try, newest first"
@@ -193,7 +213,7 @@ gen=0
 for cand in "${candidates[@]}"; do
   gen=$((gen + 1))
   log "generation $gen/${#candidates[@]}: $(basename "$cand")"
-  if try_candidate "$cand"; then
+  if try_candidate "$cand" "${hashes[$((gen - 1))]:-}"; then
     import_ok=1
     break
   fi

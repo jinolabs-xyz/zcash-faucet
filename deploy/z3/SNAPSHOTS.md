@@ -172,6 +172,14 @@ Point `/etc/zsnap-restore-url` at the snapshots **directory** (or a published
 single archive path or URL is still one candidate, deliberately: naming one
 archive means you want that archive.
 
+**`ZSNAP_EXPECT_HASH` pins one archive, not a chain.** A hash describes a
+single snapshot, so when the source resolves to several generations the pin is
+ignored with a log line and each generation is verified against its own hash:
+`manifest_hash<N>=` from the pointer, or its `.manifest-hash` sidecar. Applying
+one pin across a chain would verify generation 2 against generation 1's hash,
+fail every fallback, and blame the archives. Set the pin when you name a single
+archive; leave it unset for a chain and the per-generation hashes do the work.
+
 ### Disk
 
 The peak is one raw export plus the archive being written, while all three
