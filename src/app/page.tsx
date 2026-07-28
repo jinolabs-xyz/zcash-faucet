@@ -686,7 +686,7 @@ export default function Home() {
         {tool === "about" && (
           <div id="tool-about" style={{ border: "2px solid var(--color-divider)", padding: 14, display: "flex", flexDirection: "column", gap: 9 }}>
             <span style={{ ...kicker, color: muted(60) }}>How it works</span>
-            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: muted(72) }}>This faucet mines its own testnet blocks, so every TAZ it hands out is one it produced. It never has to queue at another faucet for a top-up, and it can tell you honestly when it is empty.</p>
+            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: muted(72) }}>This faucet runs its own node and wallet, and it mines testnet blocks. It does not currently earn from mining: a dominant miner wins every block race on public testnet, so the blocks it wins are orphaned. The TAZ it hands out is donated or topped up by hand, which is why it can run empty and why it says so plainly when it does.</p>
             <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: muted(72) }}>Drips leave as shielded (z→z) transactions. The amount and the recipient never touch the public ledger, which is also why a send takes about ten seconds: it is building the zero-knowledge proof that makes that possible.</p>
           </div>
         )}

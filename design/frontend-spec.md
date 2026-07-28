@@ -70,7 +70,7 @@ Design these as variations of the core screen: same layout, different status.
 | State | What's true | How it should feel / say |
 |---|---|---|
 | **Preparing / syncing** | Node is syncing the chain (show %) | Calm, reassuring, *with a progress indicator*: "Getting ready: syncing the node (34%)." Input disabled or queued. **This is on screen right now and must look intentional, not broken.** |
-| **Empty** | Node ready, but wallet not funded yet | Honest: "The faucet is refilling. Check back shortly." Optionally show how it funds itself (see §9). |
+| **Empty** | Node ready, but wallet not funded yet | Honest, and do **not** promise a self-heal: the wallet is topped up by hand, so say that and offer the donation address. See §9. |
 | **Ready** | Funded, idle | The default hero. Confident, inviting. |
 | **Submitting** | Building the shielded proof (~10s) | A deliberate progress state: "Building your private transaction…" with motion. Must not look hung. |
 | **Success** | Sent | A **receipt**: amount, shortened txid (copyable), explorer link, "sent privately to your shielded address ✓". Celebratory but restrained. |
@@ -80,7 +80,8 @@ Design these as variations of the core screen: same layout, different status.
 The **status** is a first-class element, not a footnote. A small always-visible
 **status pill/dot** in the header (green live / amber preparing / red down),
 plus a compact **live panel** the curious can expand: node sync %, wallet
-balance (TAZ), and (nice touch) that it **mines its own coins**.
+balance (TAZ), and whether the reserve is topping up. Do not badge it as
+self-funded, see §9.
 
 ## 6. Components
 
@@ -122,9 +123,13 @@ Explore freely, but anchor to:
 ## 9. Trust & what makes this one different (worth surfacing subtly)
 
 - **Shielded by default**: recipients get private funds (z→z). Say it once, clearly.
-- **Self-mining**: this faucet mines its own testnet coins, so it doesn't beg
-  other faucets. That's a genuine trust/independence signal, worth a quiet badge
-  or a line in the live panel ("self-funded · mines its own TAZ").
+- **Self-mining, carefully**: the faucet runs its own node, wallet and miner,
+  and that independence is a genuine signal worth showing. What it must never
+  claim is that mining *funds* it. A dominant miner orphans every block we win,
+  so mining income measured zero (issue #42), and the TAZ handed out is donated
+  or topped up by hand. Earlier drafts of this spec suggested a "self-funded"
+  badge and the UI shipped one. It was false and has been removed. Show the
+  independence, never the income.
 - **Honest status**: the visible live state is itself a trust signal. Lean into it.
 
 ## 10. Responsive & accessibility
