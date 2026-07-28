@@ -88,14 +88,74 @@ suite_deps() { # $1 suite name -> commands it needs beyond the base set
   esac
 }
 
+# A name check is not enough. macOS ships a `stat` and a `find` of the right
+# name that lack `-c` and `-printf`, so the command resolves, the suite runs, and
+# ~85 assertions fail as though the code were broken (#164).
+#
+# One of them is worse than a false failure. drift's read-only assertion compares
+# two `sha256sum` listings, and with no sha256sum BOTH are empty, so they compare
+# equal and the test reports ok while proving nothing. Verified: a file modified
+# between the two listings is not detected. That test is what pins the audit's
+# read-only promise, so a silent pass there is the worst outcome in this file.
+#
+# So probe the CAPABILITY, by running the flag, not by asking for the name.
+suite_caps() { # $1 suite -> capability keys it needs
+  case "$1" in
+    backup)   echo "stat_c find_printf sha256sum" ;;
+    zsnap)    echo "find_printf sha256sum" ;;
+    metrics)  echo "stat_c" ;;
+    drift)    echo "sha256sum" ;;
+    *)        echo "" ;;
+  esac
+}
+
+cap_probe() { # $1 key -> 0 when this host really has it
+  case "$1" in
+    stat_c)      stat -c %a . >/dev/null 2>&1 ;;
+    find_printf) find . -maxdepth 0 -printf '' >/dev/null 2>&1 ;;
+    sha256sum)   command -v sha256sum >/dev/null 2>&1 ;;
+    *)           return 0 ;;
+  esac
+}
+
+cap_reason() { # $1 key -> what is missing, in the operator's terms
+  case "$1" in
+    stat_c)      echo "stat -c        GNU coreutils. BSD/macOS stat uses -f instead." ;;
+    find_printf) echo "find -printf   GNU findutils. BSD/macOS find has no -printf." ;;
+    sha256sum)   echo "sha256sum      GNU coreutils. macOS ships shasum instead." ;;
+  esac
+}
+
 missing=""
+missing_caps=""
 for suite in $SELECTED; do
   [ -f "$SCRATCH/suites/$suite.sh" ] || continue
   for cmd in $(suite_deps "$suite"); do
     command -v "$cmd" >/dev/null 2>&1 && continue
     case " $missing " in *" $cmd "*) ;; *) missing="$missing $cmd" ;; esac
   done
+  for cap in $(suite_caps "$suite"); do
+    cap_probe "$cap" && continue
+    case " $missing_caps " in *" $cap "*) ;; *) missing_caps="$missing_caps $cap" ;; esac
+  done
 done
+
+if [ -n "$missing_caps" ]; then
+  echo "REFUSING TO RUN: this host has the commands but not the GNU behaviour these" >&2
+  echo "suites depend on. This is a Linux harness. Run it in the container." >&2
+  echo >&2
+  for cap in $missing_caps; do echo "  missing: $(cap_reason "$cap")" >&2; done
+  echo >&2
+  echo "Running anyway is worse than a failure: most of those assertions go red as" >&2
+  echo "though the code were broken, and drift's read-only check goes GREEN without" >&2
+  echo "checking anything, because two empty sha256sum listings compare equal." >&2
+  echo >&2
+  echo "  docker run --rm -v \"\$PWD:/repo:ro\" ubuntu:24.04 bash -c '" >&2
+  echo "    set -e; apt-get update -qq" >&2
+  echo "    apt-get install -y -qq zstd curl gnupg python3 openssh-server" >&2
+  echo "    bash /repo/deploy/z3/tests/run-tests.sh'" >&2
+  exit 2
+fi
 
 if [ -n "$missing" ]; then
   echo "REFUSING TO RUN: these suites need commands this host does not have:" >&2
