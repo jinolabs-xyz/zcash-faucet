@@ -82,6 +82,13 @@ fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
 }
 
+fn now_unix() -> u32 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as u32)
+        .unwrap_or(0)
+}
+
 fn log(msg: &str) {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -178,28 +185,47 @@ enum Outcome {
 }
 
 fn mine_once(rpc: &Rpc, config: &Config) -> Result<Outcome, String> {
+    // Timings for the orphan analysis (issue #32). The question is whether we
+    // lose the network race because our block is late, or because a dominant
+    // miner never builds on us. These numbers settle it: if template age and
+    // solve-to-submit are small fractions of the block interval, latency is
+    // not the cause and the answer is hashrate share. See MINING.md.
+    let fetched_at = Instant::now();
     let raw = rpc.call("getblocktemplate", json!([{"mode": "template"}]))?;
     let t: Template =
         serde_json::from_value(raw).map_err(|e| format!("could not parse the template: {e}"))?;
     let target = expand_target(&t.bits)?;
     let header = Header::from_template(&t)?;
 
+    // curtime is when the node built the template. Wall-clock skew makes this
+    // approximate, so it is reported as a floor rather than a precise age.
+    let template_built_at_unix = t.cur_time;
     log(&format!(
-        "template: height {} bits {} txs {}",
+        "template: height {} bits {} txs {} fetch {:.2}s",
         t.height,
         t.bits,
-        t.transactions.len()
+        t.transactions.len(),
+        fetched_at.elapsed().as_secs_f64()
     ));
 
+    let solve_started = Instant::now();
     let Some(solved) = solve(&header, &target, config) else {
         return Ok(Outcome::NoSolution { height: t.height });
     };
+    let solve_secs = solve_started.elapsed().as_secs_f64();
+    let solved_at = Instant::now();
 
     let block_hex = hex::encode(serialize_block(&solved, &t)?);
+    // Template age at solve: how stale the parent we built on was by the time
+    // we had a solution. If this is small relative to the block interval, a
+    // faster poll cannot be what saves our blocks.
+    let template_age_secs = now_unix().saturating_sub(template_built_at_unix);
     log(&format!(
-        "height {}: found a block, hash {}",
+        "height {}: found a block, hash {} solve {:.1}s template_age {}s",
         t.height,
-        hex::encode(display_hash(&solved.hash_le()))
+        hex::encode(display_hash(&solved.hash_le())),
+        solve_secs,
+        template_age_secs
     ));
 
     // Always validate through proposal mode first: it runs zebra's full block
@@ -222,6 +248,14 @@ fn mine_once(rpc: &Rpc, config: &Config) -> Result<Outcome, String> {
     // null from submitblock means accepted, anything else is a rejection
     // reason ("duplicate", "rejected", ...).
     let submitted = rpc.call("submitblock", json!([block_hex]))?;
+    // Solve-to-submit covers serialization plus the proposal check plus the
+    // submit call: the whole window between having a winning block and the
+    // network hearing about it.
+    log(&format!(
+        "height {}: solve_to_submit {:.2}s",
+        t.height,
+        solved_at.elapsed().as_secs_f64()
+    ));
     if submitted.is_null() {
         Ok(Outcome::Accepted { height: t.height })
     } else {

@@ -98,6 +98,70 @@ costs us the faucet, while a slow miner costs us nothing but time. This is
 also why the miner is a separate process rather than zebra's built-in
 `internal_miner`, which cannot be capped independently of the node.
 
+## Why our blocks were orphaned (issue #32)
+
+All eight blocks we mined were orphaned. Every height was won by one miner
+(`tmFU5Ak...`) that extends only its own chain and never builds on ours. It is
+worth being precise about what that means, because the intuitive fix is the
+wrong one.
+
+**It is not latency.** The miner now logs three numbers on every block:
+template fetch time, `template_age` (how stale the parent was when we had a
+solution), and `solve_to_submit` (having a winning block to the network
+hearing about it). Read them out of the journal:
+
+```bash
+journalctl -u zcash-testnet-miner | grep -oE 'template_age [0-9]+s|solve_to_submit [0-9.]+s|solve [0-9.]+s'
+```
+
+Testnet targets a 75 second block interval. A 5 second template poll and a
+sub-second submit are single-digit percentages of that, so shaving them
+changes a race we are losing by a wide margin. If `template_age` ever comes
+back in the tens of seconds, that is worth fixing, and the numbers are now
+there to check rather than assume.
+
+**It is hashrate share, and the consensus rule does the rest.** A miner that
+ignores our blocks means our chain only ever advances when *we* find a block,
+while theirs advances when *they* do. That is a biased random walk, and with
+share `q` below theirs the outcome is not close:
+
+| Our share `q` | We win one race | Three in a row | Long-run survival |
+|---|---|---|---|
+| 2% | 0.02 | 0.000008 | 0 |
+| 10% | 0.10 | 0.001 | 0 |
+| 33% | 0.33 | 0.036 | 0 |
+| 50% | 0.50 | 0.125 | 1 |
+
+Below 50% of the hashrate that miner brings, long-run survival of any given
+block is zero, not merely low. Eight orphans out of eight is exactly the
+expected result, not bad luck. Our own share is a single CPU capped at 150%
+of one box against a miner winning every height, so `q` is very small.
+
+**What follows.** Mining cannot fund the faucet while that miner is active.
+Not "funds it slowly", cannot: expected revenue is `q^k`-shaped and rounds to
+zero. So:
+
+- **Keep the miner running.** It costs one and a half capped cores, it lands
+  a block whenever the dominant miner pauses or a min-difficulty gap favours
+  us, and those coinbases are real when they survive. It is a lottery ticket,
+  not a budget line.
+- **Do not spend effort on latency.** Template freshness, faster submits and
+  more solver threads all multiply a number whose ceiling is set by hashrate
+  share. The measurement exists so this stays a decision rather than an
+  argument.
+- **Fund the faucet from a source that does not race.** External testnet
+  faucets, an ask to the Zcash Foundation or ECC for testnet TAZ, or an
+  existing testnet balance. This is a testnet faucet, TAZ has no market
+  value, and asking is cheap and reliable in a way that out-mining a
+  dominant miner is not.
+- **Revisit if the picture changes.** If that miner goes quiet for a stretch,
+  our survival rate stops being zero and mining becomes worth counting again.
+  `journalctl -u zcash-testnet-miner | grep ACCEPTED` is the check.
+
+The honest summary: the miner is correct, it is winning solves and losing
+races, and no amount of tuning on our side changes that while one participant
+holds the majority of testnet hashrate and refuses to build on anyone else.
+
 ## Operating notes
 
 - Blocks pay to `ZEBRA_MINING__MINER_ADDRESS` on the node, not to anything
