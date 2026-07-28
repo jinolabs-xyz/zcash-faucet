@@ -160,8 +160,9 @@ belongs in `deploy/z3/` and in the install docs, an untracked override
 belongs in git, and a stale script in `/opt/faucet` means re-copying it or
 admitting the box is ahead of review.
 
-Env files are reported as present or absent only. Their values are never
-read, because a drift report is something you paste into an issue.
+Env files are reported as present or absent only, and drop-in values are
+redacted to `KEY=<redacted>` while keeping the key names. A drift report gets
+pasted into issues, and a drop-in can carry a webhook URL or an RPC password.
 
 ## Restore from backup
 

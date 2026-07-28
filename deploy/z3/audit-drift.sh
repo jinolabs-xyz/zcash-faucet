@@ -104,9 +104,11 @@ for dropin_dir in "$UNIT_DIR"/*.d; do
     [ -e "$conf" ] || continue
     found "drop-in $unit.d/$(basename "$conf") exists on the box and is not in the repo" \
       "fold its directives into $OVERLAY_DIR/$unit (or add the drop-in to the repo), then commit"
-    # Directives are config, not secrets, and the report is useless without them.
+    # Names make the report actionable, values can be secrets (webhook URL,
+    # RPC password), so Environment=KEY= is kept and the value is cut.
     if [ "$VERBOSE" = "1" ]; then
-      sed 's/^/             | /' "$conf"
+      sed -E 's/^([[:space:]]*Environment=[A-Za-z_][A-Za-z0-9_]*=).*/\1<redacted>/;
+              t; s/^([^#=]*=).*/\1<redacted>/' "$conf" | sed 's/^/             | /'
     fi
   done
 done

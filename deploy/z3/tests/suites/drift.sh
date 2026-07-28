@@ -69,7 +69,7 @@ bash "$AUDIT" > "$T/dropin.log" 2>&1
 check "exits 1" "[ $? -eq 1 ]"
 check "names the drop-in" "grep -q 'drop-in zcash-testnet-miner.service.d/override.conf' '$T/dropin.log'"
 bash "$AUDIT" --verbose > "$T/dropinv.log" 2>&1
-check "verbose shows the directive so the report is actionable" "grep -q 'MINER_MODE=submit' '$T/dropinv.log'"
+check "verbose shows the directive name, value redacted" "grep -q 'MINER_MODE=<redacted>' '$T/dropinv.log'"
 
 echo "== drift: a stale installed script means the box runs unreviewed code"
 drift_env; make_clean_box; echo "# hand edit on the box" >> "$T/install/thing.sh"
@@ -175,3 +175,17 @@ printf '[Service]\nExecStart=/bin/true\n' > "$T/units/nginx.service"
 mkdir -p "$T/units/nginx.service.d"; printf '[Service]\n' > "$T/units/nginx.service.d/o.conf"
 bash "$AUDIT" > "$T/derived3.log" 2>&1
 check "unrelated units and their drop-ins stay out" "! grep -q 'nginx' '$T/derived3.log'"
+
+echo "== drift: drop-in values are redacted, names are kept"
+# QA's objection: a drop-in can carry a webhook URL or an RPC password, and a
+# drift report gets pasted into issues.
+drift_env; make_clean_box
+mkdir -p "$T/units/faucet-thing.service.d"
+printf '[Service]\nEnvironment=WATCHDOG_ALERT_URL=https://hooks.slack.com/services/SUPERSECRET\nEnvironment=MINER_MODE=submit\n' \
+  > "$T/units/faucet-thing.service.d/override.conf"
+bash "$AUDIT" --verbose > "$T/redact.log" 2>&1
+check "the secret NEVER appears" "! grep -q 'SUPERSECRET' '$T/redact.log'"
+check "nor does any hooks.slack.com URL" "! grep -q 'hooks.slack.com' '$T/redact.log'"
+check "the directive name is still shown" "grep -q 'WATCHDOG_ALERT_URL=<redacted>' '$T/redact.log'"
+check "so is the second one, still actionable" "grep -q 'MINER_MODE=<redacted>' '$T/redact.log'"
+check "the drop-in is still reported as drift" "grep -q 'drop-in faucet-thing.service.d/override.conf' '$T/redact.log'"
