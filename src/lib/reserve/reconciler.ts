@@ -74,7 +74,10 @@ class ReserveReconciler {
 
       this.stepInFlight = true;
       getSendQueue()
-        .run(() => getRefiller().step())
+        // Same backstop as a drip (#88). A shield sweep goes through the same
+        // wallet and the same async-operation polling, so a stuck one would
+        // stall every queued claim behind it just as surely as a stuck send.
+        .run(() => getRefiller().step(), config.sendTaskDeadlineMs)
         .catch((err) => {
           console.error(`[reserve] refill step failed (retrying next tick): ${err instanceof Error ? err.message : err}`);
         })

@@ -39,6 +39,7 @@ with an anti-abuse gate on.
 | `SEND_QUEUE_MAX_PENDING` | `20` | Sends allowed to queue before the faucet sheds with a busy 503, so a surge cannot pile up unbounded work. |
 | `TX_LOOKUP_RATE_WINDOW_SECONDS` | `60` | Window for the per-IP limit on `/api/tx`. |
 | `TX_LOOKUP_RATE_MAX` | `60` | Lookups per IP per window on `/api/tx`, each of which costs a wallet RPC. The default is set from what our own page needs: a visible receipt polls every 10s, so 6/min per tab, and 60 leaves room for ten tabs behind one NAT. Needs `TRUSTED_PROXY_COUNT` set, since with no trusted proxy there is no client IP to key on and the limit is skipped. |
+| `SEND_TASK_DEADLINE_MS` | derived, `309000` on stock zallet settings | How long a caller waits on one queued send before the outcome is reported unknown. It does **not** stop the send or free the wallet. Derived from the zallet timings so it always sits above them: setting it lower makes legitimate slow sends report unknown, which costs the claimant a full cooldown for coins they did receive. Raise `ZALLET_OP_TIMEOUT_MS` and this follows on its own. |
 | `ZALLET_RPC_TIMEOUT_MS` | `15000` | Per-call RPC timeout. Floor of 1000. |
 | `ZALLET_OP_TIMEOUT_MS` | `180000` | How long to wait for a shielded build and prove to land. Floor of 5000. Past this the outcome is unknown, not failed. |
 | `ZALLET_POLL_MS` | `1500` | Gap between operation-status polls. Floor of 250. |

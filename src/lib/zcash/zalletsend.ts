@@ -22,6 +22,10 @@ import { SendOutcomeUnknownError, type Sender, type SendRequest, type SendResult
 // .ts extension for node --test resolution, same pattern as pow.ts.
 import { config, ZATOSHI_PER_TAZ } from "../config.ts";
 import { explorerTxUrl } from "./explorer.ts";
+// Transient RPC blips should not kill a send that is otherwise progressing.
+// POLL_RETRIES lives in sendBudget.ts because the send queue's backstop deadline
+// is computed from it, and two copies would drift apart silently.
+import { POLL_RETRIES } from "./sendBudget.ts";
 
 /** Render zatoshi as an exact ZEC decimal literal (no float drift). */
 function zatToZecLiteral(zat: bigint): string {
@@ -30,8 +34,6 @@ function zatToZecLiteral(zat: bigint): string {
   return frac ? `${whole}.${frac}` : `${whole}`;
 }
 
-/** Transient RPC blips should not kill a send that is otherwise progressing. */
-const POLL_RETRIES = 3;
 
 interface RpcError {
   code: number;
