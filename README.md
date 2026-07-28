@@ -131,12 +131,13 @@ Settings are in [CONFIGURATION.md](CONFIGURATION.md), and
 The faucet is built to fund itself and to accept help, and it runs both legs at
 once.
 
-**It mines.** A solo Equihash miner and the reserve loop are wired end to end:
-the miner works the chain, the loop watches the balance and shields matured
-coinbase into the wallet without ever pausing a drip. On public testnet today a
-dominant miner takes every block race, so that leg contributes nothing right now
-([the measurement](#mining-and-the-reserve-loop)). It costs almost nothing to
-run and starts contributing the day the network stops being one miner's.
+**It mines.** A solo Equihash miner and the reserve loop are wired end to end,
+and the whole chain has run for real: a block we mined survived, the loop
+shielded its coinbase on its own, and the faucet served a drip from it. On
+public testnet a dominant miner takes most block races, so treat that leg as a
+lottery ticket rather than a budget line
+([the arithmetic](#mining-and-the-reserve-loop)). It costs almost nothing to
+run and it pays when it pays.
 
 **The community fills it.** Testnet TAZ has no market value, so topping up a
 shared faucet is a small thing that keeps a tool available for everyone building
