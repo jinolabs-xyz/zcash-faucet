@@ -23,6 +23,23 @@ FAUCET_DOMAIN="${FAUCET_DOMAIN:-}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"       # deploy/
 Z3="$HERE/z3-stack"                                        # where we clone z3
 ENVF="--env-file .env.$NETWORK"
+
+# Bind the node and wallet RPC to loopback on the HOST. Docker publishes ports
+# by writing its own iptables chain, which bypasses ufw entirely, so a firewall
+# rule cannot close these: the binding is the only control. Shell values win
+# over --env-file, so this needs no edit to z3's files.
+#
+# P2P stays on all interfaces because inbound peers are the point. Zaino is
+# only published under the indexer profile we do not run, covered in case
+# someone enables it.
+Z3_LOOPBACK_BINDINGS=(
+  "Z3_ZEBRA_HOST_RPC_PORT=127.0.0.1:$([ "$NETWORK" = testnet ] && echo 18232 || echo 8232)"
+  "Z3_ZEBRA_HOST_HEALTH_PORT=127.0.0.1:$([ "$NETWORK" = testnet ] && echo 18080 || echo 8080)"
+  "Z3_ZALLET_HOST_RPC_PORT=127.0.0.1:$([ "$NETWORK" = testnet ] && echo 40232 || echo 28232)"
+  "Z3_ZAINO_HOST_GRPC_PORT=127.0.0.1:$([ "$NETWORK" = testnet ] && echo 18137 || echo 8137)"
+  "Z3_ZAINO_HOST_JSON_RPC_PORT=127.0.0.1:$([ "$NETWORK" = testnet ] && echo 18237 || echo 8237)"
+)
+z3(){ env "${Z3_LOOPBACK_BINDINGS[@]}" docker compose $ENVF "$@"; }
 NETNAME="z3-$NETWORK"
 say(){ printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 
@@ -49,7 +66,7 @@ fi
 RPCPW="$(cat "$PWFILE")"
 
 say "Starting Zebra (the node) — first sync takes hours, one time"
-docker compose $ENVF up -d zebra
+z3 up -d zebra
 
 # 2. Site up first, before the sync wait --------------------------------------
 # The web frontend serves an honest syncing state long before the chain is
@@ -111,7 +128,7 @@ say "Waiting for Zebra to finish syncing (Ctrl-C is safe; re-run to resume)"
 # gated by a completion marker dropped in the volume after a full init.
 ZVOL="$NETNAME-zallet"
 ZIDFILE="${ZALLET_IDENTITY_FILE:-identity.txt}"
-zwallet(){ docker compose $ENVF run --rm --no-deps zallet \
+zwallet(){ z3 run --rm --no-deps zallet \
              --datadir /var/lib/zallet --config /etc/zallet/zallet.toml "$@"; }
 zvol_has(){ docker run --rm -v "$ZVOL:/data" busybox test -f "/data/$1"; }
 if ! zvol_has .faucet-wallet-initialized; then
@@ -126,7 +143,7 @@ if ! zvol_has .faucet-wallet-initialized; then
 fi
 
 say "Starting Zallet (the wallet)"
-docker compose $ENVF up -d zallet
+z3 up -d zallet
 sleep 5
 
 # 4. Faucet's shielded account ----------------------------------------------
@@ -134,7 +151,7 @@ sleep 5
 # --config is required: the RPC client reads the server port from the same
 # config the server started with, and without it zallet looks for a config
 # in the datadir that does not exist ("No JSON-RPC port available").
-zrpc(){ docker compose $ENVF exec -T zallet zallet-zaino \
+zrpc(){ z3 exec -T zallet zallet-zaino \
           --datadir /var/lib/zallet --config /etc/zallet/zallet.toml rpc "$@"; }
 ACCTFILE="$HERE/.faucet-account"
 if [ ! -f "$ACCTFILE" ]; then

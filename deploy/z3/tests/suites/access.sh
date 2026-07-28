@@ -62,7 +62,7 @@ printf '0.0.0.0:22\n0.0.0.0:80\n0.0.0.0:443\n' > "$STUB_LISTEN"
 printf 'Status: active\n\n22/tcp                     ALLOW       Anywhere\n80/tcp                     ALLOW       Anywhere\n' > "$STUB_UFW_STATUS"
 echo 'MaxStartups 30:30:100' > "$ACCESS_SSHD_CONFIG"
 bash "$AUDIT_A" > "$T/missing.log" 2>&1
-check "443 with no rule is reported" "grep -q 'port 443 is intended to be public but has no ufw rule' '$T/missing.log'"
+check "443 with no rule is reported" "grep -q 'port 443 is serving and intended to be public but has no ufw rule' '$T/missing.log'"
 
 echo "== access: an unset MaxStartups is reported with the real default"
 access_env
@@ -131,3 +131,26 @@ check "names the hardcoded 6-per-30s limit" "grep -q '6 connections per 30s per 
 check "recommends the client-side fix first" "grep -q 'prefer client-side multiplexing' '$T/trade.log'"
 check "says allow REMOVES brute-force limiting" "grep -q 'REMOVES brute-force limiting' '$T/trade.log'"
 check "names the compensating controls" "grep -q 'keys-only auth and fail2ban' '$T/trade.log'"
+
+echo "== access: P2P is public by intent, RPC ports never are"
+# Found while doing the loopback rebinding: the audit flagged Zebra's P2P port,
+# which must be reachable for inbound peers. A false positive on a port that
+# should stay open teaches operators to close the wrong thing.
+access_env
+printf '0.0.0.0:22\n0.0.0.0:80\n0.0.0.0:443\n0.0.0.0:18233\n127.0.0.1:18232\n127.0.0.1:40232\n' > "$STUB_LISTEN"
+printf 'Status: active\n\n22/tcp ALLOW Anywhere\n80/tcp ALLOW Anywhere\n443/tcp ALLOW Anywhere\n18233/tcp ALLOW Anywhere\n' > "$STUB_UFW_STATUS"
+printf 'maxstartups 30:30:100\n' > "$STUB_SSHD_T"
+bash "$AUDIT_A" > "$T/p2p.log" 2>&1
+check "exits 0 with P2P public and RPC on loopback" "[ $? -eq 0 ]"
+check "P2P is not flagged" "! grep -q '18233' '$T/p2p.log'"
+check "loopback node RPC is not flagged" "! grep -q '18232' '$T/p2p.log'"
+check "loopback wallet RPC is not flagged" "! grep -q '40232' '$T/p2p.log'"
+
+echo "== access: a publicly bound WALLET rpc is the worst case, and says why ufw cannot fix it"
+access_env
+printf '0.0.0.0:22\n0.0.0.0:80\n0.0.0.0:443\n0.0.0.0:40232\n' > "$STUB_LISTEN"; ufw_active
+printf 'maxstartups 30:30:100\n' > "$STUB_SSHD_T"
+bash "$AUDIT_A" > "$T/wallet.log" 2>&1
+check "exits 1" "[ $? -eq 1 ]"
+check "flags the wallet RPC" "grep -q 'port 40232 is bound on 0.0.0.0' '$T/wallet.log'"
+check "says rebind, because docker bypasses ufw" "grep -q 'docker writes its own iptables chain' '$T/wallet.log'"
