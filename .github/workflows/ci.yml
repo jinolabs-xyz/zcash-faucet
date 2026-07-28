@@ -103,9 +103,16 @@ jobs:
       - run: npm run build
       # --no-save on purpose: Playwright is a CI-only concern, so it stays out
       # of package.json and `npm ci` stays lean for everyone else.
+      #
+      # Pinned exactly, because unpinned it resolved to whatever shipped that
+      # morning: a browser release could turn this job red with no diff to
+      # explain it. Dependabot cannot see a version that lives outside a
+      # manifest, so bumping this is a manual step, deliberately.
       - name: install playwright chromium
+        env:
+          PLAYWRIGHT_VERSION: 1.62.0
         run: |
-          npm i --no-save playwright
+          npm i --no-save "playwright@${PLAYWRIGHT_VERSION}"
           npx playwright install --with-deps chromium
       # Drives a claim in a real browser: the page, the pow worker, the success
       # card and the copy path. Guarded so refs predating the script stay green.
