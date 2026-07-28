@@ -28,8 +28,13 @@ CURL_TIMEOUT="${METRICS_CURL_TIMEOUT:-8}"
 ZEBRA_MATCH="${METRICS_ZEBRA_MATCH:-zebra}"
 ZALLET_MATCH="${METRICS_ZALLET_MATCH:-zallet}"
 FAUCET_MATCH="${METRICS_FAUCET_MATCH:-faucet-web}"
+# Filesystems worth watching, and the floor under which the box is in trouble.
+METRICS_DISK_PATHS="${METRICS_DISK_PATHS:-/ /var/lib/zsnap /var/lib/faucet-backups}"
+METRICS_DISK_FLOOR_PCT="${METRICS_DISK_FLOOR_PCT:-10}"
 
 log() { echo "$(date -u +%FT%TZ) faucet-metrics: $*"; }
+# Shared sender, so a low-disk warning pages the same channel as everything else.
+ALERT_SH="${METRICS_ALERT_SH:-$(dirname "$0")/alert.sh}"
 
 # Pulls a numeric or boolean field out of a JSON blob without needing jq,
 # which is not installed on a stock box. Prints nothing when the field is
@@ -113,6 +118,25 @@ status_body="$(curl -fsS --max-time "$CURL_TIMEOUT" "$FAUCET_URL/api/status" 2>/
   emit faucet_container_up "1 when the zebra container is running." gauge "$(container_up "$ZEBRA_MATCH")"
   emit faucet_zallet_container_up "1 when the zallet container is running." gauge "$(container_up "$ZALLET_MATCH")"
   emit faucet_web_container_up "1 when the faucet web container is running." gauge "$(container_up "$FAUCET_MATCH")"
+  # Disk. A full disk stops exports, backups and the chain at once, so this is
+  # reported per filesystem rather than as one number.
+  for path in $METRICS_DISK_PATHS; do
+    [ -d "$path" ] || continue
+    read -r fs_free fs_size <<EOF
+$(df -Pk "$path" | awk 'NR==2 {print $4, $2}')
+EOF
+    [ -n "${fs_size:-}" ] && [ "$fs_size" -gt 0 ] || continue
+    free_pct=$((fs_free * 100 / fs_size))
+    emit "faucet_disk_free_bytes{path=\"$path\"}" "Free bytes on the filesystem holding $path." gauge "$((fs_free * 1024))"
+    emit "faucet_disk_free_percent{path=\"$path\"}" "Free percent on the filesystem holding $path." gauge "$free_pct"
+    emit "faucet_disk_below_floor{path=\"$path\"}" "1 when free percent is under METRICS_DISK_FLOOR_PCT." gauge \
+      "$([ "$free_pct" -lt "$METRICS_DISK_FLOOR_PCT" ] && echo 1 || echo 0)"
+    if [ "$free_pct" -lt "$METRICS_DISK_FLOOR_PCT" ]; then
+      log "DISK LOW: $path has ${free_pct}% free, floor is ${METRICS_DISK_FLOOR_PCT}%" >&2
+      [ -x "$ALERT_SH" ] && "$ALERT_SH" "disk low: $path has ${free_pct}% free (floor ${METRICS_DISK_FLOOR_PCT}%), snapshots and backups will start failing" >/dev/null 2>&1
+    fi
+  done
+
   emit faucet_metrics_scrape_timestamp "Unix time this file was written." gauge "$now"
 } > "$tmp"
 

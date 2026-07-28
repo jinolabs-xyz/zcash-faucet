@@ -2,16 +2,17 @@
 # zsnap-export.sh and zsnap-import.sh. Sourced by run-tests.sh, which
 # provides the helpers in lib.sh and the EXPORT/IMPORT paths.
 
-echo "== export hot (default): happy path, then rotation over 3 runs (keep 2)"
+echo "== export hot (default): three generations kept, the fourth rotates S1 out"
 fresh_env; with_chain
-for i in 1 2 3; do
+for i in 1 2 3 4; do
   sed "s/3652108/365210$i/" "$SCRATCH/stubs/zebrad-stub" > "$T/zebrad-$i" && chmod +x "$T/zebrad-$i"
   ZSNAP_ZEBRAD="$T/zebrad-$i" bash "$EXPORT" > "$T/export-$i.log" 2>&1 || bad "export run $i exited $? (see $T/export-$i.log)"
 done
 n_archives="$(find "$ZSNAP_DIR/snapshots" -name 'zsnap-testnet-*.tar.zst' | wc -l | tr -d ' ')"
-check "rotation keeps 2 archives (got $n_archives)" "[ '$n_archives' = '2' ]"
-check "oldest archive rotated out" "! find '$ZSNAP_DIR/snapshots' -name '*3652101*' | grep -q ."
-check "latest symlink points at newest" "[ \"\$(readlink '$ZSNAP_DIR/snapshots/latest.tar.zst')\" = 'zsnap-testnet-3652103-deadbeefcafe.tar.zst' ]"
+check "three generations kept (got $n_archives)" "[ '$n_archives' = '3' ]"
+check "S1 rotated out when S4 landed" "! find '$ZSNAP_DIR/snapshots' -name '*3652101*' | grep -q ."
+check "S2, S3, S4 all still present" "[ \"\$(find '$ZSNAP_DIR/snapshots' -name '*365210[234]*.tar.zst' | wc -l | tr -d ' ')\" = '3' ]"
+check "latest symlink points at newest" "[ \"\$(readlink '$ZSNAP_DIR/snapshots/latest.tar.zst')\" = 'zsnap-testnet-3652104-deadbeefcafe.tar.zst' ]"
 check "sidecar has full manifest hash" "grep -q '^deadbeefcafe.*0123$' '$ZSNAP_DIR/snapshots/latest.manifest-hash'"
 check "archive unpacks to snapshot/MANIFEST.json" "zstd -dc \"$ZSNAP_DIR/snapshots/\$(readlink '$ZSNAP_DIR/snapshots/latest.tar.zst')\" | tar -tf - | grep -q 'snapshot/MANIFEST.json'"
 check "workdir cleaned up" "[ -z \"\$(ls -A '$ZSNAP_DIR/work')\" ]"
@@ -285,3 +286,161 @@ STUB_READY=0 ZSNAP_READY_TRIES=2 ZSNAP_READY_WAIT=1 bash "$EXPORT" > "$T/nready.
 check "exits nonzero" "[ $? -ne 0 ]"
 check "refusal names the probe count" "grep -q 'not ready in 2 probes' '$T/nready.log'"
 check "no export attempted" "! grep -q 'zebrad export-snapshot' '$STUB_LOG'"
+
+echo "== import: walks generations newest to oldest, genesis only after all fail"
+mkgen() { # $1 dir, $2 height, $3 good|corrupt
+  local d="$1" n="zsnap-testnet-$2-deadbeefcafe.tar.zst"
+  mkdir -p "$d/g$2/snapshot"; echo '{"stub":true}' > "$d/g$2/snapshot/MANIFEST.json"
+  ( cd "$d/g$2" && tar -cf - snapshot | zstd -q -o "$d/$n" )
+  echo "deadbeefcafe0123" > "$d/$n.manifest-hash"
+  if [ "$3" = "corrupt" ]; then
+    # Break the payload but keep a sha256 that matches, so the failure has to
+    # be caught by unpacking, not only by the checksum.
+    printf 'not a zstd stream' > "$d/$n"
+  fi
+  sha256sum "$d/$n" | cut -d' ' -f1 > "$d/$n.sha256"
+  rm -rf "$d/g$2"
+}
+
+# Newest is corrupt, middle is good: it must fall through exactly one layer.
+fresh_env
+mkdir -p "$T/gens"
+mkgen "$T/gens" 100 good; sleep 1.1
+mkgen "$T/gens" 200 good; sleep 1.1
+mkgen "$T/gens" 300 corrupt
+bash "$IMPORT" "$T/gens" > "$T/walk.log" 2>&1
+check "import succeeds by falling back" "[ $? -eq 0 ]"
+check "saw three candidates" "grep -q '3 candidate(s) to try' '$T/walk.log'"
+check "tried the newest first" "grep -q 'generation 1/3: zsnap-testnet-300' '$T/walk.log'"
+check "announced the failure loudly" "grep -q 'GENERATION 1 FAILED' '$T/walk.log'"
+check "fell through to the next older" "grep -q 'generation 2/3: zsnap-testnet-200' '$T/walk.log'"
+check "did not reach the oldest" "! grep -q 'generation 3/3' '$T/walk.log'"
+check "state was imported" "[ -f '$STUB_CACHE_DIR/state/v27/testnet/db.stub' ]"
+
+# All three corrupt: genesis fallback, and it must say so rather than pretend.
+fresh_env
+mkdir -p "$T/gens"
+for h in 100 200 300; do mkgen "$T/gens" $h corrupt; sleep 1.1; done
+bash "$IMPORT" "$T/gens" > "$T/allfail.log" 2>&1
+check "exits nonzero so the boot path falls back to genesis" "[ $? -ne 0 ]"
+check "tried all three" "grep -q 'generation 3/3' '$T/allfail.log'"
+check "says every generation failed" "grep -q 'all 3 generation(s) failed' '$T/allfail.log'"
+check "names genesis as the consequence" "grep -q 'sync from genesis' '$T/allfail.log'"
+check "left no partial state behind" "[ ! -d '$STUB_CACHE_DIR/state' ]"
+
+# A checksum mismatch is caught before unpacking.
+fresh_env
+mkdir -p "$T/gens"; mkgen "$T/gens" 400 good
+printf '%064d' 0 > "$T/gens/zsnap-testnet-400-deadbeefcafe.tar.zst.sha256"
+bash "$IMPORT" "$T/gens" > "$T/sha.log" 2>&1
+check "sha mismatch is reported as corruption" "grep -q 'sha256 mismatch' '$T/sha.log'"
+
+# An explicit argument is one candidate, not a walk.
+fresh_env
+mkdir -p "$T/gens"; mkgen "$T/gens" 500 good; mkgen "$T/gens" 600 good
+bash "$IMPORT" "$T/gens/zsnap-testnet-600-deadbeefcafe.tar.zst" > "$T/one.log" 2>&1
+check "explicit archive is a single candidate" "grep -q '1 candidate(s) to try' '$T/one.log'"
+
+echo "== import: a pinned hash cannot break the fallback chain (SDE-App's HIGH)"
+# ZSNAP_EXPECT_HASH is the DOCUMENTED path. Applying it to every generation
+# verified gen 2 against gen 1's hash, so the walk could never succeed and the
+# log blamed the archives rather than the pin.
+fresh_env
+mkdir -p "$T/gens"
+mkgen "$T/gens" 700 good; sleep 1.1
+mkgen "$T/gens" 800 corrupt
+ZSNAP_EXPECT_HASH="hash-that-only-matches-generation-1" bash "$IMPORT" "$T/gens" > "$T/pin.log" 2>&1
+check "the walk still succeeds with a pin set" "[ $? -eq 0 ]"
+check "says the pin is ignored for a chain" "grep -q 'per-generation hashes are used instead' '$T/pin.log'"
+check "the pin was NOT passed to the surviving generation" "! grep -q -- '--expect-hash hash-that-only-matches-generation-1' '$STUB_LOG'"
+check "the good generation was imported" "[ -f '$STUB_CACHE_DIR/state/v27/testnet/db.stub' ]"
+
+# One candidate: the pin is exactly what it is for, so it must still apply.
+fresh_env
+mkdir -p "$T/gens"; mkgen "$T/gens" 900 good
+ZSNAP_EXPECT_HASH="pinned-for-one" bash "$IMPORT" "$T/gens/zsnap-testnet-900-deadbeefcafe.tar.zst" > "$T/pin1.log" 2>&1
+check "a single candidate still honours the pin" "grep -q -- '--expect-hash pinned-for-one' '$STUB_LOG'"
+check "and does not warn about a chain" "! grep -q 'per-generation hashes' '$T/pin1.log'"
+
+echo "== import: the published-pointer path, exercised end to end"
+# The previous test for this REIMPLEMENTED the parsing loop and its copy
+# omitted the guard that caused the bug, so it passed while production dropped
+# the newest generation. This serves a real pointer and real archives over HTTP
+# and runs zsnap-import.sh, so only the shipped code decides the result.
+fresh_env
+mkdir -p "$T/pub"
+for h in 100 200 300; do
+  mkdir -p "$T/build/snapshot"; echo '{"stub":true}' > "$T/build/snapshot/MANIFEST.json"
+  ( cd "$T/build" && tar -cf - snapshot | zstd -q -o "$T/pub/zsnap-testnet-$h-deadbeefcafe.tar.zst" )
+  echo "hash-$h" > "$T/pub/zsnap-testnet-$h-deadbeefcafe.tar.zst.manifest-hash"
+  rm -rf "$T/build"
+done
+# Newest first, exactly the format zsnap-publish.sh writes: file= then fileN=.
+{
+  echo "file=zsnap-testnet-300-deadbeefcafe.tar.zst"
+  echo "height=300"
+  echo "manifest_hash=hash-300"
+  echo "file2=zsnap-testnet-200-deadbeefcafe.tar.zst"
+  echo "manifest_hash2=hash-200"
+  echo "file3=zsnap-testnet-100-deadbeefcafe.tar.zst"
+  echo "manifest_hash3=hash-100"
+} > "$T/pub/latest-testnet.txt"
+
+PUB_PORT=$((18940 + (RANDOM % 40)))
+( cd "$T/pub" && python3 -m http.server "$PUB_PORT" --bind 127.0.0.1 ) >/dev/null 2>&1 &
+PUB_PID=$!
+for _ in $(seq 1 40); do curl -sf -o /dev/null "http://127.0.0.1:$PUB_PORT/latest-testnet.txt" && break; sleep 0.25; done
+
+bash "$IMPORT" "http://127.0.0.1:$PUB_PORT/latest-testnet.txt" > "$T/ptr.log" 2>&1
+check "pointer restore succeeds" "[ $? -eq 0 ]"
+check "ALL THREE generations were collected, newest included" "grep -q '3 candidate(s) to try' '$T/ptr.log'"
+check "the newest (file=, no digits) is generation 1" "grep -q 'generation 1/3: zsnap-testnet-300' '$T/ptr.log'"
+check "its own hash was used, not another generation's" "grep -q -- '--expect-hash hash-300' '$STUB_LOG'"
+check "no older generation was needed" "! grep -q 'generation 2/3' '$T/ptr.log'"
+
+# And the pairing must hold deeper in the chain: break the newest, the walk
+# must use generation 2's OWN hash.
+fresh_env
+cp -r "$T/../$(basename "$T")/pub" "$T/pub" 2>/dev/null || { mkdir -p "$T/pub"; }
+for h in 100 200 300; do
+  mkdir -p "$T/build/snapshot"; echo '{"stub":true}' > "$T/build/snapshot/MANIFEST.json"
+  ( cd "$T/build" && tar -cf - snapshot | zstd -q -o "$T/pub/zsnap-testnet-$h-deadbeefcafe.tar.zst" )
+  echo "hash-$h" > "$T/pub/zsnap-testnet-$h-deadbeefcafe.tar.zst.manifest-hash"
+  rm -rf "$T/build"
+done
+printf 'not a zstd stream' > "$T/pub/zsnap-testnet-300-deadbeefcafe.tar.zst"
+{
+  echo "file=zsnap-testnet-300-deadbeefcafe.tar.zst"
+  echo "manifest_hash=hash-300"
+  echo "file2=zsnap-testnet-200-deadbeefcafe.tar.zst"
+  echo "manifest_hash2=hash-200"
+} > "$T/pub/latest-testnet.txt"
+PUB_PORT2=$((PUB_PORT + 1))
+( cd "$T/pub" && python3 -m http.server "$PUB_PORT2" --bind 127.0.0.1 ) >/dev/null 2>&1 &
+PUB_PID2=$!
+for _ in $(seq 1 40); do curl -sf -o /dev/null "http://127.0.0.1:$PUB_PORT2/latest-testnet.txt" && break; sleep 0.25; done
+bash "$IMPORT" "http://127.0.0.1:$PUB_PORT2/latest-testnet.txt" > "$T/ptr2.log" 2>&1
+check "falls back when the newest is corrupt" "[ $? -eq 0 ]"
+check "generation 2 was verified with ITS hash" "grep -q -- '--expect-hash hash-200' '$STUB_LOG'"
+check "not with the newest generation's hash" "! grep -q -- '--expect-hash hash-300' '$STUB_LOG'"
+kill "$PUB_PID" "$PUB_PID2" 2>/dev/null
+
+echo "== import: a pointer without a trailing newline keeps its oldest generation"
+# read -r drops a final unterminated line, which silently lost a generation.
+# Served without a trailing newline, and counted by the SHIPPED parser via the
+# script's own log line rather than by a copy of the loop.
+fresh_env
+mkdir -p "$T/pub2"
+for h in 10 20 30; do
+  mkdir -p "$T/b/snapshot"; echo '{"stub":true}' > "$T/b/snapshot/MANIFEST.json"
+  ( cd "$T/b" && tar -cf - snapshot | zstd -q -o "$T/pub2/zsnap-testnet-$h-deadbeefcafe.tar.zst" )
+  echo "h$h" > "$T/pub2/zsnap-testnet-$h-deadbeefcafe.tar.zst.manifest-hash"; rm -rf "$T/b"
+done
+printf 'file=zsnap-testnet-30-deadbeefcafe.tar.zst\nmanifest_hash=h30\nfile2=zsnap-testnet-20-deadbeefcafe.tar.zst\nmanifest_hash2=h20\nfile3=zsnap-testnet-10-deadbeefcafe.tar.zst\nmanifest_hash3=h10' > "$T/pub2/latest-testnet.txt"
+PUB_PORT3=$((18990 + (RANDOM % 8)))
+( cd "$T/pub2" && python3 -m http.server "$PUB_PORT3" --bind 127.0.0.1 ) >/dev/null 2>&1 &
+PUB_PID3=$!
+for _ in $(seq 1 40); do curl -sf -o /dev/null "http://127.0.0.1:$PUB_PORT3/latest-testnet.txt" && break; sleep 0.25; done
+bash "$IMPORT" "http://127.0.0.1:$PUB_PORT3/latest-testnet.txt" > "$T/ptr3.log" 2>&1
+check "the shipped parser reads all three from an unterminated pointer" "grep -q '3 candidate(s) to try' '$T/ptr3.log'"
+kill "$PUB_PID3" 2>/dev/null

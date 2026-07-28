@@ -98,10 +98,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-expect_hash="$ZSNAP_EXPECT_HASH"
-snapshot_dir=""
-url_arg=()
-
 fetch_sidecar() { # $1 = sidecar path or url, best effort
   case "$1" in
     http://*|https://*) curl -fsSL --max-time 60 "$1" 2>/dev/null | tr -d '[:space:]' ;;
@@ -109,56 +105,133 @@ fetch_sidecar() { # $1 = sidecar path or url, best effort
   esac
 }
 
-# A .tar.zst URL is downloaded first, then handled like a local archive.
-case "$source" in
-  http://*.tar.zst|https://*.tar.zst)
-    command -v zstd >/dev/null || die "zstd is not installed (apt-get install zstd)"
-    log "downloading $source"
-    # -C - resumes a partial download if this script is rerun after a drop.
-    curl -fL -C - --retry 3 -o "$work/snapshot.tar.zst" "$source"
-    [ -n "$expect_hash" ] || expect_hash="$(fetch_sidecar "$source.manifest-hash" || true)"
-    source="$work/snapshot.tar.zst"
-    ;;
-esac
+# Resolves one candidate and imports it. Returns nonzero on any failure so the
+# caller can try the next generation instead of giving up.
+try_candidate() { # $1 = archive path, directory, or url; $2 = its expected hash
+  local cand="$1" expect_hash="${2:-}" snapshot_dir="" manifest
+  local attempt_dir url_arg=() verify_args=()
+  attempt_dir="$(mktemp -d "$work/attempt.XXXXXX")" || return 1
 
-case "$source" in
-  *.tar.zst)
-    command -v zstd >/dev/null || die "zstd is not installed (apt-get install zstd)"
-    [ -f "$source" ] || die "no such archive: $source"
-    [ -n "$expect_hash" ] || expect_hash="$(fetch_sidecar "$source.manifest-hash" || true)"
-    log "unpacking $(basename "$source")"
-    zstd -dc "$source" | tar -C "$work" -xf -
-    manifest="$(find "$work" -name MANIFEST.json -print -quit)"
-    [ -n "$manifest" ] || die "archive has no MANIFEST.json, not a zsnap snapshot"
-    snapshot_dir="$(dirname "$manifest")"
-    ;;
-  http://*|https://*)
-    # Directory-style URL: let zebrad do the (resumable, verified) download.
-    snapshot_dir="$work/snapshot"
-    url_arg=(--url "$source")
-    ;;
-  *)
-    [ -f "$source/MANIFEST.json" ] || die "$source is not a snapshot directory (no MANIFEST.json)"
-    snapshot_dir="$source"
-    ;;
-esac
+  case "$cand" in
+    http://*.tar.zst|https://*.tar.zst)
+      command -v zstd >/dev/null || { log "zstd is not installed"; return 1; }
+      log "downloading $cand"
+      curl -fL -C - --retry 3 -o "$attempt_dir/snapshot.tar.zst" "$cand" || return 1
+      [ -n "$expect_hash" ] || expect_hash="$(fetch_sidecar "$cand.manifest-hash" || true)"
+      cand="$attempt_dir/snapshot.tar.zst"
+      ;;
+  esac
 
-verify_args=()
-if [ -n "$expect_hash" ]; then
-  verify_args=(--expect-hash "$expect_hash")
-elif [ "$ZSNAP_ALLOW_UNVERIFIED" = "1" ]; then
-  verify_args=(--allow-unverified)
-  log "WARNING: importing without authentication (ZSNAP_ALLOW_UNVERIFIED=1)"
+  case "$cand" in
+    *.tar.zst)
+      command -v zstd >/dev/null || { log "zstd is not installed"; return 1; }
+      [ -f "$cand" ] || { log "no such archive: $cand"; return 1; }
+      [ -n "$expect_hash" ] || expect_hash="$(fetch_sidecar "$cand.manifest-hash" || true)"
+      # Transport check first: a truncated download is cheaper to catch here
+      # than inside zebrad.
+      local sha_file="$cand.sha256"
+      if [ -f "$sha_file" ]; then
+        if ! echo "$(cat "$sha_file")  $cand" | sha256sum -c --quiet - 2>/dev/null; then
+          log "sha256 mismatch on $(basename "$cand"), it is corrupt or truncated"
+          return 1
+        fi
+      fi
+      log "unpacking $(basename "$cand")"
+      zstd -dc "$cand" | tar -C "$attempt_dir" -xf - || { log "could not unpack $(basename "$cand")"; return 1; }
+      manifest="$(find "$attempt_dir" -name MANIFEST.json -print -quit)"
+      [ -n "$manifest" ] || { log "no MANIFEST.json inside $(basename "$cand")"; return 1; }
+      snapshot_dir="$(dirname "$manifest")"
+      ;;
+    http://*|https://*)
+      snapshot_dir="$attempt_dir/snapshot"
+      url_arg=(--url "$cand")
+      ;;
+    *)
+      [ -f "$cand/MANIFEST.json" ] || { log "$cand is not a snapshot directory"; return 1; }
+      snapshot_dir="$cand"
+      ;;
+  esac
+
+  if [ -n "$expect_hash" ]; then
+    verify_args=(--expect-hash "$expect_hash")
+  elif [ "$ZSNAP_ALLOW_UNVERIFIED" = "1" ]; then
+    verify_args=(--allow-unverified)
+    log "WARNING: importing without authentication (ZSNAP_ALLOW_UNVERIFIED=1)"
+  fi
+
+  log "importing into $ZSNAP_CHAIN_VOLUME ($cache_dir)"
+  "$ZSNAP_ZEBRAD" import-snapshot "$snapshot_dir" "${url_arg[@]}" "${verify_args[@]}" \
+    --cache-dir "$cache_dir" --network "$ZSNAP_NETWORK" || return 1
+  return 0
+}
+
+# The generations are fallback layers, so build the list newest to oldest.
+# What the source IS decides, not how it arrived: a directory of archives is a
+# fallback chain even when named explicitly, while a single archive is one
+# candidate even when it came from config.
+candidates=()
+hashes=()
+if [ -d "$source" ] && [ -f "$source/MANIFEST.json" ]; then
+  candidates=("$source"); hashes=("")          # already an unpacked snapshot
+elif [ -d "$source" ]; then
+  # Each archive carries its own sidecar, fetched per candidate below.
+  while read -r f || [ -n "$f" ]; do
+    [ -n "$f" ] && { candidates+=("$f"); hashes+=(""); }
+  done < <(find "$source" -maxdepth 1 -name "zsnap-$ZSNAP_NETWORK-*.tar.zst" -printf '%T@ %p\n' 2>/dev/null \
+             | sort -rn | cut -d' ' -f2-)
+  [ "${#candidates[@]}" -gt 0 ] \
+    || die "$source holds no zsnap-$ZSNAP_NETWORK-*.tar.zst archives"
+elif printf '%s' "$source" | grep -q '^https\?://.*latest-.*\.txt$'; then
+  # A published pointer pairs fileN= with manifest_hashN=, so each generation
+  # is verified against ITS OWN hash rather than the newest one's.
+  base="${source%/*}"
+  pointer_body="$(curl -fsSL --max-time 60 "$source" 2>/dev/null)"
+  # Read the file lines themselves. The newest generation is written as
+  # "file=" with no digits, so extracting an index first yields an empty
+  # string for it and any non-empty guard silently drops the freshest
+  # snapshot. The suffix comes off the key instead: "" for the newest.
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in file=*|file[0-9]*=*) ;; *) continue ;; esac
+    suffix="${line%%=*}"; suffix="${suffix#file}"
+    f="${line#*=}"
+    [ -n "$f" ] || continue
+    candidates+=("$base/$f")
+    hashes+=("$(printf '%s' "$pointer_body" | sed -n "s/^manifest_hash${suffix}=//p" | head -1)")
+  done < <(printf '%s' "$pointer_body" | grep -E '^file[0-9]*=')
+  [ "${#candidates[@]}" -gt 0 ] || { candidates=("$source"); hashes=(""); }
+else
+  candidates=("$source"); hashes=("")
 fi
-# With neither, zebrad falls back to its embedded trusted hash for this
-# network and height, and refuses if there is none. That refusal is correct.
 
-log "importing into $ZSNAP_CHAIN_VOLUME ($cache_dir)"
-"$ZSNAP_ZEBRAD" import-snapshot "$snapshot_dir" "${url_arg[@]}" "${verify_args[@]}" \
-  --cache-dir "$cache_dir" --network "$ZSNAP_NETWORK"
-import_ok=1
+# A pinned hash describes ONE archive, so it only applies when there is one
+# candidate. With a chain, per-generation hashes (pointer or sidecar) decide.
+if [ -n "$ZSNAP_EXPECT_HASH" ]; then
+  if [ "${#candidates[@]}" = "1" ]; then
+    hashes[0]="$ZSNAP_EXPECT_HASH"
+  else
+    log "ZSNAP_EXPECT_HASH is set but there are ${#candidates[@]} generations, so per-generation hashes are used instead (a single pin cannot verify a fallback chain)"
+  fi
+fi
 
-# Files were written as root. The zebra container's entrypoint chowns its
-# cache dir to the zebra user before dropping privileges (z3 grants it CHOWN
-# for exactly this), so ownership sorts itself out on first start.
+log "${#candidates[@]} candidate(s) to try, newest first"
+gen=0
+for cand in "${candidates[@]}"; do
+  gen=$((gen + 1))
+  log "generation $gen/${#candidates[@]}: $(basename "$cand")"
+  if try_candidate "$cand" "${hashes[$((gen - 1))]:-}"; then
+    import_ok=1
+    break
+  fi
+  # Loud on purpose: a silently skipped generation hides a corrupt archive.
+  log "GENERATION $gen FAILED: $(basename "$cand"). Trying the next older one."
+  rm -rf "$cache_dir"/zsnap-import-* 2>/dev/null || true
+done
+
+if [ "${import_ok:-0}" != "1" ]; then
+  log "ERROR: all ${#candidates[@]} generation(s) failed to import."
+  log "Zebra will sync from genesis, which is correct but slow. Investigate the archives:"
+  log "  every one failed its checksum, its manifest verification, or the import itself."
+  exit 1
+fi
+
 log "done, zebra will start from the snapshot tip and sync the remainder"

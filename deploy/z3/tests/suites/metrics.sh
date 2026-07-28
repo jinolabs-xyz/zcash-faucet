@@ -64,3 +64,43 @@ check "rewrite leaves a complete file" "grep -q 'faucet_metrics_scrape_timestamp
 check "file is world-readable for the scraper" "[ \"\$(stat -c %a '$METRICS_FILE')\" = '644' ]"
 
 kill "$API_PID" 2>/dev/null
+
+echo "== metrics: disk gauges per filesystem, and a floor that alerts"
+metrics_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+export METRICS_DISK_PATHS="$T"
+export METRICS_DISK_FLOOR_PCT=0            # nothing is below a 0% floor
+bash "$METRICS_SH" > "$T/disk.log" 2>&1
+check "free bytes gauge emitted with a path label" "grep -q 'faucet_disk_free_bytes{path=\"$T\"} [0-9]' '$METRICS_FILE'"
+check "free percent gauge emitted" "grep -q 'faucet_disk_free_percent{path=\"$T\"} [0-9]' '$METRICS_FILE'"
+check "not below floor at 0%" "grep -q 'faucet_disk_below_floor{path=\"$T\"} 0' '$METRICS_FILE'"
+check "no alert sent when healthy" "! grep -q 'DISK LOW' '$T/disk.log'"
+
+# A 101% floor is below-floor by construction, so the alert path runs without
+# needing to actually fill a disk.
+metrics_env
+export METRICS_DISK_PATHS="$T" METRICS_DISK_FLOOR_PCT=101
+printf '#!/usr/bin/env bash\necho "ALERTED: $*" >> %q\n' "$T/alerts.log" > "$T/fake-alert.sh"
+chmod +x "$T/fake-alert.sh"; export METRICS_ALERT_SH="$T/fake-alert.sh"
+bash "$METRICS_SH" > "$T/disk2.log" 2>&1
+check "below-floor gauge is 1" "grep -q 'faucet_disk_below_floor{path=\"$T\"} 1' '$METRICS_FILE'"
+check "logs the shortfall with both numbers" "grep -qE 'DISK LOW: .* has [0-9]+% free, floor is 101%' '$T/disk2.log'"
+check "pages through the shared sender" "grep -q 'ALERTED: disk low' '$T/alerts.log'"
+check "the alert names the consequence" "grep -q 'snapshots and backups will start failing' '$T/alerts.log'"
+
+echo "== metrics: a nonexistent disk path is skipped, not reported as 0 free"
+metrics_env
+export METRICS_DISK_PATHS="$T/definitely-not-here"
+bash "$METRICS_SH" > /dev/null 2>&1
+check "no gauge invented for a missing path" "! grep -q 'definitely-not-here' '$METRICS_FILE'"
+
+echo "== metrics: the file only ever contains valid Prometheus lines"
+# A log line leaking into the textfile can make node_exporter reject all of it,
+# and the disk warning did exactly that until it was sent to stderr.
+metrics_env
+export METRICS_DISK_PATHS="$T" METRICS_DISK_FLOOR_PCT=101
+printf '#!/usr/bin/env bash\nexit 0\n' > "$T/fake-alert.sh"; chmod +x "$T/fake-alert.sh"
+export METRICS_ALERT_SH="$T/fake-alert.sh"
+bash "$METRICS_SH" > "$T/valid.log" 2>&1
+check "warning appears in the log, not the metrics file" "grep -q 'DISK LOW' '$T/valid.log' && ! grep -q 'DISK LOW' '$METRICS_FILE'"
+check "every line is a comment or a metric" "! grep -vE '^(#|[a-z_]+(\{[^}]*\})? -?[0-9.]+$)' '$METRICS_FILE'"
