@@ -122,10 +122,9 @@ what the backend is doing:
 
 ## Running it
 
-Deploy to a fresh box with cloud-init or reconcile an existing one with
-`deploy/deploy.sh`, both in [deploy/](deploy/). Every setting is an environment
-variable, listed in [CONFIGURATION.md](CONFIGURATION.md). To work on it, see
-[CONTRIBUTING.md](CONTRIBUTING.md).
+[DEPLOY.md](DEPLOY.md) has both paths, local mock mode and a real server.
+Settings are in [CONFIGURATION.md](CONFIGURATION.md), and
+[CONTRIBUTING.md](CONTRIBUTING.md) covers working on it.
 
 ## How the tank stays full
 

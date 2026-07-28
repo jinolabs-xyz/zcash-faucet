@@ -1,7 +1,67 @@
-# Deploying the faucet (free: Render + Cloudflare)
+# Deploying the faucet
 
-Verified stack: **Render** (web app, free) + **Cloudflare** (D1 ledger + Turnstile +
-DNS/CDN, free) + **UptimeRobot** (keep-alive ping, free).
+Two paths. Pick by what you are doing.
+
+| Path | Needs | Use it for |
+|---|---|---|
+| [Local, mock mode](#local-mock-mode) | Node 23, nothing else | Working on the app. No keys, no chain, no wallet, no coins move. |
+| [A real server](#a-real-server-the-z3-stack) | One VM | The actual faucet: Zebra, Zallet, the miner, Caddy and TLS. |
+
+## Local, mock mode
+
+Runs the entire flow with no keys, no chain and no wallet. The mock sender keeps
+a simulated balance, so the low-balance guard, the empty state and the whole
+claim path are all exercisable.
+
+```bash
+npm install
+npm run build
+FAUCET_SENDER=mock FAUCET_CHALLENGE=pow RATE_LIMIT_SALT=dev-salt npm start
+```
+
+Open http://localhost:3000, hit **Generate a test address**, and claim.
+
+To watch the reserve loop refill, add `FAUCET_MINER_ACTIVE=true
+FAUCET_MOCK_REFILL=true` and set the marks low, for example
+`FAUCET_RESERVE_LOW_TAZ=4 FAUCET_RESERVE_TARGET_TAZ=8`.
+
+**`npm run dev` does not bundle.** A `node:` import in `src/lib/zcash/t2z.ts`
+breaks the dev webpack build, so use `npm run build && npm start`.
+
+Every setting is in [CONFIGURATION.md](CONFIGURATION.md).
+
+## A real server (the z3 stack)
+
+This is how the faucet actually runs: one VM with a Zebra full node, a Zallet
+shielded wallet, the solo miner, the app, and Caddy terminating TLS.
+
+Fresh box, paste-once:
+
+```bash
+# Provision with deploy/cloud-init.yaml, which brings the whole stack up on
+# first boot. See deploy/linode/ or deploy/digitalocean/ for provider notes.
+```
+
+Existing box, re-runnable and safe to repeat:
+
+```bash
+cd /opt/zcash-faucet
+git pull
+NETWORK=testnet FAUCET_DOMAIN=$(cat /etc/faucet-domain) ./deploy/deploy.sh
+```
+
+The stack, its wallet setup and the RPC wiring are documented in
+[deploy/z3/README.md](deploy/z3/README.md). TLS and DNS are in
+[deploy/z3/HTTPS.md](deploy/z3/HTTPS.md). Day-two operations, health versus
+readiness, backups, snapshots and the 3am runbook are in
+[OPERATIONS.md](OPERATIONS.md).
+
+## Legacy: Render plus Cloudflare
+
+Kept because `render.yaml` and the D1 proxy Worker are still in the repo and
+still work, but this predates the z3 stack. It runs the app against a public
+lightwalletd with the ledger on Cloudflare D1, which means no full node and no
+shielded faucet wallet. Use the z3 path above for anything real.
 
 ## Pre-flight: what's already verified
 
