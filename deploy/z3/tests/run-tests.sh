@@ -61,12 +61,22 @@ suite_deps() { # $1 suite name -> commands it needs beyond the base set
     zsnap)    echo "zstd python3 curl" ;;
     backup)   echo "gpg zstd python3" ;;
     redeploy) echo "curl" ;;
+    # Both stand up a real python http server and talk to it with the real
+    # curl, past the stub. Derived by running each suite alone with nothing
+    # installed and adding deps until it went green, not by reading the code:
+    # deploy 8/26 with curl alone, 34/0 with curl and python3.
+    deploy)   echo "curl python3" ;;
+    metrics)  echo "curl python3" ;;
     # audit-access.sh asks sshd what it enforces. Without sshd the audit is
     # right to report NOT VERIFIED, but the suite asserts the resolved path.
     access)   echo "sshd" ;;
-    # alert.sh encodes JSON with jq or python3, either one, so it is not a hard
-    # requirement here. The suites read the refusal path deliberately.
-    drift|alerts) echo "python3" ;;
+    # curl because alert.sh POSTs with it, and the suites assert on a webhook
+    # actually receiving the body. drift inherits it through the wording tests,
+    # which drive the real alert.sh rather than a stub.
+    #
+    # jq is NOT listed: alert.sh encodes with jq OR python3, either one, and the
+    # suites exercise the refusal path when neither exists.
+    drift|alerts) echo "python3 curl" ;;
     *)        echo "" ;;
   esac
 }
