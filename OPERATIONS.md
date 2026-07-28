@@ -19,10 +19,30 @@ checked out at `/opt/zcash-faucet`.
 | chain snapshot export | systemd `zsnap-export.timer` | `/opt/faucet/zsnap-export.sh` | [deploy/z3/SNAPSHOTS.md](deploy/z3/SNAPSHOTS.md) |
 | encrypted backups | systemd `faucet-backup.timer` | `/opt/faucet/backup.sh` | [deploy/z3/BACKUPS.md](deploy/z3/BACKUPS.md) |
 | metrics textfile | systemd `faucet-metrics.timer` | `/opt/faucet/faucet-metrics.sh` | [deploy/z3/OBSERVABILITY.md](deploy/z3/OBSERVABILITY.md) |
+| alerting | `faucet-alert@.service`, wired as `OnFailure=` on every unit above | `/opt/faucet/alert.sh` | [deploy/z3/OBSERVABILITY.md](deploy/z3/OBSERVABILITY.md) |
 
 Only caddy is public. Zebra and zallet RPC stay on the private docker
 network. Everything docker is `restart: unless-stopped`, so a reboot brings
 the containers back without help.
+
+Any unit above failing posts to the alert webhook with its last journal lines,
+so a timer cannot fail silently. That is what `OnFailure` buys.
+
+### Tools you run by hand
+
+Nothing schedules these. All are read-only except `redeploy.sh` and
+`restore-backup.sh`.
+
+| Tool | Answers | Deep doc |
+|---|---|---|
+| `redeploy.sh` | ship a build, health-gated, auto-rollback | [REDEPLOY.md](deploy/z3/REDEPLOY.md) |
+| `redeploy.sh rollback` / `status` | go back; what is running | [REDEPLOY.md](deploy/z3/REDEPLOY.md) |
+| `audit-drift.sh` | what is on the box that the repo does not describe | [drift section](#config-drift) |
+| `audit-access.sh` | what is exposed, and how sshd throttles | [box access](#box-access-what-is-exposed-and-the-ssh-resets) |
+| `zsnap-export.sh preflight` | can the export binary read this chain state | [SNAPSHOTS.md](deploy/z3/SNAPSHOTS.md) |
+| `zsnap-publish.sh` | put a snapshot where a replacement box can fetch it | [SNAPSHOTS.md](deploy/z3/SNAPSHOTS.md) |
+| `restore-backup.sh` | put the wallet and ledger back | [BACKUPS.md](deploy/z3/BACKUPS.md) |
+| `alert.sh --self-test` | does paging actually work | [OBSERVABILITY.md](deploy/z3/OBSERVABILITY.md) |
 
 ## Start, stop, status
 
@@ -198,7 +218,24 @@ Host 172.235.26.235 faucet.*
 Neither the ufw limit nor `MaxStartups` is approached, because there is one
 connection instead of ten. **This changes nothing on the box, needs no
 sign-off, and is reversible by deleting three lines.** Try it before anything
-below.
+below. (Finding credited to SDE-App, who proposed it over the server-side
+change.)
+
+Proven on this box: six parallel connections, zero resets, nothing altered
+server-side.
+
+One gotcha from that run. The **first** parallel burst can still fail, because
+several clients race to become the master before the control socket exists. Warm
+it once, then fan out:
+
+```bash
+ssh -o ControlMaster=yes -o ControlPersist=10m -fN root@<box>   # open the master
+ssh -O check root@<box>                                        # confirm it is up
+# now run the parallel work
+```
+
+A wrapper that opens the master before any loop is worth more than retry logic
+in every script.
 
 **2. `ufw limit` on ssh, if the audit reports LIMIT.** That is a hardcoded 6
 connections per 30 seconds per source, with no gentler setting to tune, so the
