@@ -1,10 +1,12 @@
 // End-to-end API smoke test: drives the real claim flow over HTTP against a
-// running server (mock sender + pow challenge). This is the integration check
-// the unit tests cannot give us: route wiring, challenge issue/verify,
+// running server (zallet sender against the fake-zallet double + pow), the
+// integration check the unit tests cannot give us: route wiring, challenge,
 // rate-limit reservation and the send queue, all through the front door.
 //
 // Run it against a built server (never dev, it does not bundle):
-//   FAUCET_SENDER=mock FAUCET_CHALLENGE=pow RATE_LIMIT_SALT=smoke PORT=3100 npm start
+//   node scripts/fake-zallet.mjs &
+//   FAUCET_SENDER=zallet ZALLET_RPC_URL=http://127.0.0.1:28299/ ZALLET_ACCOUNT=fake-account \
+//   ZALLET_ADDRESS=utest1fake ZALLET_MIN_CONF=0 FAUCET_CHALLENGE=pow RATE_LIMIT_SALT=smoke PORT=3100 npm start
 //   SMOKE_URL=http://localhost:3100 npm run smoke
 //
 // No dependencies: global fetch and node:crypto cover it.
@@ -22,7 +24,7 @@ const ok = (name, cond, detail = "") => {
 // address.test.ts builds its fixtures, then pasted as literals to keep this
 // script dependency-free:
 //   bech32m.encode("utest", bech32m.toWords(seq(96, N)), 1023)  // N = 3, 41
-// Mock mode validates the format and never sends, so the payload bytes only
+// The double accepts any checksum-valid recipient, so the payload bytes only
 // need to be correctly sized, not a spendable receiver.
 const ADDR_A =
   "utest1qv9pzxqlyckngw6zf9g9whn9d3eh4qvg37tfmf9tk2uup37w6hww86h3lrlsvrg5rv3zjvph8ez5c566v95x7anasj9e9xdq57htt0xretga3hlxah60kqsfzqt3uffvxvayzjz02ewkg6mj0xqg0r54ns6ly2rh";
@@ -77,9 +79,9 @@ async function solvedChallenge() {
 const status = await getJson("/api/status");
 ok("GET /api/status is 200", status.status === 200);
 ok("challenge mode is pow", status.body.challenge === "pow", `got ${status.body.challenge}`);
-ok("sender is mock", status.body.sender === "mock", `got ${status.body.sender}`);
+ok("sender is zallet", status.body.sender === "zallet", `got ${status.body.sender}`);
 if (failures) {
-  console.log("server is not in mock+pow mode, aborting before the claim steps");
+  console.log("server is not in zallet+pow mode, aborting before the claim steps");
   process.exit(1);
 }
 

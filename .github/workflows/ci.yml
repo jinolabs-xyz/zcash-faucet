@@ -37,7 +37,14 @@ jobs:
   smoke:
     runs-on: ubuntu-latest
     env:
-      FAUCET_SENDER: mock
+      # Real ZalletSender against the fake-zallet double (#68): the path under
+      # test is production code, only the wallet RPC boundary is faked.
+      FAUCET_SENDER: zallet
+      ZALLET_RPC_URL: http://127.0.0.1:28299/
+      ZALLET_ACCOUNT: fake-account
+      ZALLET_ADDRESS: utest1fake
+      ZALLET_MIN_CONF: "0"
+      ZALLET_POLL_MS: "250"
       FAUCET_CHALLENGE: pow
       FAUCET_POW_BITS: "16"
       RATE_LIMIT_SALT: ci-smoke-not-a-secret
@@ -56,9 +63,11 @@ jobs:
       # unit tests cannot give, and the cutover validation script.
       - name: e2e smoke
         run: |
+          PORT=28299 node scripts/fake-zallet.mjs &
+          double=$!
           npm start &
           server=$!
-          trap 'kill "$server" 2>/dev/null || true' EXIT
+          trap 'kill "$server" "$double" 2>/dev/null || true' EXIT
           for _ in $(seq 1 60); do
             curl -sf "$SMOKE_URL/api/status" >/dev/null && break
             sleep 1
@@ -68,7 +77,13 @@ jobs:
   ui:
     runs-on: ubuntu-latest
     env:
-      FAUCET_SENDER: mock
+      # Same double-backed setup as the smoke job, see #68.
+      FAUCET_SENDER: zallet
+      ZALLET_RPC_URL: http://127.0.0.1:28299/
+      ZALLET_ACCOUNT: fake-account
+      ZALLET_ADDRESS: utest1fake
+      ZALLET_MIN_CONF: "0"
+      ZALLET_POLL_MS: "250"
       FAUCET_CHALLENGE: pow
       # Low bits so the in-page worker still runs but finishes fast.
       FAUCET_POW_BITS: "12"
@@ -97,9 +112,11 @@ jobs:
             echo "no scripts/ui-smoke.mjs on this ref, skipping"
             exit 0
           fi
+          PORT=28299 node scripts/fake-zallet.mjs &
+          double=$!
           npm start &
           server=$!
-          trap 'kill "$server" 2>/dev/null || true' EXIT
+          trap 'kill "$server" "$double" 2>/dev/null || true' EXIT
           for _ in $(seq 1 60); do
             curl -sf "$UI_SMOKE_URL/api/status" >/dev/null && break
             sleep 1
