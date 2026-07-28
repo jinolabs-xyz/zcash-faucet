@@ -104,9 +104,8 @@ bash "$AUDIT" > /dev/null 2>&1
 # shellcheck disable=SC2034
 after="$(find "$T/units" "$T/install" "$T/env" -type f -exec sha256sum {} \; | sort)"
 check "no file on the box was touched" "[ \"\$before\" = \"\$after\" ]"
-# Report-only is a design commitment, not an accident, so pin it: no branch
-# that would act on --apply. The word appears in a comment explaining why it
-# does not exist, hence matching the case branch rather than the word.
+# Report-only is a commitment, so pin it. Matches the case branch, not the
+# word, which appears in the header explaining why the flag does not exist.
 check "there is no --apply branch" "! grep -qE -- '[-][-]apply[)\"]' '$REPO/deploy/z3/audit-drift.sh'"
 
 echo "== drift: every finding carries a paste-able fix command"
@@ -134,9 +133,8 @@ bash "$AUDIT" --verbose > "$T/fix5.log" 2>&1
 check "no fix lines when there is no drift" "! grep -q 'fix:' '$T/fix5.log'"
 
 echo "== drift: a skipped check is never reported as clean (doctrine rule 1)"
-# No systemctl means enablement cannot be checked. Before this was fixed the
-# audit printed "this box matches the repo" and exited 0, having never looked
-# at whether a single unit would survive a reboot.
+# Before the fix this printed "matches the repo" and exited 0 without ever
+# checking whether a unit would survive a reboot.
 drift_env; make_clean_box
 rm -f "$T/bin/systemctl"
 PATH="/usr/bin:/bin" bash "$AUDIT" > "$T/unver.log" 2>&1
