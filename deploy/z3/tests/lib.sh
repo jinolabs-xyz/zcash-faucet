@@ -5,6 +5,30 @@
 # and share one pass/fail tally so the runner can report a single total.
 
 pass=0; fail=0
+
+# Scratch-dir handling, both halves of #161. Register every dir and remove them
+# all on exit so a run stops leaking one per env. AND refuse to continue if a dir
+# cannot be created: an empty T (mktemp failed, e.g. a full disk) makes every
+# derived path absolute at / and the suite KEEPS SCORING, printing ok for
+# assertions whose redirect silently failed. Cleanup only makes ENOSPC rare;
+# this guard is what stops a fake green when the disk fills for reasons unrelated
+# to us. mk_scratch sets the global T directly rather than via $(...), so the
+# exit runs in the real shell instead of a command-substitution subshell.
+_TEST_TMPDIRS=()
+_cleanup_test_tmpdirs() { [ "${#_TEST_TMPDIRS[@]}" -gt 0 ] && rm -rf "${_TEST_TMPDIRS[@]}"; }
+trap _cleanup_test_tmpdirs EXIT
+mk_scratch() {  # sets global T
+  T="$(mktemp -d "$1")" || true
+  if [ -z "$T" ] || [ ! -d "$T" ]; then
+    echo "  FATAL: could not create scratch dir ($1), disk full? refusing to score" >&2
+    # Exit 2, not 1: a disk-full abort is could-not-run, not tests-failed, per the
+    # preflight's exit-code contract (#151). CI can then tell "fix the runner
+    # image" from "someone broke the code".
+    exit 2
+  fi
+  _TEST_TMPDIRS+=("$T")
+}
+
 ok()   { pass=$((pass+1)); echo "  ok: $1"; }
 bad()  { fail=$((fail+1)); echo "  FAIL: $1"; }
 check(){ if eval "$2"; then ok "$1"; else bad "$1"; fi; }
@@ -21,7 +45,7 @@ check_order() {
 # and curl on PATH, fake docker volumes on disk, everything under TMPDIR so a
 # read-only checkout works.
 fresh_env() {
-  T="$(mktemp -d "${TMPDIR:-/tmp}/zsnap-test.XXXXXX")"
+  mk_scratch "${TMPDIR:-/tmp}/zsnap-test.XXXXXX"
   export STUB_LOG="$T/stub.log"; : > "$STUB_LOG"
   export STUB_VOLROOT="$T/volumes"; mkdir -p "$STUB_VOLROOT"
   export STUB_CONTAINERS="$T/containers"; mkdir -p "$STUB_CONTAINERS"
@@ -41,7 +65,7 @@ with_chain() { mkdir -p "$STUB_CACHE_DIR"; head -c 100000 /dev/urandom > "$STUB_
 # compose, one-off runs and container labels rather than zsnap's volumes), so
 # it gets its own PATH entry rather than sharing stubs/.
 deploy_fresh_env() {
-  T="$(mktemp -d "${TMPDIR:-/tmp}/deploy-test.XXXXXX")"
+  mk_scratch "${TMPDIR:-/tmp}/deploy-test.XXXXXX"
   export STUB_LOG="$T/stub.log"; : > "$STUB_LOG"
   export STUB_CONTAINERS="$T/containers"; mkdir -p "$STUB_CONTAINERS"
   export STUB_VOLROOT="$T/volumes"; mkdir -p "$STUB_VOLROOT"
