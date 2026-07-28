@@ -42,10 +42,7 @@ export interface Sender {
   send(req: SendRequest): Promise<SendResult>;
 }
 
-/** Testnet block explorer link for a txid (best-effort convenience). */
-function explorerUrl(txid: string): string {
-  return `https://blockexplorer.one/zcash/testnet/tx/${txid}`;
-}
+import { explorerTxUrl } from "./explorer.ts";
 
 class MockSender implements Sender {
   readonly name = "mock";
@@ -72,7 +69,7 @@ class MockSender implements Sender {
     const txid = h.toString(16).padStart(64, "0").slice(0, 64);
     await new Promise((r) => setTimeout(r, 300)); // simulate broadcast latency
     this.store.__faucetMockBal -= req.amountZat;
-    return { txid, explorerUrl: explorerUrl(txid) };
+    return { txid, explorerUrl: explorerTxUrl(txid) };
   }
 }
 
