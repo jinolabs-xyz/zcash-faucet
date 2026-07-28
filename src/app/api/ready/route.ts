@@ -14,11 +14,12 @@ import { config, ZATOSHI_PER_TAZ } from "@/lib/config";
 import { pingBackend } from "@/lib/zcash/lightwalletd";
 import { safeBalance } from "@/lib/zcash/send";
 import { getNodeStatus } from "@/lib/zcash/nodeStatus";
+import { withApi } from "@/lib/api";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export const GET = withApi("ready", async () => {
   const [backend, balanceZat, node] = await Promise.all([pingBackend(), safeBalance(), getNodeStatus()]);
 
   // Order the checks cheapest-signal first so the reason is the most upstream cause.
@@ -42,4 +43,4 @@ export async function GET() {
     },
     { status: ready ? 200 : 503 },
   );
-}
+});

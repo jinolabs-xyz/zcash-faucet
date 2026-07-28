@@ -70,7 +70,7 @@ export default function Home() {
   const [panel, setPanel] = useState(false);
   const [theme, setTheme] = useState<"paper" | "ink">("ink");
   const [tx, setTx] = useState<Tx | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<"txid" | "receipt" | null>(null);
   const [cooldownEnd, setCooldownEnd] = useState(0);
   const [now, setNow] = useState(Date.now());
   const [errMsg, setErrMsg] = useState("");
@@ -198,15 +198,45 @@ export default function Home() {
 
   const again = () => {
     inFlow.current = false;
-    setAddr(""); setTouched(false); setTx(null); setCopied(false); setErrMsg("");
+    setAddr(""); setTouched(false); setTx(null); setCopied(null); setErrMsg("");
     setPhase(basePhase(status));
   };
-  const copyTx = () => {
-    if (!tx) return;
-    navigator.clipboard?.writeText(tx.txid).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1700);
+
+  // Clipboard is unavailable on http origins and in some in-app browsers, so
+  // fall back to a hidden textarea rather than silently doing nothing.
+  const copy = async (what: "txid" | "receipt", text: string) => {
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
+      else {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        ta.remove();
+      }
+      setCopied(what);
+      setTimeout(() => setCopied(null), 1700);
+    } catch {
+      setCopied(null);
+    }
   };
+
+  /** Plain-text receipt, the thing people actually paste into an issue or chat. */
+  const receiptText = (t: Tx) =>
+    [
+      `Zcash testnet faucet drip`,
+      `amount:  ${dripText}`,
+      `to:      ${t.to}`,
+      `txid:    ${t.txid}`,
+      `privacy: ${t.priv ? "shielded (z to z)" : "transparent (public on-chain)"}`,
+      `sent:    ${new Date(t.at).toISOString()}`,
+      t.explorerUrl ? `explorer: ${t.explorerUrl}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
   const generate = async () => {
     try {
       const r = await fetch("/api/account", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: "shielded" }) });
@@ -483,15 +513,30 @@ export default function Home() {
                 <span style={{ fontFamily: "var(--mono)", fontSize: 12, color: muted(55) }}>on its way</span>
               </div>
               <div>
-                <div style={rowLine}><span style={{ color: muted(55) }}>to</span><span style={{ fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "60%" }}>{short(tx.to, 12, 6)}</span></div>
-                <div style={rowLine}><span style={{ color: muted(55) }}>txid</span><span style={{ fontWeight: 700 }}>{short(tx.txid, 10, 8)}</span></div>
-                <div style={rowLine}><span style={{ color: muted(55) }}>privacy</span><span style={{ fontWeight: 700, textAlign: "right", maxWidth: "62%" }}>{tx.priv ? "shielded, sent z→z ✓" : "transparent, public on-chain"}</span></div>
+                {/* Full values in title + a copyable receipt below: the shortened
+                    forms are for reading, never the only way to get the data. */}
+                <div style={rowLine}><span style={{ color: muted(55) }}>to</span><span title={tx.to} style={{ fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "60%" }}>{short(tx.to, 12, 6)}</span></div>
+                <div style={rowLine}><span style={{ color: muted(55) }}>txid</span><span title={tx.txid} style={{ fontWeight: 700 }}>{short(tx.txid, 10, 8)}</span></div>
+                <div style={rowLine}>
+                  <span style={{ color: muted(55) }}>privacy</span>
+                  <span style={{ fontWeight: 700, textAlign: "right", maxWidth: "62%" }}>
+                    {tx.priv ? <span className="tag tag-outline" style={{ fontSize: 9 }}>shielded z→z</span> : "transparent, public on-chain"}
+                  </span>
+                </div>
+                <div style={rowLine}><span style={{ color: muted(55) }}>network</span><span style={{ fontWeight: 700 }}>{status?.network ?? "testnet"}</span></div>
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-                <button className="btn btn-secondary btn-sm" onClick={copyTx}>{copied ? "Copied ✓" : "Copy txid"}</button>
+                <button className="btn btn-secondary btn-sm" onClick={() => void copy("txid", tx.txid)}>{copied === "txid" ? "Copied ✓" : "Copy txid"}</button>
+                <button className="btn btn-secondary btn-sm" onClick={() => void copy("receipt", receiptText(tx))}>{copied === "receipt" ? "Copied ✓" : "Copy receipt"}</button>
                 {tx.explorerUrl && <a className="btn btn-secondary btn-sm" href={tx.explorerUrl} target="_blank" rel="noreferrer">View in explorer ↗</a>}
                 <button className="btn btn-ghost btn-sm" onClick={again} style={{ padding: 0 }}>Another address</button>
               </div>
+              <p aria-live="polite" className="sr-only">{copied === "txid" ? "Transaction id copied." : copied === "receipt" ? "Receipt copied." : ""}</p>
+              <p style={{ margin: 0, fontSize: 12, lineHeight: 1.5, color: muted(55) }}>
+                {tx.priv
+                  ? "Shielded sends take a moment to show up in an explorer, and the amount stays private there."
+                  : "It can take a minute to appear in an explorer while the transaction is mined."}
+              </p>
             </div>
           </div>
         )}

@@ -20,7 +20,8 @@
  *     Zallet wallet (Z3 stack) over JSON-RPC. Faucet holdings and the faucet↔
  *     claimant link stay private, and it can pay Sapling recipients too.
  */
-import { config } from "../config";
+// .ts extension for node --test resolution, same pattern as pow.ts.
+import { config } from "../config.ts";
 import type { AddressInfo } from "./address";
 
 export interface SendRequest {
@@ -41,10 +42,7 @@ export interface Sender {
   send(req: SendRequest): Promise<SendResult>;
 }
 
-/** Testnet block explorer link for a txid (best-effort convenience). */
-function explorerUrl(txid: string): string {
-  return `https://blockexplorer.one/zcash/testnet/tx/${txid}`;
-}
+import { explorerTxUrl } from "./explorer.ts";
 
 class MockSender implements Sender {
   readonly name = "mock";
@@ -71,7 +69,7 @@ class MockSender implements Sender {
     const txid = h.toString(16).padStart(64, "0").slice(0, 64);
     await new Promise((r) => setTimeout(r, 300)); // simulate broadcast latency
     this.store.__faucetMockBal -= req.amountZat;
-    return { txid, explorerUrl: explorerUrl(txid) };
+    return { txid, explorerUrl: explorerTxUrl(txid) };
   }
 }
 
@@ -121,12 +119,13 @@ class CompositeRealSender implements Sender {
  * other mode rather than silently pretending funds arrived.
  */
 export function creditMockBalance(zat: bigint): void {
-  const s = getSender();
-  if (!(s instanceof MockSender)) {
-    throw new Error(`creditMockBalance is mock-only (sender is "${s.name}").`);
+  // Config check, not instanceof: constructing the sender just to inspect its
+  // type would drag in the zallet/real modules as a side effect.
+  if (config.sender !== "mock") {
+    throw new Error(`creditMockBalance is mock-only (sender is "${config.sender}").`);
   }
-  const g = globalThis as unknown as { __faucetMockBal: bigint };
-  g.__faucetMockBal += zat;
+  const g = globalThis as unknown as { __faucetMockBal?: bigint };
+  g.__faucetMockBal = (g.__faucetMockBal ?? config.mockBalanceZatoshi) + zat;
 }
 
 let cached: Sender | null = null;
