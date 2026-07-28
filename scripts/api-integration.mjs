@@ -98,6 +98,8 @@ const serverA = boot(PORT_A, {
   FAUCET_POW_BITS: "8",
   FAUCET_POW_ESCALATE_BITS: "0",
   FAUCET_MOCK_BALANCE_TAZ: "10",
+  FAUCET_DONATION_ADDRESS: "utest1donationfixture",
+  FAUCET_MINING_ADDRESS: "tmMiningFixtureAddress",
 });
 const serverB = boot(PORT_B, {
   FAUCET_SENDER: "mock",
@@ -148,6 +150,19 @@ try {
   const genClaim = await claim(BASE_A, uaAddr, await solvedChallenge(BASE_A));
   ok("A generated UA is accepted by the claim endpoint", genClaim.status === 200 && genClaim.body.ok === true, `status ${genClaim.status} ${JSON.stringify(genClaim.body.error ?? "")}`);
 
+  /* ── donate page wiring (#55) ────────────────────────────────────────── */
+  // The page renders entirely from /api/status, so pinning these fields is
+  // what stops the donate page silently going blank on a status change.
+  ok("A status carries the donation address", s.donationAddress === "utest1donationfixture", JSON.stringify(s.donationAddress));
+  ok("A status carries the mining address", s.miningAddress === "tmMiningFixtureAddress", JSON.stringify(s.miningAddress));
+
+  const donatePage = await fetch(BASE_A + "/donate");
+  const donateHtml = await donatePage.text();
+  ok("A GET /donate is 200", donatePage.status === 200, `status ${donatePage.status}`);
+  ok("A /donate is the donate page, not a 404 shell", /Keep the tank full/.test(donateHtml));
+  ok("A /donate says plainly that mining income is zero", /rounds to zero|orphaned/i.test(donateHtml));
+  ok("A main page links to /donate", /href="\/donate"/.test(await (await fetch(BASE_A + "/")).text()));
+
   /* ── A: faucet happy path, then every rejection ──────────────────────── */
   const sent = await claim(BASE_A, tmAddr, await solvedChallenge(BASE_A));
   ok("A claim with pow to generated address is 200 + txid", sent.status === 200 && sent.body.ok === true && typeof sent.body.txid === "string" && sent.body.txid.length >= 32, `status ${sent.status} ${JSON.stringify(sent.body.error ?? "")}`);
@@ -182,6 +197,15 @@ try {
 
   const readyB = await get(BASE_B, "/api/ready");
   ok("B GET /api/ready is 503 with a reason", readyB.status === 503 && readyB.body.ready === false && typeof readyB.body.reason === "string", JSON.stringify(readyB.body.reason ?? null));
+
+  // Unset donation address: the page must still render and say so, rather
+  // than showing an empty box or 500ing.
+  const statusBBody = statusB.body;
+  ok("B status reports no donation address", !statusBBody.donationAddress, JSON.stringify(statusBBody.donationAddress));
+  const donateB = await fetch(BASE_B + "/donate");
+  const donateBHtml = await donateB.text();
+  ok("B GET /donate still renders without a configured address", donateB.status === 200, `status ${donateB.status}`);
+  ok("B /donate says there is nothing to send to", /No address configured|not published a donation address/i.test(donateBHtml));
 
   const emptyClaim = await claim(BASE_B, UNIFIED_A, null);
   ok("B claim on empty wallet is 503 with the empty message", emptyClaim.status === 503 && /empty/i.test(emptyClaim.body.error ?? ""), `status ${emptyClaim.status}`);
