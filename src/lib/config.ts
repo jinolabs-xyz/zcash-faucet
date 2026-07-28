@@ -57,7 +57,7 @@ export const config = {
   get lightwalletdEndpoint() {
     return this.lightwalletdEndpoints[0]!;
   },
-  sender: (process.env.FAUCET_SENDER ?? "mock") as "mock" | "real" | "zallet",
+  sender: (process.env.FAUCET_SENDER ?? "zallet") as "real" | "zallet",
   walletSeed: process.env.FAUCET_WALLET_SEED ?? "",
 
   // Zallet backend (FAUCET_SENDER=zallet): a genuinely shielded faucet. Holds
@@ -109,12 +109,7 @@ export const config = {
   d1ProxyUrl: process.env.D1_PROXY_URL ?? "",
   d1ProxySecret: process.env.D1_PROXY_SECRET ?? "",
 
-  // Simulated spendable balance for the mock sender (real sender reads on-chain).
-  mockBalanceZatoshi: tazToZatoshi(num("FAUCET_MOCK_BALANCE_TAZ", 10)),
 
-  // Explicit opt-in for the mock refiller, so a mock-mode deploy never
-  // silently "mines" simulated funds. Tests and local runs turn it on.
-  mockRefill: process.env.FAUCET_MOCK_REFILL === "true",
 
   // Max sends waiting in the serial FIFO queue before we reject with "busy".
   sendQueueMaxPending: Math.max(1, Math.floor(num("SEND_QUEUE_MAX_PENDING", 20))),

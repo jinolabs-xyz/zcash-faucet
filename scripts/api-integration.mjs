@@ -97,19 +97,39 @@ function stop(child) {
   try { process.kill(-child.pid, "SIGTERM"); } catch { /* already gone */ }
 }
 
+// Two doubles, two apps. The app runs its production ZalletSender against a
+// fake wallet, so the path under test is the shipped one.
+const WALLET_A = 28321;
+const WALLET_B = 28322;
+const wallet = (port, balanceTaz) =>
+  spawn("node", ["scripts/fake-zallet.mjs"], {
+    env: { ...process.env, PORT: String(port), BALANCE_TAZ: String(balanceTaz) },
+    stdio: "ignore",
+    detached: true,
+  });
+const walletA = wallet(WALLET_A, 10);
+const walletB = wallet(WALLET_B, 0);
+
+const zallet = (rpcPort) => ({
+  FAUCET_SENDER: "zallet",
+  ZALLET_RPC_URL: `http://127.0.0.1:${rpcPort}/`,
+  ZALLET_ACCOUNT: "test-account",
+  ZALLET_ADDRESS: "utest1testfaucet",
+  ZALLET_MIN_CONF: "0",
+  ZALLET_POLL_MS: "250",
+});
+
 const serverA = boot(PORT_A, {
-  FAUCET_SENDER: "mock",
+  ...zallet(WALLET_A),
   FAUCET_CHALLENGE: "pow",
   RATE_LIMIT_SALT: "integration-test-salt",
   FAUCET_POW_BITS: "8",
   FAUCET_POW_ESCALATE_BITS: "0",
-  FAUCET_MOCK_BALANCE_TAZ: "10",
   FAUCET_DONATION_ADDRESS: DONATION_UA,
   FAUCET_MINING_ADDRESS: MINING_TADDR,
 });
 const serverB = boot(PORT_B, {
-  FAUCET_SENDER: "mock",
-  FAUCET_MOCK_BALANCE_TAZ: "0",
+  ...zallet(WALLET_B),
   FAUCET_CHALLENGE: "none",
 });
 
@@ -120,7 +140,7 @@ try {
   const status = await get(BASE_A, "/api/status");
   ok("A GET /api/status is 200", status.status === 200);
   const s = status.body;
-  ok("A status: mode is mock+pow", s.sender === "mock" && s.challenge === "pow", JSON.stringify({ sender: s.sender, challenge: s.challenge }));
+  ok("A status: mode is zallet+pow", s.sender === "zallet" && s.challenge === "pow", JSON.stringify({ sender: s.sender, challenge: s.challenge }));
   ok("A status: core shape", typeof s.dripTaz === "number" && typeof s.cooldownSeconds === "number" && typeof s.balanceTaz === "number" && s.empty === false && typeof s.queueDepth === "number");
   ok("A status: backend + miner blocks", typeof s.backend?.reachable === "boolean" && typeof s.miner?.active === "boolean");
   ok("A status: reserve block shape", typeof s.reserve?.targetTaz === "number" && typeof s.reserve?.lowTaz === "number" && typeof s.reserve?.refilling === "boolean" && "spendableTaz" in (s.reserve ?? {}));
@@ -230,6 +250,8 @@ try {
 } finally {
   stop(serverA);
   stop(serverB);
+  stop(walletA);
+  stop(walletB);
 }
 
 console.log(failures === 0 ? "\napi-integration: all green" : `\napi-integration: ${failures} FAILED`);

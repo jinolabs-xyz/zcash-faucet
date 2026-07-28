@@ -11,13 +11,8 @@
  *   miner active + zallet      → ZalletRefiller (./zalletRefiller.ts), shields
  *     mature coinbase into the faucet's Orchard account. Mining itself is the
  *     miner container's job; our step is the shield leg.
- *   miner active + mock sender + FAUCET_MOCK_REFILL=true → MockRefiller,
- *     credits the simulated balance so the whole loop is observable end to end
- *     with no node. The extra flag is deliberate: a mock-mode deploy must
- *     never silently "mine". Without it you get Noop like everyone else.
  */
 import { config } from "../config";
-import { creditMockBalance } from "../zcash/send";
 import { selectRefillerKind } from "./select";
 
 export interface Refiller {
@@ -31,29 +26,14 @@ class NoopRefiller implements Refiller {
   async step(): Promise<void> {}
 }
 
-class MockRefiller implements Refiller {
-  readonly name = "mock";
-  // 1 TAZ per step ≈ a shielded coinbase chunk; gradual enough to watch the
-  // balance climb in /api/status while testing.
-  async step(): Promise<void> {
-    creditMockBalance(100_000_000n);
-  }
-}
-
 let cached: Refiller | null = null;
 
 export function getRefiller(): Refiller {
   if (cached) return cached;
-  const kind = selectRefillerKind({
-    minerActive: config.miner.active,
-    sender: config.sender,
-    mockRefill: config.mockRefill,
-  });
+  const kind = selectRefillerKind({ minerActive: config.miner.active, sender: config.sender });
   if (kind === "zallet") {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     cached = new (require("./zalletRefiller").ZalletRefiller)() as Refiller;
-  } else if (kind === "mock") {
-    cached = new MockRefiller();
   } else {
     cached = new NoopRefiller();
   }

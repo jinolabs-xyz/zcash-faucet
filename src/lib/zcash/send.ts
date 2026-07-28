@@ -3,12 +3,8 @@
  * and exposes the faucet wallet's spendable balance so the API can guard against
  * draining the single hot wallet.
  *
- * Three implementations behind one interface:
- *
- *   MockSender  (FAUCET_SENDER=mock, default)
- *     Runs with no keys and no node. Keeps a simulated balance (seeded from
- *     FAUCET_MOCK_BALANCE_TAZ) that decrements per send, so the low-balance
- *     guard, the "faucet empty" UX, and the whole flow are testable end to end.
+ * Two implementations behind one interface. Tests point the zallet one at
+ * scripts/fake-zallet.mjs, so the code under test is the production path:
  *
  *   RealSender  (FAUCET_SENDER=real, see ./realsend.ts + ./t2zsend.ts)
  *     Spends the faucet's funded *transparent* testnet wallet. Transparent
@@ -60,40 +56,11 @@ export interface Sender {
 
 import { explorerTxUrl } from "./explorer.ts";
 import { createRequire } from "node:module";
+import { ZalletSender } from "./zalletsend.ts";
 
-// Backends load lazily so an unused one never drags its dependencies in, and
-// through createRequire because a bare require() does not exist under plain
-// ESM (node --test), only inside the bundler.
+// The transparent backends load lazily because they drag in utxo-lib and the
+// t2z prover. createRequire because a bare require() does not exist in ESM.
 const req = createRequire(import.meta.url);
-
-class MockSender implements Sender {
-  readonly name = "mock";
-
-  // Persist the simulated balance across dev hot-reloads.
-  private get store() {
-    const g = globalThis as unknown as { __faucetMockBal?: bigint };
-    if (g.__faucetMockBal === undefined) g.__faucetMockBal = config.mockBalanceZatoshi;
-    return g as { __faucetMockBal: bigint };
-  }
-
-  async balance(): Promise<bigint> {
-    return this.store.__faucetMockBal;
-  }
-
-  async send(req: SendRequest): Promise<SendResult> {
-    // Guard is enforced upstream, but double-check so mock can never go negative.
-    if (this.store.__faucetMockBal < req.amountZat) {
-      throw new Error("Insufficient faucet balance (mock).");
-    }
-    const seed = `${req.toAddress}:${req.amountZat}:${Date.now()}`;
-    let h = 0n;
-    for (const ch of seed) h = (h * 131n + BigInt(ch.charCodeAt(0))) % (1n << 256n);
-    const txid = h.toString(16).padStart(64, "0").slice(0, 64);
-    await new Promise((r) => setTimeout(r, 300)); // simulate broadcast latency
-    this.store.__faucetMockBal -= req.amountZat;
-    return { txid, explorerUrl: explorerTxUrl(txid) };
-  }
-}
 
 /**
  * Real mode routes by recipient type: transparent (`tm…`) → RealSender (a plain
@@ -136,32 +103,15 @@ class CompositeRealSender implements Sender {
   }
 }
 
-/**
- * Add funds to the simulated mock balance. Only the mock refiller uses this,
- * so the reserve loop is testable end to end without a node. Throws in any
- * other mode rather than silently pretending funds arrived.
- */
-export function creditMockBalance(zat: bigint): void {
-  // Config check, not instanceof: constructing the sender just to inspect its
-  // type would drag in the zallet/real modules as a side effect.
-  if (config.sender !== "mock") {
-    throw new Error(`creditMockBalance is mock-only (sender is "${config.sender}").`);
-  }
-  const g = globalThis as unknown as { __faucetMockBal?: bigint };
-  g.__faucetMockBal = (g.__faucetMockBal ?? config.mockBalanceZatoshi) + zat;
-}
-
 let cached: Sender | null = null;
 
 export function getSender(): Sender {
   if (cached) return cached;
   let s: Sender;
   if (config.sender === "zallet") {
-    s = new (req("./zalletsend").ZalletSender)() as Sender;
-  } else if (config.sender === "real") {
-    s = new CompositeRealSender();
+    s = new ZalletSender();
   } else {
-    s = new MockSender();
+    s = new CompositeRealSender();
   }
   cached = s;
   return s;
