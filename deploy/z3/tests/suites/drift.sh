@@ -6,6 +6,7 @@ AUDIT="$REPO/deploy/z3/audit-drift.sh"
 
 drift_env() {
   T="$(mktemp -d "${TMPDIR:-/tmp}/drift-test.XXXXXX")"
+  _TEST_TMPDIRS+=("$T")
   export STUB_LOG="$T/stub.log"; : > "$STUB_LOG"
   mkdir -p "$T/bin" "$T/units" "$T/install" "$T/env" "$T/repo/deploy/z3"
   ln -sf "$SCRATCH/stubs/audit-systemctl" "$T/bin/systemctl"
