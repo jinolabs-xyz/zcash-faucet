@@ -189,3 +189,20 @@ check "nor does any hooks.slack.com URL" "! grep -q 'hooks.slack.com' '$T/redact
 check "the directive name is still shown" "grep -q 'WATCHDOG_ALERT_URL=<redacted>' '$T/redact.log'"
 check "so is the second one, still actionable" "grep -q 'MINER_MODE=<redacted>' '$T/redact.log'"
 check "the drop-in is still reported as drift" "grep -q 'drop-in faucet-thing.service.d/override.conf' '$T/redact.log'"
+
+echo "== drift: nothing unmatched prints, so continuations and comments cannot leak"
+# SDE-App's finding: both old rules needed an = on the line, so a systemd
+# continuation carrying --rpc-password, and a comment carrying a webhook,
+# printed verbatim. The printer is an allowlist now.
+drift_env; make_clean_box
+mkdir -p "$T/units/faucet-thing.service.d"
+printf '[Service]\nEnvironment=MINER_MODE=submit\nExecStart=/opt/faucet/miner \\\n    --rpc-password HUNTER2_ACTUAL_SECRET \\\n    --address tmXXXX\n# note: webhook https://hooks.slack.com/services/T0/B0/COMMENTSECRET\n' \
+  > "$T/units/faucet-thing.service.d/override.conf"
+bash "$AUDIT" --verbose > "$T/leak.log" 2>&1
+check "the continuation-line password never prints" "! grep -q 'HUNTER2_ACTUAL_SECRET' '$T/leak.log'"
+check "the comment webhook never prints" "! grep -q 'COMMENTSECRET' '$T/leak.log'"
+check "no hooks.slack.com anywhere" "! grep -q 'hooks.slack.com' '$T/leak.log'"
+check "the [Service] header does not print either" "! grep -q '| \[Service\]' '$T/leak.log'"
+check "Environment keeps its variable name" "grep -q 'Environment=MINER_MODE=<redacted>' '$T/leak.log'"
+check "ExecStart is named but its arguments are gone" "grep -q 'ExecStart=<redacted>' '$T/leak.log'"
+check "the drop-in is still reported as drift" "grep -q 'drop-in faucet-thing.service.d/override.conf' '$T/leak.log'"

@@ -160,9 +160,10 @@ belongs in `deploy/z3/` and in the install docs, an untracked override
 belongs in git, and a stale script in `/opt/faucet` means re-copying it or
 admitting the box is ahead of review.
 
-Env files are reported as present or absent only, and drop-in values are
-redacted to `KEY=<redacted>` while keeping the key names. A drift report gets
-pasted into issues, and a drop-in can carry a webhook URL or an RPC password.
+Env files are reported as present or absent only. Drop-ins print on an
+allowlist: `KEY=<redacted>` lines and nothing else, so a continuation line
+carrying `--rpc-password` or a comment carrying a webhook cannot leak. You
+learn which key was set by hand, not its value.
 
 ## Restore from backup
 
