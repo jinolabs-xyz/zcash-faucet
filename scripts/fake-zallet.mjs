@@ -70,6 +70,15 @@ const handlers = {
     return { opid, shieldingUTXOs: 1 };
   },
 
+  // Node truth for /api/tx: known if we minted it, -5 if not, which is what
+  // zallet returns (LegacyCode::InvalidAddressOrKey).
+  getrawtransaction: (params) => {
+    const txid = params[0];
+    const known = [...ops.values()].some((o) => o.txid === txid && !o.failed);
+    if (!known) throw Object.assign(new Error("No such mempool or blockchain transaction"), { code: -5 });
+    return { txid, confirmations: Number(process.env.TX_CONFIRMATIONS ?? 1), height: NODE_TIP };
+  },
+
   z_getoperationstatus: (params) => {
     const id = params[0][0];
     if (SEND_HANGS) return [{ id, status: "executing" }];
@@ -100,7 +109,7 @@ createServer((req, res) => {
         try {
           out = { jsonrpc: "2.0", result: handler(params ?? []) };
         } catch (err) {
-          out = { jsonrpc: "2.0", error: { code: -6, message: err.message } };
+          out = { jsonrpc: "2.0", error: { code: err.code ?? -6, message: err.message } };
         }
       }
     } catch {
