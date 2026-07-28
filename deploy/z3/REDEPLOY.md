@@ -50,6 +50,22 @@ where the faucet might not be answering.
 And 2 is not success. `redeploy.sh && echo shipped` must not print `shipped`
 after a rollback.
 
+## How it reaches the app
+
+By default it does not use the network at all: it runs the probe **inside the
+container**, the same way the compose healthcheck does. The app port is
+`expose`-only, so nothing on the host can reach `127.0.0.1:3000`, and once
+`FAUCET_DOMAIN` is set Caddy answers `:80` with a 308 to HTTPS. Both of those
+made a host-side probe fail against a perfectly healthy faucet, which is how
+the first real run rolled back a working deploy.
+
+Set `REDEPLOY_FAUCET_URL` only if you publish a port yourself, and point it at
+something that answers 200 without a redirect.
+
+If the probe cannot run at all (no URL, and `docker compose exec` fails), the
+script says `NOT VERIFIED`, changes nothing, and exits 2. It does not roll
+back, because being unable to ask is not evidence of a bad build.
+
 ## Why the health gate is two-tier
 
 `/api/health` is liveness: is the process answering. Always required.

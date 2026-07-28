@@ -16,6 +16,9 @@ redeploy_env() {
   export PATH="$T/bin:$BASE_PATH"
   export REDEPLOY_OVERLAY_DIR="$T/overlay" REDEPLOY_REPO_DIR="$T"
   export REDEPLOY_HEALTH_TIMEOUT=6 REDEPLOY_HEALTH_INTERVAL=1
+  # These tests drive the URL probe path. The container-exec default is
+  # covered separately below.
+  export REDEPLOY_FAUCET_URL="http://127.0.0.1:9"
   export STUB_HEALTH="$T/healthy" STUB_READY="$T/ready"
   unset STUB_BUILD_FAIL STUB_UP_FAIL STUB_PULL_FAIL 2>/dev/null
   echo "sha256:old" > "$STUB_IMAGES/zcash-faucet_latest"   # something is running
@@ -151,3 +154,41 @@ check "build failure does not claim the faucet is down" "! grep -qi 'may be down
 STUB_PULL_FAIL=1 bash "$REDEPLOY" > "$T/say-pull.log" 2>&1
 check "pull failure says the change did not ship" "grep -q 'did NOT ship' '$T/say-pull.log'"
 check "pull failure does not claim the faucet is down" "! grep -qi 'may be down' '$T/say-pull.log'"
+
+echo "== redeploy: the default probe runs inside the container, not on the host"
+redeploy_env
+unset REDEPLOY_FAUCET_URL
+# The stub compose records exec calls; the app port is expose-only on a real
+# box, so a host-side probe would always fail.
+rm -f "$T/bin/docker"   # it is a symlink into a read-only mount
+printf '#!/usr/bin/env bash\necho "compose $*" >> %q\nexit 0\n' "$T/stub.log" > "$T/bin/docker"
+chmod +x "$T/bin/docker"
+touch "$STUB_HEALTH" "$STUB_READY"
+bash "$REDEPLOY" --no-pull > "$T/exec.log" 2>&1
+check "probes via docker compose exec" "grep -q 'exec -T faucet node' '$T/stub.log'"
+# The URL appears inside the node -e argument, which is correct. What must
+# not happen is a host-side curl to a port the overlay never publishes.
+check "no host-side curl to the app port" "! grep -qE '^curl .*3000' '$T/stub.log'"
+
+echo "== redeploy: an unprobeable app is NOT VERIFIED, never a rollback"
+redeploy_env
+unset REDEPLOY_FAUCET_URL
+# compose succeeds for build/up but every exec fails, so the probe mechanism
+# is unusable. That is not evidence the faucet is unhealthy.
+rm -f "$T/bin/docker"
+cat > "$T/bin/docker" <<'DOCKER'
+#!/usr/bin/env bash
+echo "docker $*" >> "$STUB_LOG"
+case "$*" in
+  *"exec -T faucet"*) exit 1 ;;
+  *image*inspect*) echo "sha256:old" ;;
+  *) exit 0 ;;
+esac
+DOCKER
+chmod +x "$T/bin/docker"
+bash "$REDEPLOY" --no-pull > "$T/unprobe.log" 2>&1
+rc_unprobe=$?
+check "exits 2, not 1" "[ $rc_unprobe -eq 2 ]"
+check "says NOT VERIFIED" "grep -q 'NOT VERIFIED' '$T/unprobe.log'"
+check "does not claim the faucet may be down" "! grep -q 'may be down' '$T/unprobe.log'"
+check "did not roll back on an unprobeable app" "! grep -q 'rolling back' '$T/unprobe.log'"

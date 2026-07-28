@@ -38,7 +38,9 @@ OVERLAY_DIR="${REDEPLOY_OVERLAY_DIR:-$REPO_DIR/deploy/z3}"
 COMPOSE_FILE="${REDEPLOY_COMPOSE_FILE:-docker-compose.faucet.yml}"
 IMAGE="${REDEPLOY_IMAGE:-zcash-faucet:latest}"
 PREVIOUS_TAG="${REDEPLOY_PREVIOUS_TAG:-zcash-faucet:previous}"
-FAUCET_URL="${REDEPLOY_FAUCET_URL:-http://127.0.0.1:3000}"
+# Empty by default: the app port is expose-only, so there is no URL the host
+# can reach. Probing happens inside the container unless you set one.
+FAUCET_URL="${REDEPLOY_FAUCET_URL:-}"
 HEALTH_TIMEOUT="${REDEPLOY_HEALTH_TIMEOUT:-120}"   # seconds to become live
 HEALTH_INTERVAL="${REDEPLOY_HEALTH_INTERVAL:-3}"
 Z3_NETWORK_NAME="${Z3_NETWORK_NAME:-z3-testnet}"
@@ -64,16 +66,35 @@ compose() { ( cd "$OVERLAY_DIR" && Z3_NETWORK_NAME="$Z3_NETWORK_NAME" \
 
 image_id() { docker image inspect -f '{{.Id}}' "$1" 2>/dev/null; }
 
+# Probes from inside the container, mirroring the compose healthcheck, because
+# the app port is expose-only and Caddy redirects :80 once a domain is set.
+probe() { # $1 = health|ready, returns 0 when it answers 200
+  if [ -n "$FAUCET_URL" ]; then
+    curl -fsS --max-time 8 "$FAUCET_URL/api/$1" >/dev/null 2>&1
+    return $?
+  fi
+  compose exec -T faucet node -e \
+    "fetch('http://127.0.0.1:3000/api/$1').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" \
+    >/dev/null 2>&1
+}
+
+# True when the probe mechanism itself cannot run, which is not the same as
+# the faucet being unhealthy and must never be reported as such.
+probe_usable() {
+  [ -n "$FAUCET_URL" ] && return 0
+  compose exec -T faucet node -e 'process.exit(0)' >/dev/null 2>&1
+}
+
 # Liveness is required. Readiness is required only when it held before, so a
 # deploy cannot silently downgrade a serving faucet, and is not blocked by a
 # node that is still syncing.
 wait_healthy() { # $1 = 1 when readiness is also required
   local want_ready="$1" deadline=$((SECONDS + HEALTH_TIMEOUT)) live=0
   while [ "$SECONDS" -lt "$deadline" ]; do
-    if curl -fsS --max-time 5 "$FAUCET_URL/api/health" >/dev/null 2>&1; then
+    if probe health; then
       live=1
       if [ "$want_ready" != "1" ]; then return 0; fi
-      if curl -fsS --max-time 8 "$FAUCET_URL/api/ready" >/dev/null 2>&1; then return 0; fi
+      if probe ready; then return 0; fi
     fi
     sleep "$HEALTH_INTERVAL"
   done
@@ -81,7 +102,7 @@ wait_healthy() { # $1 = 1 when readiness is also required
   return 1
 }
 
-is_ready_now() { curl -fsS --max-time 8 "$FAUCET_URL/api/ready" >/dev/null 2>&1; }
+is_ready_now() { probe ready; }
 
 # Puts the previous image back and waits for it to answer. Returns nonzero
 # when there is nothing to go back to or it will not come up, which is the
@@ -168,6 +189,14 @@ if wait_healthy "$want_ready"; then
   new="$(image_id "$IMAGE")"
   log "deployed and healthy: $new"
   exit 0
+fi
+
+# A gate failure only means something when the probe could actually run.
+if ! probe_usable; then
+  log "NOT VERIFIED: could not probe the app at all (no $FAUCET_URL and docker compose exec failed)"
+  log "The new build is running and may be fine. Nothing was rolled back."
+  log "Set REDEPLOY_FAUCET_URL to something reachable and re-run to get a real verdict."
+  exit 2
 fi
 
 log "the new build failed the health gate after ${HEALTH_TIMEOUT}s, rolling back"
