@@ -61,6 +61,47 @@ jobs:
           done
           npm run smoke
 
+  ui:
+    runs-on: ubuntu-latest
+    env:
+      FAUCET_SENDER: mock
+      FAUCET_CHALLENGE: pow
+      # Low bits so the in-page worker still runs but finishes fast.
+      FAUCET_POW_BITS: "12"
+      RATE_LIMIT_SALT: ci-ui-smoke-not-a-secret
+      PORT: "3120"
+      UI_SMOKE_URL: http://localhost:3120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 23
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      # --no-save on purpose: Playwright is a CI-only concern, so it stays out
+      # of package.json and `npm ci` stays lean for everyone else.
+      - name: install playwright chromium
+        run: |
+          npm i --no-save playwright
+          npx playwright install --with-deps chromium
+      # Drives a claim in a real browser: the page, the pow worker, the success
+      # card and the copy path. Guarded so refs predating the script stay green.
+      - name: browser smoke
+        run: |
+          if [ ! -f scripts/ui-smoke.mjs ]; then
+            echo "no scripts/ui-smoke.mjs on this ref, skipping"
+            exit 0
+          fi
+          npm start &
+          server=$!
+          trap 'kill "$server" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 60); do
+            curl -sf "$UI_SMOKE_URL/api/status" >/dev/null && break
+            sleep 1
+          done
+          node scripts/ui-smoke.mjs
+
   api-tests:
     runs-on: ubuntu-latest
     steps:
