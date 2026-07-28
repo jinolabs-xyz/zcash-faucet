@@ -21,7 +21,10 @@ mk_scratch() {  # sets global T
   T="$(mktemp -d "$1")" || true
   if [ -z "$T" ] || [ ! -d "$T" ]; then
     echo "  FATAL: could not create scratch dir ($1), disk full? refusing to score" >&2
-    exit 1
+    # Exit 2, not 1: a disk-full abort is could-not-run, not tests-failed, per the
+    # preflight's exit-code contract (#151). CI can then tell "fix the runner
+    # image" from "someone broke the code".
+    exit 2
   fi
   _TEST_TMPDIRS+=("$T")
 }
