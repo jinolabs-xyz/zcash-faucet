@@ -131,6 +131,32 @@ FAUCET_DOMAIN=$(cat /etc/faucet-domain) \
 Return to main with `git checkout main` and redeploy when fixed. Rolling back
 code never touches the volumes, so funds and the rate-limit ledger are safe.
 
+## Config drift
+
+The repo is supposed to describe the box. In practice a box accumulates hand
+work (a drop-in, an override, a unit copied straight into
+`/etc/systemd/system`) and a rebuild silently loses it. Nothing breaks
+loudly: the new box comes up, serves, and is quietly missing something only
+the person who typed it knows about.
+
+```bash
+/opt/faucet/audit-drift.sh            # what is here that the repo does not describe
+/opt/faucet/audit-drift.sh --verbose  # also show matches and drop-in contents
+```
+
+Exit codes: `0` no drift, `1` drift found, `2` could not audit (so an audit
+that cannot run never looks like a pass).
+
+It is **read-only and has no `--apply`**. Reconciling the box to the repo
+would delete the very hand work the audit exists to surface. The fix for
+drift is putting the change into the repo: a hand-installed unit or drop-in
+belongs in `deploy/z3/` and in the install docs, an untracked override
+belongs in git, and a stale script in `/opt/faucet` means re-copying it or
+admitting the box is ahead of review.
+
+Env files are reported as present or absent only. Their values are never
+read, because a drift report is something you paste into an issue.
+
 ## Restore from backup
 
 The backup covers the two things the box cannot regrow: the wallet (keys and

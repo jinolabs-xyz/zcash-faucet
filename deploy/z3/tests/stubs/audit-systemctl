@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Stub systemctl for the drift audit tests. Enabled units are listed one per
+# line in $STUB_ENABLED; anything else reports disabled.
+set -uo pipefail
+args=(); for a in "$@"; do [ "$a" = "--quiet" ] || args+=("$a"); done
+case "${args[0]:-}" in
+  is-enabled)
+    grep -qxF "${args[1]:-}" "${STUB_ENABLED:-/nonexistent}" 2>/dev/null && exit 0 || exit 1 ;;
+  *) exit 0 ;;
+esac
