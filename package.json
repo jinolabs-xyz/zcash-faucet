@@ -12,7 +12,8 @@
     "test": "node --test \"src/**/*.test.ts\"",
     "smoke": "node scripts/e2e-smoke.mjs",
     "test:api": "node scripts/api-integration.mjs",
-    "smoke:live": "node scripts/live-probe.mjs"
+    "smoke:live": "node scripts/live-probe.mjs",
+    "icons": "node scripts/build-icons.mjs"
   },
   "dependencies": {
     "@bitgo/utxo-lib": "^11.24.0",

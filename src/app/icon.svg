@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="Zcash Testnet Faucet">
+  <!-- Derived from docs/banner-ink.svg: ink ground, one bold mark, and the
+       banner's red rule as the only accent. Colours are globals.css tokens.
+
+       PURE GEOMETRY, no <text>. A favicon renders outside the page, so a font
+       stack is not guaranteed to resolve; a missing Archivo would silently fall
+       back to something else, or to nothing. The Z is a path.
+
+       Ink ground in both themes on purpose. A tab strip is not our canvas and we
+       cannot query its colour, so the mark carries its own background. Paper on
+       ink measures 16.2:1.
+
+       The rule sits under the mark rather than framing it. I rendered a framed
+       version at true 16px and the border ate the letterform: at that size a
+       4-unit stroke is a quarter of the icon. -->
+  <rect width="64" height="64" fill="#171615"/>
+  <path d="M11,14 H53 V23 L29,41 H53 V50 H11 V41 L35,23 H11 Z" fill="#f3f2f2"/>
+  <rect x="0" y="56" width="64" height="8" fill="#ec3013"/>
+</svg>

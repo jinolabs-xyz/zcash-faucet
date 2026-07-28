@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <pattern id="hatch" width="26" height="26" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="26" height="26" fill="none"/>
+      <rect width="3" height="26" fill="#ec3013"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="630" fill="#171615"/>
+  <rect x="1" y="1" width="1198" height="628" fill="none" stroke="#ec3013" stroke-width="2"/>
+
+  <!-- the mark, same geometry as src/app/icon.svg -->
+  <g transform="translate(84,96) scale(1.9)">
+    <path d="M11,14 H53 V23 L29,41 H53 V50 H11 V41 L35,23 H11 Z" fill="#f3f2f2"/>
+    <rect x="0" y="56" width="64" height="8" fill="#ec3013"/>
+  </g>
+
+  <text x="84" y="330" font-family="Archivo, 'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="86" font-weight="800" letter-spacing="-2.5" fill="#f3f2f2">Zcash Testnet Faucet</text>
+  <text x="84" y="392" font-family="Archivo, 'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="30" font-weight="500" fill="#f3f2f2" opacity="0.62">Shielded TAZ from a faucet that runs its own node and wallet.</text>
+
+  <g font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="18" letter-spacing="1.4">
+    <rect x="84" y="452" width="236" height="46" fill="none" stroke="#ec3013" stroke-width="2"/>
+    <text x="102" y="482" fill="#ec3013">SHIELDED Z TO Z</text>
+    <rect x="336" y="452" width="272" height="46" fill="none" stroke="#f3f2f2" stroke-opacity="0.32" stroke-width="2"/>
+    <text x="354" y="482" fill="#f3f2f2" opacity="0.72">ZEBRA + ZALLET</text>
+    <rect x="624" y="452" width="300" height="46" fill="none" stroke="#f3f2f2" stroke-opacity="0.32" stroke-width="2"/>
+    <text x="642" y="482" fill="#f3f2f2" opacity="0.72">BROWSER PROOF OF WORK</text>
+  </g>
+
+  <g>
+    <rect x="84" y="540" width="316" height="46" fill="none" stroke="#f3f2f2" stroke-opacity="0.32" stroke-width="2"/>
+    <rect x="86" y="542" width="211" height="42" fill="url(#hatch)"/>
+  </g>
+  <text x="416" y="571" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace"
+        font-size="17" letter-spacing="1.6" fill="#f3f2f2" opacity="0.5">zcashfaucet.jinolabs.xyz</text>
+</svg>
