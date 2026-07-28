@@ -57,14 +57,25 @@ function solveNonce(seed: string, difficulty: number): string {
 let globalCount = 0;
 const pressure = () => (globalCount >= 60 ? 3 : globalCount >= 25 ? 2 : globalCount >= 10 ? 1 : 0);
 
-test("a hammering client escalates per request and hits the maxBits ceiling", async () => {
+/**
+ * One escalating attempt. Since #132 the counter moves on ATTEMPTS, not on
+ * fetches, so both the per-client term and the global pressure term are fed
+ * from here. A wrong nonce suffices: the count happens once the signature
+ * proves the challenge is ours, before the digest is checked.
+ */
+async function attempt(ip: string) {
+  await verifySolution({ ...issueChallenge(ip), nonce: "not-a-solution" }, ip);
+  globalCount++;
+}
+
+test("a hammering client escalates per ATTEMPT and hits the maxBits ceiling", async () => {
   const seen: number[] = [];
   for (let i = 0; i < 5; i++) {
     const expected = Math.min(MAX, BASE + i * 2 + pressure());
     const ch = issueChallenge("iphash-hammer");
-    globalCount++;
     seen.push(ch.difficulty);
-    assert.equal(ch.difficulty, expected, `request ${i + 1}`);
+    assert.equal(ch.difficulty, expected, `attempt ${i + 1}`);
+    await attempt("iphash-hammer");
   }
   // 8, 10, 12, then the ceiling twice: escalation is real and bounded.
   assert.deepEqual(seen, [8, 10, 12, 14, 14]);
@@ -72,7 +83,6 @@ test("a hammering client escalates per request and hits the maxBits ceiling", as
 
 test("someone else's hammering does not escalate a fresh client", async () => {
   const ch = issueChallenge("iphash-bystander");
-  globalCount++;
   assert.equal(ch.difficulty, BASE + pressure());
   assert.ok(ch.difficulty <= BASE + 1, "no per-client escalation leaked across ipHashes");
 });
@@ -81,11 +91,9 @@ test("global pressure raises difficulty for brand-new clients", async () => {
   // Flood from distinct ipHashes, one request each: no per-client escalation
   // anywhere, so any rise for the next client is the pressure term alone.
   while (globalCount < 60) {
-    issueChallenge(`iphash-flood-${globalCount}`);
-    globalCount++;
+    await attempt(`iphash-flood-${globalCount}`);
   }
   const ch = issueChallenge("iphash-after-flood");
-  globalCount++;
   assert.equal(ch.difficulty, BASE + 3, "the +3 bump at 60 requests in the window");
 });
 

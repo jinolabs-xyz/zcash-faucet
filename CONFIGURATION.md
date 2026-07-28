@@ -19,8 +19,8 @@ with an anti-abuse gate on.
 | `RATE_LIMIT_SALT` | none | **Required in production** with a gate on. Signs PoW challenges and salts IP hashes. Boot fails on an empty or placeholder value. |
 | `FAUCET_POW_BITS` | `20` | Base difficulty in leading zero bits. |
 | `FAUCET_POW_ESCALATE_BITS` | `2` | Extra bits per recent claim from the same client. |
-| `FAUCET_POW_MAX_BITS` | `26` | Hard difficulty cap. |
-| `FAUCET_POW_TTL_SECONDS` | `180` | How long a challenge stays valid. |
+| `FAUCET_POW_MAX_BITS` | `26` | Difficulty cap you ask for. The gate also applies a **solvable ceiling** derived from the TTL and a conservative browser hashrate, and issues the lower of the two, so a value a browser could not answer inside the challenge's life is silently not used. With the stock TTL that ceiling is 23 (#132). Buy a harder gate with a longer `FAUCET_POW_TTL_SECONDS`, not with this alone. |
+| `FAUCET_POW_TTL_SECONDS` | `180` | How long a **base-difficulty** challenge stays valid. Harder challenges get proportionally longer, and this value also sets the solvable ceiling above. |
 | `FAUCET_MINER_ACTIVE` | `false` | Whether the reserve loop may move funds. Off means it arms nothing at all. |
 | `FAUCET_RESERVE_TARGET_TAZ` | `15` | Refill stops here. |
 | `FAUCET_RESERVE_LOW_TAZ` | `5` | Refill starts below here. Must be under target, checked at boot. |

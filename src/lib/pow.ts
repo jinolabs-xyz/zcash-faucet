@@ -20,6 +20,7 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 // Explicit .ts extension so `node --test` (type stripping resolves literal
 // paths only) can load this module. Next's bundler accepts it too.
 import { config } from "./config.ts";
+import { solvableCeilingBits, ttlSecondsFor } from "./powBudget.ts";
 import { spendChallenge } from "./db/index.ts";
 
 const SALT = process.env.RATE_LIMIT_SALT ?? "";
@@ -77,9 +78,25 @@ function difficultyFor(ipHash: string, now: number): number {
   const repeats = mine.length; // requests already made in the window
   const pressure = globalReqs.length >= 60 ? 3 : globalReqs.length >= 25 ? 2 : globalReqs.length >= 10 ? 1 : 0;
   const bits = config.pow.baseBits + repeats * config.pow.escalateBits + pressure;
-  return Math.min(config.pow.maxBits, bits);
+  // Two ceilings, and the second one is not optional. maxBits is what the
+  // operator asked for; the solvable ceiling is what a browser can actually
+  // answer inside the challenge's own life (#132). Issuing above it is not a
+  // harder gate, it is a gate nobody can pass.
+  return Math.min(config.pow.maxBits, solvableCeiling(), bits);
 }
 
+/** Config is read once at boot, so the ceiling is constant for the process. */
+let ceilingCache: number | null = null;
+function solvableCeiling(): number {
+  return (ceilingCache ??= solvableCeilingBits(config.pow.baseBits, config.pow.ttlSeconds));
+}
+
+/**
+ * Escalation counts ATTEMPTS, never fetches. The UI fetches a challenge on its
+ * own, and a 403 used to tell people to refresh, so counting fetches punished
+ * users for the client's behaviour and for their own retries, then re-armed the
+ * same difficulty on the way back (#132).
+ */
 function recordRequest(ipHash: string, now: number) {
   const mine = perIp.get(ipHash) ?? [];
   mine.push(now);
@@ -93,9 +110,9 @@ function recordRequest(ipHash: string, now: number) {
 export function issueChallenge(ipHash: string): Challenge {
   const now = Date.now();
   const difficulty = difficultyFor(ipHash, now);
-  recordRequest(ipHash, now);
   const seed = createHash("sha256").update(`${now}:${Math.random()}:${ipHash}`).digest("hex").slice(0, 32);
-  const exp = Math.floor(now / 1000) + config.pow.ttlSeconds;
+  // A harder challenge lives longer. Cushion, not guarantee: see powBudget.ts.
+  const exp = Math.floor(now / 1000) + ttlSecondsFor(difficulty, config.pow.baseBits, config.pow.ttlSeconds);
   return { seed, difficulty, exp, sig: sign(seed, difficulty, exp, ipHash) };
 }
 
@@ -111,12 +128,16 @@ export interface Verdict { ok: boolean; reason?: string }
 export async function verifySolution(s: Solution, ipHash: string): Promise<Verdict> {
   if (!s || !s.seed || typeof s.nonce !== "string") return { ok: false, reason: "Missing challenge solution." };
   const now = Math.floor(Date.now() / 1000);
-  if (s.exp < now) return { ok: false, reason: "Challenge expired — refresh and try again." };
+  if (s.exp < now) return { ok: false, reason: "That challenge expired. The gate is busy right now, so come back in a few minutes." };
   if (s.difficulty < config.pow.baseBits - 1 || s.difficulty > config.pow.maxBits) return { ok: false, reason: "Bad challenge difficulty." };
 
   const expect = Buffer.from(sign(s.seed, s.difficulty, s.exp, ipHash), "hex");
   const got = Buffer.from(String(s.sig), "hex");
   if (expect.length !== got.length || !timingSafeEqual(expect, got)) return { ok: false, reason: "Invalid challenge signature." };
+
+  // Count it now, not earlier: the signature proves this is a challenge we
+  // issued to this client, so junk POSTs cannot escalate a shared IP.
+  recordRequest(ipHash, Date.now());
 
   const digest = createHash("sha256").update(`${s.seed}:${s.nonce}`).digest();
   if (leadingZeroBits(digest) < s.difficulty) return { ok: false, reason: "Proof of work does not meet the difficulty." };
