@@ -55,6 +55,30 @@ try {
   ok("page renders its heading", (await page.textContent("body")).includes("Get free testnet ZEC"));
   ok("status bar reached the API", /balance\s/.test(await page.textContent("body")));
 
+  // Generate-then-claim, the flow #31 broke for every visitor: the button read
+  // the address from the wrong field and substituted a synthesized one that
+  // checksum validation refuses. Driving the button, not the API, is what
+  // catches it.
+  await page.getByRole("button", { name: "Generate a test address" }).first().click();
+  // Settle on a filled field OR a visible error, then assert. Both #31 shapes
+  // then fail by name rather than timing out: reading the wrong response field
+  // leaves the box empty today, and the older synthesized fallback filled it
+  // with a too-short address.
+  await page
+    .waitForFunction(
+      () => (document.querySelector("input.input")?.value ?? "").length > 0 || /Couldn.t (generate|reach)/.test(document.body.innerText),
+      null,
+      { timeout: 20_000 },
+    )
+    .catch(() => {});
+  const generated = await page.locator("input.input").first().inputValue();
+  ok("the generate button yields a full unified address", generated.length > 100, `${generated.length} chars`);
+  if (generated.length <= 100) throw new Error("generate did not produce a usable address, skipping the claim it feeds");
+  await page.locator("button.btn-primary").first().click();
+  await page.getByText("Sent ✓").waitFor({ timeout: 120_000 });
+  ok("a generated address is accepted by the faucet (#31)", true);
+  await page.getByRole("button", { name: /Another address/ }).click();
+
   const address = await freshAddress();
   await page.locator("input.input").first().fill(address);
   const submit = page.locator("button.btn-primary").first();
