@@ -7,9 +7,13 @@ on:
   push:
     branches: [main]
 
+# Cancel superseded runs on PR branches, never on main: GitHub renders a
+# cancelled run as failing, so rapid merges were flipping the README badge
+# to FAILING while main was healthy. Main runs are few and cheap, let each
+# one finish and keep the badge truthful.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   app:
