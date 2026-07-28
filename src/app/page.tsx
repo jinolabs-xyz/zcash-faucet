@@ -187,7 +187,16 @@ export default function Home() {
 
   useEffect(() => () => { powWorker.current?.terminate(); powWorker.current = null; }, []);
   useEffect(() => { const t = localStorage.getItem("zfaucet_theme"); if (t === "paper" || t === "ink") setTheme(t); }, []);
-  useEffect(() => { localStorage.setItem("zfaucet_theme", theme); }, [theme]);
+  useEffect(() => {
+    localStorage.setItem("zfaucet_theme", theme);
+    // The app shell is a div, so switching its class leaves the document element
+    // on the old colour and the overscroll bounce shows the wrong one (#143).
+    // Same reason for theme-color: it paints the browser's own chrome.
+    document.documentElement.dataset.theme = theme;
+    document
+      .querySelector('meta[name="theme-color"]')
+      ?.setAttribute("content", theme === "ink" ? "#171615" : "#f3f2f2");
+  }, [theme]);
 
   // Solve the server's proof-of-work challenge in a worker so the tab never
   // freezes. Resolves with the solution to hand back with the claim.
