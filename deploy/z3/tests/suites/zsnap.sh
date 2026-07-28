@@ -2,16 +2,17 @@
 # zsnap-export.sh and zsnap-import.sh. Sourced by run-tests.sh, which
 # provides the helpers in lib.sh and the EXPORT/IMPORT paths.
 
-echo "== export hot (default): happy path, then rotation over 3 runs (keep 2)"
+echo "== export hot (default): three generations kept, the fourth rotates S1 out"
 fresh_env; with_chain
-for i in 1 2 3; do
+for i in 1 2 3 4; do
   sed "s/3652108/365210$i/" "$SCRATCH/stubs/zebrad-stub" > "$T/zebrad-$i" && chmod +x "$T/zebrad-$i"
   ZSNAP_ZEBRAD="$T/zebrad-$i" bash "$EXPORT" > "$T/export-$i.log" 2>&1 || bad "export run $i exited $? (see $T/export-$i.log)"
 done
 n_archives="$(find "$ZSNAP_DIR/snapshots" -name 'zsnap-testnet-*.tar.zst' | wc -l | tr -d ' ')"
-check "rotation keeps 2 archives (got $n_archives)" "[ '$n_archives' = '2' ]"
-check "oldest archive rotated out" "! find '$ZSNAP_DIR/snapshots' -name '*3652101*' | grep -q ."
-check "latest symlink points at newest" "[ \"\$(readlink '$ZSNAP_DIR/snapshots/latest.tar.zst')\" = 'zsnap-testnet-3652103-deadbeefcafe.tar.zst' ]"
+check "three generations kept (got $n_archives)" "[ '$n_archives' = '3' ]"
+check "S1 rotated out when S4 landed" "! find '$ZSNAP_DIR/snapshots' -name '*3652101*' | grep -q ."
+check "S2, S3, S4 all still present" "[ \"\$(find '$ZSNAP_DIR/snapshots' -name '*365210[234]*.tar.zst' | wc -l | tr -d ' ')\" = '3' ]"
+check "latest symlink points at newest" "[ \"\$(readlink '$ZSNAP_DIR/snapshots/latest.tar.zst')\" = 'zsnap-testnet-3652104-deadbeefcafe.tar.zst' ]"
 check "sidecar has full manifest hash" "grep -q '^deadbeefcafe.*0123$' '$ZSNAP_DIR/snapshots/latest.manifest-hash'"
 check "archive unpacks to snapshot/MANIFEST.json" "zstd -dc \"$ZSNAP_DIR/snapshots/\$(readlink '$ZSNAP_DIR/snapshots/latest.tar.zst')\" | tar -tf - | grep -q 'snapshot/MANIFEST.json'"
 check "workdir cleaned up" "[ -z \"\$(ls -A '$ZSNAP_DIR/work')\" ]"
@@ -285,3 +286,57 @@ STUB_READY=0 ZSNAP_READY_TRIES=2 ZSNAP_READY_WAIT=1 bash "$EXPORT" > "$T/nready.
 check "exits nonzero" "[ $? -ne 0 ]"
 check "refusal names the probe count" "grep -q 'not ready in 2 probes' '$T/nready.log'"
 check "no export attempted" "! grep -q 'zebrad export-snapshot' '$STUB_LOG'"
+
+echo "== import: walks generations newest to oldest, genesis only after all fail"
+mkgen() { # $1 dir, $2 height, $3 good|corrupt
+  local d="$1" n="zsnap-testnet-$2-deadbeefcafe.tar.zst"
+  mkdir -p "$d/g$2/snapshot"; echo '{"stub":true}' > "$d/g$2/snapshot/MANIFEST.json"
+  ( cd "$d/g$2" && tar -cf - snapshot | zstd -q -o "$d/$n" )
+  echo "deadbeefcafe0123" > "$d/$n.manifest-hash"
+  if [ "$3" = "corrupt" ]; then
+    # Break the payload but keep a sha256 that matches, so the failure has to
+    # be caught by unpacking, not only by the checksum.
+    printf 'not a zstd stream' > "$d/$n"
+  fi
+  sha256sum "$d/$n" | cut -d' ' -f1 > "$d/$n.sha256"
+  rm -rf "$d/g$2"
+}
+
+# Newest is corrupt, middle is good: it must fall through exactly one layer.
+fresh_env
+mkdir -p "$T/gens"
+mkgen "$T/gens" 100 good; sleep 1.1
+mkgen "$T/gens" 200 good; sleep 1.1
+mkgen "$T/gens" 300 corrupt
+bash "$IMPORT" "$T/gens" > "$T/walk.log" 2>&1
+check "import succeeds by falling back" "[ $? -eq 0 ]"
+check "saw three candidates" "grep -q '3 candidate(s) to try' '$T/walk.log'"
+check "tried the newest first" "grep -q 'generation 1/3: zsnap-testnet-300' '$T/walk.log'"
+check "announced the failure loudly" "grep -q 'GENERATION 1 FAILED' '$T/walk.log'"
+check "fell through to the next older" "grep -q 'generation 2/3: zsnap-testnet-200' '$T/walk.log'"
+check "did not reach the oldest" "! grep -q 'generation 3/3' '$T/walk.log'"
+check "state was imported" "[ -f '$STUB_CACHE_DIR/state/v27/testnet/db.stub' ]"
+
+# All three corrupt: genesis fallback, and it must say so rather than pretend.
+fresh_env
+mkdir -p "$T/gens"
+for h in 100 200 300; do mkgen "$T/gens" $h corrupt; sleep 1.1; done
+bash "$IMPORT" "$T/gens" > "$T/allfail.log" 2>&1
+check "exits nonzero so the boot path falls back to genesis" "[ $? -ne 0 ]"
+check "tried all three" "grep -q 'generation 3/3' '$T/allfail.log'"
+check "says every generation failed" "grep -q 'all 3 generation(s) failed' '$T/allfail.log'"
+check "names genesis as the consequence" "grep -q 'sync from genesis' '$T/allfail.log'"
+check "left no partial state behind" "[ ! -d '$STUB_CACHE_DIR/state' ]"
+
+# A checksum mismatch is caught before unpacking.
+fresh_env
+mkdir -p "$T/gens"; mkgen "$T/gens" 400 good
+printf '%064d' 0 > "$T/gens/zsnap-testnet-400-deadbeefcafe.tar.zst.sha256"
+bash "$IMPORT" "$T/gens" > "$T/sha.log" 2>&1
+check "sha mismatch is reported as corruption" "grep -q 'sha256 mismatch' '$T/sha.log'"
+
+# An explicit argument is one candidate, not a walk.
+fresh_env
+mkdir -p "$T/gens"; mkgen "$T/gens" 500 good; mkgen "$T/gens" 600 good
+bash "$IMPORT" "$T/gens/zsnap-testnet-600-deadbeefcafe.tar.zst" > "$T/one.log" 2>&1
+check "explicit archive is a single candidate" "grep -q '1 candidate(s) to try' '$T/one.log'"

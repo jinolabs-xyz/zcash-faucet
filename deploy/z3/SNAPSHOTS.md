@@ -146,12 +146,45 @@ momentary lag past `READY_MAX_BLOCKS_BEHIND` is normal during min-difficulty
 bursts (a mid-sync snapshot would evict a better one
 from rotation), and the snapshot filesystem must have about 1.5x the state
 size free (raw export plus archive at peak), so a full disk cannot wedge the
-node. `ZSNAP_KEEP` (default 2) bounds how many archives stay around. A flock
+node. `ZSNAP_KEEP` (default 3) bounds how many archives stay around. A flock
 means overlapping timer fires skip instead of stacking.
 
 Config goes in `/etc/faucet/zsnap.env` (both scripts and the units read it):
 `ZSNAP_NETWORK`, `ZSNAP_CHAIN_VOLUME`, `ZSNAP_ZEBRAD`, `ZSNAP_DIR`,
 `ZSNAP_KEEP`, `ZSNAP_UPLOAD_CMD`, `ZSNAP_EXPECT_HASH`, `ZSNAP_ZEBRAD_URL`.
+
+## Three generations, and the restore actually walks them
+
+Retention is three archives, S1 to S3, and when S4 lands S1 rotates out. That
+buys two things: a recent snapshot always exists, so a rebuild never resyncs
+from genesis, and no single archive is a point of failure.
+
+The second guarantee only holds because the restore path uses it.
+`zsnap-import.sh` tries the newest generation, and if it fails its sha256, its
+manifest verification, or the import itself, it says so loudly and tries the
+next older one, then the one before. Only after **all** of them fail does it
+exit nonzero, which lets `faucet-up` fall through to a normal genesis sync.
+Three stored archives with a restore path that only reads the first would be
+one layer wearing three costumes.
+
+Point `/etc/zsnap-restore-url` at the snapshots **directory** (or a published
+`latest-<net>.txt`, which lists every generation) to get the whole chain. A
+single archive path or URL is still one candidate, deliberately: naming one
+archive means you want that archive.
+
+### Disk
+
+The peak is one raw export plus the archive being written, while all three
+generations still exist. The export measures rather than guesses: the raw
+export is about the state size, and the new archive is sized from the largest
+existing one. It refuses when that peak will not fit, and separately warns when
+the filesystem cannot hold the steady state at all, because the export still
+helps today and the operator needs the number.
+
+`faucet-metrics.sh` reports `faucet_disk_free_bytes`, `faucet_disk_free_percent`
+and `faucet_disk_below_floor` per filesystem, and pages through the shared
+alert sender under `METRICS_DISK_FLOOR_PCT` (default 10). A full disk stops
+exports, backups and the chain at once, so it is worth its own alert.
 
 ## Restore on a fresh box
 

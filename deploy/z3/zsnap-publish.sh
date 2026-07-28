@@ -85,6 +85,8 @@ sha256sum "$archive" | awk '{print $1}' > "$sha_file"
 
 # The pointer file. Deliberately plain text and self-describing: someone
 # rebuilding a dead box at 3am should not have to parse anything.
+# Lists every local generation, newest first, so an off-box restorer gets the
+# same fallback chain the box has. file=/file2=/file3= are read in order.
 pointer="$work/latest-$ZSNAP_NETWORK.txt"
 {
   echo "file=$name"
@@ -92,6 +94,16 @@ pointer="$work/latest-$ZSNAP_NETWORK.txt"
   echo "manifest_hash=$manifest_hash"
   echo "sha256=$(cat "$sha_file")"
   echo "published=$(date -u +%FT%TZ)"
+  gen=1
+  while read -r older; do
+    [ -n "$older" ] || continue
+    [ "$(basename "$older")" = "$name" ] && continue
+    gen=$((gen + 1))
+    echo "file${gen}=$(basename "$older")"
+    [ -f "$older.manifest-hash" ] \
+      && echo "manifest_hash${gen}=$(tr -d '[:space:]' < "$older.manifest-hash")"
+  done < <(find "$ZSNAP_DIR/snapshots" -maxdepth 1 -name "zsnap-$ZSNAP_NETWORK-*.tar.zst" -printf '%T@ %p\n' 2>/dev/null \
+             | sort -rn | cut -d' ' -f2-)
 } > "$pointer"
 
 log "publishing $name (height $height)"

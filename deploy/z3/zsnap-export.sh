@@ -49,7 +49,9 @@ ZSNAP_MODE="${ZSNAP_MODE:-hot}"
 ZSNAP_ZEBRAD="${ZSNAP_ZEBRAD:-/opt/zebrad-miner}"
 ZSNAP_CHAIN_VOLUME="${ZSNAP_CHAIN_VOLUME:-z3-${ZSNAP_NETWORK}-chain}"
 ZSNAP_DIR="${ZSNAP_DIR:-/var/lib/zsnap}"
-ZSNAP_KEEP="${ZSNAP_KEEP:-2}"                 # archives to keep after a new one lands
+# Three generations, so no single snapshot is a point of failure and a recent
+# one always exists. zsnap-import.sh walks them newest to oldest.
+ZSNAP_KEEP="${ZSNAP_KEEP:-3}"
 ZSNAP_FORCE="${ZSNAP_FORCE:-0}"               # 1 = skip the ready and space gates
 ZSNAP_RETRIES="${ZSNAP_RETRIES:-3}"           # export attempts before giving up
 ZSNAP_RETRY_WAIT="${ZSNAP_RETRY_WAIT:-30}"    # seconds between attempts
@@ -169,11 +171,27 @@ if [ "$ZSNAP_FORCE" != "1" ]; then
   done
   [ "$ready_attempt" = "1" ] || log "zebra became ready after $ready_attempt probes"
 
+  # Peak is the raw export plus the archive being written, while all KEEP
+  # existing generations are still present. Measured, not guessed: the raw
+  # export is about the state size, and the new archive is sized from the
+  # largest existing one (falling back to a third of the state when there is
+  # none yet, which is roughly what zstd achieves on this data).
   state_kb="$(du -sk "$cache_dir" | cut -f1)"
   free_kb="$(df -Pk "$ZSNAP_DIR" | awk 'NR==2 {print $4}')"
-  need_kb=$((state_kb * 3 / 2))
-  [ "$free_kb" -ge "$need_kb" ] \
-    || die "need ~$((need_kb / 1024)) MB free in $ZSNAP_DIR, have $((free_kb / 1024)) MB (ZSNAP_FORCE=1 overrides)"
+  biggest_kb="$(find "$ZSNAP_DIR/snapshots" -maxdepth 1 -name "zsnap-$ZSNAP_NETWORK-*.tar.zst" -printf '%k\n' 2>/dev/null \
+    | sort -rn | head -1)"
+  archive_kb="${biggest_kb:-$((state_kb / 3))}"
+  need_kb=$((state_kb + archive_kb))
+  if [ "$free_kb" -lt "$need_kb" ]; then
+    die "need ~$((need_kb / 1024)) MB free in $ZSNAP_DIR for the export plus its archive, have $((free_kb / 1024)) MB. Lower ZSNAP_KEEP (now $ZSNAP_KEEP) or add disk (ZSNAP_FORCE=1 overrides)"
+  fi
+  # Warn, do not refuse, when the steady state will not fit once this run
+  # rotates: the export still helps today and the operator needs the number.
+  steady_kb=$(( (ZSNAP_KEEP + 1) * archive_kb + state_kb ))
+  used_kb="$(df -Pk "$ZSNAP_DIR" | awk 'NR==2 {print $3}')"
+  if [ "$((free_kb + used_kb))" -lt "$steady_kb" ]; then
+    log "WARNING: this filesystem cannot hold the steady state. $ZSNAP_KEEP generations plus one in-flight export needs ~$((steady_kb / 1024)) MB, the filesystem is ~$(((free_kb + used_kb) / 1024)) MB. Rotation will keep working but a future export may refuse."
+  fi
 fi
 
 work=""
