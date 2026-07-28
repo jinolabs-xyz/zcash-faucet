@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-label="Zcash Testnet Faucet. Shielded TAZ, own node, own wallet.">
+  <!-- Product language, taken from src/app/globals.css rather than eyeballed:
+       ink bg #171615, surface #201e1d, text #f3f2f2, accent #ec3013, 2px
+       borders, zero corner radius, and the 135deg hatch the progress meters
+       use. Fonts are a stack, not an embed: GitHub renders SVG in a sandboxed
+       img context where a webfont would not load, so this degrades to a heavy
+       grotesque rather than breaking. -->
+  <defs>
+    <pattern id="hatch" width="26" height="26" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="26" height="26" fill="none"/>
+      <rect width="3" height="26" fill="#ec3013"/>
+    </pattern>
+  </defs>
+
+  <rect width="1200" height="320" fill="#171615"/>
+  <rect x="1" y="1" width="1198" height="318" fill="none" stroke="#ec3013" stroke-width="2"/>
+
+  <!-- Accent rule, left, echoing the 2px dividers in the UI -->
+  <rect x="56" y="72" width="72" height="4" fill="#ec3013"/>
+
+  <text x="56" y="152"
+        font-family="Archivo, 'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="72" font-weight="800" letter-spacing="-2" fill="#f3f2f2">Zcash Testnet Faucet</text>
+
+  <text x="56" y="196"
+        font-family="Archivo, 'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="24" font-weight="500" fill="#f3f2f2" opacity="0.62">Shielded TAZ from a faucet that runs its own node and wallet.</text>
+
+  <!-- Three facts, in the mono the live panel uses. Deliberately no funding
+       claim: mining income measured zero (#42), so the banner says what the
+       faucet IS, never what it earns. -->
+  <g font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="15" letter-spacing="1.2">
+    <rect x="56" y="234" width="196" height="38" fill="none" stroke="#ec3013" stroke-width="2"/>
+    <text x="72" y="259" fill="#ec3013">SHIELDED Z TO Z</text>
+
+    <rect x="268" y="234" width="228" height="38" fill="none" stroke="#f3f2f2" stroke-opacity="0.32" stroke-width="2"/>
+    <text x="284" y="259" fill="#f3f2f2" opacity="0.72">ZEBRA + ZALLET</text>
+
+    <rect x="512" y="234" width="252" height="38" fill="none" stroke="#f3f2f2" stroke-opacity="0.32" stroke-width="2"/>
+    <text x="528" y="259" fill="#f3f2f2" opacity="0.72">BROWSER PROOF OF WORK</text>
+  </g>
+
+  <!-- The hatch meter, the most recognisable element of the UI, filled to the
+       reserve target as a graphic device. -->
+  <g>
+    <rect x="880" y="234" width="264" height="38" fill="none" stroke="#f3f2f2" stroke-opacity="0.32" stroke-width="2"/>
+    <rect x="882" y="236" width="176" height="34" fill="url(#hatch)"/>
+  </g>
+  <text x="880" y="222"
+        font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace"
+        font-size="13" letter-spacing="1.4" fill="#f3f2f2" opacity="0.5">RESERVE</text>
+</svg>

@@ -1,17 +1,21 @@
-# Zcash Testnet Faucet (TAZ)
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/banner-paper.svg">
+  <img src="docs/banner-ink.svg" alt="Zcash Testnet Faucet. Shielded TAZ from a faucet that runs its own node and wallet.">
+</picture>
 
-A shielded Zcash **testnet** faucet that runs its own chain infrastructure.
-Paste a testnet address, solve a small proof-of-work in the browser, get TAZ as
-a shielded z2z transaction.
+[![CI](https://github.com/jinolabs-xyz/zcash-faucet/actions/workflows/ci.yml/badge.svg)](https://github.com/jinolabs-xyz/zcash-faucet/actions/workflows/ci.yml)
+![network: testnet only](docs/badge-testnet.svg)
 
-Next.js and TypeScript on the front, a self-hosted z3 stack behind it. No
-third-party wallet service, no captcha vendor required.
+Paste a Zcash testnet address, solve a small proof-of-work in the browser, get
+TAZ as a shielded z2z transaction. Next.js and TypeScript on the front, a
+self-hosted Zebra and Zallet stack behind it. No third-party wallet service and
+no captcha vendor.
 
-It also mines, and the reserve loop is built to fund the wallet from what it
-mines. On public testnet today that does not work: a dominant miner wins every
-block race, so our blocks are orphaned and mining income is zero. Measured, not
-guessed ([#42](../../issues/42)). The machinery is real and the funding is not,
-so the faucet currently needs TAZ from somewhere else.
+It mines too, and the reserve loop is built to fund the wallet from what it
+mines. On public testnet that does not currently work: one dominant miner wins
+every block race, so ours are orphaned and mining income is zero. Measured, not
+guessed ([#42](../../issues/42)). The machinery is real, the revenue is not, so
+the wallet is topped up from elsewhere. See [donate](#keeping-it-funded).
 
 > `zcashd` reached end of life on 2026-07-18 and every node auto-halted. This
 > project is built on what replaced it: **Zebra** (full node) and **Zallet**
@@ -159,6 +163,16 @@ handled internally in zatoshi to avoid float drift.
 | `FAUCET_DONATION_ADDRESS` | none | Shown in the UI so people can top the faucet up. |
 
 Full deploy example: [deploy/z3/faucet.env.example](deploy/z3/faucet.env.example).
+
+## Keeping it funded
+
+Because mining income is zero, the wallet is topped up by hand or by donation.
+Two env keys cover it, both optional and both surfaced on `/api/status`:
+`FAUCET_DONATION_ADDRESS` is the unified address donations go to, so they arrive
+shielded, and `FAUCET_MINING_ADDRESS` is the transparent address the miner pays
+its coinbase to, shown for anyone who wants to point spare hashrate at the
+faucet. Set either and the UI surfaces it. Set neither and the pages that would
+show them say so rather than rendering an empty box.
 
 ## Operations
 
