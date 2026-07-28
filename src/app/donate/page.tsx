@@ -64,7 +64,14 @@ export default async function Donate() {
           <BrandMark />
           <span>Zcash Testnet Faucet</span>
         </div>
-        <Link className="btn btn-secondary btn-sm" href="/">Back to the faucet</Link>
+        <Link className="btn btn-secondary btn-sm" href="/" aria-label="Back to the faucet">
+          {/* The visible label shortens at narrow widths so the masthead stays on
+              one row once the mark is in it. aria-label carries the full
+              destination either way: a screen reader user at 360px gets the same
+              information a sighted user at 1200px does. */}
+          <span className="nav-back-long">Back to the faucet</span>
+          <span className="nav-back-short">Back</span>
+        </Link>
       </header>
 
       <main style={{ flex: 1, width: "100%", maxWidth: 620, margin: "0 auto", padding: `clamp(22px,5vw,46px) ${pad} 60px`, display: "flex", flexDirection: "column", gap: 20 }}>

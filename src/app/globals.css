@@ -152,6 +152,16 @@ a:hover { color: var(--color-accent-800); }
 .nav { display: flex; align-items: center; gap: 16px; border-bottom: 2px solid var(--color-divider); }
 .nav-brand { font-family: var(--font-heading); font-weight: var(--font-heading-weight); margin-right: auto; }
 
+/* The masthead back-link shortens rather than letting the nav wrap to two rows
+   once the brand mark is in it. Measured: with the full label the row needs
+   347.3px of the 328px available at 360px. The accessible name stays complete
+   via aria-label on the link, so this is a visual truncation only. */
+.nav-back-short { display: none; }
+@media (max-width: 420px) {
+  .nav-back-long { display: none; }
+  .nav-back-short { display: inline; }
+}
+
 /* fingers need bigger targets than mice: 44px is the accessibility floor */
 @media (pointer: coarse) {
   .app .btn-sm { min-height: 44px; }
