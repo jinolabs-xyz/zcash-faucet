@@ -197,3 +197,74 @@ check "preflight works on a box with no ZSNAP_DIR yet" "[ $? -eq 0 ]"
 # this fail on any runner where an unrelated zsnap-preflight.* file already
 # existed, which is why it passed locally and failed in CI.
 check "and leaves no scratch behind" "! ls '$T'/zsnap-preflight.* >/dev/null 2>&1"
+
+echo "== publish: uploads the set a stranger needs, pointer last"
+PUBLISH="$REPO/deploy/z3/zsnap-publish.sh"
+publish_env() {
+  fresh_env
+  mkdir -p "$ZSNAP_DIR/snapshots" "$T/remote"
+  printf '#!/usr/bin/env bash\nset -e\ncp "$1" "$2"\necho "up $(basename "$1")" >> %q\n' "$T/uploads.log" > "$T/upcmd"
+  chmod +x "$T/upcmd"
+  export ZSNAP_PUBLISH_CMD="$T/upcmd" ZSNAP_PUBLISH_BASE="$T/remote"
+  : > "$T/uploads.log"
+}
+mksnap() { # $1 height
+  local n="zsnap-testnet-$1-deadbeefcafe.tar.zst"
+  echo "archive-bytes-$1" > "$ZSNAP_DIR/snapshots/$n"
+  echo "deadbeefcafe0123456789" > "$ZSNAP_DIR/snapshots/$n.manifest-hash"
+  echo "$ZSNAP_DIR/snapshots/$n"
+}
+
+publish_env
+snap="$(mksnap 4204800)"
+bash "$PUBLISH" > "$T/pub.log" 2>&1
+check "publish exits 0" "[ $? -eq 0 ]"
+check "archive uploaded" "[ -f '$T/remote/zsnap-testnet-4204800-deadbeefcafe.tar.zst' ]"
+check "manifest hash uploaded" "[ -f '$T/remote/zsnap-testnet-4204800-deadbeefcafe.tar.zst.manifest-hash' ]"
+check "sha256 uploaded" "[ -f '$T/remote/zsnap-testnet-4204800-deadbeefcafe.tar.zst.sha256' ]"
+check "pointer uploaded" "[ -f '$T/remote/latest-testnet.txt' ]"
+check "pointer names the file" "grep -qx 'file=zsnap-testnet-4204800-deadbeefcafe.tar.zst' '$T/remote/latest-testnet.txt'"
+check "pointer carries the height" "grep -qx 'height=4204800' '$T/remote/latest-testnet.txt'"
+check "pointer carries the manifest hash" "grep -qx 'manifest_hash=deadbeefcafe0123456789' '$T/remote/latest-testnet.txt'"
+check "pointer sha matches the archive" "[ \"\$(grep '^sha256=' '$T/remote/latest-testnet.txt' | cut -d= -f2)\" = \"\$(sha256sum '$snap' | cut -d' ' -f1)\" ]"
+# A pointer naming a half-uploaded archive is worse than a stale pointer.
+check "pointer uploaded LAST" "[ \"\$(tail -n1 '$T/uploads.log')\" = 'up latest-testnet.txt' ]"
+
+echo "== publish: picks the newest snapshot when not told which"
+publish_env
+mksnap 4204700 >/dev/null; sleep 1.1; mksnap 4204900 >/dev/null
+bash "$PUBLISH" > /dev/null 2>&1
+check "newest height published" "grep -qx 'height=4204900' '$T/remote/latest-testnet.txt'"
+
+echo "== publish: refusals"
+publish_env
+snap="$(mksnap 4204800)"; rm -f "$snap.manifest-hash"
+bash "$PUBLISH" > "$T/nohash.log" 2>&1
+check "no sidecar -> refuses" "[ $? -ne 0 ] && grep -q 'nothing to verify against' '$T/nohash.log'"
+check "and uploaded nothing" "[ -z \"\$(ls -A '$T/remote')\" ]"
+
+publish_env
+mksnap 4204800 >/dev/null
+ZSNAP_PUBLISH_CMD='' bash "$PUBLISH" > "$T/nocmd.log" 2>&1
+check "no upload command -> refuses" "[ $? -ne 0 ] && grep -q 'ZSNAP_PUBLISH_CMD is not set' '$T/nocmd.log'"
+
+publish_env
+bash "$PUBLISH" > "$T/nosnap.log" 2>&1
+check "no snapshot at all -> clear error" "[ $? -ne 0 ] && grep -q 'run an export first' '$T/nosnap.log'"
+
+echo "== publish: --dry-run needs no config and uploads nothing"
+publish_env
+mksnap 4204800 >/dev/null
+ZSNAP_PUBLISH_CMD='' ZSNAP_PUBLISH_BASE='' bash "$PUBLISH" --dry-run > "$T/dry.log" 2>&1
+check "dry run exits 0 without config" "[ $? -eq 0 ]"
+check "dry run shows the pointer it would write" "grep -q 'manifest_hash=' '$T/dry.log'"
+check "dry run uploaded nothing" "[ -z \"\$(ls -A '$T/remote')\" ]"
+
+echo "== publish: a failed upload does not leave a pointer behind"
+publish_env
+mksnap 4204800 >/dev/null
+printf '#!/usr/bin/env bash\nexit 1\n' > "$T/upcmd"   # every upload fails
+bash "$PUBLISH" > "$T/upfail.log" 2>&1
+check "exits nonzero" "[ $? -ne 0 ]"
+check "says nothing was published" "grep -q 'nothing was published' '$T/upfail.log'"
+check "no pointer in the remote" "[ ! -f '$T/remote/latest-testnet.txt' ]"
