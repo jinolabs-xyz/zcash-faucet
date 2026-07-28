@@ -1,12 +1,17 @@
 # Zcash Testnet Faucet (TAZ)
 
-A shielded Zcash **testnet** faucet that runs its own chain infrastructure and
-mines the coins it hands out. Paste a testnet address, solve a small
-proof-of-work in the browser, get TAZ as a shielded z2z transaction.
+A shielded Zcash **testnet** faucet that runs its own chain infrastructure.
+Paste a testnet address, solve a small proof-of-work in the browser, get TAZ as
+a shielded z2z transaction.
 
 Next.js and TypeScript on the front, a self-hosted z3 stack behind it. No
-third-party wallet service, no captcha vendor required, no queueing at another
-faucet for a top-up.
+third-party wallet service, no captcha vendor required.
+
+It also mines, and the reserve loop is built to fund the wallet from what it
+mines. On public testnet today that does not work: a dominant miner wins every
+block race, so our blocks are orphaned and mining income is zero. Measured, not
+guessed ([#42](../../issues/42)). The machinery is real and the funding is not,
+so the faucet currently needs TAZ from somewhere else.
 
 > `zcashd` reached end of life on 2026-07-18 and every node auto-halted. This
 > project is built on what replaced it: **Zebra** (full node) and **Zallet**
@@ -31,23 +36,32 @@ and the UI says plainly that those drips are public.
 The public lightwalletd endpoint (`LIGHTWALLETD_ENDPOINT`) is now only used for
 the read-side balance lookup tool. Nothing that moves money depends on it.
 
-### Self-mining, and the honest caveat
+### Mining and the reserve loop, and why funding does not work yet
 
-The faucet funds itself. A solo CPU Equihash miner (`deploy/z3/miner`, Rust)
-works `getblocktemplate` against our own Zebra, and a reserve loop
-(`src/lib/reserve/`) watches the spendable balance: below the low-water mark it
-starts shielding mined coinbase into the faucet's account, and it stops once the
-balance reaches target. Two marks instead of one means the miner does not flap
-on and off. Refill work goes through the same serial send queue as drips, one
-bounded step at a time, and skips its turn whenever a real claim is waiting, so
-**topping up never pauses service**.
+A solo CPU Equihash miner (`deploy/z3/miner`, Rust) works `getblocktemplate`
+against our own Zebra, and a reserve loop (`src/lib/reserve/`) watches the
+spendable balance: below the low-water mark it starts shielding mined coinbase
+into the faucet's account, and it stops once the balance reaches target. Two
+marks instead of one means the miner does not flap on and off. Refill work goes
+through the same serial send queue as drips, one bounded step at a time, and
+skips its turn whenever a real claim is waiting, so **topping up never pauses
+service**.
 
-Where this genuinely stands: the miner solves real blocks and our node accepts
-them, but on public testnet a dominant miner with far more hashrate wins the
-propagation race and ours get reorged out. Winning locally is not the same as
-funding the wallet. That race is [issue #32](../../issues/32) and it is open.
-Mining costs almost nothing to leave running, so it runs, but do not assume it
-alone will keep a production wallet topped up.
+That machinery works. The funding does not, and the reason is arithmetic rather
+than a bug. We have mined real blocks that our own node accepted, but a single
+dominant miner on public testnet wins every height and only ever extends its own
+chain, so ours are orphaned. When one miner never builds on your blocks, your
+chain advances only when you find a block and theirs advances when they do.
+Below half their hashrate the long-run survival of any block you mine is **zero,
+not merely small**, so no amount of tuning propagation or template freshness
+changes the outcome. The measurement and the maths are in
+[#42](../../issues/42).
+
+What that means in practice: treat mining as machinery that is ready rather than
+as an income stream. A deploy that needs a funded wallet has to get TAZ from
+somewhere else for now. Mining costs almost nothing to leave running, so it
+keeps running and would start funding the faucet the moment the network stops
+being dominated by one miner.
 
 ### Anti-abuse
 
