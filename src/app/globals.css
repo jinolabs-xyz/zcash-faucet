@@ -14,6 +14,9 @@
   --color-neutral-800: #444141;
   --color-neutral-900: #2d2b2b;
 
+  /* Resting link colour, per theme. 6.41:1 here. */
+  --color-link: #ae1800;
+
   --color-accent-100: #fff2ef;
   --color-accent-400: #ff9783;
   --color-accent-600: #dd2b0f;
@@ -54,6 +57,7 @@
      both themes. Also stays clear of the topping-up accent's 4.30, so the two
      empty states do not collapse into the same-looking dot. */
   --color-empty: #ff6a4d;
+  --color-link: #ff9783; /* 8.61:1 on ink; the paper value would sink to 2.52 */
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -74,9 +78,15 @@ h1, h2, h3, h4, h5, h6 {
   letter-spacing: -0.015em;
   margin: 0 0 8px;
 }
-a { color: var(--color-accent); text-underline-offset: 3px; }
-a:hover { color: var(--color-accent-700); }
-.app.ink a:hover { color: var(--color-accent-400); }
+/* Links use --color-link, not --color-accent: the accent measures 3.76 on paper
+   and 4.30 on ink, both under the 4.5 floor for normal text, and a resting link
+   is text. The accent stays the brand everywhere non-text.
+
+   Hover moves to accent-800 rather than staying put, because the agreed resting
+   values were the OLD hover values, which would have left hover with nothing to
+   do. Both directions increase contrast: paper darkens, ink lightens. */
+a { color: var(--color-link); text-underline-offset: 3px; }
+a:hover { color: var(--color-accent-800); }
 :focus { outline: none; }
 :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 ::selection { background: color-mix(in srgb, var(--color-accent) 30%, transparent); }
