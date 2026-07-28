@@ -8,6 +8,7 @@
 // (type stripping) resolves literal paths only, and config sits on the import
 // chain of every test that touches pow or the senders.
 import { saltRejectionReason } from "./saltGuard.ts";
+import { defaultTaskDeadlineMs } from "./zcash/sendBudget.ts";
 
 export const ZATOSHI_PER_TAZ = 100_000_000n;
 
@@ -53,6 +54,19 @@ function endpointList(): string[] {
   return list.length ? list : ["https://testnet.zec.rocks:443"];
 }
 
+/**
+ * Zallet's own send timings, hoisted out of the config literal because the send
+ * queue's backstop deadline is DERIVED from them (#88). The backstop has to sit
+ * above whatever the sender's own bounds already allow, and a literal would
+ * start firing early the moment an operator raised ZALLET_OP_TIMEOUT_MS.
+ */
+const zalletTimings = {
+  rpcTimeoutMs: Math.max(1000, Math.floor(num("ZALLET_RPC_TIMEOUT_MS", 15_000))),
+  // A shielded build+prove can take tens of seconds; give the opid room to land.
+  opTimeoutMs: Math.max(5000, Math.floor(num("ZALLET_OP_TIMEOUT_MS", 180_000))),
+  pollMs: Math.max(250, Math.floor(num("ZALLET_POLL_MS", 1500))),
+};
+
 export const config = {
   dripTaz: num("FAUCET_DRIP_TAZ", 0.1),
   get dripZatoshi() {
@@ -94,10 +108,7 @@ export const config = {
     // If the wallet is encrypted at rest, unlock it for this many seconds per send.
     passphrase: process.env.ZALLET_PASSPHRASE ?? "",
     unlockSeconds: Math.max(1, Math.floor(num("ZALLET_UNLOCK_SECONDS", 60))),
-    rpcTimeoutMs: Math.max(1000, Math.floor(num("ZALLET_RPC_TIMEOUT_MS", 15_000))),
-    // A shielded build+prove can take tens of seconds; give the opid room to land.
-    opTimeoutMs: Math.max(5000, Math.floor(num("ZALLET_OP_TIMEOUT_MS", 180_000))),
-    pollMs: Math.max(250, Math.floor(num("ZALLET_POLL_MS", 1500))),
+    ...zalletTimings,
   },
 
   // Reserve top-up loop (src/lib/reserve): start refilling when spendable
@@ -143,6 +154,17 @@ export const config = {
     windowSeconds: Math.max(1, Math.floor(num("TX_LOOKUP_RATE_WINDOW_SECONDS", 60))),
     max: Math.max(1, Math.floor(num("TX_LOOKUP_RATE_MAX", 60))),
   },
+  // Backstop deadline for ONE queued task (#88). It bounds how long a caller
+  // waits, not how long the wallet stays held: see queue.ts run().
+  //
+  // The default is derived from the sender's own timings so it always sits above
+  // them. Setting this BELOW that (defaultTaskDeadlineMs, 309s with stock
+  // zallet settings) makes legitimate slow sends report an unknown outcome,
+  // which costs a claimant a full cooldown for coins they actually received.
+  sendTaskDeadlineMs: Math.max(
+    1000,
+    Math.floor(num("SEND_TASK_DEADLINE_MS", defaultTaskDeadlineMs(zalletTimings))),
+  ),
 
   turnstile: {
     siteKey: process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? "",

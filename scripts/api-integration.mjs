@@ -16,8 +16,10 @@ import { bech32m } from "@scure/base";
 
 const PORT_A = 3210;
 const PORT_B = 3211;
+const PORT_C = 3212;
 const BASE_A = `http://localhost:${PORT_A}`;
 const BASE_B = `http://localhost:${PORT_B}`;
+const BASE_C = `http://localhost:${PORT_C}`;
 
 let failures = 0;
 const ok = (name, cond, detail = "") => {
@@ -107,8 +109,16 @@ const wallet = (port, balanceTaz) =>
     stdio: "ignore",
     detached: true,
   });
+// C's wallet accepts the send and then never finishes the operation, which is
+// the shape of the hang the queue deadline exists for (#88).
+const WALLET_C = 28323;
 const walletA = wallet(WALLET_A, 10);
 const walletB = wallet(WALLET_B, 0);
+const walletC = spawn("node", ["scripts/fake-zallet.mjs"], {
+  env: { ...process.env, PORT: String(WALLET_C), BALANCE_TAZ: "10", SEND_HANGS: "true" },
+  stdio: "ignore",
+  detached: true,
+});
 
 const zallet = (rpcPort) => ({
   FAUCET_SENDER: "zallet",
@@ -140,9 +150,17 @@ const serverB = boot(PORT_B, {
   // test mirrors production rather than the default no-proxy case.
   TRUSTED_PROXY_COUNT: "1",
 });
+// The deadline is normally derived at ~309s, far above any legitimate send. Pin
+// it low here so the hang path is reachable in a test rather than never covered.
+const serverC = boot(PORT_C, {
+  ...zallet(WALLET_C),
+  FAUCET_CHALLENGE: "none",
+  SEND_TASK_DEADLINE_MS: "2500",
+  ZALLET_OP_TIMEOUT_MS: "600000", // the sender must NOT be what gives up first
+});
 
 try {
-  await Promise.all([waitReady(BASE_A), waitReady(BASE_B)]);
+  await Promise.all([waitReady(BASE_A), waitReady(BASE_B), waitReady(BASE_C)]);
 
   /* ── A: /api/status shape ────────────────────────────────────────────── */
   const status = await get(BASE_A, "/api/status");
@@ -273,11 +291,39 @@ try {
 
   const emptyClaim = await claim(BASE_B, UNIFIED_A, null);
   ok("B claim on empty wallet is 503 with the empty message", emptyClaim.status === 503 && /empty/i.test(emptyClaim.body.error ?? ""), `status ${emptyClaim.status}`);
+
+  /* ── C: a send that hangs forever (#88) ──────────────────────────────── */
+  // The wallet took the send and will never resolve the operation. The queue
+  // deadline must answer the caller, and it must answer "unknown", not "failed".
+  const hung = await claim(BASE_C, UNIFIED_A, null);
+  ok("C a hung send is 504, not a 500 or a hang", hung.status === 504, `status ${hung.status}`);
+  ok(
+    "C the 504 tells the user NOT to retry, because coins may be moving",
+    /do not retry/i.test(hung.body.error ?? ""),
+    JSON.stringify(hung.body.error ?? "").slice(0, 120),
+  );
+
+  // The money-safety property. A deadline is not a failure, so the claim must
+  // still be held. If the deadline released it, this retry would be allowed and
+  // one entitlement could be paid twice.
+  const retryAfterHang = await claim(BASE_C, UNIFIED_A, null);
+  ok(
+    "C the claim is HELD after a deadline, so the same address cannot be paid twice",
+    retryAfterHang.status === 429,
+    `status ${retryAfterHang.status}, expected 429`,
+  );
+
+  // And the wallet is still counted as busy, since the send really is still in
+  // flight inside the wallet.
+  const statusC = await get(BASE_C, "/api/status");
+  ok("C the stuck send still counts against queue depth", statusC.body.queueDepth >= 1, `depth ${statusC.body.queueDepth}`);
 } finally {
   stop(serverA);
   stop(serverB);
+  stop(serverC);
   stop(walletA);
   stop(walletB);
+  stop(walletC);
 }
 
 console.log(failures === 0 ? "\napi-integration: all green" : `\napi-integration: ${failures} FAILED`);

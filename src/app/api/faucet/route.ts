@@ -14,7 +14,7 @@ import { validateTestnetAddress } from "@/lib/zcash/address";
 import { verifyTurnstile } from "@/lib/turnstile";
 import { verifySolution } from "@/lib/pow";
 import { getSender, safeBalance, SendOutcomeUnknownError, type SendResult } from "@/lib/zcash/send";
-import { getSendQueue, QueueFullError } from "@/lib/zcash/queue";
+import { getSendQueue, QueueFullError, TaskDeadlineError } from "@/lib/zcash/queue";
 import { reserveClaim, finalizeClaim } from "@/lib/db";
 import { fingerprintIp } from "@/lib/privacy";
 import { clientIp } from "@/lib/clientIp";
@@ -107,14 +107,20 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
   //    the send itself failed.
   let result: SendResult;
   try {
-    result = await getSendQueue().run(() =>
-      getSender().send({ toAddress: address, addressInfo: info, amountZat: config.dripZatoshi }),
+    result = await getSendQueue().run(
+      () => getSender().send({ toAddress: address, addressInfo: info, amountZat: config.dripZatoshi }),
+      config.sendTaskDeadlineMs,
     );
   } catch (err) {
     // A submitted-but-unresolved send is NOT a failure. The wallet holds an
     // opid and may still broadcast, so releasing the claim would let the same
     // address get paid twice, and telling the user nothing moved would be a lie.
-    if (err instanceof SendOutcomeUnknownError) {
+    //
+    // TaskDeadlineError lands here for the same reason and NOT in the failure
+    // branch below: the queue only stopped waiting, it did not stop the send
+    // (#88). Treating it as a failure would release the claim while a live
+    // transaction was still being built.
+    if (err instanceof SendOutcomeUnknownError || err instanceof TaskDeadlineError) {
       // Record it as sent, which is the only safe assumption for a payout we
       // cannot observe. Leaving the row 'pending' looked like it held the
       // claim, but pending only blocks for PENDING_LEASE_SECONDS, and an
@@ -127,12 +133,17 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
       // nothing actually went out. Erring toward not paying twice: the cost of
       // being wrong here is one user waiting out a cooldown for a drip they did
       // not get, against the faucet paying twice for one entitlement.
+      //
+      // A deadline has no opid to record, so it gets the "deadline" marker. Same
+      // unknown: prefix family, so one query finds every claim an operator needs
+      // to reconcile by hand.
+      const marker = err instanceof SendOutcomeUnknownError ? `unknown:${err.opid}` : "unknown:deadline";
       try {
-        await finalizeClaim(reservation.claimId, "sent", `unknown:${err.opid}`);
+        await finalizeClaim(reservation.claimId, "sent", marker);
       } catch (finErr) {
         api.logError(finErr, `finalize(unknown) failed, claim ${reservation.claimId} will release on the lease`);
       }
-      api.logError(err, `send outcome UNKNOWN, opid ${err.opid}, claim ${reservation.claimId} held for the full cooldown`);
+      api.logError(err, `send outcome UNKNOWN (${marker}), claim ${reservation.claimId} held for the full cooldown`);
       return apiError(
         504,
         "Your drip was submitted but we lost track of it before it confirmed. Do not retry yet: if it went " +
