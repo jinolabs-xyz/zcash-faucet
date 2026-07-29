@@ -108,8 +108,8 @@ export const PENDING_LEASE_SECONDS = 120;
  * single-threaded). Anonymous `?` params for portability across drivers.
  */
 export const RESERVE_SQL = `
-INSERT INTO claims (address_hash, ip_hash, amount_zat, status, created_at)
-SELECT ?, ?, ?, 'pending', ?
+INSERT INTO claims (address_hash, ip_hash, subnet_hash, amount_zat, status, created_at)
+SELECT ?, ?, ?, ?, 'pending', ?
 WHERE NOT EXISTS (
   SELECT 1 FROM claims WHERE address_hash = ?
     AND ((status='sent' AND created_at > ?) OR (status='pending' AND created_at > ?))
@@ -119,6 +119,12 @@ AND (
     SELECT 1 FROM claims WHERE ip_hash = ?
       AND ((status='sent' AND created_at > ?) OR (status='pending' AND created_at > ?))
   )
+)
+AND (
+  ? = '' OR (
+    SELECT COUNT(*) FROM claims WHERE subnet_hash = ?
+      AND ((status='sent' AND created_at >= ?) OR (status='pending' AND created_at >= ?))
+  ) < ?
 )
 AND (
   (SELECT COALESCE(SUM(amount_zat), 0) FROM claims
@@ -131,21 +137,32 @@ AND (
 export function reserveParams(o: {
   addressHash: string;
   ipHash: string;
+  /** "" when the client's subnet could not be derived, which SKIPS the subnet rule. */
+  subnetHash: string;
   amountZat: number;
   now: number;
   cooldownSeconds: number;
   dailyCapZat: number;
+  subnetDailyMax: number;
 }): (string | number)[] {
   const cooldownCut = o.now - o.cooldownSeconds;
   const leaseCut = o.now - PENDING_LEASE_SECONDS;
   const since = o.now - 86_400;
   return [
-    o.addressHash, o.ipHash, o.amountZat, o.now, // INSERT ... SELECT
-    o.addressHash, cooldownCut, leaseCut, //         address NOT EXISTS
-    o.ipHash, o.ipHash, cooldownCut, leaseCut, //    ip branch (guard + NOT EXISTS)
-    since, leaseCut, o.amountZat, o.dailyCapZat, //  daily cap
+    o.addressHash, o.ipHash, o.subnetHash, o.amountZat, o.now, // INSERT ... SELECT
+    o.addressHash, cooldownCut, leaseCut, //                      address NOT EXISTS
+    o.ipHash, o.ipHash, cooldownCut, leaseCut, //                 ip branch (guard + NOT EXISTS)
+    o.subnetHash, o.subnetHash, since, leaseCut, o.subnetDailyMax, // subnet branch
+    since, leaseCut, o.amountZat, o.dailyCapZat, //               global daily cap
   ];
 }
+
+/** How many claims a subnet has made in the window, for the "why blocked" message. */
+export const SUBNET_COUNT_SQL = `
+SELECT COUNT(*) AS n FROM claims
+WHERE subnet_hash = ?
+  AND ((status='sent' AND created_at >= ?) OR (status='pending' AND created_at >= ?))
+`;
 
 /** Most-recent live (blocking) claim for a column, for the "why blocked" message. */
 export const LIVE_BLOCK_SQL = (column: "address_hash" | "ip_hash") => `
