@@ -336,13 +336,35 @@ curl -s https://hosh.zec.rocks/api/v0/zec.json \
   | jq '[.servers[] | select(.chain=="test" and .online) | .height] | max'
 ```
 
-**Proof required before step 4:** the two numbers agree within a few blocks.
+**Proof required before step 4:** our tip lags the network by **fewer than 10
+blocks**. That number is derived, not chosen, and the derivation is why this gate
+exists at all.
 
-Do not accept `frozen: false` as the gate on its own. It only trips past
-`FAUCET_FREEZE_BLOCKS` (200), so a node 150 blocks behind reads as healthy while
-still stamping transactions with an expiry that has already passed. Compare the
-numbers yourself. A null or missing external tip is cannot-verify, which is not a
-pass.
+A wallet stamps `expiry_height = ourTip + 40`. Forty is the protocol default and
+it is what our own transparent sender uses too (`realsend.ts:91`, per ZIP 203).
+A transaction can only be mined while the network tip is at or below its expiry,
+so:
+
+```
+minable  requires  networkTip <= ourTip + 40
+                   i.e.  lag <= 40
+```
+
+At a lag of exactly 40 the transaction is born with zero runway. It needs blocks
+in hand to propagate and be included, so the usable budget is 40 minus the lag.
+Ten leaves thirty blocks of real runway, which is roughly forty minutes at
+testnet's target spacing.
+
+**This is a different number from `FAUCET_FREEZE_BLOCKS`, and using that one here
+would be a five-fold error.** #171's threshold is 200 because it answers "has our
+node stopped following the chain", where hundreds of blocks of drift is the
+signal. Broadcast safety asks "can a transaction this node builds still be
+mined", and the answer flips at 40. So a node 150 blocks behind is **not frozen**
+by #171 and **cannot produce a minable transaction**. Both statements are true at
+once, which is precisely why `frozen: false` must not be read as clearance to
+broadcast.
+
+A null or missing external tip is cannot-verify, which is not a pass.
 
 **Candidate B: the transaction never reached the network.** Peer count, relay, and
 whether our mempool is reachable at all. This needs box reads and it is
