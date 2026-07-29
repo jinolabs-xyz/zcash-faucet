@@ -124,6 +124,106 @@ mod tests {
         Rpc::new(url, Path::new("/nonexistent/cookie"), 5)
     }
 
+    /// Like serve_once, but reads the request to completion instead of taking a
+    /// single 8 KB read.
+    ///
+    /// serve_once cannot express a realistic submitblock. `let mut buf = [0u8;
+    /// 8192]` with one `read()` caps what the harness can receive at 8 KB, and
+    /// even a smaller body can arrive split across reads. A block hex is tens of
+    /// KB, so the payload that matters most was unrepresentable and therefore
+    /// untestable — the same shape as the docker stub that ignored `-a` (#175).
+    fn serve_once_reading_all(status_line: &str, body: &str) -> (String, mpsc::Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let (tx, rx) = mpsc::channel();
+        let response = format!(
+            "HTTP/1.1 {status_line}\r\ncontent-type: application/json\r\n\
+             content-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut raw: Vec<u8> = Vec::new();
+            let mut chunk = [0u8; 16384];
+            // Read until the headers are complete, then until content-length
+            // bytes of body have arrived. Anything less and a truncated request
+            // looks like a complete one.
+            let mut need: Option<usize> = None;
+            loop {
+                let n = match stream.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => n,
+                };
+                raw.extend_from_slice(&chunk[..n]);
+                if need.is_none() {
+                    if let Some(pos) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&raw[..pos]).to_lowercase();
+                        let len = head
+                            .lines()
+                            .find_map(|l| l.strip_prefix("content-length:"))
+                            .and_then(|v| v.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        need = Some(pos + 4 + len);
+                    }
+                }
+                if let Some(total) = need {
+                    if raw.len() >= total {
+                        break;
+                    }
+                }
+            }
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+            let _ = tx.send(String::from_utf8_lossy(&raw).to_string());
+        });
+        (url, rx)
+    }
+
+    /// A real submitblock carries the whole block as hex, tens of KB. ureq 3 owns
+    /// request-body framing since #146, so a truncated or mis-framed body would
+    /// only surface against a server that reads all of it, and against the live
+    /// node (#166) — which needs box access nobody on this branch has. This closes
+    /// the part that does not: the bytes we put on the wire.
+    #[test]
+    fn a_full_size_submitblock_body_reaches_the_wire_intact() {
+        // 80 KB, comfortably past one read and past serve_once's 8 KB ceiling.
+        let block_hex = "ab".repeat(40_000);
+        let (url, rx) = serve_once_reading_all("200 OK", r#"{"result":null,"error":null}"#);
+
+        // null result means the node ACCEPTED the block, so this must be Ok.
+        let out = rpc_for(&url).call("submitblock", json!([block_hex.clone()]));
+        assert!(out.is_ok(), "accepted submitblock read as an error: {out:?}");
+
+        let raw = rx.recv().unwrap();
+        assert!(
+            raw.contains(&block_hex),
+            "the block hex did not reach the wire intact: sent {} chars, request was {} bytes",
+            block_hex.len(),
+            raw.len()
+        );
+        // And the framing must be declared, not chunked: zebra reads a body by
+        // content-length. A chunked request would still "contain" the hex above.
+        let head = raw.split("\r\n\r\n").next().unwrap_or("").to_lowercase();
+        assert!(
+            head.contains(&format!("content-length: {}", block_hex.len() + 90)) || head.contains("content-length:"),
+            "no content-length on a submitblock request; headers were: {head}"
+        );
+        assert!(
+            !head.contains("transfer-encoding: chunked"),
+            "submitblock was sent chunked, which zebra's JSON-RPC does not accept: {head}"
+        );
+    }
+
+    /// A rejected block comes back as a STRING reason, not null, and that must
+    /// not read as success. main.rs:248 keys the accept/reject decision on this.
+    #[test]
+    fn a_rejected_submitblock_is_not_mistaken_for_acceptance() {
+        let (url, _rx) = serve_once_reading_all("200 OK", r#"{"result":"rejected: bad-txns-duplicate","error":null}"#);
+        let out = rpc_for(&url).call("submitblock", json!(["00"])).unwrap();
+        assert_eq!(out, json!("rejected: bad-txns-duplicate"));
+        assert!(!out.is_null(), "a rejection must not present as the null that means accepted");
+    }
+
     // The reason http_status_as_error(false) is set. ureq 3's default turns a
     // non-2xx into an error carrying the status and NOT the body, and for a 401
     // the body names which cookie the node wanted. If a later bump flips that
