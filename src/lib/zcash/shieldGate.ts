@@ -27,6 +27,7 @@
  * the target — the default leaves an order of magnitude of headroom.
  */
 
+import { num } from "../config.ts";
 import { getExternalTip } from "./externalTip.ts";
 
 /*
@@ -55,13 +56,48 @@ export interface ShieldGate {
   reason: string;
 }
 
+/** Zcash sets a transaction's expiry at tip+40, so a lag of 40 guarantees death. */
+export const EXPIRY_DELTA_BLOCKS = 40;
+
+/**
+ * Hard ceiling on the lag budget, enforced here rather than trusted to a comment.
+ * A budget settable past the cliff by one line in a .env is not a limit.
+ */
+export const SHIELD_LAG_CEILING = 10;
+
 /**
  * Blocks our node may lag the independently-observed tip and still be trusted to
- * build a transaction. Deliberately far below Zcash's 40-block expiry delta: 40 is
+ * build a transaction. Deliberately far below the 40-block expiry delta: 40 is
  * where the arithmetic guarantees death, not where safety ends, and a ceiling is
  * not a target (the same trap as FAUCET_POW_MAX_BITS in #132).
+ *
+ * TWO WAYS THIS USED TO FAIL OPEN, both found by SDE-App running it rather than
+ * reading it:
+ *
+ * 1. Number("trlue") is NaN, and `lag > NaN` is FALSE for every lag — so one typo
+ *    in a .env made every possible lag read "safe" and mayShield() return true.
+ *    A module whose whole thesis is fail-closed, disabled without touching its
+ *    logic. num() throws on a value it cannot parse, so we refuse to boot instead:
+ *    fail closed on a value we cannot PARSE, exactly as we fail closed on a tip we
+ *    cannot VERIFY.
+ * 2. The budget was creepable at deploy time. A test asserts the SOURCE default
+ *    stays small, but a test does not run in production, and 500 in an env file was
+ *    honoured — which made a 40-block lag "safe" again. Hence the clamp.
  */
-export const SHIELD_MAX_LAG_BLOCKS = Number(process.env.FAUCET_SHIELD_MAX_LAG_BLOCKS ?? 5);
+export const SHIELD_MAX_LAG_BLOCKS = (() => {
+  const configured = num("FAUCET_SHIELD_MAX_LAG_BLOCKS", 5);
+  if (configured > SHIELD_LAG_CEILING) {
+    // Loud, because silently ignoring an operator's setting is its own trap: they
+    // would believe a wider budget is in force and plan around it.
+    console.warn(
+      `[shieldGate] FAUCET_SHIELD_MAX_LAG_BLOCKS=${configured} exceeds the ceiling of ` +
+        `${SHIELD_LAG_CEILING} (Zcash expires at tip+${EXPIRY_DELTA_BLOCKS}); clamping to ${SHIELD_LAG_CEILING}`,
+    );
+    return SHIELD_LAG_CEILING;
+  }
+  // A negative or zero budget is stricter, not looser, so it is allowed through.
+  return configured;
+})();
 
 /**
  * @param nodeHeight     our own node's tip, or null when we could not read it.

@@ -31,7 +31,14 @@ function senderFromEnv(): SenderKind {
   );
 }
 
-function num(name: string, fallback: number): number {
+/**
+ * Parse an env var as a number, or REFUSE TO BOOT. Exported because the same rule
+ * has to hold outside this file: a threshold that silently becomes NaN disables
+ * whatever it guards, and `x > NaN` is false, so the guard fails OPEN. Failing to
+ * start on a value we cannot parse is the same discipline as refusing to shield on
+ * a tip we cannot verify.
+ */
+export function num(name: string, fallback: number): number {
   const raw = process.env[name];
   if (raw === undefined || raw === "") return fallback;
   const n = Number(raw);

@@ -5,7 +5,7 @@
  * yet — which is exactly the case while zebra does its first sync — this returns
  * null and the UI shows an indeterminate "bringing the node online" state.
  */
-import { config } from "../config.ts";
+import { config, num } from "../config.ts";
 import { getExternalTip } from "./externalTip.ts";
 import { readShieldFreshness, type ShieldGate } from "./shieldGate.ts";
 import { tipProgress, type TipSample } from "./tipProgress.ts";
@@ -19,6 +19,8 @@ export interface NodeStatus {
   frozen: boolean; // our node has fallen far behind the real network (#170)
   /** How long our tip has sat unchanged, or null when we cannot say yet. */
   tipStalledMs: number | null;
+  /** The network is not producing blocks either, so a static tip is expected. */
+  networkQuiet: boolean;
   /**
    * Whether our chain view is fresh enough to BUILD a transaction — a different and
    * much tighter question than `frozen`, and deliberately not derived from it. See
@@ -36,7 +38,10 @@ export interface NodeStatus {
 // A genuinely frozen node diverges by hundreds to thousands and keeps growing
 // (Fauzec's faucet was 12,607 behind), so this catches a real freeze without
 // false-alarming on normal lag or a fast burst of blocks.
-const FREEZE_BLOCKS = Number(process.env.FAUCET_FREEZE_BLOCKS ?? 200);
+// num() rather than Number(): NaN would make `externalHeight - n > FREEZE_BLOCKS`
+// false for every gap, so the 12,607-block freeze this check was written for (#170)
+// would read healthy. Refuse to boot on a value we cannot parse.
+const FREEZE_BLOCKS = num("FAUCET_FREEZE_BLOCKS", 200);
 
 // Remembered across calls so the motion check has something to compare against.
 // Process-local by design: a restart legitimately forgets, and a fresh process
@@ -78,7 +83,7 @@ export async function getNodeStatus(): Promise<NodeStatus | null> {
     // opinion, so it still works while the oracle is down — which is exactly when
     // the distance check goes quiet. It also catches a node wedged just behind the
     // tip, which is close enough to look fine by distance and just as stuck.
-    const progress = tipProgress(lastTip, n, Date.now());
+    const progress = tipProgress(lastTip, n, externalHeight, Date.now());
     lastTip = progress.next;
 
     const frozen = behind || progress.stalled;
@@ -92,6 +97,7 @@ export async function getNodeStatus(): Promise<NodeStatus | null> {
       externalHeight,
       frozen,
       tipStalledMs: progress.stalledMs,
+      networkQuiet: progress.networkQuiet,
       shield: readShieldFreshness(n),
     };
   } catch {

@@ -84,8 +84,19 @@ function boot(port, env) {
   });
   return child;
 }
-// Poll the tip-oracle fixture until it answers, so no app can out-race it.
-async function waitHosh(ms = 15_000) {
+/**
+ * Poll the tip-oracle fixture until it answers, so no app can out-race it.
+ *
+ * @param expectTestnetRow when true (the default) we additionally require a usable
+ *   testnet row, because a 200 with an unusable body would let the oracle's
+ *   fallback fire anyway — the failure this wait exists to prevent.
+ *
+ *   An EMPTY=true fixture deliberately serves no testnet row, to make the oracle's
+ *   cannot-verify path reachable. Waiting for a row there would hang and then throw,
+ *   so a caller exercising that mode must pass false. Before this parameter existed,
+ *   fake-hosh advertised an EMPTY mode that could only produce a dead suite (SDE-App).
+ */
+async function waitHosh(expectTestnetRow = true, ms = 15_000) {
   const url = `http://127.0.0.1:${HOSH_PORT}/`;
   const deadline = Date.now() + ms;
   for (;;) {
@@ -93,14 +104,18 @@ async function waitHosh(ms = 15_000) {
       const res = await fetch(url, { signal: AbortSignal.timeout(1000) });
       if (res.ok) {
         const rows = await res.json();
-        // Assert the fixture is serving what the apps need. A 200 with an
-        // unusable body would let the fallback fire anyway, which is the failure
-        // this wait exists to prevent — so check the shape, not just the status.
         const servers = Array.isArray(rows?.servers) ? rows.servers : [];
+        if (!expectTestnetRow) return; // responding at all is the whole requirement
         if (servers.some((r) => r.chain === "test" && r.online && r.height > 0)) return;
       }
     } catch { /* not up yet */ }
-    if (Date.now() > deadline) throw new Error(`tip-oracle fixture at ${url} never served a usable testnet height`);
+    if (Date.now() > deadline) {
+      throw new Error(
+        expectTestnetRow
+          ? `tip-oracle fixture at ${url} never served a usable testnet height`
+          : `tip-oracle fixture at ${url} never responded`,
+      );
+    }
     await new Promise((r) => setTimeout(r, 100));
   }
 }
