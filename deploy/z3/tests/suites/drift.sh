@@ -17,6 +17,16 @@ drift_env() {
   printf '[Service]\nExecStart=%s/thing.sh\n' "$T/install" > "$T/repo/deploy/z3/faucet-thing.service"
   printf '[Timer]\nOnCalendar=hourly\n' > "$T/repo/deploy/z3/faucet-thing.timer"
   printf '#!/usr/bin/env bash\necho thing\n' > "$T/repo/deploy/z3/thing.sh"
+  # The env-completeness half needs src/ and a declaring env file, or the fixture
+  # does not model its inputs at all. It did not, so every clean-box case hit the
+  # "no src, cannot list what the app reads" path, which is correctly an UNVERIFIED
+  # and correctly exits 2 — and that broke four exit-0 baselines. The check was
+  # right and the fixture was incomplete, so the fixture is what changes here.
+  mkdir -p "$T/repo/src/lib"
+  printf 'const a = process.env.FIXTURE_DECLARED_KEY;\nconst b = num("FIXTURE_TUNING_KEY", 5);\n' \
+    > "$T/repo/src/lib/config.ts"
+  printf 'FIXTURE_DECLARED_KEY=yes\nFIXTURE_TUNING_KEY=5\n' \
+    > "$T/repo/deploy/z3/faucet.env.example"
 }
 # A box that matches the repo exactly.
 make_clean_box() {
@@ -31,6 +41,32 @@ bash "$AUDIT" > "$T/clean.log" 2>&1
 check "exits 0" "[ $? -eq 0 ]"
 check "says no drift" "grep -q 'no drift' '$T/clean.log'"
 check "prints no DRIFT lines" "! grep -q 'DRIFT' '$T/clean.log'"
+# Exit 2 is "could not check", exit 1 is "checked and found drift". The clean box
+# must be COMPLETE as well as clean, or an audit that silently skipped half its
+# job reads the same as one that passed it.
+check "and the audit was complete, not merely quiet" "! grep -q 'NOT VERIFIED' '$T/clean.log'"
+
+echo "== drift: the env-completeness half actually FIRES"
+# The clean case above proves the check is SILENT on a good box, which is only half
+# a proof — a check that never speaks at all passes it too. This is the positive
+# control, and exit 1 rather than nonzero because exit 2 would mean it could not
+# look rather than that it looked and found something.
+drift_env; make_clean_box
+printf 'const c = process.env.FIXTURE_UNDECLARED_KEY;\n' >> "$T/repo/src/lib/config.ts"
+bash "$AUDIT" > "$T/env-undeclared.log" 2>&1
+check "an undeclared key the app reads is reported as DRIFT" "[ $? -eq 1 ]"
+check "and the key is named, so the operator knows which one" \
+  "grep -q 'FIXTURE_UNDECLARED_KEY' '$T/env-undeclared.log'"
+
+echo "== drift: a key read only by a TEST is not deployment config"
+# process.env.PATH in a test harness was reported undeclared on every box forever,
+# and a check that always reports drift is one people learn to ignore.
+drift_env; make_clean_box
+printf 'const p = process.env.FIXTURE_TEST_ONLY_KEY;\n' > "$T/repo/src/lib/spawn.test.ts"
+bash "$AUDIT" > "$T/env-testonly.log" 2>&1
+check "a test-only env read is not drift" "[ $? -eq 0 ]"
+check "and it is not named as undeclared" \
+  "! grep -q 'FIXTURE_TEST_ONLY_KEY' '$T/env-testonly.log'"
 
 echo "== drift: a missing unit is drift"
 drift_env; make_clean_box; rm -f "$T/units/faucet-thing.timer"
