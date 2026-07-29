@@ -88,6 +88,8 @@ export default function Home() {
   const [elapsed, setElapsed] = useState(0);
   const [powState, setPowState] = useState<{ hashes: number; difficulty: number } | null>(null);
   const [genErr, setGenErr] = useState("");
+  // Which lightwalletd we are talking to. Asked for by name in community feedback.
+  const [indexer, setIndexer] = useState<{ vendor: string; version: string } | null>(null);
   const [txSeen, setTxSeen] = useState<{ known: boolean | null; confirmations: number | null } | null>(null);
   // A claim held while the node syncs. Persisted so a reload (or coming back
   // tomorrow) keeps the place in line; fires on its own when the node is ready.
@@ -117,6 +119,22 @@ export default function Home() {
     load();
     const iv = setInterval(load, 4000);
     return () => { alive = false; clearInterval(iv); };
+  }, []);
+
+  // Fetched ONCE, deliberately not on the 4s poll. A server version does not
+  // change while someone has the page open, and /api/network costs a gRPC
+  // round-trip per call, so polling it would spend a request every four seconds
+  // to re-learn a constant. Failure is silent: no label is better than a wrong
+  // one, and nothing else on the page depends on this.
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/network")
+      .then((r) => r.json())
+      .then((n) => {
+        if (alive && n?.ok && n.vendor && n.version) setIndexer({ vendor: n.vendor, version: n.version });
+      })
+      .catch(() => {});
+    return () => { alive = false; };
   }, []);
 
   useEffect(() => {
@@ -466,6 +484,12 @@ export default function Home() {
           { k: "height", v: num(height) },
           { k: "balance", v: balance ? balance.toFixed(1) + " TAZ" : "0 TAZ" },
           { k: "miner", v: status?.miner?.active ? "on" : "off" },
+          // "indexer", never "node". This is the lightwalletd we query, not the
+          // Zcash node behind it, and calling it the node version would be wrong
+          // in front of the people who asked for it. Our own zebra version is not
+          // reachable from the app at all: everything goes via zallet or
+          // lightwalletd, so it needs a data path we do not have (#193).
+          ...(indexer ? [{ k: "indexer", v: `${indexer.vendor} ${indexer.version}` }] : []),
           ...(reserve
             ? [
                 {
