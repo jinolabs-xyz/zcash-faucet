@@ -492,6 +492,11 @@ Coinbase leaving that address is the event. Nothing else in the system moves it,
 and an independent explorer reporting the drop is not something our own node can
 be confused about.
 
+**Once #185 lands, read the shielded figure directly** and keep this as the
+independent cross-check. `/api/status` will then report the drippable pool
+separately from coinbase-awaiting-shielding, which is the read this step actually
+wants. Until then no such field exists, which is why the proof is on-chain.
+
 **Supporting reads, none of them sufficient alone:**
 
 - `refilling: false`, the hysteresis stopped on its own because the target was
