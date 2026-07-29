@@ -152,6 +152,497 @@ For a web-app-only change, rebuilding the overlay is enough (the compose
 `up -d --build` from the start/stop section). Wallet, chain state, ledger and
 TLS material all live in named volumes and survive rebuilds.
 
+## Recovering mined coinbase into spendable balance
+
+Written for the specific state this box is in after the July 2026 incident, and
+reusable for any future "coinbase is mined but not spendable" situation. Run it
+**only after the wallet is healthy**. The wallet repair is a different runbook
+and this one assumes it succeeded.
+
+The situation it exists for: 47.5 TAZ of mined coinbase sitting at the
+transparent miner address while the faucet served a shortage, because the reserve
+loop was not permitted to sweep it and said nothing about that (#172).
+
+**Read this warning before step 5.** The shield transaction that broke this
+wallet was created by the same operation this runbook performs. A previous
+`z_shieldcoinbase` was built, broadcast, never confirmed, expired, and left a
+retrieval-queue entry that crashed zallet 221 times. **A sweep that broadcasts
+and does not confirm recreates the incident.** Step 5 therefore watches for
+confirmation, not for broadcast.
+
+Every command below is a read unless it says otherwise. Two writes exist in the
+whole sequence: step 3's deploy and step 4's env edit.
+
+### 1. Put the verifier in place first
+
+Infra owns the mechanics ([their delivery install](#monitoring-and-alerts)); this
+sequences it first because it is what will tell you if the rest goes wrong.
+
+Installing the script alone is not enough. The watchdog ran for months with
+`alert=none`, `alert.sh` absent and `/etc/faucet/watchdog.env` missing, so 812
+"recovered" messages went to the journal and nowhere else.
+
+**The read that proves it:**
+
+```sh
+journalctl -u faucet-watchdog -n 20 | grep 'watchdog: starting'
+```
+
+**Proof is `alert=` naming a real target.** `alert=none` means the verifier is
+installed and still cannot tell anyone anything, which is the state that hid this
+incident. Do not proceed on `alert=none`.
+
+**Failure mode:** the line says `alert=none` after the install. The env file or
+`alert.sh` did not land. Fix that before continuing, because a recovery you cannot be
+told about failing is not a recovery you should attempt.
+
+### 2. Confirm the wallet is actually stable
+
+Two independent reads, because "it started" and "it stays up" are different
+claims and this wallet has satisfied the first 221 times.
+
+```sh
+# a. restart count, twice, at least 5 minutes apart. It must not move.
+docker inspect -f '{{.RestartCount}}' z3-testnet-zallet-1
+
+# b. the app's own view
+curl -s localhost:3000/api/status | jq .reserve
+```
+
+**The read that proves it:** the restart count is **identical** across two reads
+five minutes apart, and `.reserve.blindTicks` is `0`. A zero there means the app
+successfully read a balance from the wallet on its last tick, which is positive
+evidence that the wallet answers.
+
+**How to read `.reserve` honestly**, because two of its fields are easy to
+misread:
+
+| reading | what it means |
+|---|---|
+| `blindTicks: 0` | the balance was readable. Positive evidence the wallet answers. |
+| `blindTicks > 0` | the loop is **blind**, not idle. The wallet is not answering. |
+| `refilling: true` | the loop has ticked, so the background layer is alive. |
+| `refilling: false` | **proves nothing either way.** With an unreadable balance the loop correctly holds this at false. Do not read it as a fault. |
+| no `.reserve` object at all | the only reading that indicates a real instrumentation failure. |
+
+**Failure mode:** the restart count moves between the two reads. The wallet is
+still looping. **Stop.** Go back to the wallet repair. Nothing below is safe
+while the wallet cannot stay up, and a sweep attempted against a restarting
+wallet is how the expired transaction happened.
+
+### 3. Confirm the flag exists on the box
+
+#174 is merged, so `deploy.sh` appends this key when it is absent. That does not
+mean the box has it: `write_env` seeds the example onto a FRESH box only, so on
+this deployment the line arrives with the next `deploy.sh` run and not before.
+Check rather than assume.
+
+`FAUCET_SHIELD_COINBASE` must be **present** before anyone can set it, and it
+will not appear on its own. `write_env` copies `faucet.env.example` only on a
+fresh box, so a key added to the example never reaches an existing deployment.
+#174 makes `deploy.sh` append it when absent.
+
+```sh
+cd /opt/zcash-faucet && git pull
+NETWORK=testnet FAUCET_DOMAIN=$(cat /etc/faucet-domain) ./deploy/deploy.sh   # WRITE
+grep '^FAUCET_SHIELD_COINBASE' deploy/z3/faucet.env
+```
+
+**The read that proves it:** `FAUCET_SHIELD_COINBASE=false`. Present, and still
+false. It is deliberately not `true` yet: that is step 4 and it is not yours.
+
+**Failure mode:** `grep` finds nothing. The deploy did not run `write_env`, or ran
+an older `deploy.sh`. Check `git log -1` in the checkout matches the merged #174.
+Adding the line by hand also works and is safe, since the append never overwrites.
+
+### 3.5 Establish why the first shield died, before permitting a second
+
+**Precondition, not a post-hoc watch.** The previous `z_shieldcoinbase` was built,
+broadcast, and never confirmed. If whatever killed it is still true, a new shield
+dies the same way the moment step 4 flips the flag, and we will have done all of
+this to recreate the poison we just removed.
+
+**The cause is now measured, not guessed.** Tx 29 was created **4.3 seconds after
+the block at its own expiry height was mined**. The network had already reached
+4,217,981 when the wallet stamped that as the deadline, so the transaction was
+born with zero runway and could never have been included, whatever the fee or the
+relay.
+
+That puts the observed lag at almost exactly **40 blocks**, which is the value at
+which runway reaches zero by the arithmetic below. The derivation and the
+measurement agree, which is the strongest form this explanation can take.
+
+So the diagnosis question is closed. **The refusal below still binds**, for a
+different reason than when it was written: we now know what killed the transaction
+and we cannot yet prove the condition is gone, because no detector exists at the
+resolution that matters. #171's freeze check trips at 200 blocks and the fatal
+threshold is 40, so nothing we currently run can tell a safe node from one that
+will mint another corpse. Infra is building that gate. Until it ships, the answer
+to "is it safe to shield" is unverifiable rather than yes.
+
+What is already ruled out, so nobody spends time there:
+
+**Block production is not the cause.** VERIFIED: the network tip is past that
+expiry by more than two thousand blocks. A transaction expires because the chain
+*advanced* without including it, so miners were active throughout and ours was in
+none of their blocks. "Testnet was quiet" is not the explanation.
+
+**The fee is not the suspect.** VERIFIED from the code: the refiller passes
+`null` as the fee, so zallet computes it under ZIP 317 rather than us choosing a
+number. 15,000 zatoshi is three times ZIP 317's 5,000 marginal fee, which is a
+conformant fee for a small shield. A hand-picked too-low fee would be a good
+theory and it is not what happened.
+
+That leaves two candidates, and one of them we can already test with a field we
+built for something else.
+
+**Confirmed cause: our node was behind the network when it built the transaction.**
+A wallet sets `expiry_height` from *its own node's* tip. A node that has drifted
+behind builds a transaction whose expiry is already in the network's past, so it
+can never be mined regardless of fee or relay. It looks perfectly valid locally
+and is dead on arrival everywhere else. The 4.3-second measurement above is this
+mechanism caught in the act.
+
+I proposed this as one mechanism explaining two mysteries, the non-confirmation
+and the multiplicity, and **the multiplicity half was refuted by the box.** The
+wallet holds nine unmined transactions and eight are bare placeholder rows with no
+body, no fee, no expiry and no notes. They were never built by us and carry
+nothing. There was exactly **one** self-shield, and it is the one already removed.
+
+So repeated failing shields is not what happened, and the grounds for the refusal
+below are narrower than I first claimed: not "our shields systematically fail",
+but **"we cannot explain the one failure we saw"**. That is weaker and still
+sufficient to wait.
+
+**Separate the two questions, because only one of them can block recovery.**
+
+| question | tense | what it decides |
+|---|---|---|
+| was the node behind when it built the dead transactions | past | *why this happened*. Diagnosis. Does not block anything. |
+| is the node at the true tip **right now** | present | *whether it is safe to shield again*. This is the gate. |
+
+A node that drifted historically and has since caught up is **safe to shield
+from** once the poison is removed. So a confirmed diagnosis of past drift is not a
+reason to refuse the recovery, and nobody should read it that way. The only
+reading that blocks step 4 is a present-tense disagreement between our tip and
+the network's.
+
+**Two dependencies before this read works at all**, both found by SDE-Infra
+trying to run it rather than by me writing it.
+
+1. `externalHeight` and `frozen` now EXIST, since #171 merged, so the read below
+   works. It did not when this step was written, and the box only has them after
+   a deploy that carries #171. Confirm the field is present rather than reading a
+   `null` as an answer: absent and unverifiable look identical through `jq`.
+2. `nodeHeight` comes from **zallet's** `getwalletstatus`,
+   not from zebra directly. A dead wallet makes `getNodeStatus()` return null and
+   takes every height with it. So this gate cannot be satisfied while the wallet
+   is down, which makes it strictly dependent on step 2 having passed.
+
+Once #171 is merged and deployed and the wallet is up:
+
+```sh
+curl -s localhost:3000/api/status | jq '.node | {nodeHeight, externalHeight, frozen}'
+```
+
+**The fallback that works today, and is better for this purpose anyway.** Ask
+zebra its height directly and compare against a source that is not us. This has
+no zallet dependency, so it works while the wallet is still broken:
+
+```sh
+# our node, straight from zebra
+docker exec z3-testnet-zebra-1 \
+  curl -s --data '{"jsonrpc":"2.0","id":1,"method":"getblockcount","params":[]}' \
+  -H 'content-type: application/json' http://127.0.0.1:18232/ | jq .result
+
+# the network, per an aggregate we do not run
+curl -s https://hosh.zec.rocks/api/v0/zec.json \
+  | jq '[.servers[] | select(.chain=="test" and .online) | .height] | max'
+```
+
+**Proof required before step 4:** our tip lags the network by **5 blocks or
+fewer**, against an externally verified tip that is not null. That is the CTO's
+ruling and it is what #171's shield gate enforces, so the runbook and the detector
+agree by construction. The derivation below is why a gate exists at all and where
+the ceiling comes from.
+
+A wallet stamps `expiry_height = ourTip + 40`. Forty is the protocol default and
+it is what our own transparent sender uses too (`realsend.ts:91`, per ZIP 203).
+A transaction can only be mined while the network tip is at or below its expiry,
+so:
+
+```
+minable  requires  networkTip <= ourTip + 40
+                   i.e.  lag <= 40
+```
+
+At a lag of exactly 40 the transaction is born with zero runway, which is what
+happened to tx 29. It needs blocks in hand to propagate and be included, so the
+usable budget is 40 minus the lag.
+
+That makes 40 the hard ceiling and everything below it a judgement about margin.
+The gate is set at 5, leaving 35 blocks of runway, roughly three quarters of an
+hour at testnet's target spacing. Do not raise it toward 40 on the grounds that
+the arithmetic allows it: the arithmetic says where the transaction is guaranteed
+dead, not where it is safe.
+
+**This is a different number from `FAUCET_FREEZE_BLOCKS`, and using that one here
+would be a five-fold error.** #171's threshold is 200 because it answers "has our
+node stopped following the chain", where hundreds of blocks of drift is the
+signal. Broadcast safety asks "can a transaction this node builds still be
+mined", and the answer flips at 40. So a node 150 blocks behind is **not frozen**
+by #171 and **cannot produce a minable transaction**. Both statements are true at
+once, which is precisely why `frozen: false` must not be read as clearance to
+broadcast.
+
+A null or missing external tip is cannot-verify, which is not a pass.
+
+**Ruled out: the transaction never reached the network.** Relay and isolation were
+the other candidate and the box refutes them. Zebra reports 111 peers, and the
+mempool is empty as expected for a long-expired transaction. A shield that our
+node accepted and no miner ever saw would be a relay problem, and that is not what
+happened here.
+
+**If neither can be established, do not flip the flag.** An unexplained failure
+of exactly this operation is a reason to wait, not a reason to retry. The coinbase
+is not going anywhere, and the cost of guessing wrong is a second poisoned wallet
+plus another day of outage.
+
+
+### 4. The operator authorises the sweep
+
+**This step is the user's decision, not an automatic part of the sequence.**
+
+Setting this flag permits the faucet to broadcast a transaction that moves real
+funds. It is a money-path authorisation and the runbook deliberately stops here
+until a human makes it. Nobody should flip it because the previous five steps
+went well.
+
+**The go/no-go read, and it is a read from the box rather than a judgement.**
+#171 merged, so the app answers this itself. Take the answer, do not reason about
+the heights:
+
+```sh
+curl -s localhost:3000/api/status | jq '.node.shield'
+```
+
+| `state` | meaning | proceed? |
+|---|---|---|
+| `"safe"` | our node is within 5 blocks of an independently observed tip | yes |
+| `"unsafe"` | we are further behind than that, so a shield built now risks an expiry the network has passed | **no.** Wait. `lag` says by how much |
+| `"unverifiable"` | we could not establish the network tip at all, or the wallet did not report a height | **no.** Cannot-verify is not clearance, and this is the state that has to be actively refused rather than waited out. Find out which half is missing first |
+
+A null oracle reads as `unverifiable`, and that is a stop rather than a shrug. The
+whole reason this gate exists is that the transaction which broke this wallet was
+built while our view of the tip looked fine by every check we had at the time.
+
+Since #186 the sweep enforces this itself, so flipping the flag against an
+`unsafe` node produces refusals rather than a broadcast. That is the safe
+direction, and it is still the wrong way to find out: read the gate first so the
+authorisation means what the operator thinks it means.
+
+```sh
+# WRITE, and only on the user's explicit say-so
+sed -i 's/^FAUCET_SHIELD_COINBASE=false/FAUCET_SHIELD_COINBASE=true/' \
+  /opt/zcash-faucet/deploy/z3/faucet.env
+cd /opt/zcash-faucet/deploy/z3 && docker compose restart faucet
+```
+
+**The read that proves it:**
+
+```sh
+curl -s localhost:3000/api/status | jq '.reserve.shieldCoinbase, .reserve.refilling'
+```
+
+Expect `true` and `true`: permitted to sweep, and wanting to. If
+`shieldCoinbase` is still false the restart did not pick up the env.
+
+**Rollback, and its honest limit:** set the flag back to `false` and restart. That
+stops any *further* sweep. It does **not** unwind a transaction already
+broadcast, and nothing can. That is why the authorisation is a human decision and
+why step 5 exists.
+
+### 5. Watch the sweep move funds, and confirm
+
+This is the step that recreates the incident if it goes wrong, so watch for
+**confirmation** rather than for the attempt.
+
+```sh
+docker compose logs -f --since 5m faucet | grep '\[reserve\]'
+```
+
+Read the verdict, not the vibe. #174 makes each outcome distinct on purpose:
+
+| log line | meaning | action |
+|---|---|---|
+| `verdict=moved` | funds moved and the operation landed | proceed to step 6 |
+| `verdict=present-but-unspendable`, `remainingUTXOs` non-zero | coinbase **exists** and this account cannot spend it | **stop.** The miner address is not a receiver of `ZALLET_ACCOUNT`. Waiting will not fix it. This needs the address rewired or the key imported, which is its own decision. |
+| `verdict=nothing-visible`, `remainingUTXOs: 0` | the backend reports genuinely nothing mature | normal shortly after a block. Coinbase needs 100 confirmations. Wait, do not act. |
+| `verdict=count-not-reported` repeating | zallet does not report `remainingUTXOs` at all | we are **blind** on this signal. Not a failure of the sweep, a failure to observe it. Fall back to reading `spendableTaz` in step 6 and treat the sweep as unverified. |
+
+**The read that proves the confirmation, which is the one that matters:**
+
+```sh
+# a shield that broadcast but never confirmed is the exact failure that
+# expired and crashed this wallet. Height must ADVANCE past the tx.
+curl -s localhost:3000/api/status | jq '.node.nodeHeight, .reserve.spendableTaz'
+```
+
+`spendableTaz` **rising** is the only positive proof the shield confirmed. A
+broadcast with a flat `spendableTaz` over several blocks is the incident
+happening again.
+
+**Failure mode:** `emptySweeps` climbing while `refilling` stays true. The loop
+wants to refill and every attempt finds nothing. Read the verdict column above
+before waiting any longer: three of the four rows mean "waiting will not help".
+
+**The other failure mode, and it looks like nothing at all.** #186 wired the
+freshness gate into this sweep, so the step can now decline to broadcast before
+it ever asks the wallet. A refusal produces **no `verdict=` line**, and
+`emptySweeps` **stays at 0** on purpose, because the sweep did not look. So every
+signal in the table above reads normal while nothing moves, which is the shape
+this runbook exists to prevent. What a refusal emits instead:
+
+```
+[reserve] shield REFUSED (3 consecutive, state=unsafe, lag=40): our node is 40
+blocks behind the network (limit 5) ... the balance cannot recover on its own.
+```
+
+```sh
+curl -s localhost:3000/api/status | jq '.reserve | {shieldRefusals, lastRefusal, emptySweeps}'
+```
+
+| read | what it means, and what to do |
+|---|---|
+| `shieldRefusals: 0` | the gate is not what is stopping you. Use the verdict table. |
+| `shieldRefusals` climbing, `state: "unsafe"` | our node is behind the network by more than 5 blocks. **Wait**, do not force it. This is the gate doing its job, and the lag is in `lastRefusal.lag`. |
+| `shieldRefusals` climbing, `state: "unverifiable"` | we cannot establish the network tip, so we refuse rather than assume. Check the tip oracle before anything else, and note the wallet being down produces this too. |
+
+A refusal is not a fault to route around. It means a shield built now would carry
+an expiry the network has already passed, which is precisely how the transaction
+this runbook was written about died. Setting `FAUCET_SHIELD_COINBASE=true` is
+therefore **no longer sufficient on its own**: the sweep also needs the gate to
+pass, and step 3.5 is now the pre-check for that rather than a diagnosis of the
+past.
+
+### 6. Confirm the money is spendable and serve a real drip
+
+```sh
+curl -s localhost:3000/api/status | jq '.reserve'
+curl -s localhost:3000/api/ready | jq '.ready, .reason'
+```
+
+**Do not use `spendableTaz` as the proof.** It currently sums every pool
+`z_getbalanceforaccount` returns, transparent included (#185), so it counts the
+unshielded coinbase itself. That means this step's target is satisfiable **before
+the sweep has moved anything**, and a runbook whose success criterion can pass
+without the operation happening is worse than no criterion.
+
+**Success is TWO-SIDED, and today only one side is readable.** Shielding moves
+coinbase out of transparent and into the shielded pool, so the honest signal is
+both halves:
+
+| side | read | usable today? |
+|---|---|---|
+| transparent at the miner address **falls** | an independent explorer | **yes**, and it is the proof |
+| the **shielded** balance **rises** | `/api/status` | **no.** `spendableTaz` sums every pool including transparent (#185), so it cannot tell a shield from a no-op |
+
+That second row is why `spendableTaz` rising is not evidence: it already counts the
+unshielded coinbase, so it can be at target before the sweep moves anything, and a
+success criterion satisfiable without the operation is worse than none. Once #185
+splits the pools, the shielded figure becomes the primary read and the on-chain one
+stays as a cross-check where one source is not us.
+
+**The read that proves it today, because only shielding can make it true:** the
+transparent balance at the miner address **falls**, seen from a source that is not
+us.
+
+```sh
+curl -s "https://testnet.cipherscan.app/api/address/$FAUCET_MINER_ADDRESS" | jq .balance
+```
+
+Coinbase leaving that address is the event. Nothing else in the system moves it,
+and an independent explorer reporting the drop is not something our own node can
+be confused about.
+
+**Once #185 lands, read the shielded figure directly** and keep this as the
+independent cross-check. `/api/status` will then report the drippable pool
+separately from coinbase-awaiting-shielding, which is the read this step actually
+wants. Until then no such field exists, which is why the proof is on-chain.
+
+**Supporting reads, none of them sufficient alone:**
+
+- `refilling: false`, the hysteresis stopped on its own because the target was
+  reached, which is different from never having started. Note this is also
+  currently reachable via #185, so treat it as consistent rather than as proof.
+- `/api/ready` returns `ready: true` with a null reason
+- `emptySweeps: 0` after having been non-zero, which means a sweep moved funds
+  rather than never having attempted one
+- `shieldRefusals: 0` (merged with #186), which says the gate is not the thing
+  holding the recovery up. Climbing instead means read `lastRefusal` and go back
+  to the go/no-go in step 4
+- `node.canBuildTx`, a single boolean for the same verdict, arrives with #189 and
+  is **not on the box until that merges**. Until then read `node.shield.state`
+  and treat a missing field as unverifiable rather than as a pass
+
+Then the acceptance test that is not a status read: **claim a real drip** and
+confirm the txid on an independent explorer, not only in our own response. Our
+node agreeing with itself is what #170 and #171 are about.
+
+**Failure mode:** `spendableTaz` rose but `/api/ready` still refuses. Read
+`.reason`. `below reserve, refilling` means the sweep recovered less than
+`drip + minReserve`, so the sweep worked and was not enough. `node frozen behind
+network` is unrelated to this runbook and is #171's signal.
+
+### 7. Put the marks back, because the loop will never stop on its own
+
+Step 4 raises `FAUCET_RESERVE_LOW_TAZ` to force the sweep, and that is the only thing
+that starts it. `decideRefilling` starts refilling below LOW, stops at or above TARGET,
+and HOLDS in between, so the trigger is LOW and nothing else. Verified by running it
+against the box's real figures:
+
+```
+spendable 255.95, low 5,   target 15    -> refilling stays FALSE
+spendable 255.95, low 5,   target 1000  -> refilling stays FALSE   <- raising TARGET does nothing
+spendable 255.95, low 999, target 1000  -> refilling TRUE
+```
+
+The same arithmetic is why it keeps going: shielding moves coinbase from transparent to
+shielded, and while #185 counts both pools the reported spendable does not change, so it
+never reaches TARGET and holds `refilling: true`. That is what works through the backlog
+across many ticks, and it is also why it **never finishes**.
+
+So once the transparent balance at the miner address has stopped falling:
+
+```sh
+# back to the real marks
+sed -i.bak 's/^FAUCET_RESERVE_LOW_TAZ=.*/FAUCET_RESERVE_LOW_TAZ=5/;s/^FAUCET_RESERVE_TARGET_TAZ=.*/FAUCET_RESERVE_TARGET_TAZ=15/' \
+  /opt/zcash-faucet/deploy/z3/faucet.env
+cd /opt/zcash-faucet/deploy/z3 && docker compose restart faucet
+```
+
+**The read that proves it:** `.reserve.refilling` is `false` and `.reserve.emptySweeps`
+has stopped climbing.
+
+**Why this is a step and not a footnote.** Left as it is, the loop stays armed forever,
+enqueues a sweep every tick, finds nothing, and logs an empty sweep each time. Nothing
+breaks, and the logs fill with a symptom that looks exactly like the fault this runbook
+exists to diagnose. The next person reading `verdict=nothing-visible` on repeat will not
+know whether they are looking at a recovery that finished or a faucet that cannot see its
+own coinbase.
+
+Leaving `FAUCET_SHIELD_COINBASE=true` afterwards is a separate decision and a reasonable
+one: it is what lets the loop keep the shielded pool topped up from future mining. The
+marks are the part that must go back.
+
+### What this runbook does not cover
+
+- The wallet repair itself. Separate, and it comes first.
+- Rewiring the miner address if step 5 says `present-but-unspendable`. That is a
+  key-custody decision, not an operations step.
+- Turning mining back on. `FAUCET_MINER_ACTIVE` is a different flag for a
+  different question and nothing here needs it.
+
 ## Rollback
 
 `redeploy.sh` keeps the previously running image tagged `zcash-faucet:previous`
