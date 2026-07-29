@@ -118,10 +118,20 @@ export const config = {
     targetZatoshi: tazToZatoshi(num("FAUCET_RESERVE_TARGET_TAZ", 15)),
     lowZatoshi: tazToZatoshi(num("FAUCET_RESERVE_LOW_TAZ", 5)),
     checkSeconds: Math.max(5, Math.floor(num("FAUCET_RESERVE_CHECK_SECONDS", 30))),
+
+    // Whether the loop may sweep coinbase we already own into the wallet.
+    // Deliberately NOT the same switch as mining (#172): shielding our own
+    // coinbase is a self-transfer with no fork risk, while mining on a syncing
+    // node is what forks us. One flag for both meant turning mining off also
+    // turned fund recovery off, and 47.5 TAZ sat unswept through a shortage.
+    // Default false because it broadcasts a transaction, so it stays opt-in.
+    shieldCoinbase: process.env.FAUCET_SHIELD_COINBASE === "true",
   },
 
-  // Whether the refill loop may actually move funds (mine + shield). Off until
-  // tip cutover: mining against a still-syncing node would fork us off-chain.
+  // Whether we may MINE. The app itself never mines, that is the miner container
+  // and zebra, so this gates nothing here except arming the reserve loop to
+  // OBSERVE. Mining on a still-syncing node would fork us off the real chain,
+  // which is why it defaults off, and why it is not the switch for shielding.
   miner: { active: process.env.FAUCET_MINER_ACTIVE === "true" },
 
   // Public address shown on /donate so people can refill the faucet. Unified,

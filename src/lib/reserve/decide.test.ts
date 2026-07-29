@@ -44,18 +44,27 @@ test("zero balance starts a refill", () => {
 });
 
 test("a tick enqueues a step only when refilling with nothing in the way", () => {
-  assert.equal(shouldStartStep({ refilling: true, stepInFlight: false, queueDepth: 0 }), true);
+  assert.equal(shouldStartStep({ refilling: true, canAct: true, stepInFlight: false, queueDepth: 0 }), true);
 });
 
 test("no step when not refilling", () => {
-  assert.equal(shouldStartStep({ refilling: false, stepInFlight: false, queueDepth: 0 }), false);
+  assert.equal(shouldStartStep({ refilling: false, canAct: true, stepInFlight: false, queueDepth: 0 }), false);
 });
 
 test("no second step while one is in flight", () => {
-  assert.equal(shouldStartStep({ refilling: true, stepInFlight: true, queueDepth: 0 }), false);
+  assert.equal(shouldStartStep({ refilling: true, canAct: true, stepInFlight: true, queueDepth: 0 }), false);
 });
 
 test("refill yields whenever user traffic is queued", () => {
-  assert.equal(shouldStartStep({ refilling: true, stepInFlight: false, queueDepth: 1 }), false);
-  assert.equal(shouldStartStep({ refilling: true, stepInFlight: false, queueDepth: 20 }), false);
+  assert.equal(shouldStartStep({ refilling: true, canAct: true, stepInFlight: false, queueDepth: 1 }), false);
+  assert.equal(shouldStartStep({ refilling: true, canAct: true, stepInFlight: false, queueDepth: 20 }), false);
+});
+
+test("a tick forbidden to move funds does not enqueue a step it cannot finish", () => {
+  // Otherwise the loop burns a queue slot on a guaranteed no-op AND records a
+  // run of empty sweeps as if it had tried and found nothing (#172).
+  assert.equal(
+    shouldStartStep({ refilling: true, canAct: false, stepInFlight: false, queueDepth: 0 }),
+    false,
+  );
 });

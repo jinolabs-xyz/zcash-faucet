@@ -21,7 +21,8 @@ with an anti-abuse gate on.
 | `FAUCET_POW_ESCALATE_BITS` | `2` | Extra bits per recent claim from the same client. |
 | `FAUCET_POW_MAX_BITS` | `26` | Difficulty cap you ask for. The gate also applies a **solvable ceiling** derived from the TTL and a conservative browser hashrate, and issues the lower of the two, so a value a browser could not answer inside the challenge's life is silently not used. With the stock TTL that ceiling is 23 (#132). Buy a harder gate with a longer `FAUCET_POW_TTL_SECONDS`, not with this alone. |
 | `FAUCET_POW_TTL_SECONDS` | `180` | How long a **base-difficulty** challenge stays valid. Harder challenges get proportionally longer, and this value also sets the solvable ceiling above. |
-| `FAUCET_MINER_ACTIVE` | `false` | Whether the reserve loop may move funds. Off means it arms nothing at all. |
+| `FAUCET_MINER_ACTIVE` | `false` | Whether we may **mine**. The app never mines itself (that is the miner container and zebra), so this only arms the reserve loop to *observe*. It does **not** authorise moving funds, see the next row. |
+| `FAUCET_SHIELD_COINBASE` | `false` | Whether the reserve loop may **sweep coinbase we already own** into the wallet. This is the switch that authorises money movement, and it is separate from mining on purpose: shielding our own coinbase is a self-transfer with no fork risk, while mining on a syncing node is what forks us. One flag for both is what stranded 47.5 TAZ through a shortage (#172). Off by default because a shield broadcasts a transaction. With it off and a refill needed, the loop says so loudly every tick rather than sitting silent. |
 | `FAUCET_RESERVE_TARGET_TAZ` | `15` | Refill stops here. |
 | `FAUCET_RESERVE_LOW_TAZ` | `5` | Refill starts below here. Must be under target, checked at boot. |
 | `FAUCET_RESERVE_CHECK_SECONDS` | `30` | Reconciler interval. |

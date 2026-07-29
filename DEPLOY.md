@@ -21,9 +21,14 @@ FAUCET_SENDER=mock FAUCET_CHALLENGE=pow RATE_LIMIT_SALT=dev-salt npm start
 
 Open http://localhost:3000, hit **Generate a test address**, and claim.
 
-To watch the reserve loop refill, add `FAUCET_MINER_ACTIVE=true
+To watch the reserve loop refill, add `FAUCET_SHIELD_COINBASE=true
 FAUCET_MOCK_REFILL=true` and set the marks low, for example
 `FAUCET_RESERVE_LOW_TAZ=4 FAUCET_RESERVE_TARGET_TAZ=8`.
+
+`FAUCET_SHIELD_COINBASE` is the switch that lets the loop move funds, and it is
+deliberately **not** `FAUCET_MINER_ACTIVE` — that one is about mining, which the
+app does not do. Either flag arms the loop so it observes and reports; only this
+one lets it sweep (#172).
 
 **`npm run dev` does not bundle.** A `node:` import in `src/lib/zcash/t2z.ts`
 breaks the dev webpack build, so use `npm run build && npm start`.
