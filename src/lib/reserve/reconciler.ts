@@ -18,11 +18,12 @@
  * dies. Singleton on globalThis to survive dev hot reloads, same pattern as
  * the send queue.
  */
-import { config, ZATOSHI_PER_TAZ } from "../config";
-import { safeBalance } from "../zcash/send";
-import { getSendQueue } from "../zcash/queue";
-import { classifySweep, decideRefilling, shouldStartStep } from "./decide";
-import { getRefiller } from "./refiller";
+import { config, ZATOSHI_PER_TAZ } from "../config.ts";
+import { safeBalance } from "../zcash/send.ts";
+import { getSendQueue } from "../zcash/queue.ts";
+import { classifySweep, decideRefilling, shouldStartStep } from "./decide.ts";
+import type { ShieldFreshness } from "../zcash/shieldGate.ts";
+import { getRefiller } from "./refiller.ts";
 
 export interface ReserveStatus {
   targetTaz: number;
@@ -38,6 +39,14 @@ export interface ReserveStatus {
   blindTicks: number;
   /** Consecutive sweeps that found nothing to shield. */
   emptySweeps: number;
+  /**
+   * Consecutive ticks where the shield gate declined to broadcast. Separate from
+   * emptySweeps on purpose: this loop tried nothing, the other tried and found
+   * nothing, and only one of them means the node is the problem.
+   */
+  shieldRefusals: number;
+  /** Why the last refusal happened, so the reason is readable without the logs. */
+  lastRefusal: { state: ShieldFreshness; reason: string; lag: number | null } | null;
   /** UTXOs the backend last reported as still shieldable, when it says. */
   remainingUTXOs: number | null;
 }
@@ -50,6 +59,8 @@ class ReserveReconciler {
   private timer: NodeJS.Timeout | null = null;
   private blindTicks = 0;
   private emptySweeps = 0;
+  private shieldRefusals = 0;
+  private lastRefusal: ReserveStatus["lastRefusal"] = null;
   private remainingUTXOs: number | null = null;
 
   /**
@@ -130,6 +141,34 @@ class ReserveReconciler {
         .run(() => getRefiller().step(), config.sendTaskDeadlineMs)
         .then((outcome) => {
           this.remainingUTXOs = outcome.remainingUTXOs ?? null;
+
+          // A refusal is handled BEFORE the empty-sweep path and never touches
+          // emptySweeps, because the step did not look. Counting it would report
+          // "nothing to shield" for a tick that never asked the wallet, which is
+          // #174's conflation with the sign flipped and would send an operator
+          // hunting the miner address while the real fault is a stale node.
+          //
+          // Logged every tick rather than once, same as a blind tick. This state
+          // BLOCKS recovery: the loop is refilling, permitted to sweep, and still
+          // moving nothing, and the whole cost of #172 was sixteen hours of that
+          // being indistinguishable from an idle loop. Loud and repeated is the
+          // point, one line at the transition is not.
+          if (outcome.refused) {
+            this.shieldRefusals++;
+            this.lastRefusal = outcome.refused;
+            console.error(
+              `[reserve] shield REFUSED (${this.shieldRefusals} consecutive, state=${outcome.refused.state}, ` +
+                `lag=${outcome.refused.lag ?? "unknown"}): ${outcome.refused.reason}. ` +
+                "No coinbase will be swept until this clears, so the balance cannot recover on its own.",
+            );
+            return;
+          }
+          if (this.shieldRefusals > 0) {
+            console.log(`[reserve] shield gate cleared after ${this.shieldRefusals} refusal(s)`);
+          }
+          this.shieldRefusals = 0;
+          this.lastRefusal = null;
+
           if (outcome.moved) {
             if (this.emptySweeps > 0) {
               console.log(`[reserve] sweep moved funds after ${this.emptySweeps} empty sweep(s)`);
@@ -181,6 +220,8 @@ class ReserveReconciler {
       shieldCoinbase: config.reserve.shieldCoinbase,
       blindTicks: this.blindTicks,
       emptySweeps: this.emptySweeps,
+      shieldRefusals: this.shieldRefusals,
+      lastRefusal: this.lastRefusal,
       remainingUTXOs: this.remainingUTXOs,
     };
   }

@@ -62,6 +62,8 @@ export function shouldStartStep(opts: {
  * like a quiet tick with nothing to do. The backend reports `remainingUTXOs`
  * alongside the opid, and that number is what separates the cases.
  *
+ *   refused                   the step DECLINED to broadcast, so nothing was
+ *                             asked and nothing was learned about what is there
  *   moved                     funds actually moved
  *   nothing-visible           no opid and the backend REPORTED zero remaining:
  *                             genuinely empty, or nothing mature yet
@@ -78,14 +80,27 @@ export function shouldStartStep(opts: {
  * missing count to "nothing is there" would restore exactly the #172 blindness
  * this replaced, with tests passing over the top of it. A fact and an absence of
  * information are different things and the caller must be able to see which it has.
+ *
+ * `refused` is on the same footing and is checked first. A refusal carries no
+ * count because the wallet was never asked, so every other branch here would read
+ * it as a statement about coinbase: without this it lands on count-not-reported
+ * and points an operator at the miner address while the actual fault is a stale
+ * chain view. Keeping the function total over StepOutcome is what stops that,
+ * rather than relying on every caller to check `refused` before calling.
  */
 export type SweepVerdict =
+  | "refused"
   | "moved"
   | "nothing-visible"
   | "present-but-unspendable"
   | "count-not-reported";
 
-export function classifySweep(outcome: { moved: boolean; remainingUTXOs?: number }): SweepVerdict {
+export function classifySweep(outcome: {
+  moved: boolean;
+  refused?: unknown;
+  remainingUTXOs?: number;
+}): SweepVerdict {
+  if (outcome.refused) return "refused";
   if (outcome.moved) return "moved";
   if (typeof outcome.remainingUTXOs !== "number") return "count-not-reported";
   if (outcome.remainingUTXOs > 0) return "present-but-unspendable";

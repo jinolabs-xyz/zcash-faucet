@@ -16,6 +16,8 @@
 // .ts extension for node --test resolution, same pattern as pow.ts.
 import { config } from "../config.ts";
 import type { Refiller, StepOutcome } from "./refiller";
+import { getNodeStatus } from "../zcash/nodeStatus.ts";
+import { mayShield, readShieldFreshness } from "../zcash/shieldGate.ts";
 
 // Cap coinbase UTXOs per shield tx (zcashd's old default). A long mining
 // backlog gets swept over several steps instead of one oversized tx, and it
@@ -62,6 +64,32 @@ export class ZalletRefiller implements Refiller {
     const { account, address } = this.z;
     if (!account) throw new Error("ZALLET_ACCOUNT (account UUID) is required to shield coinbase.");
     if (!address) throw new Error("ZALLET_ADDRESS is required to shield coinbase.");
+
+    // THE GATE. This is the broadcast site, so this is where the refusal has to
+    // live: shieldGate.ts decides nothing until something declines to call the
+    // RPC, and a gate nobody calls is the same as a gate nobody deployed (#171).
+    //
+    // Fails CLOSED on purpose. mayShield() is true only for "safe", so both
+    // "unsafe" and "unverifiable" stop us here. Never write `state !== "unsafe"`,
+    // which is the one phrasing that lets an unverifiable node broadcast.
+    //
+    // Reading our height from getwalletstatus rather than a separate zebra call
+    // is deliberate: it is the height the WALLET believes, and the wallet is what
+    // stamps expiry_height onto the transaction. A zebra reading could be correct
+    // while the wallet's view is stale, and it is the wallet's view that kills a
+    // shield (#172: expiry already mined four seconds before the build).
+    //
+    // Reuse the gate getNodeStatus already computed instead of re-deriving it, so
+    // what /api/status shows an operator is the same verdict that allowed or
+    // refused the broadcast. Two independent readings of one oracle drift apart
+    // between calls and then the dashboard alibis a decision it never made.
+    // A null status is the wallet being unreachable, which is unverifiable, not
+    // a pass: readShieldFreshness(null) is what says so.
+    const status = await getNodeStatus();
+    const gate = status?.shield ?? readShieldFreshness(null);
+    if (!mayShield(gate)) {
+      return { moved: false, refused: { state: gate.state, reason: gate.reason, lag: gate.lag } };
+    }
 
     // z_shieldcoinbase <account-uuid> <toaddress> <fee=null> <limit> — sweep
     // mature coinbase from the account's transparent receivers into the faucet
