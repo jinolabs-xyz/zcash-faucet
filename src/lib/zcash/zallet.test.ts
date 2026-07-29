@@ -12,7 +12,6 @@ process.env.ZALLET_RPC_URL = "http://127.0.0.1:59999/";
 process.env.ZALLET_POLL_MS = "250";
 
 const { ZalletSender } = await import("./zalletsend.ts");
-const { ZalletRefiller } = await import("../reserve/zalletRefiller.ts");
 const { safeBalance } = await import("./send.ts");
 
 const UA_INFO: AddressInfo = { valid: true, kind: "unified", shielded: true };
@@ -92,26 +91,10 @@ test("send surfaces the wallet's failure message", async () => {
   );
 });
 
-test("refiller step sweeps by account UUID with the 50-UTXO cap", async () => {
-  let statusPolls = 0;
-  const calls = mockRpc({
-    z_shieldcoinbase: () => ({ opid: "opid-shield", shieldingUTXOs: 3 }),
-    z_getoperationstatus: () => [{ id: "opid-shield", status: ++statusPolls < 2 ? "queued" : "success" }],
-    z_getoperationresult: () => [{ id: "opid-shield", status: "success" }],
-  });
-  await new ZalletRefiller().step();
-  const shield = calls.find((c) => c.method === "z_shieldcoinbase");
-  assert.deepEqual(shield!.params, ["11111111-2222-3333-4444-555555555555", "utest1faucetunifiedaddressfixture", null, 50]);
-  assert.ok(calls.some((c) => c.method === "z_getoperationresult"), "collected the final result");
-});
-
-test("refiller step with nothing to shield is a clean no-op", async () => {
-  const calls = mockRpc({
-    z_shieldcoinbase: () => ({ remainingUTXOs: 0 }), // no opid: nothing eligible
-  });
-  await new ZalletRefiller().step();
-  assert.equal(calls.length, 1, "no polling without an opid");
-});
+// The refiller's two step() tests moved to ../reserve/shieldGateWiring.test.ts.
+// They need a primed tip oracle now that the sweep refuses to broadcast behind a
+// stale node, and without one they pass for the wrong reason: "nothing to shield"
+// stays green on a step that never asked the wallet anything.
 
 test("safeBalance is null, never a throw, when the wallet is unreachable", async () => {
   // Real fetch against the closed port from the env above.

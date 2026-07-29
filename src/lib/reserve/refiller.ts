@@ -17,12 +17,26 @@
  * from a loop that was not running at all (#172) — so the caller now gets enough
  * to tell those apart and say so.
  */
-import { config } from "../config";
-import { selectRefillerKind } from "./select";
+// .ts extensions throughout: Next resolves extensionless specifiers, node --test
+// does not, and this module had never been loaded by a test until the shield gate
+// needed the whole refill path exercised end to end.
+import { config } from "../config.ts";
+import type { ShieldFreshness } from "../zcash/shieldGate.ts";
+import { selectRefillerKind } from "./select.ts";
+import { ZalletRefiller } from "./zalletRefiller.ts";
 
 export interface StepOutcome {
   /** True only when funds actually moved: an operation was submitted and landed. */
   moved: boolean;
+  /**
+   * Set when the step DECLINED to broadcast, rather than trying and finding
+   * nothing. A refusal and an empty sweep are both `moved: false` and mean
+   * opposite things: one is "the chain view is too stale to build a valid
+   * transaction", the other is "there was nothing here". Folding them together
+   * would report a safety refusal as an absence of coinbase, which is the same
+   * mistake as reading a missing count as a zero (#174).
+   */
+  refused?: { state: ShieldFreshness; reason: string; lag: number | null };
   /**
    * UTXOs the backend still sees as shieldable, when it reports the figure.
    * Zero versus non-zero is what separates "there is nothing here" from "there
@@ -54,7 +68,11 @@ export function getRefiller(): Refiller {
     sender: config.sender,
   });
   if (kind === "zallet") {
-    cached = new (require("./zalletRefiller").ZalletRefiller)() as Refiller;
+    // Static import rather than the require() this used to do. `require` is not
+    // defined in an ES module, so the lazy version made every caller unloadable
+    // outside Next's CJS server bundle, and the lazy load bought nothing:
+    // zalletRefiller pulls in config and two pure modules.
+    cached = new ZalletRefiller();
   } else {
     cached = new NoopRefiller();
   }
