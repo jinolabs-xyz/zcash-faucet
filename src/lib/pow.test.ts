@@ -18,6 +18,7 @@ process.env.FAUCET_POW_BITS = "8";
 process.env.FAUCET_POW_ESCALATE_BITS = "0";
 
 const { issueChallenge, verifySolution } = await import("./pow.ts");
+const { config } = await import("./config.ts");
 
 const SALT = "pow-test-salt";
 const IP = "iphash-test-client";
@@ -55,8 +56,15 @@ test("issueChallenge: shape, expiry window, and a signature we can reproduce", a
 
   assert.match(ch.seed, /^[0-9a-f]{32}$/);
   assert.equal(ch.difficulty, 8); // baseBits, no escalation, no pressure yet
-  // exp = issue time + ttl (default 180s), allowing a second of clock movement
-  assert.ok(ch.exp >= before + 179 && ch.exp <= before + 181, `exp ${ch.exp} not ~${before}+180`);
+  // exp = issue time + the CONFIGURED base ttl, read rather than hardcoded: this
+  // pinned 180 literally and broke when the default moved to 600 to buy escalation
+  // headroom (#196). The property worth asserting is that exp tracks the config, not
+  // that the config holds a particular number.
+  const ttl = config.pow.ttlSeconds;
+  assert.ok(
+    ch.exp >= before + ttl - 1 && ch.exp <= before + ttl + 1,
+    `exp ${ch.exp} not ~${before}+${ttl}`,
+  );
   assert.equal(ch.sig, sign(ch.seed, ch.difficulty, ch.exp, IP));
 });
 
