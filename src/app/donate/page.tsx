@@ -16,7 +16,7 @@
 import type { CSSProperties } from "react";
 import Link from "next/link";
 import { config, ZATOSHI_PER_TAZ } from "@/lib/config";
-import { safeBalance } from "@/lib/zcash/send";
+import { safeBalance, safeDonations } from "@/lib/zcash/send";
 import { CopyAddress } from "./CopyAddress";
 import { BrandMark } from "../BrandMark";
 
@@ -48,11 +48,16 @@ export default async function Donate() {
   const donation = config.donationAddress.trim();
   const mining = config.miningAddress.trim();
 
-  const balanceZat = await safeBalance();
+  // Both reads are independent and neither blocks the page, so do not serialize them.
+  const [balanceZat, donations] = await Promise.all([safeBalance(), safeDonations()]);
   const spendable = balanceZat === null ? null : Number(balanceZat) / Number(ZATOSHI_PER_TAZ);
   const target = Number(config.reserve.targetZatoshi) / Number(ZATOSHI_PER_TAZ);
   const fillPct = spendable != null && target > 0 ? Math.min(100, Math.round((spendable / target) * 100)) : null;
   const dripsLeft = spendable != null && config.dripTaz > 0 ? Math.floor(spendable / config.dripTaz) : null;
+  // Trim trailing zeros so a whole-TAZ donation reads "5" and not "5.00000000".
+  const donatedTaz = donations
+    ? (Number(donations.zat) / Number(ZATOSHI_PER_TAZ)).toFixed(8).replace(/\.?0+$/, "")
+    : null;
 
   return (
     <div
@@ -130,6 +135,27 @@ export default async function Donate() {
                 the public ledger.
               </span>
             </div>
+          </div>
+        )}
+
+        {/* Only rendered when the wallet could actually attribute the history. A
+            counter that cannot tell a donation from our own mining income would
+            publish our block rewards as generosity, so no number beats a flattering
+            one. See tallyDonations for what does and does not qualify. */}
+        {donations && donations.count > 0 && (
+          <div style={{ border: "2px solid var(--color-divider)", padding: "14px 16px", display: "flex", flexDirection: "column", gap: 7 }}>
+            <span style={kicker}>Donations received</span>
+            <span style={{ fontFamily: "var(--mono)", fontSize: 17, fontWeight: 700 }}>
+              {donatedTaz} TAZ <span style={{ fontSize: 12, fontWeight: 400, color: muted(60) }}>
+                from {donations.count} shielded {donations.count === 1 ? "donation" : "donations"}
+              </span>
+            </span>
+            <span style={{ fontSize: 12, lineHeight: 1.55, color: muted(60), maxWidth: "52ch" }}>
+              Shielded receipts only, and it excludes anything the faucet paid itself, so this is
+              money that came from outside. Someone donating to the transparent receiver would not
+              appear here, because at this address that is indistinguishable from our own mining
+              income and we would rather undercount than flatter ourselves.
+            </span>
           </div>
         )}
 

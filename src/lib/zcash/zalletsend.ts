@@ -26,6 +26,13 @@ import { explorerTxUrl } from "./explorer.ts";
 // POLL_RETRIES lives in sendBudget.ts because the send queue's backstop deadline
 // is computed from it, and two copies would drift apart silently.
 import { POLL_RETRIES } from "./sendBudget.ts";
+import { tallyDonations, type DonationTally, type WalletTx } from "./donations.ts";
+
+/** Paging for the donation scan. 500 is well inside a single RPC response, and 20
+ *  pages covers 10,000 transactions, which is far more history than this testnet
+ *  faucet has. Past that we report the tally as incomplete rather than partial. */
+const DONATION_PAGE = 500;
+const DONATION_MAX_PAGES = 20;
 
 /** Render zatoshi as an exact ZEC decimal literal (no float drift). */
 function zatToZecLiteral(zat: bigint): string {
@@ -164,6 +171,40 @@ export class ZalletSender implements Sender {
       `[${JSON.stringify(this.z.account)},${this.z.minConf}]`,
     );
     return drippableZat(bal.pools ?? {});
+  }
+
+  /**
+   * Tally donations from the account's own transaction history (#192).
+   *
+   * Pages because the history holds one entry per drip as well, so it grows with
+   * traffic rather than with donations. `complete` is false if we hit the page cap,
+   * and the caller must not publish a total in that case: a partial scan of a
+   * cumulative sum is not a small number, it is a wrong one.
+   */
+  async donations(): Promise<{ tally: DonationTally; complete: boolean }> {
+    if (!this.z.account) throw new Error("FAUCET_ZALLET_ACCOUNT (account UUID) is required to read donations.");
+
+    const txs: WalletTx[] = [];
+    let complete = false;
+    for (let page = 0; page < DONATION_MAX_PAGES; page++) {
+      // z_listtransactions <account> <start_height> <end_height> <offset> <limit>
+      const batch = await this.rpc<WalletTx[]>(
+        "z_listtransactions",
+        `[${JSON.stringify(this.z.account)},null,null,${page * DONATION_PAGE},${DONATION_PAGE}]`,
+      );
+      const rows = Array.isArray(batch) ? batch : [];
+      txs.push(...rows);
+      if (rows.length < DONATION_PAGE) {
+        complete = true;
+        break;
+      }
+    }
+    if (!complete) {
+      console.warn(
+        `[donations] history exceeds ${DONATION_MAX_PAGES * DONATION_PAGE} transactions, so the tally is partial and will not be published`,
+      );
+    }
+    return { tally: tallyDonations(txs), complete };
   }
 
   async send(req: SendRequest): Promise<SendResult> {

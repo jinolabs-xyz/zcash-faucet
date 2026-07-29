@@ -56,6 +56,7 @@ export interface Sender {
 
 import { createRequire } from "node:module";
 import { ZalletSender } from "./zalletsend.ts";
+import type { DonationTally } from "./donations.ts";
 
 // The transparent backends load lazily because they drag in utxo-lib and the
 // t2z prover. createRequire because a bare require() does not exist in ESM.
@@ -127,4 +128,43 @@ export async function safeBalance(): Promise<bigint | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * Donations for display (#192). Null means "we cannot say", which the page renders
+ * as nothing at all rather than as a zero: a wallet we cannot reach has not told us
+ * that nobody donated.
+ *
+ * Cached because /donate is a server component, so without this every visitor costs
+ * a paged walk of the whole account history. Two minutes stale is invisible on a
+ * cumulative total and it caps the wallet load at one scan regardless of traffic.
+ *
+ * Only zallet can answer this. The transparent senders spend a wallet whose
+ * receipts we do not enumerate, and there is no account to attribute against.
+ */
+const DONATION_CACHE_MS = 120_000;
+let donationCache: { at: number; value: DonationTally | null } | null = null;
+
+export async function safeDonations(): Promise<DonationTally | null> {
+  if (config.sender !== "zallet") return null;
+  const now = Date.now();
+  if (donationCache && now - donationCache.at < DONATION_CACHE_MS) return donationCache.value;
+
+  let value: DonationTally | null = null;
+  try {
+    const { tally, complete } = await (getSender() as ZalletSender).donations();
+    // A partial scan of a cumulative total is wrong, not small, so publish nothing.
+    value = complete ? tally : null;
+  } catch (e) {
+    // Display-only, so this fails OPEN: /donate is the page that still matters when
+    // the faucet is dry, and it must not 500 because a counter could not load.
+    console.warn(`[donations] tally unavailable, hiding the counter: ${(e as Error).message}`);
+  }
+  donationCache = { at: now, value };
+  return value;
+}
+
+/** Test seam: the cache is module state and would leak between cases. */
+export function resetDonationCache(): void {
+  donationCache = null;
 }
