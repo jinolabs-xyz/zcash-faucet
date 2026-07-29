@@ -96,11 +96,38 @@ if [ "$FORCE" != "1" ]; then
   for t in "${targets[@]}"; do
     [ ! -f "$t" ] \
       || die "$t already exists, refusing to overwrite (nothing was written; FORCE=1 if you really mean it)"
+    # The sidecars count as the database existing. Deleting a db.sqlite while
+    # leaving its -wal behind used to walk straight through this refusal: no
+    # file, restore allowed, and then the stale -wal overwrote the backup we
+    # just installed (#216). A leftover -wal is a database in a crashed state,
+    # not an absent one, so say so instead of quietly proceeding.
+    for sidecar in "$t-wal" "$t-shm"; do
+      [ ! -f "$sidecar" ] \
+        || die "$sidecar exists without $t: that is a crashed database, not an absent one, and its contents would overwrite the restore. Nothing was written. Remove $t-wal and $t-shm, or FORCE=1 if you really mean it."
+    done
   done
 fi
 
 install_file() { # $1 src, $2 dest, $3 owner (uid:gid or "keep")
   install -m 600 "$1" "$2"
+  # A SQLite database is three files, and we were only replacing one of them.
+  #
+  # A process killed mid-write leaves a populated -wal and -shm beside the db.
+  # Install a backup over just the db and the next reader finds that stale -wal,
+  # replays it, and serves the PRE-CRASH data — the backup's contents are gone.
+  # No error, exit 0, and this function still logs "restored". Reproduced: the
+  # restored row is absent with the sidecars left, present with them removed
+  # (#216, found by SDE-App).
+  #
+  # Restoring over a crashed database is the MAIN path here, not an edge case:
+  # a wallet that crashed is exactly a wallet that left sidecars, which is the
+  # shape of the 2026-07-29 incident.
+  #
+  # Removed AFTER the install, so a crash between the two leaves the old
+  # database with its own sidecars — consistent — rather than the new database
+  # wearing the old one's WAL, which is the defect itself. Harmless for the
+  # identity file, which has no sidecars.
+  rm -f "$2-wal" "$2-shm"
   # Ownership matters (zallet runs as uid 1000 and will not read a file it
   # does not own) but it is not worth aborting a restore over: the data is
   # already written by this point, and dying here leaves a half-restored
