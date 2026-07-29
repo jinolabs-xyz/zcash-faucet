@@ -29,18 +29,25 @@ case "${1:-}" in
     ;;
   ps)
     shift
-    name=""
+    name=""; all=0
     while [ $# -gt 0 ]; do
       case "$1" in
         --filter) name="${2#name=}"; shift 2 ;;
         --format) shift 2 ;;
+        -a|--all) all=1; shift ;;
         *) shift ;;
       esac
     done
     for f in "${STUB_CONTAINERS:?}"/*; do
       [ -e "$f" ] || continue
       c="$(basename "$f")"
-      [ "$(cat "$f")" = "running" ] || continue
+      # -a means every state, which is the whole point of the flag: the watchdog
+      # calls `ps -a` precisely so it can SEE a stopped or restarting container.
+      # Honouring it only for 'running' made crash-loop behaviour untestable,
+      # which is how 812 false recoveries shipped.
+      if [ "$all" -eq 0 ]; then
+        [ "$(head -n1 "$f")" = "running" ] || continue
+      fi
       case "$c" in *"$name"*) echo "$c" ;; esac
     done
     ;;
@@ -53,7 +60,14 @@ case "${1:-}" in
   start)
     shift
     [ -f "${STUB_CONTAINERS:?}/$1" ] || { echo "no such container: $1" >&2; exit 1; }
-    echo running > "${STUB_CONTAINERS:?}/$1"
+    # A crash-looping container is the case the watchdog used to misread: the
+    # start is ACCEPTED (exit 0) and the container still does not stay up. Name
+    # it in STUB_CRASHLOOP to model that, because a stub where every start
+    # succeeds can only ever prove the happy path.
+    case " ${STUB_CRASHLOOP:-} " in
+      *" $1 "*) echo restarting > "${STUB_CONTAINERS:?}/$1" ;;
+      *)        echo running    > "${STUB_CONTAINERS:?}/$1" ;;
+    esac
     echo "$1"
     ;;
   inspect)

@@ -29,6 +29,18 @@ READY_GRACE_SECS="${WATCHDOG_READY_GRACE_SECS:-1800}" # 30 min un-ready before w
 ALERT_URL="${WATCHDOG_ALERT_URL:-}"                 # optional webhook for alerts
 ALERT_FORMAT="${WATCHDOG_ALERT_FORMAT:-slack}"      # slack (default) or discord
 
+# Crash-loop escalation. A container that needs starting again and again is not
+# being recovered, it is looping, and the old code could not tell the difference:
+# it announced "recovered" on every attempt, so 812 consecutive failures over 16
+# hours looked exactly like 812 successful self-heals and nobody was ever paged.
+# Counts live on disk so a watchdog restart does not reset the evidence.
+FLAP_ESCALATE="${WATCHDOG_FLAP_ESCALATE:-3}"        # consecutive attempts before we page
+FLAP_REALERT="${WATCHDOG_FLAP_REALERT:-60}"         # then re-page every N attempts
+STATE_DIR="${WATCHDOG_STATE_DIR:-/run/faucet-watchdog}"
+
+# 0 = loop forever (production). Tests set this to run an exact number of sweeps.
+MAX_TICKS="${WATCHDOG_MAX_TICKS:-0}"
+
 # Target containers, matched by name substring so exact compose prefixes and the
 # hand-run faucet-web container both resolve. Override any of these in the env.
 FAUCET_MATCH="${WATCHDOG_FAUCET_MATCH:-faucet-web}"
@@ -79,24 +91,64 @@ ensure_restart_policy() {
   fi
 }
 
-# Start a container back up if it is not in the running state.
+# Consecutive failed-start attempts per container, persisted so the count is not
+# lost if the watchdog itself restarts mid-loop.
+flap_file() { printf '%s/%s.flaps' "$STATE_DIR" "$(printf '%s' "$1" | tr -c 'A-Za-z0-9_.-' '_')"; }
+flap_get()  { cat "$(flap_file "$1")" 2>/dev/null || echo 0; }
+flap_set()  { mkdir -p "$STATE_DIR" 2>/dev/null; printf '%s' "$2" > "$(flap_file "$1")" 2>/dev/null || true; }
+
+# Start a container back up if it is not running, and report only what we can
+# actually establish. Three outcomes, because two were not enough:
+#
+#   recovered     it is running NOW and we had been restarting it, so the start held
+#   still-broken  it needed starting again, which is a loop rather than a fix
+#   cannot-tell   docker could not answer, which is not the same as "it is fine"
+#
+# `docker start` exiting 0 means the COMMAND was accepted, not that the container
+# stayed up. For a container already in 'restarting' docker is cycling it anyway,
+# so the call is a no-op that always succeeds. Claiming recovery there is how the
+# zallet crash loop stayed invisible: only the NEXT sweep seeing 'running' proves
+# anything, so recovery is announced one tick later or not at all.
 recover_if_down() {
   local name="$1"
   [ -n "$name" ] || return 0
+
   local state
-  state="$(docker inspect -f '{{.State.Status}}' "$name" 2>/dev/null || echo 'missing')"
-  case "$state" in
-    running) : ;;
-    missing) log "container matching '$name' not found yet (stack may still be coming up)";;
-    *)
-      log "container $name is '$state' — starting it"
-      if docker start "$name" >/dev/null 2>&1; then
-        alert "recovered $name from state '$state'"
-      else
-        alert "failed to start $name (state '$state')"
-      fi
-      ;;
-  esac
+  if ! state="$(docker inspect -f '{{.State.Status}}' "$name" 2>/dev/null)" || [ -z "$state" ]; then
+    # Could not ask. Absent container and unreachable daemon are different
+    # problems and neither is evidence of health, so assert neither.
+    log "cannot determine state of $name (docker inspect gave nothing) — asserting nothing"
+    return 0
+  fi
+
+  local prior
+  prior="$(flap_get "$name")"
+
+  if [ "$state" = "running" ]; then
+    if [ "$prior" -gt 0 ]; then
+      # This is the only place a recovery claim is honest: it is up on a later
+      # sweep than the one that started it.
+      alert "recovered $name: running again, verified on the sweep after $prior restart attempt(s)"
+      flap_set "$name" 0
+    fi
+    return 0
+  fi
+
+  local n=$((prior + 1))
+  flap_set "$name" "$n"
+  log "container $name is '$state' — starting it (consecutive attempt $n)"
+
+  if docker start "$name" >/dev/null 2>&1; then
+    log "start command accepted for $name; recovery UNCONFIRMED until a later sweep sees it running"
+  else
+    log "start command failed for $name (state '$state')"
+  fi
+
+  # Page on the threshold, then only periodically: an ongoing outage should keep
+  # reminding us without becoming the 812-messages-a-night noise it replaces.
+  if [ "$n" -eq "$FLAP_ESCALATE" ] || { [ "$n" -gt "$FLAP_ESCALATE" ] && [ $(( (n - FLAP_ESCALATE) % FLAP_REALERT )) -eq 0 ]; }; then
+    alert "STILL BROKEN: $name has needed $n consecutive restarts (state '$state') — this is a crash loop, not a recovery; it will not fix itself"
+  fi
 }
 
 faucet_misses=0
@@ -113,7 +165,9 @@ esac
 
 log "starting: interval=${INTERVAL}s faucet=${FAUCET_URL} ready_grace=${READY_GRACE_SECS}s alert=${ALERT_URL:-none} format=${ALERT_FORMAT}"
 
+ticks=0
 while true; do
+  ticks=$((ticks + 1))
   zebra="$(find_container "$ZEBRA_MATCH")"
   zallet="$(find_container "$ZALLET_MATCH")"
   faucet="$(find_container "$FAUCET_MATCH")"
@@ -157,5 +211,10 @@ while true; do
     fi
   fi
 
+  # Bounded only under test. Production leaves MAX_TICKS at 0 and never exits,
+  # and the sleep is skipped on the final tick so a suite is not paying for it.
+  if [ "$MAX_TICKS" -gt 0 ] && [ "$ticks" -ge "$MAX_TICKS" ]; then
+    break
+  fi
   sleep "$INTERVAL"
 done
