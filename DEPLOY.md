@@ -4,34 +4,69 @@ Two paths. Pick by what you are doing.
 
 | Path | Needs | Use it for |
 |---|---|---|
-| [Local, mock mode](#local-mock-mode) | Node 23, nothing else | Working on the app. No keys, no chain, no wallet, no coins move. |
+| [Local, against fakes](#local-against-fakes) | Node 23, nothing else | Working on the app. No keys, no chain, no wallet, no coins move. |
 | [A real server](#a-real-server-the-z3-stack) | One VM | The actual faucet: Zebra, Zallet, the miner, Caddy and TLS. |
 
-## Local, mock mode
+## Local, against fakes
 
-Runs the entire flow with no keys, no chain and no wallet. The mock sender keeps
-a simulated balance, so the low-balance guard, the empty state and the whole
-claim path are all exercisable.
+Runs the whole flow with no keys, no chain and no wallet. Two small doubles stand in
+for the network boundary, and everything above them is the shipped code: the real
+`ZalletSender`, the real ledger, the real anti-abuse gate.
 
 ```bash
-npm install
+npm ci
 npm run build
-FAUCET_SENDER=mock FAUCET_CHALLENGE=pow RATE_LIMIT_SALT=dev-salt npm start
+
+node scripts/fake-zallet.mjs &        # a wallet on :28299, 15 TAZ, synced
+node scripts/fake-hosh.mjs &          # a tip oracle on :28324, agreeing with it
+
+FAUCET_SENDER=zallet ZALLET_RPC_URL=http://127.0.0.1:28299/ \
+  ZALLET_ACCOUNT=fake-account ZALLET_ADDRESS=utest1fake ZALLET_MIN_CONF=0 \
+  FAUCET_CHALLENGE=none RATE_LIMIT_SALT=dev-salt \
+  HOSH_URL=http://127.0.0.1:28324/ \
+  npm start
 ```
 
-Open http://localhost:3000, hit **Generate a test address**, and claim.
+Open http://localhost:3000, hit **Generate a test address**, and claim. You should get
+a txid back.
 
-To watch the reserve loop refill, add `FAUCET_SHIELD_COINBASE=true
-FAUCET_MOCK_REFILL=true` and set the marks low, for example
+### Why each of those is there
+
+**Both doubles, not just the wallet.** `fake-zallet` reports a fixed node tip of
+3,650,000. Without `fake-hosh`, the app compares that against the real network, decides
+it is ~570,000 blocks behind, and refuses every claim with "our node is catching up",
+which is the freshness gate doing its job against an environment that is lying to it.
+Pointing `HOSH_URL` at the local oracle makes the two agree. CI's `smoke` and `ui` jobs
+do exactly this for the same reason.
+
+**`FAUCET_CHALLENGE=none`** turns off proof of work so a claim is one request. The gate
+defaults ON, so local work has to ask for it off by name.
+
+**`RATE_LIMIT_SALT`** can be anything here. It only has to be a real value in production,
+where the app refuses to boot on a placeholder because the anti-abuse challenge is signed
+with it.
+
+### Knobs on the wallet double
+
+| Variable | Default | Effect |
+|---|---|---|
+| `BALANCE_TAZ` | 15 | Starting balance. `0` boots an empty faucet, for the empty state |
+| `SYNC_SECONDS` | 0 | Seconds to reach tip, for the syncing state |
+| `SEND_FAILS` | unset | Every send fails, for the failure path |
+| `SEND_HANGS` | unset | Operations never finish, for the unknown-outcome path |
+| `SHIELD_TAZ` | 0 | TAZ each shield sweep adds, for watching the reserve loop refill |
+
+To watch the reserve loop refill, run the wallet with `SHIELD_TAZ=5`, add
+`FAUCET_SHIELD_COINBASE=true`, and set the marks low, for example
 `FAUCET_RESERVE_LOW_TAZ=4 FAUCET_RESERVE_TARGET_TAZ=8`.
 
 `FAUCET_SHIELD_COINBASE` is the switch that lets the loop move funds, and it is
-deliberately **not** `FAUCET_MINER_ACTIVE` — that one is about mining, which the
-app does not do. Either flag arms the loop so it observes and reports; only this
-one lets it sweep (#172).
+deliberately **not** `FAUCET_MINER_ACTIVE`, which is about mining and the app does not
+mine. Either flag arms the loop so it observes and reports. Only this one lets it sweep
+(#172).
 
-**`npm run dev` does not bundle.** A `node:` import in `src/lib/zcash/t2z.ts`
-breaks the dev webpack build, so use `npm run build && npm start`.
+**`npm run dev` does not bundle.** A `node:` import in `src/lib/zcash/t2z.ts` breaks the
+dev webpack build, so use `npm run build && npm start`.
 
 Every setting is in [CONFIGURATION.md](CONFIGURATION.md).
 
