@@ -30,12 +30,33 @@ check "no salt nag on a fresh box, because there is nothing to nag about" \
   "! grep -q 'set a real RATE_LIMIT_SALT' '$T/run1.log'"
 
 # deploy.sh's placeholder list is a COPY of PLACEHOLDER_MARKERS in
-# src/lib/saltGuard.ts, because a shell script cannot import TypeScript. If the
-# two drift, deploy.sh blesses an env the app rejects, which is #173 again.
-for marker in __fill_me__ change-me changeme; do
-  check "deploy.sh knows the '$marker' placeholder" "grep -q '$marker' '$REPO/deploy/deploy.sh'"
-  check "saltGuard.ts still rejects '$marker'" "grep -q '$marker' '$REPO/src/lib/saltGuard.ts'"
-done
+# src/lib/saltGuard.ts, because a shell script cannot import TypeScript. If the two
+# drift, deploy.sh blesses an env the app rejects, which is #173 again.
+#
+# Compared as SETS, and that detail is SDE-Infra's finding on #205. My first version
+# looped over three hardcoded marker names and grepped for each in both files, which
+# is a THIRD copy of the list and can only catch DELETION. Addition is the likelier
+# direction, because you add a marker at the moment you discover a new template
+# string: add "placeholder" to saltGuard.ts and every assertion still passed, while
+# deploy.sh left RATE_LIMIT_SALT=placeholder in place for the app to reject at boot.
+# The #188 shape, proving the mechanism while blind to the coverage.
+#
+# Read from each DECLARATION rather than grepped over the whole file, which is the
+# other half of their finding: a whole-file grep reported no drift for "placeholder"
+# because the PROSE COMMENT above contains that word. The comment explaining the
+# mechanism satisfied the check for a marker the code does not handle, which is #177
+# again.
+ts_markers(){ sed -n 's/.*PLACEHOLDER_MARKERS = \[\(.*\)\].*/\1/p' "$1" | tr -d '" ' | tr ',' '\n' | sort; }
+sh_markers(){ sed -n 's/.*PLACEHOLDER_MARKERS = (\(.*\)).*/\1/p'  "$1" | tr -d '" ' | tr ',' '\n' | sort; }
+GUARD_MARKERS="$(ts_markers "$REPO/src/lib/saltGuard.ts")"
+SHELL_MARKERS="$(sh_markers "$REPO/deploy/deploy.sh")"
+# The -n guards are not decoration. If either sed stops matching because a
+# declaration gets reformatted, the extraction is empty, two empty strings compare
+# EQUAL, and the check passes having verified nothing.
+check "both placeholder lists were actually found" \
+  "[ -n \"$GUARD_MARKERS\" ] && [ -n \"$SHELL_MARKERS\" ]"
+check "deploy.sh's placeholder list matches saltGuard.ts exactly, both directions" \
+  "[ \"$GUARD_MARKERS\" = \"$SHELL_MARKERS\" ]"
 check "overlay containers labeled and present" "[ -f '$STUB_CONTAINERS/zcash-faucet-faucet-1' ] && [ -f '$STUB_CONTAINERS/zcash-faucet-caddy-1' ]"
 
 ZVOL_DIR() { echo "$STUB_VOLROOT/z3-testnet-zallet"; }
