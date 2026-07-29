@@ -425,6 +425,36 @@ Every correction came from the same few habits, so the habits are rules.
     it merges or re-target the child first, and audit with the ancestor check
     rather than by reading anything.
 
+29. A negative control proves an instrument can say NO. It says nothing about
+    whether that instrument can say YES. Rule 26 is about our own detector firing;
+    this one is about a measuring device we merely READ, where the danger is that
+    "not there" and "I cannot see it" come back as the same value.
+
+    Concretely: to decide whether a coinbase was paid into a shielded pool, I chose
+    an explorer's per-transaction pool fields over writing a decoder, on the stated
+    grounds that an unvalidated parser would be a new source of error placed right
+    in front of the question. I then validated that choice against a known
+    TRANSPARENT coinbase. Every shielded field read zero, exactly as it should, and
+    I wrote down that a later non-zero reading would therefore mean something.
+
+    It would not. Our own recovery sweep, which moved ~50 TAZ into the shielded
+    pool, reads from the same endpoint as `hasShieldedData: false`, every pool
+    balance zero, `totalOutput: 0`, and `fee: 50.00125`: it cannot decode the pool,
+    so it books the entire shielded output as a fee. A transparent transaction and a
+    shielded one it cannot read are byte-identical through that instrument. My
+    control could not have caught it, because I validated only the arm that says no.
+
+    So: every oracle needs a known-POSITIVE control as well as a known-negative one,
+    and they have to return *distinguishable* answers before either is trusted. The
+    two-arm form of the same rule, which cost a wrong conclusion in the other
+    direction the same night: **if the control and the test agree, the comparison has
+    no discriminating power and cannot support either conclusion, including the
+    reassuring one.** A reproduction where both arms returned the same answer nearly
+    had one of us tell the other their funds-adjacent bug report was mistaken.
+
+    Worth keeping the provenance: this was not caught by diligence. It was caught by
+    reaching for the same explorer for an unrelated privacy claim and noticing a
+    50 TAZ fee. The rule is here so the next person does not need that accident.
 
 Money paths (send, ledger, reservation, PoW verify) never skip review, no
 matter how urgent the window. Docs and pure test additions may fast-track
