@@ -109,7 +109,6 @@ if [ "$FORCE" != "1" ]; then
 fi
 
 install_file() { # $1 src, $2 dest, $3 owner (uid:gid or "keep")
-  install -m 600 "$1" "$2"
   # A SQLite database is three files, and we were only replacing one of them.
   #
   # A process killed mid-write leaves a populated -wal and -shm beside the db.
@@ -123,11 +122,30 @@ install_file() { # $1 src, $2 dest, $3 owner (uid:gid or "keep")
   # a wallet that crashed is exactly a wallet that left sidecars, which is the
   # shape of the 2026-07-29 incident.
   #
-  # Removed AFTER the install, so a crash between the two leaves the old
-  # database with its own sidecars — consistent — rather than the new database
-  # wearing the old one's WAL, which is the defect itself. Harmless for the
-  # identity file, which has no sidecars.
+  # Removed BEFORE the install, and the order is the whole point. I had it the
+  # other way and the comment justifying it was wrong: I claimed a crash between
+  # the two "leaves the old database with its own sidecars", but after the install
+  # the db file is the NEW one, so that window leaves the new database wearing the
+  # old one's WAL — precisely the mismatched pair this fix exists to prevent, and
+  # worse than stale data, because WAL frames carry the old file's page numbers and
+  # replaying them over a different database is corruption rather than a rollback.
+  #
+  # This order has no silent window. All three states measured:
+  #
+  #   install-then-rm, crash before the rm  ->  "PRE-CRASH"                  SILENT
+  #   rm-then-install, crash before install ->  "no such table"              loud
+  #   rm-then-install, crash mid-install    ->  "disk image is malformed"    loud
+  #
+  # The middle one is louder than I first wrote here. I assumed it left the old
+  # database "consistent, minus uncheckpointed writes"; in fact when nothing has
+  # ever been checkpointed the base file holds no schema at all, so dropping the
+  # -wal surfaces as an error rather than as older data. Which is the point: every
+  # failure in this order announces itself, and the only order that can hand back
+  # plausible wrong data silently is the one we are moving away from (App's finding).
+  #
+  # Harmless for the identity file, which has no sidecars.
   rm -f "$2-wal" "$2-shm"
+  install -m 600 "$1" "$2"
   # Ownership matters (zallet runs as uid 1000 and will not read a file it
   # does not own) but it is not worth aborting a restore over: the data is
   # already written by this point, and dying here leaves a half-restored

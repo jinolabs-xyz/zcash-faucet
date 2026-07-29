@@ -121,6 +121,20 @@ gpg --batch --quiet -d --passphrase-fd 3 3<<<"test-passphrase" "$walarch" | tar 
 check "and the archived ledger CONTAINS the uncheckpointed row" \
   "[ \"\$(dumpdb '$T/walout/faucet-backup/faucet.db')\" = 'only-in-wal' ]"
 
+echo "== the sidecar removal happens BEFORE the install, not after (#216)"
+# A source-order assertion, which is unusual, and it is here because the two orders
+# are indistinguishable from the outside on a completed run — every behavioural test
+# below passes either way. The difference only shows in the crash window: with the
+# rm AFTER the install, a crash between them leaves the new db wearing the old db's
+# WAL and the next reader silently gets PRE-CRASH data. I shipped that order first
+# with a comment arguing it was the safe one, and the comment was wrong. Nothing
+# except this check would notice it being flipped back.
+rm_line="$(grep -n 'rm -f "\$2-wal"' "$REPO/deploy/z3/restore-backup.sh" | head -1 | cut -d: -f1)"
+inst_line="$(grep -n 'install -m 600 "\$1" "\$2"' "$REPO/deploy/z3/restore-backup.sh" | head -1 | cut -d: -f1)"
+check "both lines were found (an empty match would compare as equal and pass)" \
+  "[ -n '$rm_line' ] && [ -n '$inst_line' ]"
+check "sidecars are removed before the database is written" "[ '$rm_line' -lt '$inst_line' ]"
+
 echo "== restore over a CRASHED database returns the backup, not the pre-crash data (#216)"
 # The defect: a killed process leaves a populated -wal, restore replaced only the
 # .db, and the next reader replayed that stale -wal over the freshly installed
