@@ -251,8 +251,18 @@ else
   # REFUSE TO BOOT on a bad value. It proved the mechanism while missing the
   # coverage, which is the same shape as every false pass we chased today, aimed at
   # the guard itself (SDE-App).
+  # Test files are excluded, and that is a correctness fix rather than a
+  # convenience. A test reads the environment for its OWN harness — the clearest
+  # case is `env: { PATH: process.env.PATH }` when spawning a child — and PATH is
+  # not deployment configuration. Left in, the check reported PATH as undeclared
+  # on every box forever, and a check that always reports drift is a check people
+  # learn to ignore. Verified against main: excluding tests drops exactly one key,
+  # PATH, and keeps all six behaviour-gating ones (FAUCET_SHIELD_MAX_LAG_BLOCKS,
+  # FAUCET_FREEZE_BLOCKS, FAUCET_TIP_STALL_MS, FAUCET_CHALLENGE, RATE_LIMIT_SALT,
+  # HOSH_URL), so the coverage this check exists for is untouched.
   app_keys="$(grep -rhoE 'process\.env\.[A-Z_][A-Z0-9_]*|\b(num|str|bool|env)\("[A-Z_][A-Z0-9_]*"' \
-      "$REPO_DIR/src" --include='*.ts' --include='*.tsx' 2>/dev/null \
+      "$REPO_DIR/src" --include='*.ts' --include='*.tsx' \
+      --exclude='*.test.ts' --exclude='*.test.tsx' 2>/dev/null \
     | grep -oE '[A-Z_][A-Z0-9_]{3,}' | sort -u)"
   # The contract is the set of keys actually ASSIGNED somewhere, not every key
   # NAMED somewhere. Matching raw text let a key mentioned only in a comment count
