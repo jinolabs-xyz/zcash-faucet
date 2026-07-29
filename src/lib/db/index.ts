@@ -10,6 +10,8 @@ import { config } from "../config.ts";
 import { fingerprintAddress } from "../privacy.ts";
 import { SqliteDriver, D1Driver, type DbDriver } from "./driver.ts";
 import {
+  FARMING_SIGNALS_SQL,
+  farmingSignalsParams,
   RESERVE_SQL,
   reserveParams,
   LIVE_BLOCK_SQL,
@@ -116,4 +118,58 @@ export async function spendChallenge(sig: string, exp: number, now: number): Pro
   driver().run(PURGE_CHALLENGES_SQL, [now]).catch(() => {});
   const res = await driver().run(SPEND_CHALLENGE_SQL, [sig, exp]);
   return res.changes === 1;
+}
+
+export interface FarmingSignals {
+  claims1h: number;
+  distinctIps1h: number;
+  distinctAddrs1h: number;
+  taz1h: number;
+  claims24h: number;
+  distinctIps24h: number;
+  distinctAddrs24h: number;
+  taz24h: number;
+  /** claims per distinct IP over 24h, or null when there is nothing to divide. */
+  claimsPerIp24h: number | null;
+}
+
+/**
+ * Counts that make farming visible, over data the ledger already holds (#196).
+ *
+ * Returns null on any failure rather than throwing. This is a diagnostic read on a
+ * timer, and it must never be the reason a faucet stops serving: safeBalance() takes
+ * the same position for the same reason. A null here means "we could not look",
+ * which the caller says out loud rather than reporting zeros, because zeros would
+ * read as a quiet faucet and that is the #172 mistake in a new place.
+ */
+export async function farmingSignals(now: number): Promise<FarmingSignals | null> {
+  try {
+    const row = await driver().get<{
+      claims_1h: number; ips_1h: number; addrs_1h: number; zat_1h: number;
+      claims_24h: number; ips_24h: number; addrs_24h: number; zat_24h: number;
+    }>(FARMING_SIGNALS_SQL, farmingSignalsParams(now));
+    if (!row) return null;
+    const zatToTaz = (z: number) => z / 100_000_000;
+    return {
+      claims1h: row.claims_1h,
+      distinctIps1h: row.ips_1h,
+      distinctAddrs1h: row.addrs_1h,
+      taz1h: zatToTaz(row.zat_1h),
+      claims24h: row.claims_24h,
+      distinctIps24h: row.ips_24h,
+      distinctAddrs24h: row.addrs_24h,
+      taz24h: zatToTaz(row.zat_24h),
+      // Guarded rather than allowed to produce Infinity or NaN: a ratio with no
+      // denominator is not a big number, it is an absent one.
+      claimsPerIp24h: row.ips_24h > 0 ? row.claims_24h / row.ips_24h : null,
+    };
+  } catch (err) {
+    // SAY WHY. The first version swallowed this and returned a bare null, and when it
+    // fired for real against a ledger on a full disk I had to patch the code to learn
+    // that "disk I/O error" was the cause. An operator hitting the same line would
+    // have had no way to tell a broken ledger from an empty one. A ten-minute timer
+    // can afford a reason.
+    console.error(`[farming] ledger read failed: ${err instanceof Error ? err.message : err}`);
+    return null;
+  }
 }

@@ -103,6 +103,53 @@ export function reserveParams(o: {
   ];
 }
 
+/**
+ * Farming signals, one row, over the columns the ledger already holds.
+ *
+ * WHY IT EXISTS (#196). Every Sybil lever we discussed is untunable without this,
+ * and because the daily cap is GLOBAL the first symptom of farming is an empty
+ * faucet for everyone. "Ship a mitigation" and "know whether it worked" are
+ * different tasks and only one of them was on the plan.
+ *
+ * The number that matters is claims per DISTINCT ip_hash. One claim per IP is what
+ * honest use looks like. Many claims per IP is a shared NAT or a farm, and many IPs
+ * each claiming once is either healthy growth or a distributed farm, which is
+ * exactly the ambiguity the subnet column exists to resolve.
+ *
+ * PRIVACY. Every figure is a COUNT or a SUM over data already stored. No hash is
+ * returned, nothing new is retained, and nothing is more identifying than what the
+ * ledger holds to enforce a cooldown. Subnet spread is deliberately ABSENT rather
+ * than approximated, because the column does not exist yet (#213 blocks it) and a
+ * guessed figure would be worse than a missing one.
+ *
+ * Counts sent AND pending, excluding failed, which matches what the daily cap
+ * counts: a claim in flight is a claim.
+ *
+ * The windows are cut-and-newer with no upper bound, which is right for the only
+ * caller (a timer passing the current time) and is worth stating because it is not
+ * what it looks like: passing an EARLIER `now` widens the window rather than moving
+ * it back through history. There is no historical-window query here and this SQL
+ * should not be reused as one.
+ */
+export const FARMING_SIGNALS_SQL = `
+SELECT
+  (SELECT COUNT(*)                   FROM claims WHERE status <> 'failed' AND created_at >= ?) AS claims_1h,
+  (SELECT COUNT(DISTINCT ip_hash)    FROM claims WHERE status <> 'failed' AND created_at >= ?) AS ips_1h,
+  (SELECT COUNT(DISTINCT address_hash) FROM claims WHERE status <> 'failed' AND created_at >= ?) AS addrs_1h,
+  (SELECT COALESCE(SUM(amount_zat),0) FROM claims WHERE status <> 'failed' AND created_at >= ?) AS zat_1h,
+  (SELECT COUNT(*)                   FROM claims WHERE status <> 'failed' AND created_at >= ?) AS claims_24h,
+  (SELECT COUNT(DISTINCT ip_hash)    FROM claims WHERE status <> 'failed' AND created_at >= ?) AS ips_24h,
+  (SELECT COUNT(DISTINCT address_hash) FROM claims WHERE status <> 'failed' AND created_at >= ?) AS addrs_24h,
+  (SELECT COALESCE(SUM(amount_zat),0) FROM claims WHERE status <> 'failed' AND created_at >= ?) AS zat_24h
+`;
+
+/** Params for FARMING_SIGNALS_SQL, in statement order: four 1h cuts then four 24h. */
+export function farmingSignalsParams(now: number): number[] {
+  const hourCut = now - 3600;
+  const dayCut = now - 86_400;
+  return [hourCut, hourCut, hourCut, hourCut, dayCut, dayCut, dayCut, dayCut];
+}
+
 /** Most-recent live (blocking) claim for a column, for the "why blocked" message. */
 export const LIVE_BLOCK_SQL = (column: "address_hash" | "ip_hash") => `
 SELECT created_at, status FROM claims
