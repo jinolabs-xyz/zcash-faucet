@@ -18,7 +18,12 @@ CREATE TABLE IF NOT EXISTS claims (
   amount_zat    INTEGER NOT NULL,
   txid          TEXT,
   status        TEXT    NOT NULL DEFAULT 'pending',
-  created_at    INTEGER NOT NULL
+  created_at    INTEGER NOT NULL,
+  -- Coarser than ip_hash: a salted hash of the client's SUBNET, for limiting a
+  -- cloud range without limiting a person (#196). NULLABLE on purpose, because
+  -- rows written before it existed have none and a migration cannot invent one.
+  -- Nothing reads it yet.
+  subnet_hash   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_claims_addrhash ON claims(address_hash, created_at);
 CREATE INDEX IF NOT EXISTS idx_claims_iphash   ON claims(ip_hash, created_at);
@@ -30,6 +35,45 @@ CREATE TABLE IF NOT EXISTS used_challenges (
 );
 CREATE INDEX IF NOT EXISTS idx_used_exp ON used_challenges(exp);
 `;
+
+/**
+ * Schema changes for databases that ALREADY EXIST.
+ *
+ * SCHEMA above is `CREATE TABLE IF NOT EXISTS`, which is a NO-OP on a database that
+ * already has the table. So a column added there reaches a fresh database and never
+ * an existing one, and the next INSERT naming it fails every claim. That is #213,
+ * and it is the third appearance of one pattern: the artifact defining the contract
+ * only applies to something that does not exist yet (#172's env var, #177's
+ * write_env seeding the example once, and now the schema).
+ *
+ * Idempotent BY CONSTRUCTION rather than by swallowing an error. Each migration
+ * declares how to tell whether it is already applied, the runner checks that first,
+ * and nothing relies on parsing "duplicate column name" out of a driver's message.
+ * An error-swallowing runner cannot distinguish "already applied" from "broken", and
+ * that distinction is the whole job.
+ *
+ * Fresh and migrated databases must converge: every column added here is also in
+ * SCHEMA, and there is a test asserting the two paths produce identical tables.
+ * Otherwise a box's behaviour would depend on when its database was created.
+ */
+export interface Migration {
+  /** Stable name, for the log line when it runs. */
+  id: string;
+  /** Already applied when this table has this column. */
+  presentWhen: { table: string; column: string };
+  sql: string;
+}
+
+export const MIGRATIONS: readonly Migration[] = [
+  {
+    id: "claims.subnet_hash",
+    presentWhen: { table: "claims", column: "subnet_hash" },
+    sql: "ALTER TABLE claims ADD COLUMN subnet_hash TEXT",
+  },
+];
+
+/** Columns a table currently has. The idempotence check, and the test's read too. */
+export const TABLE_COLUMNS_SQL = (table: string) => `PRAGMA table_info(${table})`;
 
 /**
  * Spend a proof-of-work challenge, atomically. The PRIMARY KEY on sig makes the
