@@ -152,6 +152,199 @@ For a web-app-only change, rebuilding the overlay is enough (the compose
 `up -d --build` from the start/stop section). Wallet, chain state, ledger and
 TLS material all live in named volumes and survive rebuilds.
 
+## Recovering mined coinbase into spendable balance
+
+Written for the specific state this box is in after the July 2026 incident, and
+reusable for any future "coinbase is mined but not spendable" situation. Run it
+**only after the wallet is healthy**. The wallet repair is a different runbook
+and this one assumes it succeeded.
+
+The situation it exists for: 47.5 TAZ of mined coinbase sitting at the
+transparent miner address while the faucet served a shortage, because the reserve
+loop was not permitted to sweep it and said nothing about that (#172).
+
+**Read this warning before step 5.** The shield transaction that broke this
+wallet was created by the same operation this runbook performs. A previous
+`z_shieldcoinbase` was built, broadcast, never confirmed, expired, and left a
+retrieval-queue entry that crashed zallet 221 times. **A sweep that broadcasts
+and does not confirm recreates the incident.** Step 5 therefore watches for
+confirmation, not for broadcast.
+
+Every command below is a read unless it says otherwise. Two writes exist in the
+whole sequence: step 3's deploy and step 4's env edit.
+
+### 1. Put the verifier in place first
+
+Infra owns the mechanics ([their delivery install](#monitoring-and-alerts)); this
+sequences it first because it is what will tell you if the rest goes wrong.
+
+Installing the script alone is not enough. The watchdog ran for months with
+`alert=none`, `alert.sh` absent and `/etc/faucet/watchdog.env` missing, so 812
+"recovered" messages went to the journal and nowhere else.
+
+**The read that proves it:**
+
+```sh
+journalctl -u faucet-watchdog -n 20 | grep 'watchdog: starting'
+```
+
+**Proof is `alert=` naming a real target.** `alert=none` means the verifier is
+installed and still cannot tell anyone anything, which is the state that hid this
+incident. Do not proceed on `alert=none`.
+
+**Failure mode:** the line says `alert=none` after the install. The env file or
+`alert.sh` did not land. Fix that before continuing, because a recovery you cannot be
+told about failing is not a recovery you should attempt.
+
+### 2. Confirm the wallet is actually stable
+
+Two independent reads, because "it started" and "it stays up" are different
+claims and this wallet has satisfied the first 221 times.
+
+```sh
+# a. restart count, twice, at least 5 minutes apart. It must not move.
+docker inspect -f '{{.RestartCount}}' z3-testnet-zallet-1
+
+# b. the app's own view
+curl -s localhost:3000/api/status | jq .reserve
+```
+
+**The read that proves it:** the restart count is **identical** across two reads
+five minutes apart, and `.reserve.blindTicks` is `0`. A zero there means the app
+successfully read a balance from the wallet on its last tick, which is positive
+evidence that the wallet answers.
+
+**How to read `.reserve` honestly**, because two of its fields are easy to
+misread:
+
+| reading | what it means |
+|---|---|
+| `blindTicks: 0` | the balance was readable. Positive evidence the wallet answers. |
+| `blindTicks > 0` | the loop is **blind**, not idle. The wallet is not answering. |
+| `refilling: true` | the loop has ticked, so the background layer is alive. |
+| `refilling: false` | **proves nothing either way.** With an unreadable balance the loop correctly holds this at false. Do not read it as a fault. |
+| no `.reserve` object at all | the only reading that indicates a real instrumentation failure. |
+
+**Failure mode:** the restart count moves between the two reads. The wallet is
+still looping. **Stop.** Go back to the wallet repair. Nothing below is safe
+while the wallet cannot stay up, and a sweep attempted against a restarting
+wallet is how the expired transaction happened.
+
+### 3. Merge #174 so the flag exists on the box
+
+`FAUCET_SHIELD_COINBASE` must be **present** before anyone can set it, and it
+will not appear on its own. `write_env` copies `faucet.env.example` only on a
+fresh box, so a key added to the example never reaches an existing deployment.
+#174 makes `deploy.sh` append it when absent.
+
+```sh
+cd /opt/zcash-faucet && git pull
+NETWORK=testnet FAUCET_DOMAIN=$(cat /etc/faucet-domain) ./deploy/deploy.sh   # WRITE
+grep '^FAUCET_SHIELD_COINBASE' deploy/z3/faucet.env
+```
+
+**The read that proves it:** `FAUCET_SHIELD_COINBASE=false`. Present, and still
+false. It is deliberately not `true` yet: that is step 4 and it is not yours.
+
+**Failure mode:** `grep` finds nothing. The deploy did not run `write_env`, or ran
+an older `deploy.sh`. Check `git log -1` in the checkout matches the merged #174.
+Adding the line by hand also works and is safe, since the append never overwrites.
+
+### 4. The operator authorises the sweep
+
+**This step is the user's decision, not an automatic part of the sequence.**
+
+Setting this flag permits the faucet to broadcast a transaction that moves real
+funds. It is a money-path authorisation and the runbook deliberately stops here
+until a human makes it. Nobody should flip it because the previous five steps
+went well.
+
+```sh
+# WRITE, and only on the user's explicit say-so
+sed -i 's/^FAUCET_SHIELD_COINBASE=false/FAUCET_SHIELD_COINBASE=true/' \
+  /opt/zcash-faucet/deploy/z3/faucet.env
+cd /opt/zcash-faucet/deploy/z3 && docker compose restart faucet
+```
+
+**The read that proves it:**
+
+```sh
+curl -s localhost:3000/api/status | jq '.reserve.shieldCoinbase, .reserve.refilling'
+```
+
+Expect `true` and `true`: permitted to sweep, and wanting to. If
+`shieldCoinbase` is still false the restart did not pick up the env.
+
+**Rollback, and its honest limit:** set the flag back to `false` and restart. That
+stops any *further* sweep. It does **not** unwind a transaction already
+broadcast, and nothing can. That is why the authorisation is a human decision and
+why step 5 exists.
+
+### 5. Watch the sweep move funds, and confirm
+
+This is the step that recreates the incident if it goes wrong, so watch for
+**confirmation** rather than for the attempt.
+
+```sh
+docker compose logs -f --since 5m faucet | grep '\[reserve\]'
+```
+
+Read the verdict, not the vibe. #174 makes each outcome distinct on purpose:
+
+| log line | meaning | action |
+|---|---|---|
+| `verdict=moved` | funds moved and the operation landed | proceed to step 6 |
+| `verdict=present-but-unspendable`, `remainingUTXOs` non-zero | coinbase **exists** and this account cannot spend it | **stop.** The miner address is not a receiver of `ZALLET_ACCOUNT`. Waiting will not fix it. This needs the address rewired or the key imported, which is its own decision. |
+| `verdict=nothing-visible`, `remainingUTXOs: 0` | the backend reports genuinely nothing mature | normal shortly after a block. Coinbase needs 100 confirmations. Wait, do not act. |
+| `verdict=count-not-reported` repeating | zallet does not report `remainingUTXOs` at all | we are **blind** on this signal. Not a failure of the sweep, a failure to observe it. Fall back to reading `spendableTaz` in step 6 and treat the sweep as unverified. |
+
+**The read that proves the confirmation, which is the one that matters:**
+
+```sh
+# a shield that broadcast but never confirmed is the exact failure that
+# expired and crashed this wallet. Height must ADVANCE past the tx.
+curl -s localhost:3000/api/status | jq '.node.nodeHeight, .reserve.spendableTaz'
+```
+
+`spendableTaz` **rising** is the only positive proof the shield confirmed. A
+broadcast with a flat `spendableTaz` over several blocks is the incident
+happening again.
+
+**Failure mode:** `emptySweeps` climbing while `refilling` stays true. The loop
+wants to refill and every attempt finds nothing. Read the verdict column above
+before waiting any longer: three of the four rows mean "waiting will not help".
+
+### 6. Confirm the money is spendable and serve a real drip
+
+```sh
+curl -s localhost:3000/api/status | jq '.reserve'
+curl -s localhost:3000/api/ready | jq '.ready, .reason'
+```
+
+**The reads that prove it:**
+
+- `spendableTaz` at or near the recovered amount
+- `refilling: false`, the hysteresis stopped on its own because the target was
+  reached, which is different from never having started
+- `/api/ready` returns `ready: true` with a null reason
+
+Then the acceptance test that is not a status read: **claim a real drip** and
+confirm the txid on an independent explorer, not only in our own response. Our
+node agreeing with itself is what #170 and #171 are about.
+
+**Failure mode:** `spendableTaz` rose but `/api/ready` still refuses. Read
+`.reason`. `below reserve, refilling` means the sweep recovered less than
+`drip + minReserve`, so the sweep worked and was not enough. `node frozen behind
+network` is unrelated to this runbook and is #171's signal.
+
+### What this runbook does not cover
+
+- The wallet repair itself. Separate, and it comes first.
+- Rewiring the miner address if step 5 says `present-but-unspendable`. That is a
+  key-custody decision, not an operations step.
+- Turning mining back on. `FAUCET_MINER_ACTIVE` is a different flag for a
+  different question and nothing here needs it.
+
 ## Rollback
 
 `redeploy.sh` keeps the previously running image tagged `zcash-faucet:previous`
