@@ -280,10 +280,16 @@ behind builds a transaction whose expiry is already in the network's past, so it
 can never be mined regardless of fee or relay. It looks perfectly valid locally
 and is dead on arrival everywhere else.
 
-One mechanism accounts for two separate mysteries, which is why it is the leading
-explanation: it explains why a shield never confirmed, and it explains why there
-is more than one dead transaction. Every shield built during a lagging window was
-born unminable, so repeated attempts produce repeated corpses rather than one.
+I proposed this as one mechanism explaining two mysteries, the non-confirmation
+and the multiplicity, and **the multiplicity half was refuted by the box.** The
+wallet holds nine unmined transactions and eight are bare placeholder rows with no
+body, no fee, no expiry and no notes. They were never built by us and carry
+nothing. There was exactly **one** self-shield, and it is the one already removed.
+
+So repeated failing shields is not what happened, and the grounds for the refusal
+below are narrower than I first claimed: not "our shields systematically fail",
+but **"we cannot explain the one failure we saw"**. That is weaker and still
+sufficient to wait.
 
 **Separate the two questions, because only one of them can block recovery.**
 
@@ -298,21 +304,45 @@ reason to refuse the recovery, and nobody should read it that way. The only
 reading that blocks step 4 is a present-tense disagreement between our tip and
 the network's.
 
-The read for the present-tense question already exists, because it is what #171
-was built for:
+**Two dependencies before this read works at all**, both found by SDE-Infra
+trying to run it rather than by me writing it.
+
+1. `externalHeight` and `frozen` **do not exist on the deployed build.** They
+   arrive with #171, which is not merged. On today's box `.node` carries no such
+   fields, so the read below is not available yet.
+2. Even once #171 lands, `nodeHeight` comes from **zallet's** `getwalletstatus`,
+   not from zebra directly. A dead wallet makes `getNodeStatus()` return null and
+   takes every height with it. So this gate cannot be satisfied while the wallet
+   is down, which makes it strictly dependent on step 2 having passed.
+
+Once #171 is merged and deployed and the wallet is up:
 
 ```sh
 curl -s localhost:3000/api/status | jq '.node | {nodeHeight, externalHeight, frozen}'
 ```
 
-**Proof required before step 4:** `frozen: false`, `externalHeight` non-null, and
-`externalHeight - nodeHeight` within a few blocks. Not merely "not frozen":
-`frozen` only trips past `FAUCET_FREEZE_BLOCKS` (200), and a node 150 blocks
-behind is under that threshold while still building transactions that expire
-before they can be mined. Read the two heights and compare them yourself.
+**The fallback that works today, and is better for this purpose anyway.** Ask
+zebra its height directly and compare against a source that is not us. This has
+no zallet dependency, so it works while the wallet is still broken:
 
-A null `externalHeight` means cannot-verify, which is **not** a pass. Do not
-permit a broadcast while the one check that would catch this failure is blind.
+```sh
+# our node, straight from zebra
+docker exec z3-testnet-zebra-1 \
+  curl -s --data '{"jsonrpc":"2.0","id":1,"method":"getblockcount","params":[]}' \
+  -H 'content-type: application/json' http://127.0.0.1:18232/ | jq .result
+
+# the network, per an aggregate we do not run
+curl -s https://hosh.zec.rocks/api/v0/zec.json \
+  | jq '[.servers[] | select(.chain=="test" and .online) | .height] | max'
+```
+
+**Proof required before step 4:** the two numbers agree within a few blocks.
+
+Do not accept `frozen: false` as the gate on its own. It only trips past
+`FAUCET_FREEZE_BLOCKS` (200), so a node 150 blocks behind reads as healthy while
+still stamping transactions with an expiry that has already passed. Compare the
+numbers yourself. A null or missing external tip is cannot-verify, which is not a
+pass.
 
 **Candidate B: the transaction never reached the network.** Peer count, relay, and
 whether our mempool is reachable at all. This needs box reads and it is
