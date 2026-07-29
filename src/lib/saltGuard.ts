@@ -8,6 +8,14 @@
  * Pure function in the decide.ts mold so the rules are unit-testable without
  * reloading config. Only production with an active challenge gate is guarded.
  * Local dev and challenge=none run fine saltless.
+ *
+ * "Production" here means SERVING in production, not being COMPILED for it.
+ * `next build` sets NODE_ENV=production and then imports every route module to
+ * collect page data, so a build would otherwise demand the deploy secret at image
+ * build time. That is wrong twice over: a build serves no traffic, and requiring
+ * the real salt to be present in order to compile is how a secret ends up in a
+ * build argument or a CI log. Caught by CI when the gate's default changed to pow
+ * and every build started failing.
  */
 
 // Every placeholder our templates ship: deploy.sh writes __FILL_ME__, the z3
@@ -19,7 +27,10 @@ export function saltRejectionReason(opts: {
   salt: string;
   production: boolean;
   challenge: string;
+  /** True while `next build` is collecting page data. A build is not serving. */
+  buildPhase?: boolean;
 }): string | null {
+  if (opts.buildPhase) return null;
   if (!opts.production) return null;
   if (opts.challenge !== "pow" && opts.challenge !== "turnstile") return null;
 

@@ -245,5 +245,9 @@ const saltProblem = saltRejectionReason({
   salt: process.env.RATE_LIMIT_SALT ?? "",
   production: process.env.NODE_ENV === "production",
   challenge: config.challenge,
+  // next build sets this while importing every route to collect page data, and a
+  // build is not serving traffic. Without it, making pow the default meant no one
+  // could compile the app without the production secret in hand.
+  buildPhase: process.env.NEXT_PHASE === "phase-production-build",
 });
 if (saltProblem) throw new Error(saltProblem);

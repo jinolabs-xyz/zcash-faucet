@@ -46,3 +46,36 @@ test("a real random salt passes in production with either gate", () => {
   assert.equal(saltRejectionReason({ salt: REAL_SALT, production: true, challenge: "pow" }), null);
   assert.equal(saltRejectionReason({ salt: REAL_SALT, production: true, challenge: "turnstile" }), null);
 });
+
+test("a BUILD is not serving, so it needs no salt even with the gate on", () => {
+  // next build sets NODE_ENV=production and imports every route module to collect
+  // page data. Once pow became the default, that made every build demand the
+  // production secret, so `npm run build` failed for anyone without it. A build
+  // serves no traffic, and needing the real salt to compile is how a secret ends
+  // up in a build argument. CI caught this; my own check had not, because I
+  // grepped the log for "Compiled successfully", which prints BEFORE the step
+  // that failed.
+  for (const challenge of ["pow", "turnstile"]) {
+    assert.equal(
+      saltRejectionReason({ salt: "", production: true, challenge, buildPhase: true }),
+      null,
+    );
+    assert.equal(
+      saltRejectionReason({ salt: "__FILL_ME__", production: true, challenge, buildPhase: true }),
+      null,
+    );
+  }
+});
+
+test("but SERVING in production still refuses, so the exemption is narrow", () => {
+  // The whole value of the guard is here. If buildPhase ever leaks into a serving
+  // process, this is what fails.
+  assert.match(
+    saltRejectionReason({ salt: "", production: true, challenge: "pow", buildPhase: false }) ?? "",
+    /RATE_LIMIT_SALT is not set/,
+  );
+  assert.match(
+    saltRejectionReason({ salt: "", production: true, challenge: "pow" }) ?? "",
+    /RATE_LIMIT_SALT is not set/,
+  );
+});
