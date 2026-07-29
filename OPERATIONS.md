@@ -594,6 +594,47 @@ node agreeing with itself is what #170 and #171 are about.
 `drip + minReserve`, so the sweep worked and was not enough. `node frozen behind
 network` is unrelated to this runbook and is #171's signal.
 
+### 7. Put the marks back, because the loop will never stop on its own
+
+Step 4 raises `FAUCET_RESERVE_LOW_TAZ` to force the sweep, and that is the only thing
+that starts it. `decideRefilling` starts refilling below LOW, stops at or above TARGET,
+and HOLDS in between, so the trigger is LOW and nothing else. Verified by running it
+against the box's real figures:
+
+```
+spendable 255.95, low 5,   target 15    -> refilling stays FALSE
+spendable 255.95, low 5,   target 1000  -> refilling stays FALSE   <- raising TARGET does nothing
+spendable 255.95, low 999, target 1000  -> refilling TRUE
+```
+
+The same arithmetic is why it keeps going: shielding moves coinbase from transparent to
+shielded, and while #185 counts both pools the reported spendable does not change, so it
+never reaches TARGET and holds `refilling: true`. That is what works through the backlog
+across many ticks, and it is also why it **never finishes**.
+
+So once the transparent balance at the miner address has stopped falling:
+
+```sh
+# back to the real marks
+sed -i.bak 's/^FAUCET_RESERVE_LOW_TAZ=.*/FAUCET_RESERVE_LOW_TAZ=5/;s/^FAUCET_RESERVE_TARGET_TAZ=.*/FAUCET_RESERVE_TARGET_TAZ=15/' \
+  /opt/zcash-faucet/deploy/z3/faucet.env
+cd /opt/zcash-faucet/deploy/z3 && docker compose restart faucet
+```
+
+**The read that proves it:** `.reserve.refilling` is `false` and `.reserve.emptySweeps`
+has stopped climbing.
+
+**Why this is a step and not a footnote.** Left as it is, the loop stays armed forever,
+enqueues a sweep every tick, finds nothing, and logs an empty sweep each time. Nothing
+breaks, and the logs fill with a symptom that looks exactly like the fault this runbook
+exists to diagnose. The next person reading `verdict=nothing-visible` on repeat will not
+know whether they are looking at a recovery that finished or a faucet that cannot see its
+own coinbase.
+
+Leaving `FAUCET_SHIELD_COINBASE=true` afterwards is a separate decision and a reasonable
+one: it is what lets the loop keep the shielded pool topped up from future mining. The
+marks are the part that must go back.
+
 ### What this runbook does not cover
 
 - The wallet repair itself. Separate, and it comes first.
