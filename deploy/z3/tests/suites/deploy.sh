@@ -80,6 +80,37 @@ sed 's/^RATE_LIMIT_SALT=.*/RATE_LIMIT_SALT=a-real-salt/' "$D/z3/faucet.env" > "$
 run_deploy > "$T/run3.log" 2>&1
 check "salt-fixed re-run exits 0" "[ $? -eq 0 ]"
 check "no salt nag once set" "! grep -q 'RATE_LIMIT_SALT' '$T/run3.log'"
+echo "== deploy does not announce a faucet that is not staying up (#206)"
+# The bug this pins: deploy.sh printed "the faucet is live" for having REACHED
+# that line, so a fresh box could crash-loop through an entire chain sync with the
+# last thing on screen saying it worked. Same shape as the watchdog announcing a
+# recovery it never checked (#175).
+deploy_fresh_env
+STUB_FAUCET_STATE=restarting run_deploy > "$T/crashloop.log" 2>&1
+check "a crash-looping faucet makes deploy exit nonzero" "[ $? -ne 0 ]"
+check "and it does NOT say the faucet is live" "! grep -q 'faucet is live' '$T/crashloop.log'"
+check "and it says the site is NOT serving" "grep -q 'NOT serving' '$T/crashloop.log'"
+check "and it hands over the command that shows why" \
+  "grep -q 'logs --tail=50 faucet' '$T/crashloop.log'"
+check "and it does not blame an earlier step that really did succeed" \
+  "grep -q 'Nothing above failed' '$T/crashloop.log'"
+
+# A container in a restart loop passes THROUGH running, so one sample can land on
+# the good frame. This is the case a single-sample check would call healthy, and
+# it is the whole reason deploy.sh looks twice.
+deploy_fresh_env
+STUB_FAUCET_STATE="running restarting" run_deploy > "$T/flap.log" 2>&1
+check "a faucet up on the first look and gone on the second is caught" "[ $? -ne 0 ]"
+check "and that one is not announced as live either" \
+  "! grep -q 'faucet is live' '$T/flap.log'"
+
+# Positive control. Without it every check above would also pass if deploy.sh had
+# simply stopped saying "the faucet is live" at all.
+deploy_fresh_env
+run_deploy > "$T/healthy.log" 2>&1
+check "a faucet that stays up IS still announced as live" "[ $? -eq 0 ]"
+check "and the live message is the real one" "grep -q 'faucet is live' '$T/healthy.log'"
+
 echo "== miner address: a wrong one loses funds silently, so deploy refuses it"
 # The node mines, blocks are found, and the reward is unspendable or belongs to a
 # stranger. Nothing errors. So the real safety property is not just a nonzero
