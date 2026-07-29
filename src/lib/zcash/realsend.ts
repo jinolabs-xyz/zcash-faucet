@@ -14,7 +14,8 @@
  */
 import type { Sender, SendRequest, SendResult } from "./send.ts";
 import { faucetWallet } from "./wallet.ts";
-import { getAddressUtxos, getLatestBlock, getLightdInfo, sendRawTransaction, type Utxo } from "./grpc.ts";
+import { getAddressUtxos, getLightdInfo, sendRawTransaction, type Utxo } from "./grpc.ts";
+import { tipForExpiry } from "./expiryTip.ts";
 import { explorerTxUrl } from "./explorer.ts";
 
 // @bitgo/utxo-lib ships no usable types, so this is any by necessity.
@@ -75,10 +76,15 @@ export class RealSender implements Sender {
       throw new Error("Faucet balance too low to cover this drip + fee.");
     }
 
-    const [{ height }, { info }] = await Promise.all([
-      getLatestBlock().then((h) => ({ height: Number(h.height) })),
+    // Expiry comes from tipForExpiry (every endpoint, take the max), not from
+    // getLatestBlock's first-to-answer. A lagging endpoint that happens to be
+    // quick is #190, and stamping its tip builds a transaction that is born
+    // expired. Under-estimating kills, over-estimating just buys time.
+    const [tip, { info }] = await Promise.all([
+      tipForExpiry(),
       getLightdInfo().then((r) => ({ info: r.info })),
     ]);
+    const height = tip.height!; // tipForExpiry throws rather than returning null
     const branchId = parseInt(info.consensusBranchId, 16);
 
     const { hex, txid } = this.buildTransparentTx({
