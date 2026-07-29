@@ -12,7 +12,9 @@ nothing longer than needed.
   storing their address in the clear would deanonymize them in a way the
   blockchain itself does not. We refuse to build that record.
 - **No raw IPs.** Rate-limiting keys on a salted hash of the client IP, never
-  the IP itself.
+  the IP itself. The same is true of the **subnet** described below: the network is
+  hashed with the same salt and the same one-way function, so neither the address
+  nor the range it came from is recoverable from the ledger.
 - **No accounts, emails, cookies, analytics, or trackers.** Nothing to log in to,
   nothing following you.
 - **No logging of PII.** Addresses, IPs, and the faucet key are never written to
@@ -21,9 +23,34 @@ nothing longer than needed.
 ## What it keeps, and for how long
 
 The ledger holds only what's needed to enforce fair use: `address_hash`,
-`ip_hash`, amount, status, txid, timestamp. Rows are **purged** once they're
-older than the retention window (`max(cooldown, 24h) + 1h`), after which they can
-no longer affect a cooldown or the daily cap, so they're deleted.
+`ip_hash`, `subnet_hash`, amount, status, txid, timestamp. Rows are **purged**
+once they're older than the retention window (`max(cooldown, 24h) + 1h`), after
+which they can no longer affect a cooldown or the daily cap, so they're deleted.
+
+### About `subnet_hash`, because it is not the same kind of thing as `ip_hash`
+
+A single IP is one claimant. A cloud provider hands one person thousands, which is
+why a per-IP cooldown is a speed bump for anyone renting a range. So the ledger
+also stores a salted hash of the client's **network** (`/24` for IPv4, `/64` for
+IPv6) and caps claims per network per day.
+
+Being straight about what that means, because it cuts both ways:
+
+- It is **less** identifying than `ip_hash`. A `/24` is up to 256 addresses, so the
+  hash points at a neighbourhood rather than a door.
+- It is a **new kind** of fact about you. From `ip_hash` alone we cannot tell that
+  two claims are related. From `subnet_hash` we can tell they came from the same
+  network. We could not link two strangers before and now, if they share a range,
+  we can see that much.
+- It is why a **shared network can be limited by someone else's** claims. An office,
+  a university or a NAT looks like one network from outside. The per-network cap is
+  set well above what one person needs so this is rare, and it is a real cost we
+  chose rather than an accident.
+- An IP we cannot parse gets **no** subnet hash and is simply exempt from that rule,
+  rather than being put in a shared bucket with every other unparseable address.
+
+It is hashed with the same salt and never stored or logged in the clear, and it is
+purged on the same schedule as the rest of the row.
 
 ## Shielded-first
 

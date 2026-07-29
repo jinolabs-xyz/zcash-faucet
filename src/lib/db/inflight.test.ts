@@ -17,7 +17,10 @@ const COOLDOWN = 86_400;
 const CAP = 100_000_000_000n;
 const DRIP = 10_000_000n;
 const reserve = (address: string, now: number) =>
-  reserveClaim({ address, ipHash: null, amountZat: DRIP, now, cooldownSeconds: COOLDOWN, dailyCapZat: CAP });
+  // subnetHash null skips the subnet rule, so this file still exercises only the
+  // cooldown and cap behaviour it names.
+  reserveClaim({ address, ipHash: null, subnetHash: null, amountZat: DRIP, now,
+    cooldownSeconds: COOLDOWN, dailyCapZat: CAP, subnetDailyMax: 1_000_000 });
 
 test("a send we lost track of keeps blocking past the pending lease", async () => {
   // The bug (#51): the kept reservation stayed 'pending', and pending rows only
@@ -46,7 +49,8 @@ test("the in-flight amount still counts toward the daily cap after the lease", a
   const now = 1_800_100_000;
   const capForTwo = DRIP * 2n;
   const tight = (address: string, at: number) =>
-    reserveClaim({ address, ipHash: null, amountZat: DRIP, now: at, cooldownSeconds: COOLDOWN, dailyCapZat: capForTwo });
+    reserveClaim({ address, ipHash: null, subnetHash: null, amountZat: DRIP, now: at,
+      cooldownSeconds: COOLDOWN, dailyCapZat: capForTwo, subnetDailyMax: 1_000_000 });
 
   const a = await tight("utest1cap-a", now);
   assert.equal(a.ok, true);

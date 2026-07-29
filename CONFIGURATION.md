@@ -14,6 +14,7 @@ with an anti-abuse gate on.
 | `FAUCET_DRIP_TAZ` | `0.1` | Amount per claim. |
 | `FAUCET_COOLDOWN_SECONDS` | `86400` | Per-address cooldown. |
 | `FAUCET_DAILY_CAP_TAZ` | `100` | Ceiling across all claims in 24h. |
+| `FAUCET_SUBNET_DAILY_MAX` | `20` | Claims allowed from one **subnet** per rolling 24h (/24 for IPv4, /64 for IPv6). The per-IP cooldown already limits one address to one claim a day, so a /24 otherwise permits 256. This is the lever that makes a block of cloud IPs cost what a block of cloud IPs should, and a residential claimer never meets it. **The number is a judgement, not a measurement**, and deliberately generous: too low turns away real people sharing an ISP block, too high does nothing. Tighten once the farming counts say what normal looks like (#196). |
 | `FAUCET_MIN_RESERVE_TAZ` | `0` | Floor the faucet refuses to spend below. |
 | `FAUCET_CHALLENGE` | `turnstile` if its secret is set, else `pow` | Anti-abuse gate: `pow`, `turnstile`, `none`. Defaults ON: turning it off is something you ask for by name. `pow` needs a real `RATE_LIMIT_SALT` or the app refuses to boot. |
 | `RATE_LIMIT_SALT` | none | **Required in production** with a gate on. Signs PoW challenges and salts IP hashes. Boot fails on an empty or placeholder value. |

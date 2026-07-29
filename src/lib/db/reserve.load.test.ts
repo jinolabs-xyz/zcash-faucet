@@ -28,10 +28,14 @@ function reserve(db: InstanceType<typeof Database>, addr: string, ip: string, no
     ...reserveParams({
       addressHash: addr,
       ipHash: ip,
+      // "" is the skip sentinel for the subnet rule, so this file keeps testing the
+      // cap and the per-IP cooldown under concurrency and nothing else.
+      subnetHash: "",
       amountZat: DRIP,
       now,
       cooldownSeconds: COOLDOWN,
       dailyCapZat: CAP,
+      subnetDailyMax: 1_000_000,
     }),
   );
 }
