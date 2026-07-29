@@ -82,6 +82,22 @@ export const config = {
   cooldownSeconds: num("FAUCET_COOLDOWN_SECONDS", 86_400),
   dailyCapZatoshi: tazToZatoshi(num("FAUCET_DAILY_CAP_TAZ", 100)),
 
+  /**
+   * Claims allowed from one SUBNET per rolling 24h (#196).
+   *
+   * The per-IP cooldown already limits one address to one claim a day, so a /24
+   * currently permits 256. This is the lever that makes a block of cloud IPs cost
+   * what a block of cloud IPs should, while a residential claimer never meets it.
+   *
+   * THE NUMBER IS A JUDGEMENT, NOT A MEASUREMENT, and it is deliberately generous.
+   * Too low turns away real people who share an ISP block, which is the same harm
+   * the datacenter-range idea carries and the reason it is not first. Too high just
+   * does nothing. We have no data on real subnet spread yet, which is what the
+   * farming counts (#214) exist to produce, so this starts loose and tightens once
+   * the counts say what normal looks like.
+   */
+  subnetDailyMax: Math.max(1, Math.floor(num("FAUCET_SUBNET_DAILY_MAX", 20))),
+
   // How many reverse proxies YOU operate in front of the app (nginx, Cloudflare,
   // Vercel, …). Each appends to X-Forwarded-For, so only the last N hops are
   // trustworthy — anything further left is client-supplied and spoofable. 0 =

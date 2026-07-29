@@ -19,7 +19,7 @@ import { getNodeStatus } from "@/lib/zcash/nodeStatus";
 import { mayBuildTransaction, readChainFreshnessAsking } from "@/lib/zcash/shieldGate";
 import { getSendQueue, QueueFullError, TaskDeadlineError } from "@/lib/zcash/queue";
 import { reserveClaim, finalizeClaim } from "@/lib/db";
-import { fingerprintIp } from "@/lib/privacy";
+import { fingerprintIp, fingerprintSubnet } from "@/lib/privacy";
 import { clientIp } from "@/lib/clientIp";
 import { withApi, apiError } from "@/lib/api";
 
@@ -50,6 +50,11 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
   // trust an IP for this request, so the IP-based limit is skipped.
   const rawIp = clientIp(req);
   const ipHash = rawIp ? fingerprintIp(rawIp) : null;
+  // Derived HERE because it needs the raw IP, and the ledger layer deliberately only
+  // ever sees fingerprints. Null when the address will not parse, which skips the
+  // subnet rule for this request rather than dropping the client into a shared bucket
+  // with every other unparseable one (#196).
+  const subnetHash = rawIp ? fingerprintSubnet(rawIp) : null;
 
   let body: z.infer<typeof BodySchema>;
   try {
@@ -148,12 +153,29 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
   const reservation = await reserveClaim({
     address,
     ipHash,
+    subnetHash,
     amountZat: config.dripZatoshi,
     now,
     cooldownSeconds: config.cooldownSeconds,
     dailyCapZat: config.dailyCapZatoshi,
+    subnetDailyMax: config.subnetDailyMax,
   });
   if (!reservation.ok) {
+    // A subnet refusal is worth SAYING, and the other two are not. A cooldown is
+    // ordinary and a global cap is visible in the reserve figures, but this is a new
+    // rule whose threshold is a judgement rather than a measurement (#196), so the
+    // only way to learn whether it ever lands on a real person is to log when it
+    // fires. Pairs with the farming counts: many refusals with a low
+    // claims-per-IP ratio would mean the cap is too tight, not that we caught a farm.
+    if (reservation.kind === "subnet") {
+      api.logError(
+        `claim refused by the per-subnet daily cap (limit ${config.subnetDailyMax}). If this ` +
+          "fires while claims-per-distinct-IP stays near 1, the cap is too tight rather than working.",
+        "subnet cap",
+      );
+    }
+    // 429 for both cooldown kinds and the subnet rule, because all three are "you,
+    // later". 503 stays for the global cap, which is "the faucet, later".
     return apiError(reservation.kind === "cap" ? 503 : 429, reservation.reason, api, {
       retryAfterSeconds: reservation.retryAfterSeconds,
     });

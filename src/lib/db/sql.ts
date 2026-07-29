@@ -21,8 +21,8 @@ CREATE TABLE IF NOT EXISTS claims (
   created_at    INTEGER NOT NULL,
   -- Coarser than ip_hash: a salted hash of the client's SUBNET, for limiting a
   -- cloud range without limiting a person (#196). NULLABLE on purpose, because
-  -- rows written before it existed have none and a migration cannot invent one.
-  -- Nothing reads it yet.
+  -- rows written before it existed have none and a migration cannot invent one,
+  -- so the cap treats a NULL as out of scope rather than as a shared bucket.
   subnet_hash   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_claims_addrhash ON claims(address_hash, created_at);
@@ -108,8 +108,8 @@ export const PENDING_LEASE_SECONDS = 120;
  * single-threaded). Anonymous `?` params for portability across drivers.
  */
 export const RESERVE_SQL = `
-INSERT INTO claims (address_hash, ip_hash, amount_zat, status, created_at)
-SELECT ?, ?, ?, 'pending', ?
+INSERT INTO claims (address_hash, ip_hash, subnet_hash, amount_zat, status, created_at)
+SELECT ?, ?, ?, ?, 'pending', ?
 WHERE NOT EXISTS (
   SELECT 1 FROM claims WHERE address_hash = ?
     AND ((status='sent' AND created_at > ?) OR (status='pending' AND created_at > ?))
@@ -119,6 +119,12 @@ AND (
     SELECT 1 FROM claims WHERE ip_hash = ?
       AND ((status='sent' AND created_at > ?) OR (status='pending' AND created_at > ?))
   )
+)
+AND (
+  ? = '' OR (
+    SELECT COUNT(*) FROM claims WHERE subnet_hash = ?
+      AND ((status='sent' AND created_at >= ?) OR (status='pending' AND created_at >= ?))
+  ) < ?
 )
 AND (
   (SELECT COALESCE(SUM(amount_zat), 0) FROM claims
@@ -131,19 +137,23 @@ AND (
 export function reserveParams(o: {
   addressHash: string;
   ipHash: string;
+  /** "" when the client's subnet could not be derived, which SKIPS the subnet rule. */
+  subnetHash: string;
   amountZat: number;
   now: number;
   cooldownSeconds: number;
   dailyCapZat: number;
+  subnetDailyMax: number;
 }): (string | number)[] {
   const cooldownCut = o.now - o.cooldownSeconds;
   const leaseCut = o.now - PENDING_LEASE_SECONDS;
   const since = o.now - 86_400;
   return [
-    o.addressHash, o.ipHash, o.amountZat, o.now, // INSERT ... SELECT
-    o.addressHash, cooldownCut, leaseCut, //         address NOT EXISTS
-    o.ipHash, o.ipHash, cooldownCut, leaseCut, //    ip branch (guard + NOT EXISTS)
-    since, leaseCut, o.amountZat, o.dailyCapZat, //  daily cap
+    o.addressHash, o.ipHash, o.subnetHash, o.amountZat, o.now, // INSERT ... SELECT
+    o.addressHash, cooldownCut, leaseCut, //                      address NOT EXISTS
+    o.ipHash, o.ipHash, cooldownCut, leaseCut, //                 ip branch (guard + NOT EXISTS)
+    o.subnetHash, o.subnetHash, since, leaseCut, o.subnetDailyMax, // subnet branch
+    since, leaseCut, o.amountZat, o.dailyCapZat, //               global daily cap
   ];
 }
 
@@ -163,8 +173,10 @@ export function reserveParams(o: {
  * PRIVACY. Every figure is a COUNT or a SUM over data already stored. No hash is
  * returned, nothing new is retained, and nothing is more identifying than what the
  * ledger holds to enforce a cooldown. Subnet spread is deliberately ABSENT rather
- * than approximated, because the column does not exist yet (#213 blocks it) and a
- * guessed figure would be worse than a missing one.
+ * than approximated: the column now exists AND is populated, but this query does
+ * not aggregate it yet (#213), and a guessed figure would be worse than a missing
+ * one. The old reason here was that the column did not exist, which stopped being
+ * true when the subnet cap landed.
  *
  * Counts sent AND pending, excluding failed, which matches what the daily cap
  * counts: a claim in flight is a claim.
@@ -193,6 +205,13 @@ export function farmingSignalsParams(now: number): number[] {
   const dayCut = now - 86_400;
   return [hourCut, hourCut, hourCut, hourCut, dayCut, dayCut, dayCut, dayCut];
 }
+
+/** How many claims a subnet has made in the window, for the "why blocked" message. */
+export const SUBNET_COUNT_SQL = `
+SELECT COUNT(*) AS n FROM claims
+WHERE subnet_hash = ?
+  AND ((status='sent' AND created_at >= ?) OR (status='pending' AND created_at >= ?))
+`;
 
 /** Most-recent live (blocking) claim for a column, for the "why blocked" message. */
 export const LIVE_BLOCK_SQL = (column: "address_hash" | "ip_hash") => `

@@ -13,6 +13,7 @@ import {
   FARMING_SIGNALS_SQL,
   farmingSignalsParams,
   RESERVE_SQL,
+  SUBNET_COUNT_SQL,
   reserveParams,
   LIVE_BLOCK_SQL,
   FINALIZE_SQL,
@@ -30,12 +31,14 @@ function driver(): DbDriver {
 
 export type ReserveResult =
   | { ok: true; claimId: number }
-  | { ok: false; kind: "cooldown" | "cap"; reason: string; retryAfterSeconds?: number };
+  | { ok: false; kind: "cooldown" | "cap" | "subnet"; reason: string; retryAfterSeconds?: number };
 
 /** Diagnose why an atomic reserve inserted 0 rows (for a useful error message). */
 async function whyBlocked(
   addressHash: string,
   ipHash: string | null,
+  subnetHash: string | null,
+  subnetDailyMax: number,
   now: number,
   cooldownSeconds: number,
 ): Promise<ReserveResult & { ok: false }> {
@@ -58,7 +61,29 @@ async function whyBlocked(
       };
     }
   }
-  // No live cooldown row → it was the daily cap.
+  // Distinguish the SUBNET rule from the global cap before falling through. Both
+  // block, and telling someone the faucet is empty for the day when it is actually
+  // their network that is over quota sends them away for the wrong reason, and hides
+  // the signal from us too.
+  if (subnetHash) {
+    const row = await driver().get<{ n: number }>(SUBNET_COUNT_SQL, [
+      subnetHash,
+      now - 86_400,
+      now - PENDING_LEASE_SECONDS,
+    ]);
+    if ((row?.n ?? 0) >= subnetDailyMax) {
+      return {
+        ok: false,
+        kind: "subnet",
+        // Deliberately does not say "your network", which would confirm to a farmer
+        // exactly which limit they hit and how it is keyed. It says enough to be
+        // actionable for a real person and no more.
+        reason: "Too many claims from your network today. Try again tomorrow, or from a different connection.",
+        retryAfterSeconds: 3600,
+      };
+    }
+  }
+  // No live cooldown row and no subnet overage → it was the global daily cap.
   return { ok: false, kind: "cap", reason: "Faucet daily cap reached. Please come back tomorrow." };
 }
 
@@ -71,13 +96,21 @@ function retentionCutoff(now: number, cooldownSeconds: number): number {
 export async function reserveClaim(opts: {
   address: string;
   ipHash: string | null;
+  /**
+   * Already fingerprinted by the caller, because deriving it needs the RAW IP and
+   * this layer deliberately never sees one. Null when it could not be derived, which
+   * skips the subnet rule rather than inventing a shared bucket.
+   */
+  subnetHash: string | null;
   amountZat: bigint;
   now: number;
   cooldownSeconds: number;
   dailyCapZat: bigint;
+  subnetDailyMax: number;
 }): Promise<ReserveResult> {
   const addressHash = fingerprintAddress(opts.address);
   const ipHash = opts.ipHash ?? "";
+  const subnetHash = opts.subnetHash ?? "";
 
   // Data minimization: drop expired rows opportunistically (best-effort).
   driver()
@@ -89,15 +122,17 @@ export async function reserveClaim(opts: {
     reserveParams({
       addressHash,
       ipHash,
+      subnetHash,
       amountZat: Number(opts.amountZat),
       now: opts.now,
       cooldownSeconds: opts.cooldownSeconds,
       dailyCapZat: Number(opts.dailyCapZat),
+      subnetDailyMax: opts.subnetDailyMax,
     }),
   );
 
   if (res.changes === 1) return { ok: true, claimId: res.lastInsertRowid };
-  return whyBlocked(addressHash, opts.ipHash, opts.now, opts.cooldownSeconds);
+  return whyBlocked(addressHash, opts.ipHash, opts.subnetHash, opts.subnetDailyMax, opts.now, opts.cooldownSeconds);
 }
 
 /** Finalise a reserved claim once the send resolves. */

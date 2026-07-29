@@ -55,7 +55,7 @@ export async function register() {
         `24h claims=${s.claims24h} ips=${s.distinctIps24h} addrs=${s.distinctAddrs24h} taz=${s.taz24h.toFixed(1)} | ` +
         `claims_per_ip_24h=${s.claimsPerIp24h === null ? "n/a" : s.claimsPerIp24h.toFixed(2)} | ` +
         // Named as absent rather than omitted, so nobody reads its absence as a zero.
-        "subnet_spread=UNAVAILABLE(no subnet_hash column yet, #213)",
+        "subnet_spread=UNAVAILABLE(column is populated, this query does not aggregate it, #213)",
     );
   };
   const signalsTimer = setInterval(() => void emitSignals(), 10 * 60_000);
