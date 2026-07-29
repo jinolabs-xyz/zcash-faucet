@@ -215,10 +215,20 @@ LIVE_ENV="$OVERLAY_DIR/faucet.env"
 # pattern-matched so adding one is a visible, reviewable decision.
 env_optional() {
   case "$1" in
+    # injected by the framework, never by us: Next sets NEXT_RUNTIME itself, and
+    # NEXT_PUBLIC_SITE_URL is inlined at build time. Declaring either in
+    # faucet.env would be misleading rather than helpful.
+    NEXT_RUNTIME|NEXT_PUBLIC_SITE_URL) return 0 ;;
     # alternate database backend, unused by the z3 deploy
     DB_BACKEND|D1_PROXY_URL|D1_PROXY_SECRET) return 0 ;;
-    # secrets for sender modes this deploy does not run
-    FAUCET_WALLET_SEED|ZALLET_PASSPHRASE) return 0 ;;
+    # a seed for a sender mode this deploy does not run
+    FAUCET_WALLET_SEED) return 0 ;;
+    # ZALLET_PASSPHRASE is NOT "a mode we do not run" — zallet IS our sender and
+    # this key gates walletpassphrase. It is optional because the default is empty
+    # and zalletsend skips unlocking when it is unset, which is the configuration
+    # we actually run. Stating the real reason matters: a wrong justification in an
+    # allowlist is how the next entry gets waved through on its coat-tails (SDE-App).
+    ZALLET_PASSPHRASE) return 0 ;;
     # timeouts and poll intervals, all with defaults that work
     ZALLET_OP_TIMEOUT_MS|ZALLET_POLL_MS|ZALLET_RPC_TIMEOUT_MS|ZALLET_UNLOCK_SECONDS) return 0 ;;
     SEND_TASK_DEADLINE_MS|TX_LOOKUP_RATE_MAX|TX_LOOKUP_RATE_WINDOW_SECONDS) return 0 ;;
@@ -228,13 +238,21 @@ env_optional() {
   esac
 }
 
-if [ ! -f "$CONFIG_TS" ]; then
-  note_unverified "env completeness: no $CONFIG_TS, cannot list what the app reads"
+if [ ! -d "$REPO_DIR/src" ]; then
+  note_unverified "env completeness: no $REPO_DIR/src, cannot list what the app reads"
 elif [ ! -f "$ENV_EXAMPLE" ]; then
   note_unverified "env completeness: no $ENV_EXAMPLE, cannot tell what the deployment declares"
 else
-  # Every env name config.ts touches, however it is read.
-  app_keys="$(grep -oE 'process\.env\.[A-Z_][A-Z0-9_]*|\b(num|str|bool|env)\("[A-Z_][A-Z0-9_]*"' "$CONFIG_TS" \
+  # Every env name the app reads, ANYWHERE under src/ — not just config.ts.
+  #
+  # Scanning only config.ts was this check's own false pass: it made the acceptance
+  # test (FAUCET_MINER_ACTIVE, which lives in config.ts) succeed while the check was
+  # blind to seven keys read elsewhere, including three thresholds added by #171 that
+  # REFUSE TO BOOT on a bad value. It proved the mechanism while missing the
+  # coverage, which is the same shape as every false pass we chased today, aimed at
+  # the guard itself (SDE-App).
+  app_keys="$(grep -rhoE 'process\.env\.[A-Z_][A-Z0-9_]*|\b(num|str|bool|env)\("[A-Z_][A-Z0-9_]*"' \
+      "$REPO_DIR/src" --include='*.ts' --include='*.tsx' 2>/dev/null \
     | grep -oE '[A-Z_][A-Z0-9_]{3,}' | sort -u)"
   # The contract is the set of keys actually ASSIGNED somewhere, not every key
   # NAMED somewhere. Matching raw text let a key mentioned only in a comment count
@@ -244,9 +262,14 @@ else
   #
   #   faucet.env.example   KEY=...  (a commented-out `# KEY=` still documents it)
   #   compose              `- KEY=` or `KEY:` inside an environment: block
+  # One key per LINE, and compared whole-line below. Stripping the separators into a
+  # single blob let `case *KEY*` match across a junction — FOO plus BARBAZ reading as
+  # a declaration of OOBAR. No live false positive today, but it is the same
+  # mentions-versus-assignments trap one level down, so it gets closed the same way
+  # (SDE-App).
   contract="$(
-    grep -oE '^[[:space:]]*#?[[:space:]]*[A-Z_][A-Z0-9_]*=' "$ENV_EXAMPLE" 2>/dev/null | tr -d '#[:space:]='
-    grep -oE '^[[:space:]]*-?[[:space:]]*[A-Z_][A-Z0-9_]*[:=]' "$COMPOSE" 2>/dev/null | tr -d '\-[:space:]:='
+    grep -oE '^[[:space:]]*#?[[:space:]]*[A-Z_][A-Z0-9_]*=' "$ENV_EXAMPLE" 2>/dev/null | sed 's/[#[:space:]=]//g'
+    grep -oE '^[[:space:]]*-?[[:space:]]*[A-Z_][A-Z0-9_]*[:=]' "$COMPOSE" 2>/dev/null | sed 's/[-[:space:]:=]//g'
   )"
 
   # A key count of zero means the grep broke, not that the app reads nothing. Say so
@@ -256,11 +279,11 @@ else
   else
     for key in $app_keys; do
       env_optional "$key" && continue
-      case "$contract" in
-        *"$key"*) ;;
-        *) found "$key is read by the app but declared nowhere in the deployment, so an operator reading deploy/ cannot know it exists" \
-                 "add $key to $ENV_EXAMPLE (with its default and a one-line why), then commit" ;;
-      esac
+      # Whole-line match, so a key is only "declared" if it is declared, not merely
+      # a substring of something else that is.
+      printf '%s\n' "$contract" | grep -qxF "$key" && continue
+      found "$key is read by the app but declared nowhere in the deployment, so an operator reading deploy/ cannot know it exists" \
+            "add $key to $ENV_EXAMPLE (with its default and a one-line why), then commit"
     done
 
     # Box side. Only meaningful when the live file exists; on a machine that is not
