@@ -57,9 +57,34 @@ Every branch goes through the same pipeline, and nothing skips a step:
 
 1. Mark your branch ready and send it to the OTHER engineer. Not the CTO, and
    there is no QA seat: branch name, a two-line summary, and what you checked.
-2. **Check the author before you route anything.** One `gh` read. Sending a
-   branch to its own author silently removes the gate and leaves a review
-   comment sitting under it that looks like the gate held.
+2. **Check the author before you route anything.** Sending a branch to its own
+   author silently removes the gate and leaves a review comment sitting under it
+   that looks exactly like the gate held.
+
+   **Do not use `git` or `gh` for this. They cannot answer it.** Everyone here
+   pushes through one GitHub account, so every field that looks like authorship
+   is the same for all of us. Measured across two seats' branches:
+
+   ```
+   gh pr view 221 --json author  ->  author.login=Giri-Aayush   (App's)
+   gh pr view 218 --json author  ->  author.login=Giri-Aayush   (Infra's)
+
+   git log --format='%an <%ae> / %cn <%ce>' on either branch
+     ->  Aayush Giri <aayushgiri1234@gmail.com> / same, byte for byte
+   ```
+
+   Author, committer, email and `gh`'s login are identical, and there are no
+   trailers. So a routing decision read from them is a coin flip wearing the
+   costume of evidence, which is worse than having no check: it produces a
+   confident wrong answer. This nearly sent three of one seat's own PRs back to
+   that seat for review, and only a human memory of who wrote what caught it.
+
+   **What does work**, in order of reliability: which seat holds the local
+   branch or worktree, and what each seat said over IPC when it opened the PR.
+   Both are outside git, which is the whole point.
+
+   **If you cannot establish it, ask.** "Who authored this" is one message and
+   an unanswered gate is worth more than a fast one.
 3. The non-author reviews: typecheck, tests, build, and then actually
    exercising the change (a browser for frontend, a running server for routes,
    stubs for infra scripts). Findings go back to the author.
@@ -102,6 +127,12 @@ wrong mental model before anybody tried to file an approval and got told why.
 So the gate is the IPC verdict plus the CTO's audit, and it always was. Write
 the verdict into a PR comment anyway: IPC scrolls away with the session, and
 the next person reading `git log` deserves to find out why something merged.
+
+The same single account is why **step 2 above tells you not to check authorship
+with `git` or `gh`**. That fact lived in this paragraph while step 2 said to take
+one `gh` read, twenty lines apart, and nobody connected them until a routing
+decision nearly sent three PRs back to their own author. If you change one of
+these two places, change the other.
 
 ## Build and test, the local loop
 
