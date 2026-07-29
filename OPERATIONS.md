@@ -474,12 +474,32 @@ curl -s localhost:3000/api/status | jq '.reserve'
 curl -s localhost:3000/api/ready | jq '.ready, .reason'
 ```
 
-**The reads that prove it:**
+**Do not use `spendableTaz` as the proof.** It currently sums every pool
+`z_getbalanceforaccount` returns, transparent included (#185), so it counts the
+unshielded coinbase itself. That means this step's target is satisfiable **before
+the sweep has moved anything**, and a runbook whose success criterion can pass
+without the operation happening is worse than no criterion.
 
-- `spendableTaz` at or near the recovered amount
+**The read that proves it, because only shielding can make it true:** the
+transparent balance at the miner address **falls**, seen from a source that is not
+us.
+
+```sh
+curl -s "https://testnet.cipherscan.app/api/address/$FAUCET_MINER_ADDRESS" | jq .balance
+```
+
+Coinbase leaving that address is the event. Nothing else in the system moves it,
+and an independent explorer reporting the drop is not something our own node can
+be confused about.
+
+**Supporting reads, none of them sufficient alone:**
+
 - `refilling: false`, the hysteresis stopped on its own because the target was
-  reached, which is different from never having started
+  reached, which is different from never having started. Note this is also
+  currently reachable via #185, so treat it as consistent rather than as proof.
 - `/api/ready` returns `ready: true` with a null reason
+- `emptySweeps: 0` after having been non-zero, which means a sweep moved funds
+  rather than never having attempted one
 
 Then the acceptance test that is not a status read: **claim a real drip** and
 confirm the txid on an independent explorer, not only in our own response. Our
