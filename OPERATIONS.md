@@ -250,6 +250,64 @@ false. It is deliberately not `true` yet: that is step 4 and it is not yours.
 an older `deploy.sh`. Check `git log -1` in the checkout matches the merged #174.
 Adding the line by hand also works and is safe, since the append never overwrites.
 
+### 3.5 Establish why the first shield died, before permitting a second
+
+**Precondition, not a post-hoc watch.** The previous `z_shieldcoinbase` was built,
+broadcast, never confirmed, and expired unmined at height 4,217,981 with a fee of
+15,000 zatoshi. If whatever killed it is still true, a new shield dies the same
+way the moment step 4 flips the flag, and we will have done all of this to
+recreate the poison we just removed.
+
+What is already ruled out, so nobody spends time there:
+
+**Block production is not the cause.** VERIFIED: the network tip is past that
+expiry by more than two thousand blocks. A transaction expires because the chain
+*advanced* without including it, so miners were active throughout and ours was in
+none of their blocks. "Testnet was quiet" is not the explanation.
+
+**The fee is not the suspect.** VERIFIED from the code: the refiller passes
+`null` as the fee, so zallet computes it under ZIP 317 rather than us choosing a
+number. 15,000 zatoshi is three times ZIP 317's 5,000 marginal fee, which is a
+conformant fee for a small shield. A hand-picked too-low fee would be a good
+theory and it is not what happened.
+
+That leaves two candidates, and one of them we can already test with a field we
+built for something else.
+
+**Candidate A: our node was behind the network when it built the transaction.**
+This is the one to check first, because it explains the failure completely and it
+is cheap to rule out. A wallet sets `expiry_height` from *its own node's* tip.
+A node that has drifted behind builds a transaction whose expiry is already in
+the network's past, so it can never be mined regardless of fee or relay. It looks
+perfectly valid locally and is dead on arrival everywhere else.
+
+That is exactly the condition #171's tip oracle detects, so the read exists:
+
+```sh
+curl -s localhost:3000/api/status | jq '.node | {nodeHeight, externalHeight, frozen}'
+```
+
+**Proof required before step 4:** `frozen: false`, `externalHeight` non-null, and
+`externalHeight - nodeHeight` within a few blocks. Not merely "not frozen":
+`frozen` only trips past `FAUCET_FREEZE_BLOCKS` (200), and a node 150 blocks
+behind is under that threshold while still building transactions that expire
+before they can be mined. Read the two heights and compare them yourself.
+
+A null `externalHeight` means cannot-verify, which is **not** a pass. Do not
+permit a broadcast while the one check that would catch this failure is blind.
+
+**Candidate B: the transaction never reached the network.** Peer count, relay, and
+whether our mempool is reachable at all. This needs box reads and it is
+SDE-Infra's verification-layer territory rather than mine. INFERRED, not
+verified: if candidate A comes back clean, B is what remains, and a shield that
+our own node accepted and no miner ever saw is a relay problem.
+
+**If neither can be established, do not flip the flag.** An unexplained failure
+of exactly this operation is a reason to wait, not a reason to retry. The coinbase
+is not going anywhere, and the cost of guessing wrong is a second poisoned wallet
+plus another day of outage.
+
+
 ### 4. The operator authorises the sweep
 
 **This step is the user's decision, not an automatic part of the sequence.**
