@@ -216,6 +216,48 @@ Every correction came from the same few habits, so the habits are rules.
     commit message, and choose units so the pessimistic direction is the cheap
     one. Being wrong toward caution costs latency. Being wrong toward optimism
     cost a live user their claim in #132.
+17. Before believing a null result, prove the question can return non-null.
+    An empty answer from a broken question looks exactly like an empty answer
+    from a good one, and the second is a finding while the first is nothing.
+    Three in one morning. A `grep` for a symbol in the zallet image returned
+    nothing, and the image is distroless with no `sh`, so the probe had never
+    executed at all: a positive control on a symbol that must exist is what
+    showed it. A systemd unit reported inactive was the wrong unit name, and
+    the real one had been running for a day. A 64-hex string pulled from an
+    explorer 404'd on a `/tx/` route because it was a block hash, not a txid,
+    which was one step from being reported as the explorer rejecting real
+    chain data. In all three the tool was silent, not the world. Pair every
+    negative check with a positive one whose answer you already know.
+18. A test double defines which failures are expressible. A gap in the double
+    is a gap in what can ever be tested, so a component can lie for months
+    with a green suite and nobody has been careless. The docker stub listed
+    only `running` containers while the watchdog calls `docker ps -a`
+    precisely to see a stopped one, so crash-loop behaviour was
+    unrepresentable and 812 false recoveries went unnoticed (#175). The
+    miner's loopback server did one `read()` into an 8 KB buffer, and
+    `submitblock` is the one call whose body is tens of KB, so the only
+    large-body path had no reachable test (#166). A blackhole harness built
+    to test an outage made the working-oracle case unreachable, which is how
+    a CI failure was missed while its output was on screen (#171). When a
+    behaviour resists testing, suspect the double before the code.
+19. A code path proves what CAN happen, never what IS happening. Reading real
+    code and reasoning correctly still produces a claim about the world, and
+    the world gets a vote. Two in one morning. A placeholder-salt chain through
+    `deploy.sh`, `saltGuard` and `config.ts` was real code and not the live
+    fault. A flag defaulting false with no `deploy/` entry was real code, and
+    the flag was set true in production all along. Both were settled in seconds
+    by a single read from the box. Finish with a read from the thing itself, and
+    when you cannot get one, say the claim is unverified rather than shipping the
+    inference. This applies hardest to your own diagnosis, because a clean
+    mechanism is exactly what makes a wrong one persuasive.
+20. An assertion over two derived collections must prove the collection is
+    real first. Otherwise the empty case passes for free, and it passes
+    hardest when the tool that builds the collection is missing. `drift`'s
+    read-only check compared two `sha256sum` listings, and on a host without
+    `sha256sum` both were empty, compared equal, and reported `ok` while a
+    file was rewritten between them (#167). Equality is only evidence when
+    inequality is reachable, so pin both: that the listing found something,
+    and that a real change is detected.
 
 Money paths (send, ledger, reservation, PoW verify) never skip review, no
 matter how urgent the window. Docs and pure test additions may fast-track
