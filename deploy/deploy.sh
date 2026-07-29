@@ -228,6 +228,14 @@ vals={"ZALLET_RPC_USER":"faucet","ZALLET_RPC_PASSWORD":pw}
 if uuid: vals["ZALLET_ACCOUNT"]=uuid
 if addr: vals["ZALLET_ADDRESS"]=addr
 for k,v in vals.items(): s=re.sub(rf'(?m)^{k}=.*$', f'{k}={v}', s)
+# Keys that must be PRESENT even on a box whose faucet.env predates them. The
+# rewrite above only touches a line that already exists, and the example file is
+# copied exactly once on a fresh box, so adding a line to faucet.env.example
+# never reaches an existing deployment. Append when absent, never overwrite: an
+# operator who has set a value keeps it (#172, #177).
+for k,v in [("FAUCET_SHIELD_COINBASE","false")]:
+    if re.search(rf'(?m)^{k}=', s) is None:
+        s = s.rstrip("\n") + f"\n\n# Whether the reserve loop may sweep coinbase we already own into the wallet.\n# Separate from mining on purpose (#172). Broadcasts a transaction, so it stays\n# an explicit authorisation: set true only deliberately.\n{k}={v}\n"
 if "RATE_LIMIT_SALT=change" in s: s=s.replace("RATE_LIMIT_SALT=change-me-to-a-long-random-secret", "RATE_LIMIT_SALT=__FILL_ME__")
 open(f,"w").write(s)
 PY
