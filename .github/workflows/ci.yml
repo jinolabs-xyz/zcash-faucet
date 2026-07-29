@@ -53,6 +53,13 @@ jobs:
       RATE_LIMIT_SALT: ci-smoke-not-a-secret
       PORT: "3100"
       SMOKE_URL: http://localhost:3100
+      # Point the tip oracle at a local fixture, same as the ui and api-tests
+      # jobs. This job was green WITHOUT it only because the claim went through
+      # POST /api/faucet, which consulted nothing: the oracle reached the live
+      # dashboard, our node read ~570,000 blocks behind the wallet double's tip
+      # of 3,650,000, and nothing on the drip path cared. #187 makes the drip
+      # path care, so the environment has to stop lying to it (#171).
+      HOSH_URL: http://127.0.0.1:28324/
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -68,9 +75,22 @@ jobs:
         run: |
           PORT=28299 node scripts/fake-zallet.mjs &
           double=$!
+          # Before the app, not after. The first background tip refresh happens at
+          # boot, and if the fixture is missing then, the oracle degrades to a
+          # direct lightwalletd call and caches the REAL network tip for the rest
+          # of the run. Starting it late narrows the race instead of removing it.
+          PORT=28324 node scripts/fake-hosh.mjs &
+          hosh=$!
+          # Declared before the trap so the hard exit below still reaps the doubles.
+          server=""
+          trap 'kill "$server" "$double" "$hosh" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            curl -sf "$HOSH_URL" >/dev/null && break
+            sleep 1
+          done
+          curl -sf "$HOSH_URL" >/dev/null || { echo "tip-oracle fixture never came up"; exit 1; }
           npm start &
           server=$!
-          trap 'kill "$server" "$double" 2>/dev/null || true' EXIT
           for _ in $(seq 1 60); do
             curl -sf "$SMOKE_URL/api/status" >/dev/null && break
             sleep 1

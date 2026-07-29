@@ -17,9 +17,13 @@ import { bech32m } from "@scure/base";
 const PORT_A = 3210;
 const PORT_B = 3211;
 const PORT_C = 3212;
+const PORT_D = 3213;
+const PORT_E = 3214;
 const BASE_A = `http://localhost:${PORT_A}`;
 const BASE_B = `http://localhost:${PORT_B}`;
 const BASE_C = `http://localhost:${PORT_C}`;
+const BASE_D = `http://localhost:${PORT_D}`;
+const BASE_E = `http://localhost:${PORT_E}`;
 
 let failures = 0;
 const ok = (name, cond, detail = "") => {
@@ -96,8 +100,8 @@ function boot(port, env) {
  *   so a caller exercising that mode must pass false. Before this parameter existed,
  *   fake-hosh advertised an EMPTY mode that could only produce a dead suite (SDE-App).
  */
-async function waitHosh(expectTestnetRow = true, ms = 15_000) {
-  const url = `http://127.0.0.1:${HOSH_PORT}/`;
+async function waitHosh(expectTestnetRow = true, ms = 15_000, port = HOSH_PORT) {
+  const url = `http://127.0.0.1:${port}/`;
   const deadline = Date.now() + ms;
   for (;;) {
     try {
@@ -156,6 +160,14 @@ const walletC = spawn("node", ["scripts/fake-zallet.mjs"], {
   detached: true,
 });
 
+// D's wallet is healthy and well funded. The ONLY thing wrong with D is that the
+// network has moved 40 blocks past our node, which is the tx 29 lag exactly.
+const WALLET_D = 28325;
+const walletD = wallet(WALLET_D, 10);
+// E's wallet is healthy too. E's oracle is the one that has nothing to say.
+const WALLET_E = 28327;
+const walletE = wallet(WALLET_E, 10);
+
 // A hosh-shaped tip oracle. Without it the readiness assertions depend on the
 // public internet AND on a race: the wallet double reports tip 3,650,000 while
 // real testnet is past 4,220,000, so the moment the oracle gets a real answer our
@@ -164,6 +176,33 @@ const walletC = spawn("node", ["scripts/fake-zallet.mjs"], {
 const HOSH_PORT = 28324;
 const fakeHosh = spawn("node", ["scripts/fake-hosh.mjs"], {
   env: { ...process.env, PORT: String(HOSH_PORT) },
+  stdio: "ignore",
+  detached: true,
+});
+
+// A SECOND oracle, reporting the network 40 blocks ahead of the wallet double's
+// 3,650,000. 40 is picked to sit in the gap that #187 is about: past the shield
+// gate's 5-block budget, so a transaction built now would carry a dead expiry, but
+// nowhere near FREEZE_BLOCKS at 200, so `frozen` stays false and readiness keeps
+// answering 200. A lag of 1000 would also refuse the drip and would prove much
+// less, because `frozen` would be doing the work.
+const HOSH_STALE_PORT = 28326;
+const STALE_LAG = 40;
+const fakeHoshStale = spawn("node", ["scripts/fake-hosh.mjs"], {
+  env: { ...process.env, PORT: String(HOSH_STALE_PORT), HEIGHT: String(3_650_000 + STALE_LAG) },
+  stdio: "ignore",
+  detached: true,
+});
+
+// A THIRD oracle that serves no usable testnet row, so the tip is genuinely
+// unknown rather than merely stale. This is the fail-closed case: "cannot verify"
+// must refuse a payout exactly as "too far behind" does, because a gate that only
+// catches the state it can measure is the one that let #172 happen. EMPTY=true is
+// the mode fake-hosh advertised and could not deliver until waitHosh gained its
+// expectTestnetRow parameter.
+const HOSH_EMPTY_PORT = 28328;
+const fakeHoshEmpty = spawn("node", ["scripts/fake-hosh.mjs"], {
+  env: { ...process.env, PORT: String(HOSH_EMPTY_PORT), EMPTY: "true" },
   stdio: "ignore",
   detached: true,
 });
@@ -223,6 +262,24 @@ const serverC = boot(PORT_C, {
   ZALLET_OP_TIMEOUT_MS: "600000", // the sender must NOT be what gives up first
 });
 
+// D: a healthy wallet behind a stale chain view. Challenge off so a claim is one
+// POST, which keeps the cooldown assertion below about the gate and nothing else.
+const serverD = boot(PORT_D, {
+  ...zallet(WALLET_D),
+  HOSH_URL: `http://127.0.0.1:${HOSH_STALE_PORT}/`,
+  FAUCET_CHALLENGE: "none",
+});
+
+// E: a healthy wallet whose chain view cannot be established at all. The
+// lightwalletd fallback is pinned at a closed port so the oracle has NO second
+// route to a real tip, which is the only way "unknown" stays unknown.
+const serverE = boot(PORT_E, {
+  ...zallet(WALLET_E),
+  HOSH_URL: `http://127.0.0.1:${HOSH_EMPTY_PORT}/`,
+  LIGHTWALLETD_ENDPOINT: "https://127.0.0.1:28399",
+  FAUCET_CHALLENGE: "none",
+});
+
 try {
   // Wait for the oracle double BEFORE the apps are usable. If an app's first
   // background tip refresh runs while the fixture is still binding, hosh yields
@@ -232,7 +289,11 @@ try {
   // suite pass locally and fail in CI; overriding HOSH_URL is only half the fix if
   // nothing waits for the override to be listening.
   await waitHosh();
-  await Promise.all([waitReady(BASE_A), waitReady(BASE_B), waitReady(BASE_C)]);
+  await waitHosh(true, 15_000, HOSH_STALE_PORT);
+  // false: this fixture serves no testnet row BY DESIGN, so requiring one would
+  // hang and then throw. Responding at all is the whole requirement.
+  await waitHosh(false, 15_000, HOSH_EMPTY_PORT);
+  await Promise.all([waitReady(BASE_A), waitReady(BASE_B), waitReady(BASE_C), waitReady(BASE_D), waitReady(BASE_E)]);
 
   /* ── A: /api/status shape ────────────────────────────────────────────── */
   const status = await get(BASE_A, "/api/status");
@@ -399,8 +460,118 @@ try {
   // flight inside the wallet.
   const statusC = await get(BASE_C, "/api/status");
   ok("C the stuck send still counts against queue depth", statusC.body.queueDepth >= 1, `depth ${statusC.body.queueDepth}`);
+
+  /* ── D: a stale chain view must not pay out (#187) ────────────────────── */
+
+  // First, that readiness sees NOTHING wrong. This is the whole thesis: the lag
+  // that kills a transaction is invisible to the check we already had, so if these
+  // two assertions ever start failing, the test has stopped covering the gap it
+  // was written for and someone has widened FREEZE_BLOCKS or narrowed the lag.
+  // /api/status uses the NON-BLOCKING oracle read on purpose, so the first read
+  // after the cache ages past MAX_AGE_MS returns null and only then kicks a refresh.
+  // This suite runs long enough for that to happen, so poll until the app has an
+  // answer instead of asserting against a cache that is merely cold. The drip path
+  // does not need this (it asks, bounded, before deciding) but a status reader does.
+  let statusD = await get(BASE_D, "/api/status");
+  for (let i = 0; i < 40 && statusD.body.node?.externalHeight == null; i++) {
+    await new Promise((r) => setTimeout(r, 250));
+    statusD = await get(BASE_D, "/api/status");
+  }
+  ok(
+    "D the oracle fixture actually reached the app, so the assertions below mean something",
+    statusD.body.node?.externalHeight === 3_650_000 + STALE_LAG,
+    `externalHeight ${JSON.stringify(statusD.body.node?.externalHeight)}`,
+  );
+  ok(
+    `D readiness is untroubled by a ${STALE_LAG}-block lag, which is the gap #187 is about`,
+    statusD.body.node?.ready === true && statusD.body.node?.frozen === false,
+    JSON.stringify({ ready: statusD.body.node?.ready, frozen: statusD.body.node?.frozen }),
+  );
+  const readyD = await get(BASE_D, "/api/ready");
+  ok("D /api/ready still answers 200, so nothing upstream would hold traffic back", readyD.status === 200, `status ${readyD.status}`);
+
+  // The gate itself, and the boolean the browser reads.
+  ok(
+    "D the freshness gate says unsafe and reports the lag",
+    statusD.body.node?.shield?.state === "unsafe" && statusD.body.node?.shield?.lag === STALE_LAG,
+    JSON.stringify(statusD.body.node?.shield),
+  );
+  ok(
+    "D canBuildTx is false, computed server-side so the browser carries no copy of the rule",
+    statusD.body.node?.canBuildTx === false,
+    `canBuildTx ${JSON.stringify(statusD.body.node?.canBuildTx)}`,
+  );
+
+  // The payout itself. Before #187 this returned 200 with a txid and an explorer
+  // link for a transaction whose expiry the network had already passed.
+  const addrD = (await post(BASE_D, "/api/account", { kind: "shielded" })).body.account.address;
+  const dripD = await claim(BASE_D, addrD, null);
+  ok(
+    "D a claim on a stale chain view is REFUSED, not paid with a doomed txid",
+    dripD.status === 503 && dripD.body.ok !== true && !dripD.body.txid,
+    `status ${dripD.status} ${JSON.stringify(dripD.body.txid ?? dripD.body.error ?? "")}`,
+  );
+  ok("D the refusal says it will expire rather than blaming the user", /expire/i.test(dripD.body.error ?? ""), dripD.body.error ?? "");
+  ok("D the refusal carries a retry hint", typeof dripD.body.retryAfterSeconds === "number", JSON.stringify(dripD.body.retryAfterSeconds));
+
+  // THE ONE THAT PINS THE ORDERING. The gate sits above reserveClaim, so a refusal
+  // consumes no cooldown and no daily cap: our node's lag is not the user's fault
+  // (#132). Move the gate below the reservation and this flips to 429, because the
+  // first attempt would have booked the entitlement it then refused to honour. That
+  // is a failure no amount of reading the diff makes obvious.
+  const secondD = await claim(BASE_D, addrD, null);
+  ok(
+    "D a refused claim costs the user NOTHING: the same address is refused again, never rate-limited",
+    secondD.status === 503,
+    `status ${secondD.status}${secondD.status === 429 ? " (429 means the refusal consumed the cooldown, so the gate is below reserveClaim)" : ""}`,
+  );
+
+  /* ── E: a tip we CANNOT VERIFY must refuse too (#187 fail-closed) ─────── */
+
+  // The state a boolean would have collapsed. E's node might be perfectly current,
+  // and that is the point: we cannot show that it is, so we do not pay. Anyone who
+  // writes `state !== "unsafe"` at a call site passes this state straight through,
+  // which is why mayBuildTransaction() is the only asker.
+  const statusE = await get(BASE_E, "/api/status");
+  ok(
+    "E the tip is genuinely unknown, not merely stale",
+    statusE.body.node?.externalHeight === null && statusE.body.node?.shield?.state === "unverifiable",
+    JSON.stringify({ external: statusE.body.node?.externalHeight, state: statusE.body.node?.shield?.state }),
+  );
+  ok("E canBuildTx is false on cannot-verify, not just on too-far-behind", statusE.body.node?.canBuildTx === false, `canBuildTx ${JSON.stringify(statusE.body.node?.canBuildTx)}`);
+  // The asymmetry, and the reason it is asserted on `frozen` rather than on a 200:
+  // readiness deliberately does NOT flip to frozen on a tip it cannot verify, since a
+  // public-endpoint outage must never take down a healthy faucet. The money gate takes
+  // the opposite view of the identical input, which is the whole design.
+  //
+  // E's /api/ready is 503 for an unrelated reason, and it is worth knowing why:
+  // LIGHTWALLETD_ENDPOINT is both the oracle's fallback route and the app's read-side
+  // backend, so the pin that makes the tip genuinely unknown also makes the backend
+  // unreachable ("backend unreachable", verified). The suite already warns about this
+  // trap higher up. So assert the property, not the status code it cannot show here.
+  ok(
+    "E readiness still fails OPEN on the same input the money gate refuses",
+    statusE.body.node?.frozen === false,
+    JSON.stringify({ frozen: statusE.body.node?.frozen }),
+  );
+
+  const addrE = (await post(BASE_E, "/api/account", { kind: "shielded" })).body.account.address;
+  const dripE = await claim(BASE_E, addrE, null);
+  ok(
+    "E a claim is REFUSED when freshness cannot be established, with a healthy wallet behind it",
+    dripE.status === 503 && !dripE.body.txid,
+    `status ${dripE.status} ${JSON.stringify(dripE.body.txid ?? dripE.body.error ?? "")}`,
+  );
+  const secondE = await claim(BASE_E, addrE, null);
+  ok("E the cannot-verify refusal also leaves the cooldown alone", secondE.status === 503, `status ${secondE.status}`);
 } finally {
   stop(fakeHosh);
+  stop(fakeHoshStale);
+  stop(fakeHoshEmpty);
+  stop(serverD);
+  stop(walletD);
+  stop(serverE);
+  stop(walletE);
   stop(serverA);
   stop(serverB);
   stop(serverC);
