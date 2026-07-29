@@ -5,7 +5,8 @@
  */
 import type { Sender, SendRequest, SendResult } from "./send.ts";
 import { faucetWallet } from "./wallet.ts";
-import { getAddressUtxos, getLatestBlock, sendRawTransaction, type Utxo } from "./grpc.ts";
+import { getAddressUtxos, sendRawTransaction, type Utxo } from "./grpc.ts";
+import { tipForExpiry } from "./expiryTip.ts";
 import { buildT2zTx } from "./t2z.ts";
 import { explorerTxUrl } from "./explorer.ts";
 import { bytesToHex } from "@noble/hashes/utils.js";
@@ -48,7 +49,10 @@ export class T2zSender implements Sender {
     }
     if (total < need) throw new Error("Faucet balance too low to cover this drip + fee.");
 
-    const height = Number((await getLatestBlock()).height);
+    // Max across every endpoint, not first-to-answer (#190). Same hazard as
+    // realsend: a quick-but-lagging endpoint stamps an expiry the network has
+    // already passed. The issue named only realsend; this path had it too.
+    const height = (await tipForExpiry()).height!;
 
     const { hex } = await buildT2zTx({
       inputs: chosen.map((u) => ({
