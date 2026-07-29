@@ -15,7 +15,7 @@ with an anti-abuse gate on.
 | `FAUCET_COOLDOWN_SECONDS` | `86400` | Per-address cooldown. |
 | `FAUCET_DAILY_CAP_TAZ` | `100` | Ceiling across all claims in 24h. |
 | `FAUCET_MIN_RESERVE_TAZ` | `0` | Floor the faucet refuses to spend below. |
-| `FAUCET_CHALLENGE` | `turnstile` if its secret is set, else `none` | Anti-abuse gate: `pow`, `turnstile`, `none`. |
+| `FAUCET_CHALLENGE` | `turnstile` if its secret is set, else `pow` | Anti-abuse gate: `pow`, `turnstile`, `none`. Defaults ON: turning it off is something you ask for by name. `pow` needs a real `RATE_LIMIT_SALT` or the app refuses to boot. |
 | `RATE_LIMIT_SALT` | none | **Required in production** with a gate on. Signs PoW challenges and salts IP hashes. Boot fails on an empty or placeholder value. |
 | `FAUCET_POW_BITS` | `20` | Base difficulty in leading zero bits. |
 | `FAUCET_POW_ESCALATE_BITS` | `2` | Extra bits per recent claim from the same client. |

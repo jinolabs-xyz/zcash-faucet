@@ -192,10 +192,25 @@ export const config = {
   },
 
   // Anti-abuse gate before a claim: "pow" (browser proof-of-work / hashcash),
-  // "turnstile" (Cloudflare captcha), or "none". Default follows whatever is
-  // configured: Turnstile if its secret is set, else none.
+  // "turnstile" (Cloudflare captcha), or "none".
+  //
+  // The fallback is POW, not none, and that is the whole point. This is the only
+  // switch that makes a claim COST anything, and its default used to be off: a
+  // fresh box, a clean redeploy, or a forgotten variable all came up serving with
+  // no gate at all, silently. The live faucet had pow only because somebody had
+  // typed it into the box by hand, which is not a control, it is a habit.
+  //
+  // A security default of "off" eventually ships off. So an operator who says
+  // nothing gets the gate, and turning it OFF is the thing you have to ask for by
+  // name (challenge=none, which local dev and the test doubles do explicitly).
+  //
+  // Consequence worth knowing: in production with pow, saltGuard refuses to boot
+  // on an empty or placeholder RATE_LIMIT_SALT, because a known salt makes the
+  // challenge forgeable. So a fresh box now stops with a message naming what to
+  // set, instead of coming up unprotected. That is the trade, and it is the right
+  // way round: loud and safe over quiet and open.
   challenge: (process.env.FAUCET_CHALLENGE ??
-    (process.env.TURNSTILE_SECRET_KEY ? "turnstile" : "none")) as "pow" | "turnstile" | "none",
+    (process.env.TURNSTILE_SECRET_KEY ? "turnstile" : "pow")) as "pow" | "turnstile" | "none",
 
   pow: {
     // Base difficulty in leading zero bits of sha256(challenge:nonce). ~20 bits
