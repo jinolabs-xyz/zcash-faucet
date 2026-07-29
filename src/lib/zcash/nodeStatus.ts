@@ -8,6 +8,7 @@
 import { config } from "../config.ts";
 import { getExternalTip } from "./externalTip.ts";
 import { readShieldFreshness, type ShieldGate } from "./shieldGate.ts";
+import { tipProgress, type TipSample } from "./tipProgress.ts";
 
 export interface NodeStatus {
   ready: boolean;
@@ -16,6 +17,8 @@ export interface NodeStatus {
   nodeHeight: number | null; // node tip (OUR node's self-report)
   externalHeight: number | null; // network tip per an independent source (null = couldn't verify)
   frozen: boolean; // our node has fallen far behind the real network (#170)
+  /** How long our tip has sat unchanged, or null when we cannot say yet. */
+  tipStalledMs: number | null;
   /**
    * Whether our chain view is fresh enough to BUILD a transaction — a different and
    * much tighter question than `frozen`, and deliberately not derived from it. See
@@ -34,6 +37,11 @@ export interface NodeStatus {
 // (Fauzec's faucet was 12,607 behind), so this catches a real freeze without
 // false-alarming on normal lag or a fast burst of blocks.
 const FREEZE_BLOCKS = Number(process.env.FAUCET_FREEZE_BLOCKS ?? 200);
+
+// Remembered across calls so the motion check has something to compare against.
+// Process-local by design: a restart legitimately forgets, and a fresh process
+// must not claim a stall it has not observed.
+let lastTip: TipSample | null = null;
 
 export async function getNodeStatus(): Promise<NodeStatus | null> {
   if (config.sender !== "zallet") return null;
@@ -58,12 +66,22 @@ export async function getNodeStatus(): Promise<NodeStatus | null> {
     if (w == null || n == null) return null;
     const syncPercent = n > 0 ? Math.min(100, (w / n) * 100) : null;
 
-    // Frozen only on POSITIVE evidence: the network is reachable AND our node's
-    // tip is far below it. A null external tip means we could not verify — we do
-    // NOT flip to frozen on that (never let a public-endpoint outage take down a
-    // healthy faucet), but readiness stops claiming more than it knows.
+    // Frozen only on POSITIVE evidence, from two independent signals.
+    //
+    // DISTANCE: the network is reachable AND our tip is far below it. A null
+    // external tip means we could not verify, and we do NOT flip to frozen on that
+    // — a public-endpoint outage must never take down a healthy faucet.
     const externalHeight = getExternalTip();
-    const frozen = externalHeight != null && externalHeight - n > FREEZE_BLOCKS;
+    const behind = externalHeight != null && externalHeight - n > FREEZE_BLOCKS;
+
+    // MOTION: our own tip has not advanced in a long time. This needs no second
+    // opinion, so it still works while the oracle is down — which is exactly when
+    // the distance check goes quiet. It also catches a node wedged just behind the
+    // tip, which is close enough to look fine by distance and just as stuck.
+    const progress = tipProgress(lastTip, n, Date.now());
+    lastTip = progress.next;
+
+    const frozen = behind || progress.stalled;
 
     const walletCaughtUp = n > 0 && w >= n - 5;
     return {
@@ -73,6 +91,7 @@ export async function getNodeStatus(): Promise<NodeStatus | null> {
       nodeHeight: n,
       externalHeight,
       frozen,
+      tipStalledMs: progress.stalledMs,
       shield: readShieldFreshness(n),
     };
   } catch {
