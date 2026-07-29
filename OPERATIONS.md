@@ -418,6 +418,29 @@ funds. It is a money-path authorisation and the runbook deliberately stops here
 until a human makes it. Nobody should flip it because the previous five steps
 went well.
 
+**The go/no-go read, and it is a read from the box rather than a judgement.**
+#171 merged, so the app answers this itself. Take the answer, do not reason about
+the heights:
+
+```sh
+curl -s localhost:3000/api/status | jq '.node.shield'
+```
+
+| `state` | meaning | proceed? |
+|---|---|---|
+| `"safe"` | our node is within 5 blocks of an independently observed tip | yes |
+| `"unsafe"` | we are further behind than that, so a shield built now risks an expiry the network has passed | **no.** Wait. `lag` says by how much |
+| `"unverifiable"` | we could not establish the network tip at all, or the wallet did not report a height | **no.** Cannot-verify is not clearance, and this is the state that has to be actively refused rather than waited out. Find out which half is missing first |
+
+A null oracle reads as `unverifiable`, and that is a stop rather than a shrug. The
+whole reason this gate exists is that the transaction which broke this wallet was
+built while our view of the tip looked fine by every check we had at the time.
+
+Since #186 the sweep enforces this itself, so flipping the flag against an
+`unsafe` node produces refusals rather than a broadcast. That is the safe
+direction, and it is still the wrong way to find out: read the gate first so the
+authorisation means what the operator thinks it means.
+
 ```sh
 # WRITE, and only on the user's explicit say-so
 sed -i 's/^FAUCET_SHIELD_COINBASE=false/FAUCET_SHIELD_COINBASE=true/' \
@@ -515,7 +538,22 @@ unshielded coinbase itself. That means this step's target is satisfiable **befor
 the sweep has moved anything**, and a runbook whose success criterion can pass
 without the operation happening is worse than no criterion.
 
-**The read that proves it, because only shielding can make it true:** the
+**Success is TWO-SIDED, and today only one side is readable.** Shielding moves
+coinbase out of transparent and into the shielded pool, so the honest signal is
+both halves:
+
+| side | read | usable today? |
+|---|---|---|
+| transparent at the miner address **falls** | an independent explorer | **yes**, and it is the proof |
+| the **shielded** balance **rises** | `/api/status` | **no.** `spendableTaz` sums every pool including transparent (#185), so it cannot tell a shield from a no-op |
+
+That second row is why `spendableTaz` rising is not evidence: it already counts the
+unshielded coinbase, so it can be at target before the sweep moves anything, and a
+success criterion satisfiable without the operation is worse than none. Once #185
+splits the pools, the shielded figure becomes the primary read and the on-chain one
+stays as a cross-check where one source is not us.
+
+**The read that proves it today, because only shielding can make it true:** the
 transparent balance at the miner address **falls**, seen from a source that is not
 us.
 
@@ -540,6 +578,12 @@ wants. Until then no such field exists, which is why the proof is on-chain.
 - `/api/ready` returns `ready: true` with a null reason
 - `emptySweeps: 0` after having been non-zero, which means a sweep moved funds
   rather than never having attempted one
+- `shieldRefusals: 0` (merged with #186), which says the gate is not the thing
+  holding the recovery up. Climbing instead means read `lastRefusal` and go back
+  to the go/no-go in step 4
+- `node.canBuildTx`, a single boolean for the same verdict, arrives with #189 and
+  is **not on the box until that merges**. Until then read `node.shield.state`
+  and treat a missing field as unverifiable rather than as a pass
 
 Then the acceptance test that is not a status read: **claim a real drip** and
 confirm the txid on an independent explorer, not only in our own response. Our
