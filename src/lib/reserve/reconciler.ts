@@ -40,6 +40,12 @@ export interface ReserveStatus {
   /** Consecutive sweeps that found nothing to shield. */
   emptySweeps: number;
   /**
+   * Consecutive ticks where a refill was needed and shielding was not permitted.
+   * Counted rather than only logged, because the log line is now sampled and the
+   * state must stay readable between samples.
+   */
+  forbiddenTicks: number;
+  /**
    * Consecutive ticks where the shield gate declined to broadcast. Separate from
    * emptySweeps on purpose: this loop tried nothing, the other tried and found
    * nothing, and only one of them means the node is the problem.
@@ -51,6 +57,37 @@ export interface ReserveStatus {
   remainingUTXOs: number | null;
 }
 
+/**
+ * Should a REPEATING state say so on this tick?
+ *
+ * Every repeating line in this loop was written to fire every tick on purpose,
+ * because #172 was sixteen hours of a stalled loop looking exactly like an idle
+ * one and silence was the bug. That reasoning is still right for the first
+ * minutes and wrong forever after.
+ *
+ * The live case that forced this: after the recovery the operator set low 100 and
+ * target 1000 so future coinbase auto-sweeps. Spendable sits at 257, which is
+ * neither below low nor at target, so `refilling` HOLDS true, and every tick
+ * enqueues a sweep that correctly finds nothing. That is 2,880 identical error
+ * lines a day, forever, for a faucet in perfect health.
+ *
+ * So: say it loudly while it is news, then keep saying it at a rate an operator
+ * can actually read. The COUNTERS on /api/status stay exact either way, and the
+ * clearing transition is never throttled, so nothing about the state becomes
+ * invisible. Only the repetition is dropped, and the line says it is sampling so
+ * nobody reads a gap as a recovery.
+ */
+export const LOUD_TICKS = 5; // first few are news
+export const SAMPLE_EVERY = 20; // then roughly every 10 minutes at the default interval
+export function shouldSay(consecutive: number): boolean {
+  return consecutive <= LOUD_TICKS || consecutive % SAMPLE_EVERY === 0;
+}
+
+/** Appended when a line is a sample rather than every occurrence. */
+export function sampledNote(consecutive: number): string {
+  return consecutive > LOUD_TICKS ? ` (sampling 1 in ${SAMPLE_EVERY}, this state is continuous)` : "";
+}
+
 class ReserveReconciler {
   private refilling = false;
   private spendableZat: bigint | null = null;
@@ -60,6 +97,7 @@ class ReserveReconciler {
   private blindTicks = 0;
   private emptySweeps = 0;
   private shieldRefusals = 0;
+  private forbiddenTicks = 0;
   private lastRefusal: ReserveStatus["lastRefusal"] = null;
   private remainingUTXOs: number | null = null;
 
@@ -99,10 +137,13 @@ class ReserveReconciler {
       // healthy idle loop. Say it every tick instead (#172).
       if (this.spendableZat === null) {
         this.blindTicks++;
-        console.error(
-          `[reserve] balance UNKNOWN (${this.blindTicks} consecutive tick(s)): cannot reach the wallet, ` +
-            `so refill decisions are frozen at refilling=${this.refilling}. This is not an idle loop, it is a blind one.`,
-        );
+        if (shouldSay(this.blindTicks)) {
+          console.error(
+            `[reserve] balance UNKNOWN (${this.blindTicks} consecutive tick(s)): cannot reach the wallet, ` +
+              `so refill decisions are frozen at refilling=${this.refilling}. This is not an idle loop, it is a blind one.` +
+              sampledNote(this.blindTicks),
+          );
+        }
       } else {
         if (this.blindTicks > 0) {
           console.log(`[reserve] balance readable again after ${this.blindTicks} blind tick(s)`);
@@ -120,10 +161,16 @@ class ReserveReconciler {
       // code, but it must never be invisible: without this line the loop reports
       // refilling=true forever and never says why nothing happens.
       if (this.refilling && !config.reserve.shieldCoinbase) {
-        console.error(
-          "[reserve] refill is NEEDED but shielding is not permitted (FAUCET_SHIELD_COINBASE is off), " +
-            "so no coinbase will be swept and the balance cannot recover on its own.",
-        );
+        this.forbiddenTicks++;
+        if (shouldSay(this.forbiddenTicks)) {
+          console.error(
+            "[reserve] refill is NEEDED but shielding is not permitted (FAUCET_SHIELD_COINBASE is off), " +
+              "so no coinbase will be swept and the balance cannot recover on its own." +
+              sampledNote(this.forbiddenTicks),
+          );
+        }
+      } else {
+        this.forbiddenTicks = 0;
       }
       const start = shouldStartStep({
         refilling: this.refilling,
@@ -156,11 +203,14 @@ class ReserveReconciler {
           if (outcome.refused) {
             this.shieldRefusals++;
             this.lastRefusal = outcome.refused;
-            console.error(
-              `[reserve] shield REFUSED (${this.shieldRefusals} consecutive, state=${outcome.refused.state}, ` +
-                `lag=${outcome.refused.lag ?? "unknown"}): ${outcome.refused.reason}. ` +
-                "No coinbase will be swept until this clears, so the balance cannot recover on its own.",
-            );
+            if (shouldSay(this.shieldRefusals)) {
+              console.error(
+                `[reserve] shield REFUSED (${this.shieldRefusals} consecutive, state=${outcome.refused.state}, ` +
+                  `lag=${outcome.refused.lag ?? "unknown"}): ${outcome.refused.reason}. ` +
+                  "No coinbase will be swept until this clears, so the balance cannot recover on its own." +
+                  sampledNote(this.shieldRefusals),
+              );
+            }
             return;
           }
           if (this.shieldRefusals > 0) {
@@ -191,10 +241,13 @@ class ReserveReconciler {
                   "The backend reported NO count at all, so we cannot tell whether coinbase is waiting. " +
                   "z_shieldcoinbase's remainingUTXOs is zcashd's shape and this zallet may not return it: " +
                   "if this line repeats, the sweep has no visibility and that is a gap, not a quiet tick.";
-          console.error(
-            `[reserve] sweep moved nothing (${this.emptySweeps} consecutive, verdict=${verdict}), ` +
-              `remainingUTXOs=${outcome.remainingUTXOs ?? "not reported"}. ${because}`,
-          );
+          if (shouldSay(this.emptySweeps)) {
+            console.error(
+              `[reserve] sweep moved nothing (${this.emptySweeps} consecutive, verdict=${verdict}), ` +
+                `remainingUTXOs=${outcome.remainingUTXOs ?? "not reported"}. ${because}` +
+                sampledNote(this.emptySweeps),
+            );
+          }
         })
         .catch((err) => {
           console.error(`[reserve] refill step failed (retrying next tick): ${err instanceof Error ? err.message : err}`);
@@ -220,6 +273,7 @@ class ReserveReconciler {
       shieldCoinbase: config.reserve.shieldCoinbase,
       blindTicks: this.blindTicks,
       emptySweeps: this.emptySweeps,
+      forbiddenTicks: this.forbiddenTicks,
       shieldRefusals: this.shieldRefusals,
       lastRefusal: this.lastRefusal,
       remainingUTXOs: this.remainingUTXOs,
