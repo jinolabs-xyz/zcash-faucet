@@ -354,9 +354,11 @@ curl -s https://hosh.zec.rocks/api/v0/zec.json \
   | jq '[.servers[] | select(.chain=="test" and .online) | .height] | max'
 ```
 
-**Proof required before step 4:** our tip lags the network by **fewer than 10
-blocks**. That number is derived, not chosen, and the derivation is why this gate
-exists at all.
+**Proof required before step 4:** our tip lags the network by **5 blocks or
+fewer**, against an externally verified tip that is not null. That is the CTO's
+ruling and it is what #171's shield gate enforces, so the runbook and the detector
+agree by construction. The derivation below is why a gate exists at all and where
+the ceiling comes from.
 
 A wallet stamps `expiry_height = ourTip + 40`. Forty is the protocol default and
 it is what our own transparent sender uses too (`realsend.ts:91`, per ZIP 203).
@@ -368,10 +370,15 @@ minable  requires  networkTip <= ourTip + 40
                    i.e.  lag <= 40
 ```
 
-At a lag of exactly 40 the transaction is born with zero runway. It needs blocks
-in hand to propagate and be included, so the usable budget is 40 minus the lag.
-Ten leaves thirty blocks of real runway, which is roughly forty minutes at
-testnet's target spacing.
+At a lag of exactly 40 the transaction is born with zero runway, which is what
+happened to tx 29. It needs blocks in hand to propagate and be included, so the
+usable budget is 40 minus the lag.
+
+That makes 40 the hard ceiling and everything below it a judgement about margin.
+The gate is set at 5, leaving 35 blocks of runway, roughly three quarters of an
+hour at testnet's target spacing. Do not raise it toward 40 on the grounds that
+the arithmetic allows it: the arithmetic says where the transaction is guaranteed
+dead, not where it is safe.
 
 **This is a different number from `FAUCET_FREEZE_BLOCKS`, and using that one here
 would be a five-fold error.** #171's threshold is 200 because it answers "has our
