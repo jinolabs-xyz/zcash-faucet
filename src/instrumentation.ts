@@ -25,6 +25,12 @@ export async function register() {
   const { getReserveReconciler } = await import("@/lib/reserve/reconciler");
   getReserveReconciler().start();
 
+  // Warm the independent tip cache so the first readiness check can already tell
+  // whether our node is following the chain (#170). Fire-and-forget: never block
+  // boot on a public endpoint.
+  const { warmExternalTip } = await import("@/lib/zcash/externalTip");
+  void warmExternalTip();
+
   if (process.env.FAUCET_SENDER !== "real") return;
   const { warmT2z } = await import("@/lib/zcash/t2z");
   warmT2z();

@@ -41,3 +41,16 @@ test("no height field means null, never a fabricated number", () => {
   assert.equal(heightFromBlockID(Buffer.from([0x12, hash.length, ...hash])), null);
   assert.equal(heightFromBlockID(Buffer.alloc(0)), null);
 });
+
+test("a truncated height varint returns null, never a smaller wrong number", () => {
+  // 0x08 = height field, then a varint that keeps its continuation bit set but
+  // the buffer ends. Must be null (the safe direction is not-a-number, since a
+  // smaller number would falsely read as "not frozen").
+  assert.equal(heightFromBlockID(Buffer.from([0x08, 0x80])), null);
+  assert.equal(heightFromBlockID(Buffer.from([0x08, 0xda, 0x9d, 0x81])), null);
+});
+
+test("a truncated length-delimited field returns null, not a misread height", () => {
+  // 0x12 = hash field with a truncated length prefix, then nothing.
+  assert.equal(heightFromBlockID(Buffer.from([0x12, 0x80])), null);
+});

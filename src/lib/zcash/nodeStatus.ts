@@ -32,18 +32,15 @@ export async function getNodeStatus(): Promise<NodeStatus | null> {
   if (user) headers.authorization = "Basic " + Buffer.from(`${user}:${password}`).toString("base64");
 
   try {
-    // Ask our own node where it thinks the tip is, and independently ask the
-    // network where the tip actually is. The second call is what stops us from
-    // trusting a frozen node's word (#170).
-    const [res, externalHeight] = await Promise.all([
-      fetch(endpoint, {
-        method: "POST",
-        headers,
-        body: `{"jsonrpc":"2.0","id":"status","method":"getwalletstatus","params":[]}`,
-        signal: AbortSignal.timeout(4000),
-      }),
-      getExternalTip(),
-    ]);
+    // Ask our own node where it thinks the tip is. This is the only network call
+    // on the readiness path — the independent tip is a cached, non-blocking read
+    // (see externalTip.ts) so a slow public endpoint can never slow /api/ready.
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers,
+      body: `{"jsonrpc":"2.0","id":"status","method":"getwalletstatus","params":[]}`,
+      signal: AbortSignal.timeout(4000),
+    });
     if (!res.ok) return null;
     const json = (await res.json()) as { result?: { wallet_tip?: { height?: number }; node_tip?: { height?: number } } };
     const w = json.result?.wallet_tip?.height ?? null;
@@ -55,6 +52,7 @@ export async function getNodeStatus(): Promise<NodeStatus | null> {
     // tip is far below it. A null external tip means we could not verify — we do
     // NOT flip to frozen on that (never let a public-endpoint outage take down a
     // healthy faucet), but readiness stops claiming more than it knows.
+    const externalHeight = getExternalTip();
     const frozen = externalHeight != null && externalHeight - n > FREEZE_BLOCKS;
 
     const walletCaughtUp = n > 0 && w >= n - 5;
