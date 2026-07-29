@@ -6,7 +6,7 @@
 import { createRequire } from "node:module";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { SCHEMA } from "./sql.ts";
+import { MIGRATIONS, SCHEMA, TABLE_COLUMNS_SQL } from "./sql.ts";
 
 export interface Row {
   [k: string]: unknown;
@@ -37,6 +37,27 @@ export class SqliteDriver implements DbDriver {
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("busy_timeout = 5000");
     this.db.exec(SCHEMA);
+    this.migrate();
+  }
+
+  /**
+   * Bring an EXISTING database up to the current schema (#213).
+   *
+   * Synchronous and in the constructor, deliberately: every read and write goes
+   * through this driver, so there is no ordering in which a query could beat the
+   * migration. An async post-construction step would have that race.
+   *
+   * Skips rather than swallows. A migration whose column is already there is not
+   * attempted at all, so a genuine failure still throws and takes the process down
+   * at boot with the reason, which is where a broken ledger should be discovered.
+   */
+  private migrate() {
+    for (const m of MIGRATIONS) {
+      const cols = this.db.prepare(TABLE_COLUMNS_SQL(m.presentWhen.table)).all() as { name: string }[];
+      if (cols.some((c) => c.name === m.presentWhen.column)) continue;
+      this.db.exec(m.sql);
+      console.log(`[db] applied migration ${m.id}`);
+    }
   }
 
   async run(sql: string, params: (string | number)[]): Promise<RunResult> {
