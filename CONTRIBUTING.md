@@ -400,10 +400,6 @@ Every correction came from the same few habits, so the habits are rules.
     to broadcast on a tip we cannot verify. And clamp the parsed value, because a
     budget an operator can set past the cliff is a comment, not a limit.
 
-Money paths (send, ledger, reservation, PoW verify) never skip review, no
-matter how urgent the window. Docs and pure test additions may fast-track
-at the CTO's discretion.
-
 28. `merged` is not `shipped`. GitHub reporting a pull request MERGED means a
     merge succeeded, never that the code reached the branch that deploys. #220 was
     stacked on #219's branch so a reviewer could see a migration and its first
@@ -429,6 +425,10 @@ at the CTO's discretion.
     it merges or re-target the child first, and audit with the ancestor check
     rather than by reading anything.
 
+
+Money paths (send, ledger, reservation, PoW verify) never skip review, no
+matter how urgent the window. Docs and pure test additions may fast-track
+at the CTO's discretion.
 
 ## Comments
 
