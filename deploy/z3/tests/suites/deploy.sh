@@ -19,7 +19,44 @@ check "overlay brought up twice (early + account rewire)" "[ \"\$(grep -c '^over
 check "faucet.env has RPC password" "grep -q '^ZALLET_RPC_PASSWORD=..*' '$D/z3-stack/../z3/faucet.env'"
 check "faucet.env has account uuid" "grep -q '^ZALLET_ACCOUNT=stub-uuid-1234$' '$D/z3/faucet.env'"
 check "faucet.env has address" "grep -q '^ZALLET_ADDRESS=utest1stubaddress$' '$D/z3/faucet.env'"
-check "salt note printed" "grep -q 'RATE_LIMIT_SALT' '$T/run1.log'"
+# A fresh box must come up with a REAL salt, not a placeholder and not a note
+# telling a human to go and fix it (#173). The old check asserted the NOTE, which
+# is what "a deploy printing success over an unbootable env" looks like in a test.
+check "fresh deploy GENERATES a real salt" \
+  "grep -qE '^RATE_LIMIT_SALT=[0-9a-f]{64}$' '$D/z3/faucet.env'"
+check "no placeholder salt survives a successful deploy" \
+  "! grep -qiE 'RATE_LIMIT_SALT=.*(__fill_me__|change-me|changeme)' '$D/z3/faucet.env'"
+check "no salt nag on a fresh box, because there is nothing to nag about" \
+  "! grep -q 'set a real RATE_LIMIT_SALT' '$T/run1.log'"
+
+# deploy.sh's placeholder list is a COPY of PLACEHOLDER_MARKERS in
+# src/lib/saltGuard.ts, because a shell script cannot import TypeScript. If the two
+# drift, deploy.sh blesses an env the app rejects, which is #173 again.
+#
+# Compared as SETS, and that detail is SDE-Infra's finding on #205. My first version
+# looped over three hardcoded marker names and grepped for each in both files, which
+# is a THIRD copy of the list and can only catch DELETION. Addition is the likelier
+# direction, because you add a marker at the moment you discover a new template
+# string: add "placeholder" to saltGuard.ts and every assertion still passed, while
+# deploy.sh left RATE_LIMIT_SALT=placeholder in place for the app to reject at boot.
+# The #188 shape, proving the mechanism while blind to the coverage.
+#
+# Read from each DECLARATION rather than grepped over the whole file, which is the
+# other half of their finding: a whole-file grep reported no drift for "placeholder"
+# because the PROSE COMMENT above contains that word. The comment explaining the
+# mechanism satisfied the check for a marker the code does not handle, which is #177
+# again.
+ts_markers(){ sed -n 's/.*PLACEHOLDER_MARKERS = \[\(.*\)\].*/\1/p' "$1" | tr -d '" ' | tr ',' '\n' | sort; }
+sh_markers(){ sed -n 's/.*PLACEHOLDER_MARKERS = (\(.*\)).*/\1/p'  "$1" | tr -d '" ' | tr ',' '\n' | sort; }
+GUARD_MARKERS="$(ts_markers "$REPO/src/lib/saltGuard.ts")"
+SHELL_MARKERS="$(sh_markers "$REPO/deploy/deploy.sh")"
+# The -n guards are not decoration. If either sed stops matching because a
+# declaration gets reformatted, the extraction is empty, two empty strings compare
+# EQUAL, and the check passes having verified nothing.
+check "both placeholder lists were actually found" \
+  "[ -n \"$GUARD_MARKERS\" ] && [ -n \"$SHELL_MARKERS\" ]"
+check "deploy.sh's placeholder list matches saltGuard.ts exactly, both directions" \
+  "[ \"$GUARD_MARKERS\" = \"$SHELL_MARKERS\" ]"
 check "overlay containers labeled and present" "[ -f '$STUB_CONTAINERS/zcash-faucet-faucet-1' ] && [ -f '$STUB_CONTAINERS/zcash-faucet-caddy-1' ]"
 
 ZVOL_DIR() { echo "$STUB_VOLROOT/z3-testnet-zallet"; }
@@ -71,15 +108,34 @@ echo "== (wallet-init checks skipped, deploy.sh has no init flow on this branch)
 fi
 unset HAS_INIT
 
-echo "== re-run after the operator fixed the salt (the old errexit trap)"
-# Portable in-place edit: `sed -i` takes a backup suffix on BSD/macOS, so the
-# GNU no-suffix form fails there and leaves the file unchanged (#160). Write to
-# a temp and move instead, which behaves the same on both.
-sed 's/^RATE_LIMIT_SALT=.*/RATE_LIMIT_SALT=a-real-salt/' "$D/z3/faucet.env" > "$D/z3/faucet.env.tmp" \
-  && mv "$D/z3/faucet.env.tmp" "$D/z3/faucet.env"
+echo "== re-run must NOT rotate an existing salt"
+# The property that matters most here, and the one that would be silent if wrong.
+# RATE_LIMIT_SALT both signs the PoW challenges AND salts the ledger
+# fingerprints, so regenerating it on every deploy would invalidate every live
+# challenge and effectively RESET EVERY COOLDOWN, handing everyone a fresh drip.
+# Nothing would error. write_env also runs twice per deploy, so this covers the
+# second call leaving the first call's work alone.
+SALT_BEFORE="$(grep '^RATE_LIMIT_SALT=' "$D/z3/faucet.env")"
 run_deploy > "$T/run3.log" 2>&1
-check "salt-fixed re-run exits 0" "[ $? -eq 0 ]"
-check "no salt nag once set" "! grep -q 'RATE_LIMIT_SALT' '$T/run3.log'"
+check "re-run exits 0" "[ $? -eq 0 ]"
+check "re-run left the generated salt EXACTLY as it was" \
+  "[ \"\$(grep '^RATE_LIMIT_SALT=' '$D/z3/faucet.env')\" = \"$SALT_BEFORE\" ]"
+
+echo "== a hand-edited placeholder salt is REPLACED, not preserved"
+# saltGuard rejects change-me as well as __FILL_ME__, and the old deploy check
+# only looked for its own placeholder, so this exact shape passed the deploy and
+# then crash-looped the app.
+#
+# Portable in-place edit: `sed -i` takes a backup suffix on BSD/macOS, so the GNU
+# no-suffix form fails there and leaves the file unchanged (#160). Write to a temp
+# and move instead, which behaves the same on both.
+sed 's/^RATE_LIMIT_SALT=.*/RATE_LIMIT_SALT=change-me-please/' "$D/z3/faucet.env" > "$D/z3/faucet.env.tmp" \
+  && mv "$D/z3/faucet.env.tmp" "$D/z3/faucet.env"
+run_deploy > "$T/run4.log" 2>&1
+check "re-run over a placeholder exits 0" "[ $? -eq 0 ]"
+check "the placeholder was replaced with a real generated salt" \
+  "grep -qE '^RATE_LIMIT_SALT=[0-9a-f]{64}$' '$D/z3/faucet.env'"
+
 echo "== deploy does not announce a faucet that is not staying up (#206)"
 # The bug this pins: deploy.sh printed "the faucet is live" for having REACHED
 # that line, so a fresh box could crash-loop through an entire chain sync with the
