@@ -323,6 +323,53 @@ fi
 say "Restarting the faucet with the account wired"
 overlay_up
 
+# Do not announce success without checking it. This line used to print "the
+# faucet is live" for having been REACHED, and nothing looked. overlay_up happens
+# before the hours-long sync wait, so a box whose app could not boot crash-looped
+# through the whole sync with the last thing on screen saying it worked (#206).
+# Same shape as the watchdog announcing 812 recoveries it never verified (#175):
+# a report derived from control flow instead of from the thing it describes.
+#
+# Asked of compose by SERVICE name rather than grepped for a container name:
+# compose derives the project from the directory, so the real containers are
+# z3-faucet-1 while the harness models zcash-faucet-faucet-1 — a name grep would
+# pass in tests and go blind in production, which is backwards for a check whose
+# only job is honesty.
+#
+# Sampled twice, because a container in a restart loop passes through `running`
+# on its way round and one look can land on the good frame.
+#
+# This proves the process STAYS UP. It does not prove the faucet serves correct
+# responses — a container answering 500 to everything reads as running here — so
+# the wording claims only what was observed.
+faucet_status(){  # running | not-running | cannot-tell
+  local cid s1 s2
+  cid="$( cd "$HERE/z3" && docker compose -f docker-compose.faucet.yml ps -q faucet 2>/dev/null | head -n1 )"
+  [ -n "$cid" ] || { printf 'cannot-tell'; return 0; }
+  s1="$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null)" || { printf 'cannot-tell'; return 0; }
+  sleep "${DEPLOY_HEALTH_SETTLE_SECS:-5}"
+  s2="$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null)" || { printf 'cannot-tell'; return 0; }
+  if [ "$s1" = running ] && [ "$s2" = running ]; then printf 'running'
+  else printf 'not-running'; fi
+}
+
+case "$(faucet_status)" in
+  not-running)
+    say "DEPLOY INCOMPLETE: everything is installed, but the faucet container is
+   not staying up, so the site is NOT serving. Nothing above failed — this is the
+   app refusing to boot or crashing on start, and the reason is in its log:
+       cd $HERE/z3 && docker compose -f docker-compose.faucet.yml logs --tail=50 faucet
+   Re-run this script once the cause is fixed; it is safe to re-run."
+    exit 1
+    ;;
+  cannot-tell)
+    say "Everything is installed, but I could not read the faucet container's
+   state, so I cannot tell you whether the site is serving. Check it yourself:
+       curl -s ${FAUCET_DOMAIN:+https://$FAUCET_DOMAIN}${FAUCET_DOMAIN:-http://localhost}/api/status"
+    exit 1
+    ;;
+esac
+
 say "Done. The faucet is live${FAUCET_DOMAIN:+ at https://$FAUCET_DOMAIN}."
 echo "   Check:   curl -s ${FAUCET_DOMAIN:+https://$FAUCET_DOMAIN}${FAUCET_DOMAIN:-http://localhost}/api/status"
 echo "   Fund it: send $NETWORK ZEC to  $ADDR"

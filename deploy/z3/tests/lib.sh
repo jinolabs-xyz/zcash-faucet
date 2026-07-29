@@ -85,4 +85,8 @@ deploy_fresh_env() {
   printf '#!/usr/bin/env bash\nexit 0\n' > "$D/z3-stack/scripts/setup-network.sh"
   chmod +x "$D/z3-stack/scripts/"*.sh
 }
-run_deploy() { NONINTERACTIVE=1 NETWORK=testnet bash "$D/deploy.sh"; }
+# DEPLOY_HEALTH_SETTLE_SECS=0: deploy.sh samples the faucet's state twice with a
+# pause between, which is right on a real box and only dead time here. The stub
+# advances the state per read, not per second, so the two samples stay two
+# samples.
+run_deploy() { NONINTERACTIVE=1 NETWORK=testnet DEPLOY_HEALTH_SETTLE_SECS=0 bash "$D/deploy.sh"; }
