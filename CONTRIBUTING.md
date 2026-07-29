@@ -111,6 +111,14 @@ Gotchas that have already bitten us once each:
 - The shell test harness has one entrypoint, `deploy/z3/tests/run-tests.sh`.
   Never glob the tests directory: `stubs/` holds fake binaries the runner
   puts on PATH, not test files.
+- A job spec only exists in the shell that created it. `npm start &` in one
+  shell and `kill %1` in another kills nothing and reports nothing, which is
+  how 51 orphaned `next-server` processes ended up holding ports on one
+  machine. Tear down by port instead, and read the port back, because a kill
+  is a claim like any other:
+  `pid=$(lsof -ti :PORT -sTCP:LISTEN | head -1); kill "$pid"`. Never
+  `pkill -f next-server` on a shared box, since a teammate is probably
+  mid-assertion on one of them.
 
 CI runs all of this on every PR and on pushes to main. Green on CI is the
 floor, not the bar. The bar is that you exercised your change for real.
@@ -280,6 +288,73 @@ Every correction came from the same few habits, so the habits are rules.
     and read as an inconsistency worth tidying, which is exactly how the wrong
     one gets copied. Write which direction each failure takes and why, next to
     the code, because the tidy version of this is the dangerous one.
+
+22. Fail-closed, applied without thinking, invents a new way to fail. The
+    freshness gate refuses to pay out when it cannot verify the chain tip, which
+    is right. `getExternalTip()` is deliberately NON-BLOCKING, so the first read
+    after its cache ages out returns null and only then starts a refresh, which
+    is also right. Composed, they meant a healthy faucet with a funded wallet
+    refused a real user's claim after five quiet minutes, and told them our node
+    was behind when the truth was that we had not asked lately (#187). So on a
+    path that moves money, ASK before deciding, bounded, and let the timeout be
+    the thing that produces cannot-verify. "We could not establish it" has to
+    mean the network would not tell us, never that we did not get round to
+    checking. Refusing for a reason that is not true is its own outage.
+
+23. Awaiting a coalesced refresher can be a silent no-op. `warmExternalTip()`
+    returns immediately when a refresh is already in flight, and the read that
+    just returned null is precisely what started that refresh, so awaiting it
+    resolves at once and you read the same null. Nothing errors. Poll for the
+    VALUE with a deadline, never await the thing that fetches it, whenever the
+    fetcher deduplicates. The reason this is a rule and not a bug report: the
+    warning was already written down, by me, in the test file for the previous
+    change, and I walked into it anyway a few hours later. Documenting a trap
+    is not the same as heeding it, so the safe shape has to be the one in the
+    code rather than the one in a comment above it.
+
+24. A module that will not load is a module with no tests, and nothing tells
+    you. `refiller.ts` built its implementation through `require()`, which is
+    undefined in an ES module, and the reserve modules used extensionless
+    imports that Next resolves and `node --test` does not. Between them the
+    whole refill path was unloadable under the test runner, so the reconciler
+    had never had a single test, and no count, no suite name and no green run
+    ever mentioned it. Rules 15 and 18 are about what a test can express. This
+    is the floor under them: check that the module you believe is covered can
+    be imported by the runner at all, because zero tests looks exactly like
+    passing tests from the summary line. That gap is a real part of how #172
+    got as far as it did.
+
+25. When two figures for the same thing disagree, one of them is wrong, and
+    "both sound bad enough" is not a resolution. The temptation is to accept
+    whichever number supports the action you were going to take, because both
+    point the same direction. Find out what each figure is actually OF. A CI run
+    read six of seven jobs green while another reading of the same branch read
+    seven of seven, and neither was a mistake: one described the branch tip, the
+    other a commit two behind it. The reviewer who reconciles them says "the run,
+    not the branch" and moves on. The one who does not either blocks a green PR
+    or clears a red one, with a straight face either way.
+
+26. A detector has to prove it can still FIRE, not just that it passes. A check
+    that looks for a key by name matched the key in a COMMENT, so the comment
+    written to explain why the key mattered was enough to silence the check for
+    that key: documenting the problem hid it (#188). It was caught by deleting
+    the real assignment and watching the audit stay quiet, which is rule 4's
+    sabotage applied to a detector rather than a test. Match the thing that
+    carries the meaning, an assignment and not a mention, then break it and
+    watch the alarm go off.
+
+27. For every threshold, ask what happens when it is NOT a number. This is where
+    a guard silently disappears rather than misbehaving. `Number("trlue")` is
+    `NaN`, `lag > NaN` is false for every lag, so one typo in an env file turned
+    the shield gate into a pass-through that reported a 220,000-block lag as
+    safe, with its own reason string reading "within NaN blocks" (#171). The same
+    typo would have switched off the frozen-node detector that exists because of
+    Fauzec's faucet, and the stall detector, which then reported `stalled: false`
+    beside `stalledMs: 86400000`. Three guards, one keystroke each. Parse through
+    a helper that THROWS (`num()` in `config.ts`) rather than one that coerces:
+    failing to boot on a value we cannot parse is the same discipline as refusing
+    to broadcast on a tip we cannot verify. And clamp the parsed value, because a
+    budget an operator can set past the cliff is a comment, not a limit.
 
 Money paths (send, ledger, reservation, PoW verify) never skip review, no
 matter how urgent the window. Docs and pure test additions may fast-track
