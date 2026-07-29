@@ -7,6 +7,7 @@
  */
 import { config } from "../config.ts";
 import { getExternalTip } from "./externalTip.ts";
+import { readShieldFreshness, type ShieldGate } from "./shieldGate.ts";
 
 export interface NodeStatus {
   ready: boolean;
@@ -15,6 +16,15 @@ export interface NodeStatus {
   nodeHeight: number | null; // node tip (OUR node's self-report)
   externalHeight: number | null; // network tip per an independent source (null = couldn't verify)
   frozen: boolean; // our node has fallen far behind the real network (#170)
+  /**
+   * Whether our chain view is fresh enough to BUILD a transaction — a different and
+   * much tighter question than `frozen`, and deliberately not derived from it. See
+   * shieldGate.ts for why they must not share a threshold: a 40-block lag produces
+   * born-expired transactions while `frozen` (200) still reads false (#172).
+   * Surfaced here so it is observable from /api/status; the refusal itself belongs
+   * at the broadcast site.
+   */
+  shield: ShieldGate;
 }
 
 // How far our node may lag the independent tip before we call it frozen. Normal
@@ -56,7 +66,15 @@ export async function getNodeStatus(): Promise<NodeStatus | null> {
     const frozen = externalHeight != null && externalHeight - n > FREEZE_BLOCKS;
 
     const walletCaughtUp = n > 0 && w >= n - 5;
-    return { ready: walletCaughtUp && !frozen, syncPercent, height: w, nodeHeight: n, externalHeight, frozen };
+    return {
+      ready: walletCaughtUp && !frozen,
+      syncPercent,
+      height: w,
+      nodeHeight: n,
+      externalHeight,
+      frozen,
+      shield: readShieldFreshness(n),
+    };
   } catch {
     return null;
   }
