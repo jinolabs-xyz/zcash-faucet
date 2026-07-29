@@ -263,6 +263,24 @@ Every correction came from the same few habits, so the habits are rules.
     inequality is reachable, so pin both: that the listing found something,
     and that a real change is detected.
 
+21. Absent information needs its own state, and the caller must refuse on it.
+    A missing count is not a zero. A missing tip is not a safe tip. Two states
+    force the unknown case to collapse into one of them, and it collapses toward
+    whichever is permissive, because that is the branch nobody notices. So give
+    it a third: `cannot-verify` beside not-frozen and frozen (#171),
+    `cannot-tell` beside recovered and still-broken (#175),
+    `count-not-reported` beside nothing-visible and present-but-unspendable
+    (#174), `unverifiable` beside safe and unsafe on the shield gate. Four in one
+    week, each found after a boolean had already shipped.
+    The sharpest case is two checks needing OPPOSITE failure modes on the same
+    input. Readiness must fail OPEN on a null external tip, because a public
+    endpoint going down must not take a healthy faucet with it. The gate that
+    authorises moving money must fail CLOSED on the identical value, because
+    cannot-verify is not clearance. Those live a few lines apart in the same file
+    and read as an inconsistency worth tidying, which is exactly how the wrong
+    one gets copied. Write which direction each failure takes and why, next to
+    the code, because the tidy version of this is the dangerous one.
+
 Money paths (send, ledger, reservation, PoW verify) never skip review, no
 matter how urgent the window. Docs and pure test additions may fast-track
 at the CTO's discretion.
