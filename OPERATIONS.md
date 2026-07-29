@@ -253,10 +253,27 @@ Adding the line by hand also works and is safe, since the append never overwrite
 ### 3.5 Establish why the first shield died, before permitting a second
 
 **Precondition, not a post-hoc watch.** The previous `z_shieldcoinbase` was built,
-broadcast, never confirmed, and expired unmined at height 4,217,981 with a fee of
-15,000 zatoshi. If whatever killed it is still true, a new shield dies the same
-way the moment step 4 flips the flag, and we will have done all of this to
-recreate the poison we just removed.
+broadcast, and never confirmed. If whatever killed it is still true, a new shield
+dies the same way the moment step 4 flips the flag, and we will have done all of
+this to recreate the poison we just removed.
+
+**The cause is now measured, not guessed.** Tx 29 was created **4.3 seconds after
+the block at its own expiry height was mined**. The network had already reached
+4,217,981 when the wallet stamped that as the deadline, so the transaction was
+born with zero runway and could never have been included, whatever the fee or the
+relay.
+
+That puts the observed lag at almost exactly **40 blocks**, which is the value at
+which runway reaches zero by the arithmetic below. The derivation and the
+measurement agree, which is the strongest form this explanation can take.
+
+So the diagnosis question is closed. **The refusal below still binds**, for a
+different reason than when it was written: we now know what killed the transaction
+and we cannot yet prove the condition is gone, because no detector exists at the
+resolution that matters. #171's freeze check trips at 200 blocks and the fatal
+threshold is 40, so nothing we currently run can tell a safe node from one that
+will mint another corpse. Infra is building that gate. Until it ships, the answer
+to "is it safe to shield" is unverifiable rather than yes.
 
 What is already ruled out, so nobody spends time there:
 
@@ -274,11 +291,12 @@ theory and it is not what happened.
 That leaves two candidates, and one of them we can already test with a field we
 built for something else.
 
-**Candidate A: our node was behind the network when it built the transaction.**
+**Confirmed cause: our node was behind the network when it built the transaction.**
 A wallet sets `expiry_height` from *its own node's* tip. A node that has drifted
 behind builds a transaction whose expiry is already in the network's past, so it
 can never be mined regardless of fee or relay. It looks perfectly valid locally
-and is dead on arrival everywhere else.
+and is dead on arrival everywhere else. The 4.3-second measurement above is this
+mechanism caught in the act.
 
 I proposed this as one mechanism explaining two mysteries, the non-confirmation
 and the multiplicity, and **the multiplicity half was refuted by the box.** The
@@ -366,11 +384,11 @@ broadcast.
 
 A null or missing external tip is cannot-verify, which is not a pass.
 
-**Candidate B: the transaction never reached the network.** Peer count, relay, and
-whether our mempool is reachable at all. This needs box reads and it is
-SDE-Infra's verification-layer territory rather than mine. INFERRED, not
-verified: if candidate A comes back clean, B is what remains, and a shield that
-our own node accepted and no miner ever saw is a relay problem.
+**Ruled out: the transaction never reached the network.** Relay and isolation were
+the other candidate and the box refutes them. Zebra reports 111 peers, and the
+mempool is empty as expected for a long-expired transaction. A shield that our
+node accepted and no miner ever saw would be a relay problem, and that is not what
+happened here.
 
 **If neither can be established, do not flip the flag.** An unexplained failure
 of exactly this operation is a reason to wait, not a reason to retry. The coinbase
