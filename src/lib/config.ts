@@ -192,10 +192,25 @@ export const config = {
   },
 
   // Anti-abuse gate before a claim: "pow" (browser proof-of-work / hashcash),
-  // "turnstile" (Cloudflare captcha), or "none". Default follows whatever is
-  // configured: Turnstile if its secret is set, else none.
+  // "turnstile" (Cloudflare captcha), or "none".
+  //
+  // The fallback is POW, not none, and that is the whole point. This is the only
+  // switch that makes a claim COST anything, and its default used to be off: a
+  // fresh box, a clean redeploy, or a forgotten variable all came up serving with
+  // no gate at all, silently. The live faucet had pow only because somebody had
+  // typed it into the box by hand, which is not a control, it is a habit.
+  //
+  // A security default of "off" eventually ships off. So an operator who says
+  // nothing gets the gate, and turning it OFF is the thing you have to ask for by
+  // name (challenge=none, which local dev and the test doubles do explicitly).
+  //
+  // Consequence worth knowing: in production with pow, saltGuard refuses to boot
+  // on an empty or placeholder RATE_LIMIT_SALT, because a known salt makes the
+  // challenge forgeable. So a fresh box now stops with a message naming what to
+  // set, instead of coming up unprotected. That is the trade, and it is the right
+  // way round: loud and safe over quiet and open.
   challenge: (process.env.FAUCET_CHALLENGE ??
-    (process.env.TURNSTILE_SECRET_KEY ? "turnstile" : "none")) as "pow" | "turnstile" | "none",
+    (process.env.TURNSTILE_SECRET_KEY ? "turnstile" : "pow")) as "pow" | "turnstile" | "none",
 
   pow: {
     // Base difficulty in leading zero bits of sha256(challenge:nonce). ~20 bits
@@ -226,9 +241,25 @@ if (config.reserve.lowZatoshi >= config.reserve.targetZatoshi) {
 // A production faucet with an active challenge gate must not run on an empty
 // or template-placeholder RATE_LIMIT_SALT: the PoW gate signs challenges with
 // it, so a known salt makes the gate forgeable. Same fail-loud posture.
-const saltProblem = saltRejectionReason({
-  salt: process.env.RATE_LIMIT_SALT ?? "",
-  production: process.env.NODE_ENV === "production",
-  challenge: config.challenge,
-});
-if (saltProblem) throw new Error(saltProblem);
+/**
+ * Checks that only make sense for a process about to SERVE traffic. Called from
+ * instrumentation.register() at boot, never at import.
+ *
+ * The salt guard used to run at import time, which meant `next build` demanded the
+ * production secret: it sets NODE_ENV=production and imports every route module to
+ * collect page data, so compiling the artifact required a runtime secret. A build
+ * serves nothing and has no gate to forge yet. register() does not run during a
+ * build, so boot is where this belongs.
+ *
+ * The security property is unchanged: a real server still refuses to start without
+ * a usable salt, and it says so in a boot log where an operator can act on it
+ * rather than buried in build output (#206).
+ */
+export function assertServingConfig(): void {
+  const saltProblem = saltRejectionReason({
+    salt: process.env.RATE_LIMIT_SALT ?? "",
+    production: process.env.NODE_ENV === "production",
+    challenge: config.challenge,
+  });
+  if (saltProblem) throw new Error(saltProblem);
+}

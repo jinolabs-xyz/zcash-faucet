@@ -46,3 +46,14 @@ test("a real random salt passes in production with either gate", () => {
   assert.equal(saltRejectionReason({ salt: REAL_SALT, production: true, challenge: "pow" }), null);
   assert.equal(saltRejectionReason({ salt: REAL_SALT, production: true, challenge: "turnstile" }), null);
 });
+
+test("the rule itself is about SERVING, and where it runs is asserted elsewhere", () => {
+  // This function cannot know when it is called, so the build-versus-boot property
+  // is pinned in challengeDefault.test.ts against the real import path. Kept here
+  // as a pointer, because the obvious place to look for it is this file.
+  assert.equal(saltRejectionReason({ salt: "", production: false, challenge: "pow" }), null);
+  assert.match(
+    saltRejectionReason({ salt: "", production: true, challenge: "pow" }) ?? "",
+    /RATE_LIMIT_SALT is not set/,
+  );
+});
