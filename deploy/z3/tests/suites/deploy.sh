@@ -19,7 +19,23 @@ check "overlay brought up twice (early + account rewire)" "[ \"\$(grep -c '^over
 check "faucet.env has RPC password" "grep -q '^ZALLET_RPC_PASSWORD=..*' '$D/z3-stack/../z3/faucet.env'"
 check "faucet.env has account uuid" "grep -q '^ZALLET_ACCOUNT=stub-uuid-1234$' '$D/z3/faucet.env'"
 check "faucet.env has address" "grep -q '^ZALLET_ADDRESS=utest1stubaddress$' '$D/z3/faucet.env'"
-check "salt note printed" "grep -q 'RATE_LIMIT_SALT' '$T/run1.log'"
+# A fresh box must come up with a REAL salt, not a placeholder and not a note
+# telling a human to go and fix it (#173). The old check asserted the NOTE, which
+# is what "a deploy printing success over an unbootable env" looks like in a test.
+check "fresh deploy GENERATES a real salt" \
+  "grep -qE '^RATE_LIMIT_SALT=[0-9a-f]{64}$' '$D/z3/faucet.env'"
+check "no placeholder salt survives a successful deploy" \
+  "! grep -qiE 'RATE_LIMIT_SALT=.*(__fill_me__|change-me|changeme)' '$D/z3/faucet.env'"
+check "no salt nag on a fresh box, because there is nothing to nag about" \
+  "! grep -q 'set a real RATE_LIMIT_SALT' '$T/run1.log'"
+
+# deploy.sh's placeholder list is a COPY of PLACEHOLDER_MARKERS in
+# src/lib/saltGuard.ts, because a shell script cannot import TypeScript. If the
+# two drift, deploy.sh blesses an env the app rejects, which is #173 again.
+for marker in __fill_me__ change-me changeme; do
+  check "deploy.sh knows the '$marker' placeholder" "grep -q '$marker' '$REPO/deploy/deploy.sh'"
+  check "saltGuard.ts still rejects '$marker'" "grep -q '$marker' '$REPO/src/lib/saltGuard.ts'"
+done
 check "overlay containers labeled and present" "[ -f '$STUB_CONTAINERS/zcash-faucet-faucet-1' ] && [ -f '$STUB_CONTAINERS/zcash-faucet-caddy-1' ]"
 
 ZVOL_DIR() { echo "$STUB_VOLROOT/z3-testnet-zallet"; }
@@ -71,15 +87,34 @@ echo "== (wallet-init checks skipped, deploy.sh has no init flow on this branch)
 fi
 unset HAS_INIT
 
-echo "== re-run after the operator fixed the salt (the old errexit trap)"
-# Portable in-place edit: `sed -i` takes a backup suffix on BSD/macOS, so the
-# GNU no-suffix form fails there and leaves the file unchanged (#160). Write to
-# a temp and move instead, which behaves the same on both.
-sed 's/^RATE_LIMIT_SALT=.*/RATE_LIMIT_SALT=a-real-salt/' "$D/z3/faucet.env" > "$D/z3/faucet.env.tmp" \
-  && mv "$D/z3/faucet.env.tmp" "$D/z3/faucet.env"
+echo "== re-run must NOT rotate an existing salt"
+# The property that matters most here, and the one that would be silent if wrong.
+# RATE_LIMIT_SALT both signs the PoW challenges AND salts the ledger
+# fingerprints, so regenerating it on every deploy would invalidate every live
+# challenge and effectively RESET EVERY COOLDOWN, handing everyone a fresh drip.
+# Nothing would error. write_env also runs twice per deploy, so this covers the
+# second call leaving the first call's work alone.
+SALT_BEFORE="$(grep '^RATE_LIMIT_SALT=' "$D/z3/faucet.env")"
 run_deploy > "$T/run3.log" 2>&1
-check "salt-fixed re-run exits 0" "[ $? -eq 0 ]"
-check "no salt nag once set" "! grep -q 'RATE_LIMIT_SALT' '$T/run3.log'"
+check "re-run exits 0" "[ $? -eq 0 ]"
+check "re-run left the generated salt EXACTLY as it was" \
+  "[ \"\$(grep '^RATE_LIMIT_SALT=' '$D/z3/faucet.env')\" = \"$SALT_BEFORE\" ]"
+
+echo "== a hand-edited placeholder salt is REPLACED, not preserved"
+# saltGuard rejects change-me as well as __FILL_ME__, and the old deploy check
+# only looked for its own placeholder, so this exact shape passed the deploy and
+# then crash-looped the app.
+#
+# Portable in-place edit: `sed -i` takes a backup suffix on BSD/macOS, so the GNU
+# no-suffix form fails there and leaves the file unchanged (#160). Write to a temp
+# and move instead, which behaves the same on both.
+sed 's/^RATE_LIMIT_SALT=.*/RATE_LIMIT_SALT=change-me-please/' "$D/z3/faucet.env" > "$D/z3/faucet.env.tmp" \
+  && mv "$D/z3/faucet.env.tmp" "$D/z3/faucet.env"
+run_deploy > "$T/run4.log" 2>&1
+check "re-run over a placeholder exits 0" "[ $? -eq 0 ]"
+check "the placeholder was replaced with a real generated salt" \
+  "grep -qE '^RATE_LIMIT_SALT=[0-9a-f]{64}$' '$D/z3/faucet.env'"
+
 echo "== deploy does not announce a faucet that is not staying up (#206)"
 # The bug this pins: deploy.sh printed "the faucet is live" for having REACHED
 # that line, so a fresh box could crash-loop through an entire chain sync with the
