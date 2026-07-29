@@ -1,5 +1,11 @@
 /**
- * May we broadcast a coinbase shield right now?
+ * Is our chain view fresh enough to BUILD a transaction that can actually confirm?
+ *
+ * Not shield-specific, despite the filename. A drip and a coinbase shield are the
+ * same question: both are transactions this wallet builds, both get an expiry height
+ * of tip+40, and both are born dead if our node's tip is stale. #187 is what happens
+ * when only one of them asks. The filename stays for now so #171 and #186 do not need
+ * reworking mid-flight, and renaming the file is a follow-up once both have landed.
  *
  * This lives in its own file on purpose. The readiness check in nodeStatus.ts
  * asks a similar-looking question about the same two heights and deliberately
@@ -28,14 +34,14 @@
  */
 
 import { num } from "../config.ts";
-import { getExternalTip } from "./externalTip.ts";
+import { getExternalTip, warmExternalTip } from "./externalTip.ts";
 
 /*
  * The decision itself is a PURE function of two heights (see shieldFreshness),
  * following the same convention as the reserve's decide.ts: rules with no imports,
  * so every branch — including the ones that only happen when a public endpoint is
  * down — is reachable in a test without mocking a module or touching a network.
- * readShieldFreshness() is the thin wrapper that supplies the live oracle value.
+ * readChainFreshness() is the thin wrapper that supplies the live oracle value.
  */
 
 /**
@@ -44,10 +50,10 @@ import { getExternalTip } from "./externalTip.ts";
  * permissive side. Same reasoning as the tip oracle's null, the watchdog's
  * cannot-tell, and #174's count-not-reported: a missing tip is not a safe tip.
  */
-export type ShieldFreshness = "safe" | "unsafe" | "unverifiable";
+export type ChainFreshness = "safe" | "unsafe" | "unverifiable";
 
-export interface ShieldGate {
-  state: ShieldFreshness;
+export interface ChainGate {
+  state: ChainFreshness;
   nodeHeight: number | null;
   externalHeight: number | null;
   /** externalHeight - nodeHeight when both are known; negative means we are ahead. */
@@ -110,10 +116,10 @@ export const SHIELD_MAX_LAG_BLOCKS = (() => {
  * unlike the diagnostic question of "is our node caught up" while the wallet is
  * down — that one needs a direct zebra read and is answered outside the app.
  */
-export function shieldFreshness(
+export function chainFreshness(
   nodeHeight: number | null,
   externalHeight: number | null,
-): ShieldGate {
+): ChainGate {
   if (nodeHeight == null) {
     return {
       state: "unverifiable",
@@ -165,12 +171,74 @@ export function shieldFreshness(
  * The only helper callers should use to decide whether to broadcast. It exists so
  * no call site ever writes `state !== "unsafe"`, which would let unverifiable
  * through — the precise mistake this module's shape is designed to prevent.
+ *
+ * Named for the general question rather than the shield, because the drip path asks
+ * it too (#187). A gate called mayShield() guarding a user's drip is a lie at the
+ * call site, and a misleading name on a money gate is how someone eventually decides
+ * it does not apply to them and writes the `!== "unsafe"` version by hand.
  */
-export function mayShield(gate: ShieldGate): boolean {
+export function mayBuildTransaction(gate: ChainGate): boolean {
   return gate.state === "safe";
 }
 
 /** Live reading: the pure decision above, fed the current cached oracle value. */
-export function readShieldFreshness(nodeHeight: number | null): ShieldGate {
-  return shieldFreshness(nodeHeight, getExternalTip());
+export function readChainFreshness(nodeHeight: number | null): ChainGate {
+  return chainFreshness(nodeHeight, getExternalTip());
 }
+
+/**
+ * Longest we will make a caller wait for the oracle before deciding without it.
+ * The request path is the constraint: two seconds is tolerable in front of a drip
+ * that takes seconds to build anyway, and it is well under any sane client timeout.
+ */
+const ORACLE_WAIT_MS = 2000;
+
+/**
+ * The reading for a caller that is ABOUT TO BUILD a transaction, rather than one
+ * reporting status.
+ *
+ * The difference is worth a whole function. getExternalTip() is deliberately
+ * NON-BLOCKING: it returns the cached value and only kicks a refresh afterwards, so
+ * a slow public endpoint can never slow /api/ready. The consequence is that the
+ * FIRST read after the cache ages out returns null even when the network is
+ * perfectly reachable, because the refresh it triggers has not landed yet.
+ *
+ * Fail-closed then turns a cold cache into a refused payout. A faucet with no
+ * traffic for five minutes would refuse the next legitimate claim, and the user
+ * would be told our node is behind when the truth is that we had not asked lately.
+ * Found by running the integration suite: server C's claim was refused mid-run for
+ * exactly this reason, with a wallet and a node that were both fine.
+ *
+ * So a caller on the money path ASKS, bounded, before deciding. "We cannot verify"
+ * has to mean the network would not tell us, never that we did not get round to
+ * checking. If the wait expires with nothing, we are back to unverifiable and refuse
+ * as before, which is the honest outcome rather than a softened one.
+ */
+export async function readChainFreshnessAsking(
+  nodeHeight: number | null,
+  waitMs = ORACLE_WAIT_MS,
+): Promise<ChainGate> {
+  // POLL for the value rather than awaiting one refresh. warmExternalTip() returns
+  // IMMEDIATELY when a refresh is already in flight (externalTip.ts guards on a
+  // `refreshing` flag), so awaiting it once can be a silent no-op: the read that
+  // returned null a moment ago is exactly what kicked the refresh we would then be
+  // waiting on. That bug shipped in the first version of this function and the
+  // integration suite caught it, refusing a claim against a healthy wallet.
+  const deadline = Date.now() + waitMs;
+  while (getExternalTip() == null && Date.now() < deadline) {
+    void warmExternalTip();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return chainFreshness(nodeHeight, getExternalTip());
+}
+
+/*
+ * Shield-flavoured aliases. The shield path is a caller like any other now, so these
+ * exist only so #171 and #186 do not have to be reworked while they are in flight.
+ * New call sites should use the general names.
+ */
+export type ShieldFreshness = ChainFreshness;
+export type ShieldGate = ChainGate;
+export const mayShield = mayBuildTransaction;
+export const readShieldFreshness = readChainFreshness;
+export const shieldFreshness = chainFreshness;

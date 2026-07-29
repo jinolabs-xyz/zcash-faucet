@@ -4,6 +4,7 @@
  *   1. parse + validate address
  *   2. anti-abuse gate (proof-of-work or Turnstile, per config)
  *   3. low-balance guard
+ *   3.5 chain-freshness guard (a stale node builds transactions that cannot confirm)
  *   4. atomically reserve the claim (cooldown + daily cap, concurrency-safe)
  *   5. send, then finalise the reservation
  */
@@ -14,6 +15,8 @@ import { validateTestnetAddress } from "@/lib/zcash/address";
 import { verifyTurnstile } from "@/lib/turnstile";
 import { verifySolution } from "@/lib/pow";
 import { getSender, safeBalance, SendOutcomeUnknownError, type SendResult } from "@/lib/zcash/send";
+import { getNodeStatus } from "@/lib/zcash/nodeStatus";
+import { mayBuildTransaction, readChainFreshnessAsking } from "@/lib/zcash/shieldGate";
 import { getSendQueue, QueueFullError, TaskDeadlineError } from "@/lib/zcash/queue";
 import { reserveClaim, finalizeClaim } from "@/lib/db";
 import { fingerprintIp } from "@/lib/privacy";
@@ -21,6 +24,10 @@ import { clientIp } from "@/lib/clientIp";
 import { withApi, apiError } from "@/lib/api";
 
 export const runtime = "nodejs"; // better-sqlite3 needs Node, not Edge.
+
+// Roughly one testnet block. Long enough that a retry is not a hot loop, short
+// enough that a lag of a few blocks clears within one or two retries.
+const FRESHNESS_RETRY_SECONDS = 75;
 
 const BodySchema = z.object({
   address: z.string().min(1).max(512),
@@ -82,6 +89,57 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
   const balance = await safeBalance();
   if (balance !== null && balance < config.dripZatoshi + config.minReserveZatoshi) {
     return apiError(503, "The faucet is empty right now. Please check back after it's refilled.", api);
+  }
+
+  // 3.5. Chain freshness. A drip is a transaction: it gets an expiry height of
+  //    tip+40, so if our node's view of the tip is stale the transaction is born
+  //    expired and can never be mined at any fee. That is #172, and #187 is that
+  //    the shield path refused while this one did not: at a lag of 40 the faucet
+  //    declined to move its own money and still sent a user's, returning ok:true
+  //    with a txid and an explorer link for a transaction already dead.
+  //
+  //    BEFORE the reservation, deliberately. A refusal here must not consume the
+  //    cooldown or count toward the daily cap: the user did nothing wrong and our
+  //    node's lag is not their fault. #132 is the precedent for what it costs to
+  //    charge someone for our own condition. It sits next to the low-balance guard
+  //    because it is the same kind of check, ours-not-yours, come back shortly.
+  //
+  //    Fails closed via mayBuildTransaction(), true only for "safe", so a tip we
+  //    cannot verify refuses too. Never `state !== "unsafe"`.
+  //
+  //    Scoped to the zallet path, and not as a convenience. The hazard is OUR node's
+  //    stale view being stamped onto the transaction: zallet asks its own node for
+  //    the tip, so a lagging node produces a doomed expiry. The real sender reads
+  //    the tip from lightwalletd instead (realsend.ts: expiryHeight = height + 40
+  //    off getLatestBlock()), so our node's lag cannot reach it and this gate has
+  //    nothing to say. If lightwalletd were itself lagging that path would have the
+  //    same disease from a different source, which is a separate question and not
+  //    one this check can answer.
+  //
+  //    Written as an explicit sender test rather than leaning on getNodeStatus()
+  //    returning null off-zallet, because that null is indistinguishable from an
+  //    unreachable wallet, and those two must not share an answer: one is "does not
+  //    apply", the other is "cannot verify, so refuse".
+  const freshness =
+    config.sender === "zallet"
+      ? await readChainFreshnessAsking((await getNodeStatus())?.nodeHeight ?? null)
+      : null;
+  if (freshness && !mayBuildTransaction(freshness)) {
+    // A string, not an Error: logError only attaches a stack to a real Error, and
+    // a synthesised one here would put ten frames of Next internals in the log for
+    // an expected operational state. Still level=error, because a node too stale to
+    // pay anyone is worth seeing, the same reasoning as the reserve loop's refusals.
+    api.logError(
+      `drip refused, chain view ${freshness.state} (lag ${freshness.lag ?? "unknown"}): ${freshness.reason}`,
+      "chain freshness gate",
+    );
+    return apiError(
+      503,
+      "Our node is catching up with the network, so a drip sent right now would expire " +
+        "before it could confirm. Nothing was claimed, your cooldown is untouched. Try again shortly.",
+      api,
+      { retryAfterSeconds: FRESHNESS_RETRY_SECONDS },
+    );
   }
 
   // 4. Reserve atomically (cooldown + daily cap in one transaction). This is the

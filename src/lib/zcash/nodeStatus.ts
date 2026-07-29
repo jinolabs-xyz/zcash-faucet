@@ -7,7 +7,7 @@
  */
 import { config, num } from "../config.ts";
 import { getExternalTip } from "./externalTip.ts";
-import { readShieldFreshness, type ShieldGate } from "./shieldGate.ts";
+import { mayBuildTransaction, readChainFreshness, type ChainGate } from "./shieldGate.ts";
 import { tipProgress, type TipSample } from "./tipProgress.ts";
 
 export interface NodeStatus {
@@ -29,7 +29,20 @@ export interface NodeStatus {
    * Surfaced here so it is observable from /api/status; the refusal itself belongs
    * at the broadcast site.
    */
-  shield: ShieldGate;
+  shield: ChainGate;
+  /**
+   * The freshness DECISION, not its inputs: may we build a transaction that can
+   * actually confirm? Computed here by mayBuildTransaction() so the browser reads a
+   * boolean and implements nothing.
+   *
+   * The point is rule 15 applied to a money rule. The page has to know this to hold
+   * a claim instead of sending one that would expire, and it cannot import the gate
+   * (shieldGate.ts reaches config and the grpc oracle, both node-only). Left to
+   * compare `shield.state` itself, the client would carry a second copy of the rule,
+   * and the day the rule gains a state or moves a threshold the copy diverges in
+   * silence. That is the `!== "unsafe"` bug wearing a different hat.
+   */
+  canBuildTx: boolean;
 }
 
 // How far our node may lag the independent tip before we call it frozen. Normal
@@ -88,6 +101,7 @@ export async function getNodeStatus(): Promise<NodeStatus | null> {
 
     const frozen = behind || progress.stalled;
 
+    const shield = readChainFreshness(n);
     const walletCaughtUp = n > 0 && w >= n - 5;
     return {
       ready: walletCaughtUp && !frozen,
@@ -98,7 +112,8 @@ export async function getNodeStatus(): Promise<NodeStatus | null> {
       frozen,
       tipStalledMs: progress.stalledMs,
       networkQuiet: progress.networkQuiet,
-      shield: readShieldFreshness(n),
+      shield,
+      canBuildTx: mayBuildTransaction(shield),
     };
   } catch {
     return null;

@@ -15,7 +15,7 @@ interface Status {
   empty: boolean;
   queueDepth?: number;
   backend: { reachable: boolean; endpoint: string };
-  node?: { ready: boolean; syncPercent: number | null; height: number | null; nodeHeight: number | null };
+  node?: { ready: boolean; syncPercent: number | null; height: number | null; nodeHeight: number | null; canBuildTx?: boolean };
   miner?: { active: boolean };
   reserve?: { targetTaz: number; lowTaz: number; refilling: boolean; spendableTaz: number | null };
   donationAddress?: string;
@@ -24,6 +24,14 @@ interface Status {
 type CopyTarget = "txid" | "receipt" | "donation";
 interface Tx { txid: string; to: string; priv: boolean; explorerUrl?: string; at: number }
 interface PowSolution { seed: string; difficulty: number; exp: number; sig: string; nonce: string }
+
+/**
+ * How long we hold a claim waiting for our chain view to get fresh enough to build a
+ * drip that can confirm. Roughly twelve testnet blocks: ordinary lag of a few blocks
+ * clears well inside it, and a node still behind after this long is not going to be
+ * fixed by making the user wait more quietly.
+ */
+const HOLD_MAX_MS = 15 * 60_000;
 
 /* ── Helpers ───────────────────────────────────────────────────────────── */
 
@@ -92,6 +100,8 @@ export default function Home() {
   // A claim held while the node syncs. Persisted so a reload (or coming back
   // tomorrow) keeps the place in line; fires on its own when the node is ready.
   const [queuedAddr, setQueuedAddr] = useState<string | null>(null);
+  // When the hold started, for the freshness deadline below.
+  const [queuedAt, setQueuedAt] = useState<number | null>(null);
 
   const inFlow = useRef(false); // in a claim flow → don't let polling override the phase
   const submitStart = useRef(0);
@@ -105,6 +115,14 @@ export default function Home() {
   const basePhase = useCallback((s: Status | null): Phase => {
     if (!s || !s.backend?.reachable) return "syncing";
     if (s.node && s.node.ready === false) return "syncing";
+    // Our chain view is too stale to build a drip that could confirm, so hold rather
+    // than send one that expires before it is mined (#187). canBuildTx is computed
+    // server-side by the gate itself: the browser must not carry a second copy of a
+    // money rule, or it diverges the day the rule changes.
+    //
+    // `=== false` on purpose. A missing field (older server, or a sender the gate
+    // does not apply to) must not block a claim, so only an explicit no holds.
+    if (s.node && s.node.canBuildTx === false) return "syncing";
     if (s.balanceTaz == null) return "syncing";
     if (s.balanceTaz <= 0 || s.empty) return "empty";
     return "ready";
@@ -127,15 +145,52 @@ export default function Home() {
     setPhase(queuedAddr && base === "syncing" ? "queued" : base);
   }, [status, basePhase, queuedAddr]);
 
-  // Restore a held claim from a previous visit.
+  // Restore a held claim from a previous visit. The stored shape gained a timestamp
+  // for the freshness deadline, so a bare string is a hold from before that and
+  // starts its clock now: the alternative is treating an unknown age as expired,
+  // which would drop a claim someone left overnight on the strength of a guess.
   useEffect(() => {
     const saved = localStorage.getItem("zfaucet_queued");
-    if (saved && check(saved).ok) setQueuedAddr(saved);
+    if (!saved) return;
+    let addrIn = saved;
+    let atIn = Date.now();
+    if (saved.startsWith("{")) {
+      try {
+        const parsed = JSON.parse(saved) as { a?: string; at?: number };
+        if (!parsed.a) return;
+        addrIn = parsed.a;
+        if (typeof parsed.at === "number") atIn = parsed.at;
+      } catch {
+        return; // unreadable, treat as no hold rather than guess at it
+      }
+    }
+    if (check(addrIn).ok) { setQueuedAddr(addrIn); setQueuedAt(atIn); }
   }, []);
   useEffect(() => {
-    if (queuedAddr) localStorage.setItem("zfaucet_queued", queuedAddr);
+    if (queuedAddr) localStorage.setItem("zfaucet_queued", JSON.stringify({ a: queuedAddr, at: queuedAt ?? Date.now() }));
     else localStorage.removeItem("zfaucet_queued");
-  }, [queuedAddr]);
+  }, [queuedAddr, queuedAt]);
+
+  // Give up on a hold the chain never got fresh enough to serve, and say so.
+  //
+  // Scoped to the freshness hold on purpose. A hold through a first sync stays
+  // indefinite, which is existing and deliberate ("come back later, your place
+  // survives a reload"): a sync finishes on a schedule we can see. A node that
+  // cannot build a valid transaction for a quarter of an hour is a different
+  // situation, and leaving someone waiting on it with no end is worse than telling
+  // them plainly. Nothing was ever claimed, so there is no cooldown to release.
+  useEffect(() => {
+    if (!queuedAddr || queuedAt == null) return;
+    if (status?.node?.canBuildTx !== false) return;
+    if (now - queuedAt < HOLD_MAX_MS) return;
+    setQueuedAddr(null);
+    setQueuedAt(null);
+    setErrMsg(
+      "Our node has not caught up with the network, so we stopped holding your claim rather than " +
+        "send one that would expire. Nothing was claimed and your cooldown is untouched. Try again later.",
+    );
+    setPhase("error");
+  }, [now, queuedAddr, queuedAt, status]);
 
   // The moment the node is ready, a held claim fires through the normal
   // submit path (pow solved fresh here, a solution from queue time would
@@ -233,6 +288,7 @@ export default function Home() {
     // `target` set means we ARE the fire, never re-queue.
     if (!target && basePhase(status) === "syncing") {
       setQueuedAddr(address);
+      setQueuedAt(Date.now());
       setPhase("queued");
       return;
     }
@@ -551,7 +607,7 @@ export default function Home() {
               The moment the node is ready, {dripText} goes to <span style={{ fontFamily: "var(--mono)", fontSize: 11.5 }}>{short(queuedAddr, 12, 6)}</span>. Keep this tab open or come back later, your place survives a reload.
             </p>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-              <button className="btn btn-secondary btn-sm" onClick={() => { setQueuedAddr(null); setPhase(basePhase(status)); }}>Cancel and change address</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => { setQueuedAddr(null); setQueuedAt(null); setPhase(basePhase(status)); }}>Cancel and change address</button>
             </div>
           </div>
         )}
