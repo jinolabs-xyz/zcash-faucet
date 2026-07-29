@@ -208,7 +208,22 @@ export const config = {
     // Hard cap so difficulty can't run away into a device-killing wait.
     maxBits: Math.max(12, Math.min(30, Math.floor(num("FAUCET_POW_MAX_BITS", 26)))),
     // How long a signed challenge is valid before the browser has to fetch a new one.
-    ttlSeconds: Math.max(30, Math.floor(num("FAUCET_POW_TTL_SECONDS", 180))),
+    //
+    // Raised from 180 to 600, and it is the lever powBudget.ts names for making the
+    // gate harder: the solvable ceiling is a function of this, so a longer life buys
+    // escalation HEADROOM rather than charging everyone more. 180s put the ceiling at
+    // 23 bits, giving a repeat offender 3 bits (8x base work) before clamping. 600s
+    // puts it at 25, giving 5 bits (32x). A first-time claimer is unaffected: they
+    // still solve the base 20 bits, in about 10s on the slow phone we design for.
+    //
+    // What it costs, stated because it is a real tradeoff rather than free. A
+    // longer-lived challenge is a bigger window to stockpile cheap challenges during
+    // a quiet minute and spend them later, dodging the global pressure surcharge. It
+    // is worth very little: a challenge is single-use (its signature is spent into
+    // used_challenges) and bound to the issuing ipHash, and the per-IP cooldown caps
+    // that IP at one drip a day regardless. So a stockpile buys at most one drip per
+    // IP, which is what the farmer already had.
+    ttlSeconds: Math.max(30, Math.floor(num("FAUCET_POW_TTL_SECONDS", 600))),
   },
 
   network: "testnet" as const,

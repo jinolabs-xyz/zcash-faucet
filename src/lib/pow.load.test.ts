@@ -16,6 +16,11 @@ import { createHash, createHmac } from "node:crypto";
 // each accounting for the global request count the earlier ones left behind.
 process.chdir(mkdtempSync(join(tmpdir(), "faucet-pow-load-test-")));
 process.env.RATE_LIMIT_SALT = "pow-load-salt";
+// The global-pressure thresholds scale with the escalation window so the RATE they
+// represent stays fixed (#196). This file asserts on absolute request counts, so it
+// pins the window to the old 10 minutes and keeps its arithmetic readable rather
+// than recomputing the scaling and becoming a second copy of it.
+process.env.FAUCET_POW_WINDOW_SECONDS = "600";
 process.env.FAUCET_POW_BITS = "8"; // floor, keeps every solve here trivial
 process.env.FAUCET_POW_ESCALATE_BITS = "2";
 process.env.FAUCET_POW_MAX_BITS = "14";

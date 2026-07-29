@@ -19,7 +19,7 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 // Explicit .ts extension so `node --test` (type stripping resolves literal
 // paths only) can load this module. Next's bundler accepts it too.
-import { config } from "./config.ts";
+import { config, num } from "./config.ts";
 import { solvableCeilingBits, ttlSecondsFor } from "./powBudget.ts";
 import { spendChallenge } from "./db/index.ts";
 
@@ -63,7 +63,20 @@ function leadingZeroBits(buf: Buffer): number {
  * a wall, so a bump that resets is an acceptable trade for keeping the hot
  * path free of writes.
  */
-const REQ_WINDOW_MS = 10 * 60_000; // remember a client's requests for 10 min
+/**
+ * How long a client's attempts are remembered for escalation.
+ *
+ * Widened from 10 minutes to an hour, and this is the lever that actually targets
+ * farming rather than taxing everyone (#196). A real person claims once, so the
+ * window length is invisible to them. A farmer PACES: at ten minutes, one attempt
+ * every eleven minutes reset escalation completely and they paid base difficulty
+ * forever. An hour makes the same evasion six times slower for no cost to anyone
+ * claiming legitimately.
+ *
+ * Env-tunable because the right value depends on abuse we have not observed yet,
+ * and there is currently no visibility into claim patterns to tune it against.
+ */
+export const REQ_WINDOW_MS = Math.max(60_000, Math.floor(num("FAUCET_POW_WINDOW_SECONDS", 3600) * 1000));
 const perIp = new Map<string, number[]>(); // ipHash -> request timestamps
 const globalReqs: number[] = []; // all request timestamps (pressure signal)
 
@@ -76,7 +89,14 @@ function difficultyFor(ipHash: string, now: number): number {
   prune(mine, now);
   prune(globalReqs, now);
   const repeats = mine.length; // requests already made in the window
-  const pressure = globalReqs.length >= 60 ? 3 : globalReqs.length >= 25 ? 2 : globalReqs.length >= 10 ? 1 : 0;
+  // Global pressure. Thresholds tightened with the window widening: they count
+  // requests inside REQ_WINDOW_MS, so leaving them at 10/25/60 after a 6x longer
+  // window would have made pressure fire six times more readily by accident, which
+  // punishes legitimate users during any busy hour. Scaled with the window so the
+  // RATE they represent is unchanged, then floored so a short window stays sane.
+  const perHour = (n: number) => Math.max(n, Math.round((n * REQ_WINDOW_MS) / 600_000));
+  const pressure =
+    globalReqs.length >= perHour(60) ? 3 : globalReqs.length >= perHour(25) ? 2 : globalReqs.length >= perHour(10) ? 1 : 0;
   const bits = config.pow.baseBits + repeats * config.pow.escalateBits + pressure;
   // Two ceilings, and the second one is not optional. maxBits is what the
   // operator asked for; the solvable ceiling is what a browser can actually
