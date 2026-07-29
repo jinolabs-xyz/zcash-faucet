@@ -230,7 +230,12 @@ still looping. **Stop.** Go back to the wallet repair. Nothing below is safe
 while the wallet cannot stay up, and a sweep attempted against a restarting
 wallet is how the expired transaction happened.
 
-### 3. Merge #174 so the flag exists on the box
+### 3. Confirm the flag exists on the box
+
+#174 is merged, so `deploy.sh` appends this key when it is absent. That does not
+mean the box has it: `write_env` seeds the example onto a FRESH box only, so on
+this deployment the line arrives with the next `deploy.sh` run and not before.
+Check rather than assume.
 
 `FAUCET_SHIELD_COINBASE` must be **present** before anyone can set it, and it
 will not appear on its own. `write_env` copies `faucet.env.example` only on a
@@ -325,10 +330,11 @@ the network's.
 **Two dependencies before this read works at all**, both found by SDE-Infra
 trying to run it rather than by me writing it.
 
-1. `externalHeight` and `frozen` **do not exist on the deployed build.** They
-   arrive with #171, which is not merged. On today's box `.node` carries no such
-   fields, so the read below is not available yet.
-2. Even once #171 lands, `nodeHeight` comes from **zallet's** `getwalletstatus`,
+1. `externalHeight` and `frozen` now EXIST, since #171 merged, so the read below
+   works. It did not when this step was written, and the box only has them after
+   a deploy that carries #171. Confirm the field is present rather than reading a
+   `null` as an answer: absent and unverifiable look identical through `jq`.
+2. `nodeHeight` comes from **zallet's** `getwalletstatus`,
    not from zebra directly. A dead wallet makes `getNodeStatus()` return null and
    takes every height with it. So this gate cannot be satisfied while the wallet
    is down, which makes it strictly dependent on step 2 having passed.
@@ -466,6 +472,35 @@ happening again.
 **Failure mode:** `emptySweeps` climbing while `refilling` stays true. The loop
 wants to refill and every attempt finds nothing. Read the verdict column above
 before waiting any longer: three of the four rows mean "waiting will not help".
+
+**The other failure mode, and it looks like nothing at all.** #186 wired the
+freshness gate into this sweep, so the step can now decline to broadcast before
+it ever asks the wallet. A refusal produces **no `verdict=` line**, and
+`emptySweeps` **stays at 0** on purpose, because the sweep did not look. So every
+signal in the table above reads normal while nothing moves, which is the shape
+this runbook exists to prevent. What a refusal emits instead:
+
+```
+[reserve] shield REFUSED (3 consecutive, state=unsafe, lag=40): our node is 40
+blocks behind the network (limit 5) ... the balance cannot recover on its own.
+```
+
+```sh
+curl -s localhost:3000/api/status | jq '.reserve | {shieldRefusals, lastRefusal, emptySweeps}'
+```
+
+| read | what it means, and what to do |
+|---|---|
+| `shieldRefusals: 0` | the gate is not what is stopping you. Use the verdict table. |
+| `shieldRefusals` climbing, `state: "unsafe"` | our node is behind the network by more than 5 blocks. **Wait**, do not force it. This is the gate doing its job, and the lag is in `lastRefusal.lag`. |
+| `shieldRefusals` climbing, `state: "unverifiable"` | we cannot establish the network tip, so we refuse rather than assume. Check the tip oracle before anything else, and note the wallet being down produces this too. |
+
+A refusal is not a fault to route around. It means a shield built now would carry
+an expiry the network has already passed, which is precisely how the transaction
+this runbook was written about died. Setting `FAUCET_SHIELD_COINBASE=true` is
+therefore **no longer sufficient on its own**: the sweep also needs the gate to
+pass, and step 3.5 is now the pre-check for that rather than a diagnosis of the
+past.
 
 ### 6. Confirm the money is spendable and serve a real drip
 
