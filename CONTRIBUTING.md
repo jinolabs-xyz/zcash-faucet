@@ -219,15 +219,19 @@ Every correction came from the same few habits, so the habits are rules.
 17. Before believing a null result, prove the question can return non-null.
     An empty answer from a broken question looks exactly like an empty answer
     from a good one, and the second is a finding while the first is nothing.
-    Three in one morning. A `grep` for a symbol in the zallet image returned
+    Four in one morning. A `grep` for a symbol in the zallet image returned
     nothing, and the image is distroless with no `sh`, so the probe had never
     executed at all: a positive control on a symbol that must exist is what
     showed it. A systemd unit reported inactive was the wrong unit name, and
     the real one had been running for a day. A 64-hex string pulled from an
     explorer 404'd on a `/tx/` route because it was a block hash, not a txid,
     which was one step from being reported as the explorer rejecting real
-    chain data. In all three the tool was silent, not the world. Pair every
-    negative check with a positive one whose answer you already know.
+    chain data. And `bash /opt/faucet/audit-drift.sh` reported `exit: 0` for a
+    file that does not exist, because `$?` was read after a pipe through `tail`
+    and gave `tail`'s status rather than the script's 127. In all four the tool
+    was silent, not the world. Pair every negative check with a positive one
+    whose answer you already know, and when a status arrives through a pipeline,
+    make sure it is the status of the thing you meant to ask.
 18. A test double defines which failures are expressible. A gap in the double
     is a gap in what can ever be tested, so a component can lie for months
     with a green suite and nobody has been careless. The docker stub listed
