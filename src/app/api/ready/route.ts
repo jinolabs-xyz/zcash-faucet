@@ -23,8 +23,13 @@ export const GET = withApi("ready", async () => {
   const [backend, balanceZat, node] = await Promise.all([pingBackend(), safeBalance(), getNodeStatus()]);
 
   // Order the checks cheapest-signal first so the reason is the most upstream cause.
+  // "frozen" comes before "syncing" and is deliberately distinct: syncing is a
+  // normal first-boot state, but frozen means our node stopped following the
+  // chain while the network moved on (#170) — the silent failure that took down
+  // Fauzec's faucet. It must page, not look like an ordinary sync.
   let reason: string | null = null;
   if (!backend.reachable) reason = "backend unreachable";
+  else if (node && node.frozen) reason = "node frozen behind network";
   else if (node && node.ready === false) reason = "node syncing";
   else if (balanceZat === null) reason = "wallet balance unknown";
   else if (balanceZat < config.dripZatoshi + config.minReserveZatoshi) reason = "below reserve, refilling";

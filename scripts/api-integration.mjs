@@ -84,6 +84,42 @@ function boot(port, env) {
   });
   return child;
 }
+/**
+ * Poll the tip-oracle fixture until it answers, so no app can out-race it.
+ *
+ * @param expectTestnetRow when true (the default) we additionally require a usable
+ *   testnet row, because a 200 with an unusable body would let the oracle's
+ *   fallback fire anyway — the failure this wait exists to prevent.
+ *
+ *   An EMPTY=true fixture deliberately serves no testnet row, to make the oracle's
+ *   cannot-verify path reachable. Waiting for a row there would hang and then throw,
+ *   so a caller exercising that mode must pass false. Before this parameter existed,
+ *   fake-hosh advertised an EMPTY mode that could only produce a dead suite (SDE-App).
+ */
+async function waitHosh(expectTestnetRow = true, ms = 15_000) {
+  const url = `http://127.0.0.1:${HOSH_PORT}/`;
+  const deadline = Date.now() + ms;
+  for (;;) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(1000) });
+      if (res.ok) {
+        const rows = await res.json();
+        const servers = Array.isArray(rows?.servers) ? rows.servers : [];
+        if (!expectTestnetRow) return; // responding at all is the whole requirement
+        if (servers.some((r) => r.chain === "test" && r.online && r.height > 0)) return;
+      }
+    } catch { /* not up yet */ }
+    if (Date.now() > deadline) {
+      throw new Error(
+        expectTestnetRow
+          ? `tip-oracle fixture at ${url} never served a usable testnet height`
+          : `tip-oracle fixture at ${url} never responded`,
+      );
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
 async function waitReady(base, ms = 90_000) {
   const deadline = Date.now() + ms;
   for (;;) {
@@ -120,6 +156,31 @@ const walletC = spawn("node", ["scripts/fake-zallet.mjs"], {
   detached: true,
 });
 
+// A hosh-shaped tip oracle. Without it the readiness assertions depend on the
+// public internet AND on a race: the wallet double reports tip 3,650,000 while
+// real testnet is past 4,220,000, so the moment the oracle gets a real answer our
+// node reads as ~570,000 blocks behind and A returns 503 where we expect 200.
+// Whether that lands before the assertion decided whether CI was green (#171).
+const HOSH_PORT = 28324;
+const fakeHosh = spawn("node", ["scripts/fake-hosh.mjs"], {
+  env: { ...process.env, PORT: String(HOSH_PORT) },
+  stdio: "ignore",
+  detached: true,
+});
+
+// Every app gets the same deterministic chain view.
+//
+// Only HOSH_URL is overridden. externalTip does degrade to a direct lightwalletd
+// call when hosh yields nothing, which is a second route to the real network — but
+// the fixture always answers, so that route is never taken. Pinning
+// LIGHTWALLETD_ENDPOINT at a closed port to block it is NOT safe: the same
+// variable is also the app's read-side backend, so breaking it makes readiness
+// report "backend unreachable" and fails a different assertion. Verified by doing
+// exactly that and watching it fail.
+const chainView = {
+  HOSH_URL: `http://127.0.0.1:${HOSH_PORT}/`,
+};
+
 const zallet = (rpcPort) => ({
   FAUCET_SENDER: "zallet",
   ZALLET_RPC_URL: `http://127.0.0.1:${rpcPort}/`,
@@ -131,6 +192,7 @@ const zallet = (rpcPort) => ({
 
 const serverA = boot(PORT_A, {
   ...zallet(WALLET_A),
+  ...chainView,
   FAUCET_CHALLENGE: "pow",
   RATE_LIMIT_SALT: "integration-test-salt",
   FAUCET_POW_BITS: "8",
@@ -140,6 +202,7 @@ const serverA = boot(PORT_A, {
 });
 const serverB = boot(PORT_B, {
   ...zallet(WALLET_B),
+  ...chainView,
   FAUCET_CHALLENGE: "none",
   // Pinned low so the /api/tx limiter is reachable in a test. The shipped
   // default is 60/min, which exists to NOT limit our own receipt poll.
@@ -154,12 +217,21 @@ const serverB = boot(PORT_B, {
 // it low here so the hang path is reachable in a test rather than never covered.
 const serverC = boot(PORT_C, {
   ...zallet(WALLET_C),
+  ...chainView,
   FAUCET_CHALLENGE: "none",
   SEND_TASK_DEADLINE_MS: "2500",
   ZALLET_OP_TIMEOUT_MS: "600000", // the sender must NOT be what gives up first
 });
 
 try {
+  // Wait for the oracle double BEFORE the apps are usable. If an app's first
+  // background tip refresh runs while the fixture is still binding, hosh yields
+  // nothing, externalTip degrades to a direct lightwalletd call, and the app
+  // caches the REAL network tip — 570,000 blocks above the wallet double's — so it
+  // reads as frozen for the rest of the run. That is the same race that made this
+  // suite pass locally and fail in CI; overriding HOSH_URL is only half the fix if
+  // nothing waits for the override to be listening.
+  await waitHosh();
   await Promise.all([waitReady(BASE_A), waitReady(BASE_B), waitReady(BASE_C)]);
 
   /* ── A: /api/status shape ────────────────────────────────────────────── */
@@ -328,6 +400,7 @@ try {
   const statusC = await get(BASE_C, "/api/status");
   ok("C the stuck send still counts against queue depth", statusC.body.queueDepth >= 1, `depth ${statusC.body.queueDepth}`);
 } finally {
+  stop(fakeHosh);
   stop(serverA);
   stop(serverB);
   stop(serverC);

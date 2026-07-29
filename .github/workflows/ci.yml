@@ -93,6 +93,13 @@ jobs:
       RATE_LIMIT_SALT: ci-ui-smoke-not-a-secret
       PORT: "3120"
       UI_SMOKE_URL: http://localhost:3120
+      # Point the tip oracle at a local fixture instead of the live hosh
+      # dashboard. Without this the app compares the wallet double's tip
+      # (3,650,000) against the real network (past 4,220,000), decides our node is
+      # ~570,000 blocks behind, marks it frozen and refuses the claim — so the
+      # smoke test waits out its 120s timeout for a "Sent ✓" that can never
+      # appear. Same root cause as the api-tests job (#171).
+      HOSH_URL: http://127.0.0.1:28324/
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -124,9 +131,24 @@ jobs:
           fi
           PORT=28299 node scripts/fake-zallet.mjs &
           double=$!
+          # The oracle fixture must be answering BEFORE the app starts. If the
+          # app's first background tip refresh finds it missing, the oracle falls
+          # back to a direct lightwalletd call, caches the real network tip, and
+          # the run is frozen from then on — starting it late only narrows the race
+          # rather than removing it.
+          PORT=28324 node scripts/fake-hosh.mjs &
+          hosh=$!
+          # Declared before the trap so the early exit below still reaps the two
+          # doubles rather than leaking them on a failure path.
+          server=""
+          trap 'kill "$server" "$double" "$hosh" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            curl -sf "$HOSH_URL" >/dev/null && break
+            sleep 1
+          done
+          curl -sf "$HOSH_URL" >/dev/null || { echo "tip-oracle fixture never came up"; exit 1; }
           npm start &
           server=$!
-          trap 'kill "$server" "$double" 2>/dev/null || true' EXIT
           for _ in $(seq 1 60); do
             curl -sf "$UI_SMOKE_URL/api/status" >/dev/null && break
             sleep 1
