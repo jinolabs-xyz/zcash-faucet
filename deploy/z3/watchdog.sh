@@ -91,11 +91,54 @@ ensure_restart_policy() {
   fi
 }
 
-# Consecutive failed-start attempts per container, persisted so the count is not
-# lost if the watchdog itself restarts mid-loop.
+# Consecutive failed-start attempts per container. The count lives in memory
+# first and on disk second: disk exists only so a watchdog restart does not
+# forget an ongoing loop, so an unwritable state dir must degrade to "works
+# until restart" rather than to "never escalates". An escalation mechanism that
+# silently does nothing is precisely the failure it was built to prevent.
+STATE_WRITE_OK=unknown
+
+flap_var()  { printf 'FLAP_%s' "$(printf '%s' "$1" | tr -c 'A-Za-z0-9' '_')"; }
 flap_file() { printf '%s/%s.flaps' "$STATE_DIR" "$(printf '%s' "$1" | tr -c 'A-Za-z0-9_.-' '_')"; }
-flap_get()  { cat "$(flap_file "$1")" 2>/dev/null || echo 0; }
-flap_set()  { mkdir -p "$STATE_DIR" 2>/dev/null; printf '%s' "$2" > "$(flap_file "$1")" 2>/dev/null || true; }
+
+# Never trust the file. Its contents are fed to $(( )) below, and under `set -u`
+# an unbound name inside arithmetic exits the shell — so a torn write (OOM, power
+# loss, full disk) would put the watchdog itself into a restart loop that no
+# restart could clear, leaving the box unmonitored until a human deleted a file.
+# Anything that is not all digits is treated as no count at all.
+flap_get() {
+  local var val disk
+  var="$(flap_var "$1")"
+  eval "val=\${$var-}"
+  if [ -n "$val" ]; then printf '%s' "$val"; return 0; fi
+  disk="$(cat "$(flap_file "$1")" 2>/dev/null)"
+  case "$disk" in
+    ''|*[!0-9]*) printf '0' ;;
+    *)           printf '%s' "$disk" ;;
+  esac
+}
+
+# Memory is authoritative; the file is a best-effort copy written atomically so a
+# reader never sees a half-written count.
+flap_set() {
+  local var f tmp
+  var="$(flap_var "$1")"
+  eval "$var=\$2"
+  f="$(flap_file "$1")"; tmp="$f.tmp.$$"
+  if mkdir -p "$STATE_DIR" 2>/dev/null && printf '%s' "$2" > "$tmp" 2>/dev/null && mv -f "$tmp" "$f" 2>/dev/null; then
+    if [ "$STATE_WRITE_OK" = "no" ]; then
+      log "state dir $STATE_DIR is writable again; flap counts will survive a restart"
+    fi
+    STATE_WRITE_OK=yes
+  else
+    rm -f "$tmp" 2>/dev/null
+    if [ "$STATE_WRITE_OK" != "no" ]; then
+      log "WARNING: cannot write $STATE_DIR — flap counts are in-memory only, so escalation still works but resets if this watchdog restarts"
+    fi
+    STATE_WRITE_OK=no
+  fi
+  return 0
+}
 
 # Start a container back up if it is not running, and report only what we can
 # actually establish. Three outcomes, because two were not enough:

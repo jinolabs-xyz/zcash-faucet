@@ -88,6 +88,34 @@ wd_run 2
 # containers, the pager becomes noise and gets ignored, which is how we got here.
 check "no alerts at all for a stack that is fine" "[ ! -s '$T/alerts.log' ]"
 
+echo "== watchdog: a corrupt flap file cannot take monitoring offline"
+wd_env
+echo restarting > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+export STUB_CRASHLOOP="z3-testnet-zallet-1"
+mkdir -p "$WATCHDOG_STATE_DIR"
+# A torn write. This used to reach $(( )) as the identifiers not - a - number,
+# and under set -u an unbound name in arithmetic exits the shell: the watchdog
+# died having watched nothing, and since the file survived, systemd's restart
+# produced a crash loop in the component that exists to detect crash loops.
+printf 'not-a-number' > "$WATCHDOG_STATE_DIR/z3-testnet-zallet-1.flaps"
+wd_run 3
+check "survives a corrupt count and keeps sweeping" "grep -q 'consecutive attempt 1' '$T/run.log'"
+check "no unbound-variable death" "! grep -qi 'unbound variable' '$T/run.log'"
+check "still escalates on a garbage count" "grep -q 'STILL BROKEN' '$T/alerts.log'"
+
+echo "== watchdog: an unwritable state dir degrades, it does not go silent"
+wd_env
+echo restarting > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+export STUB_CRASHLOOP="z3-testnet-zallet-1"
+mkdir -p "$WATCHDOG_STATE_DIR"; chmod 500 "$WATCHDOG_STATE_DIR"
+wd_run 3
+chmod 700 "$WATCHDOG_STATE_DIR"
+# The escalation must still fire from the in-memory count. Persisting it is only
+# so a restart remembers; if that is impossible we lose memory across restarts,
+# not the paging itself.
+check "escalates even when the count cannot be persisted" "grep -q 'STILL BROKEN' '$T/alerts.log'"
+check "and says it is running in memory-only mode" "grep -q 'in-memory only' '$T/run.log'"
+
 echo "== watchdog: an unanswerable docker is not treated as healthy"
 wd_env
 echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
