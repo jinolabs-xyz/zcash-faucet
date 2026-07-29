@@ -12,6 +12,9 @@
 // construction and cannot drift from the validator.
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
+import { openSync, readFileSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { bech32m } from "@scure/base";
 
 const PORT_A = 3210;
@@ -19,6 +22,10 @@ const PORT_B = 3211;
 const PORT_C = 3212;
 const PORT_D = 3213;
 const PORT_E = 3214;
+const PORT_F = 3215; // boots only to prove it dies
+// Somewhere to keep the output of the server that is supposed to die, so the
+// assertion can check WHY it died rather than only that it did.
+const LOG_DIR = mkdtempSync(join(tmpdir(), "faucet-api-integration-"));
 const BASE_A = `http://localhost:${PORT_A}`;
 const BASE_B = `http://localhost:${PORT_B}`;
 const BASE_C = `http://localhost:${PORT_C}`;
@@ -88,6 +95,33 @@ function boot(port, env) {
   });
   return child;
 }
+/**
+ * Boot a server that is EXPECTED TO DIE, and resolve {code, log}.
+ *
+ * Every other server here is started and polled until it answers. This one
+ * asserts the opposite, so it needs the exit code rather than a readiness probe,
+ * and a timeout: a process that stays up is the failure being tested for, and
+ * without the timeout that failure would hang the suite instead of reporting.
+ */
+function bootExpectingExit(port, env, logPath, ms = 60_000) {
+  return new Promise((resolve) => {
+    const fd = openSync(logPath, "w");
+    const childEnv = { ...process.env, PORT: String(port), ...env };
+    // Explicitly absent, not merely unset by us: an ambient salt in the runner
+    // would make this test pass while proving nothing.
+    delete childEnv.RATE_LIMIT_SALT;
+    const child = spawn("npm", ["run", "start"], { env: childEnv, stdio: ["ignore", fd, fd], detached: true });
+    const timer = setTimeout(() => {
+      stop(child);
+      resolve({ code: "TIMEOUT", log: readFileSync(logPath, "utf8") });
+    }, ms);
+    child.on("exit", (code) => {
+      clearTimeout(timer);
+      resolve({ code, log: readFileSync(logPath, "utf8") });
+    });
+  });
+}
+
 /**
  * Poll the tip-oracle fixture until it answers, so no app can out-race it.
  *
@@ -564,6 +598,36 @@ try {
   );
   const secondE = await claim(BASE_E, addrE, null);
   ok("E the cannot-verify refusal also leaves the cooldown alone", secondE.status === 503, `status ${secondE.status}`);
+
+  /* ── F: the salt guard is WIRED, not merely correct ───────────────────── */
+
+  // This exists because the proof it replaces was accidental. While the guard ran
+  // at config-import time, a failing BUILD is what proved it was connected. Moving
+  // it to instrumentation.register() to stop a build needing a production secret
+  // removed that proof: saltGuard.test and challengeDefault.test check the
+  // PREDICATE, and both smoke suites set RATE_LIMIT_SALT so they boot with one and
+  // never take this path. So a refactor could drop the register() call and
+  // everything would stay green while production booted unprotected.
+  //
+  // Raised by SDE-Infra as the #188 shape pointed at the security gate: proving the
+  // mechanism while blind to the connection.
+  const saltless = await bootExpectingExit(
+    PORT_F,
+    { FAUCET_SENDER: "zallet", FAUCET_CHALLENGE: "pow", NODE_ENV: "production" },
+    `${LOG_DIR}/saltless-boot.log`,
+  );
+  ok(
+    "F a production boot with a gate and NO salt EXITS rather than serving unprotected",
+    saltless.code === 1,
+    `exit ${saltless.code}${saltless.code === "TIMEOUT" ? " (it stayed up, so the guard is not wired)" : ""}`,
+  );
+  // And that it died for the RIGHT reason. Without this the check passes on any
+  // startup failure at all, which is how a test starts certifying a broken build.
+  ok(
+    "F and it says which variable, in a boot log an operator reads",
+    /fatal config error/.test(saltless.log) && /RATE_LIMIT_SALT is not set/.test(saltless.log),
+    JSON.stringify(saltless.log.split("\n").filter(Boolean).slice(-2)),
+  );
 } finally {
   stop(fakeHosh);
   stop(fakeHoshStale);
