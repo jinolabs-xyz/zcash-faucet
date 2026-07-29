@@ -241,13 +241,25 @@ if (config.reserve.lowZatoshi >= config.reserve.targetZatoshi) {
 // A production faucet with an active challenge gate must not run on an empty
 // or template-placeholder RATE_LIMIT_SALT: the PoW gate signs challenges with
 // it, so a known salt makes the gate forgeable. Same fail-loud posture.
-const saltProblem = saltRejectionReason({
-  salt: process.env.RATE_LIMIT_SALT ?? "",
-  production: process.env.NODE_ENV === "production",
-  challenge: config.challenge,
-  // next build sets this while importing every route to collect page data, and a
-  // build is not serving traffic. Without it, making pow the default meant no one
-  // could compile the app without the production secret in hand.
-  buildPhase: process.env.NEXT_PHASE === "phase-production-build",
-});
-if (saltProblem) throw new Error(saltProblem);
+/**
+ * Checks that only make sense for a process about to SERVE traffic. Called from
+ * instrumentation.register() at boot, never at import.
+ *
+ * The salt guard used to run at import time, which meant `next build` demanded the
+ * production secret: it sets NODE_ENV=production and imports every route module to
+ * collect page data, so compiling the artifact required a runtime secret. A build
+ * serves nothing and has no gate to forge yet. register() does not run during a
+ * build, so boot is where this belongs.
+ *
+ * The security property is unchanged: a real server still refuses to start without
+ * a usable salt, and it says so in a boot log where an operator can act on it
+ * rather than buried in build output (#206).
+ */
+export function assertServingConfig(): void {
+  const saltProblem = saltRejectionReason({
+    salt: process.env.RATE_LIMIT_SALT ?? "",
+    production: process.env.NODE_ENV === "production",
+    challenge: config.challenge,
+  });
+  if (saltProblem) throw new Error(saltProblem);
+}

@@ -16,10 +16,17 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 
 /** Boot config.ts in a child with `env` and return its resolved challenge, or THREW:<msg>. */
-function challengeUnder(env: Record<string, string>): string {
+function challengeUnder(env: Record<string, string>, mode: "challenge" | "serving" = "challenge"): string {
+  // "challenge" reports the resolved gate. "serving" reports what the BOOT guard
+  // does, which is a different question and the one that decides whether an
+  // artifact can be built without a production secret.
+  const call =
+    mode === "serving"
+      ? '(m) => { m.assertServingConfig(); console.log("OK"); }'
+      : '(m) => console.log(m.config.challenge)';
   const script =
     'import("./src/lib/config.ts")' +
-    '.then((m) => console.log(m.config.challenge))' +
+    `.then(${call})` +
     '.catch((e) => console.log("THREW:" + e.message));';
   return execFileSync(process.execPath, ["--input-type=module", "-e", script], {
     // A clean slate: inheriting the parent's env would let an ambient
@@ -53,30 +60,39 @@ test("a configured Turnstile secret still selects turnstile", () => {
   assert.equal(challengeUnder({ TURNSTILE_SECRET_KEY: "a-real-secret" }), "turnstile");
 });
 
-test("production with a gate and a placeholder salt REFUSES TO BOOT", () => {
-  // The trade this default makes. A fresh box gets a message naming what to set
-  // instead of coming up unprotected, because a known salt is a forgeable gate.
-  const out = challengeUnder({ NODE_ENV: "production", RATE_LIMIT_SALT: "__FILL_ME__" });
+test("IMPORTING config in production does NOT throw, which is what lets a build work", () => {
+  // The regression that took CI red. `next build` sets NODE_ENV=production and
+  // imports every route module to collect page data, so a guard at import time made
+  // compiling the artifact require the production secret. Move the check back to
+  // import time and this fails, before CI has to tell you.
+  assert.equal(challengeUnder({ NODE_ENV: "production" }), "pow");
+  assert.equal(challengeUnder({ NODE_ENV: "production", RATE_LIMIT_SALT: "__FILL_ME__" }), "pow");
+});
+
+test("but SERVING in production with a placeholder salt refuses", () => {
+  // The security property, unmoved: it just fires at boot now, where an operator
+  // reads it, instead of in build output (#206).
+  const out = challengeUnder({ NODE_ENV: "production", RATE_LIMIT_SALT: "__FILL_ME__" }, "serving");
   assert.match(out, /^THREW:/);
   assert.match(out, /placeholder/);
 });
 
-test("production with a gate and NO salt refuses too", () => {
-  const out = challengeUnder({ NODE_ENV: "production" });
+test("and serving with NO salt refuses too", () => {
+  const out = challengeUnder({ NODE_ENV: "production" }, "serving");
   assert.match(out, /^THREW:/);
   assert.match(out, /RATE_LIMIT_SALT is not set/);
 });
 
-test("production with a real salt boots with the gate on", () => {
-  const out = challengeUnder({
-    NODE_ENV: "production",
-    RATE_LIMIT_SALT: "b1946ac92492d2347c6235b4d2611184e0f4a3a5c9e01f8a2b3c4d5e6f708192",
-  });
-  assert.equal(out, "pow");
+test("serving in production with a real salt is fine", () => {
+  const out = challengeUnder(
+    { NODE_ENV: "production", RATE_LIMIT_SALT: "b1946ac92492d2347c6235b4d2611184e0f4a3a5c9e01f8a2b3c4d5e6f708192" },
+    "serving",
+  );
+  assert.equal(out, "OK");
 });
 
-test("challenge=none in production still needs no salt, so local work is unaffected", () => {
-  // saltGuard only guards an ACTIVE gate. If this ever starts throwing, the
-  // guard has widened and every test double that runs saltless breaks with it.
-  assert.equal(challengeUnder({ NODE_ENV: "production", FAUCET_CHALLENGE: "none" }), "none");
+test("challenge=none needs no salt even when serving, so local work is unaffected", () => {
+  // saltGuard only guards an ACTIVE gate. If this starts throwing, the guard has
+  // widened and every test double that runs saltless breaks with it.
+  assert.equal(challengeUnder({ NODE_ENV: "production", FAUCET_CHALLENGE: "none" }, "serving"), "OK");
 });

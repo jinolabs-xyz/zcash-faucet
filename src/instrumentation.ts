@@ -10,13 +10,19 @@ export async function register() {
   // Node runtime only (skip Edge).
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
 
-  // Boot-time config validation (reserve levels, RATE_LIMIT_SALT guard) throws
-  // on fatal misconfig. Without this catch Next swallows the throw, keeps the
-  // port open, and 500s every request, a zombie the watchdog can only ping
-  // forever. Exit instead: the process dies visibly and supervision restarts
-  // it once the operator fixes the env.
+  // Boot-time config validation throws on fatal misconfig. Without this catch Next
+  // swallows the throw, keeps the port open, and 500s every request, a zombie the
+  // watchdog can only ping forever. Exit instead: the process dies visibly and
+  // supervision restarts it once the operator fixes the env.
+  //
+  // Two kinds here. Importing config runs the checks that hold for any process
+  // (reserve levels). assertServingConfig() adds the ones that only apply to a
+  // process about to serve, which is the RATE_LIMIT_SALT guard: it must NOT fire
+  // during `next build`, and this hook is the boundary because register() does not
+  // run during a build.
   try {
-    await import("@/lib/config");
+    const { assertServingConfig } = await import("@/lib/config");
+    assertServingConfig();
   } catch (err) {
     console.error(`[boot] fatal config error: ${err instanceof Error ? err.message : err}`);
     process.exit(1);
