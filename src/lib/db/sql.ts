@@ -86,6 +86,30 @@ export const TABLE_COLUMNS_SQL = (table: string) => `PRAGMA table_info(${table})
  * so sig alone identifies the challenge. No need to store anything else, and
  * nothing here is linkable to a person.
  */
+/**
+ * The cheapest read that proves the ledger can record a claim (#217).
+ *
+ * Against `claims` rather than `SELECT 1`, and I had the reason wrong until I ran
+ * it. I assumed `SELECT 1` never touches the file. It does throw on a corrupt one.
+ * What it does NOT catch is the case that matters just as much, measured on
+ * 2026-07-30 with better-sqlite3:
+ *
+ *   corrupt file   SELECT 1                       THROWS "file is not a database"
+ *   corrupt file   SELECT id FROM claims LIMIT 0  THROWS "file is not a database"
+ *   fresh empty    SELECT 1                       OK
+ *   fresh empty    SELECT id FROM claims LIMIT 0  THROWS "no such table: claims"
+ *
+ * A schemaless ledger answers `SELECT 1` happily and cannot record a single claim.
+ * Reading a table the claim path actually needs catches corruption AND a missing
+ * schema, which is the difference between proving we can talk to sqlite and
+ * proving we have a ledger. The D1 driver has never run SCHEMA at all, so the
+ * second column is not a theoretical worry there.
+ *
+ * LIMIT 0 so the cost is a table lookup with no rows crossing the wire, which
+ * matters on D1 where every query is an HTTPS round-trip.
+ */
+export const LEDGER_PROBE_SQL = "SELECT id FROM claims LIMIT 0";
+
 export const SPEND_CHALLENGE_SQL = `
 INSERT OR IGNORE INTO used_challenges (sig, exp) VALUES (?, ?)
 `;

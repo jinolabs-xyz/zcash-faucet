@@ -21,6 +21,7 @@ import {
   SPEND_CHALLENGE_SQL,
   PURGE_CHALLENGES_SQL,
 } from "./sql.ts";
+import { probeLedger, type LedgerHealth } from "./probe.ts";
 
 const g = globalThis as unknown as { __faucetDriver?: DbDriver };
 function driver(): DbDriver {
@@ -118,6 +119,15 @@ export async function spendChallenge(sig: string, exp: number, now: number): Pro
   driver().run(PURGE_CHALLENGES_SQL, [now]).catch(() => {});
   const res = await driver().run(SPEND_CHALLENGE_SQL, [sig, exp]);
   return res.changes === 1;
+}
+
+/**
+ * Can the ledger answer a read (#217)? Uses the same driver every claim uses, so a
+ * pass means the real path is readable rather than that a probe-shaped copy of it
+ * is. Never throws: the caller is a health endpoint.
+ */
+export async function ledgerHealth(): Promise<LedgerHealth> {
+  return probeLedger((sql, params) => driver().get(sql, params));
 }
 
 export interface FarmingSignals {
