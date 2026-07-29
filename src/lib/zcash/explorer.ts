@@ -2,12 +2,14 @@
  * Testnet block explorer links. One place, because the same URL was inlined in
  * all four senders and a dead explorer would then need four edits.
  *
- * blockexplorer.one is the one we use: verified serving Zcash testnet
- * transaction pages. Overridable per deploy with FAUCET_EXPLORER_TX_URL, a
- * template containing {txid}, for when that changes and nobody wants to ship
- * code to fix a link.
+ * testnet.cipherscan.app is the one we use. It passes the check blockexplorer.one
+ * failed (#71): a real txid renders its block and confirmations, and an unknown
+ * txid returns 404 rather than decorating any 64-hex string as if it existed, so
+ * the link actually confirms rather than reassures. The node-truth /api/tx is
+ * still the authority; this is the human-readable courtesy link. Overridable per
+ * deploy with FAUCET_EXPLORER_TX_URL, a template containing {txid}.
  */
-const DEFAULT_TX_URL = "https://blockexplorer.one/zcash/testnet/tx/{txid}";
+const DEFAULT_TX_URL = "https://testnet.cipherscan.app/tx/{txid}";
 
 export function explorerTxUrl(txid: string): string | undefined {
   if (!txid) return undefined;
