@@ -275,13 +275,31 @@ That leaves two candidates, and one of them we can already test with a field we
 built for something else.
 
 **Candidate A: our node was behind the network when it built the transaction.**
-This is the one to check first, because it explains the failure completely and it
-is cheap to rule out. A wallet sets `expiry_height` from *its own node's* tip.
-A node that has drifted behind builds a transaction whose expiry is already in
-the network's past, so it can never be mined regardless of fee or relay. It looks
-perfectly valid locally and is dead on arrival everywhere else.
+A wallet sets `expiry_height` from *its own node's* tip. A node that has drifted
+behind builds a transaction whose expiry is already in the network's past, so it
+can never be mined regardless of fee or relay. It looks perfectly valid locally
+and is dead on arrival everywhere else.
 
-That is exactly the condition #171's tip oracle detects, so the read exists:
+One mechanism accounts for two separate mysteries, which is why it is the leading
+explanation: it explains why a shield never confirmed, and it explains why there
+is more than one dead transaction. Every shield built during a lagging window was
+born unminable, so repeated attempts produce repeated corpses rather than one.
+
+**Separate the two questions, because only one of them can block recovery.**
+
+| question | tense | what it decides |
+|---|---|---|
+| was the node behind when it built the dead transactions | past | *why this happened*. Diagnosis. Does not block anything. |
+| is the node at the true tip **right now** | present | *whether it is safe to shield again*. This is the gate. |
+
+A node that drifted historically and has since caught up is **safe to shield
+from** once the poison is removed. So a confirmed diagnosis of past drift is not a
+reason to refuse the recovery, and nobody should read it that way. The only
+reading that blocks step 4 is a present-tense disagreement between our tip and
+the network's.
+
+The read for the present-tense question already exists, because it is what #171
+was built for:
 
 ```sh
 curl -s localhost:3000/api/status | jq '.node | {nodeHeight, externalHeight, frozen}'
