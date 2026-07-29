@@ -28,5 +28,6 @@
 ---
 
 Before requesting review: no em dashes, no semicolons in prose, no commits to
-main, and the branch came from its own worktree. Ready branches go to QA
-first. You fix your own findings, QA approves, the CTO merges.
+main, and the branch came from its own worktree. Send a ready branch to the
+OTHER engineer, never to the CTO and never to yourself. You fix your own
+findings, the reviewer re-checks and hands it to the CTO, the CTO merges.
