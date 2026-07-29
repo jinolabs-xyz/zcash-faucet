@@ -31,11 +31,18 @@ Every place a user picks an address, **shielded is the default**. Transparent is
 an explicit opt-in toggle. Shielded recipients get a private Orchard note.
 
 **The faucet's own wallet is shielded too.** It runs a Zallet wallet on its own
-node (the Z3 stack) holding an Orchard account, so a drip to a shielded address is
-a shielded send from a shielded pool: `z_sendmany`, Orchard in and Orchard out,
-with nothing on the public ledger linking the faucet to the person it paid. Earlier
-versions of this page called that a future upgrade. It shipped, and it is what the
-deployment runs.
+node (the Z3 stack), and a drip to a shielded address is a `z_sendmany` out of a
+shielded pool with nothing on the public ledger linking the faucet to the person it
+paid. Earlier versions of this page called that a future upgrade. It shipped, and
+it is what the deployment runs.
+
+Which shielded pool, precisely, because a privacy page should not be vague about
+this and an earlier draft of this very paragraph got it wrong. The wallet reports
+its holdings under the pool name **`ironwood`**, and Zallet models `ironwood` as a
+pool distinct from `orchard`: its own source maps them to separate codes and notes
+that Ironwood notes are Orchard-SHAPED but tracked separately. So this page does not
+claim the notes are Orchard. It claims what the wallet says, which is a shielded
+pool called `ironwood`, Orchard-shaped, and separate from the Orchard pool.
 
 Two limits, since the point of this page is not to flatter us:
 
@@ -54,7 +61,10 @@ Two limits, since the point of this page is not to flatter us:
   instead**, so no request reaches Cloudflare. Worth knowing if you run your own:
   the choice follows from whether `TURNSTILE_SECRET_KEY` exists rather than from a
   separate decision, so setting that key alone moves your users' requests to a
-  third party. Proof of work lives behind the same single function
+  third party. That applies to a box provisioned before `FAUCET_CHALLENGE` was
+  added to the deploy template. A box set up from the current template has the mode
+  written down explicitly, so the fallback never runs and the key alone changes
+  nothing. Proof of work lives behind the same single function
   ([`turnstile.ts`](src/lib/turnstile.ts)), which is what makes either one a clean
   swap.
 - **Explorer links** (transparent sends only) point at a third-party explorer,
