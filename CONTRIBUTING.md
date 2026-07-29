@@ -55,21 +55,34 @@ a union would have left a live token and a dead one with no error anywhere.
 
 Every branch goes through the same pipeline, and nothing skips a step:
 
-1. Mark your branch ready and send it to QA first, not the CTO: branch name,
-   a two-line summary, and what you checked.
-2. QA runs a first pass: typecheck, tests, build, then actually exercising
-   the change (a browser for frontend, stubs for infra scripts). Findings go
-   back to you, the engineer.
-3. You fix your own findings, QA re-checks, and you iterate until clean.
-4. QA forwards the approved branch to the CTO.
-5. The CTO does the final audit and merges. Anything the audit finds comes
-   back to you the same way QA findings did. You wrote it, you fix it,
-   nobody else touches your branch.
+1. Mark your branch ready and send it to the OTHER engineer. Not the CTO, and
+   there is no QA seat: branch name, a two-line summary, and what you checked.
+2. **Check the author before you route anything.** One `gh` read. Sending a
+   branch to its own author silently removes the gate and leaves a review
+   comment sitting under it that looks like the gate held.
+3. The non-author reviews: typecheck, tests, build, and then actually
+   exercising the change (a browser for frontend, a running server for routes,
+   stubs for infra scripts). Findings go back to the author.
+4. The author fixes their own findings. The reviewer re-checks, and you iterate
+   until clean.
+5. The reviewer hands it to the CTO.
+6. The CTO audits, confirms a green run on the exact head that will merge, and
+   merges. Anything the audit finds comes back to the author the same way the
+   reviewer's findings did. You wrote it, you fix it, nobody else touches your
+   branch.
+7. The CTO then watches the post-merge run on `main` to green. This is not
+   optional and it is not paperwork: a PR that was green on its own head has
+   reddened `main` after merging, and the gap between "merged" and "someone
+   noticed" is where that sits unseen.
 
-The separation is the point: engineers write and fix, QA finds, the CTO
-audits and merges. Nobody reviews their own work and nobody fixes someone
-else's. QA's own branches skip step 2 in the obvious way and go straight to
-the CTO.
+The separation is the point: the author writes and fixes, the non-author finds,
+the CTO audits and merges. Nobody reviews their own work and nobody fixes
+someone else's.
+
+Two things about step 6 that have each cost a day. Confirm the green run on the
+head that will actually merge, because a run against a commit two behind is a
+true statement about the wrong object (rule 25). And six of seven jobs is not
+seven: a job still in progress is not a pass.
 
 "It works on my machine" is not a first pass. If it renders, drive it. If it
 executes, run it.
