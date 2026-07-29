@@ -55,6 +55,32 @@ git pull
 NETWORK=testnet FAUCET_DOMAIN=$(cat /etc/faucet-domain) ./deploy/deploy.sh
 ```
 
+### Letting the faucet refill itself
+
+Mining rewards land as transparent coinbase at `FAUCET_MINER_ADDRESS`. They are
+not spendable by the faucet until the reserve loop shields them into the wallet,
+and **that is off by default**, because shielding broadcasts a transaction and
+that stays a deliberate authorisation:
+
+```bash
+# in the faucet env, then restart the app
+FAUCET_SHIELD_COINBASE=true
+```
+
+This is **not** `FAUCET_MINER_ACTIVE`. That one is about mining, which the app
+does not do. Either flag arms the loop so it observes and reports, but only this
+one lets it move funds. They were a single flag until #172, where turning mining
+off also turned fund recovery off and left 47.5 TAZ unswept through a shortage.
+
+With it off and a refill needed, the loop logs that every tick, so the state is
+loud rather than silent. Check it without reading logs:
+
+```bash
+curl -s localhost:3000/api/status | jq .reserve
+# refilling: true + shieldCoinbase: false  → it wants to refill and may not
+# blindTicks > 0                           → it cannot read the balance at all
+```
+
 The stack, its wallet setup and the RPC wiring are documented in
 [deploy/z3/README.md](deploy/z3/README.md). TLS and DNS are in
 [deploy/z3/HTTPS.md](deploy/z3/HTTPS.md). Day-two operations, health versus

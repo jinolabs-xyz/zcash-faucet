@@ -63,20 +63,31 @@ export function shouldStartStep(opts: {
  * alongside the opid, and that number is what separates the cases.
  *
  *   moved                     funds actually moved
- *   nothing-visible           no opid and nothing left over: genuinely empty,
- *                             or nothing mature yet
+ *   nothing-visible           no opid and the backend REPORTED zero remaining:
+ *                             genuinely empty, or nothing mature yet
  *   present-but-unspendable   no opid but UTXOs remain, so the coinbase exists
  *                             and this account cannot spend it. That is the
  *                             47.5 TAZ shape: wrong account, not empty.
+ *   count-not-reported        no opid and no figure at all, so we know nothing
+ *                             about what is there
+ *
+ * That last one is its own verdict rather than being folded into
+ * nothing-visible, and the distinction is the point of the whole function.
+ * `{ opid, remainingUTXOs }` is zcashd's z_shieldcoinbase shape and zallet is a
+ * rewrite, so whether it reports the figure at all is UNVERIFIED. Defaulting a
+ * missing count to "nothing is there" would restore exactly the #172 blindness
+ * this replaced, with tests passing over the top of it. A fact and an absence of
+ * information are different things and the caller must be able to see which it has.
  */
-export type SweepVerdict = "moved" | "nothing-visible" | "present-but-unspendable";
+export type SweepVerdict =
+  | "moved"
+  | "nothing-visible"
+  | "present-but-unspendable"
+  | "count-not-reported";
 
 export function classifySweep(outcome: { moved: boolean; remainingUTXOs?: number }): SweepVerdict {
   if (outcome.moved) return "moved";
-  // Strictly greater than zero: an unreported figure is not evidence of anything,
-  // and must not be read as "present" any more than as "empty".
-  if (typeof outcome.remainingUTXOs === "number" && outcome.remainingUTXOs > 0) {
-    return "present-but-unspendable";
-  }
+  if (typeof outcome.remainingUTXOs !== "number") return "count-not-reported";
+  if (outcome.remainingUTXOs > 0) return "present-but-unspendable";
   return "nothing-visible";
 }

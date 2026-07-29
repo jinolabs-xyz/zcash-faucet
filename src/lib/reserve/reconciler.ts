@@ -143,12 +143,18 @@ class ReserveReconciler {
           // #172 could not answer because the value was received and discarded.
           this.emptySweeps++;
           const verdict = classifySweep(outcome);
+          const because =
+            verdict === "present-but-unspendable"
+              ? "Coinbase EXISTS but this account cannot spend it: check the miner address is a receiver of ZALLET_ACCOUNT."
+              : verdict === "nothing-visible"
+                ? "The backend reported zero remaining, so nothing mature is visible to this account yet."
+                : // count-not-reported: we know nothing, and saying so is the point.
+                  "The backend reported NO count at all, so we cannot tell whether coinbase is waiting. " +
+                  "z_shieldcoinbase's remainingUTXOs is zcashd's shape and this zallet may not return it: " +
+                  "if this line repeats, the sweep has no visibility and that is a gap, not a quiet tick.";
           console.error(
             `[reserve] sweep moved nothing (${this.emptySweeps} consecutive, verdict=${verdict}), ` +
-              `remainingUTXOs=${outcome.remainingUTXOs ?? "not reported"}. ` +
-              (verdict === "present-but-unspendable"
-                ? "Coinbase EXISTS but this account cannot spend it: check the miner address is a receiver of ZALLET_ACCOUNT."
-                : "Nothing mature is visible to this account yet, which is normal shortly after a block."),
+              `remainingUTXOs=${outcome.remainingUTXOs ?? "not reported"}. ${because}`,
           );
         })
         .catch((err) => {

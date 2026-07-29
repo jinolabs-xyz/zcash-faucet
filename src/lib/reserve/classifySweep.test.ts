@@ -18,9 +18,20 @@ test("nothing moved while UTXOs REMAIN is the 47.5 TAZ shape, not an empty sweep
   assert.equal(classifySweep({ moved: false, remainingUTXOs: 48 }), "present-but-unspendable");
 });
 
-test("an unreported count is not evidence of presence OR emptiness", () => {
+test("an unreported count is its own verdict, not evidence of presence OR emptiness", () => {
   // It must not claim "present-but-unspendable" without a number to justify it,
-  // which would be inventing a verdict the backend never gave us.
-  assert.equal(classifySweep({ moved: false }), "nothing-visible");
-  assert.equal(classifySweep({ moved: false, remainingUTXOs: undefined }), "nothing-visible");
+  // and it must not claim "nothing-visible" either: zallet is a rewrite of
+  // zcashd and whether it reports this field is unverified, so folding a missing
+  // count into "nothing is there" would restore #172's blindness behind a
+  // passing test. SDE-Infra's finding on #174.
+  assert.equal(classifySweep({ moved: false }), "count-not-reported");
+  assert.equal(classifySweep({ moved: false, remainingUTXOs: undefined }), "count-not-reported");
+});
+
+test("a REPORTED zero is a fact and stays distinct from a missing count", () => {
+  assert.equal(classifySweep({ moved: false, remainingUTXOs: 0 }), "nothing-visible");
+  assert.notEqual(
+    classifySweep({ moved: false, remainingUTXOs: 0 }),
+    classifySweep({ moved: false }),
+  );
 });
