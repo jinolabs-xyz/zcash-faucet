@@ -35,6 +35,79 @@ function zatToZecLiteral(zat: bigint): string {
 }
 
 
+/**
+ * Pool names whose funds a SHIELDED DRIP can actually spend.
+ *
+ * An ALLOWLIST, not a denylist, and the asymmetry is the whole design (#185). This
+ * summed every pool the wallet reported, transparent included, so the faucet believed
+ * it held 257 TAZ when 50 of that was unshielded coinbase a z_sendmany to a shielded
+ * address cannot spend. The reserve loop then decided no refill was needed while the
+ * actually-drippable pool was a third of what it thought.
+ *
+ * Under-reporting is cheap, visible and self-correcting: the loop sweeps, the number
+ * rises. Over-reporting promises drips the wallet cannot deliver and fails in front of
+ * a user. So an unrecognised pool must land on the EXCLUDED side by construction,
+ * which a denylist cannot guarantee: it would silently admit whatever Zcash or zallet
+ * adds after we stop looking.
+ *
+ * `ironwood` is verified from the live wallet, which reported transparent and ironwood
+ * during the 2026-07-29 recovery. `sapling` and `orchard` are the protocol's own
+ * shielded pool names, and including them cannot cause an over-report because they ARE
+ * shielded wherever they appear.
+ *
+ * `sprout` is deliberately ABSENT despite being shielded. Those funds are effectively
+ * stranded, so counting them would promise drips we cannot make, which is the exact
+ * failure this list exists to prevent.
+ */
+export const DRIPPABLE_POOLS: readonly string[] = ["ironwood", "orchard", "sapling"];
+
+/** Pools we know are NOT drippable, so their presence needs no warning. */
+const KNOWN_NOT_DRIPPABLE: readonly string[] = ["transparent", "sprout"];
+
+/**
+ * Sum only what a shielded drip can spend, and SAY what was left out.
+ *
+ * Exported for tests because the arithmetic is the money path. The logging is not
+ * decoration: an allowlist under-reports silently by design, so if zallet renames a
+ * pool our balance quietly drops and the loop starts refilling something that was
+ * never low. Naming the unrecognised pool is how we find out instead of guessing.
+ */
+export function drippableZat(pools: Record<string, { valueZat?: number | string }>): bigint {
+  let drippable = 0n;
+  let transparent = 0n;
+  const unknown: string[] = [];
+
+  for (const [name, pool] of Object.entries(pools)) {
+    if (pool?.valueZat === undefined) continue;
+    const zat = BigInt(pool.valueZat);
+    const key = name.toLowerCase();
+    if (DRIPPABLE_POOLS.includes(key)) {
+      drippable += zat;
+    } else if (key === "transparent") {
+      transparent += zat;
+    } else if (!KNOWN_NOT_DRIPPABLE.includes(key) && zat > 0n) {
+      unknown.push(`${name}=${zat}`);
+    }
+  }
+
+  if (unknown.length) {
+    console.error(
+      `[balance] UNRECOGNISED pool(s) holding funds, EXCLUDED from the drippable total: ${unknown.join(", ")}. ` +
+        "Excluded on purpose, because assuming an unknown pool is spendable is how a faucet promises a drip it " +
+        `cannot make. If these are shielded and spendable, add them to DRIPPABLE_POOLS (currently ${DRIPPABLE_POOLS.join(", ")}).`,
+    );
+  }
+  if (transparent > 0n) {
+    // Not an error: it is normal between a mined block and a sweep. Worth saying
+    // because it is the difference between the wallet's total and what we can pay,
+    // and an operator comparing the two otherwise sees an unexplained gap.
+    console.log(
+      `[balance] ${transparent} zat sits TRANSPARENT and is not drippable until the reserve loop shields it`,
+    );
+  }
+  return drippable;
+}
+
 interface RpcError {
   code: number;
   message: string;
@@ -90,11 +163,7 @@ export class ZalletSender implements Sender {
       "z_getbalanceforaccount",
       `[${JSON.stringify(this.z.account)},${this.z.minConf}]`,
     );
-    let total = 0n;
-    for (const pool of Object.values(bal.pools ?? {})) {
-      if (pool?.valueZat !== undefined) total += BigInt(pool.valueZat);
-    }
-    return total;
+    return drippableZat(bal.pools ?? {});
   }
 
   async send(req: SendRequest): Promise<SendResult> {

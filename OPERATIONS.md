@@ -594,7 +594,7 @@ node agreeing with itself is what #170 and #171 are about.
 `drip + minReserve`, so the sweep worked and was not enough. `node frozen behind
 network` is unrelated to this runbook and is #171's signal.
 
-### 7. Put the marks back, because the loop will never stop on its own
+### 7. Put the marks back
 
 Step 4 raises `FAUCET_RESERVE_LOW_TAZ` to force the sweep, and that is the only thing
 that starts it. `decideRefilling` starts refilling below LOW, stops at or above TARGET,
@@ -607,10 +607,25 @@ spendable 255.95, low 5,   target 1000  -> refilling stays FALSE   <- raising TA
 spendable 255.95, low 999, target 1000  -> refilling TRUE
 ```
 
-The same arithmetic is why it keeps going: shielding moves coinbase from transparent to
-shielded, and while #185 counts both pools the reported spendable does not change, so it
-never reaches TARGET and holds `refilling: true`. That is what works through the backlog
-across many ticks, and it is also why it **never finishes**.
+The same arithmetic is why it keeps going, and **this changed when #185 landed**, so read
+whichever applies to the build on the box.
+
+**Before #185**, spendable summed every pool. Shielding moved coinbase from transparent to
+shielded and the reported total did not move, so TARGET was unreachable and the loop held
+`refilling: true` forever. That worked through the backlog and it also meant the loop
+**never finished**, which is why this step existed.
+
+**After #185**, spendable counts only what a shielded drip can spend, so each sweep RAISES
+it and the loop converges on its own:
+
+```
+before: 257.2 -> true, 257.2 -> true, 257.2 -> true      flat, TARGET unreachable
+after:  207.2 -> true, 500 -> true, 900 -> true, 1000.1 -> FALSE
+```
+
+So on a build with #185 the loop stops by itself once the shielded pool crosses TARGET, and
+this step becomes hygiene rather than a requirement: the marks still want putting back so
+the next low-balance episode is judged against real thresholds instead of 999.
 
 So once the transparent balance at the miner address has stopped falling:
 
