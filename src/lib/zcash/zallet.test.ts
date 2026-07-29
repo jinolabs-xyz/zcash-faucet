@@ -12,7 +12,7 @@ process.env.ZALLET_RPC_URL = "http://127.0.0.1:59999/";
 process.env.ZALLET_POLL_MS = "250";
 
 const { ZalletSender } = await import("./zalletsend.ts");
-const { safeBalance } = await import("./send.ts");
+const { safeBalance, safeDonations, resetDonationCache } = await import("./send.ts");
 
 const UA_INFO: AddressInfo = { valid: true, kind: "unified", shielded: true };
 const TM_INFO: AddressInfo = { valid: true, kind: "transparent", shielded: false };
@@ -101,3 +101,62 @@ test("safeBalance is null, never a throw, when the wallet is unreachable", async
   assert.equal(await safeBalance(), null);
 });
 
+
+/* ------------------------------------------------------------------ donations (#192) */
+
+/** One confirmed donation, in zallet's WalletTx shape. */
+function donationTx(i: number) {
+  return {
+    txid: `d${i}`,
+    mined_height: 4_000_000 + i,
+    sent_note_count: 0,
+    outputs: [{ pool: "ironwood", from_account: null, value: 100_000_000, is_change: false }],
+  };
+}
+
+test("donations pages z_listtransactions and stops on a short page", async () => {
+  const pages = [Array.from({ length: 500 }, (_, i) => donationTx(i)), [donationTx(500)]];
+  const calls = mockRpc({ z_listtransactions: (p) => pages[Number(p[3]) / 500] ?? [] });
+
+  const { tally, complete } = await new ZalletSender().donations();
+  assert.equal(complete, true);
+  assert.equal(tally.count, 501, "the second page was dropped or the first was re-read");
+  assert.equal(calls.length, 2, "stopped one call late or early");
+  // The wire params are positional, so the order is the contract with zallet.
+  assert.deepEqual(calls[0].params, ["11111111-2222-3333-4444-555555555555", null, null, 0, 500]);
+  assert.deepEqual(calls[1].params, ["11111111-2222-3333-4444-555555555555", null, null, 500, 500]);
+});
+
+test("a history longer than the page cap is reported INCOMPLETE, not partial", async () => {
+  // The rule that matters: a cumulative total from a truncated scan is not a
+  // smaller number, it is a wrong one, so it must not reach the page.
+  const full = Array.from({ length: 500 }, (_, i) => donationTx(i));
+  const calls = mockRpc({ z_listtransactions: () => full });
+
+  const { tally, complete } = await new ZalletSender().donations();
+  assert.equal(complete, false);
+  assert.ok(tally.count > 0, "it still tallied what it saw");
+  assert.equal(calls.length, 20, "the page cap did not hold, so a bad wallet could loop forever");
+
+  resetDonationCache();
+  mockRpc({ z_listtransactions: () => full });
+  assert.equal(await safeDonations(), null, "an incomplete tally was published anyway");
+});
+
+test("safeDonations caches, because /donate renders per visitor", async () => {
+  resetDonationCache();
+  const calls = mockRpc({ z_listtransactions: (p) => (Number(p[3]) === 0 ? [donationTx(1)] : []) });
+
+  const first = await safeDonations();
+  assert.equal(first?.count, 1);
+  const second = await safeDonations();
+  assert.equal(second?.count, 1);
+  assert.equal(calls.length, 1, "the second render hit the wallet again");
+});
+
+test("safeDonations is null, never a throw, when the wallet is unreachable", async () => {
+  // /donate is the page that still works when the faucet is dry. A counter that
+  // cannot load must hide itself rather than 500 the page.
+  resetDonationCache();
+  assert.equal(await safeDonations(), null); // real fetch, closed port
+});
