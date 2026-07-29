@@ -15,7 +15,7 @@
  */
 // .ts extension for node --test resolution, same pattern as pow.ts.
 import { config } from "../config.ts";
-import type { Refiller } from "./refiller";
+import type { Refiller, StepOutcome } from "./refiller";
 
 // Cap coinbase UTXOs per shield tx (zcashd's old default). A long mining
 // backlog gets swept over several steps instead of one oversized tx, and it
@@ -58,7 +58,7 @@ export class ZalletRefiller implements Refiller {
     return json.result as T;
   }
 
-  async step(): Promise<void> {
+  async step(): Promise<StepOutcome> {
     const { account, address } = this.z;
     if (!account) throw new Error("ZALLET_ACCOUNT (account UUID) is required to shield coinbase.");
     if (!address) throw new Error("ZALLET_ADDRESS is required to shield coinbase.");
@@ -68,16 +68,21 @@ export class ZalletRefiller implements Refiller {
     // UA. This zallet rejects zcashd's "*" wildcard on purpose (it would link
     // unrelated accounts on-chain), so we scope by our account UUID; the
     // privacy policy then defaults to AllowLinkingAccountAddresses, the only
-    // one valid for a UUID sweep. Fee must be null (always ZIP 317). Errors
-    // like "no UTXOs to shield" just mean the miner hasn't produced anything
-    // spendable yet; the reconciler treats a failed step as "try again next
-    // tick".
+    // one valid for a UUID sweep. Fee must be null (always ZIP 317).
+    //
+    // No opid means nothing was shieldable this tick. That is NOT necessarily
+    // "the miner hasn't produced anything" — it reads identically when the
+    // coinbase exists but belongs to receivers outside this account, or is not
+    // yet mature. #172 is what that ambiguity cost, so return remainingUTXOs
+    // instead of discarding it and let the reconciler decide when a run of
+    // empty sweeps has stopped being normal.
     const op = await this.rpc<{ opid?: string; remainingUTXOs?: number }>(
       "z_shieldcoinbase",
       `[${JSON.stringify(account)},${JSON.stringify(address)},null,${SHIELD_UTXO_LIMIT}]`,
     );
-    if (!op?.opid) return; // nothing to shield this tick
+    if (!op?.opid) return { moved: false, remainingUTXOs: op?.remainingUTXOs };
     await this.awaitOperation(op.opid);
+    return { moved: true, remainingUTXOs: op.remainingUTXOs };
   }
 
   private async awaitOperation(opid: string): Promise<void> {

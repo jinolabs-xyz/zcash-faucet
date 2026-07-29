@@ -5,32 +5,54 @@
  * single step, never a whole refill.
  *
  * Which implementation you get:
- *   FAUCET_MINER_ACTIVE=false  → NoopRefiller. The loop runs, decides, and
- *     reports state honestly, but moves no funds. This is the pre-cutover
- *     default: mining on a syncing node would fork us off the real chain.
- *   miner active + zallet      → ZalletRefiller (./zalletRefiller.ts), shields
+ *   FAUCET_SHIELD_COINBASE=false → NoopRefiller. The loop still runs, decides
+ *     and reports state honestly, it just moves no funds. Default, because a
+ *     shield broadcasts a transaction and that stays an explicit opt-in.
+ *   shielding on + zallet        → ZalletRefiller (./zalletRefiller.ts), shields
  *     mature coinbase into the faucet's Orchard account. Mining itself is the
- *     miner container's job; our step is the shield leg.
+ *     miner container's job; our step is only ever the shield leg.
+ *
+ * `step()` reports its OUTCOME rather than returning void. A shield that finds
+ * nothing to sweep used to be indistinguishable from one that moved funds, and
+ * from a loop that was not running at all (#172) — so the caller now gets enough
+ * to tell those apart and say so.
  */
 import { config } from "../config";
 import { selectRefillerKind } from "./select";
 
+export interface StepOutcome {
+  /** True only when funds actually moved: an operation was submitted and landed. */
+  moved: boolean;
+  /**
+   * UTXOs the backend still sees as shieldable, when it reports the figure.
+   * Zero versus non-zero is what separates "there is nothing here" from "there
+   * is plenty here and I cannot see it", which is the question #172 could not
+   * answer because this value was received and thrown away.
+   */
+  remainingUTXOs?: number;
+}
+
 export interface Refiller {
   readonly name: string;
-  /** One bounded refill unit. Resolves when it lands, throws on failure. */
-  step(): Promise<void>;
+  /** One bounded refill unit. Resolves with what happened, throws on failure. */
+  step(): Promise<StepOutcome>;
 }
 
 class NoopRefiller implements Refiller {
   readonly name = "noop";
-  async step(): Promise<void> {}
+  async step(): Promise<StepOutcome> {
+    return { moved: false };
+  }
 }
 
 let cached: Refiller | null = null;
 
 export function getRefiller(): Refiller {
   if (cached) return cached;
-  const kind = selectRefillerKind({ minerActive: config.miner.active, sender: config.sender });
+  const kind = selectRefillerKind({
+    shieldCoinbase: config.reserve.shieldCoinbase,
+    sender: config.sender,
+  });
   if (kind === "zallet") {
     cached = new (require("./zalletRefiller").ZalletRefiller)() as Refiller;
   } else {

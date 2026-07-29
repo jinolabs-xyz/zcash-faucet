@@ -21,9 +21,14 @@ FAUCET_SENDER=mock FAUCET_CHALLENGE=pow RATE_LIMIT_SALT=dev-salt npm start
 
 Open http://localhost:3000, hit **Generate a test address**, and claim.
 
-To watch the reserve loop refill, add `FAUCET_MINER_ACTIVE=true
+To watch the reserve loop refill, add `FAUCET_SHIELD_COINBASE=true
 FAUCET_MOCK_REFILL=true` and set the marks low, for example
 `FAUCET_RESERVE_LOW_TAZ=4 FAUCET_RESERVE_TARGET_TAZ=8`.
+
+`FAUCET_SHIELD_COINBASE` is the switch that lets the loop move funds, and it is
+deliberately **not** `FAUCET_MINER_ACTIVE` — that one is about mining, which the
+app does not do. Either flag arms the loop so it observes and reports; only this
+one lets it sweep (#172).
 
 **`npm run dev` does not bundle.** A `node:` import in `src/lib/zcash/t2z.ts`
 breaks the dev webpack build, so use `npm run build && npm start`.
@@ -48,6 +53,32 @@ Existing box, re-runnable and safe to repeat:
 cd /opt/zcash-faucet
 git pull
 NETWORK=testnet FAUCET_DOMAIN=$(cat /etc/faucet-domain) ./deploy/deploy.sh
+```
+
+### Letting the faucet refill itself
+
+Mining rewards land as transparent coinbase at `FAUCET_MINER_ADDRESS`. They are
+not spendable by the faucet until the reserve loop shields them into the wallet,
+and **that is off by default**, because shielding broadcasts a transaction and
+that stays a deliberate authorisation:
+
+```bash
+# in the faucet env, then restart the app
+FAUCET_SHIELD_COINBASE=true
+```
+
+This is **not** `FAUCET_MINER_ACTIVE`. That one is about mining, which the app
+does not do. Either flag arms the loop so it observes and reports, but only this
+one lets it move funds. They were a single flag until #172, where turning mining
+off also turned fund recovery off and left 47.5 TAZ unswept through a shortage.
+
+With it off and a refill needed, the loop logs that every tick, so the state is
+loud rather than silent. Check it without reading logs:
+
+```bash
+curl -s localhost:3000/api/status | jq .reserve
+# refilling: true + shieldCoinbase: false  → it wants to refill and may not
+# blindTicks > 0                           → it cannot read the balance at all
 ```
 
 The stack, its wallet setup and the RPC wiring are documented in
