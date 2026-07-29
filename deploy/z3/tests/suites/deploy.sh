@@ -202,8 +202,20 @@ check "and NO override is written" "[ ! -f '$D/z3-stack/docker-compose.override.
 deploy_fresh_env
 FAUCET_MINER_ADDRESS="utest17rnhex9h0grncus4ax40w2xkmvhz843mvp6" run_deploy > "$T/shielded.log" 2>&1
 check "a unified address is refused" "[ $? -ne 0 ]"
-check "and says a coinbase can only pay a transparent address" \
-  "grep -q 'only pay a TRANSPARENT address' '$T/shielded.log'"
+# The refusal stands; its REASON has now been wrong twice and the test pins the
+# survivor. Not "the protocol forbids it" (false since Heartwood), and not "we have
+# not verified what zebra pays to" (false since #195 read
+# TransactionTemplate::new_coinbase and found orchard-then-sapling-then-transparent).
+# The honest reason is the WALLET side: zebra would pay shielded, and we have not
+# verified our own wallet can see or spend such a coinbase.
+check "and names the WALLET as the unverified side, not the protocol or zebra" \
+  "grep -q 'OUR wallet detects and can spend a shielded coinbase' '$T/shielded.log'"
+check "and credits zebra with doing the right thing" \
+  "grep -q 'Zebra WOULD mine this shielded' '$T/shielded.log'"
+check "and does not assert the first false rule" \
+  "! grep -q 'only pay a TRANSPARENT address' '$T/shielded.log'"
+check "and does not assert the second false rule" \
+  "! grep -q 'have not verified that zebra builds' '$T/shielded.log'"
 check "and does NOT blame base58" "! grep -q 'not base58' '$T/shielded.log'"
 
 # The value is written inside YAML quotes, so a quote would escape into structure.

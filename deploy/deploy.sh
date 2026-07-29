@@ -99,7 +99,29 @@ validate_miner_address() {
   # not valid base58 sends them to debug the wrong thing entirely.
   if printf '%s' "$addr" | grep -qE '^(utest1|uregtest1|u1|ztestsapling1|zregtestsapling1|zs)'; then
     echo "FAUCET_MINER_ADDRESS is a shielded or unified address: $addr" >&2
-    echo "A coinbase can only pay a TRANSPARENT address, so zebra cannot mine to this." >&2
+    # This message has been wrong twice, in opposite directions, so the reason is
+    # spelled out rather than summarised.
+    #
+    # It first said "a coinbase can only pay a TRANSPARENT address". False: ZIP 213
+    # has allowed shielded coinbase since Heartwood.
+    #
+    # It then said we had not verified whether zebra pays the transparent receiver
+    # of a unified address. Also false, and falsified by our own work an hour later
+    # (#195): zebra v6.2.0's TransactionTemplate::new_coinbase tries orchard() then
+    # sapling() and only falls back to transparent(), so a UA with a shielded
+    # receiver gets a SHIELDED coinbase. Zebra's side is settled.
+    #
+    # What is genuinely unverified is the WALLET side: whether zallet detects a
+    # shielded coinbase it did not itself create, credits it to our account, and can
+    # spend it once mature. Until that is tested (#195, on the third-party build of
+    # #184), pointing mining at a UA risks rewards that are real on-chain and
+    # invisible to us — which is the same money-we-cannot-see failure as before,
+    # arriving from the other end.
+    echo "Zebra WOULD mine this shielded (it prefers a unified address's Orchard or" >&2
+    echo "Sapling receiver over its transparent one), but we have not verified that" >&2
+    echo "OUR wallet detects and can spend a shielded coinbase it did not create." >&2
+    echo "Refusing until #195 tests that, so rewards cannot land somewhere real and" >&2
+    echo "invisible to us. Not a protocol limit: shielded coinbase is legal (ZIP 213)." >&2
     echo "Expected $ok_desc. This is probably the faucet's own address rather than the miner's." >&2
     exit 1
   fi
