@@ -34,17 +34,26 @@ test("a fresh unmined send with headroom is pending, not an alarm", () => {
   assert.match(v.reason, /40 block\(s\) of expiry headroom/);
 });
 
-test("tip EQUAL to the expiry is still includable, so not dead", () => {
-  // Off by one here pages a human about a payout that then lands in that very block.
+test("tip EQUAL to the expiry is ALREADY dead, because that block is mined without it", () => {
+  // This test previously asserted "pending" and enshrined an off-by-one. A tx with
+  // expiryheight H is valid only at heights <= H, so when the tip IS H the block at H
+  // exists and does not contain it, and the next block is H+1 where it is invalid.
+  //
+  // Worth keeping the correction visible: my sabotage check "passed" against the wrong
+  // boundary, because I wrote the code and the test from the same premise. Sabotage
+  // proves a test can detect a change; it cannot prove the boundary matches consensus.
   const v = classifyPayout({ ...base, expiryHeight: 4_221_100, tip: 4_221_100 });
-  assert.equal(v.fate, "pending");
-  assert.equal(shouldAlarm(v), false);
+  assert.equal(v.fate, "dead");
+  assert.equal(shouldAlarm(v), true);
 });
 
-test("one block past the expiry IS dead, so the boundary is exact both ways", () => {
-  // The control for the test above. Without it, a rule that never fires would pass.
-  const v = classifyPayout({ ...base, expiryHeight: 4_221_100, tip: 4_221_101 });
-  assert.equal(v.fate, "dead");
+test("one block BELOW the expiry is still pending, so the boundary is exact both ways", () => {
+  // The real control. At tip H-1 the block at H has not been mined yet, so inclusion is
+  // still possible. Without this, moving every case to "dead" would pass the test above.
+  const v = classifyPayout({ ...base, expiryHeight: 4_221_100, tip: 4_221_099 });
+  assert.equal(v.fate, "pending");
+  assert.equal(shouldAlarm(v), false);
+  assert.match(v.reason, /1 block\(s\) of expiry headroom/);
 });
 
 test("expiry height 0 means NEVER expires, not expired long ago", () => {

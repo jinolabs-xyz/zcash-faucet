@@ -101,14 +101,23 @@ export function classifyPayout(f: PayoutFacts): PayoutVerdict {
     return { fate: "pending", reason: "expiry height 0 means this transaction never expires, so it cannot be dead" };
   }
 
-  // The one deterministic conclusion available. Strictly greater than: at tip ==
-  // expiryHeight the transaction is still includable in that very block, and calling
-  // it dead one block early would page a human about a payout that then lands.
-  if (f.tip > f.expiryHeight) {
+  // The one deterministic conclusion available, and the comparison is `>=`.
+  //
+  // A transaction with expiryheight H is valid only at heights <= H. So when the tip
+  // IS H and the transaction is unmined, block H has already been mined without it and
+  // the next block is H+1, where it is invalid. It is dead at tip == H, not one block
+  // later.
+  //
+  // I shipped `>` first, with a comment arguing tip == H was "still includable in that
+  // very block". It is not: that block is the tip, it exists, and the transaction is
+  // not in it. The reason string was already telling me so, printing "0 block(s) of
+  // expiry headroom left" beside a verdict of pending, which is the #211 defect in a
+  // file written hours after I approved the fix for #211.
+  if (f.tip >= f.expiryHeight) {
     return {
       fate: "dead",
       reason:
-        `our tip ${f.tip} is past this transaction's expiry ${f.expiryHeight} and it is not in a block, ` +
+        `our tip ${f.tip} has reached this transaction's expiry ${f.expiryHeight} and it is not in a block, ` +
         `so it can never be mined. This is arithmetic on our own node, not an explorer's opinion`,
     };
   }
