@@ -130,7 +130,12 @@ touch "$STUB_HEALTH" "$STUB_READY"
 STUB_READY_MAX=1 STUB_CURL_RC=7 bash "$REDEPLOY" > "$T/refused.log" 2>&1
 rc=$?
 check "a refused connection DOES roll back" "[ \"\$(img zcash-faucet:latest)\" = 'sha256:old' ]"
-check "and exits 2, because service was restored" "[ $rc -eq 2 ]"
+# Exit 1, not 2, and that is correct for what this fixture models: STUB_CURL_RC refuses
+# EVERY call, so the rolled-back image cannot be verified either. The property under
+# test is that refused counts as evidence and the revert is ATTEMPTED, which the check
+# above proves. Asserting 2 here would have required the old build to answer, which a
+# total-refusal fixture cannot express.
+check "and exits 1, because the rollback could not be verified either" "[ $rc -eq 1 ]"
 check "and says nothing is listening" "grep -q 'nothing is listening' '$T/refused.log'"
 
 echo "== redeploy: the DEFAULT no-URL path can still say NO, so rollback survives (#229)"
@@ -140,17 +145,22 @@ echo "== redeploy: the DEFAULT no-URL path can still say NO, so rollback survive
 # why it shipped green.
 redeploy_env
 unset REDEPLOY_FAUCET_URL
-export STUB_EXEC_READY="$T/execready"
-touch "$STUB_HEALTH" "$STUB_READY" "$STUB_EXEC_READY"   # ready before the deploy
-rm -f "$STUB_EXEC_READY"                                # and not after it
+export STUB_EXEC_HEALTH="$T/exechealth" STUB_EXEC_READY="$T/execready"
+# Live throughout, and ready ONLY for the pre-deploy check, which is the shape the
+# readiness gate judges: was serving before, new build never gets there.
+touch "$STUB_HEALTH" "$STUB_READY" "$STUB_EXEC_HEALTH" "$STUB_EXEC_READY"
+# Ready before the gate, gone during it: remove the marker after the pre-deploy probe
+# by making it single-use, the same trick STUB_READY_MAX plays on the URL path.
+( sleep 1; rm -f "$STUB_EXEC_READY" ) &
 bash "$REDEPLOY" > "$T/nourl.log" 2>&1
 rc=$?
+wait
 check "a failing build on the exec path DOES roll back" \
   "[ \"\$(img zcash-faucet:latest)\" = 'sha256:old' ]"
 check "and exits 2, not 1" "[ $rc -eq 2 ]"
 check "and does NOT claim the probe never answered" \
   "! grep -q 'never answered' '$T/nourl.log'"
-unset STUB_EXEC_READY
+unset STUB_EXEC_READY STUB_EXEC_HEALTH
 
 echo "== redeploy: not ready beforehand means liveness-only gate (syncing node)"
 redeploy_env

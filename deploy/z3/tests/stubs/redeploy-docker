@@ -40,7 +40,13 @@ case "${1:-}" in
       # node -e 'process.exit(0)' is the usability probe, not a health probe.
       printf '%s\n' "$@" | grep -q "process.exit(0)" && exit 0
       [ -n "${STUB_EXEC_THROW:-}" ] && exit 3
-      [ -e "${STUB_EXEC_READY:-/nonexistent}" ] && exit 0
+      # health and ready need separate markers, or a test cannot express "live but not
+      # ready", which is the only state the readiness gate exists to judge.
+      if printf '%s\n' "$@" | grep -q '/api/health'; then
+        [ -e "${STUB_EXEC_HEALTH:-${STUB_EXEC_READY:-/nonexistent}}" ] && exit 0
+      else
+        [ -e "${STUB_EXEC_READY:-/nonexistent}" ] && exit 0
+      fi
       echo 503
       exit 1
     fi
