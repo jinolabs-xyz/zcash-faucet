@@ -1,8 +1,5 @@
-import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { FlatCompat } from "@eslint/eslintrc";
-
-const compat = new FlatCompat({ baseDirectory: dirname(fileURLToPath(import.meta.url)) });
+import coreWebVitals from "eslint-config-next/core-web-vitals";
+import nextTypescript from "eslint-config-next/typescript";
 
 // Named rather than exported anonymously, which eslint's own
 // import/no-anonymous-default-export asks for and `next lint` never checked because it
@@ -21,12 +18,32 @@ const config = [
       "next-env.d.ts",
     ],
   },
-  ...compat.extends("next/core-web-vitals", "next/typescript"),
+  ...coreWebVitals,
+  ...nextTypescript,
   {
     rules: {
       // The transparent senders load lazily through createRequire because they
       // drag in utxo-lib and the t2z prover. See src/lib/zcash/send.ts.
       "@typescript-eslint/no-require-imports": "off",
+
+      // eslint-config-next 16 turns on the React Compiler rules. We have NOT adopted
+      // the compiler, so two of them are switched off deliberately and by name rather
+      // than by disabling the set (#139).
+      //
+      // KEPT ON, because they each caught a real bug in #263:
+      //   react-hooks/purity  Date.now() in a useState initialiser ran during render,
+      //                       giving the server's clock on SSR and the client's on
+      //                       hydration.
+      //   react-hooks/refs    the progress bar read a ref that is cleared
+      //                       synchronously in a finally, so a render could show a
+      //                       finished bar under a UI still saying submitting.
+      //
+      // OFF, because they are the compiler's stance on patterns that are correct
+      // without it, and satisfying them means restructuring a 700-line component whose
+      // only gate is the browser smoke. Adopting the compiler is its own project with
+      // its own testing, not a drive-by on a config bump.
+      "react-hooks/set-state-in-effect": "off", // reading storage on mount and setting state
+      "react-hooks/immutability": "off", // an effect referring to a const declared below it
     },
   },
   {
