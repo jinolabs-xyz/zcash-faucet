@@ -1,5 +1,11 @@
-# Add this block to z3's Zallet config so the faucet can authenticate to the
-# Zallet JSON-RPC. Edit the file z3 generated for your network:
+# How the faucet authenticates to Zallet's JSON-RPC, and why it is a HASH.
+#
+# deploy/deploy.sh writes this block for you, so a normal deploy never touches it.
+# This file is for standing the stack up by hand, and to keep the reasoning where the
+# next person will look for it. It authenticates the faucet to Zallet's own RPC
+# server, and is separate from Zebra's validator cookie, which z3 manages for you.
+#
+# Edit the file z3 generated for your network:
 #
 #   z3/config/testnet/zallet.toml        (testnet)
 #   z3/config/mainnet/zallet.toml        (mainnet)
@@ -8,15 +14,60 @@
 #
 #   docker compose --env-file .env.testnet up -d zallet
 #
-# Pick a long random password and put the SAME value in faucet.env
-# (ZALLET_RPC_USER / ZALLET_RPC_PASSWORD). This authenticates the faucet to
-# Zallet's own RPC server — it is separate from Zebra's validator cookie, which
-# z3 manages for you.
+# ─── Use pwhash, not password ────────────────────────────────────────────────
 #
-# (Zallet also accepts a hashed `pwhash` instead of `password`, produced by
-#  `zallet-zaino add-rpc-user <user>` — preferable if you'd rather not store the
-#  plaintext in the config file.)
+# This file used to show `password = "..."` in plaintext, and #176 is what that cost.
+# While tracing the wallet crash loop someone grepped zallet.toml for the wallet
+# database path, and the grep printed the credential into tooling output, a session
+# transcript and an IPC archive. Nothing was published and nothing was shared onward,
+# but a wallet RPC credential that has passed through logs is exposed, and anything
+# that can reach that port can move funds.
+#
+# The exposure came from a routine diagnostic, not from carelessness with the secret.
+# Anyone debugging this file will grep it the same way, so the layout is the fix rather
+# than asking everyone to remember. With a hash here, grepping the config for structure
+# cannot surface a working credential.
+#
+# Zallet agrees and says so at startup: with a bare `password` it logs that plaintext
+# credentials are less secure and recommends pwhash. The two keys are mutually
+# exclusive, and setting both makes Zallet refuse to start.
+#
+# ─── Generating one ──────────────────────────────────────────────────────────
+#
+#   docker compose --env-file .env.testnet exec zallet zallet add-rpc-user faucet
+#
+# It prompts for a password and PRINTS a block to paste here. Two things worth knowing
+# before trying to script it:
+#
+#   - It needs a TTY, and it does not modify the config, it only prints. That is why
+#     deploy.sh computes the hash itself rather than calling this.
+#   - Zallet's own generated config comments call this `zallet rpc add-user`. That
+#     command does not exist. The subcommand is `add-rpc-user`, as above.
+#
+# The scheme is Bitcoin Core's (bitcoin/bitcoin#7044), read from zallet-core's
+# components/json_rpc/server/authorization.rs:
+#
+#   pwhash = "<salt>$<hex(HMAC-SHA256(key = the salt's ASCII hex text, msg = password))>"
+#
+# The key is the ASCII text of the hex salt, NOT the 16 raw bytes it encodes. Both
+# readings look reasonable and they produce different hashes, so if you reimplement
+# this, check your output against the wallet's own before trusting it.
+#
+# ─── The pair that has to move together ──────────────────────────────────────
+#
+# The faucet still needs the plaintext to authenticate, and it lives in faucet.env as
+# ZALLET_RPC_PASSWORD. That file is gitignored and treated as a secret; this config is
+# not. So: hash here, plaintext there, and they change in ONE step or the faucet loses
+# its wallet. deploy.sh keeps deploy/.zallet-rpc-password as the single source and
+# rewrites both from it every run, so an interrupted change converges on the next
+# deploy instead of leaving the two disagreeing.
+#
+# Rotating by hand: new password, new hash here, the same password in faucet.env, then
+# restart zallet and the faucet. Note that replacing a plaintext `password` with a hash
+# of THE SAME password hides the leaked value without revoking it, so a rotation has to
+# change the password as well.
 
 [[rpc.auth]]
 user = "faucet"
-password = "REPLACE_WITH_A_LONG_RANDOM_SECRET"
+# Not a real hash. Generate your own, as above.
+pwhash = "REPLACE_ME_SALT$REPLACE_ME_HASH"

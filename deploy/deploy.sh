@@ -304,16 +304,121 @@ elif [ -n "$MINER_ADDRESS$CARRY_ADDRESS" ] || [ -n "$ZEBRA_IMG$ZALLET_IMG$ZAINO_
   } > "$OVERRIDE"
 fi
 
-# Authorize the faucet on Zallet's RPC (idempotent): add an [[rpc.auth]] user
-# with a generated password, and stash the password for the faucet env.
+# Authorize the faucet on Zallet's RPC. The config gets a HASH, never the password.
+#
+# It used to get `password = "..."` in plaintext, and #176 is what that costs: a
+# routine diagnostic grep of this file for the wallet database path printed the
+# credential into tooling output, a transcript and an IPC archive. Nothing was
+# published, but a wallet RPC credential that has been through logs is exposed, and
+# anything that can reach that port can move funds. The layout is the fix, because
+# the next person debugging this file will grep it the same way.
+#
+# zallet supports `pwhash` instead, mutually exclusive with `password`, and warns on
+# startup when you use the bare form. The scheme is Bitcoin Core's:
+#
+#   pwhash = "<salt>$<hex(HMAC-SHA256(key = the salt's ASCII hex, msg = password))>"
+#
+# Read out of zallet-core's authorization.rs rather than guessed, and confirmed
+# against the wallet's own `add-rpc-user` output: for one password and salt, this
+# generator and zallet produce the same hash, and keying the HMAC with the salt's raw
+# bytes instead of its hex text does NOT, so that check tells the two apart.
+#
+# `add-rpc-user` cannot do this for us. It requires a TTY and only PRINTS a block to
+# paste, leaving the config untouched, so a deploy cannot call it.
 ZCFG="config/$NETWORK/zallet.toml"
 PWFILE="$HERE/.zallet-rpc-password"
-if ! grep -q 'user = "faucet"' "$ZCFG"; then
+
+zallet_pwhash() { # $1 password -> salt$hash
+  python3 - "$1" <<'PY'
+import hmac, hashlib, os, sys
+salt = os.urandom(16).hex()
+print("%s$%s" % (salt, hmac.new(salt.encode(), sys.argv[1].encode(), hashlib.sha256).hexdigest()))
+PY
+}
+
+# Every question below is about the FAUCET's auth block, never about the file. A box
+# can carry another operator's [[rpc.auth]] entry, and my first version grepped the
+# whole config: another person's plaintext password would have rotated OUR credential
+# and then refused the deploy over a line that is not ours to fix.
+faucet_auth_kind() { # -> plaintext | pwhash | none
+  python3 - "$1" <<'PY'
+import re, sys
+try:
+    src = open(sys.argv[1]).read()
+except OSError:
+    print("none"); raise SystemExit
+for m in re.finditer(r'\[\[rpc\.auth\]\]\s*\n(?:[ \t]*\S+[ \t]*=.*\n?)*', src):
+    b = m.group(0)
+    if not re.search(r'^\s*user\s*=\s*"faucet"\s*$', b, re.MULTILINE):
+        continue
+    if re.search(r'^\s*password\s*=', b, re.MULTILINE):
+        print("plaintext"); break
+    if re.search(r'^\s*pwhash\s*=', b, re.MULTILINE):
+        print("pwhash"); break
+else:
+    print("none")
+PY
+}
+
+# PWFILE is the single source of truth, and both derived files are rewritten from it
+# every run. That is deliberate: the old code wrote the config once and never looked
+# again, so config and env could disagree with nothing to reconcile them. Deriving
+# both means an interrupted run converges on the next one instead of leaving the
+# faucet holding a password the wallet no longer accepts.
+if [ "$(faucet_auth_kind "$ZCFG")" = "plaintext" ]; then
+  # Plaintext in the config is the exposed credential. Hashing the SAME password
+  # would hide it while leaving it valid, so this rotates as it migrates: the value
+  # that leaked stops working. That is the whole point of #176.
+  say "Rotating the Zallet RPC password: the config held it in plaintext (#176)"
+  say "  the old value stops working, and the config gets a hash from now on"
+  rm -f "$PWFILE"
+fi
+
+if [ ! -s "$PWFILE" ]; then
   say "Authorizing the faucet on Zallet's RPC"
-  RPCPW="$(openssl rand -hex 24)"; echo "$RPCPW" > "$PWFILE"; chmod 600 "$PWFILE"
-  printf '\n[[rpc.auth]]\nuser = "faucet"\npassword = "%s"\n' "$RPCPW" >> "$ZCFG"
+  RPCPW="$(openssl rand -hex 24)"
+  # Written 600 BEFORE the secret goes in, not after, so it is never briefly world
+  # readable on a box where someone else is looking.
+  ( umask 077; printf '%s\n' "$RPCPW" > "$PWFILE" )
+  chmod 600 "$PWFILE"
 fi
 RPCPW="$(cat "$PWFILE")"
+
+# Reconcile the config with PWFILE. Any faucet auth block is replaced wholesale
+# rather than edited in place, because a partial edit is how you end up with both a
+# password and a pwhash set, which zallet refuses outright.
+python3 - "$ZCFG" "$(zallet_pwhash "$RPCPW")" <<'PY'
+import re, sys
+path, pwhash = sys.argv[1], sys.argv[2]
+src = open(path).read()
+# Only the block whose user is faucet. Other operators' entries are not ours to touch.
+block = re.compile(
+    r'\n*\[\[rpc\.auth\]\]\s*\n(?:[ \t]*[a-z_]+[ \t]*=.*\n?)*',
+    re.MULTILINE)
+kept = []
+for m in block.finditer(src):
+    if re.search(r'^\s*user\s*=\s*"faucet"\s*$', m.group(0), re.MULTILINE):
+        kept.append(m.span())
+for start, end in reversed(kept):
+    src = src[:start] + "\n" + src[end:]
+src = src.rstrip("\n") + '\n\n[[rpc.auth]]\nuser = "faucet"\npwhash = "%s"\n' % pwhash
+open(path, "w").write(src)
+PY
+# Verified after writing, because "the code that writes it looks right" is not the same
+# claim. Both failure directions are worth dying over: plaintext still present is #176
+# unfixed, and a block carrying both keys makes zallet refuse to start at all.
+case "$(faucet_auth_kind "$ZCFG")" in
+  pwhash) : ;;
+  plaintext)
+    echo "REFUSING TO CONTINUE: the faucet's auth block in $ZCFG still has a plaintext" >&2
+    echo "password after being rewritten. That is #176 unfixed, so this stops here" >&2
+    echo "rather than deploying it." >&2
+    exit 1 ;;
+  *)
+    echo "REFUSING TO CONTINUE: no faucet pwhash in $ZCFG after rewriting it, so the" >&2
+    echo "wallet would reject the faucet and every drip would fail." >&2
+    exit 1 ;;
+esac
 
 say "Starting Zebra (the node) — first sync takes hours, one time"
 z3 up -d zebra
