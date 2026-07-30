@@ -37,8 +37,12 @@ case "${1:-}" in
     if printf '%s\n' "$@" | grep -qx "exec"; then
       echo "compose exec $*" >> "${STUB_LOG:?}"
       [ -n "${STUB_EXEC_UNUSABLE:-}" ] && exit 1
-      # node -e 'process.exit(0)' is the usability probe, not a health probe.
-      printf '%s\n' "$@" | grep -q "process.exit(0)" && exit 0
+      # The usability probe is the one that does NOT fetch. Detecting it by
+      # grepping for process.exit(0) matched the health probe too, because
+      # probe_state's script contains if(r.ok)process.exit(0), so the stub answered
+      # READY to every probe_state call and the exec-path rollback test could never
+      # fail. That cost three attempts at #244 and is why the test was withdrawn.
+      printf '%s\n' "$@" | grep -q "fetch(" || exit 0
       [ -n "${STUB_EXEC_THROW:-}" ] && exit 3
       # health and ready need separate markers, or a test cannot express "live but not
       # ready", which is the only state the readiness gate exists to judge.
