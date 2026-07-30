@@ -20,7 +20,7 @@ process.env.RATE_LIMIT_SALT = "donations-test-salt";
 const { tallyDonations, DONATION_POOLS } = await import("./donations.ts");
 
 const TAZ = 100_000_000;
-const OURS = "9ae4d3a3-6e4d-443b-962f-d62cc342846c"; // shape of a zallet account uuid
+const OURS = "00000000-0000-4000-8000-000000000000"; // shape of a zallet account uuid
 
 /** A confirmed donation: someone else's transaction, paying our shielded receiver. */
 function donation(taz: number, height = 4_222_300) {
