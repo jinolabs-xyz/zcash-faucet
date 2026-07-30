@@ -5,6 +5,7 @@
 #   suites/zsnap.sh   zsnap-export.sh and zsnap-import.sh
 #   suites/backup.sh  backup.sh and restore-backup.sh
 #   suites/deploy.sh  deploy.sh (bring-up order, wallet init, re-runs)
+#   suites/repo.sh    claims the repo makes about itself in two places at once
 #
 # Docker, zebrad, systemctl and curl are stubbed (tests/stubs for zsnap and
 # backup, tests/deploy-stubs for deploy, which needs a different docker
@@ -48,7 +49,7 @@ BASE_PATH="$PATH"
 # shellcheck source=lib.sh
 . "$SCRATCH/lib.sh"
 
-SELECTED="${SUITES:-zsnap backup deploy metrics redeploy drift alerts access watchdog}"
+SELECTED="${SUITES:-zsnap backup deploy metrics redeploy drift alerts access watchdog repo}"
 
 # A missing dependency used to look exactly like broken code. With no sshd on
 # PATH the access suite reports 3 plain FAILs, and an `apt-get install` that
@@ -84,6 +85,8 @@ suite_deps() { # $1 suite name -> commands it needs beyond the base set
     # jq is NOT listed: alert.sh encodes with jq OR python3, either one, and the
     # suites exercise the refusal path when neither exists.
     drift)    echo "python3" ;;
+    # repo reads checked-in files only, so it needs nothing beyond the base set.
+    repo)     echo "" ;;
     *)        echo "" ;;
   esac
 }
