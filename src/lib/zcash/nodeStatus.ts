@@ -9,6 +9,8 @@ import { config, num } from "../config.ts";
 import { getExternalTip } from "./externalTip.ts";
 import { mayBuildTransaction, readChainFreshness, type ChainGate } from "./shieldGate.ts";
 import { tipProgress, type TipSample } from "./tipProgress.ts";
+import { getChainIdentity } from "./chainIdentityOracle.ts";
+import type { IdentityVerdict } from "./chainIdentity.ts";
 
 export interface NodeStatus {
   ready: boolean;
@@ -30,6 +32,13 @@ export interface NodeStatus {
    * at the broadcast site.
    */
   shield: ChainGate;
+  /**
+   * Are we on the real chain (#249)? Three states, and cannot-verify is the common
+   * one: only the rules half is wired, so this reports a missed upgrade but does not
+   * yet detect a split. Diagnostic, never a gate: an unreachable explorer is not a
+   * fork and must not stop the faucet serving.
+   */
+  chain: IdentityVerdict;
   /**
    * The freshness DECISION, not its inputs: may we build a transaction that can
    * actually confirm? Computed here by mayBuildTransaction() so the browser reads a
@@ -113,6 +122,7 @@ export async function getNodeStatus(): Promise<NodeStatus | null> {
       tipStalledMs: progress.stalledMs,
       networkQuiet: progress.networkQuiet,
       shield,
+      chain: getChainIdentity(),
       canBuildTx: mayBuildTransaction(shield),
     };
   } catch {
