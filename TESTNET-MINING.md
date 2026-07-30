@@ -56,8 +56,11 @@ host firewall, so `ufw deny 18232` will not save you here. The binding is the
 control.
 
 **`enable_cookie_auth=false` is a convenience for a local experiment.** It is
-fine behind a localhost binding and not fine on anything reachable. With cookie
-auth on, your miner needs the path to zebra's `.cookie` file.
+fine behind a localhost binding and not fine on anything reachable. If you turn
+cookie auth on, point the miner at the file zebra writes with
+`MINER_COOKIE_PATH`, which defaults to `/var/run/auth/.cookie`. Zebra and the
+miner have to be able to see the same file, so on Docker that means a shared
+volume rather than two containers each writing their own.
 
 Those variable names are zebra's documented Docker form, where a double
 underscore is a nested config section. The full list is in
@@ -91,7 +94,7 @@ moved past. You will burn CPU producing blocks nobody can use, and if you submit
 them you fork yourself off the chain you were trying to join. Wait it out.
 
 You can tell you are close by comparing your height to a source that is not your
-own node, for example [a public explorer](https://testnet.zcashexplorer.app) or
+own node, for example [a public explorer](https://testnet.cipherscan.app) or
 the [hosh dashboard](https://hosh.zec.rocks) which lists the tip every public
 testnet server reports.
 
@@ -134,7 +137,10 @@ MINER_MODE=submit MINER_RPC_URL=http://127.0.0.1:18232 MINER_THREADS=1 \
 
 One thread is a fine starting point. More threads cost roughly 144 MB each and
 help less than you would expect, because what limits you is how often the
-difficulty floor arrives, not how fast you hash.
+difficulty floor arrives, not how fast you hash. **The valid range is 1 to 4**:
+`MINER_THREADS=8` exits with an error naming the range rather than starting and
+running out of memory later. The ceiling is deliberate, since four threads at
+144 MB is what fits under the service unit's `MemoryMax=1G`.
 
 ## 4. Set your expectations correctly
 
