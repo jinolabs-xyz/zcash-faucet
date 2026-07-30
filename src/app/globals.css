@@ -205,3 +205,36 @@ a:hover { color: var(--color-accent-800); }
    pseudo-elements, and SMIL inside an inline SVG would also escape this. Neither
    exists today. */
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* Theme toggle, masthead. Sized off the status badge beside it rather than a
+   round number: the badge is 2px border + 5px padding + a 10px/1.2 mono line, so
+   30px is what makes the two boxes the same height at every breakpoint. If the
+   badge padding changes, this has to follow.
+
+   Square and hard-edged on purpose. A rounded pill is the default everywhere
+   else and would be the only soft corner on the page. */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  padding: 0;
+  background: none;
+  border: 2px solid var(--color-divider);
+  color: color-mix(in srgb, var(--color-text) 62%, transparent);
+  cursor: pointer;
+  transition: color .12s ease, border-color .12s ease;
+}
+/* Hover resolves to full-strength text on both themes, so the affordance does
+   not depend on which one you are in. */
+.theme-toggle:hover {
+  color: var(--color-text);
+  border-color: var(--color-text);
+}
+/* Keyboard users get the same accent ring as every other control (line 100),
+   rather than a bespoke one that reads as a different kind of focus. */
+@media (prefers-reduced-motion: reduce) {
+  .theme-toggle { transition: none; }
+}

@@ -67,6 +67,31 @@ function dur(ms: number) {
 }
 function num(n: number | null | undefined) { return n == null ? "–" : n.toLocaleString("en-US"); }
 
+/**
+ * Sun and moon for the theme toggle. Inline rather than an icon dependency: two
+ * shapes do not justify a package, and `currentColor` lets them inherit the
+ * button's hover and focus states for free.
+ *
+ * Each shows the theme you would GET, not the one you are in, which is what a
+ * reader reaching for a toggle is looking for. The aria-label says the action out
+ * loud because an icon alone does not.
+ */
+function SunIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="4.2" />
+      <path d="M12 2.4v2.4M12 19.2v2.4M4.2 4.2l1.7 1.7M18.1 18.1l1.7 1.7M2.4 12h2.4M19.2 12h2.4M4.2 19.8l1.7-1.7M18.1 5.9l1.7-1.7" />
+    </svg>
+  );
+}
+function MoonIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M20.5 14.6A8.6 8.6 0 1 1 9.4 3.5a6.9 6.9 0 0 0 11.1 11.1Z" />
+    </svg>
+  );
+}
+
 const muted = (pct: number): string => `color-mix(in srgb, var(--color-text) ${pct}%, transparent)`;
 const PROOF_SECONDS = 12; // estimated shielded-proof build time, for the progress feel
 
@@ -538,6 +563,18 @@ export default function Home() {
           <BrandMark />
           <span>Zcash Testnet Faucet</span>
         </div>
+        {/* Left of the status badge, which is where every site puts this and so
+            where people look for it. It borrows the badge's box exactly, so the
+            two read as one pair rather than a control bolted on beside a label. */}
+        <button
+          type="button"
+          className="theme-toggle"
+          onClick={() => setTheme((t) => (t === "ink" ? "paper" : "ink"))}
+          aria-label={theme === "ink" ? "Switch to light theme" : "Switch to dark theme"}
+          title={theme === "ink" ? "Light theme" : "Dark theme"}
+        >
+          {theme === "ink" ? <SunIcon /> : <MoonIcon />}
+        </button>
         {/* Not a live region: the sr-only status region in <main> owns phase
             announcements, a live badge here would say everything twice. */}
         <div style={{ display: "flex", alignItems: "center", gap: 7, border: "2px solid var(--color-divider)", padding: "5px 9px", fontFamily: "var(--mono)", fontSize: 10, fontWeight: 700, letterSpacing: ".1em" }}>
@@ -879,7 +916,7 @@ export default function Home() {
         </a>
         <span style={{ fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".05em", color: muted(50) }}>{status?.network ?? "testnet"} · {status?.sender ?? "…"} backend</span>
         <a className="btn btn-ghost btn-sm" href="/donate" style={{ padding: 0 }}>Donate TAZ</a>
-        <button className="btn btn-secondary btn-sm" onClick={() => setTheme((t) => (t === "ink" ? "paper" : "ink"))} aria-label={theme === "ink" ? "Switch to paper (light) theme" : "Switch to ink (dark) theme"} style={{ marginLeft: "auto" }}>{theme === "ink" ? "Paper" : "Ink"}</button>
+        
       </div>
     </div>
   );
