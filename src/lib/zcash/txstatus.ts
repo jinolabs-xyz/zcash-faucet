@@ -12,9 +12,16 @@ export interface TxStatus {
   known: boolean | null;
   confirmations: number | null;
   height: number | null;
+  /**
+   * The transaction's own `expiryheight`, which we were already receiving and
+   * discarding. It is what makes a payout's death DECIDABLE: once our tip is past it
+   * and the transaction is unmined, it can never be mined (#202, `payoutDead.ts`).
+   * 0 is meaningful and is not missing data, it means the transaction never expires.
+   */
+  expiryHeight: number | null;
 }
 
-const UNKNOWN: TxStatus = { known: null, confirmations: null, height: null };
+const UNKNOWN: TxStatus = { known: null, confirmations: null, height: null, expiryHeight: null };
 
 /** Only zallet mode can answer this, and only for transactions its wallet saw. */
 export async function getTxStatus(txid: string): Promise<TxStatus> {
@@ -33,20 +40,30 @@ export async function getTxStatus(txid: string): Promise<TxStatus> {
     });
     if (!res.ok) return UNKNOWN;
     const json = (await res.json()) as {
-      result?: { confirmations?: number; height?: number };
+      result?: { confirmations?: number; height?: number; expiryheight?: number };
       error?: { code: number } | null;
     };
     // Only -5 (InvalidAddressOrKey, zallet's not-found) is a real "no". Any
     // other error means the wallet could not answer, and reporting that as
     // "not seen" would be a false negative about someone's money.
     if (json.error) {
-      return json.error.code === -5 ? { known: false, confirmations: null, height: null } : UNKNOWN;
+      return json.error.code === -5
+        ? { known: false, confirmations: null, height: null, expiryHeight: null }
+        : UNKNOWN;
     }
     if (!json.result) return UNKNOWN;
     return {
       known: true,
       confirmations: json.result.confirmations ?? 0,
       height: typeof json.result.height === "number" && json.result.height >= 0 ? json.result.height : null,
+      // `>= 0` rather than truthy, because 0 is a real value here ("never expires")
+      // and a truthy test would silently turn it into "unknown", which reads as
+      // cannot-tell instead of pending. Same class as the NaN threshold in #171:
+      // the guard does not misbehave, it disappears.
+      expiryHeight:
+        typeof json.result.expiryheight === "number" && json.result.expiryheight >= 0
+          ? json.result.expiryheight
+          : null,
     };
   } catch {
     return UNKNOWN;
