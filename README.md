@@ -30,8 +30,8 @@ vendor, no external dependency in the path that moves money.
 > **Running post-Ironwood.** NU6.3 (Ironwood) is active on our testnet from
 > height 4,134,000, and the wallet's notes live in the corrected Ironwood pool,
 > not the sealed Orchard one. The faucet has minted and paid shielded drips on
-> the new pool for weeks, so it is proven on the corrected circuit ahead of
-> mainnet's own Ironwood activation on 2026-07-28.
+> the new pool for weeks, and it was running on the corrected circuit before
+> mainnet's own Ironwood activation on 2026-07-28 rather than after it.
 
 ## How it actually works
 
@@ -90,8 +90,17 @@ The **proof-of-work gate is built and live**, not a plan for later:
 - Difficulty adapts: a modest base, more bits for a client that keeps hammering,
   more again when the whole faucet is under load, hard-capped so a phone never
   gets a punishing wait.
+- Escalation is keyed on the **subnet as well as the address**. A cloud provider
+  hands one person thousands of addresses in a /24, so counting only the address
+  meant fifty attempts from fifty addresses looked like fifty first-time users
+  and the farmer paid the base difficulty forever. The two counters are combined
+  with `max` rather than a sum, so a single honest claimer is never charged twice
+  for the same attempt.
 - Each signed challenge is single use and bound to the salted IP fingerprint it
   was issued to, so a solution cannot be replayed or handed to someone else.
+- The attempt counter increments **after** the signature check, never before.
+  Otherwise anyone could raise the difficulty for a whole /24 they do not belong
+  to, including a shared office, by posting junk.
 
 Cloudflare Turnstile is still supported for anyone who prefers it.
 `FAUCET_CHALLENGE` picks: `pow`, `turnstile`, or `none`. PoW is the choice for a
@@ -101,6 +110,41 @@ Under the gate sit a per-address cooldown and a daily cap, enforced atomically i
 one transaction so a burst of simultaneous requests cannot slip past. Rate
 limiting is keyed on a **salted hash** of the IP (`src/lib/privacy.ts`), never
 the raw address, and the raw IP never reaches a log line.
+
+### Knowing the chain is real, and that a payment can still confirm
+
+Owning the node removes the trusted third party. It does not by itself tell you
+the node is right, so the faucet checks its own view rather than assuming it.
+
+- **Freshness gates the money path.** Zcash transactions carry an expiry height
+  set from the tip our node reports. A node lagging far enough builds
+  transactions that are already expired when they are broadcast, so they can
+  never be mined. The faucet compares its tip against an independent reference
+  and **refuses to build a payment** when the gap is too wide, rather than
+  issuing one that cannot confirm. `node.shield` and `node.canBuildTx` on
+  `/api/status` are that decision, and they are separate from the much looser
+  "is the node broadly behind" signal on purpose: one asks about availability,
+  the other about money.
+- **Ahead is not the same as agreeing.** A node in front of every external
+  reference looks identical to a node on its own fork. Being ahead is safe for
+  an expiry height, since ahead cannot be stale, and it is not evidence that we
+  are on the same chain as everyone else. The status reason says so in those
+  words rather than reporting a comfortable "in sync".
+- **Same rules.** The consensus branch id our node reports is compared against
+  an independent source, which catches a missed network upgrade. Reported as
+  `node.chain`.
+- **Same history** is the half that is not finished. Comparing a block hash at a
+  common height is what would actually detect a chain split, and it needs a
+  lookup neither side exposes to us yet, so it honestly reports `cannot-verify`
+  instead of a reassuring answer it has not earned.
+- **Payouts are confirmed by somebody else.** Asking our own node whether our own
+  transaction landed proves very little, so confirmation goes to an independent
+  source. A payout past its expiry height is reported as permanently unmineable,
+  which is a decidable fact rather than a guess.
+
+Throughout, a source that will not answer is recorded as **cannot verify**, never
+as a pass. An unreachable explorer is not evidence of a fork, and a check that
+cannot run must not read the same as one that ran and found nothing wrong.
 
 ### The UI
 
@@ -116,6 +160,10 @@ what the backend is doing:
   by hand rather than promising a self-heal that mining cannot deliver.
 - **Ready**, then a receipt with the txid, a working explorer link, and a
   copyable plain-text summary.
+
+Light and dark are a toggle in the masthead, next to the status badge. The
+choice is remembered and it also repaints the browser's own chrome, so the
+address bar matches the page instead of sitting light above a dark header.
 
 <table>
   <tr>
@@ -172,8 +220,22 @@ the map:
 - **Self-healing.** A watchdog restarts wedged services. `/api/health` is
   liveness (is the process answering), `/api/ready` is readiness (can it actually
   serve a drip, with the reason when it cannot). Keeping those separate is what
-  stops a normal first sync from looking like an outage.
-- **Mining** and its tuning: [deploy/z3/MINING.md](deploy/z3/MINING.md)
+  stops a normal first sync from looking like an outage. Readiness asks the
+  ledger too, so a process that answers HTTP while its database is broken stops
+  passing, and that read is cached off the hot path so a slow disk cannot make
+  readiness itself slow.
+- **The node and wallet versions are pinned in a file this repo owns**
+  (`deploy/z3/stack-versions.env`), and the drift audit compares them against
+  what is actually running. Before that the version came from a default inside a
+  third-party compose file, so the version our funds depend on never passed
+  through review and `docker inspect` on the box was the only way to know it.
+- **Config drift is reported, not corrected.** The audit compares units,
+  scripts, env keys and image versions against the repo, and a check it could
+  not run exits differently from a check that found nothing. Skipped never reads
+  as clean.
+- **Mining** and its tuning: [deploy/z3/MINING.md](deploy/z3/MINING.md), and
+  [TESTNET-MINING.md](TESTNET-MINING.md) walks a newcomer through mining a first
+  testnet block from scratch.
 - **Encrypted backups** of wallet and ledger: [deploy/z3/BACKUPS.md](deploy/z3/BACKUPS.md)
 - **Snapshots** for a fast chain rebuild: [deploy/z3/SNAPSHOTS.md](deploy/z3/SNAPSHOTS.md)
 - **TLS and domain**: [deploy/z3/HTTPS.md](deploy/z3/HTTPS.md)
