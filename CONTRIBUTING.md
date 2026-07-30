@@ -456,6 +456,26 @@ Every correction came from the same few habits, so the habits are rules.
     reaching for the same explorer for an unrelated privacy claim and noticing a
     50 TAZ fee. The rule is here so the next person does not need that accident.
 
+30. Say when a detector reaches nobody. `#215`, the alert webhook, is DEFERRED:
+    the logic exists, and with no URL configured it posts into the void. So
+    `#175`'s escalation, `#214`, `#224` and `#240` are all correct and all
+    currently land in silence. That is a known and accepted state, not a defect to
+    re-raise every cycle.
+
+    The hazard is the reader six weeks out. Someone greps "the watchdog escalates",
+    finds it, and believes a human gets woken. Nothing in the code contradicts
+    them, because the code does escalate: it escalates to a sender with nowhere to
+    send. Exactly the shape of the schema comment reading "Nothing reads it yet"
+    that quietly became literally true while a merged feature sat on a dead branch
+    (rule 28).
+
+    So any NEW alerting or monitoring work states plainly, in its issue or PR, that
+    it currently reaches nobody, and links `#215`. One sentence. And when writing
+    about alerting that already exists, keep the tense honest: "posts to a webhook
+    when one is configured" is true, "wakes someone up" is a claim about today and
+    today it is false.
+
+
 Money paths (send, ledger, reservation, PoW verify) never skip review, no
 matter how urgent the window. Docs and pure test additions may fast-track
 at the CTO's discretion.
