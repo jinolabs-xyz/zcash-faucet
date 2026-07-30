@@ -31,11 +31,25 @@ deploy, and a rollback rolls back code, not data.
 
 ## Read the exit code
 
-| Code | Means | Page someone? |
+| Code | Means | Rolled back? | Page someone? |
+|---|---|---|---|
+| 0 | the new build is live and healthy | no need | no |
+| 2 | **your change did not ship**, and the faucet is serving anyway | yes, or nothing was swapped | no |
+| 1 | the faucet **may be down**, and the reason decides what to do next | see below | yes |
+
+Exit 1 has three causes and they need different responses, so read the log rather
+than assuming a failed rollback:
+
+| Log says | What happened | The new build is |
 |---|---|---|
-| 0 | the new build is live and healthy | no |
-| 2 | **your change did not ship**, and the faucet is serving anyway | no |
-| 1 | the faucet **may be down**: the rollback failed, or there was nothing to roll back to | yes |
+| `rollback failed` / no previous image | the revert was attempted and did not work | replaced or absent |
+| `NOT ROLLING BACK: the readiness probe never answered` | nothing answered, so there was no evidence against the build and it was left alone | **still running** |
+| `NOT ROLLING BACK: ... the cause is DATA, not code` | the app gave a reason a revert cannot fix, because volumes are never touched. The list of those reasons is `reason_is_not_the_code` in the script, and today it holds exactly one, `ledger unreadable` | **still running** |
+
+The last two are the ones worth knowing about, because the instinct on seeing exit
+1 is to go looking for a rollback, and in those cases none was attempted. That is
+deliberate: a probe that never answered is not evidence against the build, and
+reverting code cannot repair data (#229).
 
 The split is about whether to wake anyone. Everything that leaves the faucet
 serving is a 2, including the cheap failures where nothing was swapped at all
