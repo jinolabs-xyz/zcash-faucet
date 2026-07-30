@@ -321,6 +321,67 @@ else
 fi
 say ""
 
+# --- node stack versions -------------------------------------------------------
+#
+# The node and wallet images come from a third-party compose file beside ours, so
+# with no override we inherit somebody else's default and the version our funds
+# depend on never passes through review. stack-versions.env is that override and
+# the reviewable record; this compares it against what is actually running, so a
+# box that stops matching is reported rather than found during an incident (#247).
+say "node stack versions (declared vs running)"
+
+VERSIONS_FILE="${AUDIT_VERSIONS_FILE:-$OVERLAY_DIR/stack-versions.env}"
+DOCKER="${AUDIT_DOCKER:-docker}"
+
+# Reuse the container name substrings watchdog.sh and zsnap-export.sh already use
+# rather than inventing a third naming scheme that can drift from those two.
+stack_match() {
+  case "$1" in
+    Z3_ZEBRA_IMAGE)  echo zebra ;;
+    Z3_ZALLET_IMAGE) echo zallet ;;
+    Z3_ZAINO_IMAGE)  echo zaino ;;
+  esac
+}
+
+if [ ! -f "$VERSIONS_FILE" ]; then
+  note_unverified "stack versions: no $VERSIONS_FILE, so nothing records which node and wallet images we intend to run"
+elif ! command -v "$DOCKER" >/dev/null 2>&1; then
+  note_unverified "stack versions: no docker on this host, so running images were not compared against $VERSIONS_FILE"
+else
+  for key in Z3_ZEBRA_IMAGE Z3_ZALLET_IMAGE Z3_ZAINO_IMAGE; do
+    match="$(stack_match "$key")"
+    declared="$(grep -E "^[[:space:]]*$key=" "$VERSIONS_FILE" 2>/dev/null | head -n1)"
+    declared="${declared#*=}"
+    name="$("$DOCKER" ps --filter "name=$match" --format '{{.Names}}' 2>/dev/null | head -n1)"
+
+    if [ -z "$declared" ]; then
+      # An unpinned component is a gap rather than a pass, but only worth saying
+      # when it is actually running. The overlay does not start zaino by default,
+      # and a check that reports an absent optional component forever is one
+      # people learn to ignore.
+      [ -n "$name" ] && note_unverified "stack versions: $name is running but $key is not pinned in $VERSIONS_FILE, so nothing reviews its version"
+      continue
+    fi
+    if [ -z "$name" ]; then
+      found "$key pins $declared but no container matching '$match' is running" \
+        "start the stack, or drop the pin if this component is no longer part of the deploy"
+      continue
+    fi
+    running="$("$DOCKER" inspect -f '{{.Config.Image}}' "$name" 2>/dev/null)"
+    if [ -z "$running" ]; then
+      # Distinct from a mismatch on purpose: we did not learn that they differ,
+      # we learned nothing, and those must not print the same way.
+      note_unverified "stack versions: docker inspect returned nothing for $name, so $key was not compared"
+    elif [ "$running" = "$declared" ]; then
+      ok "$key matches: $running"
+    else
+      found "$name runs $running but $VERSIONS_FILE pins $declared" \
+        "pull and restart the stack (see REDEPLOY.md), or update $key if the box is intentionally ahead"
+    fi
+  done
+fi
+say ""
+
 if [ -n "$unverified" ]; then
   say "NOT VERIFIED"
   say "$unverified"

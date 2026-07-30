@@ -27,6 +27,37 @@ drift_env() {
     > "$T/repo/src/lib/config.ts"
   printf 'FIXTURE_DECLARED_KEY=yes\nFIXTURE_TUNING_KEY=5\n' \
     > "$T/repo/deploy/z3/faucet.env.example"
+  # The stack-versions half needs a pin file AND a docker to ask, or every case
+  # below hits its cannot-check path, correctly exits 2, and breaks six clean-box
+  # baselines. Same shape as the env-completeness fixture above: the check was
+  # right and the fixture modelled none of its inputs. Nothing pinned and nothing
+  # running is the deliberately quiet case, so the baseline stays clean.
+  printf '#Z3_ZEBRA_IMAGE=\n' > "$T/repo/deploy/z3/stack-versions.env"
+  export AUDIT_VERSIONS_FILE="$T/repo/deploy/z3/stack-versions.env"
+  export AUDIT_DOCKER="$T/bin/docker-stub"
+  # Stub docker: `ps --filter name=X` prints $STUB_RUNNING_X, `inspect` prints
+  # $STUB_IMAGE_<sanitised container name>. Empty means absent, which is how the
+  # not-running and cannot-inspect cases are expressed. Injected via AUDIT_DOCKER
+  # rather than PATH for the same reason systemctl is: a runner that HAS docker
+  # would otherwise reach the real one and the result would depend on the machine.
+  cat > "$T/bin/docker-stub" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+  ps)
+    for a in "$@"; do case "$a" in name=*) m="${a#name=}";; esac; done
+    v="STUB_RUNNING_$m"; printf '%s\n' "${!v:-}" | grep -v '^$' || true ;;
+  inspect)
+    # Container names contain hyphens, which cannot appear in a variable name,
+    # so the lookup key is sanitised the same way on both sides.
+    n="${!#}"; v="STUB_IMAGE_$(printf '%s' "$n" | tr -c 'A-Za-z0-9' '_')"
+    printf '%s\n' "${!v:-}" | grep -v '^$' || true ;;
+esac
+STUB
+  chmod +x "$T/bin/docker-stub"
+  # Leaked exports from a previous case would make a later one see a container
+  # that this fixture never started, which is how my own not-running test first
+  # failed for a reason that had nothing to do with the code under test.
+  unset "${!STUB_RUNNING_@}" "${!STUB_IMAGE_@}" 2>/dev/null || true
 }
 # A box that matches the repo exactly.
 make_clean_box() {
@@ -436,3 +467,70 @@ export DRIFT_ACCESS_AUDIT="$T/access.sh"
 bash "$REPORT" > "$T/both.log" 2>&1
 check "a clean config plus access drift still alerts" "grep -q 'access findings' '$T/alerts.log'"
 check "and the clean one is reported clean" "grep -q 'config: clean' '$T/both.log'"
+
+# --- node stack versions (#247) -----------------------------------------------
+# docker is injected via AUDIT_DOCKER rather than PATH, for the same reason
+# systemctl is: a runner that HAS docker would otherwise reach the real one and
+# the result would depend on the machine.
+versions_env() {
+  drift_env; make_clean_box
+}
+
+echo "== versions: a box running the pinned image reports no drift"
+versions_env
+printf 'Z3_ZEBRA_IMAGE=zfnd/zebra:6.2.0\n' > "$AUDIT_VERSIONS_FILE"
+export STUB_RUNNING_zebra=z3-zebra-1
+export STUB_IMAGE_z3_zebra_1="zfnd/zebra:6.2.0"
+bash "$AUDIT" > "$T/v-match.log" 2>&1; rc=$?
+check "exits 0" "[ $rc -eq 0 ]"
+check "reports no drift" "grep -q 'no drift' '$T/v-match.log'"
+check "and did not silently skip the version check" "! grep -q 'stack versions:' '$T/v-match.log'"
+
+echo "== versions: a box running a DIFFERENT image than the pin is drift"
+# The whole point of #247. Without this the version could change under us and
+# every signal we have would stay green.
+versions_env
+printf 'Z3_ZEBRA_IMAGE=zfnd/zebra:6.2.0\n' > "$AUDIT_VERSIONS_FILE"
+export STUB_RUNNING_zebra=z3-zebra-1
+export STUB_IMAGE_z3_zebra_1="zfnd/zebra:6.2.3"
+bash "$AUDIT" > "$T/v-drift.log" 2>&1; rc=$?
+check "exits 1" "[ $rc -eq 1 ]"
+check "names BOTH the running and the pinned version" \
+  "grep -q 'runs zfnd/zebra:6.2.3' '$T/v-drift.log' && grep -q 'pins zfnd/zebra:6.2.0' '$T/v-drift.log'"
+
+echo "== versions: an unpinned component that IS running is unverified, not clean"
+# A running container nobody pinned is the exact hole #247 describes, so it must
+# not read the same as a match.
+versions_env
+printf '#Z3_ZALLET_IMAGE=\n' > "$AUDIT_VERSIONS_FILE"
+export STUB_RUNNING_zallet=z3-zallet-1
+export STUB_IMAGE_z3_zallet_1="zodlinc/zallet:whatever"
+bash "$AUDIT" > "$T/v-unpinned.log" 2>&1; rc=$?
+check "exits 2, not 0" "[ $rc -eq 2 ]"
+check "says NOT VERIFIED" "grep -q 'NOT VERIFIED' '$T/v-unpinned.log'"
+check "and names the unpinned component" "grep -q 'not pinned' '$T/v-unpinned.log'"
+
+echo "== versions: an unpinned component that is NOT running stays quiet"
+# Otherwise the optional zaino reports forever and the whole audit gets ignored.
+versions_env
+printf '#Z3_ZAINO_IMAGE=\n' > "$AUDIT_VERSIONS_FILE"
+bash "$AUDIT" > "$T/v-absent.log" 2>&1; rc=$?
+check "exits 0" "[ $rc -eq 0 ]"
+check "says nothing about zaino" "! grep -q 'ZAINO' '$T/v-absent.log'"
+
+echo "== versions: no pin file at all is unverified, not a pass"
+versions_env
+rm -f "$AUDIT_VERSIONS_FILE"
+bash "$AUDIT" > "$T/v-nofile.log" 2>&1; rc=$?
+check "exits 2" "[ $rc -eq 2 ]"
+check "says nothing records the intended versions" \
+  "grep -q 'nothing records which node and wallet images' '$T/v-nofile.log'"
+
+echo "== versions: docker missing is unverified, not a pass"
+# The box that cannot be inspected is not the box that matches.
+versions_env
+printf 'Z3_ZEBRA_IMAGE=zfnd/zebra:6.2.0\n' > "$AUDIT_VERSIONS_FILE"
+export AUDIT_DOCKER="$T/bin/no-such-docker"
+bash "$AUDIT" > "$T/v-nodocker.log" 2>&1; rc=$?
+check "exits 2" "[ $rc -eq 2 ]"
+check "says the images were not compared" "grep -q 'were not compared' '$T/v-nodocker.log'"
