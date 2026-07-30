@@ -44,7 +44,7 @@ than assuming a failed rollback:
 |---|---|---|
 | `rollback failed` / no previous image | the revert was attempted and did not work | replaced or absent |
 | `NOT ROLLING BACK: the readiness probe never answered` | nothing answered, so there was no evidence against the build and it was left alone | **still running** |
-| `NOT ROLLING BACK: ... the cause is DATA, not code` | the ledger is unreadable, which a revert cannot fix because volumes are never touched | **still running** |
+| `NOT ROLLING BACK: ... the cause is DATA, not code` | the app gave a reason a revert cannot fix, because volumes are never touched. The list of those reasons is `reason_is_not_the_code` in the script, and today it holds exactly one, `ledger unreadable` | **still running** |
 
 The last two are the ones worth knowing about, because the instinct on seeing exit
 1 is to go looking for a rollback, and in those cases none was attempted. That is
