@@ -185,13 +185,53 @@ if [ "$ZSNAP_FORCE" != "1" ]; then
   if [ "$free_kb" -lt "$need_kb" ]; then
     die "need ~$((need_kb / 1024)) MB free in $ZSNAP_DIR for the export plus its archive, have $((free_kb / 1024)) MB. Lower ZSNAP_KEEP (now $ZSNAP_KEEP) or add disk (ZSNAP_FORCE=1 overrides)"
   fi
-  # Warn, do not refuse, when the steady state will not fit once this run
-  # rotates: the export still helps today and the operator needs the number.
+  # Two different warnings, because the old one asked the wrong question and so
+  # could not fire for the failure that was actually coming.
+  #
+  # It compared steady_kb against free_kb + used_kb, the filesystem TOTAL. That
+  # asks "is this disk big enough in principle". The failure on our box is a disk
+  # that is big enough and merely FULL: 146 GB total against a 44 GB steady state,
+  # so it stayed silent while the next export was 0.5 GB from refusing. A warning
+  # that predicts a refusal only when the disk could never work is a warning that
+  # arrives after the operator already knows.
+  #
+  # HEADROOM is the one that gives lead time: how close is free to need, right now.
+  headroom_kb=$((free_kb - need_kb))
+  if [ "$headroom_kb" -lt "$archive_kb" ]; then
+    # Name the KEEP that would fit rather than saying "lower it". Each generation
+    # dropped frees one archive, so this is arithmetic the operator should not have
+    # to redo at 3am.
+    # Floor of 1, never 0. Recommending zero retention means deleting the thing
+    # this script exists to produce, and the loop happily reached it: at KEEP=1 the
+    # first version of this advised KEEP=0. Found by simulating the box AFTER taking
+    # my own advice, which is the case a recommendation should always be checked
+    # against.
+    fits=$ZSNAP_KEEP
+    while [ "$fits" -gt 1 ] && [ "$((free_kb + (ZSNAP_KEEP - fits) * archive_kb - need_kb))" -lt "$archive_kb" ]; do
+      fits=$((fits - 1))
+    done
+    if [ "$fits" -lt "$ZSNAP_KEEP" ]; then
+      advice="Set ZSNAP_KEEP=$fits to free ~$(( (ZSNAP_KEEP - fits) * archive_kb / 1024 )) MB."
+    else
+      # Already at the floor, or dropping generations would not buy an archive's
+      # worth. Say so instead of suggesting a change that changes nothing.
+      advice="ZSNAP_KEEP is already $ZSNAP_KEEP, so retention cannot buy the room: this needs more disk, or publishing so snapshots stop living here (#7)."
+    fi
+    log "WARNING: only ~$((headroom_kb / 1024)) MB of headroom after this export, less than one archive (~$((archive_kb / 1024)) MB). The next export may refuse. $advice"
+  fi
+
+  # Kept, because "this disk can never hold the steady state" is still worth saying,
+  # it is just a different and rarer problem from running out today.
   steady_kb=$(( (ZSNAP_KEEP + 1) * archive_kb + state_kb ))
   used_kb="$(df -Pk "$ZSNAP_DIR" | awk 'NR==2 {print $3}')"
   if [ "$((free_kb + used_kb))" -lt "$steady_kb" ]; then
-    log "WARNING: this filesystem cannot hold the steady state. $ZSNAP_KEEP generations plus one in-flight export needs ~$((steady_kb / 1024)) MB, the filesystem is ~$(((free_kb + used_kb) / 1024)) MB. Rotation will keep working but a future export may refuse."
+    log "WARNING: this filesystem cannot hold the steady state at all. $ZSNAP_KEEP generations plus one in-flight export needs ~$((steady_kb / 1024)) MB, the filesystem is ~$(((free_kb + used_kb) / 1024)) MB total."
   fi
+
+  # Neither warning reaches anybody: both go to stdout and journald, and alerting
+  # is deferred (#215). A stale latest.tar.zst that still looks healthy is the
+  # symptom, and nothing pages for it.
+  
 fi
 
 work=""
