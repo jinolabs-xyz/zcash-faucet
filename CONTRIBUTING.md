@@ -400,6 +400,32 @@ Every correction came from the same few habits, so the habits are rules.
     to broadcast on a tip we cannot verify. And clamp the parsed value, because a
     budget an operator can set past the cliff is a comment, not a limit.
 
+28. `merged` is not `shipped`. GitHub reporting a pull request MERGED means a
+    merge succeeded, never that the code reached the branch that deploys. #220 was
+    stacked on #219's branch so a reviewer could see a migration and its first
+    consumer together. #219 was squash-merged to main, which does NOT re-target a
+    stacked child, and its branch was not deleted, so 99 seconds later #220 merged
+    cleanly into a branch that no longer led anywhere. 405 lines of reviewed
+    anti-farming code, `merged=true` and closed, absent from main for an hour while
+    the board said the Sybil lever had shipped. Nothing failed: no conflict, no red
+    CI, no warning. Both of us verified it and both asked the wrong question, the
+    author by trusting the merge and the CTO by reading `state,mergeCommit` and
+    getting MERGED plus a sha.
+
+    So the check is two facts, not one, and neither is the merge result:
+
+    ```
+    base == main                                        before merging
+    git merge-base --is-ancestor <merge_sha> origin/main  after merging
+    ```
+
+    It was found by accident, which is the part worth remembering. A schema
+    comment reading "Nothing reads it yet", written as a note about sequencing,
+    had quietly become literally true. If you stack, delete the parent branch when
+    it merges or re-target the child first, and audit with the ancestor check
+    rather than by reading anything.
+
+
 Money paths (send, ledger, reservation, PoW verify) never skip review, no
 matter how urgent the window. Docs and pure test additions may fast-track
 at the CTO's discretion.
