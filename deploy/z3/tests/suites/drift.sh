@@ -45,11 +45,30 @@ drift_env() {
 case "$1" in
   ps)
     for a in "$@"; do case "$a" in name=*) m="${a#name=}";; esac; done
-    v="STUB_RUNNING_$m"; printf '%s\n' "${!v:-}" | grep -v '^$' || true ;;
+    v="STUB_RUNNING_$m"
+    # Two ps shapes now: bare names for the version check, and name plus compose
+    # project for the orphan check. Separate cases, because one answer serving both
+    # questions is a stub that agrees with whatever it is asked.
+    case " $* " in
+      *compose.project*)
+        # Default to a project rather than to empty. Empty means "started by hand",
+        # which is the FINDING, and a stub whose default is the finding would make
+        # every unrelated fixture report an orphan it never created.
+        for c in ${!v:-}; do
+          pv="STUB_PROJECT_$(printf '%s' "$c" | tr -c 'A-Za-z0-9' '_')"
+          if [ -n "${!pv+set}" ]; then printf '%s %s\n' "$c" "${!pv}"; else printf '%s z3\n' "$c"; fi
+        done ;;
+      *) printf '%s\n' "${!v:-}" | grep -v '^$' || true ;;
+    esac ;;
   inspect)
-    # Container names contain hyphens, which cannot appear in a variable name,
-    # so the lookup key is sanitised the same way on both sides.
-    n="${!#}"; v="STUB_IMAGE_$(printf '%s' "$n" | tr -c 'A-Za-z0-9' '_')"
+    # TWO questions arrive here now, and they must not share a case: what reference a
+    # CONTAINER was created from, and what registry digests an IMAGE has. Answering
+    # both from one variable is how a stub starts agreeing with whatever it is asked.
+    n="${!#}"; k="$(printf '%s' "$n" | tr -c 'A-Za-z0-9' '_')"
+    case " $* " in
+      *RepoDigests*) v="STUB_REPODIGESTS_$k" ;;
+      *)             v="STUB_IMAGE_$k" ;;
+    esac
     printf '%s\n' "${!v:-}" | grep -v '^$' || true ;;
 esac
 STUB
@@ -57,7 +76,7 @@ STUB
   # Leaked exports from a previous case would make a later one see a container
   # that this fixture never started, which is how my own not-running test first
   # failed for a reason that had nothing to do with the code under test.
-  unset "${!STUB_RUNNING_@}" "${!STUB_IMAGE_@}" 2>/dev/null || true
+  unset "${!STUB_RUNNING_@}" "${!STUB_IMAGE_@}" "${!STUB_REPODIGESTS_@}" "${!STUB_PROJECT_@}" 2>/dev/null || true
 }
 # A box that matches the repo exactly.
 make_clean_box() {
@@ -485,6 +504,102 @@ bash "$AUDIT" > "$T/v-match.log" 2>&1; rc=$?
 check "exits 0" "[ $rc -eq 0 ]"
 check "reports no drift" "grep -q 'no drift' '$T/v-match.log'"
 check "and did not silently skip the version check" "! grep -q 'stack versions:' '$T/v-match.log'"
+
+# We pin the wallet BY DIGEST, because z3's compose defaults it to a digest and writing
+# the tag alone would swap an immutable reference for a moveable one. The box was created
+# from the plain tag, so .Config.Image is the tag and a text compare reports drift on
+# every single run. A line that is always red is a line people stop reading, so the
+# comparison has to be about the image rather than about the string.
+echo "== versions: a digest pin matches a container created from the equivalent tag"
+versions_env
+printf 'Z3_ZALLET_IMAGE=zodlinc/zallet:v0.1.0-beta.1@%s\n' "sha256:1849b4469875dc0165942c06d15fa6a7da76b2d43bade578cc8e5903a639869d" > "$AUDIT_VERSIONS_FILE"
+export STUB_RUNNING_zallet=z3-zallet-1
+export STUB_IMAGE_z3_zallet_1="zodlinc/zallet:v0.1.0-beta.1"
+export STUB_REPODIGESTS_zodlinc_zallet_v0_1_0_beta_1="zodlinc/zallet@sha256:1849b4469875dc0165942c06d15fa6a7da76b2d43bade578cc8e5903a639869d"
+# --verbose because ok() is quiet without it, which is right for a cron audit and means
+# a test that wants to read the POSITIVE message has to ask for it.
+bash "$AUDIT" --verbose > "$T/v-digest.log" 2>&1; rc=$?
+check "a digest pin against the same image by tag exits 0" "[ $rc -eq 0 ]"
+check "and reports no drift" "grep -q 'no drift' '$T/v-digest.log'"
+check "and says it matched by DIGEST, not by luck" "grep -q 'matches by digest' '$T/v-digest.log'"
+
+echo "== versions: a MOVED tag is caught even though the text never changed"
+# The failure the digest exists to catch. .Config.Image is byte-identical to the case
+# above; only what the registry served changed. A text compare cannot see this at all.
+versions_env
+printf 'Z3_ZALLET_IMAGE=zodlinc/zallet:v0.1.0-beta.1@%s\n' "sha256:1849b4469875dc0165942c06d15fa6a7da76b2d43bade578cc8e5903a639869d" > "$AUDIT_VERSIONS_FILE"
+export STUB_RUNNING_zallet=z3-zallet-1
+export STUB_IMAGE_z3_zallet_1="zodlinc/zallet:v0.1.0-beta.1"
+export STUB_REPODIGESTS_zodlinc_zallet_v0_1_0_beta_1="zodlinc/zallet@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+bash "$AUDIT" > "$T/v-moved.log" 2>&1; rc=$?
+check "a tag that no longer resolves to the pinned digest is DRIFT" "[ $rc -eq 1 ]"
+check "and names the digest rather than saying the images differ" "grep -q 'whose digest is not' '$T/v-moved.log'"
+
+echo "== versions: an image with no registry digest is NOT VERIFIED, not a pass"
+# A locally built image has no RepoDigests. We did not learn that it differs, so this
+# must not read as agreement, and it must not read as drift either.
+versions_env
+printf 'Z3_ZALLET_IMAGE=zodlinc/zallet:v0.1.0-beta.1@%s\n' "sha256:1849b4469875dc0165942c06d15fa6a7da76b2d43bade578cc8e5903a639869d" > "$AUDIT_VERSIONS_FILE"
+export STUB_RUNNING_zallet=z3-zallet-1
+export STUB_IMAGE_z3_zallet_1="zodlinc/zallet:v0.1.0-beta.1"
+bash "$AUDIT" > "$T/v-nodigest.log" 2>&1; rc=$?
+check "an unresolvable digest exits 2, the incomplete code" "[ $rc -eq 2 ]"
+check "and says so under NOT VERIFIED" "grep -q 'no registry digest' '$T/v-nodigest.log'"
+check "and does NOT claim a match" "! grep -q 'matches by digest' '$T/v-nodigest.log'"
+check "and does NOT claim drift" "! grep -q 'DRIFT FOUND' '$T/v-nodigest.log'"
+
+echo "== versions: two digest references for the same image agree"
+versions_env
+printf 'Z3_ZALLET_IMAGE=zodlinc/zallet:v0.1.0-beta.1@%s\n' "sha256:1849b4469875dc0165942c06d15fa6a7da76b2d43bade578cc8e5903a639869d" > "$AUDIT_VERSIONS_FILE"
+export STUB_RUNNING_zallet=z3-zallet-1
+export STUB_IMAGE_z3_zallet_1="zodlinc/zallet@sha256:1849b4469875dc0165942c06d15fa6a7da76b2d43bade578cc8e5903a639869d"
+bash "$AUDIT" --verbose > "$T/v-bothdg.log" 2>&1; rc=$?
+check "the same digest written two ways is not drift" "[ $rc -eq 0 ]"
+check "and is reported as a digest match" "grep -q 'matches by digest' '$T/v-bothdg.log'"
+
+# ORPHANS. Every version check above reads the FIRST container whose name matches, so it
+# cannot see a second one, and a container outside the compose project is invisible to the
+# tooling that manages the stack: no recreate, no stop, and a pin bump cannot reach it.
+echo "== orphans: a container matching our images but in NO compose project is drift"
+versions_env
+printf 'Z3_ZEBRA_IMAGE=zfnd/zebra:6.2.0\n' > "$AUDIT_VERSIONS_FILE"
+export STUB_RUNNING_zebra="z3-zebra-1 stray-zebra"
+export STUB_IMAGE_z3_zebra_1="zfnd/zebra:6.2.0"
+export STUB_PROJECT_stray_zebra=""
+bash "$AUDIT" > "$T/orphan.log" 2>&1; rc=$?
+check "a hand-started container matching the stack is DRIFT" "[ $rc -eq 1 ]"
+check "and it is named" "grep -q 'stray-zebra' '$T/orphan.log'"
+check "and the reason is the compose project, not the image" \
+  "grep -q 'belongs to no compose project' '$T/orphan.log'"
+check "and it says compose cannot manage it, which is WHY this matters" \
+  "grep -q 'compose cannot recreate or stop it' '$T/orphan.log'"
+# The version line above looked at z3-zebra-1 and reported a match. That is exactly the
+# false reassurance this check exists to break.
+check "and the count is reported too, since the version line described only one of them" \
+  "grep -q 'containers match' '$T/orphan.log'"
+
+echo "== orphans: two containers in the SAME project is still reported"
+# Not an orphan, but the version check still silently picked one of two.
+versions_env
+printf 'Z3_ZEBRA_IMAGE=zfnd/zebra:6.2.0\n' > "$AUDIT_VERSIONS_FILE"
+export STUB_RUNNING_zebra="z3-zebra-1 z3-zebra-2"
+export STUB_IMAGE_z3_zebra_1="zfnd/zebra:6.2.0"
+bash "$AUDIT" > "$T/twin.log" 2>&1; rc=$?
+check "two containers for one component is drift" "[ $rc -eq 1 ]"
+check "and says the version above described only one of them" \
+  "grep -q 'describes only one of them' '$T/twin.log'"
+check "but does NOT call either one an orphan, because both are in the project" \
+  "! grep -q 'belongs to no compose project' '$T/twin.log'"
+
+echo "== orphans: a normal single container in a project is silent"
+# The check has to be quiet in the ordinary case or nobody will keep it.
+versions_env
+printf 'Z3_ZEBRA_IMAGE=zfnd/zebra:6.2.0\n' > "$AUDIT_VERSIONS_FILE"
+export STUB_RUNNING_zebra=z3-zebra-1
+export STUB_IMAGE_z3_zebra_1="zfnd/zebra:6.2.0"
+bash "$AUDIT" > "$T/noorphan.log" 2>&1; rc=$?
+check "one container, in a project, matching the pin, exits 0" "[ $rc -eq 0 ]"
+check "and says nothing about orphans" "! grep -q 'compose project' '$T/noorphan.log'"
 
 echo "== versions: a box running a DIFFERENT image than the pin is drift"
 # The whole point of #247. Without this the version could change under us and

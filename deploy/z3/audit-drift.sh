@@ -343,6 +343,10 @@ stack_match() {
   esac
 }
 
+# A reference can be repo:tag, repo@sha256:..., or repo:tag@sha256:... . Only the
+# digest half is an identity; the tag half is a moveable label.
+ref_digest() { case "$1" in *@sha256:*) printf 'sha256:%s\n' "${1##*@sha256:}" ;; *) printf '\n' ;; esac; }
+
 if [ ! -f "$VERSIONS_FILE" ]; then
   note_unverified "stack versions: no $VERSIONS_FILE, so nothing records which node and wallet images we intend to run"
 elif ! command -v "$DOCKER" >/dev/null 2>&1; then
@@ -368,16 +372,83 @@ else
       continue
     fi
     running="$("$DOCKER" inspect -f '{{.Config.Image}}' "$name" 2>/dev/null)"
+    declared_digest="$(ref_digest "$declared")"
+    running_digest="$(ref_digest "$running")"
     if [ -z "$running" ]; then
       # Distinct from a mismatch on purpose: we did not learn that they differ,
       # we learned nothing, and those must not print the same way.
       note_unverified "stack versions: docker inspect returned nothing for $name, so $key was not compared"
     elif [ "$running" = "$declared" ]; then
       ok "$key matches: $running"
+    elif [ -n "$declared_digest" ] && [ "$declared_digest" = "$running_digest" ]; then
+      # Same bytes, different way of writing them. A digest identifies content, so
+      # once two references carry the same one the tag text cannot disagree.
+      ok "$key matches by digest: $declared_digest"
+    elif [ -n "$declared_digest" ] && [ -z "$running_digest" ]; then
+      # The interesting case, and the reason this is not a string compare. We pin a
+      # digest because a tag can be re-pushed under us, but the container was created
+      # from a plain tag, so .Config.Image records the tag and the two strings differ
+      # while the image may be identical. Comparing text here would report drift on
+      # every run and teach people to ignore the line.
+      #
+      # So ask what the image actually is. RepoDigests is what the registry served.
+      repo_digests="$("$DOCKER" inspect -f '{{join .RepoDigests ","}}' "$running" 2>/dev/null)"
+      if [ -z "$repo_digests" ]; then
+        # A locally built or never-pushed image has no RepoDigests at all. We did not
+        # learn that it differs, so this is not drift and not a pass.
+        note_unverified "stack versions: $name runs $running, which has no registry digest, so it could not be compared against the digest $key pins"
+      # Compared as the whole field after the '@', not as a substring. A digest is
+      # fixed length so a substring match would almost always be right, and "almost
+      # always" is not what this line is for.
+      elif printf '%s' "$repo_digests" | tr ',' '\n' |
+           awk -v want="$declared_digest" -F@ 'NF>1 && $NF == want { hit=1 } END { exit !hit }'; then
+        ok "$key matches by digest: $name was started from the tag $running, which is $declared_digest"
+      else
+        found "$name runs $running, whose digest is not the $declared_digest that $VERSIONS_FILE pins" \
+          "the tag has moved or the box was never recreated: pull and restart the stack, or update $key"
+      fi
     else
       found "$name runs $running but $VERSIONS_FILE pins $declared" \
-        "pull and restart the stack (see REDEPLOY.md), or update $key if the box is intentionally ahead"
+        "pull and restart the stack, or update $key if the box is intentionally ahead"
     fi
+  done
+
+  # ORPHANS. Everything above asked "is the right version running", using the FIRST
+  # container whose name matches. That question cannot see a second one.
+  #
+  # A container outside the compose project is invisible to the tooling that manages
+  # the stack: `compose up -d` will not recreate it, `compose down` will not stop it,
+  # and a pin bump cannot reach it, so it keeps running the old image while every check
+  # above reports the new one, having looked at the sibling. It can also hold the port
+  # or the data volume the real one needs. deploy.sh already treats a missing compose
+  # label as the signature of a hand-started container, which is how it knows to remove
+  # a squatting faucet-web and leave an unrelated tool alone, so this reuses that fact
+  # rather than inventing a second rule.
+  for key in Z3_ZEBRA_IMAGE Z3_ZALLET_IMAGE Z3_ZAINO_IMAGE; do
+    match="$(stack_match "$key")"
+    # Every match, not the first. Labels come back on the same line as the name so a
+    # container cannot be read against another container's project.
+    listing="$("$DOCKER" ps --filter "name=$match" \
+      --format '{{.Names}} {{.Label "com.docker.compose.project"}}' 2>/dev/null)"
+    [ -n "$listing" ] || continue
+    count=0
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      count=$((count + 1))
+      cname="${line%% *}"
+      project=""
+      case "$line" in *" "*) project="${line#* }" ;; esac
+      if [ -z "$project" ]; then
+        found "$cname matches '$match' but belongs to no compose project" \
+          "it was started by hand, so compose cannot recreate or stop it: docker rm -f $cname once the stack owns the real one"
+      fi
+    done <<EOF
+$listing
+EOF
+    # Two containers answering to one component is worth saying even when both are in
+    # the project, because every version line above silently picked one of them.
+    [ "$count" -gt 1 ] && found "$count containers match '$match', so the version reported above describes only one of them" \
+      "remove the ones that are not part of the running stack"
   done
 fi
 say ""
