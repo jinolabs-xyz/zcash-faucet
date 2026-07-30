@@ -25,6 +25,14 @@ export interface ReserveFacts {
   lowTaz: number;
   targetTaz: number;
   refilling: boolean;
+  /**
+   * Consecutive throws from the refill step, and why. WANTING to refill and being ABLE
+   * to are different states, and "topping up" claims the second. The loop spent a day
+   * saying it while every tick threw "Insufficient balance (have 0)", which is not a
+   * fault, it is having no coinbase to shield on a testnet where we lose block races.
+   */
+  failedSteps?: number;
+  lastFailure?: { outcome: "waiting" | "error"; reason: string } | null;
 }
 
 export interface ReserveRows {
@@ -41,6 +49,15 @@ export function reserveRows(r: ReserveFacts): ReserveRows {
   const balance = r.spendableTaz == null ? "unknown" : `${r.spendableTaz.toFixed(1)} TAZ`;
 
   if (r.refilling) {
+    // Refilling is the intent. Whether anything can happen is a separate fact, and
+    // conflating them is what put TOPPING UP on screen while nothing could top up.
+    const stuck = (r.failedSteps ?? 0) > 0 ? r.lastFailure : null;
+    if (stuck?.outcome === "waiting") {
+      return { reserve: balance, refill: "waiting, nothing to shield yet" };
+    }
+    if (stuck?.outcome === "error") {
+      return { reserve: balance, refill: `refill FAILING, ${r.failedSteps} consecutive` };
+    }
     return { reserve: balance, refill: `topping up to ${r.targetTaz.toFixed(0)} TAZ` };
   }
 

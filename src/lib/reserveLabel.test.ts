@@ -63,3 +63,43 @@ test("exactly at the low mark is not below it, so the boundary is not off by one
   assert.match(r.refill, /starts under 100 TAZ/);
   assert.doesNotMatch(r.refill, /BELOW/);
 });
+
+/* ------------- wanting to refill versus being able to (the 758/1000 case) --------- */
+
+const STUCK = { outcome: "waiting" as const, reason: "Insufficient balance (have 0, need 10000 including fee)" };
+
+test("refilling while every step throws nothing-to-shield does NOT say topping up", () => {
+  // The state the box was actually in: refilling true, 758 of 1000, and every tick
+  // throwing because the transparent pool is empty. "Topping up" claimed an action
+  // that could not happen.
+  const r = reserveRows({ ...BAND, spendableTaz: 758.5, refilling: true, failedSteps: 40, lastFailure: STUCK });
+  assert.doesNotMatch(r.refill, /topping up/i, "claims an action nothing can perform");
+  assert.match(r.refill, /waiting, nothing to shield/);
+});
+
+test("a real error while refilling is named as failing, not softened to waiting", () => {
+  const r = reserveRows({
+    ...BAND, spendableTaz: 40, refilling: true, failedSteps: 3,
+    lastFailure: { outcome: "error", reason: "connection refused" },
+  });
+  assert.match(r.refill, /FAILING/);
+  assert.match(r.refill, /3 consecutive/);
+});
+
+test("refilling with no failures still says topping up", () => {
+  // The control. Without it, any wording that never says "topping up" would pass.
+  const r = reserveRows({ ...BAND, spendableTaz: 40, refilling: true, failedSteps: 0, lastFailure: null });
+  assert.match(r.refill, /topping up to 1000 TAZ/);
+});
+
+test("a stale lastFailure with the count cleared does not linger", () => {
+  // failedSteps is the live signal. If a reason survives a recovery, the panel would
+  // report a fault that has already cleared.
+  const r = reserveRows({ ...BAND, spendableTaz: 40, refilling: true, failedSteps: 0, lastFailure: STUCK });
+  assert.match(r.refill, /topping up/);
+});
+
+test("the fields are optional, so an older status payload still renders", () => {
+  const r = reserveRows({ ...BAND, spendableTaz: 40, refilling: true });
+  assert.match(r.refill, /topping up to 1000 TAZ/);
+});

@@ -18,6 +18,7 @@
 // | SEND_FAILS   | unset   | Every send fails, for the failure path          |
 // | SEND_HANGS   | unset   | Operations never finish, for unknown outcome    |
 // | SHIELD_TAZ   | 0       | TAZ each shield sweep adds, for refill tests    |
+// | SHIELD_ERROR |         | make z_shieldcoinbase THROW this message        |
 import { createServer } from "node:http";
 import { randomBytes } from "node:crypto";
 
@@ -25,6 +26,8 @@ const PORT = Number(process.env.PORT ?? 28299);
 const SYNC_SECONDS = Number(process.env.SYNC_SECONDS ?? 0);
 const ZAT_PER_TAZ = 100_000_000n;
 const SHIELD_ZAT = BigInt(Math.round(Number(process.env.SHIELD_TAZ ?? 0) * 1e8));
+// Message the shield RPC should throw instead of sweeping. Empty means do not throw.
+const SHIELD_ERROR = process.env.SHIELD_ERROR ?? "";
 const SEND_FAILS = process.env.SEND_FAILS === "true";
 const SEND_HANGS = process.env.SEND_HANGS === "true";
 const NODE_TIP = 3_650_000;
@@ -63,6 +66,14 @@ const handlers = {
   },
 
   z_shieldcoinbase: () => {
+    // The double could express "swept nothing" but not "the sweep THREW", which is the
+    // state the live loop sat in for a day while every counter read clean. Without
+    // this the failure path is unreachable in a test.
+    if (SHIELD_ERROR) {
+      const err = new Error(SHIELD_ERROR);
+      err.code = -4;
+      throw err;
+    }
     if (SHIELD_ZAT <= 0n) return { remainingUTXOs: 0 };
     const opid = "opid-shield-" + randomBytes(4).toString("hex");
     balanceZat += SHIELD_ZAT;

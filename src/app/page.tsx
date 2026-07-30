@@ -18,7 +18,7 @@ interface Status {
   backend: { reachable: boolean; endpoint: string };
   node?: { ready: boolean; syncPercent: number | null; height: number | null; nodeHeight: number | null; canBuildTx?: boolean };
   miner?: { active: boolean };
-  reserve?: { targetTaz: number; lowTaz: number; refilling: boolean; spendableTaz: number | null };
+  reserve?: { targetTaz: number; lowTaz: number; refilling: boolean; spendableTaz: number | null; failedSteps?: number; lastFailure?: { outcome: "waiting" | "error"; reason: string } | null };
   donationAddress?: string;
   challenge?: "pow" | "turnstile" | "none";
 }
