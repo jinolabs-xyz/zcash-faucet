@@ -74,6 +74,43 @@ const zalletTimings = {
   pollMs: Math.max(250, Math.floor(num("ZALLET_POLL_MS", 1500))),
 };
 
+/**
+ * Accept a MAINNET unified address, or nothing at all.
+ *
+ * This is the only place in the app that handles an address for real money, and
+ * the surrounding site is entirely testnet, so the failure we are guarding is a
+ * testnet address being pasted into a mainnet field. That mistake is silent:
+ * `utest1…` and `u1…` look alike at a glance, both are "unified addresses", and
+ * the donor only discovers the problem after the funds are gone.
+ *
+ * Prefix and charset only. This is not a checksum, so it cannot catch a typo in
+ * the middle, and it is not claimed to: it catches the wrong NETWORK and obvious
+ * junk, which is the mistake an operator actually makes. The address still wants
+ * a real send tested against it before it goes in front of anybody.
+ */
+export function mainnetUnifiedOrEmpty(raw: string): string {
+  const addr = raw.trim();
+  if (!addr) return "";
+  if (addr.startsWith("utest1") || addr.startsWith("ztestsapling") || /^t[m2]/.test(addr)) {
+    console.error(
+      `[config] FAUCET_MAINTENANCE_ADDRESS looks like a TESTNET address (${addr.slice(0, 8)}…). ` +
+        "That field is for mainnet ZEC donations, so it is being ignored rather than shown. " +
+        "Nothing else is affected.",
+    );
+    return "";
+  }
+  // Bech32m: "u1" then the lowercase bech32 charset. Unified addresses are long,
+  // so a short string is a truncated paste rather than an unusual address.
+  if (!/^u1[023456789acdefghjklmnpqrstuvwxyz]{40,}$/.test(addr)) {
+    console.error(
+      "[config] FAUCET_MAINTENANCE_ADDRESS is not a mainnet unified address (expected u1… bech32m). " +
+        "Ignoring it: showing a doubtful address for real funds is worse than showing none.",
+    );
+    return "";
+  }
+  return addr;
+}
+
 export const config = {
   dripTaz: num("FAUCET_DRIP_TAZ", 0.1),
   get dripZatoshi() {
@@ -165,6 +202,17 @@ export const config = {
   // that block, and it is a different address from the donation UA because a
   // coinbase cannot pay a shielded output directly.
   miningAddress: process.env.FAUCET_MINING_ADDRESS ?? "",
+  // MAINNET address for donations toward running the project. This is real ZEC,
+  // on a site that is otherwise entirely testnet, which is the whole reason it is
+  // validated rather than printed as given.
+  //
+  // Fails closed: anything that is not a mainnet unified address renders nothing
+  // and says why in the log. A wrong address here does not degrade a feature, it
+  // sends somebody's real money somewhere they cannot get it back from, so an
+  // unset block is strictly better than a doubtful one. Deliberately NOT a boot
+  // refusal like the numeric thresholds: a bad donation address must not take a
+  // working faucet offline.
+  maintenanceAddress: mainnetUnifiedOrEmpty(process.env.FAUCET_MAINTENANCE_ADDRESS ?? ""),
 
   // Ledger backend. "sqlite" = local file (dev / single box). "d1" = Cloudflare
   // D1 via the proxy Worker (survives Render's ephemeral disk). See worker/.

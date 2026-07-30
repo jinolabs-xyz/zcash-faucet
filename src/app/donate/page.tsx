@@ -47,6 +47,7 @@ const addrText: CSSProperties = {
 export default async function Donate() {
   const donation = config.donationAddress.trim();
   const mining = config.miningAddress.trim();
+  const maintenance = config.maintenanceAddress.trim();
 
   // Both reads are independent and neither blocks the page, so do not serialize them.
   const [balanceZat, donations] = await Promise.all([safeBalance(), safeDonations()]);
@@ -174,10 +175,40 @@ export default async function Donate() {
           </div>
         )}
 
+        {maintenance && (
+          <>
+            <div className="hr" style={{ margin: "6px 0 0" }} />
+            {/* Everything above this line is testnet play money. This block is not,
+                and the separation is the point: a donor who skims must not mistake
+                one for the other. The heading says mainnet, the copy says mainnet,
+                and the warning below says what cannot be undone. */}
+            <div id="maintenance" style={{ ...addrBox, borderColor: "var(--color-accent)" }}>
+              <span style={{ ...kicker, color: "var(--color-accent-text)" }}>
+                Mainnet ZEC · toward running the project
+              </span>
+              <span style={addrText}>{maintenance}</span>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+                <CopyAddress address={maintenance} label="Mainnet donation address" />
+                <span style={{ fontSize: 12, color: muted(60), maxWidth: "42ch" }}>
+                  Unified, so it arrives shielded. This one is <b>real ZEC on mainnet</b>, unlike
+                  everything else on this page. It goes toward the server, the domain and the time
+                  that keeps the faucet running, and it buys no advantage at the tap: drips are the
+                  same size, on the same cooldown, for everyone.
+                </span>
+              </div>
+              <span style={{ fontSize: 12, lineHeight: 1.5, color: muted(70) }}>
+                Check the address before sending. A mainnet transfer cannot be reversed, and this
+                page is the only place we publish it.
+              </span>
+            </div>
+          </>
+        )}
+
         <div className="hr" style={{ margin: "6px 0 0" }} />
         <p style={{ margin: 0, fontSize: 12, lineHeight: 1.55, color: muted(55) }}>
-          Testnet only. TAZ has no monetary value, so this is not a fundraiser, it is a way to keep a
-          shared testing tool available to the next person who needs it.
+          The faucet itself is testnet only. TAZ has no monetary value, so topping up the tank is not
+          a fundraiser, it is a way to keep a shared testing tool available to the next person who
+          needs it.
         </p>
       </main>
 

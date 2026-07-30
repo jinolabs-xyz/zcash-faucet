@@ -38,6 +38,7 @@ with an anti-abuse gate on.
 | `DB_BACKEND` | `sqlite` | `sqlite` for a normal box, `d1` to keep the claim ledger on Cloudflare D1 when the host disk is ephemeral. |
 | `FAUCET_DONATION_ADDRESS` | none | Shown in the UI so people can top the faucet up. |
 | `FAUCET_MINING_ADDRESS` | none | Transparent address the miner pays coinbase to. Shown on /donate for anyone pointing hashrate at us. Unset hides that block. |
+| `FAUCET_MAINTENANCE_ADDRESS` | none | **Mainnet** unified address for donations toward running the project. Validated: anything that is not a `u1…` mainnet UA is logged and ignored, so a testnet address pasted here shows nothing rather than sending real ZEC somewhere unrecoverable. Unset hides the block and the footer link. |
 | `FAUCET_WALLET_SEED` | none | Funded transparent wallet, WIF or 64-hex. Only used by `FAUCET_SENDER=real`. Server side, never commit it. |
 | `SEND_QUEUE_MAX_PENDING` | `20` | Sends allowed to queue before the faucet sheds with a busy 503, so a surge cannot pile up unbounded work. |
 | `TX_LOOKUP_RATE_WINDOW_SECONDS` | `60` | Window for the per-IP limit on `/api/tx`. |

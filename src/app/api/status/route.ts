@@ -29,6 +29,10 @@ export const GET = withApi("status", async () => {
     empty,
     donationAddress: config.donationAddress,
     miningAddress: config.miningAddress,
+    // Mainnet, for donations toward running the project. Validated in config, so
+    // an empty string here means unset OR rejected, and the UI treats both the
+    // same: show nothing rather than a doubtful address for real funds.
+    maintenanceAddress: config.maintenanceAddress,
     queueDepth: getSendQueue().depth,
     backend,
     node, // { ready, syncPercent, height, nodeHeight } or null while the wallet is down
