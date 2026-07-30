@@ -173,8 +173,7 @@ the map:
   liveness (is the process answering), `/api/ready` is readiness (can it actually
   serve a drip, with the reason when it cannot). Keeping those separate is what
   stops a normal first sync from looking like an outage.
-- **Mining testnet blocks yourself**, from nothing: [TESTNET-MINING.md](TESTNET-MINING.md)
-- **Mining** and its tuning, as we run it: [deploy/z3/MINING.md](deploy/z3/MINING.md)
+- **Mining** and its tuning: [deploy/z3/MINING.md](deploy/z3/MINING.md)
 - **Encrypted backups** of wallet and ledger: [deploy/z3/BACKUPS.md](deploy/z3/BACKUPS.md)
 - **Snapshots** for a fast chain rebuild: [deploy/z3/SNAPSHOTS.md](deploy/z3/SNAPSHOTS.md)
 - **TLS and domain**: [deploy/z3/HTTPS.md](deploy/z3/HTTPS.md)
