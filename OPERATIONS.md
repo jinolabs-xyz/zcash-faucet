@@ -759,7 +759,7 @@ new TCP connection, and connection multiplexing makes them share one:
 
 ```
 # ~/.ssh/config
-Host 172.235.26.235 faucet.*
+Host <faucet-host> faucet.*
     ControlMaster auto
     ControlPath ~/.ssh/cm-%r@%h:%p
     ControlPersist 10m
