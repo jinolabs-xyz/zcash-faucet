@@ -88,7 +88,11 @@ export default function Home() {
   const [tx, setTx] = useState<Tx | null>(null);
   const [copied, setCopied] = useState<CopyTarget | null>(null);
   const [cooldownEnd, setCooldownEnd] = useState(0);
-  const [now, setNow] = useState(Date.now());
+  // 0 rather than Date.now(): calling it during render gives the SERVER's clock on
+  // the first paint and the client's on hydration, which is a mismatch, and it makes
+  // render impure. The effect below sets the real value on mount and every second,
+  // and until it does `remain` is max(0, 0 - 0) = 0, which is the correct first paint.
+  const [now, setNow] = useState(0);
   const [errMsg, setErrMsg] = useState("");
   const [tool, setTool] = useState<"lookup" | "about" | null>(null);
   const [lookupAddr, setLookupAddr] = useState("");
@@ -225,7 +229,11 @@ export default function Home() {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, queuedAddr, basePhase]);
-  useEffect(() => { const iv = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(iv); }, []);
+  useEffect(() => {
+    setNow(Date.now()); // immediately, so the first tick is not up to a second late
+    const iv = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(iv);
+  }, []);
   useEffect(() => {
     if (phase !== "submitting") return;
     const iv = setInterval(() => setElapsed(Date.now() - submitStart.current), 120);
@@ -461,7 +469,12 @@ export default function Home() {
   const badgeShow = c.ok || ("label" in c && !!c.label);
   const remain = Math.max(0, cooldownEnd - now);
 
-  const proofFrac = phase === "submitting" ? Math.min(sending.current ? 0.95 : 1, elapsed / (PROOF_SECONDS * 1000)) : 0;
+  // Reads no ref. `sending.current` is set false SYNCHRONOUSLY in submit's finally
+  // while setPhase("success") only schedules a re-render, so a render landing in that
+  // window saw phase "submitting" with the ref already false and let the bar reach
+  // 100% under a UI still saying submitting. Capping on the phase alone is both the
+  // intent and reactive.
+  const proofFrac = phase === "submitting" ? Math.min(0.95, elapsed / (PROOF_SECONDS * 1000)) : 0;
   const steps: [string, number][] = [
     ["Checking eligibility", 0.09],
     ["Selecting shielded notes", 0.13],
