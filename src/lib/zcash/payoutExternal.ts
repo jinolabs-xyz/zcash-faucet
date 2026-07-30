@@ -3,7 +3,7 @@
  *
  * The internal half (txstatus.ts) asks our own wallet. That is necessary and not
  * sufficient: the failure this exists for is tx 29 on 2026-07-29, where we built a
- * shield, believed we had sent it, and the network never recorded it — its expiry
+ * shield, believed we had sent it, and the network never recorded it, its expiry
  * height had already been mined four seconds before it was created. Nothing noticed
  * for seven hours. Our node cannot report that failure, because our node is the
  * thing that would have to be wrong.
@@ -13,12 +13,12 @@
  *
  * FACT ONE: they answer for things that do not exist. `testnet.cipherscan.app`
  * returns HTTP 200 with a well-formed all-zeros body for an address never seen on
- * chain — a fabricated DATASET, not merely a rendered page, and JSON reads as more
+ * chain, a fabricated DATASET, not merely a rendered page, and JSON reads as more
  * authoritative than HTML precisely because it looks machine-checked. So absence of
  * data is never evidence of absence from the chain.
  *
  * FACT TWO: they fail in ways that look like a clean negative. The same host
- * intermittently 308-redirects to a 404 HTML page — for a txid that had answered
+ * intermittently 308-redirects to a 404 HTML page, for a txid that had answered
  * correctly moments earlier. Read carelessly, "404" means "the network never saw
  * your payment", which is a completely different emergency from "the explorer is
  * having a bad minute".
@@ -50,7 +50,7 @@ export interface ExternalSource {
  * ONE source, deliberately, and the shortfall is stated rather than papered over.
  *
  * `testnet.zcashexplorer.app` was meant to be the second org. Measured: it has no
- * JSON transaction API at all — /api/v1/tx, /api/tx, /api/transactions and
+ * JSON transaction API at all, /api/v1/tx, /api/tx, /api/transactions and
  * /api/v1/transaction all return 404 with `content-type: application/json`, so the
  * 404 is the API's real answer rather than an HTML fallback. Its HTML page does carry
  * the height, and did return it once, but minutes later the same URL 404'd for the
@@ -58,7 +58,7 @@ export interface ExternalSource {
  *
  * Listing it anyway would have been worse than omitting it: a source that can only
  * ever answer `cannot-verify` looks like diversity in the config and provides none,
- * and — see the combination rule below — it would have made `absent` permanently
+ * and (see the combination rule below) it would have made `absent` permanently
  * unreachable while appearing to strengthen the check.
  *
  * Not zec.rocks either: our own node's lightwalletd backend is zec.rocks, and
@@ -76,22 +76,21 @@ export const DEFAULT_SOURCES: ExternalSource[] = [
  * `cannot-verify`, never "no such transaction". So this can CONFIRM a payout landed
  * and it cannot RAISE THE ALARM that one did not.
  *
- * That is the correct behaviour for evidence this weak — but it means explorer
- * silence is the wrong signal to build the alarm on, and pursuing a second flaky
- * explorer would not fix it either.
+ * That is the correct behaviour for evidence this weak, but it means explorer silence
+ * is the wrong signal to build the alarm on, and pursuing a second flaky explorer
+ * would not fix it either.
  *
  * The right signal is arithmetic we can verify ourselves. tx 29 did not fail in a way
  * an explorer could describe; it failed because its expiry height had ALREADY BEEN
  * MINED four seconds before it was created, so it could never be included. That is
  * deterministic: once our own tip passes a transaction's expiry height and the
- * transaction is not in a block, it is dead — no external opinion required, and no
+ * transaction is not in a block, it is dead. No external opinion required, and no
  * flakiness to reason about.
  *
  * So the alarm belongs on `tip > expiryHeight && !confirmed`, and this module is the
  * corroboration half rather than the detection half. Recorded on #202 rather than
  * silently half-built.
  */
-export const ALARM_NEEDS_EXPIRY_CHECK = true;
 
 const TXID_RE = /^[0-9a-f]{64}$/i;
 
@@ -162,7 +161,7 @@ export async function askOneSource(
 
   // POSITIVE EVIDENCE: a mined height, and the source naming the transaction we
   // asked about. Everything short of that is unverifiable, INCLUDING a tidy body
-  // full of zeros and nulls — that is the fabricated-dataset case, and it is the
+  // full of zeros and nulls, that is the fabricated-dataset case, and it is the
   // one most likely to be mistaken for a clean negative.
   if (height !== null && height > 0 && echoed !== null) {
     return { state: "confirmed", height, source: source.org, detail: `mined at ${height}` };
@@ -177,6 +176,16 @@ export async function askOneSource(
     return { state: "absent", height: null, source: source.org, detail: "source says it has no such transaction" };
   }
 
+  // Say which of the two is missing. Saying "no height" when a height was present
+  // and the ECHO was missing is a true verdict with a false sentence, which is the
+  // #211 defect: the reader is sent to look at the wrong field. Caught by SDE-App
+  // running this module, hours after I approved their fix for exactly that shape.
+  if (height !== null && height > 0) {
+    return unverifiable(source.org, `height ${height} but no txid to check it against, so this proves nothing`);
+  }
+  if (echoed !== null) {
+    return unverifiable(source.org, "names the transaction but reports no mined height, so this proves nothing");
+  }
   return unverifiable(source.org, "no height and no explicit negative, so this proves nothing");
 }
 

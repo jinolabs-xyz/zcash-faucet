@@ -47,6 +47,24 @@ test("a tidy all-zeros body proves nothing, which is the fabricated-dataset case
   assert.match(s.detail, /proves nothing/);
 });
 
+test("a height with no txid to check it against says SO, not 'no height'", async () => {
+  // The verdict was always right and the sentence was false: this landed on
+  // "no height and no explicit negative" while a height was sitting in the body,
+  // sending the reader to look at the wrong field. Same shape as the shield gate
+  // reporting "within 5 blocks (lag -91)" (#211). Found by SDE-App running the
+  // module rather than reading it.
+  const s = await askOneSource(TXID, src("a"), 500, canned(200, JSON.stringify({ blockHeight: 4221730 })));
+  assert.equal(s.state, "cannot-verify");
+  assert.match(s.detail, /height 4221730 but no txid/);
+  assert.doesNotMatch(s.detail, /no height/, `claims no height while one was present: ${s.detail}`);
+});
+
+test("a named transaction with no mined height says THAT, not 'no height and no negative'", async () => {
+  const s = await askOneSource(TXID, src("a"), 500, canned(200, JSON.stringify({ txid: TXID, confirmations: 0 })));
+  assert.equal(s.state, "cannot-verify");
+  assert.match(s.detail, /names the transaction but reports no mined height/);
+});
+
 test("a source answering about a DIFFERENT transaction is refused", async () => {
   const s = await askOneSource(TXID, src("a"), 500, canned(200, JSON.stringify({ txid: OTHER, blockHeight: 999 })));
   assert.equal(s.state, "cannot-verify");
