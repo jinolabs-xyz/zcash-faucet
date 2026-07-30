@@ -14,7 +14,7 @@ import { config, ZATOSHI_PER_TAZ } from "@/lib/config";
 import { pingBackend } from "@/lib/zcash/lightwalletd";
 import { safeBalance } from "@/lib/zcash/send";
 import { getNodeStatus } from "@/lib/zcash/nodeStatus";
-import { ledgerHealth } from "@/lib/db";
+import { cachedLedgerHealth } from "@/lib/db";
 import { ledgerBlocksServing } from "@/lib/db/probe";
 import { withApi } from "@/lib/api";
 
@@ -22,12 +22,13 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export const GET = withApi("ready", async () => {
-  const [backend, balanceZat, node, ledger] = await Promise.all([
-    pingBackend(),
-    safeBalance(),
-    getNodeStatus(),
-    ledgerHealth(),
-  ]);
+  const [backend, balanceZat, node] = await Promise.all([pingBackend(), safeBalance(), getNodeStatus()]);
+  // SYNCHRONOUS and last-known, never awaited (#234). #228 awaited a real query
+  // here, which put an IO call on the readiness critical path: the exact coupling
+  // #171 removed from the tip oracle, on the endpoint the watchdog pages on and
+  // redeploy rolls back on. A background timer keeps this fresh and staleness
+  // degrades it to "unknown" rather than leaving a stale "ok" in place.
+  const ledger = cachedLedgerHealth();
 
   // Order the checks cheapest-signal first so the reason is the most upstream cause.
   // "frozen" comes before "syncing" and is deliberately distinct: syncing is a
