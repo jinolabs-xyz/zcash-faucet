@@ -62,6 +62,18 @@ export async function register() {
   signalsTimer.unref(); // never keep the process alive for a diagnostic
   void emitSignals(); // one at boot, so a restart does not blind us for ten minutes
 
+  // Keep the ledger verdict fresh in the background so /api/ready can read it
+  // synchronously (#234). The timer is what makes staleness reachable: if it stops,
+  // the cached value ages out and readiness reports "unknown" instead of serving a
+  // stale "ok" forever. unref'd, because a health probe must never be the reason
+  // the process refuses to exit.
+  const { refreshLedgerHealthNow, PROBE_EVERY_MS } = await import("@/lib/db");
+  const ledgerTimer = setInterval(() => void refreshLedgerHealthNow(), PROBE_EVERY_MS);
+  ledgerTimer.unref();
+  // One at boot, fire-and-forget. Until it lands, readiness reads "unknown", which
+  // does not block serving: a ledger nobody has asked about yet has not failed.
+  void refreshLedgerHealthNow();
+
   // Warm the independent tip cache so the first readiness check can already tell
   // whether our node is following the chain (#170). Fire-and-forget: never block
   // boot on a public endpoint.

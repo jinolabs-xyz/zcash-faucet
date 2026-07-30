@@ -54,6 +54,29 @@ export interface LedgerHealth {
  */
 const PROBE_TIMEOUT_MS = 2000;
 
+/*
+ * MEASURED LIMIT, and it is the opposite of reassuring, so it is written here
+ * rather than left for someone to assume their way past. Asked by SDE-Infra while
+ * reviewing this: on a loaded box, does a slow-but-fine ledger read land in
+ * "unknown" or get called a definite failure? Neither, on the backend we deploy.
+ *
+ *   sync read 600ms vs a 100ms timeout   ->  state=ok,      elapsed 601ms
+ *   async read 600ms vs a 100ms timeout  ->  state=unknown, elapsed 101ms
+ *
+ * better-sqlite3 is SYNCHRONOUS. A slow read blocks the event loop, so the timer
+ * below cannot fire until the read has already finished. The timeout is therefore
+ * INERT for sqlite and only functions for D1, where the query is a real await.
+ *
+ * The good half: slowness can never be reported as "broken" on either backend, so
+ * a loaded box cannot manufacture a 503. The bad half: "unknown" is effectively
+ * unreachable in production, so /api/ready simply answers 200 LATE, and whoever is
+ * polling hits their own timeout instead. That makes the slow-versus-definite
+ * boundary a property of the CALLER's budget, not of this module, and any
+ * mitigation that waits for `ledger.state === "unknown"` to appear on the box will
+ * wait forever. Fixing it properly means moving the read off the request thread,
+ * which is a bigger change than this one and not obviously worth it.
+ */
+
 /**
  * Does NOT create or migrate anything. `read` is a plain SELECT against a table
  * the schema guarantees, so a passing probe means the ledger is readable, not that
@@ -101,4 +124,86 @@ export async function probeLedger(
 /** True only for a definite failure. Never for unknown. See the module comment. */
 export function ledgerBlocksServing(health: LedgerHealth): boolean {
   return health.state === "broken";
+}
+
+/* ==========================================================================
+ * Getting the read OFF the readiness path (#234).
+ *
+ * #228 put `await ledgerHealth()` inside /api/ready. The CTO called that a
+ * regression in the thing #171 exists to prevent, and they are right: a network or
+ * IO call on the readiness critical path couples our availability to how fast that
+ * call answers, and /api/ready is what the watchdog pages on and what redeploy
+ * rolls back on. #171 fixed the identical mistake for the tip oracle by making the
+ * value timer-refreshed and having readers read last-known synchronously. Same fix
+ * here, same shape, deliberately.
+ *
+ * WHAT THIS BUYS, precisely, because it is less than it looks:
+ *
+ *   1. readiness never AWAITS a ledger read, so its latency stops being a function
+ *      of one, and at most one read per interval can cost anything at all.
+ *   2. `unknown` becomes REACHABLE. Before, on sqlite, it was unreachable: a slow
+ *      read blocked the timer that was supposed to fire, so the state machine had a
+ *      branch nothing could enter. Now staleness produces it, which is the state
+ *      Infra needs for #229 and could not observe.
+ *
+ * WHAT IT DOES NOT BUY, and this is the honest limit rather than a caveat. Node is
+ * single-threaded and better-sqlite3 is SYNCHRONOUS, so a slow read blocks the event
+ * loop wherever it is called from. Moving it to a timer means readiness does not
+ * wait for it, NOT that a wedged sqlite read stops stalling in-flight responses. On
+ * D1 the coupling is genuinely gone, since that query is a real await. Removing it
+ * for sqlite means moving the read to a worker thread, which is a larger change than
+ * this and is not obviously worth it at the measured margin (Infra: 0.39 to 0.66s of
+ * server-side work against an 8s budget, and the probe is not what costs it).
+ * ========================================================================== */
+
+/** How often the background timer re-probes. Matches the oracle's cadence. */
+export const PROBE_EVERY_MS = 30_000;
+
+/**
+ * Beyond this we stop claiming to know, even if the last answer was `ok`.
+ *
+ * This is the whole reason the cache is not just a cache. A dead timer that leaves
+ * the last `ok` in place forever is a check that reports health it never
+ * re-established, which is the failure mode of every cache in this repo and the one
+ * #175's 812 false recoveries were made of. Three intervals, so two missed refreshes
+ * are tolerated and the third stops the claim.
+ */
+export const MAX_AGE_MS = 3 * PROBE_EVERY_MS;
+
+export interface LedgerCacheEntry {
+  health: LedgerHealth;
+  at: number;
+}
+
+/**
+ * The age rule, pure. Given what we last learned and when, what may we claim now?
+ *
+ * Pure and here rather than beside the cache, for the reason decide.ts and
+ * chainFreshness are: the branches worth testing are cold-start and a dead timer,
+ * and neither should need a database or a clock to reach.
+ *
+ * THE STATE ITSELF IS NOT HERE, and that is deliberate and hard-won. It lived in
+ * this module first, backed by an ordinary module-level variable, and it did not
+ * work: `register()` refreshed one instance of this module while `/api/ready` read
+ * another, so the timer ran, the probe found the broken ledger, and readiness still
+ * answered 200 with "has not been probed yet". Seventeen unit tests passed while the
+ * feature was inert. The repo already had the answer, in `db/index.ts`: state that
+ * must survive Next's module boundaries goes on `globalThis`, exactly as the driver
+ * does. So the cache lives next to the driver and this stays a rule about ages.
+ */
+export function verdictFor(entry: LedgerCacheEntry | null, now: number): LedgerHealth {
+  if (entry === null) {
+    return { state: "unknown", detail: "the ledger has not been probed yet, so its state is unestablished" };
+  }
+  const age = now - entry.at;
+  if (age > MAX_AGE_MS) {
+    // Deliberately discards a stale `ok`. An answer this old is not evidence.
+    return {
+      state: "unknown",
+      detail:
+        `the last ledger probe was ${Math.round(age / 1000)}s ago (limit ${Math.round(MAX_AGE_MS / 1000)}s), ` +
+        `so its verdict of "${entry.health.state}" is too old to rely on and the refresh timer may be dead`,
+    };
+  }
+  return entry.health;
 }

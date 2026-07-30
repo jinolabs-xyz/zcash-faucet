@@ -22,9 +22,16 @@ import {
   SPEND_CHALLENGE_SQL,
   PURGE_CHALLENGES_SQL,
 } from "./sql.ts";
-import { probeLedger, type LedgerHealth } from "./probe.ts";
+import { probeLedger, verdictFor, PROBE_EVERY_MS, type LedgerCacheEntry, type LedgerHealth } from "./probe.ts";
 
-const g = globalThis as unknown as { __faucetDriver?: DbDriver };
+const g = globalThis as unknown as {
+  __faucetDriver?: DbDriver;
+  // On globalThis for the same reason the driver is: Next gives instrumentation and
+  // the route handlers different instances of a module, so a plain module variable
+  // is refreshed in one and read as empty in the other (#234).
+  __ledgerHealth?: LedgerCacheEntry | null;
+  __ledgerProbeInFlight?: boolean;
+};
 function driver(): DbDriver {
   return (g.__faucetDriver ??=
     config.dbBackend === "d1" ? new D1Driver(config.d1ProxyUrl, config.d1ProxySecret) : new SqliteDriver());
@@ -164,6 +171,50 @@ export async function spendChallenge(sig: string, exp: number, now: number): Pro
 export async function ledgerHealth(): Promise<LedgerHealth> {
   return probeLedger((sql, params) => driver().get(sql, params));
 }
+
+/**
+ * Re-probe and store. Never throws: probeLedger turns every failure into a state,
+ * and a timer callback that throws can take the timer with it.
+ */
+export async function refreshLedgerHealthNow(): Promise<void> {
+  // Coalesce, as the tip oracle does. Without it a slow read plus a fast timer
+  // queues reads behind each other and the backlog outlives the problem.
+  if (g.__ledgerProbeInFlight) return;
+  g.__ledgerProbeInFlight = true;
+  try {
+    const health = await probeLedger((sql, params) => driver().get(sql, params));
+    g.__ledgerHealth = { health, at: Date.now() };
+  } finally {
+    g.__ledgerProbeInFlight = false;
+  }
+}
+
+/**
+ * The verdict for a caller that must not block (#234): SYNCHRONOUS, last-known.
+ *
+ * Kicks a background refresh whenever it has nothing fresh to say, which is what
+ * makes this self-healing rather than dependent on a timer having armed. That is
+ * copied from getExternalTip deliberately, and it is the reason the oracle survived
+ * the same module-instance problem that broke my first attempt here: a reader that
+ * refreshes converges on its own, a purely passive reader stays empty forever.
+ *
+ * Fire-and-forget, never awaited, so a slow or wedged ledger cannot make readiness
+ * slow. Cold start reads "unknown", which does not block serving: a ledger nobody
+ * has asked about yet has not failed.
+ */
+export function cachedLedgerHealth(now: number = Date.now()): LedgerHealth {
+  const verdict = verdictFor(g.__ledgerHealth ?? null, now);
+  if (verdict.state === "unknown") void refreshLedgerHealthNow();
+  return verdict;
+}
+
+/** Test seam: globalThis state would otherwise leak between cases. */
+export function resetLedgerHealthCache(): void {
+  g.__ledgerHealth = null;
+  g.__ledgerProbeInFlight = false;
+}
+
+export { PROBE_EVERY_MS };
 
 export interface FarmingSignals {
   claims1h: number;
