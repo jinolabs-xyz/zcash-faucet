@@ -7,11 +7,12 @@
 #                    Models "was serving before the deploy, new build never
 #                    becomes ready", which needs ready true at the pre-deploy
 #                    check and false during the health gate.
-#   $STUB_CURL_TIMEOUT  set -> every call exits 28 with no output, like --max-time
-#                       being exceeded. This is the case the old stub could not
-#                       express at all, so "answered no" and "did not answer" were
-#                       the same event and no test of the difference could exist
-#                       (#229).
+#   $STUB_CURL_TIMEOUT  set -> every call exits 28, like --max-time being exceeded.
+#   $STUB_CURL_RC       set -> every call exits with that status. 7 is connection
+#                       refused, which is a DIFFERENT thing from a timeout: after the
+#                       deadline, refused means nothing is listening and the build did
+#                       not come up, so it must still roll back. Collapsing 7 into 28
+#                       was a regression, and the stub could not express either (#229).
 #   $STUB_READY_REASON  the reason string to put in the 503 body.
 #
 # Two calling conventions, because the callers differ. With -f (probe(), health) an
@@ -23,6 +24,7 @@ echo "curl $*" >> "${STUB_LOG:?}"
 
 # A transport failure beats everything: no body, no status, just curl's code.
 [ -n "${STUB_CURL_TIMEOUT:-}" ] && exit 28
+[ -n "${STUB_CURL_RC:-}" ] && exit "$STUB_CURL_RC"
 
 # Inspect the ARGS rather than pattern-matching "$*": a glob needing a leading space
 # missed -fsS when it was the first argument, so the stub reported an HTTP error as a

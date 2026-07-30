@@ -108,27 +108,53 @@ probe_state() { # $1 = health|ready ; sets PROBE_STATE + PROBE_REASON
     # -sS not -fsS: a 503 body carries the reason and -f throws it away.
     body="$(curl -sS --max-time 8 -w '\n%{http_code}' "$FAUCET_URL/api/$1" 2>/dev/null)"
     rc=$?
-    # Any nonzero curl status means we did not get an answer: 28 timeout, 7 refused,
-    # 6 DNS, 35/56 transport. None of them is the app saying no, so none may look
-    # like it.
-    if [ "$rc" -ne 0 ]; then
-      PROBE_STATE="cannot-tell"
-      PROBE_REASON="no answer from /api/$1 (curl $rc)"
-      return 0
-    fi
+    # Not every nonzero curl status means the same thing, and collapsing them was a
+    # regression: a build that starts and then crash-loops leaves nothing listening, so
+    # curl returns 7, and calling that "no evidence" means it is never rolled back.
+    #
+    #   7  connection refused  -> nothing is listening. After the deadline that IS
+    #                             evidence the build did not come up.
+    #   28 timeout             -> something accepted the connection and was too slow.
+    #                             Ambiguous, and the case #234 made reachable.
+    #   6/35/56 DNS and TLS    -> the probe could not be performed.
+    case "$rc" in
+      0) ;;
+      7)  PROBE_STATE="not-ready"; PROBE_REASON="connection refused on /api/$1, nothing is listening"; return 0 ;;
+      28) PROBE_STATE="cannot-tell"; PROBE_REASON="timed out on /api/$1 after 8s, which is not an answer"; return 0 ;;
+      *)  PROBE_STATE="cannot-tell"; PROBE_REASON="could not probe /api/$1 (curl $rc)"; return 0 ;;
+    esac
     code="${body##*$'\n'}"
     PROBE_REASON="$(printf '%s' "$body" | grep -o '"reason":"[^"]*"' | head -n1 | cut -d'"' -f4)"
     case "$code" in
       2*) PROBE_STATE="ready" ;;
+      # A redirect is an answer too. Caddy 308s http->https once a domain is set, which
+      # this file already comments on, and leaving 3xx out made that config permanently
+      # cannot-tell, so rollback would never fire again on it.
+      3*) PROBE_STATE="not-ready"; PROBE_REASON="${PROBE_REASON:-HTTP $code redirect, so the probe URL is wrong (http vs https?)}" ;;
       # An answer with a status is the app speaking, which IS evidence.
       [45]*) PROBE_STATE="not-ready" ;;
-      *) PROBE_STATE="cannot-tell" ;;
+      *) PROBE_STATE="cannot-tell"; PROBE_REASON="${PROBE_REASON:-unrecognised HTTP status $code}" ;;
     esac
     return 0
   fi
-  # No published port: fall back to the in-container probe, which cannot separate
-  # these three, so it reports the two it can and never invents the third.
-  if probe "$1"; then PROBE_STATE="ready"; else PROBE_STATE="cannot-tell"; fi
+  # No published port, which is the DEFAULT and therefore production. This path must
+  # still be able to say "no", or auto-rollback silently stops existing: `probe()`
+  # exits 1 for a definite !r.ok AND for a fetch throw, so mapping its failure to
+  # cannot-tell disabled the rollback entirely on every box without a URL. That is what
+  # the first version of this function did.
+  #
+  # So ask in a form that separates them: 1 for an answer that was not ok, 3 for no
+  # answer at all. Exit 2 is reserved by node itself for an uncaught exception.
+  local out rc
+  out="$(compose exec -T faucet node -e \
+    "fetch('http://127.0.0.1:3000/api/$1').then(r=>{if(r.ok)process.exit(0);console.log(r.status);process.exit(1)}).catch(()=>process.exit(3))" \
+    2>/dev/null)"
+  rc=$?
+  case "$rc" in
+    0) PROBE_STATE="ready" ;;
+    1) PROBE_STATE="not-ready"; PROBE_REASON="HTTP ${out:-unknown} from /api/$1 (in-container probe cannot read the body)" ;;
+    *) PROBE_STATE="cannot-tell"; PROBE_REASON="the in-container probe could not reach the app" ;;
+  esac
 }
 
 # The reasons a rollback cannot fix, because the cause is not the image. Matched on
@@ -267,6 +293,14 @@ fi
 probe_state ready
 final_state="$PROBE_STATE"
 final_reason="$PROBE_REASON"
+
+# A build that became ready just after the deadline is not a failure, and rolling it
+# back would revert a working faucet for being three seconds late.
+if [ "$final_state" = "ready" ]; then
+  log "the gate timed out, but the faucet IS ready now, so nothing is being rolled back"
+  log "  It became ready after ${HEALTH_TIMEOUT}s. Raise REDEPLOY_HEALTH_TIMEOUT if this recurs."
+  exit 0
+fi
 
 if [ "$final_state" = "cannot-tell" ]; then
   # We never got an answer. That is not evidence the new build is bad, and reverting on

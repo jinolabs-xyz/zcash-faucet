@@ -99,7 +99,11 @@ check "a never-answering probe does NOT roll back" \
   "[ \"\$(img zcash-faucet:latest)\" != 'sha256:old' ]"
 check "and exits 1, because a faucet nobody can probe is a page" "[ $rc -eq 1 ]"
 check "and says a timeout is not a negative" "grep -q 'not a negative' '$T/tmo.log'"
-check "and offers the manual rollback rather than doing it" "grep -q 'rollback' '$T/tmo.log'"
+# NOT grep -q 'rollback': that word is in the always-present "tagged
+# zcash-faucet:previous for rollback" line, so the assertion passed whether or not the
+# hint existed. Match the hint itself.
+check "and offers the manual rollback rather than doing it" \
+  "grep -q 'redeploy.sh rollback\|\$0 rollback' '$T/tmo.log'"
 
 echo "== redeploy: a DATA failure is not rolled back, because code is not the cause (#229)"
 # The ledger lives on a volume no deploy touches, so the previous image would meet the
@@ -116,6 +120,37 @@ check "and says the cause is DATA, not code" "grep -q 'DATA, not code' '$T/ledg.
 check "and says a rollback would not have fixed it" \
   "grep -q 'would not fix this' '$T/ledg.log'"
 check "and names the reason it read from the app" "grep -q 'ledger unreadable' '$T/ledg.log'"
+
+echo "== redeploy: connection REFUSED still rolls back, it is not a timeout (#229)"
+# After the deadline, refused means nothing is listening, so the build did not come up.
+# I had collapsed curl 7 into 28 as "no evidence", which stopped a crash-looping build
+# from ever being rolled back.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_READY_MAX=1 STUB_CURL_RC=7 bash "$REDEPLOY" > "$T/refused.log" 2>&1
+rc=$?
+check "a refused connection DOES roll back" "[ \"\$(img zcash-faucet:latest)\" = 'sha256:old' ]"
+check "and exits 2, because service was restored" "[ $rc -eq 2 ]"
+check "and says nothing is listening" "grep -q 'nothing is listening' '$T/refused.log'"
+
+echo "== redeploy: the DEFAULT no-URL path can still say NO, so rollback survives (#229)"
+# The regression that mattered most: with REDEPLOY_FAUCET_URL empty, which is the
+# default and therefore production, probe_state used to map every in-container failure
+# to cannot-tell and skip the rollback entirely. This path was never modelled, which is
+# why it shipped green.
+redeploy_env
+unset REDEPLOY_FAUCET_URL
+export STUB_EXEC_READY="$T/execready"
+touch "$STUB_HEALTH" "$STUB_READY" "$STUB_EXEC_READY"   # ready before the deploy
+rm -f "$STUB_EXEC_READY"                                # and not after it
+bash "$REDEPLOY" > "$T/nourl.log" 2>&1
+rc=$?
+check "a failing build on the exec path DOES roll back" \
+  "[ \"\$(img zcash-faucet:latest)\" = 'sha256:old' ]"
+check "and exits 2, not 1" "[ $rc -eq 2 ]"
+check "and does NOT claim the probe never answered" \
+  "! grep -q 'never answered' '$T/nourl.log'"
+unset STUB_EXEC_READY
 
 echo "== redeploy: not ready beforehand means liveness-only gate (syncing node)"
 redeploy_env

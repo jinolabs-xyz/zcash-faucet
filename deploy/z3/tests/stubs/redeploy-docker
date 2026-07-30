@@ -7,6 +7,28 @@ echo "docker $*" >> "${STUB_LOG:?}"
 IMG="${STUB_IMAGES:?}"
 
 case "${1:-}" in
+  compose)
+    # `compose exec -T faucet node -e <script>`: the in-container probe, which is the
+    # DEFAULT path because the app port is expose-only. It was not modelled at all, so
+    # every no-URL behaviour was untested and a regression that disabled auto-rollback
+    # on exactly that path shipped green (#229).
+    #
+    #   STUB_EXEC_UNUSABLE  the probe mechanism itself cannot run    -> exit 1, no output
+    #   STUB_EXEC_READY     file exists -> the app answers ok        -> exit 0
+    #   otherwise           the app answers, but not ok              -> print 503, exit 1
+    #   STUB_EXEC_THROW     the fetch throws, i.e. no answer at all  -> exit 3
+    if printf '%s\n' "$@" | grep -qx "exec"; then
+      echo "compose exec $*" >> "${STUB_LOG:?}"
+      [ -n "${STUB_EXEC_UNUSABLE:-}" ] && exit 1
+      # `node -e 'process.exit(0)'` is the usability probe, not a health probe.
+      printf '%s\n' "$@" | grep -q "process.exit(0)" && exit 0
+      [ -n "${STUB_EXEC_THROW:-}" ] && exit 3
+      if [ -e "${STUB_EXEC_READY:-/nonexistent}" ]; then exit 0; fi
+      echo 503
+      exit 1
+    fi
+    ;;
+
   image)
     # image inspect -f '{{.Id}}' <tag>
     shift; shift 2>/dev/null
