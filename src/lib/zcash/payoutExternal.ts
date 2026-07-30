@@ -26,6 +26,24 @@
  * Hence: POSITIVE EVIDENCE ONLY, and three states everywhere.
  */
 
+/**
+ * DELIBERATELY UNCALLED. This is a manual incident tool, one txid at a time, run by a
+ * human who already suspects a payout is dead. It is not wired into the payout path
+ * and must not be (#238, ruled).
+ *
+ * Wiring it per payout would send every payout txid, including shielded ones, to one
+ * third party from our own IP seconds after we created it. That is three changes at
+ * once from what PRIVACY.md promises: user-initiated becomes server-initiated,
+ * transparent-only becomes all sends, and the timing is a strong claim of authorship.
+ * The result would be one company holding a complete timestamped list of our payouts.
+ *
+ * And there is nothing to buy with it, which is what settles it: #240 detects a dead
+ * payout from arithmetic we own, our tip past the expiry with the transaction not in a
+ * block, so the alarm already works with nothing disclosed. The question was never
+ * alarm versus privacy. It was whether to add bulk automated disclosure on top of an
+ * alarm we already have.
+ */
+
 /** `absent` is a claim about the CHAIN. `cannot-verify` is a claim about the LOOKUP. */
 export type ExternalState = "confirmed" | "absent" | "cannot-verify";
 
