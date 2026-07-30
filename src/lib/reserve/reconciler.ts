@@ -24,6 +24,7 @@ import { getSendQueue } from "../zcash/queue.ts";
 import { classifySweep, decideRefilling, shouldStartStep } from "./decide.ts";
 import type { ShieldFreshness } from "../zcash/shieldGate.ts";
 import { getRefiller } from "./refiller.ts";
+import { classifyStepFailure, shouldAttempt, type StepOutcome } from "./stepFailure.ts";
 
 export interface ReserveStatus {
   targetTaz: number;
@@ -55,6 +56,18 @@ export interface ReserveStatus {
   lastRefusal: { state: ShieldFreshness; reason: string; lag: number | null } | null;
   /** UTXOs the backend last reported as still shieldable, when it says. */
   remainingUTXOs: number | null;
+  /**
+   * Consecutive ticks where the step THREW. Separate from emptySweeps because an
+   * empty sweep means we tried and there was nothing, while this means we could not
+   * even ask, and a repeated throw used to reach only a log line.
+   */
+  failedSteps: number;
+  /**
+   * Why the last step threw, and whether it is a legitimate steady state. "waiting"
+   * is having no coinbase to shield, normal on a testnet where we lose almost every
+   * block race. "error" is anything we do not recognise.
+   */
+  lastFailure: { outcome: StepOutcome; reason: string } | null;
 }
 
 /**
@@ -98,6 +111,9 @@ class ReserveReconciler {
   private emptySweeps = 0;
   private shieldRefusals = 0;
   private forbiddenTicks = 0;
+  private failedSteps = 0;
+  private lastFailure: { outcome: StepOutcome; reason: string } | null = null;
+  private ticksSinceAttempt = 0;
   private lastRefusal: ReserveStatus["lastRefusal"] = null;
   private remainingUTXOs: number | null = null;
 
@@ -180,6 +196,14 @@ class ReserveReconciler {
       });
       if (!start) return;
 
+        // Back off a step that keeps throwing, rather than tightening a loop that
+        // cannot succeed. decide.ts is untouched: the hysteresis rule is correct and
+        // the problem was never the decision, it was hammering an impossible action
+        // every 30 seconds and reporting nothing.
+        this.ticksSinceAttempt++;
+        if (!shouldAttempt(this.failedSteps, this.ticksSinceAttempt)) return;
+        this.ticksSinceAttempt = 0;
+
       this.stepInFlight = true;
       getSendQueue()
         // Same backstop as a drip (#88). A shield sweep goes through the same
@@ -187,6 +211,11 @@ class ReserveReconciler {
         // stall every queued claim behind it just as surely as a stuck send.
         .run(() => getRefiller().step(), config.sendTaskDeadlineMs)
         .then((outcome) => {
+          // A step that returned is a step that could ask, so the failure state clears
+          // here rather than only on success: without this the backoff would ratchet to
+          // ten minutes and stay there for the life of the process.
+          this.failedSteps = 0;
+          this.lastFailure = null;
           this.remainingUTXOs = outcome.remainingUTXOs ?? null;
 
           // A refusal is handled BEFORE the empty-sweep path and never touches
@@ -250,7 +279,21 @@ class ReserveReconciler {
           }
         })
         .catch((err) => {
-          console.error(`[reserve] refill step failed (retrying next tick): ${err instanceof Error ? err.message : err}`);
+          const reason = err instanceof Error ? err.message : String(err);
+          const outcome = classifyStepFailure(reason);
+          this.failedSteps++;
+          this.lastFailure = { outcome, reason };
+          // Sampled like every other repeating state here, and worded by outcome:
+          // having no coinbase to shield is WAITING on this testnet, not a fault, and
+          // saying "failed" every tick is how a real fault gets lost in the noise.
+          if (shouldSay(this.failedSteps)) {
+            const verb = outcome === "waiting" ? "cannot sweep yet" : "FAILED";
+            const log = outcome === "waiting" ? console.log : console.error;
+            log(
+              `[reserve] refill step ${verb} (${this.failedSteps} consecutive): ${reason}` +
+                sampledNote(this.failedSteps),
+            );
+          }
         })
         .finally(() => {
           this.stepInFlight = false;
@@ -277,6 +320,8 @@ class ReserveReconciler {
       shieldRefusals: this.shieldRefusals,
       lastRefusal: this.lastRefusal,
       remainingUTXOs: this.remainingUTXOs,
+      failedSteps: this.failedSteps,
+      lastFailure: this.lastFailure,
     };
   }
 }
