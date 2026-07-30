@@ -158,6 +158,33 @@ export function chainFreshness(
     };
   }
 
+  // AHEAD is a different fact from WITHIN, and folding them together made this
+  // string state something untrue (#211). Read off the live endpoint during the
+  // recovery pre-flight: lag -91 with the reason "our node is within 5 blocks of
+  // the network (lag -91)". The verdict was right and the sentence was not, and a
+  // human read it while deciding whether to move money.
+  //
+  // Worth its own branch rather than a tweak to the number, because a reason that
+  // recites the safe-path sentence for every safe input is exactly what would hide
+  // a threshold bug: the watchdog's 812 recoveries were the same failure, scaled up.
+  if (lag < 0) {
+    return {
+      state: "safe",
+      nodeHeight,
+      externalHeight,
+      lag,
+      // Deliberately claims LESS than the within-threshold case. A node far ahead of
+      // every external reference is also what a node on its own fork looks like, and
+      // height alone cannot tell those apart: that needs same-rules (branch id) or
+      // same-history (hash at a common height), neither of which this gate measures.
+      // So it says why being ahead is fine for EXPIRY and stops there.
+      reason:
+        `our node is ${-lag} blocks AHEAD of the independent reference. Normal for a node ` +
+        `that mines, and safe for an expiry height because ahead cannot be stale. It is not ` +
+        `evidence that we agree with the network, which height alone cannot show`,
+    };
+  }
+
   return {
     state: "safe",
     nodeHeight,
