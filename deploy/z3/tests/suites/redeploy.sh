@@ -149,12 +149,10 @@ export STUB_EXEC_HEALTH="$T/exechealth" STUB_EXEC_READY="$T/execready"
 # Live throughout, and ready ONLY for the pre-deploy check, which is the shape the
 # readiness gate judges: was serving before, new build never gets there.
 touch "$STUB_HEALTH" "$STUB_READY" "$STUB_EXEC_HEALTH" "$STUB_EXEC_READY"
-# Ready before the gate, gone during it: remove the marker after the pre-deploy probe
-# by making it single-use, the same trick STUB_READY_MAX plays on the URL path.
-( sleep 1; rm -f "$STUB_EXEC_READY" ) &
-bash "$REDEPLOY" > "$T/nourl.log" 2>&1
+# Ready for the pre-deploy probe only, then not: a counter, not a timer, so there is no
+# race. STUB_EXEC_READY_MAX mirrors STUB_READY_MAX on the URL path.
+STUB_EXEC_READY_MAX=1 bash "$REDEPLOY" > "$T/nourl.log" 2>&1
 rc=$?
-wait
 check "a failing build on the exec path DOES roll back" \
   "[ \"\$(img zcash-faucet:latest)\" = 'sha256:old' ]"
 check "and exits 2, not 1" "[ $rc -eq 2 ]"

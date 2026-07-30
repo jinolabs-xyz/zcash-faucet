@@ -45,7 +45,21 @@ case "${1:-}" in
       if printf '%s\n' "$@" | grep -q '/api/health'; then
         [ -e "${STUB_EXEC_HEALTH:-${STUB_EXEC_READY:-/nonexistent}}" ] && exit 0
       else
-        [ -e "${STUB_EXEC_READY:-/nonexistent}" ] && exit 0
+        # STUB_EXEC_READY_MAX: ready for the first N calls only, then not. A COUNTER
+        # rather than a timer, mirroring STUB_READY_MAX on the URL path. My first attempt
+        # removed the marker from a background subshell after a sleep, which raced the
+        # pre-deploy probe and failed intermittently: a flaky test is worse than an
+        # untested path, because it teaches people to re-run until green.
+        if [ -e "${STUB_EXEC_READY:-/nonexistent}" ]; then
+          if [ -n "${STUB_EXEC_READY_MAX:-}" ]; then
+            cf="${STUB_EXEC_READY}.count"
+            n=$(( $(cat "$cf" 2>/dev/null || echo 0) + 1 ))
+            echo "$n" > "$cf"
+            [ "$n" -le "$STUB_EXEC_READY_MAX" ] && exit 0
+          else
+            exit 0
+          fi
+        fi
       fi
       echo 503
       exit 1
