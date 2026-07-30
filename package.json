@@ -5,7 +5,7 @@
   "description": "Zcash testnet (TAZ) faucet \u2014 Next.js + public lightwalletd backend, Z3-era stack (zcashd is EOL).",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start -H 0.0.0.0 -p ${PORT:-3000}",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
@@ -24,7 +24,7 @@
     "@noble/secp256k1": "^3.1.0",
     "@scure/base": "^2.2.0",
     "better-sqlite3": "^11.8.1",
-    "next": "^15.5.22",
+    "next": "^16.2.12",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "zod": "^3.24.1"
