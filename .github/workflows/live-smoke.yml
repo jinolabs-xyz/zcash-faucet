@@ -25,7 +25,12 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 23
+          # Matches the Dockerfile (node:22-slim), like every job in ci.yml. #257
+          # moved those five pins off 23 and missed this one, so the workflow that
+          # probes the LIVE faucet was the last place still testing on a runtime
+          # production does not have. The repo suite now asserts this rather than
+          # leaving it to whoever remembers.
+          node-version: 22
       # No npm ci: the probe has zero dependencies, checkout is enough.
       - name: probe the live faucet
         env:
