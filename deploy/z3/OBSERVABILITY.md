@@ -3,7 +3,11 @@
 Two independent paths, because they answer different questions.
 
 **Alerts** push: the watchdog already decides when the faucet is genuinely
-un-servable and posts to a webhook. That is the thing that wakes someone up.
+un-servable and posts to a webhook **when one is configured**. That is the thing
+that would wake someone up, and today it wakes nobody: `FAUCET_ALERT_URL` is
+unset on the box and #215, which wires it, is deferred. The detection is real and
+the delivery is not, so treat every alert path below as writing to a log until
+somebody pastes a URL.
 
 **Metrics** pull: `faucet-metrics.sh` writes the faucet's own state to a
 Prometheus textfile every 30 seconds, so you can graph balance, queue depth
