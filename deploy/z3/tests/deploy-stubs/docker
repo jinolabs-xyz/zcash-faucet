@@ -7,6 +7,27 @@ echo "docker $*" >> "${STUB_LOG:?}"
 
 mk() { printf '%s\n%s\n' "$2" "$3" > "${STUB_CONTAINERS:?}/$1"; }
 
+# The wallet reads its config into memory at start. Copy the faucet's pwhash (or its
+# pre-#176 plaintext password) into the "loaded" file, which is what the curl stub
+# checks a credential against. Called ONLY on create and on restart, deliberately:
+# `up -d` against an existing container reloads nothing, and modelling that is the
+# whole point of this stub.
+zallet_load_config() {
+  [ -n "${STUB_ZALLET_LOADED:-}" ] || return 0
+  # A wallet asked to restart that did not pick the new config up: the state production
+  # was actually found in, so it has to be reachable from a test. Scoped to the RESTART
+  # only ($1 = restart), because suppressing the initial load as well makes the wallet
+  # simply unreachable, and the deploy then refuses for that reason instead, proving
+  # something adjacent to what the test claims.
+  if [ "${1:-}" = restart ] && [ "${STUB_ZALLET_IGNORE_RESTART:-0}" = "1" ]; then return 0; fi
+  cfg="${STUB_ZALLET_CONFIG:-}"
+  [ -n "$cfg" ] && [ -f "$cfg" ] || return 0
+  val="$(sed -n 's/^[[:space:]]*pwhash[[:space:]]*=[[:space:]]*"\(.*\)".*/\1/p' "$cfg" | tail -n1)"
+  [ -n "$val" ] || val="$(sed -n 's/^[[:space:]]*password[[:space:]]*=[[:space:]]*"\(.*\)".*/\1/p' "$cfg" | tail -n1)"
+  printf '%s' "$val" > "$STUB_ZALLET_LOADED"
+  echo "zallet-loaded-config" >> "${STUB_LOG:-/dev/null}"
+}
+
 case "${1:-}" in
   run)
     # One-off containers: docker run --rm -v <vol>:/data busybox <cmd> <args>
@@ -80,6 +101,18 @@ case "${1:-}" in
       [ -f "${STUB_CONTAINERS:?}/zcash-faucet-$svc-1" ] && echo "zcash-faucet-$svc-1"
       exit 0
     fi
+    # restart <service>: the ONLY thing besides creation that makes the wallet
+    # re-read its config. deploy.sh has to use this rather than `up -d`.
+    if printf '%s\n' "$@" | grep -qx "restart"; then
+      for svc in zebra zallet; do
+        if printf '%s\n' "$@" | grep -qx "$svc"; then
+          [ -f "${STUB_CONTAINERS:?}/z3-testnet-$svc-1" ] || { echo "stub: no such service $svc to restart" >&2; exit 1; }
+          echo "restart z3-testnet-$svc-1" >> "$STUB_LOG"
+          [ "$svc" = zallet ] && zallet_load_config restart
+        fi
+      done
+      exit 0
+    fi
     # up -d [services...]
     if printf '%s\n' "$@" | grep -qx "up"; then
       if printf '%s\n' "$@" | grep -qx "docker-compose.faucet.yml"; then
@@ -91,7 +124,14 @@ case "${1:-}" in
         echo "overlay-up" >> "$STUB_LOG"
       else
         for svc in zebra zallet; do
-          printf '%s\n' "$@" | grep -qx "$svc" && mk "z3-testnet-$svc-1" running z3-testnet
+          printf '%s\n' "$@" | grep -qx "$svc" || continue
+          # Existed already? Then this is a no-op, exactly as real compose treats an
+          # unchanged container spec, and the loaded config is left ALONE. That is the
+          # production bug: a rewritten bind-mounted file does not change the spec.
+          fresh=0
+          [ -f "${STUB_CONTAINERS:?}/z3-testnet-$svc-1" ] || fresh=1
+          mk "z3-testnet-$svc-1" running z3-testnet
+          [ "$fresh" = 1 ] && [ "$svc" = zallet ] && zallet_load_config create
         done
       fi
       exit 0
