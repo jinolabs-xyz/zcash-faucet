@@ -20,6 +20,8 @@ interface Status {
   miner?: { active: boolean };
   reserve?: { targetTaz: number; lowTaz: number; refilling: boolean; spendableTaz: number | null };
   donationAddress?: string;
+  /** Mainnet, for project upkeep. Empty when unset OR rejected by config validation. */
+  maintenanceAddress?: string;
   challenge?: "pow" | "turnstile" | "none";
 }
 type CopyTarget = "txid" | "receipt" | "donation";
@@ -921,6 +923,23 @@ export default function Home() {
         </a>
         <span style={{ fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".05em", color: muted(50) }}>{status?.network ?? "testnet"} · {status?.sender ?? "…"} backend</span>
         <a className="btn btn-ghost btn-sm" href="/donate" style={{ padding: 0 }}>Donate TAZ</a>
+        {/* Bottom right, and deliberately a LINK rather than the address itself.
+            Handing over an address correctly is /donate's whole job: it is server
+            rendered, so the address is readable with JavaScript off, and it has
+            the room to say plainly that this one is mainnet. A footer widget has
+            neither property, and this is real money.
+
+            Absent unless config validated it, so a rejected or unset address
+            shows nothing at all rather than an empty promise. */}
+        {status?.maintenanceAddress ? (
+          <a
+            className="btn btn-ghost btn-sm"
+            href="/donate#maintenance"
+            style={{ padding: 0, marginLeft: "auto" }}
+          >
+            Support upkeep (mainnet ZEC)
+          </a>
+        ) : null}
         
       </div>
     </div>
