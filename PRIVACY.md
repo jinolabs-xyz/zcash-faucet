@@ -55,7 +55,9 @@ purged on the same schedule as the rest of the row.
 ## Shielded-first
 
 Every place a user picks an address, **shielded is the default**. Transparent is
-an explicit opt-in toggle. Shielded recipients get a private Orchard note.
+an explicit opt-in toggle. Shielded recipients get a private Orchard note, because
+the pool an output lands in is chosen from **the receivers in your own address**,
+preferring Orchard, rather than from whichever pool the faucet happens to be holding.
 
 **The faucet's own wallet is shielded too.** It runs a Zallet wallet on its own
 node (the Z3 stack), and a drip to a shielded address is a `z_sendmany` out of a
@@ -96,6 +98,12 @@ Two limits, since the point of this page is not to flatter us:
   swap.
 - **Explorer links** (transparent sends only) point at a third-party explorer,
   and clicking one discloses the txid to them. Shielded sends show no external link.
+  **The faucet itself never tells an explorer about a payout.** It has the code to ask
+  one, and that code is deliberately never called: it is a tool an operator runs by
+  hand against a single transaction during an incident. Confirming payouts
+  automatically would hand one company a timestamped list of everything we have paid,
+  so the faucet instead detects a dead payout from its own arithmetic, by noticing its
+  tip has passed a transaction's expiry while the transaction is not in a block.
 - **`RATE_LIMIT_SALT`** must be set to a long random secret in production, or the
   address/IP hashes could be brute-forced against a small candidate set.
 
