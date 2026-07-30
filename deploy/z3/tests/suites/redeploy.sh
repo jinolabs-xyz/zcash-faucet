@@ -151,10 +151,10 @@ check "and says nothing is listening" "grep -q 'nothing is listening' '$T/refuse
 # a recorded gap, because it will be believed.
 #
 # The stub CAN now express it: STUB_EXEC_HEALTH, STUB_EXEC_READY, STUB_EXEC_READY_MAX,
-# STUB_EXEC_THROW and STUB_EXEC_UNUSABLE all exist and are driven directly in #243. The
+# STUB_EXEC_THROW and STUB_EXEC_UNUSABLE all exist and are driven directly in #244. The
 # missing piece is my understanding of the probe sequence, not the harness.
 #
-# Filed as #243. The fix itself is verified by reading and by driving probe_state against
+# Filed as #244. The fix itself is verified by reading and by driving probe_state against
 # the stub by hand; what is absent is a regression test, and that is stated rather than
 # implied by a green run.
 
