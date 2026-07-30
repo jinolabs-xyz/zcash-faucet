@@ -80,6 +80,42 @@ check "exits 2 (rolled back, did not ship)" "[ $rc -eq 2 ]"
 check "says the change did not ship" "grep -q 'did NOT ship' '$T/nr.log'"
 check "says live but never ready" "grep -q 'never became ready' '$T/nr.log'"
 check "rolled back to the previous image" "[ \"\$(img zcash-faucet:latest)\" = 'sha256:old' ]"
+# The positive control for the two cases below: a build that is genuinely not ready,
+# for a reason a rollback CAN address, must still roll back. Without this, making the
+# two new cases pass by never rolling back at all would look like a fix.
+check "and the ordinary not-ready case names the app's own reason" \
+  "grep -q 'node syncing' '$T/nr.log'"
+
+echo "== redeploy: a probe that never ANSWERS is not evidence against the build (#229)"
+# A timeout is not a negative. better-sqlite3 is synchronous, so a wedged read makes
+# readiness answer LATE rather than badly, and #234 moved the cause off the request
+# path without removing the possibility. Reverting on silence lets a slow endpoint
+# undo a good deploy.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_READY_MAX=1 STUB_CURL_TIMEOUT=1 bash "$REDEPLOY" > "$T/tmo.log" 2>&1
+rc=$?
+check "a never-answering probe does NOT roll back" \
+  "[ \"\$(img zcash-faucet:latest)\" != 'sha256:old' ]"
+check "and exits 1, because a faucet nobody can probe is a page" "[ $rc -eq 1 ]"
+check "and says a timeout is not a negative" "grep -q 'not a negative' '$T/tmo.log'"
+check "and offers the manual rollback rather than doing it" "grep -q 'rollback' '$T/tmo.log'"
+
+echo "== redeploy: a DATA failure is not rolled back, because code is not the cause (#229)"
+# The ledger lives on a volume no deploy touches, so the previous image would meet the
+# same ledger. Reverting changes only which build gets blamed, and exit 2 would say
+# nobody needs paging for a faucet that 500s every claim.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_READY_MAX=1 STUB_READY_REASON="ledger unreadable" bash "$REDEPLOY" > "$T/ledg.log" 2>&1
+rc=$?
+check "a ledger failure does NOT roll back" \
+  "[ \"\$(img zcash-faucet:latest)\" != 'sha256:old' ]"
+check "and exits 1 rather than 2, because this one needs a human" "[ $rc -eq 1 ]"
+check "and says the cause is DATA, not code" "grep -q 'DATA, not code' '$T/ledg.log'"
+check "and says a rollback would not have fixed it" \
+  "grep -q 'would not fix this' '$T/ledg.log'"
+check "and names the reason it read from the app" "grep -q 'ledger unreadable' '$T/ledg.log'"
 
 echo "== redeploy: not ready beforehand means liveness-only gate (syncing node)"
 redeploy_env

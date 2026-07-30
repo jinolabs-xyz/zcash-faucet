@@ -78,6 +78,59 @@ probe() { # $1 = health|ready, returns 0 when it answers 200
     >/dev/null 2>&1
 }
 
+# Three outcomes, because two could not tell "answered no" from "did not answer",
+# and only the first of those is evidence about the new build (#229).
+#
+# A rollback reverts CODE. It cannot fix a corrupt ledger on a volume this script
+# never touches, and it cannot fix a wedged read: better-sqlite3 is synchronous, so a
+# slow read blocks the event loop and readiness answers LATE rather than answering
+# badly (#234, and App's measurement that a 600ms read against a 100ms timeout still
+# returns ok at 601ms). Off the request path removed that cause; it did not remove the
+# possibility, so a probe that never answers must not be what authorises a revert.
+#
+# Sets PROBE_REASON to the app's own reason when it gave one, so the caller can tell a
+# node that is syncing from a ledger that is unreadable. Read from the SAME response
+# rather than a second fetch: two sequential 8s budgets against a slow endpoint is how
+# the reason goes missing exactly when it matters most.
+PROBE_REASON=""
+probe_state() { # $1 = health|ready ; echoes ready | not-ready | cannot-tell
+  PROBE_REASON=""
+  local body rc code
+  if [ -n "$FAUCET_URL" ]; then
+    # -sS not -fsS: a 503 body carries the reason and -f throws it away.
+    body="$(curl -sS --max-time 8 -w '\n%{http_code}' "$FAUCET_URL/api/$1" 2>/dev/null)"
+    rc=$?
+    case "$rc" in
+      0) ;;
+      # 28 timeout, 7 connection refused, 6 DNS, 35/56 TLS or transport. None of
+      # these is the app saying no, so none of them may look like it.
+      28|7|6|35|56) printf 'cannot-tell'; return 0 ;;
+      *) printf 'cannot-tell'; return 0 ;;
+    esac
+    code="${body##*$'\n'}"
+    PROBE_REASON="$(printf '%s' "$body" | grep -o '"reason":"[^"]*"' | head -n1 | cut -d'"' -f4)"
+    case "$code" in
+      2*) printf 'ready' ;;
+      # An answer with a status is the app speaking, which IS evidence.
+      [45]*) printf 'not-ready' ;;
+      *) printf 'cannot-tell' ;;
+    esac
+    return 0
+  fi
+  # No published port: fall back to the in-container probe, which cannot separate
+  # these three, so it reports the two it can and never invents the third.
+  if probe "$1"; then printf 'ready'; else printf 'cannot-tell'; fi
+}
+
+# The reasons a rollback cannot fix, because the cause is not the image. Matched on
+# the app's own reason string, which #228 added for exactly this.
+reason_is_not_the_code() {
+  case "$1" in
+    *"ledger unreadable"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # True when the probe mechanism itself cannot run, which is not the same as
 # the faucet being unhealthy and must never be reported as such.
 probe_usable() {
@@ -199,7 +252,37 @@ if ! probe_usable; then
   exit 2
 fi
 
-log "the new build failed the health gate after ${HEALTH_TIMEOUT}s, rolling back"
+# Before rolling back, ask WHY once more and read the app's own reason. A rollback
+# reverts code, so it is only the right move when the code is a plausible cause (#229).
+final_state="$(probe_state ready)"
+final_reason="$PROBE_REASON"
+
+if [ "$final_state" = "cannot-tell" ]; then
+  # We never got an answer. That is not evidence the new build is bad, and reverting on
+  # it means a slow or unreachable endpoint can undo a good deploy. Leave the new build
+  # running and page, because a faucet nobody can probe is not a faucet anybody should
+  # assume is fine.
+  log "NOT ROLLING BACK: the readiness probe never answered, so there is no evidence"
+  log "  against the new build. A timeout is not a negative, and reverting on one lets a"
+  log "  slow endpoint undo a good deploy."
+  log "  The new build is still running. Check it and roll back by hand if needed:"
+  log "      $0 rollback"
+  exit 1
+fi
+
+if reason_is_not_the_code "$final_reason"; then
+  # The ledger lives on a volume this script never touches, so the previous image
+  # would meet exactly the same ledger. Reverting changes nothing except which code is
+  # blamed, and exit 2 would say nobody needs paging for a faucet that 500s every claim.
+  log "NOT ROLLING BACK: the faucet is not serving, but the cause is DATA, not code"
+  log "  reason: $final_reason"
+  log "  Volumes are never touched by a deploy, so the previous image would meet the same"
+  log "  ledger. A rollback would not fix this, it would only change which build is blamed."
+  log "  Fix the ledger, then re-run this script."
+  exit 1
+fi
+
+log "the new build failed the health gate after ${HEALTH_TIMEOUT}s (reason: ${final_reason:-none given}), rolling back"
 if [ -n "$current" ]; then
   do_rollback || die "rollback failed after the health gate, the faucet may be down"
   not_shipped "the new build never became healthy"
