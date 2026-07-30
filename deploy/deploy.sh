@@ -64,6 +64,10 @@ NETNAME="z3-$NETWORK"
 say(){ printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 
 command -v docker >/dev/null || { echo "Install Docker first."; exit 1; }
+# Hard requirement, not optional. The miner-address checksum and version check is
+# the only thing standing between a typo and mining to an address nobody owns, and
+# it used to skip itself with a NOT VERIFIED note when python3 was absent (#165).
+command -v python3 >/dev/null || { echo "Install python3 first: the miner-address validation needs it."; exit 1; }
 docker compose version >/dev/null || { echo "Need Docker Compose v2 (the 'docker compose' plugin)."; exit 1; }
 
 # 1. z3 stack (node + wallet) ------------------------------------------------
@@ -158,28 +162,54 @@ validate_miner_address() {
 
   # The checksum is the only check that catches a typo which kept the right
   # prefix and length, which is the most likely real mistake.
-  if command -v python3 >/dev/null 2>&1; then
-    python3 - "$addr" <<'PY' || exit 1
+  # python3 is REQUIRED, checked at the top next to docker. It used to be optional
+  # with an else branch that printed NOT VERIFIED and carried on, so the box least
+  # likely to have python3 was the box that silently skipped the only check that
+  # catches a typo (#165). A validator that degrades to not validating is worse
+  # than no validator, because the operator reads a pass.
+  python3 - "$addr" "$NETWORK" <<'PY' || exit 1
 import hashlib, sys
 A = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
-addr = sys.argv[1]
+addr, network = sys.argv[1], sys.argv[2]
+
 n = 0
 for c in addr:
     n = n * 58 + A.index(c)
 raw = n.to_bytes((n.bit_length() + 7) // 8, 'big')
 raw = b'\x00' * (len(addr) - len(addr.lstrip('1'))) + raw
 body, checksum = raw[:-4], raw[-4:]
-if hashlib.sha256(hashlib.sha256(body).digest()).digest()[:4] != checksum:
-    sys.stderr.write(
-        "FAUCET_MINER_ADDRESS failed its base58check checksum, so it is a typo.\n"
-        "The prefix and length are right, which is why nothing else caught it.\n"
-        "Got: %s\n" % addr)
+
+def die(msg):
+    sys.stderr.write("FAUCET_MINER_ADDRESS %s\nGot: %s\n" % (msg, addr))
     raise SystemExit(1)
+
+# Length before indexing, so a short payload reports itself instead of raising
+# an IndexError that reads like a bug in this script.
+if len(body) != 22:
+    die("decodes to %d bytes, and a transparent address is 22 (2 version + 20 hash)" % len(body))
+
+if hashlib.sha256(hashlib.sha256(body).digest()).digest()[:4] != checksum:
+    die("failed its base58check checksum, so it is a typo.\n"
+        "The prefix and length are right, which is why nothing else caught it.")
+
+# The checksum only proves the string is internally consistent. It says nothing
+# about WHICH network or type the payload is for, so a well-formed address for
+# something else passes it. Verified reachable rather than assumed: version 0x1d26
+# is one off testnet P2PKH and still renders as tm..., so it survives the prefix
+# regex, the alphabet check, the length check and the checksum. Same for 0x1cbb
+# rendering as t2....
+VERSIONS = {
+    "testnet": {b"\x1d\x25": "tm (P2PKH)", b"\x1c\xba": "t2 (P2SH)"},
+    "mainnet": {b"\x1c\xb8": "t1 (P2PKH)", b"\x1c\xbd": "t3 (P2SH)"},
+}
+allowed = VERSIONS.get(network, VERSIONS["testnet"])
+version = bytes(body[:2])
+if version not in allowed:
+    die("has version bytes %s, which is not a %s transparent address.\n"
+        "Expected one of: %s.\n"
+        "The checksum passed, so this is a valid address for something else, not a typo."
+        % (version.hex(), network, ", ".join("%s=%s" % (v.hex(), n) for v, n in allowed.items())))
 PY
-  else
-    say "NOT VERIFIED: no python3, so the address checksum was not checked."
-    say "              Prefix and length passed. A typo could still slip through."
-  fi
 }
 
 if [ -n "$MINER_ADDRESS" ]; then
