@@ -1,6 +1,21 @@
 /**
  * t2z worker (plain Node, run via worker_thread — deliberately OUTSIDE src/ so
- * the Next.js bundler never touches the wasm). Handles three job types, each
+ * the Next.js bundler never touches the wasm).
+ *
+ * DO NOT make the bg import static to please turbopack. It was tried (#139) and it
+ * trades a build error for a runtime 500, which is worse because the build error is
+ * honest. With `await import(bgPath)`, turbopack refuses at build time: "server
+ * relative imports are not implemented yet". With a static
+ * `import * as bg from "@d4mr/t2z-wasm/t2z_wasm_bg.js"`, turbopack resolves it, bundles
+ * THIS FILE, and then rewrites require.resolve to return a module id, so the line
+ * below fails at runtime with `65789.replace is not a function` and every
+ * POST /api/account returns 500. The build was green and 338 unit tests passed. Only
+ * api-integration caught it.
+ *
+ * `serverExternalPackages` already lists @d4mr/t2z-wasm and does not help, because
+ * what turbopack bundles is this worker, not the package. So the build stays on
+ * `next build --webpack` until the worker is referenced in a way turbopack does not
+ * trace, which is a restructuring rather than a flag. Handles three job types, each
  * tagged with an `id` so several can be in flight without their replies crossing:
  *   - warm     : build the Halo2 proving key (~11s), so the first send is fast
  *   - keypair  : mint a real testnet Orchard account (address + spending key)
