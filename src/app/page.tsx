@@ -2,6 +2,7 @@
 
 import { CSSProperties, useCallback, useEffect, useRef, useState } from "react";
 import { BrandMark } from "./BrandMark";
+import { reserveRows } from "@/lib/reserveLabel";
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 type Phase = "syncing" | "queued" | "empty" | "ready" | "submitting" | "success" | "cooldown" | "error";
@@ -626,8 +627,12 @@ export default function Home() {
               { k: "miner", v: status?.miner?.active ? "on" : "off" },
               ...(reserve
                 ? [
-                    { k: "reserve", v: (reserve.spendableTaz ?? 0).toFixed(1) + " / " + reserve.targetTaz.toFixed(0) + " TAZ" },
-                    { k: "refill", v: refilling ? "topping up" : "idle" },
+                    // Wording lives in reserveRows and is unit-tested, because
+                    // "257.2 / 1000" beside "idle" made a healthy faucet look broken.
+                    ...(() => { const rr = reserveRows({ ...reserve, refilling }); return [
+                      { k: "reserve", v: rr.reserve },
+                      { k: "refill", v: rr.refill },
+                    ]; })(),
                   ]
                 : []),
               { k: "queue", v: (status?.queueDepth ?? 0) + " pending" },
