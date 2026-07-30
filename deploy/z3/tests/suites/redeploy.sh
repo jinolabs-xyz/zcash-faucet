@@ -80,6 +80,84 @@ check "exits 2 (rolled back, did not ship)" "[ $rc -eq 2 ]"
 check "says the change did not ship" "grep -q 'did NOT ship' '$T/nr.log'"
 check "says live but never ready" "grep -q 'never became ready' '$T/nr.log'"
 check "rolled back to the previous image" "[ \"\$(img zcash-faucet:latest)\" = 'sha256:old' ]"
+# The positive control for the two cases below: a build that is genuinely not ready,
+# for a reason a rollback CAN address, must still roll back. Without this, making the
+# two new cases pass by never rolling back at all would look like a fix.
+check "and the ordinary not-ready case names the app's own reason" \
+  "grep -q 'node syncing' '$T/nr.log'"
+
+echo "== redeploy: a probe that never ANSWERS is not evidence against the build (#229)"
+# A timeout is not a negative. better-sqlite3 is synchronous, so a wedged read makes
+# readiness answer LATE rather than badly, and #234 moved the cause off the request
+# path without removing the possibility. Reverting on silence lets a slow endpoint
+# undo a good deploy.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_READY_MAX=1 STUB_CURL_TIMEOUT=1 bash "$REDEPLOY" > "$T/tmo.log" 2>&1
+rc=$?
+check "a never-answering probe does NOT roll back" \
+  "[ \"\$(img zcash-faucet:latest)\" != 'sha256:old' ]"
+check "and exits 1, because a faucet nobody can probe is a page" "[ $rc -eq 1 ]"
+check "and says a timeout is not a negative" "grep -q 'not a negative' '$T/tmo.log'"
+# NOT grep -q 'rollback': that word is in the always-present "tagged
+# zcash-faucet:previous for rollback" line, so the assertion passed whether or not the
+# hint existed. Match the hint itself.
+check "and offers the manual rollback rather than doing it" \
+  "grep -q 'redeploy.sh rollback\|\$0 rollback' '$T/tmo.log'"
+
+echo "== redeploy: a DATA failure is not rolled back, because code is not the cause (#229)"
+# The ledger lives on a volume no deploy touches, so the previous image would meet the
+# same ledger. Reverting changes only which build gets blamed, and exit 2 would say
+# nobody needs paging for a faucet that 500s every claim.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_READY_MAX=1 STUB_READY_REASON="ledger unreadable" bash "$REDEPLOY" > "$T/ledg.log" 2>&1
+rc=$?
+check "a ledger failure does NOT roll back" \
+  "[ \"\$(img zcash-faucet:latest)\" != 'sha256:old' ]"
+check "and exits 1 rather than 2, because this one needs a human" "[ $rc -eq 1 ]"
+check "and says the cause is DATA, not code" "grep -q 'DATA, not code' '$T/ledg.log'"
+check "and says a rollback would not have fixed it" \
+  "grep -q 'would not fix this' '$T/ledg.log'"
+check "and names the reason it read from the app" "grep -q 'ledger unreadable' '$T/ledg.log'"
+
+echo "== redeploy: connection REFUSED still rolls back, it is not a timeout (#229)"
+# After the deadline, refused means nothing is listening, so the build did not come up.
+# I had collapsed curl 7 into 28 as "no evidence", which stopped a crash-looping build
+# from ever being rolled back.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_READY_MAX=1 STUB_CURL_RC=7 bash "$REDEPLOY" > "$T/refused.log" 2>&1
+rc=$?
+check "a refused connection DOES roll back" "[ \"\$(img zcash-faucet:latest)\" = 'sha256:old' ]"
+# Exit 1, not 2, and that is correct for what this fixture models: STUB_CURL_RC refuses
+# EVERY call, so the rolled-back image cannot be verified either. The property under
+# test is that refused counts as evidence and the revert is ATTEMPTED, which the check
+# above proves. Asserting 2 here would have required the old build to answer, which a
+# total-refusal fixture cannot express.
+check "and exits 1, because the rollback could not be verified either" "[ $rc -eq 1 ]"
+check "and says nothing is listening" "grep -q 'nothing is listening' '$T/refused.log'"
+
+# NOT TESTED HERE, deliberately, and this is the gap rather than a silence: the DEFAULT
+# no-URL path. The regression it would cover is the serious one this PR fixes, where
+# probe_state mapped every in-container failure to cannot-tell and disabled auto-rollback
+# on exactly the configuration production uses.
+#
+# I wrote the test three ways and could not make it assert the thing reliably: the exec
+# path makes several probe calls in a sequence (is_ready_now, then wait_healthy's health
+# and ready loop, then the final probe_state) and my budget landed in the wrong one. A
+# timer-based version raced. Five attempts is the signal that I do not understand the
+# call sequence well enough to assert on it, and a test I do not understand is worse than
+# a recorded gap, because it will be believed.
+#
+# The stub CAN now express it: STUB_EXEC_HEALTH, STUB_EXEC_READY, STUB_EXEC_READY_MAX,
+# STUB_EXEC_THROW and STUB_EXEC_UNUSABLE all exist and are driven directly in #244. The
+# missing piece is my understanding of the probe sequence, not the harness.
+#
+# Filed as #244. The fix itself is verified by reading and by driving probe_state against
+# the stub by hand; what is absent is a regression test, and that is stated rather than
+# implied by a green run.
+
 
 echo "== redeploy: not ready beforehand means liveness-only gate (syncing node)"
 redeploy_env

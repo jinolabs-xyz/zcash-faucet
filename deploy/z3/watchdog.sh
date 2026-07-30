@@ -240,12 +240,27 @@ while true; do
   # 4: readiness alerting. Not-ready is normal during first sync / refill, so we
   # only page when it persists past the grace window, and only once per episode.
   now="$(date -u +%s)"
-  if curl -fsS --max-time 8 "$FAUCET_URL/api/ready" >/dev/null 2>&1; then
+  # ONE fetch, and both the verdict and the reason come out of it. This used to probe
+  # and then re-fetch for the reason, which spent two sequential 8s budgets against the
+  # same endpoint: when readiness was slow the second fetch timed out too, so the page
+  # read "reason: unknown" precisely when a reason would have been most useful, and it
+  # doubled the load on an endpoint already established as slow (#229).
+  #
+  # -sS not -fsS, because a 503 body carries the reason and -f discards it. The status
+  # comes from -w instead, so a non-2xx is still recognised as not-ready.
+  ready_body="$(curl -sS --max-time 8 -w '\n%{http_code}' "$FAUCET_URL/api/ready" 2>/dev/null)"
+  ready_rc=$?
+  ready_code="${ready_body##*$'\n'}"
+  reason="$(printf '%s' "$ready_body" | grep -o '"reason":"[^"]*"' | head -n1 | cut -d'"' -f4)"
+  # A transport failure is not an answer. Say so, rather than reporting an empty reason
+  # that reads as though the app declined to explain itself.
+  if [ "$ready_rc" -ne 0 ]; then reason="no answer from /api/ready (curl $ready_rc)"; fi
+  case "$ready_code" in 2*) ready_ok=1 ;; *) ready_ok=0 ;; esac
+  if [ "$ready_rc" -eq 0 ] && [ "$ready_ok" = "1" ]; then
     if [ "$alerted_unready" = "1" ]; then alert "faucet is READY again"; fi
     unready_since=0
     alerted_unready=0
   else
-    reason="$(curl -s --max-time 8 "$FAUCET_URL/api/ready" 2>/dev/null | grep -o '"reason":"[^"]*"' | head -n1 | cut -d'"' -f4)"
     [ "$unready_since" = "0" ] && unready_since="$now"
     elapsed=$((now - unready_since))
     if [ "$elapsed" -ge "$READY_GRACE_SECS" ] && [ "$alerted_unready" = "0" ]; then

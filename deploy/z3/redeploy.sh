@@ -78,6 +78,94 @@ probe() { # $1 = health|ready, returns 0 when it answers 200
     >/dev/null 2>&1
 }
 
+# Three outcomes, because two could not tell "answered no" from "did not answer",
+# and only the first of those is evidence about the new build (#229).
+#
+# A rollback reverts CODE. It cannot fix a corrupt ledger on a volume this script
+# never touches, and it cannot fix a wedged read: better-sqlite3 is synchronous, so a
+# slow read blocks the event loop and readiness answers LATE rather than answering
+# badly (#234, and App's measurement that a 600ms read against a 100ms timeout still
+# returns ok at 601ms). Off the request path removed that cause; it did not remove the
+# possibility, so a probe that never answers must not be what authorises a revert.
+#
+# Sets PROBE_REASON to the app's own reason when it gave one, so the caller can tell a
+# node that is syncing from a ledger that is unreadable. Read from the SAME response
+# rather than a second fetch: two sequential 8s budgets against a slow endpoint is how
+# the reason goes missing exactly when it matters most.
+# Sets PROBE_STATE and PROBE_REASON rather than echoing, and the caller must NOT wrap
+# it in $(...). It used to echo the state and set the reason as a global, which cannot
+# work: command substitution runs in a subshell, so the reason was discarded every time
+# and every caller saw an empty string. Caught by running it, not by reading it, and it
+# is the same shape as everything else this PR is about, a value that looks present and
+# is not.
+PROBE_STATE=""
+PROBE_REASON=""
+probe_state() { # $1 = health|ready ; sets PROBE_STATE + PROBE_REASON
+  PROBE_STATE=""
+  PROBE_REASON=""
+  local body rc code
+  if [ -n "$FAUCET_URL" ]; then
+    # -sS not -fsS: a 503 body carries the reason and -f throws it away.
+    body="$(curl -sS --max-time 8 -w '\n%{http_code}' "$FAUCET_URL/api/$1" 2>/dev/null)"
+    rc=$?
+    # Not every nonzero curl status means the same thing, and collapsing them was a
+    # regression: a build that starts and then crash-loops leaves nothing listening, so
+    # curl returns 7, and calling that "no evidence" means it is never rolled back.
+    #
+    #   7  connection refused  -> nothing is listening. After the deadline that IS
+    #                             evidence the build did not come up.
+    #   28 timeout             -> something accepted the connection and was too slow.
+    #                             Ambiguous, and the case #234 made reachable.
+    #   6/35/56 DNS and TLS    -> the probe could not be performed.
+    case "$rc" in
+      0) ;;
+      7)  PROBE_STATE="not-ready"; PROBE_REASON="connection refused on /api/$1, nothing is listening"; return 0 ;;
+      28) PROBE_STATE="cannot-tell"; PROBE_REASON="timed out on /api/$1 after 8s, which is not an answer"; return 0 ;;
+      *)  PROBE_STATE="cannot-tell"; PROBE_REASON="could not probe /api/$1 (curl $rc)"; return 0 ;;
+    esac
+    code="${body##*$'\n'}"
+    PROBE_REASON="$(printf '%s' "$body" | grep -o '"reason":"[^"]*"' | head -n1 | cut -d'"' -f4)"
+    case "$code" in
+      2*) PROBE_STATE="ready" ;;
+      # A redirect is an answer too. Caddy 308s http->https once a domain is set, which
+      # this file already comments on, and leaving 3xx out made that config permanently
+      # cannot-tell, so rollback would never fire again on it.
+      3*) PROBE_STATE="not-ready"; PROBE_REASON="${PROBE_REASON:-HTTP $code redirect, so the probe URL is wrong (http vs https?)}" ;;
+      # An answer with a status is the app speaking, which IS evidence.
+      [45]*) PROBE_STATE="not-ready" ;;
+      *) PROBE_STATE="cannot-tell"; PROBE_REASON="${PROBE_REASON:-unrecognised HTTP status $code}" ;;
+    esac
+    return 0
+  fi
+  # No published port, which is the DEFAULT and therefore production. This path must
+  # still be able to say "no", or auto-rollback silently stops existing: `probe()`
+  # exits 1 for a definite !r.ok AND for a fetch throw, so mapping its failure to
+  # cannot-tell disabled the rollback entirely on every box without a URL. That is what
+  # the first version of this function did.
+  #
+  # So ask in a form that separates them: 1 for an answer that was not ok, 3 for no
+  # answer at all. Exit 2 is reserved by node itself for an uncaught exception.
+  local out rc
+  out="$(compose exec -T faucet node -e \
+    "fetch('http://127.0.0.1:3000/api/$1').then(r=>{if(r.ok)process.exit(0);console.log(r.status);process.exit(1)}).catch(()=>process.exit(3))" \
+    2>/dev/null)"
+  rc=$?
+  case "$rc" in
+    0) PROBE_STATE="ready" ;;
+    1) PROBE_STATE="not-ready"; PROBE_REASON="HTTP ${out:-unknown} from /api/$1 (in-container probe cannot read the body)" ;;
+    *) PROBE_STATE="cannot-tell"; PROBE_REASON="the in-container probe could not reach the app" ;;
+  esac
+}
+
+# The reasons a rollback cannot fix, because the cause is not the image. Matched on
+# the app's own reason string, which #228 added for exactly this.
+reason_is_not_the_code() {
+  case "$1" in
+    *"ledger unreadable"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # True when the probe mechanism itself cannot run, which is not the same as
 # the faucet being unhealthy and must never be reported as such.
 probe_usable() {
@@ -199,7 +287,47 @@ if ! probe_usable; then
   exit 2
 fi
 
-log "the new build failed the health gate after ${HEALTH_TIMEOUT}s, rolling back"
+# Before rolling back, ask WHY once more and read the app's own reason. A rollback
+# reverts code, so it is only the right move when the code is a plausible cause (#229).
+# NOT $(probe_state ready): that runs in a subshell and the reason would be lost.
+probe_state ready
+final_state="$PROBE_STATE"
+final_reason="$PROBE_REASON"
+
+# A build that became ready just after the deadline is not a failure, and rolling it
+# back would revert a working faucet for being three seconds late.
+if [ "$final_state" = "ready" ]; then
+  log "the gate timed out, but the faucet IS ready now, so nothing is being rolled back"
+  log "  It became ready after ${HEALTH_TIMEOUT}s. Raise REDEPLOY_HEALTH_TIMEOUT if this recurs."
+  exit 0
+fi
+
+if [ "$final_state" = "cannot-tell" ]; then
+  # We never got an answer. That is not evidence the new build is bad, and reverting on
+  # it means a slow or unreachable endpoint can undo a good deploy. Leave the new build
+  # running and page, because a faucet nobody can probe is not a faucet anybody should
+  # assume is fine.
+  log "NOT ROLLING BACK: the readiness probe never answered, so there is no evidence"
+  log "  against the new build. A timeout is not a negative, and reverting on one lets a"
+  log "  slow endpoint undo a good deploy."
+  log "  The new build is still running. Check it and roll back by hand if needed:"
+  log "      $0 rollback"
+  exit 1
+fi
+
+if reason_is_not_the_code "$final_reason"; then
+  # The ledger lives on a volume this script never touches, so the previous image
+  # would meet exactly the same ledger. Reverting changes nothing except which code is
+  # blamed, and exit 2 would say nobody needs paging for a faucet that 500s every claim.
+  log "NOT ROLLING BACK: the faucet is not serving, but the cause is DATA, not code"
+  log "  reason: $final_reason"
+  log "  Volumes are never touched by a deploy, so the previous image would meet the same"
+  log "  ledger. A rollback would not fix this, it would only change which build is blamed."
+  log "  Fix the ledger, then re-run this script."
+  exit 1
+fi
+
+log "the new build failed the health gate after ${HEALTH_TIMEOUT}s (reason: ${final_reason:-none given}), rolling back"
 if [ -n "$current" ]; then
   do_rollback || die "rollback failed after the health gate, the faucet may be down"
   not_shipped "the new build never became healthy"

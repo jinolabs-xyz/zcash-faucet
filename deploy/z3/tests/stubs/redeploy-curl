@@ -7,18 +7,60 @@
 #                    Models "was serving before the deploy, new build never
 #                    becomes ready", which needs ready true at the pre-deploy
 #                    check and false during the health gate.
+#   $STUB_CURL_TIMEOUT  set -> every call exits 28, like --max-time being exceeded.
+#   $STUB_CURL_RC       set -> every call exits with that status. 7 is connection
+#                       refused, which is a DIFFERENT thing from a timeout: after the
+#                       deadline, refused means nothing is listening and the build did
+#                       not come up, so it must still roll back. Collapsing 7 into 28
+#                       was a regression, and the stub could not express either (#229).
+#   $STUB_READY_REASON  the reason string to put in the 503 body.
+#
+# Two calling conventions, because the callers differ. With -f (probe(), health) an
+# HTTP error is exit 22 and the body is discarded, which is what curl does. WITHOUT
+# -f but with -w (probe_state, watchdog) curl exits 0 and prints the body and the
+# status, so a 503 is an ANSWER rather than a failure, and its reason survives.
 set -uo pipefail
 echo "curl $*" >> "${STUB_LOG:?}"
+
+# A transport failure beats everything: no body, no status, just curl's code.
+[ -n "${STUB_CURL_TIMEOUT:-}" ] && exit 28
+[ -n "${STUB_CURL_RC:-}" ] && exit "$STUB_CURL_RC"
+
+# Inspect the ARGS rather than pattern-matching "$*": a glob needing a leading space
+# missed -fsS when it was the first argument, so the stub reported an HTTP error as a
+# success and the -f convention was silently untested.
+has_f=0; has_w=0
+for a in "$@"; do
+  case "$a" in -*f*) case "$a" in --*) ;; *) has_f=1 ;; esac ;; esac
+  case "$a" in *"%{http_code}"*) has_w=1 ;; esac
+done
+
+# $1 = http status, $2 = body. Honours whichever convention the caller used.
+answer() {
+  if [ "$has_w" = "1" ]; then
+    [ -n "$2" ] && printf '%s' "$2"
+    printf '\n%s' "$1"
+    exit 0
+  fi
+  case "$1" in 2*) exit 0 ;; *) [ "$has_f" = "1" ] && exit 22 || { [ -n "$2" ] && printf '%s' "$2"; exit 0; } ;; esac
+}
+
 case "$*" in
-  */api/health*) [ -e "${STUB_HEALTH:-/nonexistent}" ] && exit 0 || exit 22 ;;
+  */api/health*)
+    if [ -e "${STUB_HEALTH:-/nonexistent}" ]; then answer 200 '{"ok":true}'; else answer 503 '{"ok":false}'; fi ;;
   */api/ready*)
-    [ -e "${STUB_READY:-/nonexistent}" ] || exit 22
+    reason="${STUB_READY_REASON:-node syncing}"
+    if [ ! -e "${STUB_READY:-/nonexistent}" ]; then
+      answer 503 "{\"ready\":false,\"reason\":\"$reason\"}"
+    fi
     if [ -n "${STUB_READY_MAX:-}" ]; then
       count_file="${STUB_READY_COUNT:-${STUB_READY}.count}"
       n=$(( $(cat "$count_file" 2>/dev/null || echo 0) + 1 ))
       echo "$n" > "$count_file"
-      [ "$n" -le "$STUB_READY_MAX" ] || exit 22
+      if [ "$n" -gt "$STUB_READY_MAX" ]; then
+        answer 503 "{\"ready\":false,\"reason\":\"$reason\"}"
+      fi
     fi
-    exit 0 ;;
-  *) exit 22 ;;
+    answer 200 '{"ready":true,"reason":null}' ;;
+  *) answer 404 '' ;;
 esac

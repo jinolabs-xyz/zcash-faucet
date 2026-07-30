@@ -7,6 +7,7 @@ echo "docker $*" >> "${STUB_LOG:?}"
 IMG="${STUB_IMAGES:?}"
 
 case "${1:-}" in
+
   image)
     # image inspect -f '{{.Id}}' <tag>
     shift; shift 2>/dev/null
@@ -24,6 +25,45 @@ case "${1:-}" in
     ;;
   compose)
     shift
+    # `exec -T faucet node -e <script>`: the in-container probe, which is the DEFAULT
+    # path because the app port is expose-only. It was not modelled at all, so every
+    # no-URL behaviour was untestable and a regression that disabled auto-rollback on
+    # exactly that path shipped green (#229).
+    #
+    #   STUB_EXEC_UNUSABLE  the probe mechanism cannot run       -> exit 1, no output
+    #   STUB_EXEC_READY     file exists, the app answers ok       -> exit 0
+    #   STUB_EXEC_THROW     the fetch throws, no answer at all    -> exit 3
+    #   otherwise           the app answered, but not ok          -> print 503, exit 1
+    if printf '%s\n' "$@" | grep -qx "exec"; then
+      echo "compose exec $*" >> "${STUB_LOG:?}"
+      [ -n "${STUB_EXEC_UNUSABLE:-}" ] && exit 1
+      # node -e 'process.exit(0)' is the usability probe, not a health probe.
+      printf '%s\n' "$@" | grep -q "process.exit(0)" && exit 0
+      [ -n "${STUB_EXEC_THROW:-}" ] && exit 3
+      # health and ready need separate markers, or a test cannot express "live but not
+      # ready", which is the only state the readiness gate exists to judge.
+      if printf '%s\n' "$@" | grep -q '/api/health'; then
+        [ -e "${STUB_EXEC_HEALTH:-${STUB_EXEC_READY:-/nonexistent}}" ] && exit 0
+      else
+        # STUB_EXEC_READY_MAX: ready for the first N calls only, then not. A COUNTER
+        # rather than a timer, mirroring STUB_READY_MAX on the URL path. My first attempt
+        # removed the marker from a background subshell after a sleep, which raced the
+        # pre-deploy probe and failed intermittently: a flaky test is worse than an
+        # untested path, because it teaches people to re-run until green.
+        if [ -e "${STUB_EXEC_READY:-/nonexistent}" ]; then
+          if [ -n "${STUB_EXEC_READY_MAX:-}" ]; then
+            cf="${STUB_EXEC_READY}.count"
+            n=$(( $(cat "$cf" 2>/dev/null || echo 0) + 1 ))
+            echo "$n" > "$cf"
+            [ "$n" -le "$STUB_EXEC_READY_MAX" ] && exit 0
+          else
+            exit 0
+          fi
+        fi
+      fi
+      echo 503
+      exit 1
+    fi
     sub=""
     for a in "$@"; do case "$a" in build|up) sub="$a"; break ;; esac; done
     case "$sub" in

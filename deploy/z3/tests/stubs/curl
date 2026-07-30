@@ -9,7 +9,26 @@ case "$*" in
     if [ -n "${STUB_READY_FAIL_UNTIL:-}" ] && [ ! -e "$STUB_READY_FAIL_UNTIL" ]; then
       touch "$STUB_READY_FAIL_UNTIL"; exit 22
     fi
-    [ "${STUB_READY:-1}" = "1" ] && exit 0 || exit 22 ;;
+    # Two conventions, because two callers differ and only one was modelled here.
+    # zsnap's gate uses -f, where an HTTP error is exit 22 and the body is discarded.
+    # watchdog.sh now uses -sS with -w '%{http_code}', where curl exits 0 and prints
+    # the body and the status, so a 503 is an ANSWER and its reason survives.
+    #
+    # With only the -f form modelled, the watchdog's rewrite read a READY faucet as
+    # not-ready under the suite: it got exit 0 but no status to match on. That was
+    # invisible because the ready-grace window is long enough that nothing paged.
+    # Same gap that made redeploy-curl unable to express any of this (#229).
+    want_code=200
+    [ "${STUB_READY:-1}" = "1" ] || want_code=503
+    for a in "$@"; do
+      case "$a" in *"%{http_code}"*)
+        if [ "$want_code" = "200" ]; then printf '{"ready":true,"reason":null}'
+        else printf '{"ready":false,"reason":"%s"}' "${STUB_READY_REASON:-node syncing}"; fi
+        printf '\n%s' "$want_code"
+        exit 0 ;;
+      esac
+    done
+    [ "$want_code" = "200" ] && exit 0 || exit 22 ;;
   *)
     exec /usr/bin/curl "$@" ;;
 esac
