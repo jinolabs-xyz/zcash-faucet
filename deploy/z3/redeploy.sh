@@ -92,34 +92,43 @@ probe() { # $1 = health|ready, returns 0 when it answers 200
 # node that is syncing from a ledger that is unreadable. Read from the SAME response
 # rather than a second fetch: two sequential 8s budgets against a slow endpoint is how
 # the reason goes missing exactly when it matters most.
+# Sets PROBE_STATE and PROBE_REASON rather than echoing, and the caller must NOT wrap
+# it in $(...). It used to echo the state and set the reason as a global, which cannot
+# work: command substitution runs in a subshell, so the reason was discarded every time
+# and every caller saw an empty string. Caught by running it, not by reading it, and it
+# is the same shape as everything else this PR is about, a value that looks present and
+# is not.
+PROBE_STATE=""
 PROBE_REASON=""
-probe_state() { # $1 = health|ready ; echoes ready | not-ready | cannot-tell
+probe_state() { # $1 = health|ready ; sets PROBE_STATE + PROBE_REASON
+  PROBE_STATE=""
   PROBE_REASON=""
   local body rc code
   if [ -n "$FAUCET_URL" ]; then
     # -sS not -fsS: a 503 body carries the reason and -f throws it away.
     body="$(curl -sS --max-time 8 -w '\n%{http_code}' "$FAUCET_URL/api/$1" 2>/dev/null)"
     rc=$?
-    case "$rc" in
-      0) ;;
-      # 28 timeout, 7 connection refused, 6 DNS, 35/56 TLS or transport. None of
-      # these is the app saying no, so none of them may look like it.
-      28|7|6|35|56) printf 'cannot-tell'; return 0 ;;
-      *) printf 'cannot-tell'; return 0 ;;
-    esac
+    # Any nonzero curl status means we did not get an answer: 28 timeout, 7 refused,
+    # 6 DNS, 35/56 transport. None of them is the app saying no, so none may look
+    # like it.
+    if [ "$rc" -ne 0 ]; then
+      PROBE_STATE="cannot-tell"
+      PROBE_REASON="no answer from /api/$1 (curl $rc)"
+      return 0
+    fi
     code="${body##*$'\n'}"
     PROBE_REASON="$(printf '%s' "$body" | grep -o '"reason":"[^"]*"' | head -n1 | cut -d'"' -f4)"
     case "$code" in
-      2*) printf 'ready' ;;
+      2*) PROBE_STATE="ready" ;;
       # An answer with a status is the app speaking, which IS evidence.
-      [45]*) printf 'not-ready' ;;
-      *) printf 'cannot-tell' ;;
+      [45]*) PROBE_STATE="not-ready" ;;
+      *) PROBE_STATE="cannot-tell" ;;
     esac
     return 0
   fi
   # No published port: fall back to the in-container probe, which cannot separate
   # these three, so it reports the two it can and never invents the third.
-  if probe "$1"; then printf 'ready'; else printf 'cannot-tell'; fi
+  if probe "$1"; then PROBE_STATE="ready"; else PROBE_STATE="cannot-tell"; fi
 }
 
 # The reasons a rollback cannot fix, because the cause is not the image. Matched on
@@ -254,7 +263,9 @@ fi
 
 # Before rolling back, ask WHY once more and read the app's own reason. A rollback
 # reverts code, so it is only the right move when the code is a plausible cause (#229).
-final_state="$(probe_state ready)"
+# NOT $(probe_state ready): that runs in a subshell and the reason would be lost.
+probe_state ready
+final_state="$PROBE_STATE"
 final_reason="$PROBE_REASON"
 
 if [ "$final_state" = "cannot-tell" ]; then
