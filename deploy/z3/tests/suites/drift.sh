@@ -45,7 +45,21 @@ drift_env() {
 case "$1" in
   ps)
     for a in "$@"; do case "$a" in name=*) m="${a#name=}";; esac; done
-    v="STUB_RUNNING_$m"; printf '%s\n' "${!v:-}" | grep -v '^$' || true ;;
+    v="STUB_RUNNING_$m"
+    # Two ps shapes now: bare names for the version check, and name plus compose
+    # project for the orphan check. Separate cases, because one answer serving both
+    # questions is a stub that agrees with whatever it is asked.
+    case " $* " in
+      *compose.project*)
+        # Default to a project rather than to empty. Empty means "started by hand",
+        # which is the FINDING, and a stub whose default is the finding would make
+        # every unrelated fixture report an orphan it never created.
+        for c in ${!v:-}; do
+          pv="STUB_PROJECT_$(printf '%s' "$c" | tr -c 'A-Za-z0-9' '_')"
+          if [ -n "${!pv+set}" ]; then printf '%s %s\n' "$c" "${!pv}"; else printf '%s z3\n' "$c"; fi
+        done ;;
+      *) printf '%s\n' "${!v:-}" | grep -v '^$' || true ;;
+    esac ;;
   inspect)
     # TWO questions arrive here now, and they must not share a case: what reference a
     # CONTAINER was created from, and what registry digests an IMAGE has. Answering
@@ -62,7 +76,7 @@ STUB
   # Leaked exports from a previous case would make a later one see a container
   # that this fixture never started, which is how my own not-running test first
   # failed for a reason that had nothing to do with the code under test.
-  unset "${!STUB_RUNNING_@}" "${!STUB_IMAGE_@}" "${!STUB_REPODIGESTS_@}" 2>/dev/null || true
+  unset "${!STUB_RUNNING_@}" "${!STUB_IMAGE_@}" "${!STUB_REPODIGESTS_@}" "${!STUB_PROJECT_@}" 2>/dev/null || true
 }
 # A box that matches the repo exactly.
 make_clean_box() {
@@ -542,6 +556,50 @@ export STUB_IMAGE_z3_zallet_1="zodlinc/zallet@sha256:1849b4469875dc0165942c06d15
 bash "$AUDIT" --verbose > "$T/v-bothdg.log" 2>&1; rc=$?
 check "the same digest written two ways is not drift" "[ $rc -eq 0 ]"
 check "and is reported as a digest match" "grep -q 'matches by digest' '$T/v-bothdg.log'"
+
+# ORPHANS. Every version check above reads the FIRST container whose name matches, so it
+# cannot see a second one, and a container outside the compose project is invisible to the
+# tooling that manages the stack: no recreate, no stop, and a pin bump cannot reach it.
+echo "== orphans: a container matching our images but in NO compose project is drift"
+versions_env
+printf 'Z3_ZEBRA_IMAGE=zfnd/zebra:6.2.0\n' > "$AUDIT_VERSIONS_FILE"
+export STUB_RUNNING_zebra="z3-zebra-1 stray-zebra"
+export STUB_IMAGE_z3_zebra_1="zfnd/zebra:6.2.0"
+export STUB_PROJECT_stray_zebra=""
+bash "$AUDIT" > "$T/orphan.log" 2>&1; rc=$?
+check "a hand-started container matching the stack is DRIFT" "[ $rc -eq 1 ]"
+check "and it is named" "grep -q 'stray-zebra' '$T/orphan.log'"
+check "and the reason is the compose project, not the image" \
+  "grep -q 'belongs to no compose project' '$T/orphan.log'"
+check "and it says compose cannot manage it, which is WHY this matters" \
+  "grep -q 'compose cannot recreate or stop it' '$T/orphan.log'"
+# The version line above looked at z3-zebra-1 and reported a match. That is exactly the
+# false reassurance this check exists to break.
+check "and the count is reported too, since the version line described only one of them" \
+  "grep -q 'containers match' '$T/orphan.log'"
+
+echo "== orphans: two containers in the SAME project is still reported"
+# Not an orphan, but the version check still silently picked one of two.
+versions_env
+printf 'Z3_ZEBRA_IMAGE=zfnd/zebra:6.2.0\n' > "$AUDIT_VERSIONS_FILE"
+export STUB_RUNNING_zebra="z3-zebra-1 z3-zebra-2"
+export STUB_IMAGE_z3_zebra_1="zfnd/zebra:6.2.0"
+bash "$AUDIT" > "$T/twin.log" 2>&1; rc=$?
+check "two containers for one component is drift" "[ $rc -eq 1 ]"
+check "and says the version above described only one of them" \
+  "grep -q 'describes only one of them' '$T/twin.log'"
+check "but does NOT call either one an orphan, because both are in the project" \
+  "! grep -q 'belongs to no compose project' '$T/twin.log'"
+
+echo "== orphans: a normal single container in a project is silent"
+# The check has to be quiet in the ordinary case or nobody will keep it.
+versions_env
+printf 'Z3_ZEBRA_IMAGE=zfnd/zebra:6.2.0\n' > "$AUDIT_VERSIONS_FILE"
+export STUB_RUNNING_zebra=z3-zebra-1
+export STUB_IMAGE_z3_zebra_1="zfnd/zebra:6.2.0"
+bash "$AUDIT" > "$T/noorphan.log" 2>&1; rc=$?
+check "one container, in a project, matching the pin, exits 0" "[ $rc -eq 0 ]"
+check "and says nothing about orphans" "! grep -q 'compose project' '$T/noorphan.log'"
 
 echo "== versions: a box running a DIFFERENT image than the pin is drift"
 # The whole point of #247. Without this the version could change under us and

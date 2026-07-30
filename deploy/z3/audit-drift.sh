@@ -412,6 +412,44 @@ else
         "pull and restart the stack, or update $key if the box is intentionally ahead"
     fi
   done
+
+  # ORPHANS. Everything above asked "is the right version running", using the FIRST
+  # container whose name matches. That question cannot see a second one.
+  #
+  # A container outside the compose project is invisible to the tooling that manages
+  # the stack: `compose up -d` will not recreate it, `compose down` will not stop it,
+  # and a pin bump cannot reach it, so it keeps running the old image while every check
+  # above reports the new one, having looked at the sibling. It can also hold the port
+  # or the data volume the real one needs. deploy.sh already treats a missing compose
+  # label as the signature of a hand-started container, which is how it knows to remove
+  # a squatting faucet-web and leave an unrelated tool alone, so this reuses that fact
+  # rather than inventing a second rule.
+  for key in Z3_ZEBRA_IMAGE Z3_ZALLET_IMAGE Z3_ZAINO_IMAGE; do
+    match="$(stack_match "$key")"
+    # Every match, not the first. Labels come back on the same line as the name so a
+    # container cannot be read against another container's project.
+    listing="$("$DOCKER" ps --filter "name=$match" \
+      --format '{{.Names}} {{.Label "com.docker.compose.project"}}' 2>/dev/null)"
+    [ -n "$listing" ] || continue
+    count=0
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      count=$((count + 1))
+      cname="${line%% *}"
+      project=""
+      case "$line" in *" "*) project="${line#* }" ;; esac
+      if [ -z "$project" ]; then
+        found "$cname matches '$match' but belongs to no compose project" \
+          "it was started by hand, so compose cannot recreate or stop it: docker rm -f $cname once the stack owns the real one"
+      fi
+    done <<EOF
+$listing
+EOF
+    # Two containers answering to one component is worth saying even when both are in
+    # the project, because every version line above silently picked one of them.
+    [ "$count" -gt 1 ] && found "$count containers match '$match', so the version reported above describes only one of them" \
+      "remove the ones that are not part of the running stack"
+  done
 fi
 say ""
 
