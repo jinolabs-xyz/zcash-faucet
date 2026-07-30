@@ -78,6 +78,67 @@ check_order "full init before zallet starts" "generate-mnemonic" "up -d zallet"
 check "rpc client passes --config" "grep 'rpc z_getnewaccount' '$STUB_LOG' | grep -q -- '--config /etc/zallet/zallet.toml'"
 fi
 
+echo "== zallet RPC auth: the config gets a HASH, and it matches the faucet's password"
+# #176: the config held the password in plaintext, and a diagnostic grep for the wallet
+# database path printed it into tooling output, a transcript and an IPC archive.
+ZCFG_T="$D/z3-stack/config/testnet/zallet.toml"
+check "the config has a pwhash" "grep -q '^pwhash = ' '$ZCFG_T'"
+check "and NO plaintext password line at all" "! grep -qE '^[[:space:]]*password[[:space:]]*=' '$ZCFG_T'"
+check "and the faucet still got a password to authenticate with" \
+  "grep -qE '^ZALLET_RPC_PASSWORD=..*' '$D/z3/faucet.env'"
+# The assertion that would catch a silent break. A hash the password does not verify
+# against means every drip fails with an auth error, and nothing else here would notice:
+# both files are present, both look right, and they do not correspond.
+check "the pwhash VERIFIES against the password in faucet.env" \
+  "python3 '$SCRATCH/verify-pwhash.py' '$ZCFG_T' '$D/z3/faucet.env'"
+
+echo "== zallet RPC auth: a re-run does not rotate a credential that is already hashed"
+# Rotating on every deploy would invalidate the running faucet's password twice per
+# deploy and produce auth failures that look like a wallet fault.
+PWHASH_BEFORE="$(grep '^pwhash = ' "$ZCFG_T")"
+PW_BEFORE="$(grep '^ZALLET_RPC_PASSWORD=' "$D/z3/faucet.env")"
+run_deploy > "$T/auth-rerun.log" 2>&1
+check "a re-run keeps the same password" \
+  "[ \"\$(grep '^ZALLET_RPC_PASSWORD=' '$D/z3/faucet.env')\" = \"$PW_BEFORE\" ]"
+check "and does not announce a rotation" "! grep -q 'Rotating the Zallet RPC password' '$T/auth-rerun.log'"
+# The hash itself is allowed to change: the salt is fresh each write, and the same
+# password under a new salt is still the same credential. Asserting the hash is stable
+# would pin an implementation detail and forbid a correct implementation.
+check "and the re-run's hash still verifies, whether or not the salt moved" \
+  "python3 '$SCRATCH/verify-pwhash.py' '$ZCFG_T' '$D/z3/faucet.env'"
+
+echo "== zallet RPC auth: a plaintext password on the box is ROTATED, not just hidden"
+# Hashing the value that leaked would hide it and leave it valid. The exposed
+# credential has to STOP WORKING, which is the actual ask in #176.
+deploy_fresh_env
+printf '[[rpc.auth]]\nuser = "faucet"\npassword = "THE-LEAKED-VALUE"\n' \
+  > "$D/z3-stack/config/testnet/zallet.toml"
+run_deploy > "$T/auth-rotate.log" 2>&1
+check "the deploy says it is rotating, and why" \
+  "grep -q 'Rotating the Zallet RPC password' '$T/auth-rotate.log'"
+check "the leaked plaintext is GONE from the config" \
+  "! grep -q 'THE-LEAKED-VALUE' '$D/z3-stack/config/testnet/zallet.toml'"
+check "and the faucet is NOT still using the leaked value" \
+  "! grep -q 'THE-LEAKED-VALUE' '$D/z3/faucet.env'"
+check "the config carries a hash instead" \
+  "grep -q '^pwhash = ' '$D/z3-stack/config/testnet/zallet.toml'"
+
+echo "== zallet RPC auth: another operator's entry is not ours to rotate or to break"
+# My first version grepped the WHOLE file for a plaintext password, so a second
+# operator's block would have rotated our credential and then refused the deploy over
+# a line we have no business changing.
+deploy_fresh_env
+printf '[[rpc.auth]]\nuser = "someone-else"\npassword = "THEIR-SECRET"\n' \
+  > "$D/z3-stack/config/testnet/zallet.toml"
+run_deploy > "$T/auth-other.log" 2>&1
+check "a deploy beside another operator's plaintext entry still succeeds" "[ $? -eq 0 ]"
+check "their entry is untouched" \
+  "grep -q 'THEIR-SECRET' '$D/z3-stack/config/testnet/zallet.toml'"
+check "and their line did not trigger a rotation of ours" \
+  "! grep -q 'Rotating the Zallet RPC password' '$T/auth-other.log'"
+check "ours is added as a hash alongside theirs" \
+  "grep -q '^pwhash = ' '$D/z3-stack/config/testnet/zallet.toml'"
+
 echo "== re-run on the same box is a clean no-op pass"
 : > "$STUB_LOG"
 # Used inside the eval'd check string below, shellcheck cannot see that.
