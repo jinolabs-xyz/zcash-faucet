@@ -343,6 +343,10 @@ stack_match() {
   esac
 }
 
+# A reference can be repo:tag, repo@sha256:..., or repo:tag@sha256:... . Only the
+# digest half is an identity; the tag half is a moveable label.
+ref_digest() { case "$1" in *@sha256:*) printf 'sha256:%s\n' "${1##*@sha256:}" ;; *) printf '\n' ;; esac; }
+
 if [ ! -f "$VERSIONS_FILE" ]; then
   note_unverified "stack versions: no $VERSIONS_FILE, so nothing records which node and wallet images we intend to run"
 elif ! command -v "$DOCKER" >/dev/null 2>&1; then
@@ -368,15 +372,44 @@ else
       continue
     fi
     running="$("$DOCKER" inspect -f '{{.Config.Image}}' "$name" 2>/dev/null)"
+    declared_digest="$(ref_digest "$declared")"
+    running_digest="$(ref_digest "$running")"
     if [ -z "$running" ]; then
       # Distinct from a mismatch on purpose: we did not learn that they differ,
       # we learned nothing, and those must not print the same way.
       note_unverified "stack versions: docker inspect returned nothing for $name, so $key was not compared"
     elif [ "$running" = "$declared" ]; then
       ok "$key matches: $running"
+    elif [ -n "$declared_digest" ] && [ "$declared_digest" = "$running_digest" ]; then
+      # Same bytes, different way of writing them. A digest identifies content, so
+      # once two references carry the same one the tag text cannot disagree.
+      ok "$key matches by digest: $declared_digest"
+    elif [ -n "$declared_digest" ] && [ -z "$running_digest" ]; then
+      # The interesting case, and the reason this is not a string compare. We pin a
+      # digest because a tag can be re-pushed under us, but the container was created
+      # from a plain tag, so .Config.Image records the tag and the two strings differ
+      # while the image may be identical. Comparing text here would report drift on
+      # every run and teach people to ignore the line.
+      #
+      # So ask what the image actually is. RepoDigests is what the registry served.
+      repo_digests="$("$DOCKER" inspect -f '{{join .RepoDigests ","}}' "$running" 2>/dev/null)"
+      if [ -z "$repo_digests" ]; then
+        # A locally built or never-pushed image has no RepoDigests at all. We did not
+        # learn that it differs, so this is not drift and not a pass.
+        note_unverified "stack versions: $name runs $running, which has no registry digest, so it could not be compared against the digest $key pins"
+      # Compared as the whole field after the '@', not as a substring. A digest is
+      # fixed length so a substring match would almost always be right, and "almost
+      # always" is not what this line is for.
+      elif printf '%s' "$repo_digests" | tr ',' '\n' |
+           awk -v want="$declared_digest" -F@ 'NF>1 && $NF == want { hit=1 } END { exit !hit }'; then
+        ok "$key matches by digest: $name was started from the tag $running, which is $declared_digest"
+      else
+        found "$name runs $running, whose digest is not the $declared_digest that $VERSIONS_FILE pins" \
+          "the tag has moved or the box was never recreated: pull and restart the stack, or update $key"
+      fi
     else
       found "$name runs $running but $VERSIONS_FILE pins $declared" \
-        "pull and restart the stack (see REDEPLOY.md), or update $key if the box is intentionally ahead"
+        "pull and restart the stack, or update $key if the box is intentionally ahead"
     fi
   done
 fi
