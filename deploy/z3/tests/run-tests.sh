@@ -16,9 +16,14 @@
 #   docker run --rm -v "$(git rev-parse --show-toplevel)":/repo:ro ubuntu:24.04 \
 #     bash -c 'set -e; apt-get update -qq
 #              apt-get install -y -qq zstd curl gnupg python3 openssh-server
-#              bash /repo/deploy/z3/tests/run-tests.sh'
+#              useradd -m runner; cp -r /repo /home/runner/repo
+#              chown -R runner /home/runner/repo
+#              su runner -c "bash /home/runner/repo/deploy/z3/tests/run-tests.sh"'
 # The `set -e` matters. An install that fails behind >/dev/null looks like the
 # suite found real bugs.
+# NOT as root, which is why the command above makes a user and copies the tree
+# out of the read-only mount. As root, chmod cannot make a path unwritable, so
+# watchdog's degrade case cannot be set up and reports a defect that is not there.
 # Scratch state goes under TMPDIR, never into the repo.
 #
 # Suites are chosen with the SUITES env var, NOT positional arguments:
@@ -105,6 +110,8 @@ suite_caps() { # $1 suite -> capability keys it needs
     zsnap)    echo "find_printf sha256sum" ;;
     metrics)  echo "stat_c" ;;
     drift)    echo "sha256sum" ;;
+    # Not a tool, a property of who we are. See cap_probe.
+    watchdog) echo "nonroot" ;;
     *)        echo "" ;;
   esac
 }
@@ -114,6 +121,12 @@ cap_probe() { # $1 key -> 0 when this host really has it
     stat_c)      stat -c %a . >/dev/null 2>&1 ;;
     find_printf) find . -maxdepth 0 -printf '' >/dev/null 2>&1 ;;
     sha256sum)   command -v sha256sum >/dev/null 2>&1 ;;
+    # Root writes to a directory that has no write bit for it, so watchdog's
+    # unwritable-state-dir case cannot be SET UP as root at all: the degrade path
+    # never runs and the assertion goes red as though the watchdog were broken.
+    # Exactly the #164 shape, with the missing capability being a user rather than
+    # a GNU flag.
+    nonroot)     [ "$(id -u)" != 0 ] ;;
     *)           return 0 ;;
   esac
 }
@@ -123,6 +136,7 @@ cap_reason() { # $1 key -> what is missing, in the operator's terms
     stat_c)      echo "stat -c        GNU coreutils. BSD/macOS stat uses -f instead." ;;
     find_printf) echo "find -printf   GNU findutils. BSD/macOS find has no -printf." ;;
     sha256sum)   echo "sha256sum      GNU coreutils. macOS ships shasum instead." ;;
+    nonroot)     echo "a non-root user  running as root, so chmod cannot make a path unwritable." ;;
   esac
 }
 
@@ -141,19 +155,24 @@ for suite in $SELECTED; do
 done
 
 if [ -n "$missing_caps" ]; then
-  echo "REFUSING TO RUN: this host has the commands but not the GNU behaviour these" >&2
-  echo "suites depend on. This is a Linux harness. Run it in the container." >&2
+  echo "REFUSING TO RUN: this host has the commands these suites need but not the" >&2
+  echo "behaviour they depend on. Run it as a normal user in the Linux container." >&2
   echo >&2
   for cap in $missing_caps; do echo "  missing: $(cap_reason "$cap")" >&2; done
   echo >&2
-  echo "Running anyway is worse than a failure: most of those assertions go red as" >&2
-  echo "though the code were broken, and drift's read-only check goes GREEN without" >&2
-  echo "checking anything, because two empty sha256sum listings compare equal." >&2
+  echo "Running anyway is worse than a failure. Without the GNU tools most of those" >&2
+  echo "assertions go red as though the code were broken, and drift's read-only check" >&2
+  echo "goes GREEN without checking anything, because two empty sha256sum listings" >&2
+  echo "compare equal. As root, watchdog's unwritable-state-dir assertion goes red for" >&2
+  echo "the same false reason: root writes to the directory the test just made" >&2
+  echo "unwritable, so the degrade path never runs and the watchdog looks broken." >&2
   echo >&2
   echo "  docker run --rm -v \"\$PWD:/repo:ro\" ubuntu:24.04 bash -c '" >&2
   echo "    set -e; apt-get update -qq" >&2
   echo "    apt-get install -y -qq zstd curl gnupg python3 openssh-server" >&2
-  echo "    bash /repo/deploy/z3/tests/run-tests.sh'" >&2
+  echo "    useradd -m runner; cp -r /repo /home/runner/repo" >&2
+  echo "    chown -R runner /home/runner/repo" >&2
+  echo "    su runner -c \"bash /home/runner/repo/deploy/z3/tests/run-tests.sh\"'" >&2
   exit 2
 fi
 
