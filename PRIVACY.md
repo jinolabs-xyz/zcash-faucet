@@ -57,19 +57,45 @@ purged on the same schedule as the rest of the row.
 Every place a user picks an address, **shielded is the default**. Transparent is
 an explicit opt-in toggle. Shielded recipients get a private Orchard note.
 
+**The faucet's own wallet is shielded too.** It runs a Zallet wallet on its own
+node (the Z3 stack), and a drip to a shielded address is a `z_sendmany` out of a
+shielded pool with nothing on the public ledger linking the faucet to the person it
+paid. Earlier versions of this page called that a future upgrade. It shipped, and
+it is what the deployment runs.
+
+Which shielded pool, precisely, because a privacy page should not be vague about
+this and an earlier draft of this very paragraph got it wrong. The wallet reports
+its holdings under the pool name **`ironwood`**, and Zallet models `ironwood` as a
+pool distinct from `orchard`: its own source maps them to separate codes and notes
+that Ironwood notes are Orchard-SHAPED but tracked separately. So this page does not
+claim the notes are Orchard. It claims what the wallet says, which is a shielded
+pool called `ironwood`, Orchard-shaped, and separate from the Orchard pool.
+
+Two limits, since the point of this page is not to flatter us:
+
+- **A transparent recipient is a transparent send.** If you paste a `tm…` address
+  the output is public, unavoidably, because that is what a transparent address is.
+  The faucet builds that one with revealed-recipient permission explicitly rather
+  than by accident, and a shielded address avoids it entirely.
+- **Amounts and timing leak at the edges.** The faucet publishes its own balance and
+  a drip is a fixed size, so someone watching the balance move can infer that
+  *a* drip happened. What they cannot learn is who received it.
+
 ## Honest trade-offs (and how to remove them)
 
 - **Cloudflare Turnstile** (optional anti-bot) sends the request to a third party.
-  It's off unless keys are set. For a fully self-sovereign deploy, swap it for a
-  **proof-of-work / hashcash** challenge: it lives behind one function
-  ([`turnstile.ts`](src/lib/turnstile.ts)), so it's a clean replacement.
+  It's off unless keys are set, and **this deployment runs the proof-of-work path
+  instead**, so no request reaches Cloudflare. Worth knowing if you run your own:
+  the choice follows from whether `TURNSTILE_SECRET_KEY` exists rather than from a
+  separate decision, so setting that key alone moves your users' requests to a
+  third party. That applies to a box provisioned before `FAUCET_CHALLENGE` was
+  added to the deploy template. A box set up from the current template has the mode
+  written down explicitly, so the fallback never runs and the key alone changes
+  nothing. Proof of work lives behind the same single function
+  ([`turnstile.ts`](src/lib/turnstile.ts)), which is what makes either one a clean
+  swap.
 - **Explorer links** (transparent sends only) point at a third-party explorer,
   and clicking one discloses the txid to them. Shielded sends show no external link.
-- **The faucet's own wallet is transparent**, so the faucet's spending is public
-  (a faucet isn't hiding). Recipient privacy, the thing that matters, is
-  preserved: shielded recipients receive private notes. A fully-shielded faucet
-  wallet (Zallet/Z3 or zingolib) is the future upgrade if faucet-side privacy is
-  wanted too.
 - **`RATE_LIMIT_SALT`** must be set to a long random secret in production, or the
   address/IP hashes could be brute-forced against a small candidate set.
 
