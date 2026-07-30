@@ -6,7 +6,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { config } from "@/lib/config";
 import { clientIp } from "@/lib/clientIp";
-import { fingerprintIp } from "@/lib/privacy";
+import { fingerprintIp, fingerprintSubnet } from "@/lib/privacy";
 import { issueChallenge } from "@/lib/pow";
 import { withApi, apiError } from "@/lib/api";
 
@@ -19,5 +19,9 @@ export const GET = withApi("pow-challenge", async (req: NextRequest, api) => {
   }
   const raw = clientIp(req);
   const ipHash = raw ? fingerprintIp(raw) : "anon";
-  return NextResponse.json({ ok: true, ...issueChallenge(ipHash) });
+  // Escalation keys on the range as well as the address (#196), so rotating IPs in a
+  // cloud /24 cannot reset difficulty. Null on an unparseable IP, which skips the rule
+  // rather than dropping every such client into one shared bucket.
+  const subnetHash = raw ? fingerprintSubnet(raw) : null;
+  return NextResponse.json({ ok: true, ...issueChallenge(ipHash, subnetHash) });
 });

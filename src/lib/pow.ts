@@ -78,17 +78,33 @@ function leadingZeroBits(buf: Buffer): number {
  */
 export const REQ_WINDOW_MS = Math.max(60_000, Math.floor(num("FAUCET_POW_WINDOW_SECONDS", 3600) * 1000));
 const perIp = new Map<string, number[]>(); // ipHash -> request timestamps
+/**
+ * Attempts per SUBNET, so rotating IPs inside one range does not reset escalation
+ * (#196). A cloud provider hands one person thousands of addresses in a /24, so
+ * keying escalation on the IP alone meant a farmer paid base difficulty forever: 50
+ * attempts from 50 addresses looked like 50 first-time users.
+ *
+ * Residential users do not cluster this way, which is the same reason the daily cap
+ * is per-subnet already. An honest claimer makes one attempt and never reaches the
+ * second bucket at all.
+ */
+const perSubnet = new Map<string, number[]>(); // subnetHash -> request timestamps
 const globalReqs: number[] = []; // all request timestamps (pressure signal)
 
 function prune(list: number[], now: number) {
   while (list.length && list[0] < now - REQ_WINDOW_MS) list.shift();
 }
 
-function difficultyFor(ipHash: string, now: number): number {
+function difficultyFor(ipHash: string, subnetHash: string | null, now: number): number {
   const mine = perIp.get(ipHash) ?? [];
   prune(mine, now);
   prune(globalReqs, now);
-  const repeats = mine.length; // requests already made in the window
+  const range = subnetHash ? (perSubnet.get(subnetHash) ?? []) : [];
+  prune(range, now);
+  // MAX rather than sum. Both buckets see the same attempt when one address makes it,
+  // so adding them would double every honest user's escalation to buy nothing. The max
+  // is what makes this cost a farmer and cost a single claimant exactly nothing.
+  const repeats = Math.max(mine.length, range.length); // attempts already in the window
   // Global pressure. Thresholds tightened with the window widening: they count
   // requests inside REQ_WINDOW_MS, so leaving them at 10/25/60 after a 6x longer
   // window would have made pressure fire six times more readily by accident, which
@@ -117,7 +133,13 @@ function solvableCeiling(): number {
  * users for the client's behaviour and for their own retries, then re-armed the
  * same difficulty on the way back (#132).
  */
-function recordRequest(ipHash: string, now: number) {
+function recordRequest(ipHash: string, subnetHash: string | null, now: number) {
+  if (subnetHash) {
+    const range = perSubnet.get(subnetHash) ?? [];
+    prune(range, now);
+    range.push(now);
+    perSubnet.set(subnetHash, range);
+  }
   const mine = perIp.get(ipHash) ?? [];
   mine.push(now);
   perIp.set(ipHash, mine);
@@ -127,9 +149,9 @@ function recordRequest(ipHash: string, now: number) {
 }
 
 /** Issue a fresh, signed challenge for this client. */
-export function issueChallenge(ipHash: string): Challenge {
+export function issueChallenge(ipHash: string, subnetHash: string | null = null): Challenge {
   const now = Date.now();
-  const difficulty = difficultyFor(ipHash, now);
+  const difficulty = difficultyFor(ipHash, subnetHash, now);
   const seed = createHash("sha256").update(`${now}:${Math.random()}:${ipHash}`).digest("hex").slice(0, 32);
   // A harder challenge lives longer. Cushion, not guarantee: see powBudget.ts.
   const exp = Math.floor(now / 1000) + ttlSecondsFor(difficulty, config.pow.baseBits, config.pow.ttlSeconds);
@@ -145,7 +167,7 @@ export interface Verdict { ok: boolean; reason?: string }
  * a restart, and the D1 backend is an HTTP round-trip. The cheap checks run
  * first so a junk solution never reaches the database.
  */
-export async function verifySolution(s: Solution, ipHash: string): Promise<Verdict> {
+export async function verifySolution(s: Solution, ipHash: string, subnetHash: string | null = null): Promise<Verdict> {
   if (!s || !s.seed || typeof s.nonce !== "string") return { ok: false, reason: "Missing challenge solution." };
   const now = Math.floor(Date.now() / 1000);
   if (s.exp < now) return { ok: false, reason: "That challenge expired. The gate is busy right now, so come back in a few minutes." };
@@ -157,7 +179,7 @@ export async function verifySolution(s: Solution, ipHash: string): Promise<Verdi
 
   // Count it now, not earlier: the signature proves this is a challenge we
   // issued to this client, so junk POSTs cannot escalate a shared IP.
-  recordRequest(ipHash, Date.now());
+  recordRequest(ipHash, subnetHash, Date.now());
 
   const digest = createHash("sha256").update(`${s.seed}:${s.nonce}`).digest();
   if (leadingZeroBits(digest) < s.difficulty) return { ok: false, reason: "Proof of work does not meet the difficulty." };

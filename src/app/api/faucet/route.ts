@@ -77,7 +77,7 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     if (!body.pow) {
       return apiError(403, "Proof of work required.", api);
     }
-    const verdict = await verifySolution(body.pow, ipHash ?? "anon");
+    const verdict = await verifySolution(body.pow, ipHash ?? "anon", subnetHash);
     if (!verdict.ok) {
       return apiError(403, verdict.reason ?? "Proof of work failed.", api);
     }
