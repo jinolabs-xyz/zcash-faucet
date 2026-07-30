@@ -133,3 +133,26 @@ test("every sighting is reported, so a disagreement can be attributed", async ()
   assert.equal(v.sightings.length, 2);
   assert.deepEqual(v.sightings.map((s) => s.source), ["a", "b"]);
 });
+
+test("a height with no txid echo says so, instead of claiming there was no height", async () => {
+  // Found reviewing #236, measured against the merged module: this input returned
+  // "no height and no explicit negative", which is false. The verdict was right and
+  // the sentence was not, which is the #211 defect in a different file.
+  //
+  // The case is not hypothetical: an explorer returning blockHeight without echoing
+  // txid is the shape a generic or cached body has, and that is the one this module
+  // most needs to describe accurately.
+  const s = await askOneSource(TXID, src("a"), 500, canned(200, JSON.stringify({ blockHeight: 4221730 })));
+  assert.equal(s.state, "cannot-verify", "a height alone must not confirm");
+  assert.doesNotMatch(s.detail, /no height/, `still claims there was no height: ${s.detail}`);
+  assert.match(s.detail, /never named the transaction/);
+  assert.match(s.detail, /4221730/, "the height it did report belongs in the reason");
+});
+
+test("a genuinely blank answer still gets the blank-answer reason", async () => {
+  // The control. Without it, giving both paths the same new sentence would pass the
+  // test above while losing the distinction it exists to make.
+  const s = await askOneSource(TXID, src("a"), 500, canned(200, JSON.stringify({ txid: TXID })));
+  assert.equal(s.state, "cannot-verify");
+  assert.match(s.detail, /no height and no explicit negative/);
+});

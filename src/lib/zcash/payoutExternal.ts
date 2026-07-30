@@ -177,6 +177,18 @@ export async function askOneSource(
     return { state: "absent", height: null, source: source.org, detail: "source says it has no such transaction" };
   }
 
+  // Distinguish the two ways of getting here, because the verdict is the same and
+  // the CAUSE is not, and a reason that names the wrong one is the #211 defect: an
+  // operator who spots the sentence is wrong cannot tell whether the verdict is too.
+  if (height !== null && height > 0) {
+    // A height WITHOUT the source naming the transaction. More suspicious than a
+    // blank answer rather than less, since a generic or cached body is exactly how
+    // one transaction's confirmation gets read as another's.
+    return unverifiable(
+      source.org,
+      `reported height ${height} but never named the transaction, so it cannot be tied to this txid`,
+    );
+  }
   return unverifiable(source.org, "no height and no explicit negative, so this proves nothing");
 }
 
