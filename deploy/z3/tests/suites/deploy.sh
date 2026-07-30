@@ -218,6 +218,32 @@ check "and does not assert the second false rule" \
   "! grep -q 'have not verified that zebra builds' '$T/shielded.log'"
 check "and does NOT blame base58" "! grep -q 'not base58' '$T/shielded.log'"
 
+# t2 (P2SH) is the other valid testnet form and had no coverage at all, so a
+# regression that accepted only tm would have passed the whole suite (#165).
+deploy_fresh_env
+FAUCET_MINER_ADDRESS="t2HifwjUj9uyxr9bknR8LFuQbc98c3vkXtu" run_deploy > "$T/t2.log" 2>&1
+check "a valid t2 P2SH testnet address is accepted" "[ $? -eq 0 ]"
+check "and the override carries it" \
+  "grep -q 'ZEBRA_MINING__MINER_ADDRESS: \"t2HifwjUj9uyxr9bknR8LFuQbc98c3vkXtu\"' '$D/z3-stack/docker-compose.override.yml'"
+
+# The version-byte check, and BOTH vectors below have VALID checksums. That is the
+# point: they pass the prefix regex, the base58 alphabet, the length check and the
+# checksum, so before this check they were accepted as testnet addresses. Verified
+# reachable rather than assumed, by encoding one-off version bytes and observing
+# what they render as: 0x1d26 renders as tm..., 0x1cbb renders as t2....
+deploy_fresh_env
+FAUCET_MINER_ADDRESS="tmt46wuJtJjoFuREQa5gP7pKBF2LtVJe8zi" run_deploy > "$T/badver-tm.log" 2>&1
+check "a tm-looking address with the WRONG version byte is refused" "[ $? -ne 0 ]"
+check "and it says version bytes, not checksum, because the checksum passed" \
+  "grep -q 'version bytes' '$T/badver-tm.log'"
+check "and it does NOT blame a typo, which would send the operator to re-paste a valid address" \
+  "! grep -q 'it is a typo' '$T/badver-tm.log'"
+check "and NO override is written" "[ ! -f '$D/z3-stack/docker-compose.override.yml' ]"
+
+deploy_fresh_env
+FAUCET_MINER_ADDRESS="t2ptZbHR4LSDWQ3K8xC3HEQBzu3mxTsMzBu" run_deploy > "$T/badver-t2.log" 2>&1
+check "a t2-looking address with the WRONG version byte is refused too" "[ $? -ne 0 ]"
+
 # The value is written inside YAML quotes, so a quote would escape into structure.
 deploy_fresh_env
 FAUCET_MINER_ADDRESS='tm" ; rm -rf /nonexistent ; echo "' run_deploy > "$T/inject.log" 2>&1
