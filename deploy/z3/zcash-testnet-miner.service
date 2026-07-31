@@ -17,6 +17,13 @@ Type=simple
 # MINER_MODE stays 'proposal' until the first live block is coordinated.
 EnvironmentFile=-/etc/faucet/miner.env
 Environment=MINER_MODE=proposal
+# The heartbeat, which is the only thing that can say whether this miner is WORKING as
+# opposed to merely running. /api/status used to report mining from an env flag, which read
+# "on" for 70 minutes while every getblocktemplate failed on a stale auth cookie.
+# StateDirectory creates and owns /var/lib/faucet-miner, and the faucet container gets it
+# bind-mounted read-only. Contract: deploy/z3/MINER-HEARTBEAT.md
+StateDirectory=faucet-miner
+Environment=MINER_HEARTBEAT_PATH=/var/lib/faucet-miner/heartbeat.json
 ExecStart=/opt/faucet/zcash-testnet-miner
 # The node and the wallet always win. 150% is one and a half cores of the
 # box, and idle IO plus a deep nice keep the solver out of their way.

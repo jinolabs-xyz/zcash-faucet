@@ -51,6 +51,15 @@ services:
     volumes:
       # Persist the rate-limit / cooldown ledger across restarts.
       - faucet_data:/app/data
+      # The miner's heartbeat, so /api/status can report whether mining is WORKING rather
+      # than what an env flag says. The miner is a systemd unit on the host, this is a
+      # container, so the file is how the two meet. Contract: MINER-HEARTBEAT.md
+      #
+      # READ-ONLY deliberately: the miner is the only writer, so the reader cannot corrupt
+      # or forge the signal it is judging. The directory is created by StateDirectory= in
+      # zcash-testnet-miner.service; docker would otherwise create it root-owned itself,
+      # and an empty dir reads as cannot-verify rather than as healthy.
+      - /var/lib/faucet-miner:/var/lib/faucet-miner:ro
     expose:
       - "3000"
     # /api/health is deliberately cheap (no gRPC/DB). node is the only binary

@@ -23,15 +23,17 @@
 //! journald.
 
 mod block;
+mod heartbeat;
 mod rpc;
 mod template;
 
 use std::{
+    env,
     path::PathBuf,
     process,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -41,6 +43,15 @@ use serde_json::json;
 
 use block::{expand_target, meets_target, serialize_block, Header};
 use rpc::Rpc;
+
+/// One place that records a failed stage, so every call site passes a fixed token and none
+/// of them can pass a formatted error. See deploy/z3/MINER-HEARTBEAT.md: the file is served
+/// publicly and an error string is where an RPC URL with credentials would end up.
+fn beat_error(hb: &Arc<Mutex<heartbeat::State>>, stage: &'static str) {
+    if let Ok(mut g) = hb.lock() {
+        g.error(stage);
+    }
+}
 use template::Template;
 
 struct Config {
@@ -153,9 +164,30 @@ fn main() {
         log("proposal mode: solved blocks are validated, never submitted");
     }
 
+    // MINER_HEARTBEAT_PATH has no default that points anywhere real: a missing configuration
+    // must not write to a stale path and must not be mistaken for a working heartbeat. Unset
+    // means no file, and the reader then reports cannot-verify, which is the honest answer.
+    let hb_path = env::var("MINER_HEARTBEAT_PATH").ok().filter(|p| !p.is_empty());
+    match &hb_path {
+        Some(p) => log(&format!("heartbeat: {p} (every {}s)", config.poll_secs.max(1))),
+        None => log("heartbeat: MINER_HEARTBEAT_PATH is unset, so nothing will report whether this miner is working"),
+    }
+    let hb = heartbeat::start(
+        hb_path.map(PathBuf::from),
+        match config.mode {
+            Mode::Submit => "submit",
+            Mode::Proposal => "proposal",
+        },
+        config.poll_secs.max(1),
+        config.template_secs,
+    );
+
     loop {
-        match mine_once(&rpc, &config) {
+        match mine_once(&rpc, &config, &hb) {
             Ok(Outcome::Accepted { height }) => {
+                if let Ok(mut g) = hb.lock() {
+                    g.submitted(true);
+                }
                 log(&format!("block at height {height} ACCEPTED by zebra"));
             }
             Ok(Outcome::ProposalValid { height }) => {
@@ -167,6 +199,11 @@ fn main() {
                 log(&format!("height {height}: no solution in this window, refetching"));
             }
             Ok(Outcome::Rejected { height, reason }) => {
+                if let Ok(mut g) = hb.lock() {
+                    g.submitted(false);
+                }
+                // The reason is LOGGED, never written to the heartbeat: it is zebra's text and
+                // the heartbeat is public.
                 log(&format!("height {height}: zebra rejected the block: {reason}"));
             }
             Err(e) => {
@@ -184,16 +221,27 @@ enum Outcome {
     NoSolution { height: u32 },
 }
 
-fn mine_once(rpc: &Rpc, config: &Config) -> Result<Outcome, String> {
+// `hb` is written at the POINTS where things happen, not derived from the return value.
+// Deriving it would misreport: a template fetched successfully followed by a failing
+// submitblock returns Err, and recording that as "no template" would show a stall while
+// templates were in fact flowing. A false alarm is not a safe direction either.
+fn mine_once(rpc: &Rpc, config: &Config, hb: &Arc<Mutex<heartbeat::State>>) -> Result<Outcome, String> {
     // Timings for the orphan analysis (issue #32). The question is whether we
     // lose the network race because our block is late, or because a dominant
     // miner never builds on us. These numbers settle it: if template age and
     // solve-to-submit are small fractions of the block interval, latency is
     // not the cause and the answer is hashrate share. See MINING.md.
     let fetched_at = Instant::now();
-    let raw = rpc.call("getblocktemplate", json!([{"mode": "template"}]))?;
+    let raw = rpc
+        .call("getblocktemplate", json!([{"mode": "template"}]))
+        .inspect_err(|_| beat_error(hb, "getblocktemplate"))?;
     let t: Template =
         serde_json::from_value(raw).map_err(|e| format!("could not parse the template: {e}"))?;
+    // The template is in hand and parsed: this is the moment that proves templates flow,
+    // and it is the one the 70-minute outage would have contradicted.
+    if let Ok(mut g) = hb.lock() {
+        g.template_ok(u64::from(t.height));
+    }
     let target = expand_target(&t.bits)?;
     let header = Header::from_template(&t)?;
 
@@ -212,6 +260,9 @@ fn mine_once(rpc: &Rpc, config: &Config) -> Result<Outcome, String> {
     let Some(solved) = solve(&header, &target, config) else {
         return Ok(Outcome::NoSolution { height: t.height });
     };
+    if let Ok(mut g) = hb.lock() {
+        g.solved();
+    }
     let solve_secs = solve_started.elapsed().as_secs_f64();
     let solved_at = Instant::now();
 
@@ -230,10 +281,12 @@ fn mine_once(rpc: &Rpc, config: &Config) -> Result<Outcome, String> {
 
     // Always validate through proposal mode first: it runs zebra's full block
     // check without touching the chain, so a malformed block costs nothing.
-    let verdict = rpc.call(
-        "getblocktemplate",
-        json!([{"mode": "proposal", "data": block_hex, "capabilities": ["proposal"]}]),
-    )?;
+    let verdict = rpc
+        .call(
+            "getblocktemplate",
+            json!([{"mode": "proposal", "data": block_hex, "capabilities": ["proposal"]}]),
+        )
+        .inspect_err(|_| beat_error(hb, "proposal"))?;
     if !verdict.is_null() {
         return Ok(Outcome::Rejected {
             height: t.height,
@@ -247,7 +300,9 @@ fn mine_once(rpc: &Rpc, config: &Config) -> Result<Outcome, String> {
 
     // null from submitblock means accepted, anything else is a rejection
     // reason ("duplicate", "rejected", ...).
-    let submitted = rpc.call("submitblock", json!([block_hex]))?;
+    let submitted = rpc
+        .call("submitblock", json!([block_hex]))
+        .inspect_err(|_| beat_error(hb, "submitblock"))?;
     // Solve-to-submit covers serialization plus the proposal check plus the
     // submit call: the whole window between having a winning block and the
     // network hearing about it.
