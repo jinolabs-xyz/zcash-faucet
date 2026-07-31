@@ -18,6 +18,12 @@ one owns its whole stack: a Zebra full node, a Zallet shielded wallet, a solo
 miner, and a self-healing deployment. No third-party wallet service, no captcha
 vendor, no external dependency in the path that moves money.
 
+The property it is built around: **it refuses rather than guesses.** The faucet will
+not build a payment its node is too far behind to confirm. The deploy will not report
+success without checking what it left behind. Every status field distinguishes
+"working" from "broken" from "cannot tell", and only one of those reads as good news.
+That discipline runs from the claim endpoint all the way down to the systemd units.
+
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/ready-paper.png">
   <img src="docs/screenshots/ready-ink.png" alt="The faucet ready to serve: address field, Request 0.1 TAZ button, and the live status strip showing node, sync, balance and reserve.">
@@ -32,6 +38,24 @@ vendor, no external dependency in the path that moves money.
 > not the sealed Orchard one. The faucet has minted and paid shielded drips on
 > the new pool for weeks, and it was running on the corrected circuit before
 > mainnet's own Ironwood activation on 2026-07-28 rather than after it.
+
+## What it does
+
+| | |
+| --- | --- |
+| **Shielded by default** | Every drip is a real z2z shielded transaction on the Ironwood pool. Amount, recipient, and the link back to the faucet stay off the public ledger. |
+| **Its own node and wallet** | Zebra full node plus Zallet with Zaino embedded. No third-party wallet service and no external dependency anywhere in the path that moves money. |
+| **Mines its own funding** | A solo Equihash miner works `getblocktemplate` against our own node, and won blocks 4,227,889 and 4,227,915 on 2026-07-31. |
+| **Auto-shields its mining rewards** | Mined coinbase is transparent. A reserve loop watches the spendable balance and shields matured coinbase into the faucet's own account automatically, so transparent rewards become shielded balance with nobody touching a key. |
+| **Never stops serving to refill** | Refill work shares the send queue with drips, one bounded step at a time, and yields the moment a real claim arrives. |
+| **Proof-of-work anti-abuse** | Browser-side PoW with adaptive difficulty, single-use signed challenges, and subnet-aware escalation. Calls nobody, tracks no one, needs no captcha vendor. |
+| **Privacy in the rate limiter** | Rate limiting keys on a salted hash of the IP. The raw address never reaches a log line. |
+| **Refuses payments that cannot confirm** | The node's tip is checked against an independent reference, and the faucet declines to build a transaction that would be born expired rather than issuing one that can never be mined. |
+| **Verifies the chain it is on** | Chain-identity, branch-id and split detection, so a faucet on a forked or mis-upgraded chain reports it rather than paying out on it. |
+| **Chain snapshots every six hours** | Verified, rotating snapshots of synced chain state, so rebuilding a box is a download and a short catch-up instead of a day-long resync. |
+| **Encrypted backups with a proven restore** | Wallet and ledger backups on a timer, and a restore path that has round-tripped a real wallet, 42 tables and 62 rows, digests matching. |
+| **A box that proves it matches the repo** | The server publishes what is installed, the status page turns it into a verdict, and CI fails when the two disagree. |
+| **Status you can check yourself** | Node, height, balance, miner, box integrity, refill, queue and backend, all live off the node, on the page, no login. |
 
 ## How it actually works
 
@@ -63,21 +87,24 @@ through the same serial send queue as drips, one bounded step at a time, and
 skips its turn whenever a real claim is waiting, so **topping up never pauses
 service**.
 
-That machinery works. The funding does not, and the reason is arithmetic rather
-than a bug. We have mined real blocks that our own node accepted, but a single
-dominant miner on public testnet wins every height and only ever extends its own
-chain, so ours are orphaned. When one miner never builds on your blocks, your
-chain advances only when you find a block and theirs advances when they do.
-Below half their hashrate the long-run survival of any block you mine is **zero,
-not merely small**, so no amount of tuning propagation or template freshness
-changes the outcome. The measurement and the maths are in
-[#42](https://github.com/jinolabs-xyz/zcash-faucet/issues/42).
+**It does win, and not often enough to be a budget.** On 2026-07-31 the miner solved
+and had accepted blocks 4,227,889 and 4,227,915 six minutes apart, paying 2.5 TAZ of
+coinbase. That is real income and it is the first this project has earned.
 
-What that means in practice: treat mining as machinery that is ready rather than
-as an income stream. A deploy that needs a funded wallet has to get TAZ from
-somewhere else for now. Mining costs almost nothing to leave running, so it
-keeps running and would start funding the faucet the moment the network stops
-being dominated by one miner.
+It does not overturn the arithmetic, which is why this section still exists. A single
+dominant miner on public testnet takes most heights and extends its own chain, so a
+small miner's blocks are usually orphaned. The measurement and the maths are in
+[#42](https://github.com/jinolabs-xyz/zcash-faucet/issues/42). Two wins in six minutes
+is luck as much as hashrate, and the honest read is that mining is a lottery ticket
+that occasionally pays rather than a line in a budget.
+
+So: **donations fund the faucet, mining supplements it.** Mining costs nothing extra
+on a box already paid for, the miner runs at the lowest priority so it yields to
+serving traffic, and it stays on permanently. Spare cycles that occasionally produce
+1.25 TAZ are worth having; planning around them is not.
+
+Coinbase needs 100 confirmations to mature before it can be shielded, so a won block
+turns into spendable shielded balance about two hours later, unattended.
 
 ### Anti-abuse
 
@@ -146,6 +173,35 @@ Throughout, a source that will not answer is recorded as **cannot verify**, neve
 as a pass. An unreachable explorer is not evidence of a fork, and a check that
 cannot run must not read the same as one that ran and found nothing wrong.
 
+### What the status actually reports
+
+Every number on the page comes off the node, and every state is a claim the system can
+defend. The distinction that took the longest to learn: **"working", "broken" and "I
+cannot tell" are three different answers, and only one of them is good news.**
+
+<img src="docs/screenshots/panel.png" alt="The expanded details panel on production: node ready, block height 4,227,965 of 4,227,965, wallet balance 829.72 TAZ, miner mining with a template 4 seconds old, box 28 of 28 files all enabled, refill waiting with nothing to shield, queue 0 pending, backend reachable.">
+
+That is production, not a mock. `box 28 of 28 files, all enabled` is the integrity gate
+answering over the scripts and units it tracks; `miner mining, template 4s ago` is a
+heartbeat file written by the miner itself, not an environment variable; `refill
+waiting, nothing to shield` is the reserve loop distinguishing patience from failure.
+Every row is a measurement, and each one covers exactly what it says and no more.
+
+- **The miner reports measured template activity, not a config flag.** An environment
+  variable saying "mining is enabled" cannot go false when the miner breaks, so the
+  panel reads a heartbeat the miner writes itself: `mining, template 14s ago`, or the
+  stall named precisely, or an explicit "cannot see the heartbeat".
+- **Not-configured and unreadable are different findings.** No heartbeat path means
+  nobody asked the app to look, and the deploy fixes it. A path with nothing readable
+  means it is wired up and the writer is dead, and the box fixes it. Collapsing those
+  throws away which of two jobs an operator has.
+- **The reserve loop says whether it is waiting or failing.** "Insufficient balance"
+  from `z_shieldcoinbase` usually means the coinbase is not 100 blocks old yet, which
+  is normal. It reads `waiting, nothing to shield`, not an error, and a real failure is
+  named as one.
+- **A refill that can still serve keeps serving and says so**, because a healthy
+  background top-up must never look like an outage.
+
 ### The UI
 
 One page (`src/app/page.tsx`), no tabs, with states that tell the truth about
@@ -156,25 +212,67 @@ what the backend is doing:
 - **Topping up** while the reserve loop refills. If the faucet can still serve it
   keeps serving and says so, because a healthy background refill must never look
   like an outage.
-- **Empty** only when it genuinely cannot pay, and it says the wallet is refilled
-  by hand rather than promising a self-heal that mining cannot deliver.
+- **Empty** only when it genuinely cannot pay, and it says plainly what happens next
+  rather than promising a self-heal on a timetable nobody can guarantee.
 - **Ready**, then a receipt with the txid, a working explorer link, and a
   copyable plain-text summary.
 
-Light and dark are a toggle in the masthead, next to the status badge. The
-choice is remembered and it also repaints the browser's own chrome, so the
-address bar matches the page instead of sitting light above a dark header.
+<img src="docs/screenshots/success-receipt.png" alt="The success receipt: amount, recipient, txid, a shielded z to z badge, and buttons to copy the txid or the whole receipt.">
+
+**The receipt is the thing you paste into an issue**: amount, recipient, txid, a
+shielded z2z badge, a working explorer link, and one button that copies the lot as
+plain text. Frame taken from a local run, since shooting it against production would
+spend a real drip.
+
+The topping-up state is visible in the main screenshot above: production is refilling
+and serving at the same time, so the banner sits at 83% directly above a live Request
+button. That is the design working rather than a mockup of it.
+
+Behind **More details** is the operator's instrument: node, block height, wallet
+balance, miner with the age of its last template, box integrity, refill, queue and
+backend. All of it live off the node, one line each, with rows that need attention
+marked so five alarming rows and four fine ones do not read the same.
+
+Light and dark are a toggle in the masthead, and the choice is remembered and repaints
+the browser's own chrome so the address bar matches the page. The source is linked
+from the masthead too.
+
+There are three other pages, and they are separate on purpose:
+
+| page | why it is its own page |
+| --- | --- |
+| `/donate` | testnet TAZ that goes back out as drips |
+| `/fund` | **mainnet ZEC** for running costs |
+| `/terms` | who operates this, and on what basis |
+
+`/donate` and `/fund` are split because both are unified shielded addresses that
+differ only in **which network eats your money if you pick wrong**. Side by side, the
+entire defence against that was a border colour and the word "mainnet". One page, one
+network is a defence that does not depend on reading carefully.
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/topping-up.png" alt="The topping-up card: a determinate meter showing spendable against the reserve target, and copy saying the faucet is still serving while it refills."></td>
-    <td width="50%"><img src="docs/screenshots/success-receipt.png" alt="The success receipt: amount, recipient, txid, a shielded z to z badge, and buttons to copy the txid or the whole receipt."></td>
+    <td width="50%"><img src="docs/screenshots/donate.png" alt="The donate page: the shielded unified address in full with a copy button, a tank gauge showing the reserve level, and the transparent address for anyone pointing a miner at the faucet."></td>
+    <td width="50%"><img src="docs/screenshots/fund.png" alt="The fund page: the mainnet unified address, a large QR code encoding a ZIP-321 payment URI, a copy button, and a red warning that mainnet sends cannot be reversed."></td>
   </tr>
   <tr>
-    <td><b>Topping up.</b> A refill that can still serve keeps serving, and says so.</td>
-    <td><b>Sent.</b> The receipt is the thing you paste into an issue.</td>
+    <td><b>Donate TAZ.</b> Testnet, costs the giver nothing, goes back out as drips.</td>
+    <td><b>Fund the project.</b> Mainnet, real money, and the only page on the site outlined in red.</td>
   </tr>
 </table>
+
+Both carry a QR encoding a ZIP-321 `zcash:` URI rather than a bare address string, so a
+wallet opens a prefilled send instead of a search box. They are generated server side,
+so nothing leaves the browser to draw them and no third party learns who read the page.
+Each is sized for about four device pixels per module and always renders black on
+white, because an inverted code fails on some phone cameras and a code that does not
+scan is decoration. The first version was 2.2 pixels per module and did not scan in
+Zashi at all.
+
+`/terms` says who operates the faucet and on what basis, including that it is provided
+as is, that donations are not refundable, and that trademarks belong to their owners.
+
+<img src="docs/screenshots/terms.png" alt="The terms page: operator identity, no-warranty statement, fair use, donations non-refundable, privacy, and trademark attribution.">
 
 ## Running it
 
@@ -206,37 +304,131 @@ Both addresses are optional config, surfaced on `/api/status` and on `/donate`.
 transparent. Set neither and the pages that would show them say so rather than
 rendering an empty box.
 
-<img src="docs/screenshots/donate.png" alt="The donate page: the shielded unified address in full with a copy button, a tank gauge showing the reserve level, and the transparent address for anyone pointing a miner at the faucet.">
-
-`/donate` is server rendered, so both addresses are readable with JavaScript
-off. That is deliberate for a page whose only job is handing over an address
-correctly.
+Both pages are server rendered, so the addresses are readable with JavaScript off. That
+is deliberate for pages whose only job is handing over an address correctly, and it is
+why [`/fund`](src/app/fund/page.tsx) is explicitly `force-dynamic`: without it Next
+would prerender at build time and ship a funding page with no address on it.
 
 ## Operations
 
-The box is meant to look after itself. Details live next to the scripts, this is
-the map:
+A faucet is only as good as the box under it, so the operations layer gets the same
+engineering as the app. **Nothing here reports success without checking the state it
+left behind**, and a check that cannot run says "cannot verify" rather than quietly
+passing. That single rule is what makes the green lights on this project worth
+believing.
 
-- **Self-healing.** A watchdog restarts wedged services. `/api/health` is
-  liveness (is the process answering), `/api/ready` is readiness (can it actually
-  serve a drip, with the reason when it cannot). Keeping those separate is what
-  stops a normal first sync from looking like an outage. Readiness asks the
-  ledger too, so a process that answers HTTP while its database is broken stops
-  passing, and that read is cached off the hot path so a slow disk cannot make
-  readiness itself slow.
-- **The node and wallet versions are pinned in a file this repo owns**
-  (`deploy/z3/stack-versions.env`), and the drift audit compares them against
-  what is actually running. Before that the version came from a default inside a
-  third-party compose file, so the version our funds depend on never passed
-  through review and `docker inspect` on the box was the only way to know it.
-- **Config drift is reported, not corrected.** The audit compares units,
-  scripts, env keys and image versions against the repo, and a check it could
-  not run exits differently from a check that found nothing. Skipped never reads
-  as clean.
+### The box has to prove it matches the repo
+
+`deploy/z3/box-report.sh` publishes what is actually installed, `/api/status` turns it
+into a verdict, and the external smoke probe **fails CI when it does not match**.
+
+**`unknown` fails the gate.** A box that cannot say what it has is not a box that is
+fine, so silence is treated as a failure rather than a pass. Installed-but-not-enabled
+fails too, because it works until the next reboot and then silently does not. A
+`.service` activated by its own `.timer` is exempt, since `disabled` is correct there.
+
+Production reads **28 of 28 tracked scripts and units, all enabled**, and that number is
+on the status page rather than buried in a log. Anyone can check it without asking us.
+
+### Deploys refuse rather than report
+
+`deploy/deploy.sh` guarantees three things, and enforces all three itself:
+
+- **It will never drop an HTTPS box to plain HTTP.** The domain is read from
+  `/etc/faucet-domain` and the deploy refuses outright rather than passing `:80` to the
+  proxy. With HSTS in play, a downgrade is not a small mistake, so the deploy treats it
+  as unthinkable rather than unlikely.
+- **It will never replace a wallet account that is already configured.**
+  Create-if-absent, never overwrite, because the account is where the money is.
+- **It will not exit without proving the end state.** HTTPS answers on the configured
+  domain, the wallet accepts the new credential **and rejects a deliberately wrong
+  one**, and the account is still the one the run started with.
+
+That last negative control is the part most deploy scripts skip. A probe that only ever
+sees 200 cannot tell real authentication from a server that says yes to everything.
+
+### The installer cannot silently do nothing
+
+`install-ops.sh` takes its source explicitly and **refuses when source and destination
+resolve to the same path**, which is the one configuration where an installer can
+compare every file to itself, install nothing, and still print a success line.
+
+After it runs it compares every file at the destination against the repo and exits
+non-zero on any mismatch. The loop finishing is not the same as the files being there,
+so it checks.
+
+The ops scripts have their own test harness, **688 assertions, 688 passed**, measured
+against `origin/main` rather than a feature branch. It **refuses to run rather than
+return a number it cannot stand behind**, and the two refusals are different failures:
+
+- **Without GNU `find` and `stat`**, roughly 85 assertions fail as though the code were
+  broken. Noisy, but honest noise.
+- **Without `sha256sum`**, one assertion passes **green** while checking nothing, because
+  the drift check compares two listings that are both empty and equal. That is the
+  dangerous one, and it is why the refusal exists: this is the case where the suite would
+  have lied rather than complained. Both tend to co-occur on macOS, which ships `shasum`
+  instead.
+- **The watchdog suite alone declines to run as root**, because root can write to the
+  directory the test just made unwritable, so the degrade path never executes and the
+  watchdog looks fine. The scoping is deliberate: `SUITES=drift` runs as root and
+  passes. Refusing suites that would have run correctly is its own kind of dishonesty.
+
+A test suite that answers wrongly is worse than one that says it cannot answer.
+
+### Credentials rotate, and the rotation is proven both ways
+
+The wallet RPC password moved from plaintext to `pwhash`, and migrating **rotates**
+rather than hashing the existing value, so a credential that has been through a log
+stops working. Verified against the **running wallet**, not the config files: the new
+password authenticates and the old one is rejected. Config and wallet agreeing on disk
+is not the wallet agreeing.
+
+### Versions are pinned where they can be reviewed
+
+`deploy/z3/stack-versions.env` pins the node by version and the **wallet by digest**,
+because a tag can be re-pushed and a digest cannot, and the wallet is a third-party
+build holding the faucet's funds. `audit-drift.sh` compares the pins against what is
+actually running, so a box that drifts is reported rather than discovered.
+
+### Encrypted backups, with a restore that has actually been run
+
+Wallet and ledger backups run on a timer, encrypted, around 22 MB. The restore path is
+exercised rather than assumed: it has round-tripped a wallet created by the real
+`zallet` binary and come back **logically identical**, 42 tables and 62 rows, with
+matching content digests on both sides.
+
+Plenty of projects have a backup script. The useful question is whether anyone has ever
+run the other half, and here the answer is yes.
+
+### Chain snapshots, so a rebuild is minutes instead of a day
+
+Zebra's initial sync is the one genuinely slow thing on this box. Chain snapshots remove
+it. Every six hours an export runs against the **live node**, with zero downtime: it
+opens the chain state in RocksDB read-only secondary mode, so it follows the running
+node's files and by construction cannot write to them.
+
+The current snapshot is height 4,226,703, 67.9 million records, 11.4 GB of state
+compressed to **8.4 GB** on disk. The last three are kept and older ones rotate out
+automatically, so the archive is always fresh and never grows without bound. A
+`latest.tar.zst` symlink always points at the newest.
+
+Every snapshot carries a **manifest hash**, and the importer verifies against it:
+
+```
+zebrad import-snapshot <snapshot> --expect-hash 4ccc79fbe88f5b61a9500049f90614a40559ec70de7151a649e7cb5a7fee059e
+```
+
+So a fresh box imports a verified snapshot and catches up from there, turning a
+day-long resync into a download plus a short catch-up. The snapshot commands come from
+our own Zebra fork
+([Giri-Aayush/zebra](https://github.com/Giri-Aayush/zebra), branch
+`feat/snapshot-sync`).
+
+### Where the details live
+
 - **Mining** and its tuning: [deploy/z3/MINING.md](deploy/z3/MINING.md), and
-  [TESTNET-MINING.md](TESTNET-MINING.md) walks a newcomer through mining a first
-  testnet block from scratch.
-- **Encrypted backups** of wallet and ledger: [deploy/z3/BACKUPS.md](deploy/z3/BACKUPS.md)
+  [TESTNET-MINING.md](TESTNET-MINING.md) walks a newcomer through mining a first block
+- **Encrypted backups**: [deploy/z3/BACKUPS.md](deploy/z3/BACKUPS.md)
 - **Snapshots** for a fast chain rebuild: [deploy/z3/SNAPSHOTS.md](deploy/z3/SNAPSHOTS.md)
 - **TLS and domain**: [deploy/z3/HTTPS.md](deploy/z3/HTTPS.md)
 - **Metrics and alerts**: [deploy/z3/OBSERVABILITY.md](deploy/z3/OBSERVABILITY.md)
