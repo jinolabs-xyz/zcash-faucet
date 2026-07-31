@@ -19,10 +19,26 @@ const base: MinerReading = {
   consecutiveErrors: 0,
 };
 
-test("running names the age and the height, because 'on' was the whole problem", () => {
+test("running names the age, because 'on' was the whole problem", () => {
+  // The original assertion also required the height. It was dropped from the HEALTHY
+  // row on purpose: the panel carries `block height` two cells away, and repeating it
+  // wrapped this row onto a second line for a number already on screen. The substance
+  // this test was written to protect is the AGE, which is what "on" never said.
   const s = minerRow(base);
   assert.match(s, /mining/);
   assert.match(s, /20s ago/);
+});
+
+test("the healthy row does NOT repeat the block height the panel already shows", () => {
+  // Pins the reason, so a future edit that helpfully adds it back has to argue with
+  // this rather than silently reintroduce the wrap.
+  assert.doesNotMatch(minerRow(base), /4,221,033/);
+});
+
+test("but a STALLED row keeps the height, because there the two numbers differ", () => {
+  // On a stall the miner's last template and the node's tip diverge, and that gap is
+  // the finding. Dropping it there would remove the evidence rather than a repetition.
+  const s = minerRow({ ...base, state: "stalled", templateAgoSeconds: 4200 });
   assert.match(s, /4,221,033/);
 });
 

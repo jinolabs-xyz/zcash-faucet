@@ -65,7 +65,9 @@ export function reserveRows(r: ReserveFacts): ReserveRows {
       // Not flagged. Having no coinbase to shield is the normal steady state on a
       // testnet where we lose nearly every block race, and marking it would train an
       // operator to ignore the marker, which costs more than the row is worth.
-      return { reserve: balance, refill: "waiting, nothing to shield yet", refillBad: false };
+      // "yet" was a whole extra line for a word that adds nothing: "waiting" already
+      // carries the not-forever sense.
+      return { reserve: balance, refill: "waiting, nothing to shield", refillBad: false };
     }
     if (stuck?.outcome === "error") {
       return { reserve: balance, refill: `refill FAILING, ${r.failedSteps} consecutive`, refillBad: true };

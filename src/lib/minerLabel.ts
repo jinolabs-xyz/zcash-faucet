@@ -84,7 +84,15 @@ export function minerRow(r: MinerReading): string {
       // Proposal mode never submits a solved block, so calling it "mining" would claim
       // we are trying to win blocks when we are only asking for templates.
       const verb = r.mode === "proposal" ? "proposing only" : "mining";
-      return `${verb}, last template ${age} ago${at}`;
+      // NO HEIGHT HERE, deliberately. The panel already carries `block height` two
+      // cells away, and repeating it pushed this row onto a second line for a number
+      // the reader can already see. The healthy row's job is to say we are working
+      // and how recently; a wrapped row costs more attention than the digits buy.
+      //
+      // The FAILING rows below keep the height, because there the two numbers differ
+      // and that gap is the finding: a miner stuck at a height the node has left
+      // behind is exactly what a stale template looks like.
+      return `${verb}, template ${age} ago`;
     }
 
     // The today case, and the one that must not sound survivable. Naming the age is
