@@ -39,6 +39,9 @@ with an anti-abuse gate on.
 | `FAUCET_DONATION_ADDRESS` | none | Shown in the UI so people can top the faucet up. |
 | `FAUCET_MINING_ADDRESS` | none | Transparent address the miner pays coinbase to. Shown on /donate for anyone pointing hashrate at us. Unset hides that block. |
 | `FAUCET_MAINTENANCE_ADDRESS` | none | **Mainnet** unified address for donations toward running the project. Validated: anything that is not a `u1…` mainnet UA is logged and ignored, so a testnet address pasted here shows nothing rather than sending real ZEC somewhere unrecoverable. Unset hides the block and the footer link. |
+| `FAUCET_CONTACT` | none | Contact address shown on `/terms`. Email or URL. Unset says so plainly rather than showing an invented one, but a public deployment should set it: a service with no contactable operator is the gap `/terms` exists to close. |
+| `FAUCET_OPERATOR` | `Jino Labs` | Who operates this deployment, named on `/terms`. A fork sets its own. |
+| `FAUCET_OPERATOR_URL` | `https://jinolabs.xyz` | Operator's site, linked from `/terms`. |
 | `FAUCET_WALLET_SEED` | none | Funded transparent wallet, WIF or 64-hex. Only used by `FAUCET_SENDER=real`. Server side, never commit it. |
 | `SEND_QUEUE_MAX_PENDING` | `20` | Sends allowed to queue before the faucet sheds with a busy 503, so a surge cannot pile up unbounded work. |
 | `TX_LOOKUP_RATE_WINDOW_SECONDS` | `60` | Window for the per-IP limit on `/api/tx`. |

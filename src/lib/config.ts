@@ -202,6 +202,14 @@ export const config = {
   // that block, and it is a different address from the donation UA because a
   // coinbase cannot pay a shielded output directly.
   miningAddress: process.env.FAUCET_MINING_ADDRESS ?? "",
+  // Who to contact about the service, shown on /terms. Deliberately config rather
+  // than a constant: a fork must publish ITS operator, not ours, and a stale
+  // address on a terms page is worse than an honest gap.
+  contact: process.env.FAUCET_CONTACT ?? "",
+  // The legal or trading name of whoever runs this deployment. Defaults to the
+  // project's own operator; a fork sets its own.
+  operator: process.env.FAUCET_OPERATOR ?? "Jino Labs",
+  operatorUrl: process.env.FAUCET_OPERATOR_URL ?? "https://jinolabs.xyz",
   // MAINNET address for donations toward running the project. This is real ZEC,
   // on a site that is otherwise entirely testnet, which is the whole reason it is
   // validated rather than printed as given.
