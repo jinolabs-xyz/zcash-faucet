@@ -147,3 +147,57 @@ check "83 minutes newer than its newest source reads CURRENT" \
   "[ \"\$(jqf '$BOX_REPORT_OUT' minerBinary)\" = 'current' ]"
 check "and the box reads complete, present equals expected" \
   "[ \"\$(jqf '$BOX_REPORT_OUT' present)\" = \"\$(jqf '$BOX_REPORT_OUT' expected)\" ]"
+
+echo "== box-report: A FRESH CLONE MUST NOT FORCE stale, which is how a false finding was made"
+# The CTO dry-ran #301 from a fresh shallow clone and got "28 of 29, minerBinary stale". It
+# was an artifact of the instrument: git sets working-tree mtimes to CHECKOUT time, so every
+# source is newer than any binary and an older-than-sources test cannot return anything else.
+# The clone decided the answer before the check ran, and a CI job that clones fresh would
+# report stale forever while looking like a real finding.
+#
+# Our false-pass doctrine pointed the other way: a check that FAILS for a reason unrelated to
+# the thing under test.
+box_env
+# The commit is BACKDATED, because that is the real situation: the last change to the miner
+# happened at 12:19, the binary was built at 13:42, and then a fresh clone stamped every
+# working-tree mtime with the checkout time. Committing "now" would have made the sources
+# genuinely newer than the binary, and the test would then have passed for the wrong reason
+# or failed for a real one. My first version of this fixture did exactly that.
+( cd "$T/repo" && git init -q . && git config user.email t@t && git config user.name t \
+  && git add -A \
+  && GIT_AUTHOR_DATE='2026-07-31T12:19:00' GIT_COMMITTER_DATE='2026-07-31T12:19:00' \
+     git commit -qm "miner sources" ) >/dev/null 2>&1
+# Built AFTER that commit, which is the truth we want reported...
+printf 'ELF-ish\n' > "$T/install/zcash-testnet-miner"
+touch -d '2026-07-31 13:42:00' "$T/install/zcash-testnet-miner"
+# ...but every source mtime is NOW, as a checkout leaves them, so mtime ALONE says stale.
+touch "$S/miner/src/main.rs"
+bash "$BOX_REPORT" > /dev/null 2>&1
+if command -v git >/dev/null 2>&1; then
+  check "a checkout whose mtimes are all fresh does NOT read stale" \
+    "[ \"\$(jqf '$BOX_REPORT_OUT' minerBinary)\" != 'stale' ]"
+  # And it reaches the RIGHT answer, not merely a different wrong one: the binary really is
+  # newer than the last committed change, so current is the truth here.
+  check "it reads CURRENT, because git's answer survives the clone" \
+    "[ \"\$(jqf '$BOX_REPORT_OUT' minerBinary)\" = 'current' ]"
+else
+  echo "  (skipped: no git in this environment, so the git basis cannot be exercised)"
+fi
+
+echo "== box-report: uncommitted miner changes are UNKNOWN, never stale"
+# We cannot know what the binary was built from, and accusing it on evidence we do not have
+# is the same error as excusing it.
+box_env
+( cd "$T/repo" && git init -q . && git config user.email t@t && git config user.name t \
+  && git add -A && git commit -qm base ) >/dev/null 2>&1
+printf 'ELF-ish\n' > "$T/install/zcash-testnet-miner"
+printf 'fn main() { /* edited, not committed */ }\n' > "$S/miner/src/main.rs"
+bash "$BOX_REPORT" > /dev/null 2>&1
+if command -v git >/dev/null 2>&1; then
+  check "a dirty miner tree reports UNKNOWN rather than stale" \
+    "[ \"\$(jqf '$BOX_REPORT_OUT' minerBinary)\" = 'unknown' ]"
+  check "and unknown is NOT counted present, so the gate still fails" \
+    "[ \"\$(jqf '$BOX_REPORT_OUT' present)\" != \"\$(jqf '$BOX_REPORT_OUT' expected)\" ]"
+else
+  echo "  (skipped: no git in this environment)"
+fi

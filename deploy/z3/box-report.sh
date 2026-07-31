@@ -95,9 +95,40 @@ if [ -d "$MINER_SRC_DIR" ]; then
   if [ ! -f "$MINER_BIN" ]; then
     miner_state="absent"
   else
+    # ASK GIT FIRST, BECAUSE MTIME LIES IN A FRESH CLONE.
+    #
+    # git sets working-tree mtimes to CHECKOUT time. So in a fresh clone every source is
+    # newer than any binary that exists, and an older-than-sources test cannot return
+    # anything but `stale`. The CTO hit this dry-running #301 from /tmp: it reported
+    # `28 of 29, minerBinary stale` and the clone had decided the answer before the check
+    # ran. A CI job that clones fresh would report stale forever and look like a real
+    # finding.
+    #
+    # That is our false-pass doctrine pointed the other way: not a check that passes while
+    # verifying nothing, but one that FAILS for a reason unrelated to the thing under test.
+    #
+    # The commit timestamp of the last change to the miner is stable across clones, so it
+    # is the honest question: was the binary built before the last change we made. mtime is
+    # the fallback for a non-git tree, and it is weaker for exactly the reason above.
+    src_time=0
+    src_basis="mtime"
+    if command -v git >/dev/null 2>&1 &&
+       git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+      src_basis="git"
+      src_time="$(git -C "$REPO_DIR" log -1 --format=%ct -- deploy/z3/miner 2>/dev/null || echo 0)"
+      [ -n "$src_time" ] || src_time=0
+      # Uncommitted changes under miner/ mean we cannot know what the binary was built
+      # from. That is UNKNOWN, not stale: accusing a binary on evidence we do not have is
+      # the same error as excusing one.
+      if [ -n "$(git -C "$REPO_DIR" status --porcelain -- deploy/z3/miner 2>/dev/null)" ]; then
+        src_time=0
+        src_basis="dirty"
+      fi
+    fi
+
     # RECURSIVE, and the manifests count too. A top-level *.rs glob would miss
     # src/anything/mod.rs the day someone adds a module, and a stale binary would then
-    # read `current` — the same false pass this check exists to remove, hiding in the
+    # read `current`: the same false pass this check exists to remove, hiding in the
     # check itself. Cargo.toml and Cargo.lock are included because a dependency bump
     # changes the binary without touching a single .rs file.
     newest_src=0
@@ -112,6 +143,11 @@ $(find "$MINER_SRC_DIR" -type f -name '*.rs' 2>/dev/null
   done)
 EOF
     bin_m="$(stat -c %Y "$MINER_BIN" 2>/dev/null || echo 0)"
+    # git's answer wins when we have one, because it survives a clone.
+    case "$src_basis" in
+      git)   [ "$src_time" -gt 0 ] && newest_src="$src_time" ;;
+      dirty) newest_src=0 ;;
+    esac
     # Equal counts as current: a build and a checkout can land in the same second.
     if [ "$newest_src" -gt 0 ] && [ "$bin_m" -ge "$newest_src" ]; then
       miner_state="current"
