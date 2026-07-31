@@ -18,10 +18,29 @@ metrics_env() {
   export METRICS_FAUCET_URL="http://127.0.0.1:$API_PORT"
 }
 # One server for the whole suite, torn down at the end.
+#
+# The readiness probe below runs at suite TOP LEVEL, before any metrics_env call, so it
+# used to inherit whatever PATH the PREVIOUS suite left behind. That is a real dependency
+# on suite order: the deploy suite leaves its own stub dir first on PATH, and when a `curl`
+# stub was added there this probe started answering success instantly. The server was then
+# still coming up, the scrape read nothing, and eight value assertions failed while "run
+# exits 0" and "textfile created" both passed. A stub answering a question it should never
+# have been asked.
+#
+# So the probe uses the REAL curl explicitly, by absolute path, and does not care what is
+# on PATH at all.
 API_PORT="${METRICS_TEST_PORT:-18731}"
+REAL_CURL="$(PATH="$BASE_PATH" command -v curl)"
 "$SCRATCH/stubs/faucet-api-stub" "$API_PORT" >/dev/null 2>&1 &
 API_PID=$!
-for _ in $(seq 1 40); do curl -sf -o /dev/null "http://127.0.0.1:$API_PORT/api/status" && break; sleep 0.25; done
+up=0
+for _ in $(seq 1 40); do
+  if "$REAL_CURL" -sf -o /dev/null "http://127.0.0.1:$API_PORT/api/status"; then up=1; break; fi
+  sleep 0.25
+done
+# Never proceed silently on a server that never came up: every value assertion below would
+# fail for a reason that has nothing to do with the code under test.
+[ "$up" = 1 ] || { echo "REFUSING: the metrics fixture's API stub never came up on port $API_PORT" >&2; exit 1; }
 
 echo "== metrics: scrapes the live endpoints into a textfile"
 metrics_env
