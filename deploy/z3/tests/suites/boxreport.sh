@@ -107,3 +107,43 @@ rm -rf "$S/miner"
 bash "$BOX_REPORT" > /dev/null 2>&1
 check "readable is false when there was nothing to compare" \
   "[ \"\$(jqf '$BOX_REPORT_OUT' readable)\" = 'False' ]"
+
+echo "== box-report: a source in a SUBDIRECTORY still makes the binary stale"
+# My first version globbed $MINER_SRC_DIR/*.rs, top level only. The day someone adds
+# src/anything/mod.rs, a stale binary would have read `current`: the same false pass this
+# check exists to remove, hiding inside the check.
+box_env
+mkdir -p "$S/miner/src/inner"
+touch -d '2026-01-01 00:00:00' "$S/miner/src/main.rs"
+printf 'ELF-ish\n' > "$T/install/zcash-testnet-miner"
+touch -d '2026-03-01 00:00:00' "$T/install/zcash-testnet-miner"
+printf 'pub fn x() {}\n' > "$S/miner/src/inner/mod.rs"
+touch -d '2026-06-01 00:00:00' "$S/miner/src/inner/mod.rs"
+bash "$BOX_REPORT" > /dev/null 2>&1
+check "a nested source newer than the binary is STALE" \
+  "[ \"\$(jqf '$BOX_REPORT_OUT' minerBinary)\" = 'stale' ]"
+
+echo "== box-report: a dependency bump with no .rs change also makes it stale"
+# Cargo.lock moving changes the binary. Watching only sources would call this current.
+box_env
+touch -d '2026-01-01 00:00:00' "$S/miner/src/main.rs"
+printf 'ELF-ish\n' > "$T/install/zcash-testnet-miner"
+touch -d '2026-03-01 00:00:00' "$T/install/zcash-testnet-miner"
+printf '[[package]]\nname = "x"\n' > "$S/miner/Cargo.lock"
+touch -d '2026-06-01 00:00:00' "$S/miner/Cargo.lock"
+bash "$BOX_REPORT" > /dev/null 2>&1
+check "a newer Cargo.lock makes the binary STALE" \
+  "[ \"\$(jqf '$BOX_REPORT_OUT' minerBinary)\" = 'stale' ]"
+
+echo "== box-report: the production shape, a binary built AFTER its sources, reads current"
+# The CTO measured the box: binary 83 minutes newer than its newest source. If my check
+# called that stale it would be a defect in the check, not an honest short count.
+box_env
+touch -d '2026-07-31 12:19:00' "$S/miner/src/main.rs"
+printf 'ELF-ish\n' > "$T/install/zcash-testnet-miner"
+touch -d '2026-07-31 13:42:00' "$T/install/zcash-testnet-miner"
+bash "$BOX_REPORT" > /dev/null 2>&1
+check "83 minutes newer than its newest source reads CURRENT" \
+  "[ \"\$(jqf '$BOX_REPORT_OUT' minerBinary)\" = 'current' ]"
+check "and the box reads complete, present equals expected" \
+  "[ \"\$(jqf '$BOX_REPORT_OUT' present)\" = \"\$(jqf '$BOX_REPORT_OUT' expected)\" ]"

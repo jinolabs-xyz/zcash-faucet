@@ -95,12 +95,22 @@ if [ -d "$MINER_SRC_DIR" ]; then
   if [ ! -f "$MINER_BIN" ]; then
     miner_state="absent"
   else
+    # RECURSIVE, and the manifests count too. A top-level *.rs glob would miss
+    # src/anything/mod.rs the day someone adds a module, and a stale binary would then
+    # read `current` — the same false pass this check exists to remove, hiding in the
+    # check itself. Cargo.toml and Cargo.lock are included because a dependency bump
+    # changes the binary without touching a single .rs file.
     newest_src=0
-    for f in "$MINER_SRC_DIR"/*.rs; do
-      [ -e "$f" ] || continue
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
       m="$(stat -c %Y "$f" 2>/dev/null || echo 0)"
       [ "$m" -gt "$newest_src" ] && newest_src="$m"
-    done
+    done <<EOF
+$(find "$MINER_SRC_DIR" -type f -name '*.rs' 2>/dev/null
+  for mf in "$MINER_SRC_DIR/../Cargo.toml" "$MINER_SRC_DIR/../Cargo.lock"; do
+    [ -f "$mf" ] && printf '%s\n' "$mf"
+  done)
+EOF
     bin_m="$(stat -c %Y "$MINER_BIN" 2>/dev/null || echo 0)"
     # Equal counts as current: a build and a checkout can land in the same second.
     if [ "$newest_src" -gt 0 ] && [ "$bin_m" -ge "$newest_src" ]; then
