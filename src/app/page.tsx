@@ -635,9 +635,6 @@ export default function Home() {
           </a>
           <span>Zcash Testnet Faucet</span>
         </div>
-        {/* Left of the status badge, which is where every site puts this and so
-            where people look for it. It borrows the badge's box exactly, so the
-            two read as one pair rather than a control bolted on beside a label. */}
         {/* The source, linked from the page every visitor lands on. An open source
             project whose repo is only findable by guessing the org name is open
             source in licence rather than in practice. Same box as the theme toggle
@@ -648,10 +645,13 @@ export default function Home() {
           target="_blank"
           rel="noopener noreferrer"
           aria-label="Source code on GitHub, opens in a new tab"
-          title="Source on GitHub"
+          title="Source code on GitHub, opens in a new tab"
         >
           <RepoIcon />
         </a>
+        {/* Left of the status badge, which is where every site puts this and so
+            where people look for it. It borrows the badge's box exactly, so the
+            two read as one pair rather than a control bolted on beside a label. */}
         <button
           type="button"
           className="theme-toggle"

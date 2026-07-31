@@ -226,10 +226,22 @@ a:hover { color: var(--color-accent-800); }
   color: color-mix(in srgb, var(--color-text) 62%, transparent);
   cursor: pointer;
   transition: color .12s ease, border-color .12s ease;
+  /* The class is now worn by an <a> as well as a <button>. An anchor brings its
+     own underline, and this box has no text to underline today, so it does not
+     paint. Say it anyway: the day someone puts a word next to the icon is not
+     the day to discover it. */
+  text-decoration: none;
 }
 /* Hover resolves to full-strength text on both themes, so the affordance does
-   not depend on which one you are in. */
-.theme-toggle:hover {
+   not depend on which one you are in.
+
+   `a.theme-toggle` rather than `.theme-toggle` because the plain class ties
+   0-1-1 with the global `a:hover` accent rule, and a tie is broken by source
+   order alone. It currently resolves this way round by luck of line numbers.
+   Moving either block would silently turn the icon accent red on hover with
+   nothing to tell you, which is a bug that only ever shows up in a screenshot. */
+.theme-toggle:hover,
+a.theme-toggle:hover {
   color: var(--color-text);
   border-color: var(--color-text);
 }
