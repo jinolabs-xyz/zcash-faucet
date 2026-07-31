@@ -22,10 +22,22 @@ const QUIET_ZONE = 4;
  * SIZE IS A SCANNING REQUIREMENT, NOT A STYLE CHOICE, and getting it wrong is why
  * the first version of this did nothing when scanned. A phone camera pointed at a
  * screen needs roughly 4 device pixels per module to resolve one; the first version
- * drew 61 modules into 132px, about 2.2px each, which a software decoder reads
- * happily and a camera does not. 240px over 57 modules is 4.2px each.
+ * drew 132px across a 61-unit viewBox, about 2.2px each, which a software decoder
+ * reads happily and a camera does not.
+ *
+ * DIVIDE BY THE VIEWBOX, NOT THE MODULE COUNT. `width` maps to the viewBox, which is
+ * `count + QUIET_ZONE * 2`, so the quiet zone is part of the divisor. My first fix
+ * divided by the module count and overstated the density; SDE-App caught it. The
+ * numbers differ per address because a longer address needs more modules:
+ *
+ *   mainnet UA (178 ch)  49 modules  57 viewBox  ->  280/57 = 4.9 px per module
+ *   testnet UA (217 ch)  53 modules  61 viewBox  ->  280/61 = 4.6 px per module
+ *
+ * 280 rather than 240 because at 240 the longer testnet address lands at 3.9, under
+ * the threshold. Size for the WORST address we render, not the one that happens to
+ * be in front of you.
  */
-const DEFAULT_SIZE = 240;
+const DEFAULT_SIZE = 280;
 
 export function AddressQR({ address, size = DEFAULT_SIZE, label }: { address: string; size?: number; label: string }) {
   // ZIP-321 payment URI, not the bare address. A wallet that scans `zcash:u1...`
@@ -33,8 +45,10 @@ export function AddressQR({ address, size = DEFAULT_SIZE, label }: { address: st
   // just a string it may or may not choose to act on, which is what "nothing
   // happens" looks like from the user's side.
   //
-  // Measured, not assumed: at error correction L the URI encodes to 49 modules, the
-  // SAME as the bare address, so the scheme prefix costs nothing in density here.
+  // Measured, not assumed, and independently re-measured in review: at error
+  // correction L the URI encodes to the SAME module count as the bare address (49
+  // for our mainnet UA, 53 for the longer testnet one), so the scheme prefix costs
+  // nothing in density.
   const payload = `zcash:${address}`;
 
   // L rather than M, deliberately. Error correction buys resilience against a
