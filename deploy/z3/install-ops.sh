@@ -24,18 +24,29 @@
 # Idempotent: it compares before copying, so a no-change run touches nothing and
 # does not reload systemd.
 #
-# ENABLEMENT IS NOT OURS TO DECIDE. Unit files are installed and systemd is
-# reloaded, but nothing is enabled or started. zcash-testnet-miner.service
-# enabled means the box starts mining, which is a money-path decision an
-# installer must not make on somebody's behalf, and faucet-alert@.service is a
-# template that is not enabled at all. Enablement stays where the operator left
-# it; this only makes sure the file systemd reads matches the file we reviewed.
+# ENABLEMENT IS NOT OURS TO DECIDE, SO THE REPO DECIDES IT. deploy/z3/enabled-units
+# lists the units that must be enabled, with the reason for each, and this installs
+# and enables exactly those. The distinction matters: the installer is not choosing
+# to arm anything, it is enforcing a decision that went through review.
+#
+# Leaving enablement to a human is what we did before, and it silently was not done.
+# Installed-but-not-enabled works until the next reboot and then quietly does not,
+# and the reporting timer that would have said so was one of the units nobody enabled.
+#
+# NOTHING IS EVER DISABLED here. A unit absent from that file is left exactly as the
+# operator has it, because turning something OFF on a running box is not a decision a
+# file sync should make either. zcash-testnet-miner.service is deliberately not listed:
+# mining is a money path and it gets armed on the box, not by a file sync.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="${OPS_INSTALL_DIR:-/opt/faucet}"
 UNIT_DIR="${OPS_UNIT_DIR:-/etc/systemd/system}"
 SYSTEMCTL="${OPS_SYSTEMCTL:-systemctl}"
+# Declared with the other configuration rather than beside its first use: the post-condition
+# below also reads it, and under `set -u` a later definition is a fatal unbound variable.
+# That is exactly how my first version of this failed, with the enable step never reached.
+ENABLED_UNITS_FILE_RAW="${OPS_ENABLED_UNITS:-}"
 DRY=0
 [ "${1:-}" = "--dry-run" ] && { DRY=1; shift; }
 
@@ -47,6 +58,7 @@ log() { echo "$(date -u +%FT%TZ) install-ops: $*"; }
 SRC="${1:-${OPS_SOURCE_DIR:-$HERE}}"
 SRC="$(cd "$SRC" 2>/dev/null && pwd -P)" || { log "ERROR: source directory ${1:-${OPS_SOURCE_DIR:-$HERE}} does not exist"; exit 2; }
 DEST_R="$(cd "$INSTALL_DIR" 2>/dev/null && pwd -P || printf '%s' "$INSTALL_DIR")"
+ENABLED_UNITS_FILE="${ENABLED_UNITS_FILE_RAW:-$SRC/enabled-units}"
 
 # THE REFUSAL. Source == destination means every copy is a file onto itself and every
 # absent file is invisible, so a run in that state cannot install anything and must
@@ -130,6 +142,36 @@ if [ "$units" -gt 0 ] && [ "$DRY" != "1" ]; then
   log "reloaded systemd for $units changed unit(s)"
 fi
 
+# --- enablement, from the repo's declaration ------------------------------------
+enabled_now=0
+enable_failed=""
+if [ "$DRY" != "1" ] && [ -f "$ENABLED_UNITS_FILE" ]; then
+  while IFS= read -r line; do
+    unit="${line%%#*}"
+    unit="$(printf '%s' "$unit" | tr -d '[:space:]')"
+    [ -n "$unit" ] || continue
+    # Only enable what we actually installed. Enabling a unit whose file is not there
+    # would be systemd's error to report, and we would rather say it ourselves.
+    if [ ! -f "$UNIT_DIR/$unit" ]; then
+      enable_failed="$enable_failed $unit(not-installed)"
+      continue
+    fi
+    if "$SYSTEMCTL" is-enabled --quiet "$unit" 2>/dev/null; then
+      continue
+    fi
+    if "$SYSTEMCTL" enable --now "$unit" >/dev/null 2>&1; then
+      log "enabled $unit"
+      enabled_now=$((enabled_now + 1))
+    else
+      enable_failed="$enable_failed $unit"
+    fi
+  done < "$ENABLED_UNITS_FILE"
+  if [ -n "$enable_failed" ]; then
+    log "ERROR: could not enable:$enable_failed"
+    rc=1
+  fi
+fi
+
 # POST-CONDITIONS. "The loop finished" is not "the files are there", and this script
 # reported the first while meaning the second for weeks. So verify the end state from
 # the destination side, which is the only side that matters.
@@ -153,19 +195,31 @@ if [ "$DRY" != "1" ]; then
     elif ! cmp -s "$src" "$dest"; then differs="$differs $name"
     fi
   done
-  if [ -n "$missing" ] || [ -n "$differs" ]; then
+  not_enabled=""
+  if [ -f "$ENABLED_UNITS_FILE" ]; then
+    while IFS= read -r line; do
+      unit="${line%%#*}"
+      unit="$(printf '%s' "$unit" | tr -d '[:space:]')"
+      [ -n "$unit" ] || continue
+      "$SYSTEMCTL" is-enabled --quiet "$unit" 2>/dev/null || not_enabled="$not_enabled $unit"
+    done < "$ENABLED_UNITS_FILE"
+  fi
+  if [ -n "$missing" ] || [ -n "$differs" ] || [ -n "$not_enabled" ]; then
     log "POST-CONDITION FAILED: the box does not match the repo after this run."
     [ -n "$missing" ] && log "  never arrived:$missing"
     [ -n "$differs" ] && log "  present but different:$differs"
+    [ -n "$not_enabled" ] && log "  declared enabled but is NOT:$not_enabled"
     log "Not reporting success for a box that is not at spec. Nothing above errored,"
     log "which is exactly why this check exists."
     exit 1
   fi
-  log "verified: every ops script and unit at the destination matches the repo"
+  log "verified: every ops script and unit matches the repo, and every declared unit is enabled"
 fi
 
-log "done: $changed installed, $skipped already current"
+log "done: $changed installed, $skipped already current, $enabled_now newly enabled"
 # Nothing was enabled or started. Say so every run rather than in a comment
 # nobody opens, because "installed" reads as "running" to a tired operator.
-[ "$changed" -gt 0 ] && log "note: nothing was enabled or started, enablement is unchanged"
+# Only the units the repo declares were touched. Say what was NOT, because "installed"
+# reads as "running" to a tired operator and the miner is deliberately not in that list.
+log "note: units not listed in $(basename "$ENABLED_UNITS_FILE") were left exactly as they were"
 exit "$rc"

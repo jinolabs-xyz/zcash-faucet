@@ -1,0 +1,57 @@
+# Units that MUST be enabled on a box at spec. One per line, comments and blanks ignored.
+#
+# WHY THIS FILE EXISTS RATHER THAN A FLAG IN THE INSTALLER.
+#
+# install-ops.sh installed units and deliberately enabled nothing, and the reason was
+# good: enabling zcash-testnet-miner.service means the box starts mining, which is a
+# money-path decision an installer must not make on somebody's behalf. So enablement was
+# left to a human, and then it silently was not done — 19 of 25 files were not even
+# installed, and the reporting timer that would have said so was among them.
+#
+# The fix is not to let the installer decide. It is to move the decision into the REPO,
+# where it goes through review like everything else. The installer then enforces a
+# decision somebody made in a pull request, which is a different thing from an installer
+# choosing to arm a miner by itself.
+#
+# Installed-but-not-enabled is the failure this closes: it works until the next reboot
+# and then silently does not.
+#
+# NOT LISTED IS A DECISION TOO. A unit absent from this file is left exactly as the
+# operator has it: the installer does not disable anything, because turning something OFF
+# on a running box is not a decision a file sync should make either. box-report.sh reports
+# units that are enabled without being declared, so that drift is visible rather than
+# assumed.
+
+# The external CI gate reads what this publishes, and a box that does not report is
+# classified `unknown` rather than healthy. It went stale on 2026-07-31 because the timer
+# was never enabled: the report was written once, aged past the 30-minute staleness window,
+# and the public probe correctly went red on a faucet that was actually serving fine.
+faucet-box-report.timer
+
+# Container supervision. Without this a crash-looping wallet is nobody's problem until a
+# human looks, which is how pre-#175 watchdog code served for a day.
+faucet-watchdog.service
+
+# Drift between the repo and the box, reported rather than discovered during an incident.
+faucet-drift-report.timer
+
+# Prometheus textfile metrics. Losing these loses the history you diagnose from.
+faucet-metrics.timer
+
+# Encrypted backups. The archives are the reason a lost disk is not lost keys.
+faucet-backup.timer
+
+# Chain snapshots, so a rebuilt box does not sync from genesis.
+zsnap-export.timer
+
+# DELIBERATELY ABSENT, and each for its own reason:
+#
+#   zcash-testnet-miner.service  Mining is always-on by the owner's decision, but it is
+#                                still a money path, and it is armed on the box rather
+#                                than by a file sync. Listing it here would mean any box
+#                                that installs this repo starts mining.
+#   faucet-alert@.service        A template. `systemctl enable` on a template without an
+#                                instance is an error, not a no-op.
+#   *.service behind a *.timer   A service pulled in by its own timer is not independently
+#                                enabled, and asking systemd about it reports disabled on a
+#                                correct box.

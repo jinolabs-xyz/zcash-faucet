@@ -5,5 +5,30 @@ args=(); for a in "$@"; do [ "$a" = "--quiet" ] || args+=("$a"); done
 case "${args[0]:-}" in
   is-enabled)
     grep -qxF "${args[1]:-}" "${STUB_ENABLED:-/nonexistent}" 2>/dev/null && exit 0 || exit 1 ;;
+  # `enable` has to actually RECORD, or a caller that enables and then verifies sees a
+  # unit it just enabled reported as disabled. The catch-all below used to swallow it and
+  # exit 0, which made the stub agree that the command worked while modelling none of its
+  # effect: a double that cannot express the state cannot test for it.
+  #
+  # A unit whose file is absent fails, the way systemd would, so "declared but not
+  # installed" is reachable from a test.
+  enable)
+    unit=""
+    for a in "${args[@]:1}"; do case "$a" in --now|--force) ;; *) unit="$a" ;; esac; done
+    [ -n "$unit" ] || exit 1
+    # UNCONDITIONAL. This used to be gated on STUB_UNIT_DIR being set, so a test that
+    # forgot to set it got a stub happily enabling units that do not exist: the same class
+    # as a stub exiting 0 while modelling nothing. App's catch.
+    [ -f "${STUB_UNIT_DIR:?stub systemctl: STUB_UNIT_DIR must be set so enable can refuse a unit that is not installed}/$unit" ] || exit 1
+    grep -qxF "$unit" "${STUB_ENABLED:-/nonexistent}" 2>/dev/null || printf '%s\n' "$unit" >> "${STUB_ENABLED:?}"
+    exit 0 ;;
+  disable)
+    # RECORDED, not just refused. "Nothing is ever disabled" was asserted by a heading and
+    # by no assertion, so App sabotaged the code and the suite stayed green: a property
+    # nothing checks survives exactly until someone edits the file. Writing it to
+    # STUB_DISABLED is what lets a test prove the call never happened.
+    printf '%s\n' "${args[1]:-<no-unit>}" >> "${STUB_DISABLED:-/dev/null}"
+    echo "stub systemctl: disable was called, which nothing in this repo should do" >&2
+    exit 1 ;;
   *) exit 0 ;;
 esac

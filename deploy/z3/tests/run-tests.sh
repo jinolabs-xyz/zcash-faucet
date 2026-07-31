@@ -55,7 +55,7 @@ BASE_PATH="$PATH"
 # shellcheck source=lib.sh
 . "$SCRATCH/lib.sh"
 
-SELECTED="${SUITES:-zsnap backup deploy metrics redeploy drift alerts access watchdog repo installops}"
+SELECTED="${SUITES:-zsnap backup deploy metrics redeploy drift alerts access watchdog repo installops boxreport}"
 
 # A missing dependency used to look exactly like broken code. With no sshd on
 # PATH the access suite reports 3 plain FAILs, and an `apt-get install` that
@@ -95,6 +95,8 @@ suite_deps() { # $1 suite name -> commands it needs beyond the base set
     repo)     echo "" ;;
     # installops copies files and asks systemctl via a stub; nothing beyond the base set.
     installops) echo "" ;;
+    # boxreport reads files and asks a stubbed systemctl; python3 parses its JSON output.
+    boxreport)  echo "python3" ;;
     *)        echo "" ;;
   esac
 }
