@@ -475,6 +475,61 @@ Every correction came from the same few habits, so the habits are rules.
     when one is configured" is true, "wakes someone up" is a claim about today and
     today it is false.
 
+31. A CHECK CAN ALSO FAIL FOR A REASON THAT HAS NOTHING TO DO WITH THE THING UNDER
+    TEST. Rule 29 and most of this list are about checks that pass while verifying
+    nothing. This is the mirror image, and it is easier to act on wrongly, because a
+    red result looks like a finding and gets believed.
+
+    Concretely, and this one was caught by the CTO not by me: `box-report.sh` decided
+    whether the compiled miner binary was stale by comparing its mtime against the
+    miner sources. Dry-run from a fresh shallow clone it reported `stale`. It could
+    not have reported anything else, because git sets working-tree mtimes to CHECKOUT
+    time, so in a fresh clone every source is newer than any binary that exists. The
+    clone had decided the answer before the check ran, and a CI job that clones fresh
+    would have reported a real-looking finding forever.
+
+    The fix that matters is not a comment saying so. It is that the check now asks git
+    for the commit time of the last change, which survives a clone, and where it
+    cannot get that it answers CANNOT-SAY rather than `stale`. App's framing, and it
+    is the better one: a comparison is only meaningful against a checkout whose mtimes
+    were set by the BUILD, and where a caller cannot guarantee that, the honest output
+    is not-seen rather than known-bad.
+
+    So: before believing a red result, ask what else could produce it. And when a
+    measurement depends on a property of the environment the code cannot verify, say
+    cannot-say instead of guessing which way to be wrong.
+
+32. NO SUITE INVOKED THIS SCRIPT. NOT A WEAK SUITE: NONE AT ALL. `install-ops.sh`
+    put every ops script on the box and had zero tests. It took its source directory
+    from its own location, `auto-deploy.sh` ran the copy it had just installed into
+    `/opt/faucet`, so the source WAS the destination: it copied files onto themselves,
+    could not see anything missing, and printed `done: 0 installed` with exit 0. 19 of
+    25 required files sat uninstalled for weeks, `audit-drift.sh` among them, which is
+    the auditor whose whole job was to report exactly that.
+
+    Nobody noticed because running it by hand from a checkout is the ONE case where
+    source and destination differ, so it worked every time a human tried it.
+
+    Before hardening a check, ask whether anything runs the thing it checks. And when
+    a script has no suite, that is the finding: write one, and make it fail against
+    today's behaviour first. A suite added after the fix only proves the fix compiles.
+
+33. SABOTAGE THE CODE AND SEE IF THE SUITE NOTICES. App reviewed `#301` this way
+    rather than by reading it, and produced the row that settled the review:
+
+        sabotage, as shipped     47 passed, 0 failed
+        clean tree + one fix     48 passed, 0 failed
+        sabotage + that fix      47 passed, 1 failed
+
+    "Nothing is ever disabled" was true in the code and asserted by a section heading.
+    A property asserted by a heading and not by an assertion survives exactly until
+    someone edits the file.
+
+    Two things make this cheap and honest. Apply the sabotage from a FILE, not inline
+    through a heredoc: three separate controls this week silently failed to apply and
+    came back green, which reads as the assertion working. And check the patch actually
+    landed before trusting the number.
+
 
 Money paths (send, ledger, reservation, PoW verify) never skip review, no
 matter how urgent the window. Docs and pure test additions may fast-track
