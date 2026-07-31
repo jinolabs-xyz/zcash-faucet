@@ -219,6 +219,33 @@ async function checkFirstPaint(page, base, address) {
   }
 }
 
+// The miner readout, in the state CI actually runs in: no heartbeat configured.
+//
+// That is the important case rather than a limitation. The old field was an env flag,
+// so an unconfigured or broken miner still rendered "on", and a run with no heartbeat
+// at all is exactly the shape that used to lie. What it must say now is that it cannot
+// tell, which is neither healthy nor "off".
+async function checkMinerPanel(page) {
+  await page.getByRole("button", { name: /More details/ }).click();
+
+  // Read the one cell, not the panel's textContent. There are no newlines in that
+  // string, so a /miner\s*([^\n]*)/ match runs to the end and drags in reserve, queue
+  // and backend. Every assertion below would then be answered by some other row.
+  const row = await page.evaluate(() => {
+    const cells = [...document.querySelectorAll(".panel-grid > *")];
+    const hit = cells.find((c) => c.firstElementChild?.textContent?.trim() === "miner");
+    return hit?.lastElementChild?.textContent?.trim() ?? "";
+  });
+
+  ok("the panel reports the miner at all", row.length > 0, row);
+  ok("no heartbeat reads as cannot tell", /cannot tell/.test(row), row);
+  ok("no heartbeat is NOT reported as running", !/\bmining\b/.test(row), row);
+  // "off" is the specific wrong answer. We have not established the miner is off, only
+  // that we cannot see it, and those call for different responses from an operator.
+  ok("no heartbeat is NOT reported as off", !/\boff\b/.test(row), row);
+  await page.getByRole("button", { name: /Hide details/ }).click();
+}
+
 // The 404 must wear the site chrome, not Next's bare default. A broken not-found
 // route renders as the framework default, which has no mark, so this fails on it.
 async function check404(page, base) {
@@ -248,6 +275,7 @@ try {
 
   // Visual + a11y checks before the claim flow, while the home page is loaded.
   await checkAppearance(page);
+  await checkMinerPanel(page);
 
   // Generate-then-claim, the flow #31 broke for every visitor: the button read
   // the address from the wrong field and substituted a synthesized one that

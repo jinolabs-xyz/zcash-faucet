@@ -192,7 +192,24 @@ export const config = {
   // and zebra, so this gates nothing here except arming the reserve loop to
   // OBSERVE. Mining on a still-syncing node would fork us off the real chain,
   // which is why it defaults off, and why it is not the switch for shielding.
-  miner: { active: process.env.FAUCET_MINER_ACTIVE === "true" },
+  //
+  // `active` is INTENT and stays intent. It is what an operator configured, and its
+  // job here is arming the reserve loop. What it must never again be is the answer to
+  // "is the miner working", which is what /api/status served for months: an env flag
+  // cannot be false while the miner is broken, and it read "on" for 70 minutes while
+  // the miner errored every 5 seconds on a stale auth cookie.
+  //
+  // Observation comes from `heartbeatPath` instead, a file the miner writes and we
+  // only read. Intent and reality are separate facts and come from separate sources,
+  // so when they disagree that is a finding rather than a contradiction.
+  //
+  // No default path on purpose. A default would point somewhere plausible and read a
+  // file that may be nobody's, and an unconfigured reader must say "cannot tell"
+  // rather than quietly report on the wrong thing.
+  miner: {
+    active: process.env.FAUCET_MINER_ACTIVE === "true",
+    heartbeatPath: process.env.FAUCET_MINER_HEARTBEAT_PATH ?? "",
+  },
 
   // Public address shown on /donate so people can refill the faucet. Unified,
   // so donations arrive shielded.

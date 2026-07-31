@@ -6,13 +6,21 @@ import { safeBalance } from "@/lib/zcash/send";
 import { getSendQueue } from "@/lib/zcash/queue";
 import { getNodeStatus } from "@/lib/zcash/nodeStatus";
 import { getReserveReconciler } from "@/lib/reserve/reconciler";
+import { readMinerHeartbeat } from "@/lib/miner/read";
+import { isActive } from "@/lib/miner/heartbeat";
 import { withApi } from "@/lib/api";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/** Whole seconds on the wire. Null stays null: an age we do not have is not zero. */
+const round = (n: number | null) => (n == null ? null : Math.round(n));
+
 export const GET = withApi("status", async () => {
   const [backend, balanceZat, node] = await Promise.all([pingBackend(), safeBalance(), getNodeStatus()]);
+  // Synchronous and off the await chain: a few hundred bytes from a bind mount, so it
+  // does not belong in the Promise.all with three network calls.
+  const minerReading = readMinerHeartbeat(config.miner.heartbeatPath);
 
   const balanceTaz = balanceZat === null ? null : Number(balanceZat) / Number(ZATOSHI_PER_TAZ);
   const empty =
@@ -36,7 +44,25 @@ export const GET = withApi("status", async () => {
     queueDepth: getSendQueue().depth,
     backend,
     node, // { ready, syncPercent, height, nodeHeight } or null while the wallet is down
-    miner: { active: config.miner.active },
+    // OBSERVED, not configured. `active` used to be config.miner.active straight from
+    // an env flag, so it could not be false while the miner was broken, and it said
+    // "on" for 70 minutes through an outage. It is derived from the heartbeat now, and
+    // `state` carries what a boolean cannot: stalled and not-writing and cannot-verify
+    // are three different findings that all used to arrive as "on" or "off".
+    //
+    // The reading is sent through as-is rather than reshaped. The page renders it with
+    // the same minerRow() the tests cover, so a reshaping layer here would be a place
+    // for the wire format and the tested format to drift apart.
+    //
+    // lastErrorStage is a fixed token, never a message. The miner's raw errors are the
+    // transport's and can carry the RPC URL, which can carry credentials in its
+    // userinfo, and this response is public.
+    miner: {
+      ...minerReading,
+      beatAgoSeconds: round(minerReading.beatAgoSeconds),
+      templateAgoSeconds: round(minerReading.templateAgoSeconds),
+      active: isActive(minerReading.state),
+    },
     // Refill loop state. spendableTaz uses this request's balance read (fresher
     // than the reconciler's last tick); refilling is the reconciler's decision.
     reserve: { ...getReserveReconciler().status, spendableTaz: balanceTaz },
