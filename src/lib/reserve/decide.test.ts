@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decideRefilling, shouldStartStep } from "./decide.ts";
+import { decideRefilling, initialRefilling, shouldStartStep } from "./decide.ts";
 
 const levels = { lowZat: 5_0000_0000n, targetZat: 15_0000_0000n }; // 5 / 15 TAZ
 
@@ -67,4 +67,53 @@ test("a tick forbidden to move funds does not enqueue a step it cannot finish", 
     shouldStartStep({ refilling: true, canAct: false, stepInFlight: false, queueDepth: 0 }),
     false,
   );
+});
+
+/* ---------------- the first tick, where there is no previous state -------------- */
+
+// The band the box actually runs, rather than the 5/15 default above. These are the
+// numbers from the deploy that lost a refill, so a regression reproduces that and not
+// an invented case.
+const live = { lowZat: 500_0000_0000n, targetZat: 1000_0000_0000n };
+
+test("THE DEPLOY THAT LOST A REFILL: 758 inside the band resumes, it does not idle", () => {
+  // What used to happen: the container restarted mid-refill, `refilling` came back
+  // false, 758 is neither below 500 nor at 1000, so decideRefilling HELD the false and
+  // the top-up stopped until the balance drained under the low mark.
+  assert.equal(initialRefilling(758_0000_0000n, live), true);
+  // The old behaviour, kept here so the difference is explicit rather than implied.
+  assert.equal(decideRefilling(false, 758_0000_0000n, live), false, "this is what it did before");
+});
+
+test("an unreadable balance leaves it UNDECIDED rather than guessing", () => {
+  // null is not false. Guessing from a blind spot is the mistake the rest of this
+  // loop refuses to make, and a wrong guess here persists: once settled it never
+  // returns to null, so a bad first answer would survive every later tick.
+  assert.equal(initialRefilling(null, live), null);
+});
+
+test("a cold start at or above target does not refill", () => {
+  assert.equal(initialRefilling(1000_0000_0000n, live), false);
+  assert.equal(initialRefilling(2000_0000_0000n, live), false);
+});
+
+test("a cold start below the low mark refills, same as it always did", () => {
+  assert.equal(initialRefilling(0n, live), true);
+  assert.equal(initialRefilling(499_9999_9999n, live), true);
+});
+
+test("the boundary at target is not off by one", () => {
+  assert.equal(initialRefilling(999_9999_9999n, live), true);
+  assert.equal(initialRefilling(1000_0000_0000n, live), false);
+});
+
+test("once decided, hysteresis owns it: reaching target still stops the refill", () => {
+  // The resume-inside-the-band choice must not become a loop that never stops. The
+  // first tick picks true at 758, and decideRefilling ends it at the target.
+  let refilling = initialRefilling(758_0000_0000n, live);
+  assert.equal(refilling, true);
+  refilling = decideRefilling(refilling, 999_0000_0000n, live);
+  assert.equal(refilling, true, "still climbing");
+  refilling = decideRefilling(refilling, 1000_0000_0000n, live);
+  assert.equal(refilling, false, "resuming on cold start must not mean refilling forever");
 });

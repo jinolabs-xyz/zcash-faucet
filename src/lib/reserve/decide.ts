@@ -34,6 +34,36 @@ export function decideRefilling(
 }
 
 /**
+ * The FIRST value of `refilling`, for a process that has no previous state.
+ *
+ * decideRefilling is right and is not what this changes. Its middle branch returns
+ * the previous decision, which is what hysteresis means, and a freshly started
+ * container has no previous decision. It had `false`, which is not "we decided not
+ * to" but "we have not decided yet", and the two were indistinguishable.
+ *
+ * What that cost: the loop was refilling toward 1000, a deploy restarted the
+ * container, spendable sat at 758 inside the band, and `decideRefilling(false, 758)`
+ * held false. The refill silently stopped partway and would not resume until the
+ * balance fell all the way back under the low mark. Every deploy did this.
+ *
+ * `null` means undecided, and it is returned while the balance is unreadable rather
+ * than guessing from a blind spot. That keeps the same rule the rest of the loop
+ * follows: not-seen and known-to-be-zero are different, and only a real reading may
+ * settle the question.
+ *
+ * INSIDE THE BAND WE RESUME. That direction is a choice and worth defending: the
+ * band is where hysteresis needs history and we have none, so one of the two answers
+ * has to be picked blind. Picking "not refilling" strands the faucet partway up with
+ * no way back until it drains below low, and an empty faucet is the user-visible
+ * failure. Picking "refilling" costs at most some sweeps of our own coinbase, which
+ * is a self-transfer, and it stops at the target on the next tick anyway.
+ */
+export function initialRefilling(spendableZat: bigint | null, levels: ReserveLevels): boolean | null {
+  if (spendableZat === null) return null;
+  return spendableZat < levels.targetZat;
+}
+
+/**
  * Whether this tick may enqueue a refill step. Refill yields to everything:
  * we must actually be refilling, be permitted to move funds at all, have no
  * step already in flight, and no user traffic waiting on the send queue.
