@@ -134,6 +134,23 @@ function writeFixtures() {
   if (box) writeFileSync(BOX, JSON.stringify(box, null, 2));
 }
 
+// REFUSE TO START ALONGSIDE ANOTHER INSTANCE. Both would rewrite the same fixture
+// files on their own timers, and the loser's state wins at random, so the UI shows a
+// state nobody asked for while the command that asked looks like it worked. Found by
+// doing exactly that: killing the listening ports leaves this parent alive, still
+// refreshing the old fixtures, and the next run reported "healthy" while rendering a
+// stalled miner. Port check rather than a lockfile, because a lockfile survives a
+// SIGKILL and then blocks every later run for no reason.
+try {
+  await fetch(`http://127.0.0.1:${PORT}/api/status`, { signal: AbortSignal.timeout(1500) });
+  console.error(
+    `something is already serving port ${PORT}. If that is another ui-state.mjs, stop it\n` +
+      "with ctrl-c rather than killing the port: this process owns the fixture files and\n" +
+      "keeps rewriting them, so leaving it running makes the next state silently wrong.",
+  );
+  process.exit(1);
+} catch { /* nothing there, which is what we want */ }
+
 mkdirSync(DIR, { recursive: true });
 writeFixtures();
 const refresh = setInterval(writeFixtures, 2000);
