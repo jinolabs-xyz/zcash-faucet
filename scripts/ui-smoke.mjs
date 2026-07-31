@@ -179,10 +179,17 @@ async function checkAppearance(page) {
   //
   // Gated on the GLYPH, which is what identifies the control, measured through the
   // element's own `color` because both icons paint with `currentColor`. The container
-  // border is measured and reported too, but not gated: it is a box edge rather than
-  // the identifying feature, and it is the shared `--color-divider` token used for
-  // every rule on the site, so gating here would be asserting a site-wide design
-  // decision from inside a masthead check.
+  // border is measured and reported but NOT gated, and the reason is 1.4.11's own
+  // scope rather than a preference: the requirement covers visual information required
+  // to IDENTIFY a component, the glyph does that on its own, and a box edge is a
+  // boundary rather than identifying information.
+  //
+  // The tempting reason, that the border uses the site-wide `--color-divider` token so
+  // this is not the place to litigate it, is App's catch and it proves too much: it
+  // would excuse never gating anything drawn with a shared token, and a shared token
+  // that fails is worse than a local one because it fails everywhere at once. If the
+  // divider is ever worth gating, it wants its own named check where the site-wide
+  // decision is argued out loud, not silence inside a masthead check.
   const worstIconControl = () =>
     page.evaluate(`(() => {
       ${COLOUR_LIB}
@@ -192,15 +199,18 @@ async function checkAppearance(page) {
       });
       if (!controls.length) return null;
       let worst = null;
+      const measured = [];
       for (const el of controls) {
         const name = el.getAttribute("aria-label") || el.tagName.toLowerCase();
         const cs = getComputedStyle(el);
         const glyph = ratioOf(cs.color, el);
         const border = ratioOf(cs.borderTopColor, el);
         if (glyph == null) return { unparseable: name };
+        measured.push(name);
         if (!worst || glyph < worst.ratio) worst = { ratio: glyph, border, control: name.slice(0, 34) };
       }
-      return worst;
+      // The two controls #300 exists for, named so the check cannot quietly re-target.
+      return { ...worst, measured, sawSource: measured.some((n) => /GitHub/i.test(n)), sawToggle: measured.some((n) => /Switch to/i.test(n)) };
     })()`);
   // Toggle to a target theme via the real footer control and wait for it to apply.
   //
@@ -241,21 +251,29 @@ async function checkAppearance(page) {
     worst ? (worst.unparseable ? `could not parse a colour on "${worst.unparseable}"` : `${worst.ratio.toFixed(2)}:1 "${worst.link}"`) : "no readable link found in a theme",
   );
 
-  // Absence is a failure, not a pass. If the selector stops matching, because the
-  // masthead is restyled or the icons gain labels, this check would otherwise go
-  // quiet while covering nothing, which is the whole reason #300 existed.
+  // Absence fails, and so does SUBSTITUTION, which is App's catch and the sharper of
+  // the two. Firing only on zero matches left the check green when both controls this
+  // exists for were given visible text: the selector stopped matching them, quietly
+  // re-targeted onto the masthead logo, and reported 14.86:1 on a link that will
+  // always pass. Green, while covering neither control it was written for. That is
+  // #300's own shape, one level up. So the two are named, and every control measured
+  // goes in the output rather than only the worst, so a reader can see the coverage
+  // instead of inferring it from a single number.
   const icons = [inkIcon, paperIcon];
   const foundIcons = icons.every((i) => i && !i.unparseable);
   const worstIcon = foundIcons ? icons.slice().sort((a, b) => a.ratio - b.ratio)[0] : null;
   const unparseableIcon = icons.find((i) => i && i.unparseable);
+  const missing = !foundIcons ? [] : ["source link", "theme toggle"].filter((_, i) => !icons.every((c) => (i === 0 ? c.sawSource : c.sawToggle)));
   ok(
     "icon-only controls meet WCAG 1.4.11 in both themes",
-    foundIcons && worstIcon.ratio >= 3,
+    foundIcons && missing.length === 0 && worstIcon.ratio >= 3,
     unparseableIcon
       ? `could not parse a colour on "${unparseableIcon.unparseable}"`
-      : worstIcon
-        ? `glyph ${worstIcon.ratio.toFixed(2)}:1 on "${worstIcon.control}", its border ${worstIcon.border == null ? "unmeasurable" : `${worstIcon.border.toFixed(2)}:1`}`
-        : "no icon-only control found in a theme, so nothing was checked",
+      : !worstIcon
+        ? "no icon-only control found in a theme, so nothing was checked"
+        : missing.length
+          ? `never measured the ${missing.join(" or the ")}; saw ${JSON.stringify(worstIcon.measured)}`
+          : `worst glyph ${worstIcon.ratio.toFixed(2)}:1 on "${worstIcon.control}", its border ${worstIcon.border == null ? "unmeasurable" : `${worstIcon.border.toFixed(2)}:1`}; measured ${JSON.stringify(worstIcon.measured)}`,
   );
 }
 
