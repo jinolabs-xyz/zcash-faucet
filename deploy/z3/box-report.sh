@@ -54,10 +54,20 @@ for src in "$SRC"/*.service "$SRC"/*.timer; do
   dst="$UNIT_DIR/$unit"
   if [ -f "$dst" ] && cmp -s "$src" "$dst"; then
     present=$((present + 1))
-    # A .service pulled in by its own .timer is not independently enabled, and
-    # counting it as disabled would make a correct box permanently red. Only ask
-    # about units that carry an [Install] section.
-    if grep -q '^\[Install\]' "$src" 2>/dev/null; then
+    # A .service activated by its OWN .timer must not be independently enabled:
+    # enabling it would additionally run it at boot, which is not what a timer
+    # means. So the question is only asked of units nothing else activates.
+    #
+    # My first version asked it of anything carrying an [Install] section, which
+    # flagged four correctly configured units and made a healthy box report as
+    # incomplete. faucet-backup.service is the proof: `disabled`, and backups have
+    # been running on schedule the whole time. A gate that cries wolf gets muted,
+    # so a false alarm here is not the harmless direction.
+    ask=1
+    case "$unit" in
+      *.service) [ -e "${src%.service}.timer" ] && ask=0 ;;
+    esac
+    if [ "$ask" = "1" ] && grep -q '^\[Install\]' "$src" 2>/dev/null; then
       "$SYSTEMCTL" is-enabled --quiet "$unit" 2>/dev/null || not_enabled=$((not_enabled + 1))
     fi
   fi
