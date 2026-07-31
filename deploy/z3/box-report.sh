@@ -147,6 +147,19 @@ EOF
     case "$src_basis" in
       git)   [ "$src_time" -gt 0 ] && newest_src="$src_time" ;;
       dirty) newest_src=0 ;;
+      mtime)
+        # WITHOUT GIT WE CANNOT TELL STALE FROM A FRESH CHECKOUT, so we must not claim
+        # either. The comparison is only meaningful against a tree whose mtimes were set by
+        # the BUILD rather than by git, and nothing here can guarantee that. A binary that
+        # is NEWER than every source is still sound: a checkout can only make sources
+        # newer, never older. A binary that is older is unknown, not stale.
+        #
+        # App's framing, and it turns the false-signal story into a behaviour instead of a
+        # warning comment. Same not-seen versus known-bad distinction as the rest of this
+        # file.
+        if [ "$newest_src" -gt 0 ] && [ "$bin_m" -lt "$newest_src" ]; then
+          newest_src=0
+        fi ;;
     esac
     # Equal counts as current: a build and a checkout can land in the same second.
     if [ "$newest_src" -gt 0 ] && [ "$bin_m" -ge "$newest_src" ]; then

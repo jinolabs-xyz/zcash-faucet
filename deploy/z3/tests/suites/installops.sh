@@ -23,6 +23,11 @@ ops_env() {
   export STUB_UNIT_DIR="$T/units"
   export OPS_SYSTEMCTL="$SCRATCH/stubs/audit-systemctl"
   export STUB_ENABLED="$T/enabled"; : > "$STUB_ENABLED"
+  # Records any `systemctl disable` call. App reviewed this PR by SABOTAGING the code and
+  # found the suite stayed green: "nothing is ever disabled" was asserted by a heading and
+  # by no assertion, and a property nothing checks survives exactly until someone edits the
+  # file. This is what makes it checkable.
+  export STUB_DISABLED="$T/disabled"; : > "$STUB_DISABLED"
   # A source that looks like deploy/z3: several scripts, a unit, a timer.
   printf '#!/usr/bin/env bash\necho watchdog\n'   > "$T/src/watchdog.sh"
   printf '#!/usr/bin/env bash\necho audit\n'      > "$T/src/audit-drift.sh"
@@ -177,6 +182,9 @@ check "and what the operator had enabled is left alone" \
   "grep -qx 'operator-enabled-this.timer' '$STUB_ENABLED'"
 check "and the run says untouched units were left as they were" \
   "grep -q 'left exactly as they were' '$T/undeclared.log'"
+# App's line, and the merge condition on this PR. Turning something OFF on a running box is
+# not a decision a file sync should make, and until now nothing proved we do not.
+check "systemctl disable was never called" "[ ! -s '$STUB_DISABLED' ]"
 
 echo "== install-ops: a re-run does not re-enable what is already enabled"
 ops_env
@@ -184,3 +192,11 @@ bash "$INSTALL_OPS" "$T/src" > /dev/null 2>&1
 bash "$INSTALL_OPS" "$T/src" > "$T/reenable.log" 2>&1
 check "a re-run exits 0" "[ $? -eq 0 ]"
 check "and reports 0 newly enabled" "grep -q '0 newly enabled' '$T/reenable.log'"
+
+echo "== install-ops: the disable assertion can actually FAIL"
+# A negative assertion that cannot fail is decoration. This proves the recorder works, so
+# the check above is evidence rather than a heading. Rule 29, applied to App's own line.
+ops_env
+"$OPS_SYSTEMCTL" disable faucet-thing.timer >/dev/null 2>&1
+check "a disable call IS recorded, so the assertion above can fail" "[ -s '$STUB_DISABLED' ]"
+check "and it names the unit" "grep -qx 'faucet-thing.timer' '$STUB_DISABLED'"

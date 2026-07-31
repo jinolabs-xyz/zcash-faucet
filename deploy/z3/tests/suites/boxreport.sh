@@ -26,10 +26,20 @@ box_env() {
   printf '[Unit]\nDescription=t\n[Timer]\nOnCalendar=hourly\n[Install]\nWantedBy=timers.target\n' \
     > "$S/faucet-thing.timer"
   printf 'fn main() {}\n' > "$S/miner/src/main.rs"
+  export STUB_UNIT_DIR="$T/units"
+  export STUB_DISABLED="$T/disabled"; : > "$STUB_DISABLED"
   # A box that matches: script installed, unit installed and enabled.
   cp "$S/watchdog.sh" "$T/install/watchdog.sh"
   cp "$S/faucet-thing.timer" "$T/units/faucet-thing.timer"
   printf 'faucet-thing.timer\n' > "$STUB_ENABLED"
+}
+# Commit the fixture at a chosen time. The stale verdict is only claimable from git, by
+# design: without git we cannot tell a stale binary from a fresh checkout, so the script
+# says cannot-say instead. So a test that wants `stale` has to give it a real history.
+commit_at() { # $1 ISO date
+  ( cd "$T/repo" && git init -q . 2>/dev/null; git config user.email t@t; git config user.name t
+    git add -A
+    GIT_AUTHOR_DATE="$1" GIT_COMMITTER_DATE="$1" git commit -qm fixture ) >/dev/null 2>&1
 }
 jqf() { python3 -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$1" "$2" 2>/dev/null; }
 
@@ -51,7 +61,7 @@ echo "== box-report: THE HOLE. a binary OLDER than its sources is STALE, not pre
 box_env
 printf 'ELF-ish\n' > "$T/install/zcash-testnet-miner"
 touch -d '2026-01-01 00:00:00' "$T/install/zcash-testnet-miner"
-touch -d '2026-06-01 00:00:00' "$S/miner/src/main.rs"
+commit_at '2026-06-01T00:00:00'
 bash "$BOX_REPORT" > /dev/null 2>&1
 check "the binary is reported STALE" "[ \"\$(jqf '$BOX_REPORT_OUT' minerBinary)\" = 'stale' ]"
 check "it is still EXPECTED, so the denominator does not shrink to hide it" \
@@ -118,7 +128,7 @@ touch -d '2026-01-01 00:00:00' "$S/miner/src/main.rs"
 printf 'ELF-ish\n' > "$T/install/zcash-testnet-miner"
 touch -d '2026-03-01 00:00:00' "$T/install/zcash-testnet-miner"
 printf 'pub fn x() {}\n' > "$S/miner/src/inner/mod.rs"
-touch -d '2026-06-01 00:00:00' "$S/miner/src/inner/mod.rs"
+commit_at '2026-06-01T00:00:00'
 bash "$BOX_REPORT" > /dev/null 2>&1
 check "a nested source newer than the binary is STALE" \
   "[ \"\$(jqf '$BOX_REPORT_OUT' minerBinary)\" = 'stale' ]"
@@ -130,7 +140,7 @@ touch -d '2026-01-01 00:00:00' "$S/miner/src/main.rs"
 printf 'ELF-ish\n' > "$T/install/zcash-testnet-miner"
 touch -d '2026-03-01 00:00:00' "$T/install/zcash-testnet-miner"
 printf '[[package]]\nname = "x"\n' > "$S/miner/Cargo.lock"
-touch -d '2026-06-01 00:00:00' "$S/miner/Cargo.lock"
+commit_at '2026-06-01T00:00:00'
 bash "$BOX_REPORT" > /dev/null 2>&1
 check "a newer Cargo.lock makes the binary STALE" \
   "[ \"\$(jqf '$BOX_REPORT_OUT' minerBinary)\" = 'stale' ]"
@@ -201,3 +211,32 @@ if command -v git >/dev/null 2>&1; then
 else
   echo "  (skipped: no git in this environment)"
 fi
+
+echo "== box-report: without git, an older binary is CANNOT-SAY rather than stale"
+# App's condition, and it turns the CTO's false-signal story into a behaviour instead of a
+# warning comment. Without git we cannot tell a stale binary from a fresh checkout, and the
+# honest output is the not-seen answer rather than the known-bad one.
+box_env
+printf 'ELF-ish\n' > "$T/install/zcash-testnet-miner"
+touch -d '2026-01-01 00:00:00' "$T/install/zcash-testnet-miner"
+touch -d '2026-06-01 00:00:00' "$S/miner/src/main.rs"
+rm -rf "$T/repo/.git"
+bash "$BOX_REPORT" > /dev/null 2>&1
+check "a non-git tree does NOT claim stale" \
+  "[ \"\$(jqf '$BOX_REPORT_OUT' minerBinary)\" != 'stale' ]"
+check "it says unknown, which is the not-seen answer" \
+  "[ \"\$(jqf '$BOX_REPORT_OUT' minerBinary)\" = 'unknown' ]"
+check "and unknown is still not counted present, so the gate keeps failing" \
+  "[ \"\$(jqf '$BOX_REPORT_OUT' present)\" != \"\$(jqf '$BOX_REPORT_OUT' expected)\" ]"
+
+echo "== box-report: without git, a binary NEWER than every source is still current"
+# A checkout can only make sources newer, never older, so newer-than-everything is sound
+# even in the weaker mode. Refusing to answer here would make the fallback useless.
+box_env
+printf 'ELF-ish\n' > "$T/install/zcash-testnet-miner"
+touch -d '2026-06-01 00:00:00' "$T/install/zcash-testnet-miner"
+touch -d '2026-01-01 00:00:00' "$S/miner/src/main.rs"
+rm -rf "$T/repo/.git"
+bash "$BOX_REPORT" > /dev/null 2>&1
+check "a newer binary reads CURRENT even without git" \
+  "[ \"\$(jqf '$BOX_REPORT_OUT' minerBinary)\" = 'current' ]"
