@@ -1,0 +1,10 @@
+[Unit]
+Description=Publish miner template activity for /api/status
+Documentation=https://github.com/jinolabs-xyz/zcash-faucet
+
+[Service]
+Type=oneshot
+ExecStart=/opt/faucet/miner-heartbeat.sh
+# Never let a failing heartbeat writer look like a failing box. It fails to
+# "cannot say" by design, and the app renders that as unverified.
+SuccessExitStatus=0

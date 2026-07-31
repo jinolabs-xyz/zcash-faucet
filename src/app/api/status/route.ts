@@ -1,6 +1,8 @@
 /** GET /api/status — backend reachability, faucet policy, and wallet balance. */
 import { NextResponse } from "next/server";
 import { config, ZATOSHI_PER_TAZ } from "@/lib/config";
+import { classifyMiner } from "@/lib/minerHeartbeat";
+import { readMinerHeartbeat } from "@/lib/minerHeartbeatFile";
 import { pingBackend } from "@/lib/zcash/lightwalletd";
 import { safeBalance } from "@/lib/zcash/send";
 import { getSendQueue } from "@/lib/zcash/queue";
@@ -36,7 +38,13 @@ export const GET = withApi("status", async () => {
     queueDepth: getSendQueue().depth,
     backend,
     node, // { ready, syncPercent, height, nodeHeight } or null while the wallet is down
-    miner: { active: config.miner.active },
+    // What the miner is DOING, not what an operator configured. `active` stays for
+    // compatibility, but it is the intent flag and must not be read as behaviour:
+    // it said "on" for 70 minutes on 2026-07-31 while the miner produced nothing.
+    miner: {
+      active: config.miner.active,
+      ...classifyMiner(readMinerHeartbeat(), config.miner.active, Date.now()),
+    },
     // Refill loop state. spendableTaz uses this request's balance read (fresher
     // than the reconciler's last tick); refilling is the reconciler's decision.
     reserve: { ...getReserveReconciler().status, spendableTaz: balanceTaz },

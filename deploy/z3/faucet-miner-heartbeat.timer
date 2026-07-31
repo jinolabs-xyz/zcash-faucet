@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh the miner heartbeat
+
+[Timer]
+# Every 30s. The app calls the miner stale after 3 minutes, so this samples six
+# times inside that window: one missed run cannot flip the verdict on its own.
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

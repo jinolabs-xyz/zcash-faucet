@@ -17,7 +17,14 @@ interface Status {
   queueDepth?: number;
   backend: { reachable: boolean; endpoint: string };
   node?: { ready: boolean; syncPercent: number | null; height: number | null; nodeHeight: number | null; canBuildTx?: boolean };
-  miner?: { active: boolean };
+  miner?: {
+    /** The CONFIG flag. Intent, not behaviour. Never render this as "is it mining". */
+    active: boolean;
+    state?: "mining" | "stalled" | "off" | "unknown";
+    lastTemplateAgoSeconds?: number | null;
+    height?: number | null;
+    reason?: string;
+  };
   reserve?: { targetTaz: number; lowTaz: number; refilling: boolean; spendableTaz: number | null; failedSteps?: number; lastFailure?: { outcome: "waiting" | "error"; reason: string } | null };
   donationAddress?: string;
   /** Mainnet, for project upkeep. Empty when unset OR rejected by config validation. */
@@ -93,6 +100,24 @@ function MoonIcon() {
       <path d="M20.5 14.6A8.6 8.6 0 1 1 9.4 3.5a6.9 6.9 0 0 0 11.1 11.1Z" />
     </svg>
   );
+}
+
+/**
+ * The miner in one word for the strip. Deliberately NOT derived from `active`:
+ * that is the config flag, and it read "on" for 70 minutes on 2026-07-31 while the
+ * miner produced no templates at all. Each word here is a claim we can defend.
+ */
+function minerShort(m: Status["miner"]): string {
+  switch (m?.state) {
+    case "mining": return "mining";
+    case "stalled": return "STALLED";
+    case "off": return "off";
+    // No heartbeat is not "off". We were told to mine and cannot see whether we are.
+    case "unknown": return "unverified";
+    // An older server that does not send `state` yet. Say what we know, which is the
+    // configured intent, and label it as such rather than implying behaviour.
+    default: return m?.active ? "on (configured)" : "off";
+  }
 }
 
 const muted = (pct: number): string => `color-mix(in srgb, var(--color-text) ${pct}%, transparent)`;
@@ -609,7 +634,9 @@ export default function Home() {
           { k: "sync", v: syncPct != null ? Math.round(syncPct) + "%" : "–" },
           { k: "height", v: num(height) },
           { k: "balance", v: balance ? balance.toFixed(1) + " TAZ" : "0 TAZ" },
-          { k: "miner", v: status?.miner?.active ? "on" : "off" },
+          // Terse, but never "on" for a miner that is not mining. That word is
+          // exactly what read fine for 70 minutes while nothing was happening.
+          { k: "miner", v: minerShort(status?.miner) },
           // "indexer", never "node". This is the lightwalletd we query, not the
           // Zcash node behind it, and calling it the node version would be wrong
           // in front of the people who asked for it. Our own zebra version is not
@@ -656,7 +683,11 @@ export default function Home() {
               { k: "node", v: node?.ready ? "ready" : "syncing" + (syncPct != null ? " (" + Math.round(syncPct) + "%)" : "") },
               { k: "block height", v: num(height) + (nodeHeight ? " / " + num(nodeHeight) : "") },
               { k: "wallet balance", v: (status?.balanceTaz ?? 0).toFixed(2) + " TAZ" },
-              { k: "miner", v: status?.miner?.active ? "on" : "off" },
+              { k: "miner", v: minerShort(status?.miner) },
+              // The user asked for the miner's real state to be knowable HERE. The
+              // strip has room for one word; this has room for the reason, which is
+              // what tells a stalled miner apart from a healthy one.
+              ...(status?.miner?.reason ? [{ k: "miner detail", v: status.miner.reason }] : []),
               ...(reserve
                 ? [
                     // Wording lives in reserveRows and is unit-tested, because
