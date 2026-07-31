@@ -365,16 +365,27 @@ PY
 # again, so config and env could disagree with nothing to reconcile them. Deriving
 # both means an interrupted run converges on the next one instead of leaving the
 # faucet holding a password the wallet no longer accepts.
+# Whether this run changes the credential, and what it changes it FROM. The old value
+# is kept only in this shell, only long enough to prove it stops working, and is never
+# written anywhere or printed.
+ROTATED=0
+OLD_RPCPW=""
 if [ "$(faucet_auth_kind "$ZCFG")" = "plaintext" ]; then
   # Plaintext in the config is the exposed credential. Hashing the SAME password
   # would hide it while leaving it valid, so this rotates as it migrates: the value
   # that leaked stops working. That is the whole point of #176.
   say "Rotating the Zallet RPC password: the config held it in plaintext (#176)"
   say "  the old value stops working, and the config gets a hash from now on"
+  # Read out before it is discarded, so the check below can prove the leaked value is
+  # actually dead rather than assume it.
+  OLD_RPCPW="$(sed -n 's/^[[:space:]]*password[[:space:]]*=[[:space:]]*"\(.*\)".*/\1/p' "$ZCFG" | head -n1)"
+  [ -n "$OLD_RPCPW" ] || OLD_RPCPW="$(cat "$PWFILE" 2>/dev/null || true)"
   rm -f "$PWFILE"
+  ROTATED=1
 fi
 
 if [ ! -s "$PWFILE" ]; then
+  ROTATED=1
   say "Authorizing the faucet on Zallet's RPC"
   RPCPW="$(openssl rand -hex 24)"
   # Written 600 BEFORE the secret goes in, not after, so it is never briefly world
@@ -537,6 +548,101 @@ fi
 say "Starting Zallet (the wallet)"
 z3 up -d zallet
 sleep 5
+
+# Rewriting the config is not the same as the WALLET changing its mind, and treating
+# them as one thing is the bug the CTO found on the box by checking both directions:
+#
+#   old password -> 200 (STILL WORKING)
+#   new password -> 401 (REJECTED)
+#
+# Backwards, because zallet was never restarted. `up -d` compares the container SPEC,
+# and a bind-mounted file that changed on disk leaves that spec identical, so compose
+# calls the service up to date and does nothing. Zallet went on serving the old config
+# it had read into memory hours earlier.
+#
+# The result was the worst of both: the faucet held a credential the wallet rejected,
+# so the reserve loop went blind, AND the leaked password stayed valid. A deploy that
+# prints success in that state is exactly the false-pass class this change exists to
+# remove, sitting inside the fix for it.
+#
+# So: an EXPLICIT restart, then prove it took effect from the outside.
+ZALLET_HOST_URL="http://127.0.0.1:$([ "$NETWORK" = testnet ] && echo 40232 || echo 28232)/"
+
+# Only the HTTP status is read. 401 is the server refusing the credential; 200 means
+# the credential was accepted, even if the JSON body carries a method-level error. That
+# keeps this a pure auth probe and stops it depending on which RPCs this build has.
+zallet_auth_status() { # $1 password -> 200 | 401 | 000 when unreachable
+  curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+    -u "faucet:$1" -H 'content-type: application/json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"getinfo","params":[]}' \
+    "$ZALLET_HOST_URL" 2>/dev/null || echo 000
+}
+
+if [ "$ROTATED" = "1" ]; then
+  say "Restarting Zallet so it re-reads the credential we just rewrote"
+  # `restart`, not `up -d`, for the reason above. Unconditional when the credential
+  # changed: on a fresh box the container already has the new config and a restart
+  # costs seconds, which is cheaper than a conditional that can be wrong.
+  z3 restart zallet || { echo "REFUSING TO CONTINUE: could not restart zallet, so the new credential is not in effect." >&2; exit 1; }
+  # `if/then/break`, not `[ ... ] && break`. Under `set -e` a failing AND-list as the
+  # last command of a loop body kills the script, so the FIRST unreachable probe would
+  # have ended the deploy instead of retrying.
+  for _ in $(seq 1 30); do
+    if [ "$(zallet_auth_status "$RPCPW")" != "000" ]; then break; fi
+    sleep 1
+  done
+
+  new_code="$(zallet_auth_status "$RPCPW")"
+  case "$new_code" in
+    200) say "  the new credential authenticates" ;;
+    000)
+      # Unreachable is not "fine". Saying nothing here is how a deploy claims a
+      # rotation it never confirmed.
+      echo "REFUSING TO CONTINUE: could not reach Zallet's RPC at $ZALLET_HOST_URL, so" >&2
+      echo "whether the new credential works is UNVERIFIED. Not treating that as success:" >&2
+      echo "the faucet would come up unable to reach its own wallet." >&2
+      exit 1 ;;
+    *)
+      echo "REFUSING TO CONTINUE: Zallet rejected the new credential (HTTP $new_code)." >&2
+      echo "The config and faucet.env agree with each other but the RUNNING wallet does" >&2
+      echo "not agree with them, so every drip would fail with an auth error." >&2
+      # The security consequence leads when it is true. A wallet that did not reload has
+      # BOTH problems at once, and "the new one is rejected" is the less alarming half:
+      # the faucet being blind is visible within minutes, while a live leaked credential
+      # is not visible at all. So say it here rather than leaving it to be inferred from
+      # a check further down that this exit never reaches.
+      if [ -n "$OLD_RPCPW" ] && [ "$OLD_RPCPW" != "$RPCPW" ] &&
+         [ "$(zallet_auth_status "$OLD_RPCPW")" = "200" ]; then
+        echo "" >&2
+        echo "AND THE PREVIOUS CREDENTIAL STILL AUTHENTICATES." >&2
+        echo "The rotation did not take effect, so the exposed value from #176 is still" >&2
+        echo "live. This is the state the box was found in: config rewritten, wallet still" >&2
+        echo "honouring the old password." >&2
+        echo "Fix: make Zallet re-read its config (docker restart on the zallet container)," >&2
+        echo "then re-run this deploy, which will re-check both directions." >&2
+      fi
+      exit 1 ;;
+  esac
+
+  # The half that actually closes #176. A new credential working says nothing about
+  # whether the leaked one stopped, and on the box those were both true at once.
+  if [ -n "$OLD_RPCPW" ] && [ "$OLD_RPCPW" != "$RPCPW" ]; then
+    old_code="$(zallet_auth_status "$OLD_RPCPW")"
+    case "$old_code" in
+      401|403) say "  and the previous credential is now rejected" ;;
+      200)
+        echo "REFUSING TO CONTINUE: the PREVIOUS credential still authenticates." >&2
+        echo "The rotation did not take effect, so the exposed value from #176 is still" >&2
+        echo "live. This is the state the box was found in: config rewritten, wallet" >&2
+        echo "still honouring the old password." >&2
+        exit 1 ;;
+      *)
+        echo "REFUSING TO CONTINUE: could not establish whether the previous credential" >&2
+        echo "still works (HTTP $old_code). Unverified, so not reported as rotated." >&2
+        exit 1 ;;
+    esac
+  fi
+fi
 
 # 4. Faucet's shielded account ----------------------------------------------
 # Created AFTER sync so its birthday = chain tip → no historical rescan.

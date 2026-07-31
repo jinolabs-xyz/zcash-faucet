@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Stands in for Zallet's RPC auth, and ONLY for that. deploy.sh's single real curl call
+# is the credential probe; the other two mentions are inside help text it echoes.
+#
+# THIS STUB EXISTS TO MAKE ONE BUG EXPRESSIBLE. The wallet reads its config into memory
+# when it starts, so rewriting the config on disk changes nothing until it restarts. On
+# the box that produced a state where the OLD password still authenticated and the NEW
+# one was rejected, because `up -d` saw an unchanged container spec and did nothing. A
+# stub that verified against the config FILE would have answered from the new value and
+# the bug would have been invisible here, which is the whole reason it reached
+# production. So this verifies against $STUB_ZALLET_LOADED, the pwhash the stub docker
+# copied out of the config at the last start or restart.
+#
+# What it models is narrow and worth stating: an HTTP status for a Basic-auth
+# credential, checked against a loaded pwhash. Not zallet, and not the wire.
+set -uo pipefail
+
+user_pass=""
+want_code=0
+for arg in "$@"; do
+  case "$arg" in
+    -u) next=user ;;
+    '%{http_code}') want_code=1 ;;
+    *)
+      if [ "${next:-}" = "user" ]; then user_pass="$arg"; next=""; fi ;;
+  esac
+done
+
+# Nothing else should be reaching the network from a test.
+if [ -z "$user_pass" ]; then
+  echo "deploy-stub curl: unexpected invocation without -u: $*" >&2
+  exit 2
+fi
+password="${user_pass#*:}"
+
+loaded="${STUB_ZALLET_LOADED:-}"
+# No loaded credential at all means the wallet is not answering yet. deploy.sh treats
+# 000 as UNVERIFIED rather than as either answer, which is the behaviour worth testing.
+if [ -z "$loaded" ] || [ ! -s "$loaded" ]; then
+  [ "$want_code" = 1 ] && printf '000'
+  exit 0
+fi
+
+pwhash="$(cat "$loaded")"
+code=401
+if printf '%s' "$pwhash" | grep -q '\$'; then
+  salt="${pwhash%%\$*}"
+  want="${pwhash#*\$}"
+  got="$(python3 -c '
+import hmac, hashlib, sys
+print(hmac.new(sys.argv[1].encode(), sys.argv[2].encode(), hashlib.sha256).hexdigest())
+' "$salt" "$password" 2>/dev/null || true)"
+  [ -n "$got" ] && [ "$got" = "$want" ] && code=200
+else
+  # A plaintext `password =` entry, which is the pre-#176 shape. Compared directly so
+  # the migration case can be modelled at all.
+  [ "$password" = "$pwhash" ] && code=200
+fi
+
+[ "$want_code" = 1 ] && printf '%s' "$code"
+exit 0

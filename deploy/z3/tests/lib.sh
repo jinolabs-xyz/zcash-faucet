@@ -70,6 +70,11 @@ deploy_fresh_env() {
   export STUB_CONTAINERS="$T/containers"; mkdir -p "$STUB_CONTAINERS"
   export STUB_VOLROOT="$T/volumes"; mkdir -p "$STUB_VOLROOT"
   export PATH="$SCRATCH/deploy-stubs:$BASE_PATH"
+  # What the stubbed wallet currently has in MEMORY, as opposed to what is on disk.
+  # The curl stub verifies credentials against this; only a create or a restart
+  # updates it. See deploy-stubs/curl for why that distinction is the point.
+  export STUB_ZALLET_LOADED="$T/zallet-loaded"; : > "$STUB_ZALLET_LOADED"
+  export STUB_ZALLET_CONFIG="$T/deploy/z3-stack/config/testnet/zallet.toml"
   # Writable copy of deploy/ so faucet.env, .zallet-rpc-password and the
   # fake z3 checkout land outside the (read-only) repo mount.
   cp -r "$REPO/deploy" "$T/deploy"
