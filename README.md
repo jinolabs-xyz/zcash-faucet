@@ -165,9 +165,10 @@ cannot tell" are three different answers, and only one of them is good news.**
 <img src="docs/screenshots/panel.png" alt="The expanded details panel on production: node ready, block height 4,227,965 of 4,227,965, wallet balance 829.72 TAZ, miner mining with a template 4 seconds old, box 28 of 28 files all enabled, refill waiting with nothing to shield, queue 0 pending, backend reachable.">
 
 That is production, not a mock. `box 28 of 28 files, all enabled` is the integrity gate
-answering; `miner mining, template 4s ago` is a heartbeat file written by the miner
-itself, not an environment variable; `refill waiting, nothing to shield` is the reserve
-loop distinguishing patience from failure. Every row is a measurement.
+answering over the scripts and units it tracks; `miner mining, template 4s ago` is a
+heartbeat file written by the miner itself, not an environment variable; `refill
+waiting, nothing to shield` is the reserve loop distinguishing patience from failure.
+Every row is a measurement, and each one covers exactly what it says and no more.
 
 - **The miner reports template activity, not a config flag.** `miner: on` used to be
   `FAUCET_MINER_ACTIVE === "true"`, an env var, which cannot be false while the miner
@@ -318,8 +319,15 @@ exempt, since `disabled` is correct there.
 The reporting timer has to be enabled once per box, because the installer places units
 and deliberately does not start them. Until someone does, the mechanism is present and
 inert, which is exactly the condition it exists to catch, so the gate reads `unknown`
-and fails rather than assuming the best. Production currently reads **28 of 28 files,
-all enabled**, and that number is on the page rather than in a log.
+and fails rather than assuming the best. Production currently reads **28 of 28 tracked
+scripts and units, all enabled**, and that number is on the page rather than in a log.
+
+Read that scope literally. The count covers the scripts and systemd units the repo
+tracks. **The compiled miner binary is outside it**, which is the gap named below, so a
+green box row is not a statement about the miner. Saying "28 of 28 files" without the
+qualifier would make it a check that cannot fail about something it appears to cover,
+which is the exact shape of the `FAUCET_MINER_ACTIVE` bug this project spent a week
+removing. It publishes the integrity of what it tracks, and the honest version says so.
 
 ### Deploys refuse rather than report
 
@@ -353,13 +361,23 @@ It installs scripts and unit files. The compiled miner binary is still built by 
 (`cargo build --release`, then copy), so a fresh box is not fully to spec after one
 command. That is a known gap and it is named here rather than rounded up.
 
-The ops scripts have their own test harness, 688 assertions, and it **refuses to run
-rather than return a number it cannot stand behind**: it declines on a host without GNU
-`find` and `stat`, because roughly 85 assertions would then fail as though the code were
-broken while one would pass green comparing two empty listings, and it declines as root,
-because root can write to the directory the test just made unwritable, so the degrade
-path never executes and the watchdog looks broken. A test suite that answers wrongly is
-worse than one that says it cannot answer.
+The ops scripts have their own test harness, **688 assertions, 688 passed**, measured
+against `origin/main` rather than a feature branch. It **refuses to run rather than
+return a number it cannot stand behind**, and the two refusals are different failures:
+
+- **Without GNU `find` and `stat`**, roughly 85 assertions fail as though the code were
+  broken. Noisy, but honest noise.
+- **Without `sha256sum`**, one assertion passes **green** while checking nothing, because
+  the drift check compares two listings that are both empty and equal. That is the
+  dangerous one, and it is why the refusal exists: this is the case where the suite would
+  have lied rather than complained. Both tend to co-occur on macOS, which ships `shasum`
+  instead.
+- **The watchdog suite alone declines to run as root**, because root can write to the
+  directory the test just made unwritable, so the degrade path never executes and the
+  watchdog looks fine. The scoping is deliberate: `SUITES=drift` runs as root and
+  passes. Refusing suites that would have run correctly is its own kind of dishonesty.
+
+A test suite that answers wrongly is worse than one that says it cannot answer.
 
 ### Credentials rotate, and the rotation is proven both ways
 
