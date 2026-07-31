@@ -460,3 +460,93 @@ check "and their line did not trigger a rotation of ours" \
   "! grep -q 'Rotating the Zallet RPC password' '$T/auth-other.log'"
 check "ours is added as a hash alongside theirs" \
   "grep -q '^pwhash = ' '$D/z3-stack/config/testnet/zallet.toml'"
+
+# ── the three defects a real deploy on the box produced ──────────────────────────
+# All three share one shape: the script asserted nothing about the state it left behind.
+
+echo "== domain: an unset FAUCET_DOMAIN does not mean plain HTTP on a box that has one"
+# Running without the variable took the Caddyfile's ':80' default, Caddy stopped binding
+# 443, and HSTS with a one-year max-age meant browsers refused to fall back to HTTP. A
+# total outage to real users while every container read healthy.
+deploy_fresh_env
+printf 'faucet.example.org\n' > "$T/faucet-domain"
+FAUCET_DOMAIN_FILE="$T/faucet-domain" run_deploy > "$T/dom-file.log" 2>&1
+check "the domain is taken from the box's own record" \
+  "grep -q 'Serving https://faucet.example.org' '$T/dom-file.log'"
+check "and the deploy does not announce a plain-HTTP fallback" \
+  "! grep -q 'serves plain HTTP' '$T/dom-file.log'"
+
+echo "== domain: REFUSE to downgrade a box that is already serving HTTPS"
+# The second signal, for a box with a domain but no record of one. Asked of the running
+# proxy, because that is the only place the truth lives on such a box.
+deploy_fresh_env
+printf 'running\nzcash-faucet\n' > "$STUB_CONTAINERS/zcash-faucet-caddy-1"
+export STUB_ENV_zcash_faucet_caddy_1="FAUCET_DOMAIN=live.example.org"
+FAUCET_DOMAIN_FILE="$T/no-such-domain-file" run_deploy > "$T/dom-refuse.log" 2>&1
+check "a deploy that would drop HTTPS is REFUSED" "[ $? -ne 0 ]"
+check "and it names the domain that would have been lost" \
+  "grep -q 'already serving HTTPS for live.example.org' '$T/dom-refuse.log'"
+check "and explains HSTS, so nobody reads it as a soft failure" \
+  "grep -q 'HSTS' '$T/dom-refuse.log'"
+check "and gives the exact command to fix it" \
+  "grep -q 'FAUCET_DOMAIN=live.example.org' '$T/dom-refuse.log'"
+unset STUB_ENV_zcash_faucet_caddy_1
+
+echo "== domain: a box that never had one still gets its :80 smoke test"
+# The refusal must not break the legitimate case, or the next person deletes it.
+deploy_fresh_env
+FAUCET_DOMAIN_FILE="$T/no-such-domain-file" run_deploy > "$T/dom-none.log" 2>&1
+check "no domain anywhere is not an error" "[ $? -eq 0 ]"
+check "and it says plainly that this serves plain HTTP" \
+  "grep -q 'serves plain HTTP' '$T/dom-none.log'"
+
+echo "== account: an account already in use is NEVER replaced by a generated one"
+# This took the visible balance from 758.46 TAZ to 0. The funds never moved; the faucet
+# was repointed at a fresh empty account and could no longer see them. The old guard
+# checked a sidecar file inside the checkout, which a replaced checkout does not have.
+deploy_fresh_env
+cp "$D/z3/faucet.env.example" "$D/z3/faucet.env"
+python3 - "$D/z3/faucet.env" <<'PYEOF'
+import re, sys
+p = sys.argv[1]; s = open(p).read()
+s = re.sub(r'(?m)^ZALLET_ACCOUNT=.*$', 'ZALLET_ACCOUNT=funded-account-9ae4d3a3', s)
+s = re.sub(r'(?m)^ZALLET_ADDRESS=.*$', 'ZALLET_ADDRESS=utest1thefundedone', s)
+open(p, 'w').write(s)
+PYEOF
+rm -f "$D/.faucet-account"
+: > "$STUB_LOG"
+run_deploy > "$T/acct.log" 2>&1
+check "a deploy beside a configured account exits 0" "[ $? -eq 0 ]"
+check "NO new account is created" "[ \"\$(grep -c 'z_getnewaccount' '$STUB_LOG')\" = '0' ]"
+check "the funded account survives in faucet.env" \
+  "grep -q '^ZALLET_ACCOUNT=funded-account-9ae4d3a3\$' '$D/z3/faucet.env'"
+check "and its address survives too" \
+  "grep -q '^ZALLET_ADDRESS=utest1thefundedone\$' '$D/z3/faucet.env'"
+check "and the deploy says it reused rather than created" \
+  "grep -q 'Reusing the account already configured' '$T/acct.log'"
+check "and the post-condition confirms the account is unchanged" \
+  "grep -q 'wallet account is unchanged' '$T/acct.log'"
+
+echo "== post-conditions: an outage invisible from inside the box still fails the deploy"
+# Containers healthy, /api/health 200 on localhost, 443 unbound. Only a request to the
+# public name can see it, so that is what the post-condition asks.
+deploy_fresh_env
+printf 'faucet.example.org\n' > "$T/faucet-domain"
+FAUCET_DOMAIN_FILE="$T/faucet-domain" STUB_HTTPS_CODE=000 run_deploy > "$T/post-https.log" 2>&1
+check "a site that does not answer over HTTPS FAILS the deploy" "[ $? -ne 0 ]"
+check "and it is reported as a post-condition, not as a step that errored" \
+  "grep -q 'POST-CONDITION FAILED' '$T/post-https.log'"
+check "and it says why HSTS makes this an outage rather than a degradation" \
+  "grep -q 'will not fall back to HTTP' '$T/post-https.log'"
+check "and the deploy does NOT claim the faucet is live" \
+  "! grep -q 'The faucet is live' '$T/post-https.log'"
+
+echo "== post-conditions: a wallet that accepts ANY password fails the deploy"
+# The negative control on the auth probe itself. A probe that only ever sees 200 cannot
+# tell authentication from a server saying yes to everything, so the post-condition sends
+# a deliberately wrong password. This proves that assertion can actually fail.
+deploy_fresh_env
+STUB_ZALLET_ACCEPT_ANY=1 run_deploy > "$T/post-anypw.log" 2>&1
+check "a wallet accepting a wrong password FAILS the deploy" "[ $? -ne 0 ]"
+check "and says the probe proves nothing about authentication" \
+  "grep -q 'accepted a WRONG password' '$T/post-anypw.log'"

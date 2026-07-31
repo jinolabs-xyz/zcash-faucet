@@ -26,8 +26,19 @@ for arg in "$@"; do
   esac
 done
 
-# Nothing else should be reaching the network from a test.
+# No -u means the HTTPS post-condition probe, which asks the PUBLIC name whether the site
+# answers. That is the check for an outage invisible from inside the box, so the stub has
+# to be able to say no: STUB_HTTPS_CODE=000 models 443 not being bound at all.
 if [ -z "$user_pass" ]; then
+  case " $* " in
+    *https://*|*http://*)
+      # ONLY the post-condition probe, which asks for a status code with -w. Anything else
+      # is a request this stub does not model, and answering 0 to it is how it silently
+      # broke another suite's readiness loop: that probe wanted a real server and got an
+      # instant yes. So a plain probe fails here, the way an unreachable host would.
+      if [ "$want_code" = 1 ]; then printf '%s' "${STUB_HTTPS_CODE:-200}"; exit 0; fi
+      exit 7 ;;
+  esac
   echo "deploy-stub curl: unexpected invocation without -u: $*" >&2
   exit 2
 fi
@@ -38,6 +49,14 @@ loaded="${STUB_ZALLET_LOADED:-}"
 # 000 as UNVERIFIED rather than as either answer, which is the behaviour worth testing.
 if [ -z "$loaded" ] || [ ! -s "$loaded" ]; then
   [ "$want_code" = 1 ] && printf '000'
+  exit 0
+fi
+
+# A wallet that says yes to everything. The post-condition sends a deliberately wrong
+# password precisely to catch this, so the state has to be reachable or that assertion
+# is decoration.
+if [ "${STUB_ZALLET_ACCEPT_ANY:-0}" = "1" ]; then
+  [ "$want_code" = 1 ] && printf '200'
   exit 0
 fi
 

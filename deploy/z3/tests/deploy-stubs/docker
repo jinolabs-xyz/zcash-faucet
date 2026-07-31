@@ -108,7 +108,7 @@ case "${1:-}" in
         if printf '%s\n' "$@" | grep -qx "$svc"; then
           [ -f "${STUB_CONTAINERS:?}/z3-testnet-$svc-1" ] || { echo "stub: no such service $svc to restart" >&2; exit 1; }
           echo "restart z3-testnet-$svc-1" >> "$STUB_LOG"
-          [ "$svc" = zallet ] && zallet_load_config restart
+          if [ "$svc" = zallet ]; then zallet_load_config restart; fi
         fi
       done
       exit 0
@@ -131,7 +131,7 @@ case "${1:-}" in
           fresh=0
           [ -f "${STUB_CONTAINERS:?}/z3-testnet-$svc-1" ] || fresh=1
           mk "z3-testnet-$svc-1" running z3-testnet
-          [ "$fresh" = 1 ] && [ "$svc" = zallet ] && zallet_load_config create
+          if [ "$fresh" = 1 ] && [ "$svc" = zallet ]; then zallet_load_config create; fi
         done
       fi
       exit 0
@@ -168,6 +168,12 @@ case "${1:-}" in
     case "$fmt" in
       *Labels*) sed -n 2p "$f" ;;
       *.Name*)  echo "/$target" ;;
+      # Container env, for the "is this box already serving HTTPS" probe. Held in a
+      # per-container variable rather than in the marker file, so existing fixtures keep
+      # their two-line format and nothing has to be rewritten to add this.
+      *Config.Env*)
+        ev="STUB_ENV_$(printf '%s' "$target" | tr -c 'A-Za-z0-9' '_')"
+        printf '%s\n' "${!ev:-}" | grep -v '^$' || true ;;
       # Line 1 may hold a SEQUENCE of states, consumed one per call, so a
       # container that flips between two reads is representable. A container in a
       # restart loop passes through `running`, so a single sample can land on the

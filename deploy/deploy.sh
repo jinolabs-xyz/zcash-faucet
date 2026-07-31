@@ -11,7 +11,9 @@
 #
 # Usage:   NETWORK=testnet FAUCET_DOMAIN=faucet.example.org \
 #            FAUCET_MINER_ADDRESS=tm... ./deploy.sh
-#          (FAUCET_DOMAIN optional; omit for a plain-HTTP :80 smoke test)
+#          (FAUCET_DOMAIN is read from /etc/faucet-domain when unset, and the deploy
+#           REFUSES to continue if the box is already serving HTTPS and no domain is
+#           given. Omitting it only means plain HTTP on a box that never had one.)
 #          (FAUCET_MINER_ADDRESS is where mining rewards go, so it is what funds
 #           the faucet. Omit it and the site serves but mines nothing.)
 #
@@ -23,6 +25,21 @@ set -euo pipefail
 
 NETWORK="${NETWORK:-testnet}"
 FAUCET_DOMAIN="${FAUCET_DOMAIN:-}"
+# THE BOX KNOWS ITS OWN DOMAIN, so an unset variable must not mean "serve plain HTTP".
+#
+# Running this without FAUCET_DOMAIN in the shell took the Caddyfile's ':80' default.
+# Caddy then logged that it was listening only on the HTTP port, applied no automatic
+# HTTPS, and stopped binding 443 at all. The site sends HSTS with a one-year max-age, so
+# every browser that had ever visited REFUSED to fall back to HTTP: a total outage to
+# real users while every container read healthy and /api/health returned 200 locally.
+#
+# Silently downgrading an HTTPS deployment to plain HTTP is not a safe default, it is the
+# worst one available, and it is invisible from inside the box. So the domain is read from
+# the box's own record when the variable is absent.
+DOMAIN_FILE="${FAUCET_DOMAIN_FILE:-/etc/faucet-domain}"
+if [ -z "$FAUCET_DOMAIN" ] && [ -s "$DOMAIN_FILE" ]; then
+  FAUCET_DOMAIN="$(tr -d '[:space:]' < "$DOMAIN_FILE")"
+fi
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"       # deploy/
 Z3="$HERE/z3-stack"                                        # where we clone z3
 ENVF="--env-file .env.$NETWORK"
@@ -69,6 +86,44 @@ command -v docker >/dev/null || { echo "Install Docker first."; exit 1; }
 # it used to skip itself with a NOT VERIFIED note when python3 was absent (#165).
 command -v python3 >/dev/null || { echo "Install python3 first: the miner-address validation needs it."; exit 1; }
 docker compose version >/dev/null || { echo "Need Docker Compose v2 (the 'docker compose' plugin)."; exit 1; }
+
+# What domain is this box serving RIGHT NOW, asked of the running proxy rather than
+# inferred. Second signal beside $DOMAIN_FILE, because a box with a domain but no record
+# of it is exactly the box that gets silently downgraded.
+current_served_domain() { # -> the domain caddy is running with, or empty
+  local cid v
+  cid="$( cd "$HERE/z3" && docker compose -f docker-compose.faucet.yml ps -q caddy 2>/dev/null | head -n1 )"
+  [ -n "$cid" ] || return 0
+  v="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$cid" 2>/dev/null \
+        | sed -n 's/^FAUCET_DOMAIN=//p' | head -n1)"
+  # ":80" and anything else starting with a colon is a port, not a domain, so there is
+  # no HTTPS to lose.
+  case "$v" in ""|:*) return 0 ;; *) printf '%s' "$v" ;; esac
+}
+
+if [ -n "$FAUCET_DOMAIN" ]; then
+  say "Serving https://$FAUCET_DOMAIN"
+else
+  SERVING="$(current_served_domain)"
+  if [ -n "$SERVING" ]; then
+    echo "REFUSING TO CONTINUE: this box is already serving HTTPS for $SERVING, and no" >&2
+    echo "FAUCET_DOMAIN is set. Continuing would pass ':80' to the proxy, which drops" >&2
+    echo "automatic HTTPS and stops binding 443 entirely." >&2
+    echo "" >&2
+    echo "That is not a soft failure. The site sends HSTS with a one-year max-age, so" >&2
+    echo "every browser that has ever visited REFUSES to fall back to HTTP: a total" >&2
+    echo "outage to real users, while every container reads healthy and /api/health" >&2
+    echo "answers 200 from inside the box. It has happened once already." >&2
+    echo "" >&2
+    echo "Fix: FAUCET_DOMAIN=$SERVING $0" >&2
+    echo "Or record it on the box so this cannot be forgotten again:" >&2
+    echo "  echo $SERVING > $DOMAIN_FILE" >&2
+    exit 1
+  fi
+  say "NOTE: no FAUCET_DOMAIN, and no record of one in $DOMAIN_FILE, so this deploy"
+  say "      serves plain HTTP on :80. Correct for a localhost or IP smoke test."
+  say "      If this box has a domain, set FAUCET_DOMAIN or write it to $DOMAIN_FILE."
+fi
 
 # 1. z3 stack (node + wallet) ------------------------------------------------
 if [ ! -d "$Z3" ]; then
@@ -453,6 +508,17 @@ for c in $(docker ps -aq --filter name=faucet-web); do
 done
 
 ENVOUT="$HERE/z3/faucet.env"
+# One reader for all of these, because `sed` on a file that does not exist yet exits 2,
+# and with `pipefail` under `set -e` that KILLS THE DEPLOY. Redirecting stderr hides the
+# message and not the status, which is how my first version of this died on a fresh box
+# right after starting zebra, with no error printed at all.
+env_value() { # $1 key -> its value in faucet.env, empty when unset or the file is absent
+  [ -f "$ENVOUT" ] || return 0
+  sed -n "s/^$1=\(..*\)\$/\1/p" "$ENVOUT" | head -n1
+}
+# Read BEFORE anything rewrites it, so the post-condition at the end can compare against
+# what the faucet was actually pointed at when this run started.
+PREV_ACCOUNT="$(env_value ZALLET_ACCOUNT)"
 # Fills faucet.env in place. Account args may be empty on the first pass:
 # the app treats an unset account as "not ready" and reports that honestly,
 # which is exactly the state we want served while the chain syncs.
@@ -652,14 +718,43 @@ fi
 zrpc(){ z3 exec -T zallet zallet-zaino \
           --datadir /var/lib/zallet --config /etc/zallet/zallet.toml rpc "$@"; }
 ACCTFILE="$HERE/.faucet-account"
-if [ ! -f "$ACCTFILE" ]; then
+
+# CREATE IF ABSENT, NEVER REPLACE. faucet.env is the authority on which account the
+# faucet uses, and this used to be gated only on the sidecar file above.
+#
+# That sidecar lives inside the checkout and is gitignored, so a box whose checkout was
+# replaced does not have it. The guard therefore looked in the wrong place: it saw no
+# sidecar, created a BRAND NEW account, and wrote it over the funded one in faucet.env.
+# The balance went 758.46 TAZ to 0. The money never moved and was never at risk, it sat
+# in the original account the whole time, but the faucet could no longer see or spend it
+# and would have served nothing while reporting itself healthy.
+#
+# So the question asked first is the one that matters: does the faucet ALREADY have an
+# account configured? An account in use is never replaced by a generated one.
+EXISTING_ACCOUNT="$(env_value ZALLET_ACCOUNT)"
+EXISTING_ADDRESS="$(env_value ZALLET_ADDRESS)"
+if [ -n "$EXISTING_ACCOUNT" ]; then
+  UUID="$EXISTING_ACCOUNT"
+  ADDR="$EXISTING_ADDRESS"
+  say "Reusing the account already configured: $UUID"
+  say "  not creating one. An account in use may hold funds, and replacing it makes"
+  say "  them invisible to the faucet."
+  # Keep the sidecar in step, so a later run reads the same account from either place
+  # rather than the two disagreeing.
+  printf 'UUID=%s\nADDR=%s\n' "$UUID" "$ADDR" > "$ACCTFILE"
+elif [ -f "$ACCTFILE" ]; then
+  # shellcheck disable=SC1090
+  source "$ACCTFILE"
+else
   say "Creating the faucet's shielded account"
   UUID="$(zrpc z_getnewaccount '"faucet"' | python3 -c 'import sys,json;print(json.load(sys.stdin)["account_uuid"])')"
   ADDR="$(zrpc z_getaddressforaccount "\"$UUID\"" | python3 -c 'import sys,json;print(json.load(sys.stdin)["address"])')"
   printf 'UUID=%s\nADDR=%s\n' "$UUID" "$ADDR" > "$ACCTFILE"
 fi
-# shellcheck disable=SC1090
-source "$ACCTFILE"
+
+# An empty UUID here would sail on and write a blank ZALLET_ACCOUNT into faucet.env,
+# which is the same outcome as overwriting it: the faucet cannot find its funds.
+[ -n "${UUID:-}" ] || { echo "REFUSING TO CONTINUE: no wallet account was resolved or created." >&2; exit 1; }
 
 # 5. Fund it -----------------------------------------------------------------
 # The faucet comes up fine unfunded (it reports "empty" until coins arrive), so
@@ -739,6 +834,81 @@ case "$(faucet_status)" in
     exit 1
     ;;
 esac
+
+# ── Post-conditions ─────────────────────────────────────────────────────────────
+# This script used to assert nothing about the state it left behind. It rewrote a config
+# and declared success without checking that the wallet accepts the new credential, that
+# the site still answers on HTTPS, or that the account it points at is the funded one.
+# Three separate outages came out of that one gap, so the claims are checked here and a
+# failure is loud. Everything above is what the script DID; this is what is TRUE after.
+POSTFAIL=0
+postfail(){ POSTFAIL=1; echo "POST-CONDITION FAILED: $1" >&2; }
+
+say "Checking what is actually true now"
+
+# 1. HTTPS. The outage this catches was invisible from inside the box: containers healthy,
+# /api/health 200 on localhost, and 443 not bound at all. So it is asked over the public
+# name, which is the only place the failure shows.
+if [ -n "$FAUCET_DOMAIN" ]; then
+  https_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 25 \
+                  "https://$FAUCET_DOMAIN/api/status" 2>/dev/null || echo 000)"
+  case "$https_code" in
+    2*|3*) say "  HTTPS answers on $FAUCET_DOMAIN (HTTP $https_code)" ;;
+    000)   postfail "https://$FAUCET_DOMAIN/api/status did not answer at all. If 443 is
+   unbound, browsers that saw HSTS will not fall back to HTTP, so this is an outage
+   to real users even though the containers look healthy." ;;
+    *)     postfail "https://$FAUCET_DOMAIN/api/status returned HTTP $https_code." ;;
+  esac
+fi
+
+# 2. The wallet, asked of the wallet. A wrong password is sent deliberately as well: a
+# probe that only ever sees 200 cannot tell authentication from a server that says yes to
+# everything, and a check that cannot fail is not a check.
+if [ -n "${RPCPW:-}" ]; then
+  good="$(zallet_auth_status "$RPCPW")"
+  bogus="$(zallet_auth_status "not-the-password-$$")"
+  if [ "$good" = 200 ] && [ "$bogus" != 200 ]; then
+    say "  the wallet accepts the configured credential and rejects a wrong one"
+  elif [ "$good" != 200 ]; then
+    postfail "the wallet rejected the credential in faucet.env (HTTP $good), so every
+   drip would fail with an auth error."
+  else
+    postfail "the wallet accepted a WRONG password (HTTP $bogus), so this probe proves
+   nothing about authentication and the RPC may be unauthenticated."
+  fi
+fi
+
+# 3. The account. Silently repointing the faucet at a fresh empty account is the defect
+# that took the visible balance from 758.46 TAZ to 0 while the funds sat untouched in the
+# account we had stopped naming.
+NOW_ACCOUNT="$(env_value ZALLET_ACCOUNT)"
+if [ -n "$PREV_ACCOUNT" ] && [ "$NOW_ACCOUNT" != "$PREV_ACCOUNT" ]; then
+  postfail "the configured wallet account CHANGED during this deploy.
+   was: $PREV_ACCOUNT
+   now: ${NOW_ACCOUNT:-<empty>}
+   The old account may hold the faucet's funds, and they are invisible to the faucet
+   while it points somewhere else. Put the previous value back in $ENVOUT."
+elif [ -n "$NOW_ACCOUNT" ]; then
+  say "  the wallet account is unchanged ($NOW_ACCOUNT), holding $(python3 -c "print(int('${BAL:-0}')/1e8)" 2>/dev/null || echo '?') TAZ"
+fi
+
+if [ "$POSTFAIL" = 1 ]; then
+  say "DEPLOY FINISHED BUT LEFT SOMETHING BROKEN. The failures above are about the state
+   of the box, not about a step that errored, which is why nothing earlier reported them.
+   Fix them before treating this deploy as done."
+  exit 1
+fi
+
+# The box remembers its own domain, so the next run cannot lose it the way this one could
+# have. Best effort: not being able to write it is worth saying, not worth failing over.
+if [ -n "$FAUCET_DOMAIN" ] && [ "$(cat "$DOMAIN_FILE" 2>/dev/null | tr -d '[:space:]')" != "$FAUCET_DOMAIN" ]; then
+  if printf '%s\n' "$FAUCET_DOMAIN" > "$DOMAIN_FILE" 2>/dev/null; then
+    say "Recorded $FAUCET_DOMAIN in $DOMAIN_FILE so an unset variable cannot downgrade this box to HTTP"
+  else
+    say "NOTE: could not write $DOMAIN_FILE, so a future run with FAUCET_DOMAIN unset would
+      serve plain HTTP. Write it by hand: echo $FAUCET_DOMAIN > $DOMAIN_FILE"
+  fi
+fi
 
 say "Done. The faucet is live${FAUCET_DOMAIN:+ at https://$FAUCET_DOMAIN}."
 echo "   Check:   curl -s ${FAUCET_DOMAIN:+https://$FAUCET_DOMAIN}${FAUCET_DOMAIN:-http://localhost}/api/status"
