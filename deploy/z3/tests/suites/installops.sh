@@ -19,6 +19,8 @@ ops_env() {
   export PATH="$SCRATCH/stubs:$BASE_PATH"
   mkdir -p "$T/src" "$T/install" "$T/units"
   export OPS_INSTALL_DIR="$T/install" OPS_UNIT_DIR="$T/units"
+  # The stub refuses to enable a unit whose file is absent, the way systemd would.
+  export STUB_UNIT_DIR="$T/units"
   export OPS_SYSTEMCTL="$SCRATCH/stubs/audit-systemctl"
   export STUB_ENABLED="$T/enabled"; : > "$STUB_ENABLED"
   # A source that looks like deploy/z3: several scripts, a unit, a timer.
@@ -30,6 +32,7 @@ ops_env() {
   # These two must never be copied by the running script: it IS one of them, and bash
   # reads a script lazily, so overwriting the file the interpreter is still reading can
   # resume it mid-line in different text.
+  printf 'faucet-thing.timer\n# a comment\n\n' > "$T/src/enabled-units"
   printf '#!/usr/bin/env bash\necho installer\n'  > "$T/src/install-ops.sh"
   printf '#!/usr/bin/env bash\necho autodeploy\n' > "$T/src/auto-deploy.sh"
 }
@@ -133,3 +136,51 @@ check "and nothing actually arrived" "[ ! -f '$T/install/watchdog.sh' ]"
 # It must not claim verification either: nothing was placed, so there is nothing true to say.
 check "and it does not claim the end state was verified" \
   "! grep -q 'verified: every ops script and unit' '$T/dry.log'"
+
+echo "== install-ops: the repo declares what must be ENABLED, and the installer enforces it"
+# Installed-but-not-enabled works until the next reboot and then silently does not. It is
+# also what actually happened: faucet-box-report.timer was never enabled, its report aged
+# past the 30-minute staleness window, and the public probe went red on a faucet that was
+# serving perfectly well.
+ops_env
+bash "$INSTALL_OPS" "$T/src" > "$T/enable.log" 2>&1
+check "exits 0" "[ $? -eq 0 ]"
+check "the declared timer was enabled" "grep -qx 'faucet-thing.timer' '$STUB_ENABLED'"
+check "and it says so" "grep -q 'enabled faucet-thing.timer' '$T/enable.log'"
+check "and the post-condition covers enablement, not only files" \
+  "grep -q 'every declared unit is enabled' '$T/enable.log'"
+# A comment and a blank line in the declaration must not become unit names.
+check "comments and blanks in the declaration are ignored" \
+  "! grep -qE '^(#|$)' '$STUB_ENABLED'"
+
+echo "== install-ops: a declared unit that will not enable FAILS the run"
+# Enabling is the point of the file; a failure there is not a warning to walk past.
+ops_env
+printf 'faucet-thing.timer\nnot-shipped.timer\n' > "$T/src/enabled-units"
+bash "$INSTALL_OPS" "$T/src" > "$T/enablefail.log" 2>&1
+check "a declared unit that is not installed FAILS the run" "[ $? -ne 0 ]"
+check "and names it as not-installed rather than as a systemd error" \
+  "grep -q 'not-shipped.timer(not-installed)' '$T/enablefail.log'"
+check "and does not claim the box is at spec" \
+  "! grep -q 'every declared unit is enabled' '$T/enablefail.log'"
+
+echo "== install-ops: nothing NOT declared is enabled, and nothing is ever disabled"
+# The money path. Listing the miner would mean any box installing this repo starts mining,
+# and disabling on a running box is not a decision a file sync should make.
+ops_env
+printf 'zcash-testnet-miner.service\n' > "$T/src/zcash-testnet-miner.service"
+printf 'faucet-thing.timer\n' > "$T/src/enabled-units"
+printf 'operator-enabled-this.timer\n' > "$STUB_ENABLED"
+bash "$INSTALL_OPS" "$T/src" > "$T/undeclared.log" 2>&1
+check "an undeclared unit is NOT enabled" "! grep -qx 'zcash-testnet-miner.service' '$STUB_ENABLED'"
+check "and what the operator had enabled is left alone" \
+  "grep -qx 'operator-enabled-this.timer' '$STUB_ENABLED'"
+check "and the run says untouched units were left as they were" \
+  "grep -q 'left exactly as they were' '$T/undeclared.log'"
+
+echo "== install-ops: a re-run does not re-enable what is already enabled"
+ops_env
+bash "$INSTALL_OPS" "$T/src" > /dev/null 2>&1
+bash "$INSTALL_OPS" "$T/src" > "$T/reenable.log" 2>&1
+check "a re-run exits 0" "[ $? -eq 0 ]"
+check "and reports 0 newly enabled" "grep -q '0 newly enabled' '$T/reenable.log'"

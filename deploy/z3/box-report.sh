@@ -73,9 +73,55 @@ for src in "$SRC"/*.service "$SRC"/*.timer; do
   fi
 done
 
+# THE COMPILED MINER BINARY, which this report could not see at all until now.
+#
+# It counted *.sh and units, so it answered "28 of 28" while /opt/faucet/zcash-testnet-miner
+# was a four-day-old build writing no heartbeat. The number was true about scripts and
+# silent about the binary, which is a check that cannot fail about the thing it appears to
+# cover: the same shape as FAUCET_MINER_ACTIVE, which also could not be false while the
+# miner was broken.
+#
+# It cannot be content-compared, because the repo ships SOURCE and the box runs a build. So
+# the question asked is the one that actually went wrong: is the binary OLDER than the
+# sources it was built from. That is staleness by mtime, and mtime is not content: a build
+# from edited-then-reverted sources would read current. It catches the real failure mode
+# here, which is a merged Rust change that nobody compiled, and it is honest about being a
+# freshness check rather than a verification.
+MINER_SRC_DIR="${BOX_MINER_SRC_DIR:-$SRC/miner/src}"
+MINER_BIN="${BOX_MINER_BIN:-$INSTALL_DIR/zcash-testnet-miner}"
+miner_state="untracked"
+if [ -d "$MINER_SRC_DIR" ]; then
+  expected=$((expected + 1))
+  if [ ! -f "$MINER_BIN" ]; then
+    miner_state="absent"
+  else
+    newest_src=0
+    for f in "$MINER_SRC_DIR"/*.rs; do
+      [ -e "$f" ] || continue
+      m="$(stat -c %Y "$f" 2>/dev/null || echo 0)"
+      [ "$m" -gt "$newest_src" ] && newest_src="$m"
+    done
+    bin_m="$(stat -c %Y "$MINER_BIN" 2>/dev/null || echo 0)"
+    # Equal counts as current: a build and a checkout can land in the same second.
+    if [ "$newest_src" -gt 0 ] && [ "$bin_m" -ge "$newest_src" ]; then
+      miner_state="current"
+      present=$((present + 1))
+    elif [ "$newest_src" -eq 0 ] || [ "$bin_m" -eq 0 ]; then
+      # Could not read one of the timestamps, so we learned nothing. Not counted as
+      # present, and reported as its own state rather than as staleness we did not observe.
+      miner_state="unknown"
+    else
+      miner_state="stale"
+    fi
+  fi
+fi
+
 # Zero expected means the glob found nothing, which is a broken run rather than a
 # perfect box. Reporting 0/0 as complete would be the exact false pass this exists
 # to prevent.
 [ "$expected" -gt 0 ] || cannot_say
 
-write "{\"expected\":${expected},\"present\":${present},\"notEnabled\":${not_enabled},\"at\":$(( $(date +%s) * 1000 )),\"readable\":true}"
+# minerBinary is emitted as its own field as well as counted, so the panel can say WHY
+# the count is short instead of only that it is. A number that drops with no reason
+# attached sends someone to the box to find out.
+write "{\"expected\":${expected},\"present\":${present},\"notEnabled\":${not_enabled},\"minerBinary\":\"${miner_state}\",\"at\":$(( $(date +%s) * 1000 )),\"readable\":true}"

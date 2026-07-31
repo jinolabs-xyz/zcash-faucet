@@ -5,5 +5,23 @@ args=(); for a in "$@"; do [ "$a" = "--quiet" ] || args+=("$a"); done
 case "${args[0]:-}" in
   is-enabled)
     grep -qxF "${args[1]:-}" "${STUB_ENABLED:-/nonexistent}" 2>/dev/null && exit 0 || exit 1 ;;
+  # `enable` has to actually RECORD, or a caller that enables and then verifies sees a
+  # unit it just enabled reported as disabled. The catch-all below used to swallow it and
+  # exit 0, which made the stub agree that the command worked while modelling none of its
+  # effect: a double that cannot express the state cannot test for it.
+  #
+  # A unit whose file is absent fails, the way systemd would, so "declared but not
+  # installed" is reachable from a test.
+  enable)
+    unit=""
+    for a in "${args[@]:1}"; do case "$a" in --now|--force) ;; *) unit="$a" ;; esac; done
+    [ -n "$unit" ] || exit 1
+    if [ -n "${STUB_UNIT_DIR:-}" ] && [ ! -f "$STUB_UNIT_DIR/$unit" ]; then exit 1; fi
+    grep -qxF "$unit" "${STUB_ENABLED:-/nonexistent}" 2>/dev/null || printf '%s\n' "$unit" >> "${STUB_ENABLED:?}"
+    exit 0 ;;
+  disable)
+    # Present so a test can prove we never call it. Nothing in the repo should.
+    echo "stub systemctl: disable was called, which nothing should do" >&2
+    exit 1 ;;
   *) exit 0 ;;
 esac
