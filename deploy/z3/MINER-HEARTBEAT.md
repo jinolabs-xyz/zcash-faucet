@@ -56,6 +56,7 @@ nothing here.
   "templateSeconds": 60,
   "templateStaleAfterSeconds": 360,
   "mode": "submit",
+  "startedAt": "2026-07-31T11:02:03Z",
   "lastTemplateAt": "2026-07-31T12:34:54Z",
   "lastTemplateHeight": 4223019,
   "lastErrorStage": null,
@@ -91,6 +92,13 @@ Let `age(x) = now - x`.
 | file absent, unreadable, unparseable, or `schema` unrecognised | `cannot-verify` | **Not "off".** We learned nothing. |
 | `age(writtenAt) > staleAfterSeconds` | `not-writing` | The miner is not beating: unit stopped, wedged, or disk full. |
 | `lastTemplateAt` is null, or `age(lastTemplateAt) > templateStaleAfterSeconds` | `stalled` | **The failure that hid for 70 minutes.** Alive and beating, not getting templates. |
+
+`startedAt` exists so the panel can word `stalled` honestly when `lastTemplateAt` is null: "started
+40 seconds ago, no template yet" and "up an hour, never fetched a template" are the same two
+fields otherwise, and only the second is a fault. It **explains** the state, it does not excuse
+it — a null `lastTemplateAt` is never `running`, and that is a choice we made rather than fell
+into: a miner restart does show `stalled` briefly, which is the fail-loud direction and agreed
+with App.
 | otherwise | `running` | Beating and fetching templates. |
 
 `cannot-verify` must never render as healthy and never as "mining off" — three different claims,

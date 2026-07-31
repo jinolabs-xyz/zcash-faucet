@@ -36,6 +36,12 @@ const SCHEMA: u32 = 1;
 #[derive(Clone, Debug, Default)]
 pub struct State {
     pub mode: String,
+    /// When this process started. Lets a reader tell "started four seconds ago and has not
+    /// fetched a template yet" from "up an hour and has never fetched one". Both are
+    /// non-healthy and neither may render as running; the difference is only in what the
+    /// panel SAYS, which matters because the first is benign and the second is broken.
+    /// Asked for by App, who would otherwise have had to infer it and could not.
+    pub started_at: u64,
     pub beat_secs: u64,
     pub template_secs: u64,
     pub last_template_at: Option<u64>,
@@ -146,6 +152,7 @@ pub fn render(s: &State) -> String {
             "  \"templateSeconds\": {},\n",
             "  \"templateStaleAfterSeconds\": {},\n",
             "  \"mode\": \"{}\",\n",
+            "  \"startedAt\": \"{}\",\n",
             "  \"lastTemplateAt\": {},\n",
             "  \"lastTemplateHeight\": {},\n",
             "  \"lastErrorStage\": {},\n",
@@ -167,6 +174,7 @@ pub fn render(s: &State) -> String {
         s.template_secs,
         s.template_secs.saturating_mul(6),
         s.mode,
+        rfc3339(s.started_at),
         ts(s.last_template_at),
         num(s.last_template_height),
         s.last_error_stage
@@ -219,6 +227,7 @@ pub fn start(
 ) -> Arc<Mutex<State>> {
     let state = Arc::new(Mutex::new(State {
         mode: mode.to_string(),
+        started_at: now(),
         beat_secs: beat_secs.max(1),
         template_secs: template_secs.max(1),
         ..Default::default()
@@ -350,6 +359,26 @@ mod tests {
         assert!(out.contains("\"lastErrorStage\": \"getblocktemplate\""));
         assert!(!out.contains("lastError\""), "a message field appeared: {out}");
         assert!(!out.to_lowercase().contains("http"), "a URL reached the heartbeat: {out}");
+    }
+
+    #[test]
+    fn started_at_separates_a_fresh_start_from_a_miner_that_never_fetched() {
+        // Without this the reader cannot tell a restart four seconds ago from an hour of
+        // silence, and both look identical: writtenAt fresh, lastTemplateAt null. Neither is
+        // healthy, but only one is a fault, and telling a human the wrong one wastes the
+        // trip to the box.
+        let s = State {
+            mode: "submit".into(),
+            beat_secs: 5,
+            template_secs: 60,
+            started_at: 1_785_438_491,
+            ..Default::default()
+        };
+        let v: serde_json::Value = serde_json::from_str(&render(&s)).unwrap();
+        assert_eq!(v["startedAt"], "2026-07-30T19:08:11Z");
+        // Still null, and the contract keeps that as NOT running: startedAt explains the
+        // state, it does not excuse it.
+        assert!(v["lastTemplateAt"].is_null());
     }
 
     #[test]
