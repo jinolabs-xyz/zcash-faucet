@@ -1,6 +1,8 @@
 /** GET /api/status — backend reachability, faucet policy, and wallet balance. */
 import { NextResponse } from "next/server";
 import { config, ZATOSHI_PER_TAZ } from "@/lib/config";
+import { classifyIntegrity } from "@/lib/boxIntegrity";
+import { readBoxIntegrity } from "@/lib/boxIntegrityFile";
 import { pingBackend } from "@/lib/zcash/lightwalletd";
 import { safeBalance } from "@/lib/zcash/send";
 import { getSendQueue } from "@/lib/zcash/queue";
@@ -35,6 +37,11 @@ export const GET = withApi("status", async () => {
     maintenanceAddress: config.maintenanceAddress,
     queueDepth: getSendQueue().depth,
     backend,
+    // Does the box have what the repo says it must? COUNTS ONLY, never file names:
+    // this endpoint is public, and naming what is missing from a production box is
+    // reconnaissance. live-smoke asserts this from outside every 15 minutes, which
+    // is the only signal that has ever reached us unprompted.
+    box: classifyIntegrity(readBoxIntegrity(), Date.now()),
     node, // { ready, syncPercent, height, nodeHeight } or null while the wallet is down
     miner: { active: config.miner.active },
     // Refill loop state. spendableTaz uses this request's balance read (fresher
