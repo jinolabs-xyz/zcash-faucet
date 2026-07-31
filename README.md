@@ -179,10 +179,10 @@ Every number on the page comes off the node, and every state is a claim the syst
 defend. The distinction that took the longest to learn: **"working", "broken" and "I
 cannot tell" are three different answers, and only one of them is good news.**
 
-<img src="docs/screenshots/panel.png" alt="The expanded details panel on production: node ready, block height 4,227,965 of 4,227,965, wallet balance 829.72 TAZ, miner mining with a template 4 seconds old, box 28 of 28 files all enabled, refill waiting with nothing to shield, queue 0 pending, backend reachable.">
+<img src="docs/screenshots/panel.png" alt="The expanded details panel on production: node ready, block height 4,228,211 of 4,228,211, wallet balance 843.47 TAZ, miner mining with a template 12 seconds old, box 29 of 29 files all enabled, refill waiting with nothing to shield, queue 0 pending, backend reachable.">
 
-That is production, not a mock. `box 28 of 28 files, all enabled` is the integrity gate
-answering over the scripts and units it tracks; `miner mining, template 4s ago` is a
+That is production, not a mock. The `box` row is the integrity gate answering over every
+script, unit and binary it tracks; `miner mining, template 4s ago` is a
 heartbeat file written by the miner itself, not an environment variable; `refill
 waiting, nothing to shield` is the reserve loop distinguishing patience from failure.
 Every row is a measurement, and each one covers exactly what it says and no more.
@@ -327,8 +327,17 @@ fine, so silence is treated as a failure rather than a pass. Installed-but-not-e
 fails too, because it works until the next reboot and then silently does not. A
 `.service` activated by its own `.timer` is exempt, since `disabled` is correct there.
 
-Production reads **28 of 28 tracked scripts and units, all enabled**, and that number is
-on the status page rather than buried in a log. Anyone can check it without asking us.
+Production reads **29 of 29, all enabled**: every tracked script, every systemd unit,
+and the compiled miner binary. That number is on the status page rather than buried in
+a log, so anyone can check it without asking us.
+
+The binary is counted differently from the rest, because it has to be. The repo ships
+Rust source and the box runs a build, so there is nothing to compare byte for byte. The
+check asks the question that actually goes wrong instead: **is the binary older than the
+sources it was built from?** That catches a merged change nobody compiled. When it
+cannot tell, because the working tree has uncommitted changes under the miner, it
+answers `unknown` rather than accusing the build on evidence it does not have, and
+`unknown` still does not count as present.
 
 ### Deploys refuse rather than report
 
