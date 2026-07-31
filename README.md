@@ -217,16 +217,16 @@ what the backend is doing:
 - **Ready**, then a receipt with the txid, a working explorer link, and a
   copyable plain-text summary.
 
-<table>
-  <tr>
-    <td width="50%"><img src="docs/screenshots/topping-up.png" alt="The topping-up card: a determinate meter showing spendable against the reserve target, and copy saying the faucet is still serving while it refills."></td>
-    <td width="50%"><img src="docs/screenshots/success-receipt.png" alt="The success receipt: amount, recipient, txid, a shielded z to z badge, and buttons to copy the txid or the whole receipt."></td>
-  </tr>
-  <tr>
-    <td><b>Topping up.</b> A refill that can still serve keeps serving, and says so.</td>
-    <td><b>Sent.</b> The receipt is the thing you paste into an issue.</td>
-  </tr>
-</table>
+<img src="docs/screenshots/success-receipt.png" alt="The success receipt: amount, recipient, txid, a shielded z to z badge, and buttons to copy the txid or the whole receipt.">
+
+**The receipt is the thing you paste into an issue**: amount, recipient, txid, a
+shielded z2z badge, a working explorer link, and one button that copies the lot as
+plain text. Frame taken from a local run, since shooting it against production would
+spend a real drip.
+
+The topping-up state is visible in the main screenshot above: production is refilling
+and serving at the same time, so the banner sits at 83% directly above a live Request
+button. That is the design working rather than a mockup of it.
 
 Behind **More details** is the operator's instrument: node, block height, wallet
 balance, miner with the age of its last template, box integrity, refill, queue and
