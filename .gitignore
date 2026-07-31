@@ -36,3 +36,7 @@ deploy/**/.env
 deploy/z3-stack/
 deploy/.zallet-rpc-password
 deploy/.faucet-account
+
+# Fixtures written by scripts/ui-state.mjs to drive the UI into a named state.
+# Regenerated on every run and never meant to be shared.
+/.ui-state/
