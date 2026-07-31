@@ -1,19 +1,27 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="Zcash Testnet Faucet">
-  <!-- Derived from docs/banner-ink.svg: ink ground, one bold mark, and the
-       banner's red rule as the only accent. Colours are globals.css tokens.
+  <!-- The official Zcash mark, matching the masthead so the tab and the page are
+       one identity. Path data is verbatim from github.com/zcash/logos
+       (zcash-logos-icons-2018/icons/black), scaled from its 493.3x490.2 artboard
+       into this 64x64 one. Not redrawn: a trademark redrawn by eye is something
+       that is almost the logo.
 
-       PURE GEOMETRY, no <text>. A favicon renders outside the page, so a font
-       stack is not guaranteed to resolve; a missing Archivo would silently fall
-       back to something else, or to nothing. The Z is a path.
+       The 2018 mark rather than Heartwood, and at 16px the reason is starker than
+       it is in the masthead. Heartwood's concentric detail is unreadable at tab
+       size; a ring and a struck-through Z survive it.
 
-       Ink ground in both themes on purpose. A tab strip is not our canvas and we
-       cannot query its colour, so the mark carries its own background. Paper on
-       ink measures 16.2:1.
+       INK GROUND IN BOTH THEMES, kept from the previous icon. A tab strip is not
+       our canvas and we cannot query its colour, so the mark carries its own
+       background. Paper on ink measures 16.2:1.
 
-       The rule sits under the mark rather than framing it. I rendered a framed
-       version at true 16px and the border ate the letterform: at that size a
-       4-unit stroke is a quarter of the icon. -->
+       The banner's red rule stays as the only accent, and it stays UNDER the mark
+       rather than framing it: at a true 16px a 4-unit border eats the letterform.
+
+       The scale is set so the mark clears the rule by 6 units, which is what the
+       previous Z had. Fitted edge to edge it touched the rule and read top heavy. -->
   <rect width="64" height="64" fill="#171615"/>
-  <path d="M11,14 H53 V23 L29,41 H53 V50 H11 V41 L35,23 H11 Z" fill="#f3f2f2"/>
+  <g transform="translate(9.8,6) scale(0.09)" fill="#f3f2f2">
+    <path d="m245.4 20c-124.3 0-225.4 101.1-225.4 225.4s101.1 225.4 225.4 225.4 225.4-101.1 225.4-225.4-101.1-225.4-225.4-225.4zm0 413.6c-103.8 0-188.2-84.4-188.2-188.2s84.4-188.2 188.2-188.2 188.2 84.4 188.2 188.2-84.4 188.2-188.2 188.2z"/>
+    <path d="m325.8 175.1v-34.3h-61.5v-37.8h-37.8v37.8h-61.5v45.5h95.4l-95.4 129.4v34.3h61.5v37.6h37.8v-37.6h61.5v-45.5h-95.4z"/>
+  </g>
   <rect x="0" y="56" width="64" height="8" fill="#ec3013"/>
 </svg>

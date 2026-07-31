@@ -2,7 +2,7 @@
   "name": "zcash-testnet-faucet",
   "version": "0.1.0",
   "private": true,
-  "description": "Zcash testnet (TAZ) faucet \u2014 Next.js + public lightwalletd backend, Z3-era stack (zcashd is EOL).",
+  "description": "Zcash testnet (TAZ) faucet. Next.js + public lightwalletd backend, Z3-era stack (zcashd is EOL).",
   "scripts": {
     "dev": "next dev",
     "build": "next build --webpack",
@@ -25,6 +25,7 @@
     "@scure/base": "^2.2.0",
     "better-sqlite3": "^11.8.1",
     "next": "^16.2.12",
+    "qrcode-generator": "^2.0.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "zod": "^3.24.1"
@@ -32,6 +33,7 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.10.7",
+    "@types/qrcode-generator": "^0.0.16",
     "@types/react": "^19.0.7",
     "@types/react-dom": "^19.0.3",
     "eslint": "^9.39.5",

@@ -1,5 +1,5 @@
 /**
- * /donate — the long-form version of the empty-state prompt.
+ * /donate: the long-form version of the empty-state prompt.
  *
  * Deliberately plain about why this page exists: the faucet mines, mining
  * income is currently zero (#42), so donations are what keep it serving. No
@@ -18,13 +18,14 @@ import Link from "next/link";
 import { config, ZATOSHI_PER_TAZ } from "@/lib/config";
 import { safeBalance, safeDonations } from "@/lib/zcash/send";
 import { CopyAddress } from "./CopyAddress";
+import { AddressQR } from "./AddressQR";
 import { BrandMark } from "../BrandMark";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export const metadata = {
-  title: "Donate TAZ — Zcash Testnet Faucet",
+  title: "Donate TAZ · Zcash Testnet Faucet",
   description: "Keep the testnet faucet serving. Donations arrive shielded.",
 };
 
@@ -47,7 +48,6 @@ const addrText: CSSProperties = {
 export default async function Donate() {
   const donation = config.donationAddress.trim();
   const mining = config.miningAddress.trim();
-  const maintenance = config.maintenanceAddress.trim();
 
   // Both reads are independent and neither blocks the page, so do not serialize them.
   const [balanceZat, donations] = await Promise.all([safeBalance(), safeDonations()]);
@@ -67,8 +67,25 @@ export default async function Donate() {
     >
       <header className="nav" style={{ padding: `14px ${pad}`, gap: 14, flexWrap: "wrap" }}>
         <div className="nav-brand" style={{ fontSize: "clamp(15px,4vw,18px)", letterSpacing: "-.01em", marginRight: "auto", display: "flex", alignItems: "center", gap: ".44em" }}>
-          <BrandMark />
-          <span>Zcash Testnet Faucet</span>
+          {/* The LOGO hyperlinks to z.cash, which is the trademark policy's
+              condition for showing it. The site NAME beside it is ours and stays
+              site navigation, so the two are separate links rather than one. Nested
+              anchors would be invalid markup anyway.
+
+              New tab, deliberately: people expect a masthead mark to go home, and
+              sending someone off-site mid-claim would lose whatever they had typed.
+              The aria-label says where it goes so the surprise is announced. */}
+          <a
+            href="https://z.cash/"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Zcash, opens z.cash in a new tab"
+            title="Zcash"
+            style={{ display: "inline-flex", flex: "none", color: "inherit" }}
+          >
+            <BrandMark />
+          </a>
+          <Link href="/" style={{ color: "inherit", textDecoration: "none" }}>Zcash Testnet Faucet</Link>
         </div>
         <Link className="btn btn-secondary btn-sm" href="/" aria-label="Back to the faucet">
           {/* The visible label shortens at narrow widths so the masthead stays on
@@ -85,16 +102,19 @@ export default async function Donate() {
           <h1 style={{ fontSize: "clamp(27px,7.4vw,40px)", lineHeight: 1.08, letterSpacing: "-.025em", margin: "0 0 10px" }}>
             Keep the tank full.
           </h1>
-          <p style={{ margin: 0, fontSize: 14.5, lineHeight: 1.55, color: muted(70), maxWidth: "46ch" }}>
-            This faucet runs its own node and wallet, and it mines. What it does not do is earn from
-            mining: on public testnet a single dominant miner wins every block race, so the blocks we
-            win get orphaned and the income rounds to zero. The machinery is real, the revenue is not.
-            Donated TAZ is what keeps drips going out.
+          <p style={{ margin: 0, fontSize: 14.5, lineHeight: 1.55, color: muted(70), maxWidth: "52ch" }}>
+            The faucet mines, but a dominant miner wins nearly every block on public testnet, so the
+            income rounds to zero. Donations are what keep drips going out.
           </p>
         </div>
 
+        {/* Testnet on the left, mainnet on the right. The split is doing the same
+            job the copy does: play money and real money must not be skimmable as
+            one another. Single column until 900px, because two columns of a
+            178-character address would both be too narrow to read. */}
         {/* Tank gauge, same hatch meter the topping-up card uses, so a donor
-            sees the same picture an operator does. */}
+            sees the same picture an operator does. Full width above the columns
+            because it describes the page, not either address. */}
         <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 11 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
             <span style={kicker}>In the tank</span>
@@ -129,12 +149,15 @@ export default async function Donate() {
           <div style={addrBox}>
             <span style={kicker}>Donate TAZ (shielded)</span>
             <span style={addrText}>{donation}</span>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
-              <CopyAddress address={donation} label="Donation address" />
-              <span style={{ fontSize: 12, color: muted(60), maxWidth: "42ch" }}>
-                Unified address, so what you send arrives shielded. The amount and the sender stay off
-                the public ledger.
-              </span>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-start" }}>
+              <AddressQR address={donation} label="QR code of the faucet donation address" />
+              <div style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0, alignItems: "flex-start", flex: "1 1 18ch" }}>
+                <span style={{ fontSize: 12.5, lineHeight: 1.5, color: muted(65) }}>
+                  Arrives shielded. Testnet only, so it costs you nothing and goes straight back
+                  out as drips.
+                </span>
+                <CopyAddress address={donation} label="Donation address" />
+              </div>
             </div>
           </div>
         )}
@@ -175,41 +198,16 @@ export default async function Donate() {
           </div>
         )}
 
-        {maintenance && (
-          <>
-            <div className="hr" style={{ margin: "6px 0 0" }} />
-            {/* Everything above this line is testnet play money. This block is not,
-                and the separation is the point: a donor who skims must not mistake
-                one for the other. The heading says mainnet, the copy says mainnet,
-                and the warning below says what cannot be undone. */}
-            <div id="maintenance" style={{ ...addrBox, borderColor: "var(--color-accent)" }}>
-              <span style={{ ...kicker, color: "var(--color-accent-text)" }}>
-                Mainnet ZEC · toward running the project
-              </span>
-              <span style={addrText}>{maintenance}</span>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
-                <CopyAddress address={maintenance} label="Mainnet donation address" />
-                <span style={{ fontSize: 12, color: muted(60), maxWidth: "42ch" }}>
-                  Unified, so it arrives shielded. This one is <b>real ZEC on mainnet</b>, unlike
-                  everything else on this page. It goes toward the server, the domain and the time
-                  that keeps the faucet running, and it buys no advantage at the tap: drips are the
-                  same size, on the same cooldown, for everyone.
-                </span>
-              </div>
-              <span style={{ fontSize: 12, lineHeight: 1.5, color: muted(70) }}>
-                Check the address before sending. A mainnet transfer cannot be reversed, and this
-                page is the only place we publish it.
-              </span>
-            </div>
-          </>
-        )}
-
-        <div className="hr" style={{ margin: "6px 0 0" }} />
-        <p style={{ margin: 0, fontSize: 12, lineHeight: 1.55, color: muted(55) }}>
-          The faucet itself is testnet only. TAZ has no monetary value, so topping up the tank is not
-          a fundraiser, it is a way to keep a shared testing tool available to the next person who
-          needs it.
+        {/* The mainnet ask lives on its own page now. Two addresses that look
+            alike and differ only in NETWORK should not share a screen: the whole
+            defence against copying the wrong one was a border colour and one word.
+            One page, one network does not rely on reading carefully. */}
+        <p style={{ margin: "4px 0 0", fontSize: 13, lineHeight: 1.55, color: muted(55) }}>
+          Supporting the running costs rather than the tank? That takes real mainnet ZEC:{" "}
+          <Link href="/fund" style={{ color: "var(--color-accent-text)" }}>fund the project</Link>.
         </p>
+
+
       </main>
 
       <div style={{ position: "sticky", bottom: 0, borderTop: "2px solid var(--color-divider)", background: "var(--color-surface)", padding: `10px ${pad}`, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>

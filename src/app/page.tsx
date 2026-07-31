@@ -563,7 +563,24 @@ export default function Home() {
     >
       <header className="nav" style={{ padding: `14px ${pad}`, gap: 14, flexWrap: "wrap" }}>
         <div className="nav-brand" style={{ fontSize: "clamp(15px,4vw,18px)", letterSpacing: "-.01em", marginRight: "auto", display: "flex", alignItems: "center", gap: ".44em" }}>
-          <BrandMark />
+          {/* The LOGO hyperlinks to z.cash, which is the trademark policy's
+              condition for showing it. The site NAME beside it is ours and stays
+              site navigation, so the two are separate links rather than one. Nested
+              anchors would be invalid markup anyway.
+
+              New tab, deliberately: people expect a masthead mark to go home, and
+              sending someone off-site mid-claim would lose whatever they had typed.
+              The aria-label says where it goes so the surprise is announced. */}
+          <a
+            href="https://z.cash/"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Zcash, opens z.cash in a new tab"
+            title="Zcash"
+            style={{ display: "inline-flex", flex: "none", color: "inherit" }}
+          >
+            <BrandMark />
+          </a>
           <span>Zcash Testnet Faucet</span>
         </div>
         {/* Left of the status badge, which is where every site puts this and so
@@ -616,12 +633,25 @@ export default function Home() {
         ].map((it) => (
           <span key={it.k}>{it.k} <b style={{ color: "var(--color-text)", fontWeight: 700 }}>{it.v}</b></span>
         ))}
-        <button className="btn btn-ghost btn-sm" onClick={() => setPanel((p) => !p)} aria-expanded={panel} aria-controls="live-panel" style={{ marginLeft: "auto", padding: 0 }}>{panel ? "Hide live panel ▴" : "Live panel ▾"}</button>
+        {/* A bordered box, not bare text. With `padding: 0` this was a ghost button
+            with every visual cue removed, so it read as a label and nobody knew the
+            panel opened. The chevron alone was not enough: it is 8px of glyph doing
+            the work a control's whole shape should do. */}
+        <button
+          className="btn btn-secondary btn-sm disclosure"
+          onClick={() => setPanel((p) => !p)}
+          aria-expanded={panel}
+          aria-controls="live-panel"
+          style={{ marginLeft: "auto" }}
+        >
+          {panel ? "Hide details" : "More details"}
+          <span aria-hidden="true" className="disclosure-caret">{panel ? "▲" : "▼"}</span>
+        </button>
       </div>
 
       {panel && (
         <div id="live-panel" style={{ borderBottom: "2px solid var(--color-divider)", background: "var(--color-surface)", padding: `16px ${pad}` }}>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", gap: "0 26px", maxWidth: 820 }}>
+          <div className="panel-grid">
             {[
               { k: "node", v: node?.ready ? "ready" : "syncing" + (syncPct != null ? " (" + Math.round(syncPct) + "%)" : "") },
               { k: "block height", v: num(height) + (nodeHeight ? " / " + num(nodeHeight) : "") },
@@ -652,12 +682,13 @@ export default function Home() {
         </div>
       )}
 
-      <main style={{ flex: 1, width: "100%", maxWidth: 620, margin: "0 auto", padding: `clamp(22px,5vw,46px) ${pad} 60px`, display: "flex", flexDirection: "column", gap: 20 }}>
+      <main style={{ flex: 1, width: "100%", maxWidth: 760, margin: "0 auto", padding: `clamp(22px,5vw,46px) ${pad} 60px`, display: "flex", flexDirection: "column", gap: 20 }}>
         <p className="sr-only" role="status">{announce}</p>
         {(phase === "ready" || phase === "syncing" || phase === "empty") && (
           <div>
             <h1 style={{ fontSize: "clamp(27px,7.4vw,40px)", lineHeight: 1.08, letterSpacing: "-.025em", margin: "0 0 10px" }}>Get free testnet ZEC, sent privately.</h1>
-            <p style={{ margin: 0, fontSize: 14.5, lineHeight: 1.55, color: muted(62), maxWidth: "44ch" }}>Paste a Zcash testnet address. The drip goes out as a shielded transaction, so the amount and the recipient stay off the public ledger.</p>
+            <p style={{ margin: 0, fontSize: 14.5, lineHeight: 1.55, color: muted(62), maxWidth: "46ch" }}>Paste a testnet address. The drip is shielded, so the amount and the recipient stay off the public ledger.</p>
+
           </div>
         )}
 
@@ -873,9 +904,25 @@ export default function Home() {
 
         <div className="hr" style={{ margin: "6px 0 0" }} />
 
+        {/* Who we are, AFTER the thing you came to do. Above the form this was a
+            third and fourth block of type between the headline and the field, which
+            is brand copy standing in the way of an action. Below it, it is what you
+            read once the request is placed, which is when "who runs this" actually
+            becomes an interesting question. */}
+        <div className="about-strip">
+          <p className="self-hosted-claim">
+            <span>Own node</span>
+            <span>Own wallet</span>
+            <span>Shielded drips</span>
+          </p>
+          <p className="about-strip-line">
+            We run the whole stack ourselves, and the community keeps it full.{" "}
+            <a href="/donate">Chip in</a> if it saved you time.
+          </p>
+        </div>
+
         <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 16px", alignItems: "center" }}>
           <button className="btn btn-ghost btn-sm" onClick={() => { setTool((t) => (t === "lookup" ? null : "lookup")); setLookupRes(""); }} aria-expanded={tool === "lookup"} aria-controls="tool-lookup" style={{ padding: 0 }}>Balance lookup</button>
-          <button className="btn btn-ghost btn-sm" onClick={generate} style={{ padding: 0 }}>Generate a test address</button>
           <button className="btn btn-ghost btn-sm" onClick={() => setTool((t) => (t === "about" ? null : "about"))} aria-expanded={tool === "about"} aria-controls="tool-about" style={{ padding: 0 }}>How it works</button>
         </div>
 
@@ -898,7 +945,7 @@ export default function Home() {
           </div>
         )}
 
-        <p style={{ margin: 0, fontFamily: "var(--mono)", fontSize: 10.5, letterSpacing: ".05em", color: muted(45) }}>Testnet only. TAZ has no monetary value.</p>
+
       </main>
 
       <div style={{ position: "sticky", bottom: 0, borderTop: "2px solid var(--color-divider)", background: "var(--color-surface)", padding: `10px ${pad}`, display: "flex", flexWrap: "wrap", gap: "8px 14px", alignItems: "center" }}>
@@ -921,7 +968,11 @@ export default function Home() {
             height={36}
           />
         </a>
-        <span style={{ fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".05em", color: muted(50) }}>{status?.network ?? "testnet"} · {status?.sender ?? "…"} backend</span>
+        {/* The Zcash mark in the masthead is ECC's trademark, shown under the
+            Foundation's policy for projects that work with Zcash. That policy turns
+            on not looking official, so this says plainly that we are not, and links
+            the mark's owner. Cheap to add, and it is the condition of using it. */}
+        <span style={{ fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".05em", color: muted(50) }}>not an official Zcash service</span>
         <a className="btn btn-ghost btn-sm" href="/donate" style={{ padding: 0 }}>Donate TAZ</a>
         {/* A terms page nobody can reach protects nobody, so it is linked from the
             footer of the page every visitor lands on. */}
@@ -936,11 +987,16 @@ export default function Home() {
             shows nothing at all rather than an empty promise. */}
         {status?.maintenanceAddress ? (
           <a
-            className="btn btn-ghost btn-sm"
-            href="/donate#maintenance"
-            style={{ padding: 0, marginLeft: "auto" }}
+            className="btn btn-secondary btn-sm fund-cta"
+            href="/fund"
+            style={{ marginLeft: "auto" }}
           >
-            Support upkeep (mainnet ZEC)
+            {/* A heart, not a coin or a card. This is upkeep for a free tool, and a
+                payment glyph would read as a price for using the faucet, which is the
+                one thing it must not suggest. */}
+            <span aria-hidden="true" className="fund-cta-icon">♥</span>
+            Fund the project
+            <span aria-hidden="true" className="fund-cta-note">mainnet ZEC</span>
           </a>
         ) : null}
         
