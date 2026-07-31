@@ -58,3 +58,38 @@ echo "== repo: the npm test script's floor is compatible with the pinned major"
 # so a pin BELOW 22 would make every suite fail to start rather than fail honestly.
 check "the pinned major is at least 22, the floor for unflagged type stripping" \
   "[ '$PROD_MAJOR' -ge 22 ]"
+
+echo "== repo: the miner heartbeat path agrees in all three places that name it"
+# Three files must agree on one path: the contract, the systemd unit that writes there, and
+# the compose mount the faucet reads through. Nothing enforced that, and a rename in one of
+# them leaves the reader watching a file nobody writes. That reports cannot-verify forever,
+# which is the hardest state to notice because it is not an error.
+HB_DOC="$REPO/deploy/z3/MINER-HEARTBEAT.md"
+HB_UNIT="$REPO/deploy/z3/zcash-testnet-miner.service"
+HB_COMPOSE="$REPO/deploy/z3/docker-compose.faucet.yml"
+HB_SRC="$REPO/deploy/z3/miner/src/heartbeat.rs"
+HB_PATH="$(sed -n 's/^Environment=MINER_HEARTBEAT_PATH=//p' "$HB_UNIT" | head -n1)"
+HB_STATEDIR="$(sed -n 's/^StateDirectory=//p' "$HB_UNIT" | head -n1)"
+HB_DIR="$(dirname "${HB_PATH:-/nowhere}")"
+
+check "the contract document exists" "[ -f '$HB_DOC' ]"
+check "the unit sets MINER_HEARTBEAT_PATH" "[ -n '$HB_PATH' ]"
+check "the unit declares a StateDirectory, so the dir is created and owned before it writes" \
+  "[ -n '$HB_STATEDIR' ]"
+check "and the StateDirectory is the directory that path lives in" \
+  "[ '/var/lib/$HB_STATEDIR' = '$HB_DIR' ]"
+check "the compose file mounts that directory into the faucet" \
+  "grep -q '$HB_DIR:$HB_DIR' '$HB_COMPOSE'"
+check "and mounts it READ-ONLY, so the reader cannot forge the signal it reports" \
+  "grep -q '$HB_DIR:$HB_DIR:ro' '$HB_COMPOSE'"
+check "the contract document names the same path" "grep -q '$HB_PATH' '$HB_DOC'"
+
+echo "== repo: the heartbeat has no error-message channel, only a stage token"
+# It is served from a public endpoint, and an error MESSAGE is where an RPC URL carrying
+# credentials in its userinfo ends up. The type is the guard: a Rust static string literal
+# cannot hold a formatted error, so this is structural rather than a habit to remember.
+check "the writer emits lastErrorStage" "grep -q lastErrorStage '$HB_SRC'"
+check "and no message or text error field exists to leak into" \
+  "! grep -qE 'lastError(Message|Text)' '$HB_SRC'"
+check "and the stage field cannot hold a formatted string" \
+  "grep -q 'last_error_stage: Option<&' '$HB_SRC'"
