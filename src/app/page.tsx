@@ -3,6 +3,8 @@
 import { CSSProperties, useCallback, useEffect, useRef, useState } from "react";
 import { BrandMark } from "./BrandMark";
 import { reserveRows } from "@/lib/reserveLabel";
+import { minerChip, minerRow, minerErrorRow, readingFromStatus } from "@/lib/minerLabel";
+import type { MinerReading } from "@/lib/miner/heartbeat";
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 // "checking" is NOT a variant of "syncing". It means we have not asked the backend
@@ -30,7 +32,11 @@ interface Status {
   queueDepth?: number;
   backend: { reachable: boolean; endpoint: string };
   node?: { ready: boolean; syncPercent: number | null; height: number | null; nodeHeight: number | null; canBuildTx?: boolean };
-  miner?: { active: boolean };
+  // `active` is derived from the heartbeat now, not from an env flag, so it can
+  // finally be false while the miner is broken. `state` is optional because an older
+  // deploy answering this shape has no heartbeat to report, and treating a missing
+  // field as "running" would be the bug all over again.
+  miner?: Partial<MinerReading> & { active: boolean };
   reserve?: { targetTaz: number; lowTaz: number; refilling: boolean; spendableTaz: number | null; failedSteps?: number; lastFailure?: { outcome: "waiting" | "error"; reason: string } | null };
   donationAddress?: string;
   /** Mainnet, for project upkeep. Empty when unset OR rejected by config validation. */
@@ -505,6 +511,10 @@ export default function Home() {
   // wallet says zero" and "we have not asked", one line before the only consumer,
   // so no guard downstream could recover it.
   const balance = status?.balanceTaz ?? null;
+  // Derived once. A missing miner block reads as cannot-verify rather than as off,
+  // which is what an older deploy answering the previous shape will produce.
+  const miner = readingFromStatus(status?.miner);
+  const minerError = minerErrorRow(miner);
   const reserve = status?.reserve;
   const donation = status?.donationAddress?.trim() ?? "";
   // A refill running while we can still serve must read as healthy, not as an
@@ -633,7 +643,10 @@ export default function Home() {
           { k: "sync", v: syncPct != null ? Math.round(syncPct) + "%" : "–" },
           { k: "height", v: num(height) },
           { k: "balance", v: balance != null ? balance.toFixed(1) + " TAZ" : status == null ? "–" : "0 TAZ" },
-          { k: "miner", v: status == null ? "–" : status.miner?.active ? "on" : "off" },
+          // Terse here, per the user, but "off" is not available as the terse word:
+          // a stalled miner is running and failing, and that needs a different
+          // response from an operator than a miner nobody started.
+          { k: "miner", v: status == null ? "–" : minerChip(miner) },
           // "indexer", never "node". This is the lightwalletd we query, not the
           // Zcash node behind it, and calling it the node version would be wrong
           // in front of the people who asked for it. Our own zebra version is not
@@ -682,7 +695,10 @@ export default function Home() {
               { k: "node", v: status == null ? "–" : node?.ready ? "ready" : "syncing" + (syncPct != null ? " (" + Math.round(syncPct) + "%)" : "") },
               { k: "block height", v: num(height) + (nodeHeight ? " / " + num(nodeHeight) : "") },
               { k: "wallet balance", v: status?.balanceTaz != null ? status.balanceTaz.toFixed(2) + " TAZ" : "–" },
-              { k: "miner", v: status == null ? "–" : status.miner?.active ? "on" : "off" },
+              // The detail belongs here, per the user: he asked that the miner's real
+              // state be knowable from More details.
+              { k: "miner", v: status == null ? "–" : minerRow(miner) },
+              ...(status != null && minerError ? [{ k: "miner error", v: minerError }] : []),
               ...(reserve
                 ? [
                     // Wording lives in reserveRows and is unit-tested, because
