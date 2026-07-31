@@ -1,0 +1,7 @@
+[Unit]
+Description=Publish box install integrity for the external gate
+Documentation=https://github.com/jinolabs-xyz/zcash-faucet
+
+[Service]
+Type=oneshot
+ExecStart=/opt/faucet/box-report.sh

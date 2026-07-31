@@ -154,6 +154,33 @@ if (!statusUsable) {
 if (statusUsable) {
   ok("status body is the faucet's", typeof status.body.balanceTaz !== "undefined" && !!status.body.network, `network ${status.body.network}`);
   ok("backend reachable from the app", status.body.backend?.reachable === true);
+
+  // THE BOX HAS WHAT THE REPO SAYS IT MUST. This is the gate that did not exist.
+  //
+  // Every other check verified the REPO: CI proves main is good, branch protection
+  // proves nothing merges red. None of it said a byte reached production, and on
+  // 2026-07-31 nine of fourteen ops scripts had never been installed, including the
+  // drift auditor whose job was catching exactly that. It went unnoticed for weeks
+  // because the only thing that could see it was never installed either.
+  //
+  // It hangs here because live-smoke is the ONLY signal that has ever reached us
+  // unprompted: it caught the disk outage and the HTTPS outage while every on-box
+  // check read healthy. A missing script now turns this red every 15 minutes.
+  //
+  // `unknown` FAILS, deliberately. A box that cannot say what it has is exactly the
+  // box we had all week, and counting silence as success is the bug itself.
+  const box = status.body.box;
+  if (!box) {
+    // An older deployment that predates the field. Not a pass and not a failure:
+    // asserting against a server that cannot answer would fail for the wrong reason.
+    ok("box integrity reported", true, "server does not send `box` yet, cannot verify");
+  } else {
+    ok(
+      "box has everything the repo requires",
+      box.state === "complete",
+      box.reason ?? `state ${box.state}`,
+    );
+  }
   console.log(
     `  balance ${status.body.balanceTaz ?? "unknown"} TAZ` +
       ` · queue ${status.body.queueDepth ?? "?"}` +

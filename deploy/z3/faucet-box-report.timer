@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh the box integrity report
+
+[Timer]
+# Every 5 minutes. The app calls a report stale after 30, so six runs fit inside
+# that window and one missed run cannot flip the verdict on its own.
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
