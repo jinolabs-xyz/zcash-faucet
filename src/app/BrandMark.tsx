@@ -1,34 +1,36 @@
 /**
- * The masthead mark. Same artwork as src/app/icon.svg, one identity.
+ * The official Zcash icon, path data taken verbatim from github.com/zcash/logos
+ * (zcash-logos-icons-2018/icons/black). Not a redraw: reproducing a trademark by
+ * eye gets you something that is almost the logo, which is worse than not using it.
  *
- * One deliberate difference: the favicon carries its own ink ground, because a
- * browser tab strip is not our canvas and we cannot query its colour. In the page
- * we DO know the ground, so the inline copy drops the ground and the Z takes
- * currentColor instead. Same geometry, same proportions, no second identity, and
- * it works in both themes without forking the file.
+ * WHY THE 2018 MARK AND NOT HEARTWOOD. The newer Heartwood icon is the better
+ * artwork and it is unusable here. It carries fine concentric detail that collapses
+ * into a speckled blob at the ~17px this masthead renders, which defeats the whole
+ * reason for using a known logo. The 2018 mark is two shapes, a ring and a struck
+ * through Z, and it survives being small. Recognisable at the size we actually ship
+ * beats faithful to the newest asset.
  *
- * No hooks, so this renders in the client page and the two server pages alike.
+ * TRADEMARK. The mark belongs to the Electric Coin Company and third-party use is
+ * governed by the Zcash Foundation's trademark policy. That policy allows a
+ * community project to display it to show it works with Zcash, provided the project
+ * does not hold itself out as official or endorsed. This faucet is neither, and the
+ * footer says so beside a link to z.cash.
+ *
+ * `currentColor` rather than the upstream #231f20, so one file serves both themes.
+ * Geometry is untouched.
+ *
+ * No hooks, so it renders in the client page and the two server pages alike.
  */
 
 /**
- * Sized in em, not px, so it tracks the wordmark through its clamp() instead of
- * being right at one viewport. The Z occupies 36 of the 64 viewBox units, and
- * Archivo ExtraBold caps are about 0.72em, so 0.72 / (36/64) = 1.28em makes the
- * Z exactly cap height at any font size. That is what "optically aligned to the
- * cap height" has to mean when the text is fluid.
+ * Sized in em so it tracks the wordmark through its clamp() rather than being right
+ * at exactly one viewport. The ring runs nearly edge to edge in its viewBox, unlike
+ * the in-house Z this replaced which sat inset, so it needs a smaller multiplier to
+ * land on the same optical weight beside the text.
  */
-const CAP_MATCHED_EM = 1.28;
+const CAP_MATCHED_EM = 1.02;
 
-/**
- * The Z is centred in its own viewBox, but a line of text is not centred on its
- * caps: the box carries descender space below them. Centring the two boxes
- * therefore leaves the Z sitting high, measured at 1.6px against an 18px
- * wordmark and 1.3px against 15px. Both are 0.085em, so the correction is a
- * constant in em and holds across the clamp.
- */
-const CAP_NUDGE_EM = 0.085;
-
-/** Decorative next to the visible wordmark, so aria-hidden and no accessible name. */
+/** Decorative beside the visible wordmark, so aria-hidden and no accessible name. */
 export function BrandMark() {
   return (
     <svg
@@ -37,11 +39,13 @@ export function BrandMark() {
       className="brand-mark"
       width={`${CAP_MATCHED_EM}em`}
       height={`${CAP_MATCHED_EM}em`}
-      viewBox="0 0 64 64"
-      style={{ flex: "none", position: "relative", top: `${CAP_NUDGE_EM}em` }}
+      viewBox="0 0 493.3 490.2"
+      style={{ flex: "none" }}
     >
-      <path d="M11,14 H53 V23 L29,41 H53 V50 H11 V41 L35,23 H11 Z" fill="currentColor" />
-      <rect x="0" y="56" width="64" height="8" fill="var(--color-accent)" />
+      <g fill="currentColor">
+        <path d="m245.4 20c-124.3 0-225.4 101.1-225.4 225.4s101.1 225.4 225.4 225.4 225.4-101.1 225.4-225.4-101.1-225.4-225.4-225.4zm0 413.6c-103.8 0-188.2-84.4-188.2-188.2s84.4-188.2 188.2-188.2 188.2 84.4 188.2 188.2-84.4 188.2-188.2 188.2z" />
+        <path d="m325.8 175.1v-34.3h-61.5v-37.8h-37.8v37.8h-61.5v45.5h95.4l-95.4 129.4v34.3h61.5v37.6h37.8v-37.6h61.5v-45.5h-95.4z" />
+      </g>
     </svg>
   );
 }

@@ -10,7 +10,7 @@ import Link from "next/link";
 import { BrandMark } from "./BrandMark";
 
 export const metadata = {
-  title: "Not found — Zcash Testnet Faucet",
+  title: "Not found · Zcash Testnet Faucet",
   description: "That page does not exist. The faucet is one page over.",
 };
 
@@ -29,8 +29,25 @@ export default function NotFound() {
     >
       <header className="nav" style={{ padding: `14px ${pad}`, gap: 14, flexWrap: "wrap" }}>
         <div className="nav-brand" style={{ fontSize: "clamp(15px,4vw,18px)", letterSpacing: "-.01em", marginRight: "auto", display: "flex", alignItems: "center", gap: ".44em" }}>
-          <BrandMark />
-          <span>Zcash Testnet Faucet</span>
+          {/* The LOGO hyperlinks to z.cash, which is the trademark policy's
+              condition for showing it. The site NAME beside it is ours and stays
+              site navigation, so the two are separate links rather than one. Nested
+              anchors would be invalid markup anyway.
+
+              New tab, deliberately: people expect a masthead mark to go home, and
+              sending someone off-site mid-claim would lose whatever they had typed.
+              The aria-label says where it goes so the surprise is announced. */}
+          <a
+            href="https://z.cash/"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Zcash, opens z.cash in a new tab"
+            title="Zcash"
+            style={{ display: "inline-flex", flex: "none", color: "inherit" }}
+          >
+            <BrandMark />
+          </a>
+          <Link href="/" style={{ color: "inherit", textDecoration: "none" }}>Zcash Testnet Faucet</Link>
         </div>
         <Link className="btn btn-secondary btn-sm" href="/" aria-label="Back to the faucet">
           {/* The visible label shortens at narrow widths so the masthead stays on

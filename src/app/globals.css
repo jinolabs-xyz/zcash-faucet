@@ -1,4 +1,4 @@
-/* Modernist design system (from the Faucet Prototype) — tokens + component
+/* Modernist design system (from the Faucet Prototype): tokens + component
    classes on plain CSS. Paper (light) is the default; .ink is dark. */
 @import url("https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&display=swap");
 
@@ -238,3 +238,130 @@ a:hover { color: var(--color-accent-800); }
 @media (prefers-reduced-motion: reduce) {
   .theme-toggle { transition: none; }
 }
+
+/* /donate splits testnet from mainnet side by side once there is room. Two
+   columns is the layout doing the safety work the copy also does: play money on
+   one side, real money on the other, so a donor who skims cannot read one block
+   as the other.
+
+   Single column is the base rather than the fallback. Below 900px two columns of
+   a 178-character address would each be too narrow to read, and the mainnet block
+   must never be the one that gets squeezed. `align-items: start` stops the
+   shorter column stretching to match the taller one, which would put a tall empty
+   border around whichever side has less in it. */
+.donate-cols {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 20px;
+  /* stretch, not start. The two children are the same KIND of thing, an address
+     block, so a ragged pair of different heights reads as an accident rather
+     than as a choice. They earn matching height by having matching structure. */
+  align-items: stretch;
+}
+.donate-col {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0; /* lets the address wrap instead of forcing the column wider */
+}
+@media (min-width: 900px) {
+  .donate-cols.has-two { grid-template-columns: 1fr 1fr; }
+}
+
+/* The masthead mark is a link on every page except home, and it needs a visible
+   affordance: without one it is a click target nobody knows is there, which is
+   the whole reason it was reported. Hover only, so the resting state stays as
+   quiet as the original heading. */
+a.nav-brand { cursor: pointer; }
+a.nav-brand:hover span { text-decoration: underline; text-underline-offset: 3px; }
+
+/* The live-panel disclosure. It was a ghost button with padding stripped to zero,
+   which left bare text plus a chevron: no box, no hover shape, nothing that says
+   "press me". People did not know the panel existed, which is a discoverability
+   bug rather than a style preference, so it now carries the same 2px box as the
+   masthead controls. */
+.disclosure { display: inline-flex; align-items: center; gap: .5em; }
+.disclosure:hover { border-color: var(--color-text); color: var(--color-text); }
+/* The caret is the state indicator, so it stays legible rather than decorative. */
+.disclosure-caret { font-size: .78em; line-height: 1; opacity: .8; }
+
+/* The upkeep link was a bare ghost link sitting among four other footer links of
+   identical weight, so the one thing on the page asking for money looked like
+   navigation. It gets a box and the accent, which is the only accent-bordered
+   thing in the footer, so it reads as an ask rather than another destination.
+
+   Still footer-sized and still secondary to the faucet itself: this must not
+   compete with "Request TAZ", because a faucet that pushes donations harder than
+   it gives out coins has its priorities visibly wrong. */
+.fund-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: .5em;
+  border-color: var(--color-accent);
+  color: var(--color-accent-text);
+}
+.fund-cta:hover {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
+}
+.fund-cta-icon { font-size: 1.05em; line-height: 1; }
+/* The network is the safety-relevant half, so it stays visible rather than being
+   a tooltip, but it is quieter than the ask itself. */
+.fund-cta-note {
+  font-size: .82em;
+  opacity: .72;
+  padding-left: .5em;
+  border-left: 1px solid currentColor;
+}
+@media (max-width: 560px) { .fund-cta-note { display: none; } }
+
+/* Live panel. Fixed counts, not auto-fit: there are eight rows, and auto-fit chose
+   three columns, which can only ever be 3/3/2 and reads as a missing tile. Four and
+   two both divide eight evenly. */
+.panel-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0 26px;
+  max-width: 1040px;
+}
+@media (min-width: 620px) { .panel-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (min-width: 1000px) { .panel-grid { grid-template-columns: repeat(4, 1fr); } }
+
+/* The self-hosted claim under the hero. Mono and uppercase because it is a
+   statement of fact in the same register as the status strip it sits under, not
+   marketing: every item on it is verifiable from that strip. */
+.self-hosted-claim {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5em 1.1em;
+  margin: 2px 0 0;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text) 52%, transparent);
+}
+/* Separators drawn rather than typed, so they cannot be read aloud as words. */
+.self-hosted-claim span + span::before {
+  content: "";
+  display: inline-block;
+  width: 3px; height: 3px;
+  margin-right: 1.1em;
+  vertical-align: middle;
+  background: var(--color-accent);
+}
+
+/* The "who runs this" strip, below the form rather than above it. One block with
+   one rhythm: the mono claim reads as a label for the sentence under it, instead
+   of the two being separate paragraphs competing in the hero. */
+.about-strip { margin: 0; }
+.about-strip .self-hosted-claim { margin: 0 0 5px; }
+.about-strip-line {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: color-mix(in srgb, var(--color-text) 52%, transparent);
+  max-width: 52ch;
+}
+.about-strip-line a { color: var(--color-accent-text); }
