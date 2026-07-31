@@ -28,6 +28,7 @@ LOCAL="$(git rev-parse HEAD)"
 REMOTE="$(git rev-parse "origin/$BRANCH")"
 [ "$LOCAL" = "$REMOTE" ] && { log "already at $(git rev-parse --short HEAD), nothing to do"; exit 0; }
 
+rc=0
 changed="$(git diff --name-only "$LOCAL" "$REMOTE")"
 
 # Two questions, not one. The old filter asked only "does the web app need a
@@ -45,7 +46,13 @@ if [ "$ops" = "1" ]; then
   # self-consistent afterwards and audit-drift has something to compare.
   install -m 755 "$REPO_DIR/deploy/z3/install-ops.sh" "$INSTALL_DIR/install-ops.sh" \
     || { log "ERROR: could not install install-ops.sh"; exit 1; }
-  "$INSTALL_DIR/install-ops.sh" || log "WARNING: install-ops reported a problem, see above"
+  # THE SOURCE IS PASSED EXPLICITLY. Running the installed copy with no argument made
+  # its source directory the DESTINATION, so it globbed /opt/faucet, copied files onto
+  # themselves, could not see anything missing, and exited 0. That is why 19 of 25
+  # required files were never installed. install-ops.sh now refuses that case outright,
+  # and this passes the repo so the refusal is never reached in normal operation.
+  "$INSTALL_DIR/install-ops.sh" "$REPO_DIR/deploy/z3" \
+    || { log "ERROR: install-ops FAILED, so the box is not at spec. Not treating this as a warning."; rc=1; }
 fi
 
 # THIS SCRIPT UPDATES ITSELF FOR THE NEXT RUN AND DOES NOT RE-EXEC.
@@ -66,3 +73,8 @@ if [ "$app" = "1" ]; then
 fi
 
 [ "$ops" = "1" ] || log "main moved but touched neither the app nor ops, nothing to install"
+
+# A failed install must not exit 0. The timer's own status is the only signal anyone
+# sees for this unit, and reporting success for a box that is not at spec is how the
+# missing 19 files stayed invisible.
+exit "$rc"

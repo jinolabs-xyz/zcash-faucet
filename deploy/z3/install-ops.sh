@@ -5,7 +5,21 @@
 # until now nothing performed the copy. Every merged ops fix sat in the checkout,
 # unrun, which is why the watchdog served pre-#175 code for a day (#181).
 #
-# Usage:  install-ops.sh [--dry-run]
+# Usage:  install-ops.sh [--dry-run] [source-dir]
+#         OPS_SOURCE_DIR=<repo>/deploy/z3 install-ops.sh
+#
+# THE SOURCE IS EXPLICIT NOW, AND THAT IS A BUG FIX, NOT TIDINESS. This used to take
+# its source from its OWN location, and auto-deploy.sh installs this script to
+# /opt/faucet and then runs the INSTALLED copy. So on the box the source directory
+# WAS the destination: it globbed /opt/faucet/*.sh and installed each file onto
+# itself, reporting "0 installed, N already current" and exiting 0. Anything present
+# in the repo and absent from /opt/faucet was never seen at all, because the glob
+# could not see it. 19 of 25 required files sat uninstalled for weeks, including
+# audit-drift.sh, the very auditor that would have reported them missing.
+#
+# Nothing caught it because no suite invoked this script, and running it from the
+# checkout by hand is the one situation where source and destination differ, so it
+# worked every time anyone tried it.
 #
 # Idempotent: it compares before copying, so a no-change run touches nothing and
 # does not reload systemd.
@@ -23,9 +37,39 @@ INSTALL_DIR="${OPS_INSTALL_DIR:-/opt/faucet}"
 UNIT_DIR="${OPS_UNIT_DIR:-/etc/systemd/system}"
 SYSTEMCTL="${OPS_SYSTEMCTL:-systemctl}"
 DRY=0
-[ "${1:-}" = "--dry-run" ] && DRY=1
+[ "${1:-}" = "--dry-run" ] && { DRY=1; shift; }
 
 log() { echo "$(date -u +%FT%TZ) install-ops: $*"; }
+
+# Explicit argument, then env, then the script's own directory. The fallback stays so
+# running it from a checkout still works, but it is now GUARDED below rather than
+# trusted, which is the whole point.
+SRC="${1:-${OPS_SOURCE_DIR:-$HERE}}"
+SRC="$(cd "$SRC" 2>/dev/null && pwd -P)" || { log "ERROR: source directory ${1:-${OPS_SOURCE_DIR:-$HERE}} does not exist"; exit 2; }
+DEST_R="$(cd "$INSTALL_DIR" 2>/dev/null && pwd -P || printf '%s' "$INSTALL_DIR")"
+
+# THE REFUSAL. Source == destination means every copy is a file onto itself and every
+# absent file is invisible, so a run in that state cannot install anything and must
+# not be allowed to report that it did.
+if [ "$SRC" = "$DEST_R" ]; then
+  log "REFUSING TO RUN: the source directory and the install directory are the same path:"
+  log "  $SRC"
+  log "Every copy would be a file onto itself, and any file missing from the destination"
+  log "would be invisible to the glob, so this would install NOTHING and exit 0. That is"
+  log "how 19 of 25 required files sat uninstalled for weeks, audit-drift.sh among them."
+  log "Pass the repo's deploy/z3 explicitly:  install-ops.sh /opt/zcash-faucet/deploy/z3"
+  exit 2
+fi
+
+# A source directory with no scripts in it is not an empty job, it is a wrong path.
+# Without this the loops below iterate zero times and the run reports success.
+src_count=0
+for f in "$SRC"/*.sh; do [ -e "$f" ] && src_count=$((src_count + 1)); done
+if [ "$src_count" -eq 0 ]; then
+  log "REFUSING TO RUN: no *.sh found in $SRC, so this is not the ops source directory."
+  log "Installing nothing and reporting success is the failure this refusal exists for."
+  exit 2
+fi
 
 changed=0
 skipped=0
@@ -56,7 +100,7 @@ place() {
 # files that are not there, and the failure would be a silent alert rather than a
 # missing unit.
 rc=0
-for src in "$HERE"/*.sh; do
+for src in "$SRC"/*.sh; do
   [ -e "$src" ] || continue
   case "$(basename "$src")" in
     # Both are skipped for the same reason and it is not tidiness. auto-deploy.sh
@@ -71,7 +115,7 @@ for src in "$HERE"/*.sh; do
 done
 
 units=0
-for src in "$HERE"/*.service "$HERE"/*.timer; do
+for src in "$SRC"/*.service "$SRC"/*.timer; do
   [ -e "$src" ] || continue
   before="$changed"
   place "$src" "$UNIT_DIR/$(basename "$src")" 644 || rc=1
@@ -84,6 +128,40 @@ done
 if [ "$units" -gt 0 ] && [ "$DRY" != "1" ]; then
   "$SYSTEMCTL" daemon-reload || log "WARNING: daemon-reload failed, systemd may still be running the old unit text"
   log "reloaded systemd for $units changed unit(s)"
+fi
+
+# POST-CONDITIONS. "The loop finished" is not "the files are there", and this script
+# reported the first while meaning the second for weeks. So verify the end state from
+# the destination side, which is the only side that matters.
+if [ "$DRY" != "1" ]; then
+  missing=""
+  differs=""
+  for src in "$SRC"/*.sh; do
+    [ -e "$src" ] || continue
+    name="$(basename "$src")"
+    case "$name" in install-ops.sh|auto-deploy.sh) continue ;; esac
+    dest="$INSTALL_DIR/$name"
+    if [ ! -f "$dest" ]; then missing="$missing $name"
+    elif ! cmp -s "$src" "$dest"; then differs="$differs $name"
+    fi
+  done
+  for src in "$SRC"/*.service "$SRC"/*.timer; do
+    [ -e "$src" ] || continue
+    name="$(basename "$src")"
+    dest="$UNIT_DIR/$name"
+    if [ ! -f "$dest" ]; then missing="$missing $name"
+    elif ! cmp -s "$src" "$dest"; then differs="$differs $name"
+    fi
+  done
+  if [ -n "$missing" ] || [ -n "$differs" ]; then
+    log "POST-CONDITION FAILED: the box does not match the repo after this run."
+    [ -n "$missing" ] && log "  never arrived:$missing"
+    [ -n "$differs" ] && log "  present but different:$differs"
+    log "Not reporting success for a box that is not at spec. Nothing above errored,"
+    log "which is exactly why this check exists."
+    exit 1
+  fi
+  log "verified: every ops script and unit at the destination matches the repo"
 fi
 
 log "done: $changed installed, $skipped already current"
