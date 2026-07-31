@@ -23,7 +23,9 @@ import type { MinerReading, MinerState } from "./miner/heartbeat.ts";
  */
 export function readingFromStatus(m: (Partial<MinerReading> & { active?: boolean }) | null | undefined): MinerReading {
   const state: MinerState =
-    m?.state === "running" || m?.state === "stalled" || m?.state === "not-writing" ? m.state : "cannot-verify";
+    m?.state === "running" || m?.state === "stalled" || m?.state === "not-writing" || m?.state === "not-configured"
+      ? m.state
+      : "cannot-verify";
   return {
     state,
     beatAgoSeconds: m?.beatAgoSeconds ?? null,
@@ -63,6 +65,9 @@ export function minerChip(r: MinerReading): string {
     case "stalled": return "no blocks";
     case "not-writing": return "no signal";
     case "cannot-verify": return "unknown";
+    // Not softened to blank. We are not watching the miner, and a reader who sees
+    // nothing here would conclude there was nothing to know.
+    case "not-configured": return "unwatched";
   }
 }
 
@@ -98,7 +103,13 @@ export function minerRow(r: MinerReading): string {
 
     // Never "off". We have not established that it is off, only that we cannot see it.
     case "cannot-verify":
-      return "cannot tell, no readable heartbeat";
+      return "cannot tell, heartbeat configured but unreadable";
+
+    // Says whose problem it is. "Cannot tell" alone sent a reader looking for a
+    // broken miner when the answer is an unset variable on the deploy, which is a
+    // different job at a different time of day.
+    case "not-configured":
+      return "not watched, no heartbeat path configured";
   }
 }
 
