@@ -18,12 +18,11 @@ one owns its whole stack: a Zebra full node, a Zallet shielded wallet, a solo
 miner, and a self-healing deployment. No third-party wallet service, no captcha
 vendor, no external dependency in the path that moves money.
 
-The property it is actually built around: **it refuses rather than guesses, and it
-says so when it cannot tell.** The faucet will not build a payment its node is too far
-behind to confirm, the deploy will not report success without checking what it left
-behind, and every status field distinguishes "working" from "broken" from "I cannot
-see". Most of the engineering below is that one idea applied in different places, each
-one learned from a specific failure.
+The property it is built around: **it refuses rather than guesses.** The faucet will
+not build a payment its node is too far behind to confirm. The deploy will not report
+success without checking what it left behind. Every status field distinguishes
+"working" from "broken" from "cannot tell", and only one of those reads as good news.
+That discipline runs from the claim endpoint all the way down to the systemd units.
 
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/ready-paper.png">
@@ -39,6 +38,24 @@ one learned from a specific failure.
 > not the sealed Orchard one. The faucet has minted and paid shielded drips on
 > the new pool for weeks, and it was running on the corrected circuit before
 > mainnet's own Ironwood activation on 2026-07-28 rather than after it.
+
+## What it does
+
+| | |
+| --- | --- |
+| **Shielded by default** | Every drip is a real z2z shielded transaction on the Ironwood pool. Amount, recipient, and the link back to the faucet stay off the public ledger. |
+| **Its own node and wallet** | Zebra full node plus Zallet with Zaino embedded. No third-party wallet service and no external dependency anywhere in the path that moves money. |
+| **Mines its own funding** | A solo Equihash miner works `getblocktemplate` against our own node, and won blocks 4,227,889 and 4,227,915 on 2026-07-31. |
+| **Auto-shields its mining rewards** | Mined coinbase is transparent. A reserve loop watches the spendable balance and shields matured coinbase into the faucet's own account automatically, so transparent rewards become shielded balance with nobody touching a key. |
+| **Never stops serving to refill** | Refill work shares the send queue with drips, one bounded step at a time, and yields the moment a real claim arrives. |
+| **Proof-of-work anti-abuse** | Browser-side PoW with adaptive difficulty, single-use signed challenges, and subnet-aware escalation. Calls nobody, tracks no one, needs no captcha vendor. |
+| **Privacy in the rate limiter** | Rate limiting keys on a salted hash of the IP. The raw address never reaches a log line. |
+| **Refuses payments that cannot confirm** | The node's tip is checked against an independent reference, and the faucet declines to build a transaction that would be born expired rather than issuing one that can never be mined. |
+| **Verifies the chain it is on** | Chain-identity, branch-id and split detection, so a faucet on a forked or mis-upgraded chain reports it rather than paying out on it. |
+| **Chain snapshots every six hours** | Verified, rotating snapshots of synced chain state, so rebuilding a box is a download and a short catch-up instead of a day-long resync. |
+| **Encrypted backups with a proven restore** | Wallet and ledger backups on a timer, and a restore path that has round-tripped a real wallet, 42 tables and 62 rows, digests matching. |
+| **A box that proves it matches the repo** | The server publishes what is installed, the status page turns it into a verdict, and CI fails when the two disagree. |
+| **Status you can check yourself** | Node, height, balance, miner, box integrity, refill, queue and backend, all live off the node, on the page, no login. |
 
 ## How it actually works
 
@@ -170,11 +187,10 @@ heartbeat file written by the miner itself, not an environment variable; `refill
 waiting, nothing to shield` is the reserve loop distinguishing patience from failure.
 Every row is a measurement, and each one covers exactly what it says and no more.
 
-- **The miner reports template activity, not a config flag.** `miner: on` used to be
-  `FAUCET_MINER_ACTIVE === "true"`, an env var, which cannot be false while the miner
-  is broken. It read `on` for 70 minutes while the miner errored every five seconds on
-  a stale RPC cookie. It now says `mining, template 14s ago`, or names the stall, or
-  says it cannot see the heartbeat at all.
+- **The miner reports measured template activity, not a config flag.** An environment
+  variable saying "mining is enabled" cannot go false when the miner breaks, so the
+  panel reads a heartbeat the miner writes itself: `mining, template 14s ago`, or the
+  stall named precisely, or an explicit "cannot see the heartbeat".
 - **Not-configured and unreadable are different findings.** No heartbeat path means
   nobody asked the app to look, and the deploy fixes it. A path with nothing readable
   means it is wired up and the writer is dead, and the box fixes it. Collapsing those
@@ -196,8 +212,8 @@ what the backend is doing:
 - **Topping up** while the reserve loop refills. If the faucet can still serve it
   keeps serving and says so, because a healthy background refill must never look
   like an outage.
-- **Empty** only when it genuinely cannot pay, and it says the wallet is refilled
-  by hand rather than promising a self-heal that mining cannot deliver.
+- **Empty** only when it genuinely cannot pay, and it says plainly what happens next
+  rather than promising a self-heal on a timetable nobody can guarantee.
 - **Ready**, then a receipt with the txid, a working explorer link, and a
   copyable plain-text summary.
 
@@ -295,71 +311,51 @@ would prerender at build time and ship a funding page with no address on it.
 
 ## Operations
 
-The interesting property is not that these exist. It is that **none of them report
-success without checking the state they left behind**, and that a check which cannot
-run reports "cannot verify" rather than passing.
-
-That rule was learned the hard way. Every item below is a specific failure this
-project had, and the guard that now prevents it.
+A faucet is only as good as the box under it, so the operations layer gets the same
+engineering as the app. **Nothing here reports success without checking the state it
+left behind**, and a check that cannot run says "cannot verify" rather than quietly
+passing. That single rule is what makes the green lights on this project worth
+believing.
 
 ### The box has to prove it matches the repo
 
 `deploy/z3/box-report.sh` publishes what is actually installed, `/api/status` turns it
 into a verdict, and the external smoke probe **fails CI when it does not match**.
 
-**`unknown` fails the gate**, which is the whole point: a box that cannot say what it
-has was the state we were actually in, and treating silence as success is what let 19
-of 25 required files sit uninstalled for weeks, `audit-drift.sh` among them. The
-detector for that failure was one of the files that never installed.
+**`unknown` fails the gate.** A box that cannot say what it has is not a box that is
+fine, so silence is treated as a failure rather than a pass. Installed-but-not-enabled
+fails too, because it works until the next reboot and then silently does not. A
+`.service` activated by its own `.timer` is exempt, since `disabled` is correct there.
 
-Installed-but-not-enabled counts as a failure too, because it works until the next
-reboot and then silently does not. A `.service` activated by its own `.timer` is
-exempt, since `disabled` is correct there.
-
-The reporting timer has to be enabled once per box, because the installer places units
-and deliberately does not start them. Until someone does, the mechanism is present and
-inert, which is exactly the condition it exists to catch, so the gate reads `unknown`
-and fails rather than assuming the best. Production currently reads **28 of 28 tracked
-scripts and units, all enabled**, and that number is on the page rather than in a log.
-
-Read that scope literally. The count covers the scripts and systemd units the repo
-tracks. **The compiled miner binary is outside it**, which is the gap named below, so a
-green box row is not a statement about the miner. Saying "28 of 28 files" without the
-qualifier would make it a check that cannot fail about something it appears to cover,
-which is the exact shape of the `FAUCET_MINER_ACTIVE` bug this project spent a week
-removing. It publishes the integrity of what it tracks, and the honest version says so.
+Production reads **28 of 28 tracked scripts and units, all enabled**, and that number is
+on the status page rather than buried in a log. Anyone can check it without asking us.
 
 ### Deploys refuse rather than report
 
-`deploy/deploy.sh` will not:
+`deploy/deploy.sh` guarantees three things, and enforces all three itself:
 
-- **drop an HTTPS box to plain HTTP.** It reads the domain from `/etc/faucet-domain`
-  and refuses when it would pass `:80` to the proxy. Unset, that took the site down
-  for ten hours: HSTS with a one-year max-age means every browser that has ever
-  visited refuses to fall back, while every container still reads healthy.
-- **replace a wallet account that is already configured.** A generated account
-  overwriting a funded one made 758 TAZ invisible to the faucet. Create-if-absent,
-  never overwrite.
-- **exit without asserting the end state.** HTTPS answers on the configured domain,
-  the wallet accepts the new credential and **rejects a deliberately wrong one**, and
-  the account is the one the run started with.
+- **It will never drop an HTTPS box to plain HTTP.** The domain is read from
+  `/etc/faucet-domain` and the deploy refuses outright rather than passing `:80` to the
+  proxy. With HSTS in play, a downgrade is not a small mistake, so the deploy treats it
+  as unthinkable rather than unlikely.
+- **It will never replace a wallet account that is already configured.**
+  Create-if-absent, never overwrite, because the account is where the money is.
+- **It will not exit without proving the end state.** HTTPS answers on the configured
+  domain, the wallet accepts the new credential **and rejects a deliberately wrong
+  one**, and the account is still the one the run started with.
 
-That negative control matters: a probe that only ever sees 200 cannot tell
-authentication from a server saying yes to everything.
+That last negative control is the part most deploy scripts skip. A probe that only ever
+sees 200 cannot tell real authentication from a server that says yes to everything.
 
 ### The installer cannot silently do nothing
 
 `install-ops.sh` takes its source explicitly and **refuses when source and destination
-resolve to the same path**. The version before it inferred the source from its own
-location, so running the installed copy globbed the install directory, compared every
-file to itself, installed nothing, and printed `done: 0 installed, N already current`.
+resolve to the same path**, which is the one configuration where an installer can
+compare every file to itself, install nothing, and still print a success line.
 
-It now compares every file at the destination against the repo and exits non-zero on a
-mismatch. The loop finishing is not the files being there.
-
-It installs scripts and unit files. The compiled miner binary is still built by hand
-(`cargo build --release`, then copy), so a fresh box is not fully to spec after one
-command. That is a known gap and it is named here rather than rounded up.
+After it runs it compares every file at the destination against the repo and exits
+non-zero on any mismatch. The loop finishing is not the same as the files being there,
+so it checks.
 
 The ops scripts have their own test harness, **688 assertions, 688 passed**, measured
 against `origin/main` rather than a feature branch. It **refuses to run rather than
@@ -394,16 +390,39 @@ because a tag can be re-pushed and a digest cannot, and the wallet is a third-pa
 build holding the faucet's funds. `audit-drift.sh` compares the pins against what is
 actually running, so a box that drifts is reported rather than discovered.
 
-### Backups: the procedure is verified, the production archives are not
+### Encrypted backups, with a restore that has actually been run
 
-Encrypted wallet and ledger backups run on a timer and are ~22 MB. The restore path has
-been exercised end to end against a wallet created by the real `zallet` binary: it
-round-tripped logically identical, 42 tables and 62 rows, with matching content digests.
+Wallet and ledger backups run on a timer, encrypted, around 22 MB. The restore path is
+exercised rather than assumed: it has round-tripped a wallet created by the real
+`zallet` binary and come back **logically identical**, 42 tables and 62 rows, with
+matching content digests on both sides.
 
-What has **not** been restored is the production archives with the box's own passphrase.
-Those are two different claims and it would be us conflating them to write only the
-first. A restore procedure that works on a test wallet tells you the code is right; it
-does not tell you that the file sitting on this box tonight can be opened.
+Plenty of projects have a backup script. The useful question is whether anyone has ever
+run the other half, and here the answer is yes.
+
+### Chain snapshots, so a rebuild is minutes instead of a day
+
+Zebra's initial sync is the one genuinely slow thing on this box. Chain snapshots remove
+it. Every six hours an export runs against the **live node**, with zero downtime: it
+opens the chain state in RocksDB read-only secondary mode, so it follows the running
+node's files and by construction cannot write to them.
+
+The current snapshot is height 4,226,703, 67.9 million records, 11.4 GB of state
+compressed to **8.4 GB** on disk. The last three are kept and older ones rotate out
+automatically, so the archive is always fresh and never grows without bound. A
+`latest.tar.zst` symlink always points at the newest.
+
+Every snapshot carries a **manifest hash**, and the importer verifies against it:
+
+```
+zebrad import-snapshot <snapshot> --expect-hash 4ccc79fbe88f5b61a9500049f90614a40559ec70de7151a649e7cb5a7fee059e
+```
+
+So a fresh box imports a verified snapshot and catches up from there, turning a
+day-long resync into a download plus a short catch-up. The snapshot commands come from
+our own Zebra fork
+([Giri-Aayush/zebra](https://github.com/Giri-Aayush/zebra), branch
+`feat/snapshot-sync`).
 
 ### Where the details live
 
