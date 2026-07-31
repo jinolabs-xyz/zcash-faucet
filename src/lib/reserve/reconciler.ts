@@ -21,7 +21,7 @@
 import { config, ZATOSHI_PER_TAZ } from "../config.ts";
 import { safeBalance } from "../zcash/send.ts";
 import { getSendQueue } from "../zcash/queue.ts";
-import { classifySweep, decideRefilling, shouldStartStep } from "./decide.ts";
+import { classifySweep, decideRefilling, initialRefilling, shouldStartStep } from "./decide.ts";
 import type { ShieldFreshness } from "../zcash/shieldGate.ts";
 import { getRefiller } from "./refiller.ts";
 import { classifyStepFailure, shouldAttempt, type StepOutcome } from "./stepFailure.ts";
@@ -102,7 +102,12 @@ export function sampledNote(consecutive: number): string {
 }
 
 class ReserveReconciler {
-  private refilling = false;
+  // null means UNDECIDED, not "decided not to". A fresh container has no previous
+  // state for decideRefilling to hold, and `false` claimed one it did not have: a
+  // deploy mid-refill at 758 of 1000 landed inside the band, held the false, and
+  // stopped topping up until the balance drained under the low mark. Settled by
+  // initialRefilling on the first tick that can actually read a balance.
+  private refilling: boolean | null = null;
   private spendableZat: bigint | null = null;
   private stepInFlight = false;
   private ticking = false;
@@ -167,10 +172,13 @@ class ReserveReconciler {
         this.blindTicks = 0;
       }
 
-      this.refilling = decideRefilling(this.refilling, this.spendableZat, {
-        lowZat: config.reserve.lowZatoshi,
-        targetZat: config.reserve.targetZatoshi,
-      });
+      const levels = { lowZat: config.reserve.lowZatoshi, targetZat: config.reserve.targetZatoshi };
+      // Undecided until a balance is actually readable. Once settled it never returns
+      // to null, so the hysteresis rule owns every tick after the first real reading.
+      this.refilling =
+        this.refilling === null
+          ? initialRefilling(this.spendableZat, levels)
+          : decideRefilling(this.refilling, this.spendableZat, levels);
 
       // Needing to refill while forbidden to is the state that stranded 47.5 TAZ.
       // It is a legitimate configuration, so it is not an error to be fixed in
@@ -189,7 +197,8 @@ class ReserveReconciler {
         this.forbiddenTicks = 0;
       }
       const start = shouldStartStep({
-        refilling: this.refilling,
+        // Undecided must not act. We have not established that a refill is wanted.
+        refilling: this.refilling === true,
         canAct: config.reserve.shieldCoinbase,
         stepInFlight: this.stepInFlight,
         queueDepth: getSendQueue().depth, // user traffic first, refill can wait
@@ -310,7 +319,9 @@ class ReserveReconciler {
     return {
       targetTaz: Number(config.reserve.targetZatoshi) / Number(ZATOSHI_PER_TAZ),
       lowTaz: Number(config.reserve.lowZatoshi) / Number(ZATOSHI_PER_TAZ),
-      refilling: this.refilling,
+      // The wire shape stays boolean. Undecided reports false, which is accurate about
+      // what is happening (nothing) and lasts only until a balance is readable.
+      refilling: this.refilling === true,
       spendableTaz:
         this.spendableZat === null ? null : Number(this.spendableZat) / Number(ZATOSHI_PER_TAZ),
       shieldCoinbase: config.reserve.shieldCoinbase,
