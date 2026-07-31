@@ -4,10 +4,18 @@
 // page wired to that API works.
 //
 //   npm run build
-//   node scripts/fake-zallet.mjs &
+//   node scripts/fake-zallet.mjs &                 # PORT=28299 wallet double
+//   PORT=28324 node scripts/fake-hosh.mjs &        # tip oracle fixture, see below
 //   FAUCET_SENDER=zallet ZALLET_RPC_URL=http://127.0.0.1:28299/ ZALLET_ACCOUNT=fake-account \
 //   ZALLET_ADDRESS=utest1fake ZALLET_MIN_CONF=0 FAUCET_CHALLENGE=pow FAUCET_POW_BITS=12 \
-//   RATE_LIMIT_SALT=ui-smoke PORT=3120 npm start
+//   RATE_LIMIT_SALT=ui-smoke HOSH_URL=http://127.0.0.1:28324/ PORT=3120 npm start
+//
+// BOTH doubles, and fake-hosh must be answering BEFORE the app starts. Leave it out
+// and the oracle compares the wallet double's tip against the real network, decides
+// our node is half a million blocks behind and refuses every claim, so the run fails
+// on the LIVE dot and then times out waiting 120s for a "Sent ✓" that cannot come.
+// That reads like a UI regression and is not one (#171). This block used to list only
+// the wallet double, which is how it cost someone an afternoon.
 //   npm i --no-save playwright@1.62.0 && npx playwright install chromium
 //   (the same version ci.yml pins, so a local repro cannot diverge from CI)
 //   UI_SMOKE_URL=http://localhost:3120 node scripts/ui-smoke.mjs
@@ -140,6 +148,104 @@ async function checkAppearance(page) {
   );
 }
 
+// What the page says and does BEFORE the first /api/status answers.
+//
+// This window is real but short, roughly half a second on localhost, so driving it
+// by racing the page is flaky by construction. Holding the response open makes it
+// as long as we like, which turns a race into an assertion.
+//
+// Two separate properties, and the second is the one that bites. The page must not
+// state a balance, a node state or a miner state it has not been told, AND a claim
+// typed in that window must still be HELD. Adding the "checking" phase took the hold
+// away by accident: the queue guard tested for "syncing" by name, so the claim fell
+// through to a live POST with no proof of work attached and came back an error.
+// `address` must be checksum-valid, or submit() bails at validation and never reaches
+// the queue guard, which would make the hold assertion pass without testing anything.
+async function checkFirstPaint(page, base, address) {
+  let release;
+  const held = new Promise((r) => { release = r; });
+  // Once we stop intercepting, Playwright resolves whatever route is still suspended
+  // here, and our continue() then throws "already handled". Which side finishes it does
+  // not matter, but an unhandled rejection out of this callback kills the whole run.
+  await page.route("**/api/status*", async (route) => {
+    await held;
+    try { await route.continue(); } catch { /* unrouted from under us */ }
+  });
+
+  try {
+    await page.goto(base, { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: /Checking status/ }).waitFor({ timeout: 15_000 });
+    const body = await page.textContent("body");
+    ok("first paint says CHECKING, not LIVE", /CHECKING/.test(body) && !/\bLIVE\b/.test(body));
+
+    // Read the status strip cell by cell rather than grepping the body. A body-wide
+    // regex cannot do this job: the drip amount "0.1 TAZ" is legitimately on the page,
+    // so "does a number followed by TAZ appear" is not a question with a useful answer.
+    // The first version of this check tested /\b0 TAZ\b/ and passed with the bug still
+    // in, because `?? 0` renders through toFixed(1) as "0.0 TAZ" and never matched.
+    const cells = await page.evaluate(() => {
+      const out = {};
+      for (const b of document.querySelectorAll("header + div span > b")) {
+        const span = b.parentElement;
+        const key = span.textContent.slice(0, span.textContent.length - b.textContent.length).trim();
+        if (key) out[key] = b.textContent.trim();
+      }
+      return out;
+    });
+    const DASH = "–";
+    ok("the strip was found at all", Object.keys(cells).length > 0, JSON.stringify(cells));
+    for (const k of ["node", "balance", "miner"]) {
+      ok(`first paint states no ${k} it was not told`, cells[k] === DASH, `${k}=${cells[k] ?? "missing"}`);
+    }
+
+    // The regression. Type and submit while status is still held.
+    await page.locator("input.input").first().fill(address);
+    await page.locator("button.btn-primary").first().click();
+    await page.waitForTimeout(400);
+    const after = await page.textContent("body");
+    const queued = /Queued/.test(after);
+    ok("a claim typed before the first status is HELD, not sent",
+      queued, queued ? "" : after.match(/Couldn.t[^.]*\./)?.[0] ?? "no Queued panel");
+  } finally {
+    release();
+    await page.unroute("**/api/status*");
+    // The held claim has to be cleared from a page the app is NOT mounted on. Clearing
+    // it while the home page is live does nothing: the claim is still in React state,
+    // the persist effect writes it straight back, and the next load restores a queued
+    // claim into a suite that assumes a clean faucet. That leak failed the LIVE-dot
+    // check and hung the claim flow, both of which looked like unrelated regressions.
+    await page.goto(`${base}/terms`, { waitUntil: "domcontentloaded" });
+    await page.evaluate(() => localStorage.removeItem("zfaucet_queued"));
+  }
+}
+
+// The miner readout, in the state CI actually runs in: no heartbeat configured.
+//
+// That is the important case rather than a limitation. The old field was an env flag,
+// so an unconfigured or broken miner still rendered "on", and a run with no heartbeat
+// at all is exactly the shape that used to lie. What it must say now is that it cannot
+// tell, which is neither healthy nor "off".
+async function checkMinerPanel(page) {
+  await page.getByRole("button", { name: /More details/ }).click();
+
+  // Read the one cell, not the panel's textContent. There are no newlines in that
+  // string, so a /miner\s*([^\n]*)/ match runs to the end and drags in reserve, queue
+  // and backend. Every assertion below would then be answered by some other row.
+  const row = await page.evaluate(() => {
+    const cells = [...document.querySelectorAll(".panel-grid > *")];
+    const hit = cells.find((c) => c.firstElementChild?.textContent?.trim() === "miner");
+    return hit?.lastElementChild?.textContent?.trim() ?? "";
+  });
+
+  ok("the panel reports the miner at all", row.length > 0, row);
+  ok("no heartbeat reads as cannot tell", /cannot tell/.test(row), row);
+  ok("no heartbeat is NOT reported as running", !/\bmining\b/.test(row), row);
+  // "off" is the specific wrong answer. We have not established the miner is off, only
+  // that we cannot see it, and those call for different responses from an operator.
+  ok("no heartbeat is NOT reported as off", !/\boff\b/.test(row), row);
+  await page.getByRole("button", { name: /Hide details/ }).click();
+}
+
 // The 404 must wear the site chrome, not Next's bare default. A broken not-found
 // route renders as the framework default, which has no mark, so this fails on it.
 async function check404(page, base) {
@@ -160,12 +266,16 @@ page.on("console", (m) => { if (m.type() === "error") problems.push(`console: ${
 page.on("requestfailed", (r) => problems.push(`request failed: ${r.url()} ${r.failure()?.errorText ?? ""}`));
 
 try {
+  // First, because it is the only check that needs the page to have asked nothing yet.
+  await checkFirstPaint(page, BASE, await freshAddress());
+
   await page.goto(BASE, { waitUntil: "networkidle", timeout: 60_000 });
   ok("page renders its heading", (await page.textContent("body")).includes("Get free testnet ZEC"));
   ok("status bar reached the API", /balance\s/.test(await page.textContent("body")));
 
   // Visual + a11y checks before the claim flow, while the home page is loaded.
   await checkAppearance(page);
+  await checkMinerPanel(page);
 
   // Generate-then-claim, the flow #31 broke for every visitor: the button read
   // the address from the wrong field and substituted a synthesized one that
