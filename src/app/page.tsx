@@ -923,6 +923,9 @@ export default function Home() {
         </a>
         <span style={{ fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".05em", color: muted(50) }}>{status?.network ?? "testnet"} · {status?.sender ?? "…"} backend</span>
         <a className="btn btn-ghost btn-sm" href="/donate" style={{ padding: 0 }}>Donate TAZ</a>
+        {/* A terms page nobody can reach protects nobody, so it is linked from the
+            footer of the page every visitor lands on. */}
+        <a className="btn btn-ghost btn-sm" href="/terms" style={{ padding: 0 }}>Terms</a>
         {/* Bottom right, and deliberately a LINK rather than the address itself.
             Handing over an address correctly is /donate's whole job: it is server
             rendered, so the address is readable with JavaScript off, and it has
