@@ -5,7 +5,20 @@ import { BrandMark } from "./BrandMark";
 import { reserveRows } from "@/lib/reserveLabel";
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
-type Phase = "syncing" | "queued" | "empty" | "ready" | "submitting" | "success" | "cooldown" | "error";
+// "checking" is NOT a variant of "syncing". It means we have not asked the backend
+// yet, and the page renders in 2ms while /api/status takes 460 to 770ms, so this
+// state is on screen for over half a second on localhost and longer over a network.
+// It used to render as "syncing", which told a first-time visitor that a healthy
+// faucet was busy coming up.
+type Phase = "checking" | "syncing" | "queued" | "empty" | "ready" | "submitting" | "success" | "cooldown" | "error";
+
+// The two states where we cannot send yet, for different reasons: we have not asked,
+// or we asked and the node is not ready. They differ in what the page SAYS and agree
+// on what it DOES, so every "can we send" test goes through here. Adding "checking"
+// without this took the queue path away from anyone who typed inside the first half
+// second: basePhase stopped returning "syncing", so the claim fell through to a live
+// POST with no proof of work attached, and a hold became an error.
+const holding = (p: Phase) => p === "checking" || p === "syncing";
 
 interface Status {
   network: string;
@@ -108,7 +121,7 @@ const CONFIRMATIONS_ENOUGH = 6;
 /* ── Component ─────────────────────────────────────────────────────────── */
 export default function Home() {
   const [status, setStatus] = useState<Status | null>(null);
-  const [phase, setPhase] = useState<Phase>("syncing");
+  const [phase, setPhase] = useState<Phase>("checking");
   const [addr, setAddr] = useState("");
   const [touched, setTouched] = useState(false);
   const [panel, setPanel] = useState(false);
@@ -147,7 +160,10 @@ export default function Home() {
   const dripText = (drip % 1 === 0 ? drip.toFixed(0) : String(drip)) + " TAZ";
 
   const basePhase = useCallback((s: Status | null): Phase => {
-    if (!s || !s.backend?.reachable) return "syncing";
+    // Null means we have not asked. Unreachable means we asked and got nothing, which
+    // is a real finding about the backend and keeps reading as syncing.
+    if (!s) return "checking";
+    if (!s.backend?.reachable) return "syncing";
     if (s.node && s.node.ready === false) return "syncing";
     // Our chain view is too stale to build a drip that could confirm, so hold rather
     // than send one that expires before it is mined (#187). canBuildTx is computed
@@ -192,7 +208,7 @@ export default function Home() {
     const base = basePhase(status);
     // A held claim shows as "queued" while the node syncs; anything else
     // (ready, empty) falls through so the fire effect below can take over.
-    setPhase(queuedAddr && base === "syncing" ? "queued" : base);
+    setPhase(queuedAddr && holding(base) ? "queued" : base);
   }, [status, basePhase, queuedAddr]);
 
   // Restore a held claim from a previous visit. The stored shape gained a timestamp
@@ -340,7 +356,7 @@ export default function Home() {
     // Node still syncing: hold the claim instead of turning the user away.
     // It fires on its own the moment the node is ready (the effect above).
     // `target` set means we ARE the fire, never re-queue.
-    if (!target && basePhase(status) === "syncing") {
+    if (!target && holding(basePhase(status))) {
       setQueuedAddr(address);
       setQueuedAt(Date.now());
       setPhase("queued");
@@ -478,12 +494,17 @@ export default function Home() {
   /* derived */
   // "queued" is still a syncing node, just with a claim held. The badge and the
   // dot must keep saying so, or the header claims a readiness we do not have.
-  const live = phase !== "syncing" && phase !== "queued";
+  // "checking" is not live. Leaving it out here made the badge read LIVE before the
+  // first status arrived, a louder lie than the "syncing" it replaced.
+  const live = !holding(phase) && phase !== "queued";
   const node = status?.node;
   const syncPct = node?.syncPercent ?? null;
   const height = node?.height ?? null;
   const nodeHeight = node?.nodeHeight ?? null;
-  const balance = status?.balanceTaz ?? 0;
+  // Keeps null rather than ?? 0. The default erased the difference between "the
+  // wallet says zero" and "we have not asked", one line before the only consumer,
+  // so no guard downstream could recover it.
+  const balance = status?.balanceTaz ?? null;
   const reserve = status?.reserve;
   const donation = status?.donationAddress?.trim() ?? "";
   // A refill running while we can still serve must read as healthy, not as an
@@ -522,7 +543,9 @@ export default function Home() {
   // when it isn't. A refill with the balance still serviceable stays "LIVE".
   // Queued is a syncing node with a claim held, so it reads PREPARING too.
   const statusText =
-    phase === "syncing" || phase === "queued"
+    phase === "checking"
+      ? "CHECKING"
+      : phase === "syncing" || phase === "queued"
       ? "PREPARING"
       : phase === "empty"
         ? (refilling ? "TOPPING UP" : "EMPTY")
@@ -543,7 +566,8 @@ export default function Home() {
   // and holds a stable sentence per state, so it never spams: no tick counters,
   // no percentages.
   const announce =
-    phase === "queued" ? "Your claim is queued. It sends on its own when the node is ready."
+    phase === "checking" ? "Checking the faucet's status."
+    : phase === "queued" ? "Your claim is queued. It sends on its own when the node is ready."
     : phase === "syncing" ? "Node is syncing. The faucet will be ready shortly."
     : phase === "empty" ? (refilling ? "Topping up the reserve. Drips resume in a moment." : "The faucet is out of TAZ right now.")
     : phase === "submitting" ? (powState ? "Checking you are human. Nothing to do, it runs on its own." : "Sending your testnet ZEC. Keep this tab open.")
@@ -605,11 +629,11 @@ export default function Home() {
 
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "4px 18px", padding: `9px ${pad}`, borderBottom: "1px solid var(--color-divider)", fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".05em", color: muted(55) }}>
         {[
-          { k: "node", v: node?.ready ? "ready" : "syncing" },
+          { k: "node", v: status == null ? "–" : node?.ready ? "ready" : "syncing" },
           { k: "sync", v: syncPct != null ? Math.round(syncPct) + "%" : "–" },
           { k: "height", v: num(height) },
-          { k: "balance", v: balance ? balance.toFixed(1) + " TAZ" : "0 TAZ" },
-          { k: "miner", v: status?.miner?.active ? "on" : "off" },
+          { k: "balance", v: balance != null ? balance.toFixed(1) + " TAZ" : status == null ? "–" : "0 TAZ" },
+          { k: "miner", v: status == null ? "–" : status.miner?.active ? "on" : "off" },
           // "indexer", never "node". This is the lightwalletd we query, not the
           // Zcash node behind it, and calling it the node version would be wrong
           // in front of the people who asked for it. Our own zebra version is not
@@ -653,10 +677,12 @@ export default function Home() {
         <div id="live-panel" style={{ borderBottom: "2px solid var(--color-divider)", background: "var(--color-surface)", padding: `16px ${pad}` }}>
           <div className="panel-grid">
             {[
-              { k: "node", v: node?.ready ? "ready" : "syncing" + (syncPct != null ? " (" + Math.round(syncPct) + "%)" : "") },
+              // Same rule as the header strip. The panel opens on a click, and nothing
+              // stops that click landing before the first status does.
+              { k: "node", v: status == null ? "–" : node?.ready ? "ready" : "syncing" + (syncPct != null ? " (" + Math.round(syncPct) + "%)" : "") },
               { k: "block height", v: num(height) + (nodeHeight ? " / " + num(nodeHeight) : "") },
-              { k: "wallet balance", v: (status?.balanceTaz ?? 0).toFixed(2) + " TAZ" },
-              { k: "miner", v: status?.miner?.active ? "on" : "off" },
+              { k: "wallet balance", v: status?.balanceTaz != null ? status.balanceTaz.toFixed(2) + " TAZ" : "–" },
+              { k: "miner", v: status == null ? "–" : status.miner?.active ? "on" : "off" },
               ...(reserve
                 ? [
                     // Wording lives in reserveRows and is unit-tested, because
@@ -684,7 +710,7 @@ export default function Home() {
 
       <main style={{ flex: 1, width: "100%", maxWidth: 760, margin: "0 auto", padding: `clamp(22px,5vw,46px) ${pad} 60px`, display: "flex", flexDirection: "column", gap: 20 }}>
         <p className="sr-only" role="status">{announce}</p>
-        {(phase === "ready" || phase === "syncing" || phase === "empty") && (
+        {(phase === "ready" || phase === "checking" || phase === "syncing" || phase === "empty") && (
           <div>
             <h1 style={{ fontSize: "clamp(27px,7.4vw,40px)", lineHeight: 1.08, letterSpacing: "-.025em", margin: "0 0 10px" }}>Get free testnet ZEC, sent privately.</h1>
             <p style={{ margin: 0, fontSize: 14.5, lineHeight: 1.55, color: muted(62), maxWidth: "46ch" }}>Paste a testnet address. The drip is shielded, so the amount and the recipient stay off the public ledger.</p>
@@ -778,7 +804,7 @@ export default function Home() {
           </div>
         )}
 
-        {(phase === "ready" || phase === "syncing" || phase === "empty") && (
+        {(phase === "ready" || phase === "checking" || phase === "syncing" || phase === "empty") && (
           <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
             <label htmlFor="zaddr" style={{ ...kicker, color: muted(60) }}>Your testnet address</label>
             <input id="zaddr" className="input" type="text" spellCheck={false} autoComplete="off" autoCapitalize="off" placeholder="utest1… / ztestsapling… / tm…" value={addr} onChange={(e) => { setAddr(e.target.value); setTouched(false); }} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} aria-describedby="addrmsg" />
@@ -790,7 +816,7 @@ export default function Home() {
               {!addr.trim() && <button className="btn btn-ghost btn-sm" onClick={generate} style={{ padding: 0 }}>Generate a test address</button>}
             </div>
             <button className="btn btn-primary" onClick={() => void submit()} disabled={phase === "empty"} style={{ width: "100%", justifyContent: "space-between" }}>
-              <span>{phase === "syncing" ? "Queue it, sends when the node is ready" : phase === "empty" ? (refilling ? "Topping up, back in a moment" : "Waiting for a refill") : "Request " + dripText}</span>
+              <span>{phase === "checking" ? "Checking status…" : phase === "syncing" ? "Queue it, sends when the node is ready" : phase === "empty" ? (refilling ? "Topping up, back in a moment" : "Waiting for a refill") : "Request " + dripText}</span>
               <span aria-hidden="true">→</span>
             </button>
             <p style={{ margin: 0, fontSize: 11.5, letterSpacing: ".02em", color: muted(55), fontFamily: "var(--mono)" }}>{dripText} · once per address / 24h · shielded z→z</p>
