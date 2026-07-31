@@ -27,8 +27,21 @@
  * a writer disagreeing about a threshold is its own silent failure.
  */
 
-/** None of these is a boolean, and that is the point. */
-export type MinerState = "running" | "stalled" | "not-writing" | "cannot-verify";
+/**
+ * None of these is a boolean, and that is the point.
+ *
+ * `not-configured` and `cannot-verify` are both "we cannot see the miner", and they
+ * are split because they are DIFFERENT FACTS pointing at different work. No path set
+ * means nobody has wired the reader up, which is a deployment gap. A path set with
+ * nothing readable at the end of it means the writer is dead or the mount is wrong,
+ * which is a fault. Collapsing them sends someone to debug a miner when the actual
+ * answer is an unset environment variable.
+ *
+ * Neither one softens into "fine". Being blind to the miner is a real deficiency
+ * whichever way it happened, and the split changes WHO it points at, not how loud
+ * it is.
+ */
+export type MinerState = "running" | "stalled" | "not-writing" | "cannot-verify" | "not-configured";
 
 export interface Heartbeat {
   schema: number;
@@ -54,6 +67,18 @@ export interface MinerReading {
   lastErrorStage: string | null;
   consecutiveErrors: number | null;
 }
+
+const NOTHING = {
+  beatAgoSeconds: null,
+  templateAgoSeconds: null,
+  lastTemplateHeight: null,
+  mode: null,
+  lastErrorStage: null,
+  consecutiveErrors: null,
+} as const;
+
+/** No heartbeat path configured, so this app was never asked to look. */
+export const UNCONFIGURED: MinerReading = { state: "not-configured", ...NOTHING };
 
 const UNVERIFIABLE: MinerReading = {
   state: "cannot-verify",

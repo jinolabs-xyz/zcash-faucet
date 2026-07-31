@@ -9,7 +9,7 @@
  * Next hands instrumentation and route handlers different module instances (#241).
  */
 import { readFileSync } from "node:fs";
-import { readingFor, type MinerReading } from "./heartbeat.ts";
+import { readingFor, UNCONFIGURED, type MinerReading } from "./heartbeat.ts";
 
 /**
  * Every failure lands on the same reading: no path configured, no file, no permission,
@@ -17,7 +17,10 @@ import { readingFor, type MinerReading } from "./heartbeat.ts";
  * classifier turns that into cannot-verify rather than into off.
  */
 export function readMinerHeartbeat(path: string, nowMs: number = Date.now()): MinerReading {
-  if (!path) return readingFor(null, nowMs);
+  // Not the same answer as an unreadable file. Nobody asked this app to look, so
+  // there is nothing to be broken yet, and reporting it as unverifiable would point
+  // an operator at a writer that was never supposed to be running here.
+  if (!path) return UNCONFIGURED;
   let raw: unknown = null;
   try {
     raw = JSON.parse(readFileSync(path, "utf8"));
