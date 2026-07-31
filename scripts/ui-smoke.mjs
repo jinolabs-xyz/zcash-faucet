@@ -100,21 +100,60 @@ async function checkAppearance(page) {
   // box count, and we take the WORST rather than the first; (2) --color-accent-text
   // is per-theme (#96/#99) and one value is unusable in the other theme, so the
   // theme the page does not render at test time is exactly the one worth checking.
+  // Colour maths for both contrast checks below, injected once.
+  //
+  // EVERY COLOUR GOES THROUGH THE BROWSER'S OWN PARSER, never a regex. The tokens in
+  // this stylesheet are `color-mix()`, which computes to `color(srgb 0..1)` in one
+  // theme and `oklab(...)` in the other, and a parser assuming `rgb(0..255)` silently
+  // divides by 255 and returns a confident wrong number: reviewing #297 that produced
+  // 1.10:1 for an icon that is plainly legible. Painting to a 1x1 canvas and reading
+  // the pixel back means whatever CSS invents next is already handled.
+  const COLOUR_LIB = `
+    const parse = (colour, over) => {
+      const c = document.createElement("canvas");
+      c.width = c.height = 1;
+      const ctx = c.getContext("2d", { willReadFrequently: true });
+      // An unparseable fillStyle is DISCARDED, leaving the previous value, so a bad
+      // colour would otherwise be measured as whatever we happened to paint before it.
+      // Two different sentinels disagree exactly when the value did not take.
+      ctx.fillStyle = "#000"; ctx.fillStyle = colour; const a = ctx.fillStyle;
+      ctx.fillStyle = "#fff"; ctx.fillStyle = colour; const b = ctx.fillStyle;
+      if (a !== b) return null;
+      // Backdrop first, colour on top, so a semi-transparent token composites the way
+      // the browser paints it instead of being read at full strength.
+      ctx.clearRect(0, 0, 1, 1);
+      if (over) { ctx.fillStyle = over; ctx.fillRect(0, 0, 1, 1); }
+      ctx.fillStyle = colour; ctx.fillRect(0, 0, 1, 1);
+      const d = ctx.getImageData(0, 0, 1, 1).data;
+      return [d[0], d[1], d[2]];
+    };
+    const lum = (rgb) => {
+      const [r, g, b] = rgb.map((n) => {
+        const s = n / 255;
+        return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const opaque = (c) => c && !/rgba\\(.*,\\s*0\\)$|transparent/.test(c);
+    const bgBehind = (el) => {
+      let bg = getComputedStyle(el).backgroundColor;
+      while (el && !opaque(bg)) { el = el.parentElement; bg = el ? getComputedStyle(el).backgroundColor : "rgb(255, 255, 255)"; }
+      return bg;
+    };
+    // null when either colour will not parse, so "cannot measure" can be reported as
+    // itself rather than arriving as a number that looks like a finding.
+    const ratioOf = (fg, el) => {
+      const back = parse(bgBehind(el));
+      const front = parse(fg, bgBehind(el));
+      if (!back || !front) return null;
+      const [hi, lo] = [lum(front), lum(back)].sort((x, y) => y - x);
+      return (hi + 0.05) / (lo + 0.05);
+    };
+  `;
+
   const worstReadableLink = () =>
-    page.evaluate(() => {
-      const lum = (c) => {
-        const [r, g, b] = (c.match(/[\d.]+/g) ?? []).slice(0, 3).map((n) => {
-          const s = Number(n) / 255;
-          return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
-        });
-        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-      };
-      const opaque = (c) => c && !/rgba\(.*,\s*0\)$|transparent/.test(c);
-      const bgBehind = (el) => {
-        let bg = getComputedStyle(el).backgroundColor;
-        while (el && !opaque(bg)) { el = el.parentElement; bg = el ? getComputedStyle(el).backgroundColor : "rgb(255, 255, 255)"; }
-        return bg;
-      };
+    page.evaluate(`(() => {
+      ${COLOUR_LIB}
       const links = [...document.querySelectorAll("a")].filter((a) => {
         const r = a.getBoundingClientRect();
         return a.textContent.trim() && r.width > 0 && r.height > 0;
@@ -122,29 +161,101 @@ async function checkAppearance(page) {
       if (!links.length) return null;
       let worst = null;
       for (const a of links) {
-        const [hi, lo] = [lum(getComputedStyle(a).color), lum(bgBehind(a))].sort((x, y) => y - x);
-        const ratio = (hi + 0.05) / (lo + 0.05);
+        const ratio = ratioOf(getComputedStyle(a).color, a);
+        if (ratio == null) return { unparseable: a.textContent.trim().slice(0, 24) };
         if (!worst || ratio < worst.ratio) worst = { ratio, link: a.textContent.trim().slice(0, 24) };
       }
       return worst;
-    });
+    })()`);
+
+  // Icon-only controls: the theme toggle and the source link (#297, #300). Neither has
+  // text, so the check above skips both by construction, and they are precisely the
+  // controls with nothing to fall back on if their colour drifts.
+  //
+  // 3:1, not 4.5:1. WCAG 1.4.11 non-text contrast governs "visual information required
+  // to identify user interface components", and holding these to the text threshold
+  // would fail controls that are actually compliant, which is a false alarm rather
+  // than a finding.
+  //
+  // Gated on the GLYPH, which is what identifies the control, measured through the
+  // element's own `color` because both icons paint with `currentColor`. The container
+  // border is measured and reported too, but not gated: it is a box edge rather than
+  // the identifying feature, and it is the shared `--color-divider` token used for
+  // every rule on the site, so gating here would be asserting a site-wide design
+  // decision from inside a masthead check.
+  const worstIconControl = () =>
+    page.evaluate(`(() => {
+      ${COLOUR_LIB}
+      const controls = [...document.querySelectorAll("a, button")].filter((el) => {
+        const r = el.getBoundingClientRect();
+        return !el.textContent.trim() && el.querySelector("svg") && r.width > 0 && r.height > 0;
+      });
+      if (!controls.length) return null;
+      let worst = null;
+      for (const el of controls) {
+        const name = el.getAttribute("aria-label") || el.tagName.toLowerCase();
+        const cs = getComputedStyle(el);
+        const glyph = ratioOf(cs.color, el);
+        const border = ratioOf(cs.borderTopColor, el);
+        if (glyph == null) return { unparseable: name };
+        if (!worst || glyph < worst.ratio) worst = { ratio: glyph, border, control: name.slice(0, 34) };
+      }
+      return worst;
+    })()`);
   // Toggle to a target theme via the real footer control and wait for it to apply.
+  //
+  // The class landing is NOT the colours landing. `.theme-toggle` carries
+  // `transition: color .12s ease`, so a measurement taken the moment the class flips
+  // reads a colour partway between the two themes. Building this check I measured
+  // exactly that and got 1.00:1 on both masthead icons, which looks precisely like a
+  // real contrast failure and is an artifact of when I looked. So settle the colours
+  // before returning: poll the toggle's computed colour until two consecutive reads
+  // agree. A fixed sleep would be a guess about a duration the stylesheet is free to
+  // change.
   const setTheme = async (want) => {
     const isInk = () => page.evaluate(() => document.querySelector(".app")?.classList.contains("ink") ?? false);
     if ((want === "ink") !== (await isInk())) await page.getByRole("button", { name: /Switch to/ }).click();
     await page.waitForFunction((w) => (document.querySelector(".app")?.classList.contains("ink") ?? false) === (w === "ink"), want);
+    await page.waitForFunction(() => {
+      const el = document.querySelector(".theme-toggle");
+      if (!el) return true; // no toggle is the other checks' problem, not this wait's
+      const now = getComputedStyle(el).color;
+      const settled = window.__uiSmokeLastColour === now;
+      window.__uiSmokeLastColour = now;
+      return settled;
+    }, null, { polling: 60, timeout: 5_000 });
+    await page.evaluate(() => { delete window.__uiSmokeLastColour; });
   };
   await setTheme("ink");
   const ink = await worstReadableLink();
+  const inkIcon = await worstIconControl();
   await setTheme("paper");
   const paper = await worstReadableLink();
+  const paperIcon = await worstIconControl();
   await setTheme("ink"); // restore for the claim flow
   const both = [ink, paper].filter(Boolean);
   const worst = both.sort((a, b) => a.ratio - b.ratio)[0];
   ok(
     "worst readable link meets WCAG AA in both themes",
     ink != null && paper != null && worst != null && worst.ratio >= 4.5,
-    worst ? `${worst.ratio.toFixed(2)}:1 "${worst.link}"` : "no readable link found in a theme",
+    worst ? (worst.unparseable ? `could not parse a colour on "${worst.unparseable}"` : `${worst.ratio.toFixed(2)}:1 "${worst.link}"`) : "no readable link found in a theme",
+  );
+
+  // Absence is a failure, not a pass. If the selector stops matching, because the
+  // masthead is restyled or the icons gain labels, this check would otherwise go
+  // quiet while covering nothing, which is the whole reason #300 existed.
+  const icons = [inkIcon, paperIcon];
+  const foundIcons = icons.every((i) => i && !i.unparseable);
+  const worstIcon = foundIcons ? icons.slice().sort((a, b) => a.ratio - b.ratio)[0] : null;
+  const unparseableIcon = icons.find((i) => i && i.unparseable);
+  ok(
+    "icon-only controls meet WCAG 1.4.11 in both themes",
+    foundIcons && worstIcon.ratio >= 3,
+    unparseableIcon
+      ? `could not parse a colour on "${unparseableIcon.unparseable}"`
+      : worstIcon
+        ? `glyph ${worstIcon.ratio.toFixed(2)}:1 on "${worstIcon.control}", its border ${worstIcon.border == null ? "unmeasurable" : `${worstIcon.border.toFixed(2)}:1`}`
+        : "no icon-only control found in a theme, so nothing was checked",
   );
 }
 
