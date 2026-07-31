@@ -4,6 +4,8 @@ import { CSSProperties, useCallback, useEffect, useRef, useState } from "react";
 import { BrandMark } from "./BrandMark";
 import { reserveRows } from "@/lib/reserveLabel";
 import { minerChip, minerRow, minerErrorRow, readingFromStatus } from "@/lib/minerLabel";
+import { boxRow, boxChip, boxIsBad } from "@/lib/boxLabel";
+import type { IntegrityStatus } from "@/lib/boxIntegrity";
 import type { MinerReading } from "@/lib/miner/heartbeat";
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
@@ -37,6 +39,9 @@ interface Status {
   // deploy answering this shape has no heartbeat to report, and treating a missing
   // field as "running" would be the bug all over again.
   miner?: Partial<MinerReading> & { active: boolean };
+  /** The box's own integrity, measured by a unit on the host. Optional: a deploy
+   * older than #287 does not send it, and absent must not read as complete. */
+  box?: IntegrityStatus;
   reserve?: { targetTaz: number; lowTaz: number; refilling: boolean; spendableTaz: number | null; failedSteps?: number; lastFailure?: { outcome: "waiting" | "error"; reason: string } | null };
   donationAddress?: string;
   /** Mainnet, for project upkeep. Empty when unset OR rejected by config validation. */
@@ -515,6 +520,7 @@ export default function Home() {
   // which is what an older deploy answering the previous shape will produce.
   const miner = readingFromStatus(status?.miner);
   const minerError = minerErrorRow(miner);
+  const box = status?.box ?? null;
   const reserve = status?.reserve;
   const donation = status?.donationAddress?.trim() ?? "";
   // A refill running while we can still serve must read as healthy, not as an
@@ -647,6 +653,11 @@ export default function Home() {
           // a stalled miner is running and failing, and that needs a different
           // response from an operator than a miner nobody started.
           { k: "miner", v: status == null ? "–" : minerChip(miner) },
+          // Only when it is NOT complete. A permanent "box ok" would spend a slot on
+          // the terse strip telling an operator what they already assume, but a box
+          // that is missing units has to be visible without opening the panel,
+          // because the panel is a click nobody makes when they think all is well.
+          ...(box && boxChip(box) ? [{ k: "box", v: boxChip(box)! }] : []),
           // "indexer", never "node". This is the lightwalletd we query, not the
           // Zcash node behind it, and calling it the node version would be wrong
           // in front of the people who asked for it. Our own zebra version is not
@@ -692,28 +703,45 @@ export default function Home() {
             {[
               // Same rule as the header strip. The panel opens on a click, and nothing
               // stops that click landing before the first status does.
-              { k: "node", v: status == null ? "–" : node?.ready ? "ready" : "syncing" + (syncPct != null ? " (" + Math.round(syncPct) + "%)" : "") },
+              { k: "node", v: status == null ? "–" : node?.ready ? "ready" : "syncing" + (syncPct != null ? " (" + Math.round(syncPct) + "%)" : ""), bad: status != null && node?.ready === false },
               { k: "block height", v: num(height) + (nodeHeight ? " / " + num(nodeHeight) : "") },
-              { k: "wallet balance", v: status?.balanceTaz != null ? status.balanceTaz.toFixed(2) + " TAZ" : "–" },
+              { k: "wallet balance", v: status?.balanceTaz != null ? status.balanceTaz.toFixed(2) + " TAZ" : "–", bad: status?.empty === true },
               // The detail belongs here, per the user: he asked that the miner's real
               // state be knowable from More details.
-              { k: "miner", v: status == null ? "–" : minerRow(miner) },
-              ...(status != null && minerError ? [{ k: "miner error", v: minerError }] : []),
+              { k: "miner", v: status == null ? "–" : minerRow(miner), bad: status != null && miner.state !== "running" },
+              ...(status != null && minerError ? [{ k: "miner error", v: minerError, bad: true }] : []),
+              // The box's own integrity. Measured since #287 and never rendered until
+              // now: the endpoint knew two files were missing and the panel said
+              // nothing, so the one place a person looks did not carry it.
+              ...(box ? [{ k: "box", v: boxRow(box), bad: boxIsBad(box) }] : []),
               ...(reserve
                 ? [
                     // Wording lives in reserveRows and is unit-tested, because
                     // "257.2 / 1000" beside "idle" made a healthy faucet look broken.
-                    ...(() => { const rr = reserveRows({ ...reserve, refilling }); return [
-                      { k: "reserve", v: rr.reserve },
-                      { k: "refill", v: rr.refill },
-                    ]; })(),
+                    //
+                    // Only the refill line. reserveRows.reserve renders spendableTaz,
+                    // which the status route sets from THIS REQUEST'S balance read, so
+                    // it was the same number as "wallet balance" one row up, printed to
+                    // a different number of decimals. Two rows, one figure, and a
+                    // reader at 3am reasonably assumes two different quantities. If the
+                    // route ever sources them separately, bring the row back.
+                    ...(() => { const rr = reserveRows({ ...reserve, refilling }); return [{ k: "refill", v: rr.refill, bad: rr.refillBad }]; })(),
                   ]
                 : []),
               { k: "queue", v: (status?.queueDepth ?? 0) + " pending" },
-              { k: "backend", v: status?.backend?.reachable ? "reachable" : "unreachable" },
+              { k: "backend", v: status?.backend?.reachable ? "reachable" : "unreachable", bad: status != null && !status.backend?.reachable },
             ].map((r) => (
+              // A bad row is marked in the VALUE, not with a badge or an icon: the grid
+              // is monospace k/v and anything else would need a column nothing else
+              // uses. Colour alone would fail anyone who cannot see it, so the marker
+              // carries the meaning and the colour only reinforces it.
               <div key={r.k} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, padding: "7px 0", borderBottom: "1px solid var(--color-divider)", fontFamily: "var(--mono)", fontSize: 11 }}>
-                <span style={{ color: muted(55) }}>{r.k}</span><span style={{ fontWeight: 700, textAlign: "right" }}>{r.v}</span>
+                <span style={{ color: muted(55) }}>{r.k}</span>
+                <span style={{ fontWeight: 700, textAlign: "right", color: r.bad ? "var(--color-empty)" : undefined }}>
+                  {r.bad ? <span aria-hidden="true">! </span> : null}
+                  {r.bad ? <span className="sr-only">needs attention: </span> : null}
+                  {r.v}
+                </span>
               </div>
             ))}
           </div>
