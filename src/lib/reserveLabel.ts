@@ -40,6 +40,15 @@ export interface ReserveRows {
   reserve: string;
   /** The refill line, which carries the number that explains the state. */
   refill: string;
+  /**
+   * Whether the refill line describes something an operator should act on.
+   *
+   * Returned here rather than re-derived at the call site, because the branches that
+   * decide the WORDING are the same branches that decide the severity, and splitting
+   * them across two files is how a line ends up reading "FAILING" without being
+   * marked, or marked while reading fine.
+   */
+  refillBad: boolean;
 }
 
 export function reserveRows(r: ReserveFacts): ReserveRows {
@@ -53,20 +62,23 @@ export function reserveRows(r: ReserveFacts): ReserveRows {
     // conflating them is what put TOPPING UP on screen while nothing could top up.
     const stuck = (r.failedSteps ?? 0) > 0 ? r.lastFailure : null;
     if (stuck?.outcome === "waiting") {
-      return { reserve: balance, refill: "waiting, nothing to shield yet" };
+      // Not flagged. Having no coinbase to shield is the normal steady state on a
+      // testnet where we lose nearly every block race, and marking it would train an
+      // operator to ignore the marker, which costs more than the row is worth.
+      return { reserve: balance, refill: "waiting, nothing to shield yet", refillBad: false };
     }
     if (stuck?.outcome === "error") {
-      return { reserve: balance, refill: `refill FAILING, ${r.failedSteps} consecutive` };
+      return { reserve: balance, refill: `refill FAILING, ${r.failedSteps} consecutive`, refillBad: true };
     }
-    return { reserve: balance, refill: `topping up to ${r.targetTaz.toFixed(0)} TAZ` };
+    return { reserve: balance, refill: `topping up to ${r.targetTaz.toFixed(0)} TAZ`, refillBad: false };
   }
 
   // Idle, and the reason depends on which side of the mark we are on. Below it with no
   // refill running means the loop cannot act, usually because shielding is off, and
   // saying "idle" there would hide a real condition behind a normal-sounding word.
   if (r.spendableTaz != null && r.spendableTaz < r.lowTaz) {
-    return { reserve: balance, refill: `idle BELOW the ${r.lowTaz.toFixed(0)} TAZ mark` };
+    return { reserve: balance, refill: `idle BELOW the ${r.lowTaz.toFixed(0)} TAZ mark`, refillBad: true };
   }
 
-  return { reserve: balance, refill: `idle, starts under ${r.lowTaz.toFixed(0)} TAZ` };
+  return { reserve: balance, refill: `idle, starts under ${r.lowTaz.toFixed(0)} TAZ`, refillBad: false };
 }

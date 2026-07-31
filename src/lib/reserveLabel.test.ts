@@ -103,3 +103,59 @@ test("the fields are optional, so an older status payload still renders", () => 
   const r = reserveRows({ ...BAND, spendableTaz: 40, refilling: true });
   assert.match(r.refill, /topping up to 1000 TAZ/);
 });
+
+/* ------------- severity, which has to agree with the wording ---------------------- */
+
+test("a line that reads FAILING is flagged, and a line that reads fine is not", () => {
+  // The pairing is the point. Deriving severity at the call site is how you get a row
+  // that says FAILING without a marker, or a marker on a row that reads normally.
+  const failing = reserveRows({ ...BAND, spendableTaz: 40, refilling: true, failedSteps: 3,
+    lastFailure: { outcome: "error", reason: "connection refused" } });
+  assert.match(failing.refill, /FAILING/);
+  assert.equal(failing.refillBad, true);
+
+  const healthy = reserveRows({ ...BAND, spendableTaz: 257.2, refilling: false });
+  assert.match(healthy.refill, /starts under/);
+  assert.equal(healthy.refillBad, false);
+});
+
+test("below the mark and not refilling is flagged, because it cannot recover alone", () => {
+  const r = reserveRows({ ...BAND, spendableTaz: 12.5, refilling: false });
+  assert.match(r.refill, /BELOW/);
+  assert.equal(r.refillBad, true);
+});
+
+test("nothing-to-shield is NOT flagged, on purpose", () => {
+  // The normal steady state on a testnet where we lose nearly every block race.
+  // Marking it would train an operator to ignore the marker, which costs more than
+  // this row is worth.
+  const r = reserveRows({ ...BAND, spendableTaz: 758.5, refilling: true, failedSteps: 40,
+    lastFailure: { outcome: "waiting", reason: "Insufficient balance (have 0)" } });
+  assert.match(r.refill, /waiting, nothing to shield/);
+  assert.equal(r.refillBad, false);
+});
+
+test("a normal top-up is not flagged", () => {
+  const r = reserveRows({ ...BAND, spendableTaz: 40, refilling: true });
+  assert.match(r.refill, /topping up/);
+  assert.equal(r.refillBad, false);
+});
+
+test("every SHOUTED line is flagged, so caps and marker cannot disagree", () => {
+  // A sweep rather than a case list: any wording that shouts must also be marked.
+  const cases = [
+    { ...BAND, spendableTaz: 12.5, refilling: false },
+    { ...BAND, spendableTaz: 40, refilling: true, failedSteps: 3, lastFailure: { outcome: "error" as const, reason: "x" } },
+    { ...BAND, spendableTaz: 758, refilling: true, failedSteps: 40, lastFailure: { outcome: "waiting" as const, reason: "y" } },
+    { ...BAND, spendableTaz: 257.2, refilling: false },
+    { ...BAND, spendableTaz: 40, refilling: true },
+    { ...BAND, spendableTaz: null, refilling: false },
+  ];
+  for (const c of cases) {
+    const r = reserveRows(c);
+    // "waiting" is deliberately calm and deliberately unflagged, so it is the one
+    // line allowed to contain no capitals and no marker.
+    const shouts = /\b[A-Z]{4,}\b/.test(r.refill);
+    if (shouts) assert.equal(r.refillBad, true, `"${r.refill}" shouts but is not flagged`);
+  }
+});
