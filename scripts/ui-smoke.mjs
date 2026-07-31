@@ -219,7 +219,7 @@ async function checkFirstPaint(page, base, address) {
   }
 }
 
-// The miner readout, in the state CI actually runs in: no heartbeat configured.
+// The miner readout, in the state CI actually runs in: no heartbeat path configured.
 //
 // That is the important case rather than a limitation. The old field was an env flag,
 // so an unconfigured or broken miner still rendered "on", and a run with no heartbeat
@@ -238,7 +238,11 @@ async function checkMinerPanel(page) {
   });
 
   ok("the panel reports the miner at all", row.length > 0, row);
-  ok("no heartbeat reads as cannot tell", /cannot tell/.test(row), row);
+  // CI sets no FAUCET_MINER_HEARTBEAT_PATH, so the honest answer here is that nobody
+  // wired the reader up, NOT that a heartbeat is missing. Those are different facts
+  // and this asserts the one that actually applies to this run.
+  ok("an unconfigured heartbeat says so, and does not blame a missing file",
+    /no heartbeat path configured/.test(row), row);
   ok("no heartbeat is NOT reported as running", !/\bmining\b/.test(row), row);
   // "off" is the specific wrong answer. We have not established the miner is off, only
   // that we cannot see it, and those call for different responses from an operator.

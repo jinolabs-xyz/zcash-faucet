@@ -72,9 +72,10 @@ test("every bad state is visibly bad in the terse strip too", () => {
   }
 });
 
-test("the four chips are four different words", () => {
-  const all = (["running", "stalled", "not-writing", "cannot-verify"] as const).map((state) => minerChip({ ...base, state }));
-  assert.equal(new Set(all).size, 4, `states collapsed in the strip: ${all.join(", ")}`);
+test("every state is a different word in the strip, none collapsed", () => {
+  const states = ["running", "stalled", "not-writing", "cannot-verify", "not-configured"] as const;
+  const all = states.map((state) => minerChip({ ...base, state }));
+  assert.equal(new Set(all).size, states.length, `states collapsed in the strip: ${all.join(", ")}`);
 });
 
 test("the terse chip does not overstate proposal mode either", () => {
@@ -144,4 +145,37 @@ test("ages round coarsely and do not pretend to precision", () => {
   assert.equal(humanAge(90), "2 min");
   assert.equal(humanAge(70 * 60), "70 min");
   assert.equal(humanAge(3 * 3600), "3 h");
+});
+
+/* ------- not-configured: we were never asked to look, which is not a fault -------- */
+
+test("NOT CONFIGURED says whose problem it is, rather than sending someone to the miner", () => {
+  // "Cannot tell" alone had a reader hunting a broken miner when the answer is an
+  // unset variable on the deploy. Different job, different time of day.
+  const row = minerRow({ ...base, state: "not-configured", beatAgoSeconds: null, templateAgoSeconds: null, lastTemplateHeight: null });
+  assert.match(row, /no heartbeat path configured/);
+  assert.doesNotMatch(row, /\bmining\b/, "must not read as healthy");
+  assert.doesNotMatch(row, /\boff\b/, "we have not established the miner is off");
+});
+
+test("configured-but-unreadable and never-configured are different sentences", () => {
+  // The whole point of the split. One is a writer that is dead or a mount that is
+  // wrong, the other is a deployment that has not happened. Same blindness, different
+  // work, and a panel that says only "cannot tell" cannot tell them apart either.
+  const broken = minerRow({ ...base, state: "cannot-verify" });
+  const never = minerRow({ ...base, state: "not-configured" });
+  assert.notEqual(broken, never);
+  assert.match(broken, /configured but unreadable/);
+  assert.match(never, /no heartbeat path configured/);
+});
+
+test("not-configured is still NOT active and still not silent", () => {
+  // Being blind to the miner is a real deficiency however it happened. The split
+  // changes who it points at, not whether it is reported.
+  assert.equal(minerChip({ ...base, state: "not-configured" }), "unwatched");
+  assert.notEqual(minerChip({ ...base, state: "not-configured" }), "");
+});
+
+test("a payload carrying not-configured is trusted, not flattened to cannot-verify", () => {
+  assert.equal(readingFromStatus({ state: "not-configured", active: false }).state, "not-configured");
 });
