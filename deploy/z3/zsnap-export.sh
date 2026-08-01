@@ -380,10 +380,29 @@ verify_snapshot() { # $1 archive, $2 expected manifest hash
 }
 
 if ! verify_snapshot "$archive" "$manifest_hash"; then
-  # Kept, renamed, and NOT published. Evidence beats tidiness, but `latest` must not point
-  # at it and rotation must not count it as the good copy that lets an older one go.
+  # Kept, renamed, NOT published, and AT MOST ONE.
+  #
+  # My first version kept every failure, and App found the loop that creates: rotation
+  # globs *.tar.zst, so a .unverified is never swept. The commonest cause of a bad
+  # snapshot here is a full disk, so a disk-full event would permanently consume disk
+  # with the evidence OF the disk-full event, making the next one likelier and its
+  # evidence file bigger. A feedback loop, running on a timer, on multi-GB files.
+  #
+  # Evidence beats tidiness was right in isolation and wrong in context. One is enough:
+  # the second failure in a row is almost always the same failure, and the note below
+  # survives even when the payload is dropped.
+  rm -f "$ZSNAP_DIR/snapshots/"*.tar.zst.unverified "$ZSNAP_DIR/snapshots/"*.unverified.txt 2>/dev/null || true
   mv "$archive" "$archive.unverified" 2>/dev/null || true
   rm -f "$archive.manifest-hash"
+  # A note, because when the cause IS a full disk the payload teaches you nothing the
+  # size and timestamp do not, and this is what remains if we ever stop keeping payloads.
+  {
+    echo "failed: $(date -u +%FT%TZ)"
+    echo "height: $height"
+    echo "zebrad reported manifest hash: $manifest_hash"
+    echo "bytes: $(wc -c < "$archive.unverified" 2>/dev/null || echo unknown)"
+    echo "reason: archive did not verify, see the export log for which check failed"
+  } > "$archive.unverified.txt" 2>/dev/null || true
   die "the snapshot this run produced did not verify, kept as $(basename "$archive").unverified, latest is unchanged"
 fi
 log "verified: decompresses, and its manifest matches the hash zebrad reported"

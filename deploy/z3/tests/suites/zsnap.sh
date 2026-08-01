@@ -484,6 +484,23 @@ check "LATEST STILL POINTS AT THE GOOD SNAPSHOT" \
   "[ \"\$(readlink '$ZSNAP_DIR/snapshots/latest.tar.zst')\" = \"$before\" ]"
 check "and the bad one has no manifest-hash sidecar to make it look publishable" \
   "! ls '$ZSNAP_DIR/snapshots/'*.unverified.manifest-hash >/dev/null 2>&1"
+check "and a note is left, which survives even if the payload is ever dropped" \
+  "ls '$ZSNAP_DIR/snapshots/'*.unverified.txt >/dev/null 2>&1"
+
+echo "== zsnap-export: kept failures are BOUNDED AT ONE, or a full disk feeds itself"
+# App's catch. Rotation globs *.tar.zst, so a .unverified is never swept. The commonest
+# cause of a bad snapshot is a full disk, so keeping every failure means a disk-full event
+# permanently consumes disk with the evidence OF the disk-full event, making the next one
+# likelier and its evidence bigger. A feedback loop on a timer, on multi-GB files.
+fresh_env; with_chain
+bash "$EXPORT" > /dev/null 2>&1
+STUB_MANIFEST_MISMATCH=1 bash "$EXPORT" > /dev/null 2>&1
+first_note="$(ls '$ZSNAP_DIR'/snapshots/*.unverified.txt 2>/dev/null | head -1)"
+STUB_MANIFEST_MISMATCH=1 bash "$EXPORT" > /dev/null 2>&1
+check "two failures in a row leave exactly ONE kept archive" \
+  "[ \"\$(ls '$ZSNAP_DIR/snapshots/'*.tar.zst.unverified 2>/dev/null | wc -l | tr -d ' ')\" = '1' ]"
+check "and exactly one note" \
+  "[ \"\$(ls '$ZSNAP_DIR/snapshots/'*.unverified.txt 2>/dev/null | wc -l | tr -d ' ')\" = '1' ]"
 
 echo "== zsnap-export: KEEP=0 is refused before it can delete this run's own snapshot"
 fresh_env; with_chain
