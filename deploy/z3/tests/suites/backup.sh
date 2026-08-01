@@ -283,3 +283,23 @@ BACKUP_KEEP=1 bash "$BACKUP" > "$T/keep1.log" 2>&1
 check "a second run with KEEP=1 exits 0" "[ $? -eq 0 ]"
 check "and exactly one archive remains" \
   "[ \"\$(find '$BACKUP_DIR/archives' -name '*.tar.gz.gpg' | wc -l | tr -d ' ')\" = '1' ]"
+
+echo "== backup: kept failures are BOUNDED AT ONE, matching zsnap-export"
+# App found this in #316 and then in this PR too, having already approved it. Rotation
+# globs *.tar.gz.gpg, so a .unverified is never swept and a disk-full event permanently
+# consumes disk with the evidence of the disk-full event. Smaller stakes at 22MB than for
+# a multi-GB snapshot, same unbounded growth, and the two scripts must behave alike.
+fresh_env; backup_env; seed_wallet
+bash "$BACKUP" > /dev/null 2>&1
+a="$(find "$BACKUP_DIR/archives" -name '*.tar.gz.gpg' | head -1)"
+# Two failures in a row, forced by corrupting what the run produces.
+for _ in 1 2; do
+  bash "$BACKUP" > /dev/null 2>&1
+  newest="$(find "$BACKUP_DIR/archives" -name '*.tar.gz.gpg' -newer "$a" | head -1)"
+  [ -n "$newest" ] && printf 'corruption' >> "$newest"
+  bash "$BACKUP" > /dev/null 2>&1 || true
+done
+check "kept .unverified archives never exceed one" \
+  "[ \"\$(find '$BACKUP_DIR/archives' -name '*.unverified' | wc -l | tr -d ' ')\" -le 1 ]"
+check "and kept notes never exceed one" \
+  "[ \"\$(find '$BACKUP_DIR/archives' -name '*.unverified.txt' | wc -l | tr -d ' ')\" -le 1 ]"

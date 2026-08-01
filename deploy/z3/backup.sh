@@ -210,11 +210,23 @@ if verify_archive "$archive"; then
   # the watchdog announcing 812 recoveries it never observed.
   verified_note=", verified"
 else
-  # The archive is NOT deleted. A file that fails verification is evidence, and throwing
-  # it away leaves nothing to diagnose from. It is renamed so rotation and any restore
-  # cannot mistake it for a good one.
+  # Kept as evidence, renamed so rotation and any restore cannot mistake it for a good
+  # one, and AT MOST ONE.
+  #
+  # App found the loop in my first version: rotation globs *.tar.gz.gpg, so a .unverified
+  # is never swept, and a disk-full event would permanently consume disk with the evidence
+  # OF the disk-full event. Smaller stakes here than for a multi-GB snapshot, but the same
+  # unbounded growth, and the two scripts must behave the same way rather than one being
+  # the surprise.
+  rm -f "$BACKUP_DIR/archives/"*.tar.gz.gpg.unverified "$BACKUP_DIR/archives/"*.unverified.txt 2>/dev/null || true
   mv "$archive" "$archive.unverified" 2>/dev/null || true
   rm -f "${archive%.tar.gz.gpg}.sha256"
+  {
+    echo "failed: $(date -u +%FT%TZ)"
+    echo "network: $BACKUP_NETWORK"
+    echo "bytes: $(wc -c < "$archive.unverified" 2>/dev/null || echo unknown)"
+    echo "reason: archive did not verify against its own MANIFEST, see the backup log"
+  } > "$archive.unverified.txt" 2>/dev/null || true
   die "the archive this run produced did not verify, kept as $(basename "$archive").unverified"
 fi
 
