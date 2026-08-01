@@ -51,7 +51,16 @@ case "$cmd" in
     # Same stdout shape as the real command, which the script parses.
     echo "snapshot exported to: $out"
     echo "network:              testnet"
-    echo "tip height:           3652108"
+    # THE TIP ADVANCES, because a real one does. A stub reporting a constant height is
+    # unfaithful on its own terms, and it made a bound untestable: two exports at the same
+    # height produce the same archive NAME, so the second overwrites the first and
+    # "exactly one kept failure" holds whether or not anything bounds it. App's catch, and
+    # the same move as making the manifest hash self-consistent: remove the fiction and
+    # the assertion becomes real for free.
+    STUB_HEIGHT_FILE="${STUB_HEIGHT_FILE:-${TMPDIR:-/tmp}/zsnap-stub-height}"
+    STUB_HEIGHT="$(cat "$STUB_HEIGHT_FILE" 2>/dev/null || echo 3652108)"
+    echo "$((STUB_HEIGHT + 1))" > "$STUB_HEIGHT_FILE"
+    echo "tip height:           $STUB_HEIGHT"
     echo "tip hash:             00000000stub"
     echo "total records:        12345"
     echo "total bytes:          300000"
