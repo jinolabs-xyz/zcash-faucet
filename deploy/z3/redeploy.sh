@@ -66,6 +66,43 @@ compose() { ( cd "$OVERLAY_DIR" && Z3_NETWORK_NAME="$Z3_NETWORK_NAME" \
 
 image_id() { docker image inspect -f '{{.Id}}' "$1" 2>/dev/null; }
 
+# What the RUNNING container is actually built from, asked of the container rather than
+# of the tag. The tag is what we asked for; this is what we got.
+running_image_id() {
+  local cid
+  cid="$(compose ps -q faucet 2>/dev/null | head -n1)"
+  [ -n "$cid" ] || return 0
+  docker inspect -f '{{.Image}}' "$cid" 2>/dev/null
+}
+
+# THE POST-CONDITION THIS SCRIPT WAS MISSING. "deployed and healthy" was derived from the
+# health gate alone, and a healthy faucet is not evidence that the NEW code is the one
+# serving: `compose up -d` compares the container spec, and we have already been bitten
+# twice by it declining to recreate while everything downstream looked fine (#278, the
+# wallet that kept serving its old config, and #279).
+#
+# If that happened here the old build would answer every probe perfectly and the deploy
+# would report success having shipped nothing. So the claim is checked against the
+# container: is the thing running the thing we just built.
+assert_running_is() { # $1 expected image id, $2 what we are claiming
+  local want="$1" what="$2" got
+  got="$(running_image_id)"
+  if [ -z "$got" ]; then
+    log "POST-CONDITION UNVERIFIED: could not read the running container's image, so"
+    log "  whether $what is actually serving is unknown. Not reporting success for it."
+    return 2
+  fi
+  if [ "$got" != "$want" ]; then
+    log "POST-CONDITION FAILED: $what is NOT what is running."
+    log "  expected: $want"
+    log "  running:  $got"
+    log "  Nothing above errored, which is exactly why this check exists: compose can"
+    log "  decline to recreate a container and every probe still passes."
+    return 1
+  fi
+  return 0
+}
+
 # Probes from inside the container, mirroring the compose healthcheck, because
 # the app port is expose-only and Caddy redirects :80 once a domain is set.
 probe() { # $1 = health|ready, returns 0 when it answers 200
@@ -205,8 +242,14 @@ do_rollback() {
   # Liveness only: the previous build was serving, and if the node has since
   # gone un-ready that is not this image's fault.
   if wait_healthy 0; then
-    log "rolled back and live"
-    return 0
+    # Liveness proves something answers, not that the PREVIOUS build is what answers.
+    # In an incident "rolled back" is the sentence people act on, so it gets checked.
+    if assert_running_is "$prev" "the rolled-back image"; then
+      log "rolled back and live"
+      return 0
+    fi
+    log "ERROR: the faucet is answering but it is not the rolled-back image, this needs a human"
+    return 1
   fi
   log "ERROR: rolled back but the faucet is not answering, this needs a human"
   return 1
@@ -275,8 +318,17 @@ fi
 
 if wait_healthy "$want_ready"; then
   new="$(image_id "$IMAGE")"
-  log "deployed and healthy: $new"
-  exit 0
+  # Called directly, NOT in a command substitution. My first version wrapped it in
+  # $(...) to read the exit code, which swallowed every log line it prints: the
+  # messages vanished into the substitution and the case matched nothing. A check whose
+  # explanation is captured and discarded is only half a check.
+  assert_running_is "$new" "the image we just built"
+  case $? in
+    0) log "deployed and healthy: $new" ; exit 0 ;;
+    2) log "the build is healthy but unverified, treat this deploy as incomplete" ; exit 2 ;;
+    *) log "the health gate passed on code that is not this build, so this deploy shipped nothing"
+       exit 1 ;;
+  esac
 fi
 
 # A gate failure only means something when the probe could actually run.
