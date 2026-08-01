@@ -213,3 +213,73 @@ bash "$RESTORE" > "$T/rpartial.log" 2>&1
 check "refuses on the later-checked file" "[ $? -ne 0 ] && grep -q 'refusing to overwrite' '$T/rpartial.log'"
 check "identity was NOT written" "[ ! -f '$STUB_VOLROOT/z3-testnet-zallet/identity.txt' ]"
 check "old wallet untouched" "[ \"\$(dumpdb '$STUB_VOLROOT/z3-testnet-zallet/wallet.db')\" = 'oldnote' ]"
+
+# ── the archive is proven to open, on every run ─────────────────────────────────
+# This script wrote a file and reported done, and whether that file could ever be
+# decrypted was untested on every run. "Backups are encrypted and run on a timer, and we
+# have never restored one" was the honest summary of our position.
+
+echo "== backup: a run VERIFIES the archive it just wrote, and says which files"
+fresh_env; backup_env; seed_wallet
+bash "$BACKUP" > "$T/verify.log" 2>&1
+check "a verified backup exits 0" "[ $? -eq 0 ]"
+check "it names each file it checked" "grep -q 'verified wallet.db' '$T/verify.log'"
+check "including the encryption identity, which is the half that is not a database" \
+  "grep -q 'verified encryption-identity.txt' '$T/verify.log'"
+# The word must come from the CHECK, not from the message text. Skipping verification
+# used to leave this line still claiming verified, which is a report derived from what I
+# typed rather than from what happened.
+check "and the done line itself says verified" \
+  "grep -qE 'done: .*, verified$' '$T/verify.log'"
+
+echo "== backup: a CORRUPTED archive fails the run and is kept as evidence"
+# The control. gpg detects the manipulation, and the point is what the script does next.
+fresh_env; backup_env; seed_wallet
+bash "$BACKUP" > /dev/null 2>&1
+good="$(find "$BACKUP_DIR/archives" -name '*.tar.gz.gpg' | head -1)"
+printf 'corruption' >> "$good"
+# Re-run verification against the corrupted file by driving the function directly.
+sed -n '/^verify_archive()/,/^}/p' "$BACKUP" > "$T/vf.sh"
+cat > "$T/drive.sh" <<'INNER'
+set -uo pipefail
+log() { echo "verify: $*"; }
+. "$VF"
+verify_archive "$1"
+INNER
+VF="$T/vf.sh" BACKUP_PASSPHRASE="test-passphrase" bash "$T/drive.sh" "$good" > "$T/corrupt.log" 2>&1
+check "a corrupted archive does NOT verify" "[ $? -ne 0 ]"
+check "and says it did not decrypt" "grep -q 'did not decrypt' '$T/corrupt.log'"
+
+echo "== backup: the WRONG passphrase does not quietly pass"
+fresh_env; backup_env; seed_wallet
+bash "$BACKUP" > /dev/null 2>&1
+a2="$(find "$BACKUP_DIR/archives" -name '*.tar.gz.gpg' | head -1)"
+VF="$T/vf.sh" BACKUP_PASSPHRASE="not-the-passphrase" bash "$T/drive.sh" "$a2" > "$T/wrongpw.log" 2>&1
+check "the wrong passphrase does NOT verify" "[ $? -ne 0 ]"
+
+echo "== backup: KEEP=0 is refused, because rotation would delete this run's own archive"
+# tail -n +1 removes every archive including the one just written: a backup job whose
+# successful outcome is no backup.
+fresh_env; backup_env; seed_wallet
+BACKUP_KEEP=0 bash "$BACKUP" > "$T/keep0.log" 2>&1
+check "KEEP=0 exits nonzero" "[ $? -ne 0 ]"
+check "and says rotation would delete the archive this run just made" \
+  "grep -q 'would delete the archive this run just made' '$T/keep0.log'"
+# The error must come from the guard, not from a missing die().
+check "and it is the guard talking, not a command-not-found" \
+  "! grep -q 'command not found' '$T/keep0.log'"
+
+echo "== backup: a non-numeric KEEP is refused too"
+fresh_env; backup_env; seed_wallet
+BACKUP_KEEP=many bash "$BACKUP" > "$T/keepx.log" 2>&1
+check "a non-numeric KEEP exits nonzero" "[ $? -ne 0 ]"
+check "and says it must be a whole number" "grep -q 'whole number' '$T/keepx.log'"
+
+echo "== backup: KEEP=1 still rotates, so the guard did not break rotation"
+fresh_env; backup_env; seed_wallet
+BACKUP_KEEP=1 bash "$BACKUP" > /dev/null 2>&1
+sleep 1
+BACKUP_KEEP=1 bash "$BACKUP" > "$T/keep1.log" 2>&1
+check "a second run with KEEP=1 exits 0" "[ $? -eq 0 ]"
+check "and exactly one archive remains" \
+  "[ \"\$(find '$BACKUP_DIR/archives' -name '*.tar.gz.gpg' | wc -l | tr -d ' ')\" = '1' ]"
