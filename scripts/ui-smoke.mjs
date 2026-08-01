@@ -222,6 +222,69 @@ async function checkAppearance(page) {
   // before returning: poll the toggle's computed colour until two consecutive reads
   // agree. A fixed sleep would be a guess about a duration the stylesheet is free to
   // change.
+
+  // The FOCUS RING, which is a state indicator and so is covered by the same WCAG 1.4.11
+  // that #306 applied to the controls themselves (#307). Nothing read it before: the ring
+  // is how a keyboard user knows where they are, and `--color-accent` is one value while
+  // the surfaces behind it are per-theme, so it can pass on one background and fail on
+  // another with nothing to say so.
+  //
+  // DRIVEN WITH REAL TAB PRESSES rather than el.focus(). `:focus-visible` is the state
+  // under test and it is exactly the state that distinguishes keyboard focus from a
+  // click, so synthesising it would be measuring a different thing. Tabbing also
+  // enumerates the REACHABLE set, which is what "these controls became unreachable" has
+  // to be measured against.
+  //
+  // THE BACKDROP IS THE ANCESTOR, NOT THE ELEMENT. `outline-offset: 2px` draws the ring
+  // OUTSIDE the border box, so on a filled control the ring sits on whatever the control
+  // sits on rather than on the control. Measuring against the element's own background
+  // would be most wrong for the primary button, which is the accent-filled one and so the
+  // likeliest to fail.
+  const worstFocusRing = () =>
+    page.evaluate(`(() => {
+      ${COLOUR_LIB}
+      const el = document.activeElement;
+      if (!el || el === document.body || el === document.documentElement) return null;
+      const cs = getComputedStyle(el);
+      // The accessible name, which is what a screen reader announces and what a reader
+      // of this output will recognise. An input's name comes from its <label>, so
+      // falling back to the tag name reported the claim field as "input" and made the
+      // reachability anchor below unable to name the thing it was looking for.
+      const name = (el.getAttribute("aria-label")
+        || el.labels?.[0]?.textContent?.trim()
+        || el.textContent.trim()
+        // A link wrapping only an image takes its name from that image's alt, which is
+        // how the footer mark is announced. Without this it reported as a bare "a" and
+        // looked like an unnamed focusable control, which is a real defect and would
+        // have been a false one to report.
+        || el.querySelector("img[alt]")?.getAttribute("alt")?.trim()
+        || el.getAttribute("placeholder")
+        || el.tagName.toLowerCase()).slice(0, 40);
+      // No ring at all is its own failure, not a ratio: a keyboard user gets nothing.
+      if (cs.outlineStyle === "none" || parseFloat(cs.outlineWidth) === 0) {
+        return { name, none: true };
+      }
+      return { name, ratio: ratioOf(cs.outlineColor, el.parentElement ?? el), width: parseFloat(cs.outlineWidth) };
+    })()`);
+
+  // Walk the whole tab order once and keep the worst ring. Capped rather than looping
+  // until it wraps, because a focus trap would otherwise hang the suite rather than
+  // failing it, and a hang reads as infrastructure trouble instead of as a finding.
+  const sweepFocusRings = async () => {
+    await page.evaluate(() => document.activeElement?.blur?.());
+    const seen = [];
+    let worst = null, ringless = null;
+    for (let i = 0; i < 40; i++) {
+      await page.keyboard.press("Tab");
+      const r = await worstFocusRing();
+      if (!r) continue;
+      if (seen.includes(r.name)) break; // wrapped
+      seen.push(r.name);
+      if (r.none) { ringless = ringless ?? r.name; continue; }
+      if (r.ratio != null && (!worst || r.ratio < worst.ratio)) worst = r;
+    }
+    return { worst, ringless, seen };
+  };
   const setTheme = async (want) => {
     const isInk = () => page.evaluate(() => document.querySelector(".app")?.classList.contains("ink") ?? false);
     if ((want === "ink") !== (await isInk())) await page.getByRole("button", { name: /Switch to/ }).click();
@@ -239,9 +302,11 @@ async function checkAppearance(page) {
   await setTheme("ink");
   const ink = await worstReadableLink();
   const inkIcon = await worstIconControl();
+  const inkRings = await sweepFocusRings();
   await setTheme("paper");
   const paper = await worstReadableLink();
   const paperIcon = await worstIconControl();
+  const paperRings = await sweepFocusRings();
   await setTheme("ink"); // restore for the claim flow
   const both = [ink, paper].filter(Boolean);
   const worst = both.sort((a, b) => a.ratio - b.ratio)[0];
@@ -274,6 +339,29 @@ async function checkAppearance(page) {
         : missing.length
           ? `never measured the ${missing.join(" or the ")}; saw ${JSON.stringify(worstIcon.measured)}`
           : `worst glyph ${worstIcon.ratio.toFixed(2)}:1 on "${worstIcon.control}", its border ${worstIcon.border == null ? "unmeasurable" : `${worstIcon.border.toFixed(2)}:1`}; measured ${JSON.stringify(worstIcon.measured)}`,
+  );
+
+  // Same failure mode as #306, so the same guard. A sweep that reports the worst ring it
+  // happened to reach says nothing about whether the controls worth reaching are still in
+  // the tab order: lose the claim button and the address input and the worst of what
+  // remains is a footer link that will always pass. So the two that matter are named, and
+  // everything reached goes in the output rather than only the worst.
+  const rings = [inkRings, paperRings];
+  const reached = (r, re) => r.seen.some((n) => re.test(n));
+  const ringsMissing = ["claim button", "address input"].filter((_, i) =>
+    !rings.every((r) => reached(r, i === 0 ? /Request|Queue it|Checking status|Topping up|Waiting for/i : /testnet address/i)));
+  const ringless = rings.map((r) => r.ringless).find(Boolean);
+  const worstRing = rings.map((r) => r.worst).filter(Boolean).sort((a, b) => a.ratio - b.ratio)[0];
+  ok(
+    "the focus ring meets WCAG 1.4.11 in both themes",
+    ringsMissing.length === 0 && !ringless && worstRing != null && worstRing.ratio >= 3,
+    ringless
+      ? `"${ringless}" takes focus with no visible ring at all`
+      : ringsMissing.length
+        ? `never reached the ${ringsMissing.join(" or the ")} by tabbing; reached ${JSON.stringify(rings[0].seen)}`
+        : worstRing
+          ? `worst ring ${worstRing.ratio.toFixed(2)}:1 on "${worstRing.name}" at ${worstRing.width}px; reached ${rings[0].seen.length} controls`
+          : "tabbing reached no focusable control, so nothing was checked",
   );
 }
 
