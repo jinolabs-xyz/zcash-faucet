@@ -254,7 +254,7 @@ network is a defence that does not depend on reading carefully.
 <table>
   <tr>
     <td width="50%"><img src="docs/screenshots/donate.png" alt="The donate page: the shielded unified address in full with a copy button, a tank gauge showing the reserve level, and the transparent address for anyone pointing a miner at the faucet."></td>
-    <td width="50%"><img src="docs/screenshots/fund.png" alt="The fund page: the mainnet unified address, a large QR code encoding a ZIP-321 payment URI, a copy button, and a red warning that mainnet sends cannot be reversed."></td>
+    <td width="50%"><img src="docs/screenshots/fund.png" alt="The fund page: the mainnet unified address, a large QR code of that address, a copy button, and a red warning that mainnet sends cannot be reversed."></td>
   </tr>
   <tr>
     <td><b>Donate TAZ.</b> Testnet, costs the giver nothing, goes back out as drips.</td>
@@ -262,13 +262,13 @@ network is a defence that does not depend on reading carefully.
   </tr>
 </table>
 
-Both carry a QR encoding a ZIP-321 `zcash:` URI rather than a bare address string, so a
-wallet opens a prefilled send instead of a search box. They are generated server side,
-so nothing leaves the browser to draw them and no third party learns who read the page.
-Each is sized for about four device pixels per module and always renders black on
-white, because an inverted code fails on some phone cameras and a code that does not
-scan is decoration. The first version was 2.2 pixels per module and did not scan in
-Zashi at all.
+Both carry a QR of the address itself. The scheme-prefixed ZIP-321 form opens a
+prefilled send screen in theory, and in practice a real wallet showed an error on it
+while the same address pasted by hand went through, so the QR encodes what every
+scanner accepts. They are generated server side, so nothing leaves the browser to draw
+them and no third party learns who read the page. Each is sized for about four device
+pixels per module and always renders black on white, because an inverted or under-dense
+code fails on real phone cameras, and a QR that does not scan is decoration.
 
 `/terms` says who operates the faucet and on what basis, including that it is provided
 as is, that donations are not refundable, and that trademarks belong to their owners.
