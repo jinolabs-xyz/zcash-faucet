@@ -308,8 +308,17 @@ done
 exec /usr/bin/gpg "$@"
 SHIM
 chmod +x "$T/gpgshim/gpg"
+# A SECOND APART, and that is not padding. Archive names carry a UTC timestamp to the
+# second, so two runs inside one second produce the SAME name and the second overwrites
+# the first: "exactly one kept archive" would then hold whether or not anything bounds it.
+# Removing the bound left this suite at 61 passed 0 failed until this sleep existed.
+#
+# Faithful rather than a trick, which is the same reasoning App used for the tip height:
+# a real backup timer runs hours apart, and two in the same second is not a scenario that
+# happens.
 for _ in 1 2; do
   PATH="$T/gpgshim:$PATH" STUB_GPG_NO_DECRYPT=1 bash "$BACKUP" > "$T/bounded.log" 2>&1
+  sleep 1
 done
 check "an archive that will not decrypt FAILS the run" \
   "grep -q 'did not verify' '$T/bounded.log'"
