@@ -285,21 +285,39 @@ check "and exactly one archive remains" \
   "[ \"\$(find '$BACKUP_DIR/archives' -name '*.tar.gz.gpg' | wc -l | tr -d ' ')\" = '1' ]"
 
 echo "== backup: kept failures are BOUNDED AT ONE, matching zsnap-export"
-# App found this in #316 and then in this PR too, having already approved it. Rotation
+# App found this in #316 and then here too, in a PR they had already approved. Rotation
 # globs *.tar.gz.gpg, so a .unverified is never swept and a disk-full event permanently
-# consumes disk with the evidence of the disk-full event. Smaller stakes at 22MB than for
-# a multi-GB snapshot, same unbounded growth, and the two scripts must behave alike.
+# consumes disk with the evidence of the disk-full event.
+#
+# REACHING THE FAILURE PATH NEEDS A DOUBLE, and my first version of this test did not have
+# one: it corrupted an EARLIER archive, so the next run produced a fresh good one, verified
+# it, and never failed. Both assertions were then vacuous, passing on zero files. I only
+# caught it by asserting the note EXISTS before asserting what is in it.
+#
+# This gpg shim encrypts for real and refuses to decrypt, which is exactly "the archive
+# does not open" and is the state the whole verification exists to catch.
 fresh_env; backup_env; seed_wallet
-bash "$BACKUP" > /dev/null 2>&1
-a="$(find "$BACKUP_DIR/archives" -name '*.tar.gz.gpg' | head -1)"
-# Two failures in a row, forced by corrupting what the run produces.
-for _ in 1 2; do
-  bash "$BACKUP" > /dev/null 2>&1
-  newest="$(find "$BACKUP_DIR/archives" -name '*.tar.gz.gpg' -newer "$a" | head -1)"
-  [ -n "$newest" ] && printf 'corruption' >> "$newest"
-  bash "$BACKUP" > /dev/null 2>&1 || true
+mkdir -p "$T/gpgshim"
+cat > "$T/gpgshim/gpg" <<'SHIM'
+#!/usr/bin/env bash
+for a in "$@"; do
+  if [ "$a" = "--decrypt" ] && [ -n "${STUB_GPG_NO_DECRYPT:-}" ]; then
+    echo "gpg: decryption failed: Bad session key (stub)" >&2; exit 2
+  fi
 done
-check "kept .unverified archives never exceed one" \
-  "[ \"\$(find '$BACKUP_DIR/archives' -name '*.unverified' | wc -l | tr -d ' ')\" -le 1 ]"
-check "and kept notes never exceed one" \
-  "[ \"\$(find '$BACKUP_DIR/archives' -name '*.unverified.txt' | wc -l | tr -d ' ')\" -le 1 ]"
+exec /usr/bin/gpg "$@"
+SHIM
+chmod +x "$T/gpgshim/gpg"
+for _ in 1 2; do
+  PATH="$T/gpgshim:$PATH" STUB_GPG_NO_DECRYPT=1 bash "$BACKUP" > "$T/bounded.log" 2>&1
+done
+check "an archive that will not decrypt FAILS the run" \
+  "grep -q 'did not verify' '$T/bounded.log'"
+check "a note was actually produced, so the checks below are not vacuous" \
+  "[ \"\$(find '$BACKUP_DIR/archives' -name '*.unverified.txt' | wc -l | tr -d ' ')\" -ge 1 ]"
+check "and it names WHICH check failed, so it can be read on its own" \
+  "find '$BACKUP_DIR/archives' -name '*.unverified.txt' -exec grep -q 'failed check: did-not-decrypt' {} +"
+check "two failures in a row leave exactly ONE kept archive" \
+  "[ \"\$(find '$BACKUP_DIR/archives' -name '*.unverified' | wc -l | tr -d ' ')\" = '1' ]"
+check "and exactly one note" \
+  "[ \"\$(find '$BACKUP_DIR/archives' -name '*.unverified.txt' | wc -l | tr -d ' ')\" = '1' ]"

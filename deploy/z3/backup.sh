@@ -161,12 +161,18 @@ sha256sum "$archive" | awk '{print $1}' > "${archive%.tar.gz.gpg}.sha256"
 # This does NOT make a restore tested end to end; restore-backup.sh and its refusals are
 # still their own path. It makes "the bytes we wrote are the bytes we meant, and they
 # decrypt with the passphrase we used" true on every run instead of assumed.
+# VERIFY_FAIL is set to a short token at whichever check fails, so the note beside a kept
+# archive can name it. App's point, and it is the right one: the note is meant to be the
+# thing that survives, and "see the log" is the one fact it cannot carry, because logs
+# rotate and get read on a different day than the file is found.
+VERIFY_FAIL=""
 verify_archive() {
   local a="$1" manifest name want got
+  VERIFY_FAIL=""
   manifest="$(gpg --batch --quiet --decrypt --passphrase-fd 3 "$a" 3<<<"$BACKUP_PASSPHRASE" \
                 | tar -xzO faucet-backup/MANIFEST 2>/dev/null)" \
-    || { log "ERROR: the archive did not decrypt with the passphrase this run used"; return 1; }
-  [ -n "$manifest" ] || { log "ERROR: no MANIFEST inside the archive"; return 1; }
+    || { VERIFY_FAIL="did-not-decrypt"; log "ERROR: the archive did not decrypt with the passphrase this run used"; return 1; }
+  [ -n "$manifest" ] || { VERIFY_FAIL="no-manifest"; log "ERROR: no MANIFEST inside the archive"; return 1; }
 
   # sha256sum lines only: the manifest also carries created/host/network headers.
   #
@@ -177,7 +183,7 @@ verify_archive() {
   # already been bitten by the same subshell rule swallowing probe_state's globals.
   local lines
   lines="$(printf '%s\n' "$manifest" | grep -E '^[0-9a-f]{64}  \./' || true)"
-  [ -n "$lines" ] || { log "ERROR: the MANIFEST carries no file hashes, so there is nothing to verify against"; return 1; }
+  [ -n "$lines" ] || { VERIFY_FAIL="manifest-has-no-hashes"; log "ERROR: the MANIFEST carries no file hashes, so there is nothing to verify against"; return 1; }
   local checked=0
   while read -r want name; do
     [ -n "$want" ] || continue
@@ -188,6 +194,7 @@ verify_archive() {
       log "ERROR: $name inside the archive does not match the manifest"
       log "  manifest: $want"
       log "  archive:  ${got:-<could not read>}"
+      VERIFY_FAIL="content-mismatch:$name"
       return 1
     fi
     checked=$((checked + 1))
@@ -197,7 +204,7 @@ $lines
 EOF
   # A loop that ran zero times must not read as success. Same shape as the empty-source
   # refusal in install-ops: nothing compared is not everything matching.
-  [ "$checked" -gt 0 ] || { log "ERROR: verified nothing, so the archive is unproven"; return 1; }
+  [ "$checked" -gt 0 ] || { VERIFY_FAIL="verified-nothing"; log "ERROR: verified nothing, so the archive is unproven"; return 1; }
   return 0
 }
 
@@ -225,7 +232,7 @@ else
     echo "failed: $(date -u +%FT%TZ)"
     echo "network: $BACKUP_NETWORK"
     echo "bytes: $(wc -c < "$archive.unverified" 2>/dev/null || echo unknown)"
-    echo "reason: archive did not verify against its own MANIFEST, see the backup log"
+    echo "failed check: ${VERIFY_FAIL:-unknown}"
   } > "$archive.unverified.txt" 2>/dev/null || true
   die "the archive this run produced did not verify, kept as $(basename "$archive").unverified"
 fi
