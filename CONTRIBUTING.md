@@ -530,6 +530,28 @@ Every correction came from the same few habits, so the habits are rules.
     came back green, which reads as the assertion working. And check the patch actually
     landed before trusting the number.
 
+    AND SABOTAGE THE TEST'S OWN PREMISE, not only the production code. Reading an
+    assertion tells you what it says, not what it can see. Three cases in one programme,
+    all found in REVIEW rather than by the author, which is itself part of the argument:
+    the person who built the fixture is the person least able to see it is a fiction.
+
+    The strongest case distorted production code rather than merely hiding a blind spot.
+    The `zebrad` stub reported a manifest hash unrelated to the file it wrote, which real
+    zebrad cannot do, so an exporter verifying the true contract could not pass against
+    the double. A double that cannot satisfy the real contract pressures the check to be
+    weakened until it can.
+
+    The other two hid the subject entirely. `backup` names archives to the second, so two
+    failing runs inside one second produced the same filename and the second overwrote
+    the first: "exactly one is kept" held whether or not anything bounded it. `zsnap`
+    names them by height and the stub reported a constant, so the same collision was
+    permanent rather than a timing accident. Removing the bound left both suites green.
+
+    In all three the fix was to make the DOUBLE FAITHFUL rather than to add an assertion.
+    Real zebrad hashes the file it wrote, a real tip advances, a real backup timer runs
+    hours apart. When a test cannot see its subject, suspect the fixture before the
+    assertion: the honest double and the working test are usually the same change.
+
 
 Money paths (send, ledger, reservation, PoW verify) never skip review, no
 matter how urgent the window. Docs and pure test additions may fast-track
