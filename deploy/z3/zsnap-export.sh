@@ -73,6 +73,17 @@ ZSNAP_READY_URL="${ZSNAP_READY_URL:-$default_ready}"
 log() { echo "$(date -u +%FT%TZ) zsnap-export: $*"; }
 die() { log "ERROR: $*"; exit 1; }
 
+# ZSNAP_KEEP=0 makes the rotation below `tail -n +1`, which deletes every snapshot
+# including the one this run just made and verified. Placed after die() rather than beside
+# the assignment, because a guard that calls die before die exists gives
+# command-not-found and exit 127, which is a worse failure than the one it guards. I
+# shipped that mistake twice today before writing it down.
+case "$ZSNAP_KEEP" in
+  ''|*[!0-9]*) die "ZSNAP_KEEP must be a whole number, got '$ZSNAP_KEEP'" ;;
+esac
+[ "$ZSNAP_KEEP" -ge 1 ] \
+  || die "ZSNAP_KEEP must be at least 1, got $ZSNAP_KEEP: rotation would delete the snapshot this run just made"
+
 # `zsnap-export.sh recover` puts the stack back after an abnormal death (a
 # SIGKILL skips every trap). The window marker below records what was stopped.
 # The systemd unit runs this via ExecStopPost, so even a timed-out export
@@ -335,6 +346,49 @@ log "compressing to $archive"
 tar -C "$work" -cf - snapshot | zstd -T0 -q -o "$archive.part"
 mv "$archive.part" "$archive"
 echo "$manifest_hash" > "$archive.manifest-hash"
+
+# VERIFY BEFORE PUBLISHING, AND THE ORDER IS THE POINT.
+#
+# This used to repoint `latest` and then rotate, both before anything read the archive
+# back. So a snapshot truncated by a full disk, and this box has hit 100% disk once
+# already, would become `latest` and could evict the last GOOD snapshot on the way out.
+# The failure would then surface at import, on the day someone is rebuilding a box,
+# which is the worst possible moment to discover it.
+#
+# What is checked is what zsnap-import will demand: the archive decompresses, it contains
+# MANIFEST.json, and that manifest hashes to the value in the sidecar. Verifying the
+# consumer's contract here means we never publish something the importer will reject.
+#
+# Streamed, never expanded to disk. An export already needs state plus one archive of
+# room (#262 headroom logic), and a verification step that needs a third copy is one that
+# gets removed the first time it fills the volume.
+verify_snapshot() { # $1 archive, $2 expected manifest hash
+  local a="$1" want="$2" got
+  zstd -t "$a" 2>/dev/null || { log "ERROR: the archive does not decompress"; return 1; }
+  zstd -dc "$a" 2>/dev/null | tar -tf - >/dev/null 2>&1 \
+    || { log "ERROR: the archive decompresses but is not a readable tar"; return 1; }
+  got="$(zstd -dc "$a" 2>/dev/null | tar -xO snapshot/MANIFEST.json 2>/dev/null | sha256sum | cut -d' ' -f1)"
+  [ -n "$got" ] || { log "ERROR: no snapshot/MANIFEST.json inside the archive"; return 1; }
+  if [ "$got" != "$want" ]; then
+    log "ERROR: the manifest inside the archive does not match the hash zebrad reported"
+    log "  zebrad said: $want"
+    log "  archive has: $got"
+    log "  zsnap-import authenticates against this hash, so it would refuse this snapshot."
+    return 1
+  fi
+  return 0
+}
+
+if ! verify_snapshot "$archive" "$manifest_hash"; then
+  # Kept, renamed, and NOT published. Evidence beats tidiness, but `latest` must not point
+  # at it and rotation must not count it as the good copy that lets an older one go.
+  mv "$archive" "$archive.unverified" 2>/dev/null || true
+  rm -f "$archive.manifest-hash"
+  die "the snapshot this run produced did not verify, kept as $(basename "$archive").unverified, latest is unchanged"
+fi
+log "verified: decompresses, and its manifest matches the hash zebrad reported"
+
+# Only now is it safe to call this the newest good snapshot.
 ln -sfn "$name.tar.zst" "$ZSNAP_DIR/snapshots/latest.tar.zst"
 ln -sfn "$name.tar.zst.manifest-hash" "$ZSNAP_DIR/snapshots/latest.manifest-hash"
 
@@ -346,7 +400,7 @@ find "$ZSNAP_DIR/snapshots" -maxdepth 1 -name "zsnap-$ZSNAP_NETWORK-*.tar.zst" -
       rm -f "$old" "$old.manifest-hash"
     done
 
-log "done: height $height, manifest hash $manifest_hash, $(du -h "$archive" | cut -f1) on disk"
+log "done: height $height, manifest hash $manifest_hash, $(du -h "$archive" | cut -f1) on disk, verified"
 
 if [ -n "$ZSNAP_UPLOAD_CMD" ]; then
   log "running upload hook"

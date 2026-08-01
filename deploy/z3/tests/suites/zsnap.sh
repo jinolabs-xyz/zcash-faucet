@@ -12,8 +12,17 @@ n_archives="$(find "$ZSNAP_DIR/snapshots" -name 'zsnap-testnet-*.tar.zst' | wc -
 check "three generations kept (got $n_archives)" "[ '$n_archives' = '3' ]"
 check "S1 rotated out when S4 landed" "! find '$ZSNAP_DIR/snapshots' -name '*3652101*' | grep -q ."
 check "S2, S3, S4 all still present" "[ \"\$(find '$ZSNAP_DIR/snapshots' -name '*365210[234]*.tar.zst' | wc -l | tr -d ' ')\" = '3' ]"
-check "latest symlink points at newest" "[ \"\$(readlink '$ZSNAP_DIR/snapshots/latest.tar.zst')\" = 'zsnap-testnet-3652104-deadbeefcafe.tar.zst' ]"
-check "sidecar has full manifest hash" "grep -q '^deadbeefcafe.*0123$' '$ZSNAP_DIR/snapshots/latest.manifest-hash'"
+# Derived from the stub's known MANIFEST bytes, not hardcoded to a fake hash. The
+# archive name carries the first 12 characters of the
+# manifest hash, and the stub now reports the REAL hash of the MANIFEST.json it writes
+# rather than a constant, because an exporter that verifies the manifest against the
+# reported hash cannot pass against a stub that reports an unrelated one.
+check "latest symlink points at the newest height" \
+  "[ \"\$(readlink '$ZSNAP_DIR/snapshots/latest.tar.zst')\" = \"zsnap-testnet-3652104-\$(printf '{\"stub\":true}\\n' | sha256sum | cut -c1-12).tar.zst\" ]"
+check "sidecar has the FULL manifest hash, not the truncated name form" \
+  "[ \"\$(cat '$ZSNAP_DIR/snapshots/latest.manifest-hash')\" = \"\$(printf '{\"stub\":true}\\n' | sha256sum | cut -d' ' -f1)\" ]"
+check "and the sidecar is longer than the 12 characters in the filename" \
+  "[ \"\$(wc -c < '$ZSNAP_DIR/snapshots/latest.manifest-hash' | tr -d ' ')\" -gt 13 ]"
 check "archive unpacks to snapshot/MANIFEST.json" "zstd -dc \"$ZSNAP_DIR/snapshots/\$(readlink '$ZSNAP_DIR/snapshots/latest.tar.zst')\" | tar -tf - | grep -q 'snapshot/MANIFEST.json'"
 check "workdir cleaned up" "[ -z \"\$(ls -A '$ZSNAP_DIR/work')\" ]"
 check "hot mode never stops a container" "! grep -q 'docker stop' '$STUB_LOG'"
@@ -444,3 +453,43 @@ for _ in $(seq 1 40); do curl -sf -o /dev/null "http://127.0.0.1:$PUB_PORT3/late
 bash "$IMPORT" "http://127.0.0.1:$PUB_PORT3/latest-testnet.txt" > "$T/ptr3.log" 2>&1
 check "the shipped parser reads all three from an unterminated pointer" "grep -q '3 candidate(s) to try' '$T/ptr3.log'"
 kill "$PUB_PID3" 2>/dev/null
+
+# ── the snapshot is proven to open, BEFORE it is published ──────────────────────
+# This used to repoint `latest` and rotate before anything read the archive back, so a
+# snapshot truncated by a full disk would become `latest` and could evict the last good
+# one. The failure would surface at import, while someone is rebuilding a box.
+
+echo "== zsnap-export: a good export says it verified, and publishes"
+fresh_env; with_chain
+bash "$EXPORT" > "$T/vok.log" 2>&1
+check "a verified export exits 0" "[ $? -eq 0 ]"
+check "it says what it verified" \
+  "grep -q 'verified: decompresses, and its manifest matches' '$T/vok.log'"
+check "and the done line carries it" "grep -qE 'done: .*verified$' '$T/vok.log'"
+check "and latest points at the new snapshot" \
+  "[ -L '$ZSNAP_DIR/snapshots/latest.tar.zst' ]"
+
+echo "== zsnap-export: a manifest that does not match FAILS and latest is NOT moved"
+# The ordering is the point. A bad snapshot must not become the one a rebuild reaches for.
+fresh_env; with_chain
+bash "$EXPORT" > /dev/null 2>&1
+before="$(readlink "$ZSNAP_DIR/snapshots/latest.tar.zst" 2>/dev/null)"
+STUB_MANIFEST_MISMATCH=1 bash "$EXPORT" > "$T/vbad.log" 2>&1
+check "an export whose manifest does not match FAILS" "[ $? -ne 0 ]"
+check "and says the importer would refuse it" \
+  "grep -q 'zsnap-import authenticates against this hash' '$T/vbad.log'"
+check "the bad archive is KEPT as evidence, renamed" \
+  "ls '$ZSNAP_DIR/snapshots/'*.unverified >/dev/null 2>&1"
+check "LATEST STILL POINTS AT THE GOOD SNAPSHOT" \
+  "[ \"\$(readlink '$ZSNAP_DIR/snapshots/latest.tar.zst')\" = \"$before\" ]"
+check "and the bad one has no manifest-hash sidecar to make it look publishable" \
+  "! ls '$ZSNAP_DIR/snapshots/'*.unverified.manifest-hash >/dev/null 2>&1"
+
+echo "== zsnap-export: KEEP=0 is refused before it can delete this run's own snapshot"
+fresh_env; with_chain
+ZSNAP_KEEP=0 bash "$EXPORT" > "$T/k0.log" 2>&1
+check "KEEP=0 exits nonzero" "[ $? -ne 0 ]"
+check "and says rotation would delete the snapshot this run just made" \
+  "grep -q 'would delete the snapshot this run just made' '$T/k0.log'"
+check "and it is the guard talking, not a command-not-found" \
+  "! grep -q 'command not found' '$T/k0.log'"

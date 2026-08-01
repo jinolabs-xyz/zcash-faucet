@@ -36,7 +36,18 @@ case "$cmd" in
     [ -e "$out/MANIFEST.json" ] && { echo "manifest already exists" >&2; exit 1; }
     mkdir -p "$out/chunks"
     head -c 300000 /dev/urandom > "$out/chunks/chunk-000001.bin"
+    # SELF-CONSISTENT, because real zebrad's reported hash IS the hash of this file.
+    # It used to write one thing and report an unrelated constant, which modelled a
+    # state zebrad cannot produce, so an exporter that verified the contract could not
+    # pass against the stub. A double that cannot satisfy the real contract forces the
+    # check to be weakened to match the double.
     echo '{"stub":true}' > "$out/MANIFEST.json"
+    STUB_MANIFEST_HASH="$(sha256sum "$out/MANIFEST.json" | cut -d' ' -f1)"
+    # STUB_MANIFEST_MISMATCH: report a hash that is NOT this file's. Models zebrad and the
+    # written manifest disagreeing, which is the condition the exporter's verification
+    # exists to catch and the only way to reach that path from a test.
+    [ -n "${STUB_MANIFEST_MISMATCH:-}" ] && \
+      STUB_MANIFEST_HASH="0000000000000000000000000000000000000000000000000000000000000000"
     # Same stdout shape as the real command, which the script parses.
     echo "snapshot exported to: $out"
     echo "network:              testnet"
@@ -44,7 +55,7 @@ case "$cmd" in
     echo "tip hash:             00000000stub"
     echo "total records:        12345"
     echo "total bytes:          300000"
-    echo "manifest hash:        deadbeefcafe0123456789abcdef0123456789abcdef0123456789abcdef0123"
+    echo "manifest hash:        $STUB_MANIFEST_HASH"
     ;;
   import-snapshot)
     snapdir="$1"; shift
