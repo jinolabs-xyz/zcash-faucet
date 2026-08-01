@@ -362,18 +362,24 @@ echo "$manifest_hash" > "$archive.manifest-hash"
 # Streamed, never expanded to disk. An export already needs state plus one archive of
 # room (#262 headroom logic), and a verification step that needs a third copy is one that
 # gets removed the first time it fills the volume.
+# VERIFY_FAIL names the failing check, so the note beside a kept archive can be read on
+# its own. App's point and it is right: logs rotate, and the file is usually found on a
+# different day than the log that explains it.
+VERIFY_FAIL=""
 verify_snapshot() { # $1 archive, $2 expected manifest hash
   local a="$1" want="$2" got
-  zstd -t "$a" 2>/dev/null || { log "ERROR: the archive does not decompress"; return 1; }
+  VERIFY_FAIL=""
+  zstd -t "$a" 2>/dev/null || { VERIFY_FAIL="does-not-decompress"; log "ERROR: the archive does not decompress"; return 1; }
   zstd -dc "$a" 2>/dev/null | tar -tf - >/dev/null 2>&1 \
-    || { log "ERROR: the archive decompresses but is not a readable tar"; return 1; }
+    || { VERIFY_FAIL="not-a-readable-tar"; log "ERROR: the archive decompresses but is not a readable tar"; return 1; }
   got="$(zstd -dc "$a" 2>/dev/null | tar -xO snapshot/MANIFEST.json 2>/dev/null | sha256sum | cut -d' ' -f1)"
-  [ -n "$got" ] || { log "ERROR: no snapshot/MANIFEST.json inside the archive"; return 1; }
+  [ -n "$got" ] || { VERIFY_FAIL="no-manifest"; log "ERROR: no snapshot/MANIFEST.json inside the archive"; return 1; }
   if [ "$got" != "$want" ]; then
     log "ERROR: the manifest inside the archive does not match the hash zebrad reported"
     log "  zebrad said: $want"
     log "  archive has: $got"
     log "  zsnap-import authenticates against this hash, so it would refuse this snapshot."
+    VERIFY_FAIL="manifest-hash-mismatch"
     return 1
   fi
   return 0
@@ -401,7 +407,7 @@ if ! verify_snapshot "$archive" "$manifest_hash"; then
     echo "height: $height"
     echo "zebrad reported manifest hash: $manifest_hash"
     echo "bytes: $(wc -c < "$archive.unverified" 2>/dev/null || echo unknown)"
-    echo "reason: archive did not verify, see the export log for which check failed"
+    echo "failed check: ${VERIFY_FAIL:-unknown}"
   } > "$archive.unverified.txt" 2>/dev/null || true
   die "the snapshot this run produced did not verify, kept as $(basename "$archive").unverified, latest is unchanged"
 fi

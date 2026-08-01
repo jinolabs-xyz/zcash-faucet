@@ -486,6 +486,10 @@ check "and the bad one has no manifest-hash sidecar to make it look publishable"
   "! ls '$ZSNAP_DIR/snapshots/'*.unverified.manifest-hash >/dev/null 2>&1"
 check "and a note is left, which survives even if the payload is ever dropped" \
   "ls '$ZSNAP_DIR/snapshots/'*.unverified.txt >/dev/null 2>&1"
+# Asserted to exist above, so this is not vacuous. The same pair of assertions in the
+# backup suite WAS vacuous until I checked existence first.
+check "and the note names WHICH check failed, not just that one did" \
+  "grep -q 'failed check: manifest-hash-mismatch' '$ZSNAP_DIR/snapshots/'*.unverified.txt"
 
 echo "== zsnap-export: kept failures are BOUNDED AT ONE, or a full disk feeds itself"
 # App's catch. Rotation globs *.tar.zst, so a .unverified is never swept. The commonest
