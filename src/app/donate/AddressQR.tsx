@@ -40,16 +40,23 @@ const QUIET_ZONE = 4;
 const DEFAULT_SIZE = 280;
 
 export function AddressQR({ address, size = DEFAULT_SIZE, label }: { address: string; size?: number; label: string }) {
-  // ZIP-321 payment URI, not the bare address. A wallet that scans `zcash:u1...`
-  // recognises a payment request and opens its send screen on it; a bare address is
-  // just a string it may or may not choose to act on, which is what "nothing
-  // happens" looks like from the user's side.
+  // THE BARE ADDRESS, not a ZIP-321 `zcash:` URI, and this is the second correction
+  // this payload has needed. Both came from someone pointing a real phone at it.
   //
-  // Measured, not assumed, and independently re-measured in review: at error
-  // correction L the URI encodes to the SAME module count as the bare address (49
-  // for our mainnet UA, 53 for the longer testnet one), so the scheme prefix costs
-  // nothing in density.
-  const payload = `zcash:${address}`;
+  // The URI form was the reasonable choice on paper: a wallet recognises a payment
+  // request and opens its send screen prefilled. In practice, scanning `zcash:u1...`
+  // made a real wallet show an ERROR, while the same address pasted by hand was
+  // accepted and the payment arrived within seconds. ZIP-321 predates unified
+  // addresses, and support for a UA in the URI form is evidently not universal.
+  //
+  // A bare address is what every wallet's scanner accepts, because it is what every
+  // exchange and every other faucet puts in a QR. The prefilled send screen was worth
+  // having only while it worked; a code that errors is worth nothing at all.
+  //
+  // Density is unaffected: at error correction L both payloads encode to the same
+  // module count, 49 for our mainnet UA and 53 for the longer testnet one, so this
+  // costs no scanning margin.
+  const payload = address;
 
   // L rather than M, deliberately. Error correction buys resilience against a
   // damaged code, which is a printing concern; this one is drawn on a screen and
