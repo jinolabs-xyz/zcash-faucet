@@ -93,3 +93,27 @@ check "and no message or text error field exists to leak into" \
   "! grep -qE 'lastError(Message|Text)' '$HB_SRC'"
 check "and the stage field cannot hold a formatted string" \
   "grep -q 'last_error_stage: Option<&' '$HB_SRC'"
+
+echo "== repo: every service routes its failures somewhere"
+# App found faucet-box-report.service had no OnFailure while every other service did.
+# Fixing that instance leaves the next one to be found the same way, so the rule is here.
+#
+# The template is excluded because it IS the handler: pointing it at itself is a loop.
+# That exclusion is also why this checks for a REAL directive rather than the string:
+# my first look used `grep -l OnFailure` and matched the COMMENT in the template's own
+# header, so the template appeared to have one and the actual gap was masked.
+SVC_MISSING=""
+SVC_COUNT=0
+for f in "$REPO"/deploy/z3/*.service; do
+  [ -e "$f" ] || continue
+  name="$(basename "$f")"
+  case "$name" in faucet-alert@.service) continue ;; esac
+  SVC_COUNT=$((SVC_COUNT + 1))
+  grep -qE '^OnFailure=' "$f" || SVC_MISSING="$SVC_MISSING $name"
+done
+check "services were actually found and read" "[ '$SVC_COUNT' -gt 0 ]"
+check "every service has an OnFailure handler" \
+  "[ -z '$SVC_MISSING' ] || { echo '   missing:$SVC_MISSING'; false; }"
+# The handler has to be the one that exists, not any string.
+check "and it routes to the alert template this repo ships" \
+  "! grep -hE '^OnFailure=' \"$REPO\"/deploy/z3/*.service | grep -qv 'faucet-alert@%n.service'"
