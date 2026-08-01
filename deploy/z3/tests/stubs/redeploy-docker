@@ -17,6 +17,19 @@ case "${1:-}" in
     [ -f "$f" ] || { echo "Error: No such image: $tag" >&2; exit 1; }
     cat "$f"
     ;;
+  inspect)
+    # inspect -f '{{.Image}}' <container-id>: what the RUNNING container is built from.
+    # Modelled as its own fact rather than derived from the tag, because the whole point
+    # of the post-condition is that those two can disagree.
+    shift
+    while [ $# -gt 0 ]; do case "$1" in -f) shift 2 ;; *) shift ;; esac; done
+    # STUB_INSPECT_FAIL: docker answers, but not about this container. Its own state,
+    # because "no container" and "cannot read the container" are different facts and the
+    # script is required to treat the second as UNVERIFIED rather than as a verdict.
+    # An absent .running cannot model it: a successful `up` creates one.
+    [ "${STUB_INSPECT_FAIL:-0}" = "1" ] && exit 1
+    if [ -f "$IMG/.running" ]; then cat "$IMG/.running"; else exit 1; fi
+    ;;
   tag)
     src="$IMG/$(printf '%s' "$2" | tr '/:' '__')"
     dst="$IMG/$(printf '%s' "$3" | tr '/:' '__')"
@@ -68,6 +81,12 @@ case "${1:-}" in
       echo 503
       exit 1
     fi
+    # `compose ps -q faucet`: the container id the post-condition inspects. Silence when
+    # nothing is running, which is what real compose does and how "cannot verify" is reached.
+    if printf '%s\n' "$@" | grep -qx "ps"; then
+      [ -f "$IMG/.running" ] && echo "stub-faucet-container"
+      exit 0
+    fi
     sub=""
     for a in "$@"; do case "$a" in build|up) sub="$a"; break ;; esac; done
     case "$sub" in
@@ -78,11 +97,22 @@ case "${1:-}" in
         echo "built" ;;
       up)
         if [ "${STUB_UP_FAIL:-0}" = "1" ]; then echo "up failed (stub)" >&2; exit 1; fi
+        # STUB_UP_NO_RECREATE: compose exits 0 having decided the service is up to date,
+        # so the RUNNING container keeps its old image. That is not hypothetical: it is
+        # what left the wallet serving a config we had already rewritten (#278) and it is
+        # invisible downstream, because the old build answers every probe perfectly.
+        # Without this knob the post-condition could not be shown to fire.
+        if [ "${STUB_UP_NO_RECREATE:-0}" = "1" ]; then
+          echo "up: service is up-to-date (stub, did not recreate)"
+          exit 0
+        fi
         # Fail only the first `up`, so the new image will not start but the
         # rollback can. STUB_UP_FAIL_ONCE names the marker file.
         if [ -n "${STUB_UP_FAIL_ONCE:-}" ] && [ ! -e "$STUB_UP_FAIL_ONCE" ]; then
           touch "$STUB_UP_FAIL_ONCE"; echo "up failed (stub, first only)" >&2; exit 1
         fi
+        # A real `up` makes the running container adopt whatever the live tag points at now.
+        cp "$IMG/zcash-faucet_latest" "$IMG/.running" 2>/dev/null || true
         echo "started" ;;
       *) echo "stub: unsupported compose op: $*" >&2; exit 64 ;;
     esac

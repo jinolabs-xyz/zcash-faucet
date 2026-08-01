@@ -288,3 +288,76 @@ check "exits 2, not 1" "[ $rc_unprobe -eq 2 ]"
 check "says NOT VERIFIED" "grep -q 'NOT VERIFIED' '$T/unprobe.log'"
 check "does not claim the faucet may be down" "! grep -q 'may be down' '$T/unprobe.log'"
 check "did not roll back on an unprobeable app" "! grep -q 'rolling back' '$T/unprobe.log'"
+
+# ── what is actually SERVING, not what the tag points at ────────────────────────
+# "deployed and healthy" came from the health gate alone, and a healthy faucet is not
+# evidence that the NEW code is serving. `compose up -d` compares the container spec and
+# can decline to recreate, which is what left the wallet reading a config we had already
+# rewritten (#278). Downstream everything looks perfect: the OLD build answers every probe.
+
+echo "== redeploy: a deploy that did not replace the container FAILS instead of claiming success"
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+echo "sha256:old" > "$STUB_IMAGES/zcash-faucet_latest"
+echo "sha256:old" > "$STUB_IMAGES/.running"
+STUB_UP_NO_RECREATE=1 bash "$REDEPLOY" > "$T/norecreate.log" 2>&1
+check "a deploy that shipped nothing does NOT exit 0" "[ $? -ne 0 ]"
+check "and says the post-condition failed" "grep -q 'POST-CONDITION FAILED' '$T/norecreate.log'"
+check "and names what is running against what was expected" \
+  "grep -q 'running:  sha256:old' '$T/norecreate.log'"
+check "and says the health gate passed on code that is not this build" \
+  "grep -q 'shipped nothing' '$T/norecreate.log'"
+# The point that makes this worth having: nothing else went wrong.
+check "and does NOT claim deployed and healthy" \
+  "! grep -q 'deployed and healthy' '$T/norecreate.log'"
+
+echo "== redeploy: a normal deploy still reports success, so the check is not just strict"
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+echo "sha256:old" > "$STUB_IMAGES/zcash-faucet_latest"
+echo "sha256:old" > "$STUB_IMAGES/.running"
+bash "$REDEPLOY" > "$T/normal.log" 2>&1
+check "a real deploy exits 0" "[ $? -eq 0 ]"
+check "and reports deployed and healthy" "grep -q 'deployed and healthy' '$T/normal.log'"
+check "and the running container is the image that was just built" \
+  "[ \"\$(cat '$STUB_IMAGES/.running')\" = \"\$(cat '$STUB_IMAGES/zcash-faucet_latest')\" ]"
+
+echo "== redeploy: an unreadable container is UNVERIFIED, not success and not failure"
+# Three states. We did not learn that the wrong code is running, we learned nothing.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+echo "sha256:old" > "$STUB_IMAGES/zcash-faucet_latest"
+echo "sha256:old" > "$STUB_IMAGES/.running"
+STUB_INSPECT_FAIL=1 bash "$REDEPLOY" > "$T/unverified.log" 2>&1
+rc=$?
+check "an unreadable running image does not report success" "[ $rc -ne 0 ]"
+check "and is reported as UNVERIFIED rather than as a failed deploy" \
+  "grep -q 'POST-CONDITION UNVERIFIED' '$T/unverified.log'"
+check "and does not claim deployed and healthy" \
+  "! grep -q 'deployed and healthy' '$T/unverified.log'"
+
+echo "== redeploy: a rollback that did not take effect is not reported as rolled back"
+# In an incident "rolled back" is the sentence people act on. Liveness proves something
+# answers, not that the PREVIOUS build is what answers.
+redeploy_env
+touch "$STUB_HEALTH"
+echo "sha256:broken" > "$STUB_IMAGES/zcash-faucet_latest"
+echo "sha256:broken" > "$STUB_IMAGES/.running"
+echo "sha256:good"   > "$STUB_IMAGES/zcash-faucet_previous"
+STUB_UP_NO_RECREATE=1 bash "$REDEPLOY" rollback > "$T/rbfail.log" 2>&1
+check "a rollback that did not replace the container FAILS" "[ $? -ne 0 ]"
+check "and says the faucet is answering but is not the rolled-back image" \
+  "grep -q 'not the rolled-back image' '$T/rbfail.log'"
+check "and does NOT say rolled back and live" "! grep -q 'rolled back and live' '$T/rbfail.log'"
+
+echo "== redeploy: a rollback that DID take effect still reports rolled back and live"
+redeploy_env
+touch "$STUB_HEALTH"
+echo "sha256:broken" > "$STUB_IMAGES/zcash-faucet_latest"
+echo "sha256:broken" > "$STUB_IMAGES/.running"
+echo "sha256:good"   > "$STUB_IMAGES/zcash-faucet_previous"
+bash "$REDEPLOY" rollback > "$T/rbok.log" 2>&1
+check "a real rollback exits 0" "[ $? -eq 0 ]"
+check "and says rolled back and live" "grep -q 'rolled back and live' '$T/rbok.log'"
+check "and the running container is the previous image" \
+  "[ \"\$(cat '$STUB_IMAGES/.running')\" = 'sha256:good' ]"
