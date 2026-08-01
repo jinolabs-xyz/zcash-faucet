@@ -530,6 +530,29 @@ Every correction came from the same few habits, so the habits are rules.
     came back green, which reads as the assertion working. And check the patch actually
     landed before trusting the number.
 
+    **SABOTAGE THE TEST'S OWN PREMISE, NOT ONLY THE PRODUCTION CODE.** Sabotaging the
+    code catches an assertion that does not exist. It does not catch an assertion that
+    cannot SEE its subject, and that is a different failure with the same green.
+
+    Three layers of it appeared in one thread, each fix moving the blind spot one layer
+    out rather than closing it:
+
+    - `backup.sh` verified its archive, and nothing asserted the verification ran.
+    - The assertion added for it passed on ZERO files, because the fixture corrupted an
+      earlier archive so the next run produced a good one and never failed.
+    - The bound on kept failures could not be seen at all, because two runs produced the
+      same FILENAME: in `zsnap` the stub reported a constant tip height, in `backup` two
+      runs landed inside one timestamped second. Either way the second file overwrote the
+      first, so "exactly one is kept" held whether or not anything kept it to one.
+
+    All three were green and all three had been read. Reading an assertion tells you what
+    it says, not what it can see. Delete the subject and watch.
+
+    The fix for a blind premise is usually to remove a FICTION from the double rather than
+    to add a trick to the test: a real tip advances, a real backup timer runs hours apart,
+    a real zebrad reports the hash of the manifest it just wrote. Make the double faithful
+    and the assertion becomes real for free.
+
 
 Money paths (send, ledger, reservation, PoW verify) never skip review, no
 matter how urgent the window. Docs and pure test additions may fast-track
