@@ -330,7 +330,7 @@ echo "sha256:old" > "$STUB_IMAGES/zcash-faucet_latest"
 echo "sha256:old" > "$STUB_IMAGES/.running"
 STUB_INSPECT_FAIL=1 bash "$REDEPLOY" > "$T/unverified.log" 2>&1
 rc=$?
-check "an unreadable running image does not report success" "[ $rc -ne 0 ]"
+check "an unreadable running image is UNVERIFIED, exit 2 not 1" "[ $rc -eq 2 ]"
 check "and is reported as UNVERIFIED rather than as a failed deploy" \
   "grep -q 'POST-CONDITION UNVERIFIED' '$T/unverified.log'"
 check "and does not claim deployed and healthy" \
