@@ -24,7 +24,6 @@
 # with nothing to do says so rather than reinstalling.
 set -uo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${SPEC_REPO_DIR:-/opt/zcash-faucet}"
 SRC="${SPEC_SOURCE_DIR:-$REPO_DIR/deploy/z3}"
 INSTALL_DIR="${SPEC_INSTALL_DIR:-/opt/faucet}"
