@@ -15,8 +15,9 @@ Running instance: **[zcashfaucet.jinolabs.xyz](https://zcashfaucet.jinolabs.xyz)
 
 Most faucets are a wallet key and a form in front of somebody else's node. This
 one owns its whole stack: a Zebra full node, a Zallet shielded wallet, a solo
-miner, and a self-healing deployment. No third-party wallet service, no captcha
-vendor, no external dependency in the path that moves money.
+miner, and a self-healing deployment. No third-party wallet service and no captcha
+vendor: every send is built and broadcast by our own wallet against our own node,
+so no third party can move the funds.
 
 The property it is built around: **it refuses rather than guesses.** The faucet will
 not build a payment its node is too far behind to confirm. The deploy will not report
@@ -44,7 +45,7 @@ That discipline runs from the claim endpoint all the way down to the systemd uni
 | | |
 | --- | --- |
 | **Shielded by default** | Every drip is a real z2z shielded transaction on the Ironwood pool. Amount, recipient, and the link back to the faucet stay off the public ledger. |
-| **Its own node and wallet** | Zebra full node plus Zallet with Zaino embedded. No third-party wallet service and no external dependency anywhere in the path that moves money. |
+| **Its own node and wallet** | Zebra full node plus Zallet. Every send is built and broadcast by our own wallet against our own node, so no third party can move the funds. A public lightwalletd serves read-only lookups such as `/api/balance`. Two checks deliberately ask an **independent** source instead: whether our node has fallen behind the network, and whether it is on the same chain, because a node cannot detect either condition about itself. |
 | **Mines its own funding** | A solo Equihash miner works `getblocktemplate` against our own node, and won blocks 4,227,889 and 4,227,915 on 2026-07-31. |
 | **Auto-shields its mining rewards** | Mined coinbase is transparent. A reserve loop watches the spendable balance and shields matured coinbase into the faucet's own account automatically, so transparent rewards become shielded balance with nobody touching a key. |
 | **Never stops serving to refill** | Refill work shares the send queue with drips, one bounded step at a time, and yields the moment a real claim arrives. |
