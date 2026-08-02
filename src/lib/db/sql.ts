@@ -34,6 +34,16 @@ CREATE TABLE IF NOT EXISTS used_challenges (
   exp  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_used_exp ON used_challenges(exp);
+
+-- Drips served, by UTC day. The claims table cannot answer "how many, ever":
+-- data minimization deletes its rows after ~25 hours, and that is a feature we
+-- will not weaken for a statistic. So the statistic lives here instead, as a
+-- count per day and NOTHING else: no address hash, no ip hash, no amount, no
+-- timestamps finer than the day. Nothing in this table is about anyone.
+CREATE TABLE IF NOT EXISTS drip_days (
+  day  TEXT    PRIMARY KEY,
+  sent INTEGER NOT NULL DEFAULT 0
+);
 `;
 
 /**
@@ -246,6 +256,29 @@ ORDER BY created_at DESC LIMIT 1
 `;
 
 export const FINALIZE_SQL = `UPDATE claims SET status = ?, txid = ? WHERE id = ?`;
+
+/** One more drip served today. The day arrives as a param: SQL date functions differ
+ * between backends, an ISO string compares correctly everywhere, and the caller's
+ * clock is the one the rest of the ledger already runs on. */
+export const DRIP_BUMP_SQL = `
+INSERT INTO drip_days (day, sent) VALUES (?, 1)
+ON CONFLICT(day) DO UPDATE SET sent = sent + 1`;
+
+/** All three windows in one read. ISO days compare lexicographically, so >= on
+ * strings is a correct date comparison and works on both backends. */
+export const DRIP_TOTALS_SQL = `
+SELECT COALESCE(SUM(sent), 0)                              AS allTime,
+       COALESCE(SUM(CASE WHEN day >= ? THEN sent END), 0)  AS last30d,
+       COALESCE(SUM(CASE WHEN day >= ? THEN sent END), 0)  AS last7d
+  FROM drip_days`;
+
+export const DRIP_ANY_SQL = `SELECT COUNT(*) AS n FROM drip_days`;
+
+/** MAX rather than +: the seed writes absolute per-day counts, so replaying it
+ * (two processes, a restart mid-seed) cannot double-count. */
+export const DRIP_SEED_SQL = `
+INSERT INTO drip_days (day, sent) VALUES (?, ?)
+ON CONFLICT(day) DO UPDATE SET sent = MAX(sent, excluded.sent)`;
 
 /**
  * Data minimization: once a row is older than the retention window it can no

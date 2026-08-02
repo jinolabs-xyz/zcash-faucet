@@ -18,6 +18,10 @@ import {
   LIVE_BLOCK_SQL,
   FINALIZE_SQL,
   PURGE_SQL,
+  DRIP_BUMP_SQL,
+  DRIP_TOTALS_SQL,
+  DRIP_ANY_SQL,
+  DRIP_SEED_SQL,
   PENDING_LEASE_SECONDS,
   SPEND_CHALLENGE_SQL,
   PURGE_CHALLENGES_SQL,
@@ -167,6 +171,7 @@ export async function finalizeClaim(
   status: "sent" | "failed",
   txid: string | null,
   noTxid?: NoTxidReason,
+  nowMs: number = Date.now(),
 ) {
   if (status === "sent" && !txid && !noTxid) {
     throw new Error(
@@ -182,6 +187,82 @@ export async function finalizeClaim(
   // already refuses "" outright, so this only governs the paths that legitimately have
   // no id: a failed send, and a network that returns none.
   await driver().run(FINALIZE_SQL, [status, txid || null, claimId]);
+
+  // Count the drip, not the drip's details. Best-effort like the purges: a lost
+  // increment must never fail a claim that was actually paid, but unlike the purges
+  // it is logged, because a counter that drifts silently is a statistic nobody
+  // should quote.
+  if (status === "sent") {
+    driver()
+      .run(DRIP_BUMP_SQL, [utcDay(nowMs)])
+      .catch((e) => console.error(`[drips] count bump failed: ${e instanceof Error ? e.message : e}`));
+  }
+}
+
+/** UTC calendar day, the only resolution the drip counter keeps. */
+function utcDay(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+export interface DripCounts {
+  allTime: number;
+  last7d: number;
+  last30d: number;
+}
+
+/** Single-flight guard for the one-time seed, per process. Cross-process replays are
+ * harmless because the seed writes absolute counts with MAX, never increments. */
+let seedOnce: Promise<void> | null = null;
+
+/**
+ * How many drips this faucet has served: ever, in the last 7 UTC days, and in the
+ * last 30, "last 7" meaning today and the six before it.
+ *
+ * "Ever" begins when this counter shipped, plus the ~25 hours of sent rows retention
+ * had not yet deleted, which the seed folds in on first read. Earlier history was
+ * deleted by design and is not reconstructable; the counter does not pretend
+ * otherwise. Returns null when the ledger will not answer: an unknown count is not
+ * zero, same rule as the balance.
+ */
+export async function countDrips(nowMs: number): Promise<DripCounts | null> {
+  try {
+    seedOnce ??= seedDripDays(nowMs);
+    await seedOnce;
+    const cutoff = (days: number) => utcDay(nowMs - (days - 1) * 86_400_000);
+    const row = await driver().get<{ allTime: number; last30d: number; last7d: number }>(
+      DRIP_TOTALS_SQL,
+      [cutoff(30), cutoff(7)],
+    );
+    if (!row) return null;
+    return { allTime: Number(row.allTime), last7d: Number(row.last7d), last30d: Number(row.last30d) };
+  } catch (e) {
+    console.error(`[drips] count read failed: ${e instanceof Error ? e.message : e}`);
+    return null;
+  }
+}
+
+/**
+ * Fold surviving sent rows into their day buckets, once, on the first read.
+ *
+ * Retention keeps ~25 hours, so the survivors span at most three UTC days. One
+ * COUNT per candidate day beats streaming rows through a single-row `get`, and
+ * the day boundaries are computed here in epoch seconds (`created_at`'s unit:
+ * the retention math subtracts 86_400 from it directly) so no SQL date function
+ * is involved.
+ */
+async function seedDripDays(nowMs: number): Promise<void> {
+  const any = await driver().get<{ n: number }>(DRIP_ANY_SQL, []);
+  if (any && Number(any.n) > 0) return;
+  for (let back = 2; back >= 0; back -= 1) {
+    const day = utcDay(nowMs - back * 86_400_000);
+    const startSec = Math.floor(Date.parse(`${day}T00:00:00Z`) / 1000);
+    const r = await driver().get<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM claims WHERE status = 'sent' AND created_at >= ? AND created_at < ?`,
+      [startSec, startSec + 86_400],
+    );
+    const sent = r ? Number(r.n) : 0;
+    if (sent > 0) await driver().run(DRIP_SEED_SQL, [day, sent]);
+  }
 }
 
 /**

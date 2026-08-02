@@ -32,6 +32,9 @@ interface Status {
   balanceTaz: number | null;
   empty: boolean;
   queueDepth?: number;
+  /** Drips served: ever, last 7 UTC days, last 30. Null (or absent, from an older
+   * deploy) means the ledger would not answer, which is unknown, never zero. */
+  drips?: { allTime: number; last7d: number; last30d: number } | null;
   backend: { reachable: boolean; endpoint: string };
   node?: { ready: boolean; syncPercent: number | null; height: number | null; nodeHeight: number | null; canBuildTx?: boolean };
   // `active` is derived from the heartbeat now, not from an env flag, so it can
@@ -755,6 +758,12 @@ export default function Home() {
                   ]
                 : []),
               { k: "queue", v: (status?.queueDepth ?? 0) + " pending" },
+              // One line, per the standing rule. The legend lives in the KEY so the
+              // value stays short at any magnitude; "10 all time · 10 in 7d · 10 in
+              // 30d" wrapped the cell on first render. Same slash idiom as the block
+              // height row. An unreadable counter says unknown rather than rendering
+              // a zero that would read as "this faucet has never served anyone".
+              { k: "drips ever/7d/30d", v: status?.drips ? num(status.drips.allTime) + " / " + num(status.drips.last7d) + " / " + num(status.drips.last30d) : "unknown" },
               { k: "backend", v: status?.backend?.reachable ? "reachable" : "unreachable", bad: status != null && !status.backend?.reachable },
             ].map((r) => (
               // A bad row is marked in the VALUE, not with a badge or an icon: the grid

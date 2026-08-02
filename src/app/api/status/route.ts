@@ -6,6 +6,7 @@ import { readBoxIntegrity } from "@/lib/boxIntegrityFile";
 import { pingBackend } from "@/lib/zcash/lightwalletd";
 import { safeBalance } from "@/lib/zcash/send";
 import { getSendQueue } from "@/lib/zcash/queue";
+import { countDrips } from "@/lib/db";
 import { getNodeStatus } from "@/lib/zcash/nodeStatus";
 import { getReserveReconciler } from "@/lib/reserve/reconciler";
 import { readMinerHeartbeat } from "@/lib/miner/read";
@@ -44,6 +45,10 @@ export const GET = withApi("status", async () => {
     // same: show nothing rather than a doubtful address for real funds.
     maintenanceAddress: config.maintenanceAddress,
     queueDepth: getSendQueue().depth,
+    // How many drips this faucet has served: ever, last 7 UTC days, last 30. From the
+    // privacy-safe per-day counter, not the claims table, whose rows retention deletes.
+    // Null when the ledger will not answer; an unknown count is not zero.
+    drips: await countDrips(Date.now()),
     backend,
     // Does the box have what the repo says it must? COUNTS ONLY, never file names:
     // this endpoint is public, and naming what is missing from a production box is
