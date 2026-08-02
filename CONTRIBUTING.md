@@ -573,6 +573,32 @@ Every correction came from the same few habits, so the habits are rules.
     the code. A sabotage result is a claim about a PAIR, and neither half is safe to
     assume.
 
+    AND RUN THE HARNESS AGAINST THE UNMODIFIED TREE FIRST. Everything above treats the
+    harness as the instrument and the code as the subject. The harness is a fixture too,
+    and it broke three times in two days, each time producing a number that read as an
+    answer:
+
+        A sabotage loop pointed at a test file that did not exist. All four runs printed
+        nothing, and nothing looks exactly like no failures.
+
+        A validity gate ran tsc on a single file, which errors with "tsconfig.json is
+        present but will not be loaded". It rejected every patch including the valid
+        ones and reported four findings that were entirely its own.
+
+        A green check piped `node --test` into `grep -q`. Under `pipefail` grep exits on
+        the match, node takes a SIGPIPE, and the pipeline returns 141, so a run of 25
+        passing tests was reported as already red.
+
+    Note the direction. Two of those manufactured a PASS and one manufactured a FAILURE,
+    so "my harness only errs toward caution" is not available. The false failure is the
+    cheaper one only because it wastes an afternoon rather than shipping a hole.
+
+    One control run catches all three, and it is the same move each time: before
+    believing any sabotage result, run the harness unchanged and require the answer you
+    already know. The suite must be green and the gate must accept the tree. If a
+    control run cannot tell you the harness works, the harness is not measuring
+    anything.
+
 
 Money paths (send, ledger, reservation, PoW verify) never skip review, no
 matter how urgent the window. Docs and pure test additions may fast-track
