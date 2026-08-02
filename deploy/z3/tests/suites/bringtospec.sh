@@ -36,9 +36,17 @@ spec_env() {
   # own suite for that. STUB_REPORT_* let a test say what the box looks like.
   cat > "$T/src/box-report.sh" <<'RPT'
 #!/usr/bin/env bash
-printf '{"expected":%s,"present":%s,"notEnabled":%s,"minerBinary":"%s","readable":true}\n' \
-  "${STUB_REPORT_EXPECTED:-3}" "${STUB_REPORT_PRESENT:-3}" \
-  "${STUB_REPORT_NOTENABLED:-0}" "${STUB_REPORT_MINER:-current}" > "${SPEC_REPORT:?}"
+# STUB_REPORT_NOMINER: emit a report with no minerBinary field at all, which is what an
+# older box-report.sh on a box that has not been updated yet actually writes.
+if [ "${STUB_REPORT_NOMINER:-0}" = "1" ]; then
+  printf '{"expected":%s,"present":%s,"notEnabled":%s,"readable":true}\n' \
+    "${STUB_REPORT_EXPECTED:-3}" "${STUB_REPORT_PRESENT:-3}" \
+    "${STUB_REPORT_NOTENABLED:-0}" > "${SPEC_REPORT:?}"
+else
+  printf '{"expected":%s,"present":%s,"notEnabled":%s,"minerBinary":"%s","readable":true}\n' \
+    "${STUB_REPORT_EXPECTED:-3}" "${STUB_REPORT_PRESENT:-3}" \
+    "${STUB_REPORT_NOTENABLED:-0}" "${STUB_REPORT_MINER:-current}" > "${SPEC_REPORT:?}"
+fi
 RPT
   chmod +x "$T/src/box-report.sh"
 
@@ -151,6 +159,84 @@ check "an empty source exits nonzero" "[ $? -ne 0 ]"
 check "and says it is not the ops source directory" \
   "grep -q 'not the ops source directory' '$T/emptysrc.log'"
 check "and nothing was installed" "[ ! -f '$T/install/watchdog.sh' ]"
+
+echo "== bring-to-spec: A STALE MINER BINARY FAILS, which is the condition this script exists for"
+# Found in review (SDE-App, #319). The post-condition read minerBinary and only PRINTED it:
+# the gate was present-vs-expected and notEnabled. So a box whose report said the binary was
+# stale exited 0 with "box is at spec", and the word `verified` appeared on the same line as
+# the word `stale`. That is the four-day-old-binary incident reproduced exactly, by the one
+# command written to prevent it.
+#
+# The build has to SUCCEED here to isolate the post-condition. An earlier run of App's
+# exited 1 from miner-build(no-binary-produced), which would have looked like the check
+# working while the check contributed nothing.
+spec_env
+STUB_REPORT_MINER=stale bash "$SPEC" > "$T/stale.log" 2>&1
+check "a stale binary FAILS the run" "[ $? -ne 0 ]"
+check "and the build itself did NOT fail, so it is the post-condition talking" \
+  "! grep -q 'miner-build' '$T/stale.log'"
+check "and it does NOT claim the box is at spec" "! grep -q 'box is at spec' '$T/stale.log'"
+check "and the word verified never appears next to a stale binary" \
+  "! grep -q 'verified:.*stale' '$T/stale.log'"
+check "and the state is named so the operator knows what to do" \
+  "grep -q 'miner binary stale' '$T/stale.log'"
+
+echo "== bring-to-spec: an absent miner binary fails too"
+spec_env
+STUB_REPORT_MINER=absent bash "$SPEC" > "$T/absent.log" 2>&1
+check "an absent binary FAILS the run" "[ $? -ne 0 ]"
+check "and does not claim spec" "! grep -q 'box is at spec' '$T/absent.log'"
+
+echo "== bring-to-spec: a report with no minerBinary field FAILS CLOSED"
+# An older box-report.sh that predates the field must not silently satisfy the check the
+# field exists for. Absence of evidence is the thing this whole programme refuses to read
+# as evidence of absence of a problem.
+spec_env
+STUB_REPORT_NOMINER=1 bash "$SPEC" > "$T/nominer.log" 2>&1
+check "a report missing the field FAILS rather than passing" "[ $? -ne 0 ]"
+check "and says the state is unknown rather than inventing one" \
+  "grep -q 'miner binary state is unknown' '$T/nominer.log'"
+check "and is UNVERIFIED rather than a claim the box is broken" \
+  "grep -q 'POST-CONDITION UNVERIFIED' '$T/nominer.log'"
+
+echo "== bring-to-spec: known-bad exits 1 and cannot-verify exits 2, exactly"
+# Matching redeploy.sh rather than quietly differing from it. The script already
+# distinguished these two states in its PROSE and collapsed them in its exit code, which
+# throws away the more useful of the two facts.
+spec_env
+STUB_REPORT_PRESENT=2 STUB_REPORT_EXPECTED=3 bash "$SPEC" > "$T/code1.log" 2>&1
+check "a box the report says is SHORT exits exactly 1 (known-bad)" "[ $? -eq 1 ]"
+
+spec_env
+rm -f "$T/src/box-report.sh"
+bash "$SPEC" > "$T/code2.log" 2>&1
+check "a run that could not read a report exits exactly 2 (cannot-verify)" "[ $? -eq 2 ]"
+
+spec_env
+STUB_REPORT_MINER=stale bash "$SPEC" > /dev/null 2>&1
+check "a stale binary is known-bad, so exactly 1" "[ $? -eq 1 ]"
+
+echo "== bring-to-spec: known-bad outranks cannot-verify when both happen"
+# A definite fault plus an unanswered question is still a definite fault, and reporting the
+# weaker of the two would be the wrong call. no-cargo is cannot-verify, a short report is
+# known-bad; together the run must come out 1 and must still MENTION the thing it could not
+# verify rather than dropping it on the floor.
+spec_env
+SPEC_CARGO="$T/bin/no-such-cargo" STUB_REPORT_PRESENT=2 STUB_REPORT_EXPECTED=3 \
+  bash "$SPEC" > "$T/both.log" 2>&1
+check "known-bad plus cannot-verify exits 1, not 2" "[ $? -eq 1 ]"
+check "and the cannot-verify part is still reported, not swallowed" \
+  "grep -q 'also could not verify:.*no-cargo' '$T/both.log'"
+
+echo "== bring-to-spec: a box with NO miner sources is not failed for lacking a binary"
+# untracked is not a fault. box-report does not even add it to `expected`, so treating it
+# like stale would fail every box that legitimately has no miner, and a gate that cries
+# wolf on correct boxes gets ignored on the one that matters.
+spec_env
+rm -rf "$T/src/miner"
+STUB_REPORT_MINER=untracked bash "$SPEC" > "$T/untracked.log" 2>&1
+check "a box with no miner sources still exits 0" "[ $? -eq 0 ]"
+check "and says the box is at spec" "grep -q 'box is at spec' '$T/untracked.log'"
 
 echo "== bring-to-spec: --dry-run changes nothing and claims nothing"
 spec_env
