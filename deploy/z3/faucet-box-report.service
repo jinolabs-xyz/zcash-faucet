@@ -1,6 +1,11 @@
 [Unit]
 Description=Publish box install integrity for the external gate
 Documentation=https://github.com/jinolabs-xyz/zcash-faucet
+# Every other service on this box routes its failures here, and this one did not. A
+# reporter that fails silently is worse than most: the external gate then reads the box
+# as `unknown`, which is correct and says nothing about WHY, so the one signal that
+# would name the cause was the one going nowhere. Found by App while reviewing #309.
+OnFailure=faucet-alert@%n.service
 
 [Service]
 Type=oneshot

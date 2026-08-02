@@ -93,3 +93,48 @@ check "and no message or text error field exists to leak into" \
   "! grep -qE 'lastError(Message|Text)' '$HB_SRC'"
 check "and the stage field cannot hold a formatted string" \
   "grep -q 'last_error_stage: Option<&' '$HB_SRC'"
+
+echo "== repo: every service routes its failures somewhere"
+# App found faucet-box-report.service had no OnFailure while every other service did.
+# Fixing that instance leaves the next one to be found the same way, so the rule is here.
+#
+# The template is excluded because it IS the handler: pointing it at itself is a loop.
+# That exclusion is also why this checks for a REAL directive rather than the string:
+# my first look used `grep -l OnFailure` and matched the COMMENT in the template's own
+# header, so the template appeared to have one and the actual gap was masked.
+SVC_MISSING=""
+SVC_COUNT=0
+for f in "$REPO"/deploy/z3/*.service; do
+  [ -e "$f" ] || continue
+  name="$(basename "$f")"
+  case "$name" in faucet-alert@.service) continue ;; esac
+  SVC_COUNT=$((SVC_COUNT + 1))
+  # SECTION-AWARE, because systemd only honours OnFailure in [Unit]. Put it under
+  # [Service] and systemd logs "Unknown key name 'OnFailure' in section 'Service',
+  # ignoring" and drops it, so the unit routes its failures nowhere while satisfying a
+  # plain grep. App proved that: they moved the directive and this rule still read
+  # 18 passed 0 failed.
+  #
+  # That is this rule's own bug one level in. I had already caught `grep -l OnFailure`
+  # matching the COMMENT in the template header and tightened it to a real directive,
+  # and the tightened version still only proved the STRING was present rather than that
+  # the BEHAVIOUR was configured.
+  #
+  # A malformed section header fails this closed, reporting the unit as missing a
+  # handler, which is the safe direction for a check about alerting.
+  awk '/^\[/{sec=$0} sec=="[Unit]" && /^OnFailure=/{f=1} END{exit !f}' "$f" \
+    || SVC_MISSING="$SVC_MISSING $name"
+done
+check "services were actually found and read" "[ '$SVC_COUNT' -gt 0 ]"
+check "every service has an OnFailure handler" \
+  "[ -z '$SVC_MISSING' ] || { echo '   missing:$SVC_MISSING'; false; }"
+# The handler has to be the one that exists, not any string.
+check "and it routes to the alert template this repo ships" \
+  "! grep -hE '^OnFailure=' \"$REPO\"/deploy/z3/*.service | grep -qv 'faucet-alert@%n.service'"
+# The exclusion above stops the template being REQUIRED to have a handler; nothing stopped
+# it HAVING one, and a handler that alerts on its own failure loops. App raised this as a
+# speculative edge and explicitly did not call it a finding. It is one line to close, and
+# an alerting loop on a box whose alerts already reach nobody is not a thing to leave
+# expressible.
+check "and the alert template does not route to itself, which would loop" \
+  "! awk '/^\\[/{sec=\$0} sec==\"[Unit]\" && /^OnFailure=/{f=1} END{exit !f}' \"$REPO/deploy/z3/faucet-alert@.service\""
