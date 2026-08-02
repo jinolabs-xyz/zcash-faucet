@@ -650,6 +650,79 @@ Every correction came from the same few habits, so the habits are rules.
     anything.
 
 
+35. A COMMENT CAN LIE WHILE THE CODE TELLS THE TRUTH, AND NOTHING WE HAVE POINTS AT IT.
+    Rules 29 through 34 are all about a check producing an untrue result. This one is
+    the opposite arrangement and it needs its own entry: the code is right, the tests
+    pass, the sabotage goes red on cue, and the sentence explaining why is invented.
+
+    Work through the gates and none of them are aimed at it. Tests assert behaviour, and
+    the behaviour is correct. CI is green because the code is fine. Rule 33 sabotage
+    turns the suite red on cue, and the comment stays equally wrong before and after, so
+    it cannot show up as a difference. Review reads the diff, and a plausible rationale
+    beside correct code is the least suspicious thing on the page.
+
+    A wrong comment on wrong code gets caught, because the code brings someone to it. A
+    wrong comment on RIGHT code has nothing to bring anyone. The only detector we have
+    is a reader who independently knows better, and that is not a process.
+
+    THE MECHANISM IS REASONING BACKWARDS FROM THE FIX, and it is worth naming because it
+    feels like understanding. You have the new code, you can see why it is better, so
+    you describe the defect it must be correcting. The story is always plausible, it is
+    derived from something true, and it is never checked against the old code, because
+    the old code is the one thing you are no longer looking at.
+
+    Three in one day, all attached to changes that were correct and all found only
+    because a second reader happened to have the context:
+
+        A rewritten pipeline was explained as fixing a lost exit status: "the status came
+        from awk, so a failing tool read as a clean empty list". `set -uo pipefail` was on
+        line 26 of that file and predated the change. Checking out the previous commit
+        and faking a failing tool showed it already exited 2. The rewrite was still worth
+        having for a different reason, and the invented one would have taught the next
+        reader that pipefail does not work there.
+
+        A fixture was reseeded and the note said an empty seed would have left the file's
+        assertions checking nothing. Reverting the seed and running it gave 3 failures by
+        name. The reseeding was right, for a subtler reason nobody had written down.
+
+        A test comment stated the dangerous shape precisely and the fixture next to it
+        tested the easy one. The prose was the design and the code was a weaker draft of
+        it, sitting together in one commit.
+
+    THE COUNTER IS REVERT, RUN, QUOTE. An explanation of a fix has to come from the
+    measured before-state, never from the fix. Check out the parent commit, reproduce
+    the defect you are about to claim, and put the observed output in the comment. If
+    reproducing it is awkward, that is the finding: you may be describing a defect that
+    was not there.
+
+    THIS RULE CAUGHT ITSELF WHILE BEING WRITTEN, which is the best argument for it.
+
+    The paragraph above originally carried a fourth example, handed over secondhand and
+    plausible: that under the empty seed a bad-input test kept passing because the
+    listener looked blind rather than because the input was rejected. A coincidental
+    pass, invisible where a red test is not. It is exactly the sort of thing this rule
+    says to distrust, and it was about to go in unrun.
+
+    Running it says otherwise. Both seeds, base 80:
+
+        seeded   rc=2   reasons=[must be above 1024]
+        empty    rc=2   reasons=[reported NOTHING, must be above 1024]
+
+    The input rejection fires either way and still says why. The empty seed adds a line,
+    it does not stand in for one. The claim was false in the same way as the three above,
+    derived by reasoning backwards from a fix that was independently correct.
+
+    What survives is better than the story, and it is the useful half. `[ $? -eq 2 ]` on
+    its own CAN be satisfied by any path that exits 2. That assertion is safe here only
+    because the line after it greps for the reason. So the rule is: ASSERT THE REASON,
+    NOT ONLY THE CODE. A verdict has a why, and an assertion that checks the verdict
+    without the why is one refactor away from passing for something else entirely.
+
+    Comments are not decoration here. Most of this file is comments that outlived the
+    argument that produced them, which is the point of writing them down, and it is also
+    why a false one is expensive. It gets cited.
+
+
 Money paths (send, ledger, reservation, PoW verify) never skip review, no
 matter how urgent the window. Docs and pure test additions may fast-track
 at the CTO's discretion.
