@@ -138,3 +138,25 @@ check "and it routes to the alert template this repo ships" \
 # expressible.
 check "and the alert template does not route to itself, which would loop" \
   "! awk '/^\\[/{sec=\$0} sec==\"[Unit]\" && /^OnFailure=/{f=1} END{exit !f}' \"$REPO/deploy/z3/faucet-alert@.service\""
+
+# A unit that points at documentation which does not exist sends an operator looking for a
+# file that was never written, at the moment they are least able to afford the detour.
+# This is here because I did exactly that: ctaz-node.service shipped with
+# Documentation=file:.../CTAZ.md before CTAZ.md existed, and nothing objected.
+DOC_MISSING=""
+DOC_COUNT=0
+for f in "$REPO"/deploy/z3/*.service; do
+  [ -e "$f" ] || continue
+  while IFS= read -r ref; do
+    [ -n "$ref" ] || continue
+    DOC_COUNT=$((DOC_COUNT + 1))
+    [ -f "$REPO/deploy/z3/$(basename "$ref")" ] \
+      || DOC_MISSING="$DOC_MISSING $(basename "$f")->$(basename "$ref")"
+  done <<EOF
+$(sed -n 's|^Documentation=file:||p' "$f")
+EOF
+done
+# No units referencing docs is a legitimate state, so this does not require a count. It
+# requires that every reference which EXISTS resolves.
+check "every Documentation= file a unit points at actually exists" \
+  "[ -z '$DOC_MISSING' ] || { echo '   dangling:$DOC_MISSING'; false; }"

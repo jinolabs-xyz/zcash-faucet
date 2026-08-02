@@ -52,6 +52,15 @@ zsnap-export.timer
 #                                that installs this repo starts mining.
 #   faucet-alert@.service        A template. `systemctl enable` on a template without an
 #                                instance is an error, not a no-op.
+#   ctaz-node.service            The Crosslink feature-net node. Installed so the box spec
+#                                counts it, deliberately NOT enabled: nothing user-facing
+#                                launches before #328 observes a real drip and the owner
+#                                says go on the day, and enabling it here would have every
+#                                box that installs this repo start syncing a second chain.
+#                                It also has an unresolved disk question — measured growth
+#                                extrapolates to roughly the box's entire free space — so
+#                                arming it by file sync would be the wrong default twice
+#                                over.
 #   *.service behind a *.timer   A service pulled in by its own timer is not independently
 #                                enabled, and asking systemd about it reports disabled on a
 #                                correct box.

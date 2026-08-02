@@ -1,0 +1,124 @@
+# The Crosslink (cTAZ) node, contained so it cannot hurt the TAZ faucet.
+#
+# Part of #327. Every limit here comes from something observed in the spike rather than
+# from a general instinct about hardening, and the comments say which.
+#
+# Install:
+#   useradd --system --home-dir /var/lib/ctaz-node --shell /usr/sbin/nologin ctaz
+#   cp ctaz-zebrad /opt/faucet/ctaz-zebrad && chmod +x /opt/faucet/ctaz-zebrad
+#   cp ctaz-node.service /etc/systemd/system/
+#   # config in /etc/faucet/ctaz-zebrad.toml  (see CTAZ.md for the required keys)
+#   systemctl daemon-reload && systemctl enable --now ctaz-node
+#
+# ── WHAT THIS UNIT DELIBERATELY DOES NOT CLAIM TO FIX ────────────────────────────
+#
+# #327 asks the unit to replace their hardcoded ten-second sleep with explicit startup
+# ordering. IT CANNOT, and pretending otherwise would be the more dangerous outcome.
+# Their zaino runs INSIDE zebrad: start.rs:719 awaits `spawn_indexer(...)` in the same
+# process, and the sleep is zaino waiting for zebra's state to be ready across a function
+# call, not across a service boundary. systemd orders processes; it has nothing to order
+# here. Running zaino as its own service would give us that boundary, but standalone
+# `zainod` does not compile from their monorepo, so embedded is the only option today.
+#
+# What the unit CAN do, and does below, is stop anything DOWNSTREAM from believing this
+# node is usable before it actually is. That is a different guarantee and it is the one
+# available.
+
+[Unit]
+Description=Crosslink feature-net node (cTAZ), contained
+Documentation=file:/opt/zcash-faucet/deploy/z3/CTAZ.md
+After=network-online.target
+Wants=network-online.target
+
+# OnFailure IS WIRED, and #327's "best-effort tier" is NOT yet honoured. Read this before
+# assuming the tiering exists.
+#
+# My first draft omitted OnFailure on purpose, reasoning that a feature-net stall must not
+# page like a TAZ outage. The repo's own rule caught it: repo.sh asserts every service
+# routes its failures somewhere, and to the template this repo actually ships. That rule
+# exists because App found a service with no handler at all, and it is right.
+#
+# Omitting the handler does not buy a quieter tier, it buys SILENCE, and silence is the
+# worse failure of the two: a noisy page is recoverable, a node that failed and told
+# nobody is the thing this whole stack was built to stop.
+#
+# So failures route here like everything else, and the honest consequence is that a cTAZ
+# failure currently pages exactly like a TAZ one. alert.sh has NO severity tiering today
+# (checked: no severity, tier or urgency handling in it), so there is nothing to route a
+# best-effort alert to. Building that tiering is the remaining part of #327's watchdog
+# item and it is not done here. Do not read this line as the tier existing.
+OnFailure=faucet-alert@%n.service
+
+[Service]
+Type=simple
+User=ctaz
+Group=ctaz
+
+# systemd creates and chowns /var/lib/ctaz-node. Their node then makes its own
+# chain-name subdirectory underneath, which is where the state actually lands:
+#   /var/lib/ctaz-node/<chain-name>/state/v27/unknowntestnet
+#   /var/lib/ctaz-node/<chain-name>/zaino/local     <- the indexer db lives in the tree too
+StateDirectory=ctaz-node
+Environment=CTAZ_DATADIR=/var/lib/ctaz-node
+
+# ── REFUSE TO START ON A PORT COLLISION ──────────────────────────────────────────
+# A crosslink node derives four listeners from one config value (P-1, P, P+10000,
+# P+10001). Two of them are ten thousand ports from the number in the config, and the
+# dangerous one is zaino's JSON-RPC at P+10000: with their default base that lands on
+# 18233, which is our zebra P2P port. Checking at start time rather than trusting whoever
+# edited the toml, because the failure mode is stealing a port from the TAZ node.
+ExecStartPre=/opt/faucet/ctaz-port-check.sh ${CTAZ_BASE_PORT}
+
+# ── REFUSE TO START IF THE DATADIR IS ALREADY OVER ITS CEILING ───────────────────
+# systemd has no size limit for StateDirectory, so this is NOT a quota and must not be
+# read as one: a real ceiling needs a filesystem quota or a dedicated volume, and that is
+# recorded as an open item on #327. What this does give is a floor under the worst case,
+# refusing to start a node whose state has already grown past what the box can spare.
+#
+# The number matters more here than usual. Measured growth on this chain was 20.8 KB/block
+# at height 428, 29.8 at 1.6k and 66.1 at 22k, so per-block cost RISES with height and
+# every early extrapolation understates. The box has 28 GB free. Until the sync reaches
+# the tip and the real figure is known, this ceiling is a guess with a safety margin, and
+# it is deliberately low enough to trip before the TAZ chain is squeezed.
+ExecStartPre=/opt/faucet/ctaz-datadir-guard.sh ${CTAZ_DATADIR} ${CTAZ_MAX_STATE_GB}
+
+EnvironmentFile=-/etc/faucet/ctaz.env
+Environment=CTAZ_BASE_PORT=19233
+Environment=CTAZ_MAX_STATE_GB=14
+
+ExecStart=/opt/faucet/ctaz-zebrad -c /etc/faucet/ctaz-zebrad.toml start
+
+# ── THE TAZ SIDE ALWAYS WINS ─────────────────────────────────────────────────────
+# The miner already runs at CPUQuota=150%, Nice=15, IOSchedulingClass=idle, and #327 asks
+# for this to sit below even that. `idle` is already the lowest IO class, so the only room
+# left is the priority within it and a deeper nice. Being honest about the ceiling: on a
+# contended box the difference between idle/4 and idle/7 is small, and if cTAZ ever
+# genuinely starves the miner the answer is fewer cores here, not a lower priority number.
+CPUQuota=100%
+Nice=19
+IOSchedulingClass=idle
+IOSchedulingPriority=7
+
+# Their node holds the chain state plus zaino's cache in one process. This cap exists so a
+# leak trips a cgroup kill on THIS service rather than the OOM killer choosing zebra or
+# zallet, which is the outcome that takes the faucet down.
+MemoryMax=2G
+MemorySwapMax=0
+
+# Best-effort and long-running: come back, but slowly enough that a misconfigured node
+# cannot spin. Deliberately on-failure and not always, so a clean administrative stop
+# stays stopped.
+Restart=on-failure
+RestartSec=60
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
