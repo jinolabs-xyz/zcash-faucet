@@ -211,6 +211,23 @@ export const config = {
     heartbeatPath: process.env.FAUCET_MINER_HEARTBEAT_PATH ?? "",
   },
 
+  /**
+   * cTAZ, behind a flag and off by default (#322, #325).
+   *
+   * Their `requestfaucetdonation` pays a FIXED amount from the node's own mining wallet
+   * and ignores whatever we ask for. `expectedZat` is our copy of that constant, and it
+   * exists to be CHECKED rather than displayed on trust: the sender compares it against
+   * what the node actually answered, so a change to their FAUCET_VALUE surfaces as drift
+   * instead of leaving a stale promise on the page.
+   */
+  crosslink: {
+    enabled: process.env.FAUCET_CTAZ_ENABLED === "true",
+    rpcUrl: process.env.CROSSLINK_RPC_URL ?? "",
+    // 0.5 cTAZ, their FAUCET_VALUE. Configurable only so the check can be exercised and
+    // so an upstream change is a config edit rather than a code change.
+    expectedZat: BigInt(Math.round(num("FAUCET_CTAZ_EXPECTED_ZAT", 50_000_000))),
+  },
+
   // Public address shown on /donate so people can refill the faucet. Unified,
   // so donations arrive shielded.
   donationAddress: process.env.FAUCET_DONATION_ADDRESS ?? "",

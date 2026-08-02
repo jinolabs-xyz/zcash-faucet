@@ -251,7 +251,19 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
   // The send is broadcast. If recording it fails, that is an operator problem
   // (the cooldown may not commit), never a reason to tell the user it failed.
   try {
-    await finalizeClaim(reservation.claimId, "sent", result.txid);
+    // Crosslink returns no transaction id, so its claims record NULL through the one
+    // exemption that exists for it and count in the cTAZ bucket. DERIVED FROM THE SENDER
+    // rather than passed in, so no caller can claim the exemption for a network that does
+    // have txids: the guard in finalizeClaim only protects what does not opt out.
+    const noTxid = getSender().name === "crosslink";
+    await finalizeClaim(
+      reservation.claimId,
+      "sent",
+      result.txid ?? null,
+      noTxid ? "network-has-no-txid" : undefined,
+      Date.now(),
+      noTxid ? "ctaz" : "taz",
+    );
   } catch (err) {
     api.logError(err, "finalize(sent) failed AFTER broadcast, cooldown may be unrecorded");
   }
@@ -259,7 +271,10 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     ok: true,
     txid: result.txid,
     explorerUrl: result.explorerUrl,
-    amountTaz: config.dripTaz,
+      amountTaz: config.dripTaz,
+      // What the network ACTUALLY paid, when it says. Crosslink's amount is fixed and
+      // ignores what we asked for, so its reply is the only authoritative figure.
+      ...(result.amountZat != null ? { paidZat: result.amountZat.toString() } : {}),
     sender: config.sender,
     to: { kind: info.kind, shielded: info.shielded },
   });

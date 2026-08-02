@@ -50,6 +50,11 @@ test("balance reads what the wallet reports", async () => {
 test("a send returns a txid and debits the wallet", async () => {
   const before = await getSender().balance();
   const result = await getSender().send(req(10_000_000n));
+  // txid is optional on SendResult now, because Crosslink genuinely returns none. So
+  // the TAZ path has to ASSERT it is present rather than lean on the type to promise it:
+  // the widening moved that guarantee from the compiler to here, and this is where it
+  // belongs, since "zallet returned a txid" is a claim about zallet, not about a type.
+  assert.ok(result.txid, "the TAZ sender must return a txid");
   assert.match(result.txid, /^[0-9a-f]{64}$/);
   assert.ok(result.explorerUrl?.includes(result.txid));
   assert.equal(await getSender().balance(), before - 10_000_000n);
