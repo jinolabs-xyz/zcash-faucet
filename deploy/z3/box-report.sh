@@ -180,7 +180,18 @@ fi
 # to prevent.
 [ "$expected" -gt 0 ] || cannot_say
 
+# WHAT ARCHITECTURE IS THIS BOX. Added because planning the cTAZ containerized build
+# turned up that the answer was written down nowhere: no `uname -m`, no `--platform`, no
+# arch in any image pin, and this report did not say either. The answer had to be fetched
+# by hand from the box, and a cross-build that guesses wrong ships a binary that will not
+# execute. Measured-once-by-a-human is not the same as reported-every-run.
+#
+# Emitted as `unknown` rather than omitted when uname is unavailable, so a consumer can
+# tell "we asked and could not tell" apart from "an older report that never asked".
+platform="$(uname -m 2>/dev/null || echo unknown)"
+[ -n "$platform" ] || platform="unknown"
+
 # minerBinary is emitted as its own field as well as counted, so the panel can say WHY
 # the count is short instead of only that it is. A number that drops with no reason
 # attached sends someone to the box to find out.
-write "{\"expected\":${expected},\"present\":${present},\"notEnabled\":${not_enabled},\"minerBinary\":\"${miner_state}\",\"at\":$(( $(date +%s) * 1000 )),\"readable\":true}"
+write "{\"expected\":${expected},\"present\":${present},\"notEnabled\":${not_enabled},\"minerBinary\":\"${miner_state}\",\"platform\":\"${platform}\",\"at\":$(( $(date +%s) * 1000 )),\"readable\":true}"

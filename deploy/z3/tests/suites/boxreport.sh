@@ -240,3 +240,29 @@ rm -rf "$T/repo/.git"
 bash "$BOX_REPORT" > /dev/null 2>&1
 check "a newer binary reads CURRENT even without git" \
   "[ \"\$(jqf '$BOX_REPORT_OUT' minerBinary)\" = 'current' ]"
+
+echo "== box-report: the report states the box's ARCHITECTURE"
+# Added while planning the cTAZ containerized build, which turned up that the box's
+# architecture was written down nowhere in this repo: no uname -m, no --platform, no arch
+# in any image pin, and this report did not say. Someone had to go and fetch it by hand,
+# and a cross-build that guesses wrong ships a binary that will not execute.
+box_env
+bash "$BOX_REPORT" > /dev/null 2>&1
+check "the report carries a platform field" \
+  "[ -n \"\$(jqf '$BOX_REPORT_OUT' platform)\" ]"
+check "and it matches what uname actually says on this host" \
+  "[ \"\$(jqf '$BOX_REPORT_OUT' platform)\" = \"\$(uname -m)\" ]"
+
+echo "== box-report: an unavailable uname reads UNKNOWN rather than vanishing"
+# `unknown` and a missing field are different facts: one says we asked and could not tell,
+# the other says an older report never asked. A consumer has to be able to tell them apart,
+# which is the same reason bring-to-spec fails closed on an absent minerBinary.
+box_env
+mkdir -p "$T/nouname"
+printf '#!/usr/bin/env bash\nexit 127\n' > "$T/nouname/uname"
+chmod +x "$T/nouname/uname"
+PATH="$T/nouname:$PATH" bash "$BOX_REPORT" > /dev/null 2>&1
+check "a failing uname still emits the field" \
+  "[ -n \"\$(jqf '$BOX_REPORT_OUT' platform)\" ]"
+check "and its value is unknown" \
+  "[ \"\$(jqf '$BOX_REPORT_OUT' platform)\" = 'unknown' ]"
