@@ -88,3 +88,15 @@ test("the exemption is a reason, so it cannot be passed by accident", async () =
   await finalizeClaim(id, "sent", null, "network-has-no-txid");
   assert.equal(txidOf(id), null);
 });
+
+test("an empty txid on a path that allows none is folded to NULL, deliberately", () => {
+  // `||` rather than `??` at the write, so "" becomes NULL. An empty transaction id is
+  // never valid, so recording it as the absence it is beats preserving a value someone
+  // later has to decide about. The CTO spotted the coercion; this pins it as a choice.
+  // The `sent` guard refuses "" outright, so this exercises the failed path.
+  return (async () => {
+    const id = await reserve("addr-empty");
+    await finalizeClaim(id, "failed", "");
+    assert.equal(txidOf(id), null, "an empty txid should not survive as an empty string");
+  })();
+});

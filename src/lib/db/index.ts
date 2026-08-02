@@ -175,6 +175,12 @@ export async function finalizeClaim(
         "the \"network-has-no-txid\" reason.",
     );
   }
+  // `||` rather than `??`, and the difference is deliberate: it folds an EMPTY STRING to
+  // NULL as well as undefined. An empty txid is never a valid transaction id, so if a
+  // sender ever hands one over it should be recorded as the absence it is rather than
+  // preserved as a value someone later has to decide about. The `sent` guard above
+  // already refuses "" outright, so this only governs the paths that legitimately have
+  // no id: a failed send, and a network that returns none.
   await driver().run(FINALIZE_SQL, [status, txid || null, claimId]);
 }
 
