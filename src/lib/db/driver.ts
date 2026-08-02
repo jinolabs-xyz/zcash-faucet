@@ -6,7 +6,7 @@
 import { createRequire } from "node:module";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { MIGRATIONS, SCHEMA, TABLE_COLUMNS_SQL } from "./sql.ts";
+import { INDEXES, MIGRATIONS, SCHEMA, TABLE_COLUMNS_SQL } from "./sql.ts";
 
 /**
  * A bound SQL parameter. NULL is a value SQLite and Postgres both take, and the type
@@ -44,8 +44,15 @@ export class SqliteDriver implements DbDriver {
     this.db = new Database(join(dir, "faucet.db"));
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("busy_timeout = 5000");
+    // TABLES, then MIGRATIONS, then INDEXES, and that order is forced rather than
+    // stylistic. An index over a migrated column cannot be created before the ALTER
+    // that adds the column, so with indexes still inside SCHEMA the first boot after
+    // #326 would have thrown "no such column: network" on every existing database
+    // while every fresh one came up fine. Same shape as #213: the statement that
+    // defines the contract only reaching the thing that does not exist yet.
     this.db.exec(SCHEMA);
     this.migrate();
+    this.db.exec(INDEXES);
   }
 
   /**

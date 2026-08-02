@@ -14,10 +14,13 @@ import { config } from "@/lib/config";
 import { validateTestnetAddress } from "@/lib/zcash/address";
 import { verifyTurnstile } from "@/lib/turnstile";
 import { verifySolution } from "@/lib/pow";
-import { getSender, safeBalance, SendOutcomeUnknownError, type SendResult } from "@/lib/zcash/send";
+import { getSenderFor, safeBalance, SendOutcomeUnknownError, type SendResult } from "@/lib/zcash/send";
 import { getNodeStatus } from "@/lib/zcash/nodeStatus";
 import { mayBuildTransaction, readChainFreshnessAsking } from "@/lib/zcash/shieldGate";
-import { getSendQueue, QueueFullError, TaskDeadlineError } from "@/lib/zcash/queue";
+import { getSendQueue, getCtazSendQueue, QueueFullError, TaskDeadlineError } from "@/lib/zcash/queue";
+import { DEFAULT_NETWORK, NETWORKS, parseNetwork } from "@/lib/network";
+import { canServeCtaz } from "@/lib/crosslink/recency";
+import { readCtazRecency } from "@/lib/crosslink/read";
 import { reserveClaim, finalizeClaim } from "@/lib/db";
 import { fingerprintIp, fingerprintSubnet } from "@/lib/privacy";
 import { clientIp } from "@/lib/clientIp";
@@ -31,6 +34,17 @@ const FRESHNESS_RETRY_SECONDS = 75;
 
 const BodySchema = z.object({
   address: z.string().min(1).max(512),
+  /**
+   * Which chain to pay on (#326). OPTIONAL, and absent means TAZ: every client that
+   * predates the toggle sends no network at all, and re-pointing those at anything
+   * else would be changing what a request means without the caller knowing.
+   *
+   * Kept as a loose string here on purpose. `z.enum(["taz","ctaz"])` would answer a
+   * bad value with the generic "Invalid request body", which is the same reply a
+   * malformed address gets; parsing it below lets an unrecognised network say what
+   * was actually wrong.
+   */
+  network: z.string().max(16).optional(),
   turnstileToken: z.string().optional(),
   pow: z
     .object({
@@ -70,6 +84,28 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
   }
   const address = body.address.trim();
 
+  // 1.5 Network. Absent is TAZ (a client older than the toggle); present-but-unknown
+  //     is a 400, because a caller who named a network we do not serve must not be
+  //     quietly paid on a different one. parseNetwork returns null for both, which is
+  //     why the two cases are separated HERE rather than by a defaulting parser.
+  const network = body.network === undefined ? DEFAULT_NETWORK : parseNetwork(body.network);
+  if (network === null) {
+    return apiError(400, `Unknown network. This faucet serves ${NETWORKS.join(" and ")}.`, api);
+  }
+  if (network === "ctaz" && !config.crosslink.enabled) {
+    // 503 rather than 400: the request is well formed and will work on a deployment
+    // with the flag on, so this is us not offering it rather than them asking wrongly.
+    return apiError(503, "cTAZ is not enabled on this faucet.", api);
+  }
+
+  // Per-network policy. The cooldown is shared (a day is a day on either chain) but the
+  // amount and the daily cap are not: cTAZ pays their fixed FAUCET_VALUE and draws on a
+  // budget of its own. See RESERVE_SQL for which limits split and which stay global.
+  const policy =
+    network === "ctaz"
+      ? { amountZat: config.crosslink.expectedZat, dailyCapZat: config.crosslink.dailyCapZatoshi }
+      : { amountZat: config.dripZatoshi, dailyCapZat: config.dailyCapZatoshi };
+
   // 2. Anti-abuse gate — proof-of-work, Turnstile, or nothing, per config.
   //    PoW is verified against the same salted IP fingerprint the challenge was
   //    issued to, so a solution can't be reused from a different client.
@@ -91,9 +127,16 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
   // 3. Low-balance guard — protect the single hot wallet from being drained
   //    below its reserve floor. `null` means the backend can't report a balance
   //    yet (real sender not wired); we skip the guard and let send() surface it.
-  const balance = await safeBalance();
-  if (balance !== null && balance < config.dripZatoshi + config.minReserveZatoshi) {
-    return apiError(503, "The faucet is empty right now. Please check back after it's refilled.", api);
+  //
+  //    TAZ ONLY, and this is not a shortcut. safeBalance() reads OUR wallet through
+  //    getSender(), and cTAZ is paid out of the Crosslink node's own mining wallet.
+  //    Left unscoped, an empty TAZ wallet would refuse cTAZ claims for a shortage on
+  //    a different chain, and a full one would vouch for a balance nobody read.
+  if (network === "taz") {
+    const balance = await safeBalance();
+    if (balance !== null && balance < config.dripZatoshi + config.minReserveZatoshi) {
+      return apiError(503, "The faucet is empty right now. Please check back after it's refilled.", api);
+    }
   }
 
   // 3.5. Chain freshness. A drip is a transaction: it gets an expiry height of
@@ -125,8 +168,14 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
   //    returning null off-zallet, because that null is indistinguishable from an
   //    unreachable wallet, and those two must not share an answer: one is "does not
   //    apply", the other is "cannot verify, so refuse".
+  //
+  //    AND TAZ ONLY, for the same reason as the balance guard one block up: this
+  //    measures OUR node's tip, and cTAZ transactions are built by their node from
+  //    their own view. The cTAZ equivalent is right below, and it is a different
+  //    question answered by a different source, so it is a separate check rather than
+  //    a widened one.
   const freshness =
-    config.sender === "zallet"
+    network === "taz" && config.sender === "zallet"
       ? await readChainFreshnessAsking((await getNodeStatus())?.nodeHeight ?? null)
       : null;
   if (freshness && !mayBuildTransaction(freshness)) {
@@ -147,6 +196,33 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     );
   }
 
+  // 3.6. cTAZ's readiness, which is a better primitive than anything the TAZ side has.
+  //    Our node cannot tell us it has fallen behind, which is why the check above has
+  //    to compare against an independent source. `get_tfl_recency_status` reports the
+  //    node's own view of the finality layer, so a node that is behind says so in its
+  //    own answer.
+  //
+  //    Fails CLOSED. canServeCtaz is true for "ready" alone, so a node we cannot read
+  //    refuses, and cannot-verify never serves. Before the reservation, like every
+  //    other ours-not-yours refusal: no cooldown consumed, nothing counted.
+  if (network === "ctaz") {
+    const reading = await readCtazRecency();
+    if (!canServeCtaz(reading.state)) {
+      api.logError(
+        `cTAZ drip refused, crosslink node ${reading.state} ` +
+          `(round lag ${reading.roundLag ?? "unknown"}, answer ${reading.ageSeconds ?? "unknown"}s old)`,
+        "cTAZ readiness gate",
+      );
+      return apiError(
+        503,
+        "The Crosslink node is not current enough to hand out cTAZ right now. Nothing was " +
+          "claimed and your cooldown is untouched. Try again shortly.",
+        api,
+        { retryAfterSeconds: FRESHNESS_RETRY_SECONDS },
+      );
+    }
+  }
+
   // 4. Reserve atomically (cooldown + daily cap in one transaction). This is the
   //    concurrency gate: with N simultaneous requests from the same client, only
   //    one reservation succeeds — the rest are blocked before any coins move.
@@ -154,11 +230,12 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     address,
     ipHash,
     subnetHash,
-    amountZat: config.dripZatoshi,
+    amountZat: policy.amountZat,
     now,
     cooldownSeconds: config.cooldownSeconds,
-    dailyCapZat: config.dailyCapZatoshi,
+    dailyCapZat: policy.dailyCapZat,
     subnetDailyMax: config.subnetDailyMax,
+    network,
   });
   if (!reservation.ok) {
     // A subnet refusal is worth SAYING, and the other two are not. A cooldown is
@@ -185,10 +262,16 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
   //    hot wallet at a time. The send and the ledger commit are separate try
   //    blocks on purpose: "nothing left the wallet" may only ever be said when
   //    the send itself failed.
+  //    Resolved BEFORE the send and reused afterwards, so the sender that finalises the
+  //    claim is provably the one that made it. Calling getSenderFor() a second time
+  //    down there would re-resolve through config and could, in principle, answer
+  //    differently from the one that moved the money.
+  const sender = getSenderFor(network);
+  const queue = network === "ctaz" ? getCtazSendQueue() : getSendQueue();
   let result: SendResult;
   try {
-    result = await getSendQueue().run(
-      () => getSender().send({ toAddress: address, addressInfo: info, amountZat: config.dripZatoshi }),
+    result = await queue.run(
+      () => sender.send({ toAddress: address, addressInfo: info, amountZat: policy.amountZat }),
       config.sendTaskDeadlineMs,
     );
   } catch (err) {
@@ -217,9 +300,14 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
       // A deadline has no opid to record, so it gets the "deadline" marker. Same
       // unknown: prefix family, so one query finds every claim an operator needs
       // to reconcile by hand.
+      //
+      // The marker goes in the txid column, so this path never needs the no-txid
+      // exemption even on cTAZ: there IS something to record, it just is not a
+      // transaction id. The network is still passed, because the drip counted here is
+      // as real as any other and belongs in its own bucket.
       const marker = err instanceof SendOutcomeUnknownError ? `unknown:${err.opid}` : "unknown:deadline";
       try {
-        await finalizeClaim(reservation.claimId, "sent", marker);
+        await finalizeClaim(reservation.claimId, "sent", marker, undefined, Date.now(), network);
       } catch (finErr) {
         api.logError(finErr, `finalize(unknown) failed, claim ${reservation.claimId} will release on the lease`);
       }
@@ -235,7 +323,7 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     // Everything else genuinely did not send. Release the reservation so the
     // user can retry immediately.
     try {
-      await finalizeClaim(reservation.claimId, "failed", null);
+      await finalizeClaim(reservation.claimId, "failed", null, undefined, Date.now(), network);
     } catch (finErr) {
       api.logError(finErr, "finalize(failed) after failed send");
     }
@@ -252,30 +340,45 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
   // (the cooldown may not commit), never a reason to tell the user it failed.
   try {
     // Crosslink returns no transaction id, so its claims record NULL through the one
-    // exemption that exists for it and count in the cTAZ bucket. DERIVED FROM THE SENDER
-    // rather than passed in, so no caller can claim the exemption for a network that does
-    // have txids: the guard in finalizeClaim only protects what does not opt out.
-    const noTxid = getSender().name === "crosslink";
+    // exemption that exists for it. DERIVED FROM THE SENDER THAT ACTUALLY PAID rather
+    // than passed in, so no caller can claim the exemption for a network that does have
+    // txids: the guard in finalizeClaim only protects what does not opt out.
+    //
+    // The sender decides the EXEMPTION and the request decides the BUCKET, and they are
+    // read from different places on purpose. Deriving the bucket from the sender too
+    // would mean a cTAZ claim that somehow reached a Zallet sender got counted as TAZ,
+    // hiding the misrouting in a statistic instead of leaving it visible as a cTAZ row
+    // with a txid. If these two ever disagree that is a finding, and it stays legible.
+    const noTxid = sender.name === "crosslink";
     await finalizeClaim(
       reservation.claimId,
       "sent",
       result.txid ?? null,
       noTxid ? "network-has-no-txid" : undefined,
       Date.now(),
-      noTxid ? "ctaz" : "taz",
+      network,
     );
   } catch (err) {
     api.logError(err, "finalize(sent) failed AFTER broadcast, cooldown may be unrecorded");
   }
   return NextResponse.json({
     ok: true,
+    // Absent for cTAZ, and absent rather than empty: the page renders "no transaction
+    // id" because this key is MISSING, never because it recognised the network. The
+    // receipt reads what happened instead of predicting it from a table.
     txid: result.txid,
     explorerUrl: result.explorerUrl,
-      amountTaz: config.dripTaz,
-      // What the network ACTUALLY paid, when it says. Crosslink's amount is fixed and
-      // ignores what we asked for, so its reply is the only authoritative figure.
-      ...(result.amountZat != null ? { paidZat: result.amountZat.toString() } : {}),
-    sender: config.sender,
+    // What we asked for, unchanged, so no existing client shifts meaning.
+    amountTaz: config.dripTaz,
+    // What the network ACTUALLY paid, when it says. Crosslink's amount is fixed and
+    // ignores what we asked for, so its reply is the only authoritative figure.
+    ...(result.amountZat != null ? { paidZat: result.amountZat.toString() } : {}),
+    network,
+    // The sender that PAID, not the configured one. Identical on TAZ ("zallet" and
+    // "real" are both the sender's own name and config's word for it), and only
+    // different on cTAZ, where config.sender would have reported "zallet" for a
+    // transaction Zallet had nothing to do with.
+    sender: sender.name,
     to: { kind: info.kind, shielded: info.shielded },
   });
 });

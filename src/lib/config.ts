@@ -226,6 +226,20 @@ export const config = {
     // 0.5 cTAZ, their FAUCET_VALUE. Configurable only so the check can be exercised and
     // so an upstream change is a config edit rather than a code change.
     expectedZat: BigInt(Math.round(num("FAUCET_CTAZ_EXPECTED_ZAT", 50_000_000))),
+    /**
+     * cTAZ's own daily cap, in cTAZ, separate from FAUCET_DAILY_CAP_TAZ (#326).
+     *
+     * 25 is deliberately small, 50 drips a day at their fixed 0.5. The TAZ cap guards
+     * OUR wallet, and we know how full it is. This one does not: the money comes out
+     * of the Crosslink node's own mining wallet, we have no balance RPC to read it
+     * with (their surface has none), and it is not our wallet to empty. So the number
+     * is a courtesy budget on someone else's coins rather than a drain guard on ours,
+     * and the honest default for a budget you cannot measure is a low one. Raise it
+     * once a real cTAZ day has been observed, not before.
+     */
+    get dailyCapZatoshi() {
+      return tazToZatoshi(num("FAUCET_CTAZ_DAILY_CAP", 25));
+    },
   },
 
   // Public address shown on /donate so people can refill the faucet. Unified,

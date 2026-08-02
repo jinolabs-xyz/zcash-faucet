@@ -114,7 +114,25 @@ class SerialQueue {
   }
 }
 
-const g = globalThis as unknown as { __faucetSendQueue?: SerialQueue };
+const g = globalThis as unknown as { __faucetSendQueue?: SerialQueue; __ctazSendQueue?: SerialQueue };
 export function getSendQueue(): SerialQueue {
   return (g.__faucetSendQueue ??= new SerialQueue(config.sendQueueMaxPending));
+}
+
+/**
+ * cTAZ gets its OWN queue, because this one exists to protect a specific wallet.
+ *
+ * The invariant above is "one transaction touches the single hot wallet at a time",
+ * and cTAZ does not touch it: their node pays out of its own mining wallet, picks its
+ * own notes, and already has a queue of its own that answers "too busy". Sharing ours
+ * would serialise two independent resources, so a ten-second shielded proof on the TAZ
+ * side would hold up a cTAZ drip that needed nothing from us, and a burst of TAZ
+ * claims would fill the backlog and tell cTAZ callers the faucet was busy while the
+ * cTAZ path sat idle. Reporting a queue someone is not in is the part that decided it.
+ *
+ * Still a serial queue rather than no queue: their side dedupes a pending address and
+ * caps at 16, so firing concurrently at it just converts our load into their refusals.
+ */
+export function getCtazSendQueue(): SerialQueue {
+  return (g.__ctazSendQueue ??= new SerialQueue(config.sendQueueMaxPending));
 }

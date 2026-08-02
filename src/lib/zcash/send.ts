@@ -18,6 +18,7 @@
  */
 // .ts extension for node --test resolution, same pattern as pow.ts.
 import { config } from "../config.ts";
+import type { FaucetNetwork } from "../network.ts";
 import type { AddressInfo } from "./address";
 
 export interface SendRequest {
@@ -121,6 +122,7 @@ class CompositeRealSender implements Sender {
 }
 
 let cached: Sender | null = null;
+let cachedCrosslink: Sender | null = null;
 
 export function getSender(): Sender {
   if (cached) return cached;
@@ -132,6 +134,31 @@ export function getSender(): Sender {
   }
   cached = s;
   return s;
+}
+
+/**
+ * The sender for a given network (#326).
+ *
+ * TAZ goes wherever FAUCET_SENDER points, exactly as it always has. cTAZ goes to
+ * Crosslink and nowhere else, because "cTAZ" IS the Crosslink node's faucet primitive:
+ * there is no other thing that pays it, so this is not a routing choice, it is what
+ * the word means.
+ *
+ * THROWS RATHER THAN FALLING BACK when cTAZ is off. A fallback here would send a
+ * request for one chain's coins to the sender for another, which is the single worst
+ * thing a router can do with money, and the flag being off is a deployment fact rather
+ * than a transient one, so there is nothing to retry into.
+ *
+ * Loaded through require for the same reason the transparent backends are: cTAZ is off
+ * by default, and an unconditional import would pull the module into every deploy that
+ * will never call it.
+ */
+export function getSenderFor(network: FaucetNetwork): Sender {
+  if (network !== "ctaz") return getSender();
+  if (!config.crosslink.enabled) {
+    throw new Error("cTAZ is not enabled on this deployment (FAUCET_CTAZ_ENABLED).");
+  }
+  return (cachedCrosslink ??= new (req("./crosslinksend").CrosslinkSender)());
 }
 
 /**

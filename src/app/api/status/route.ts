@@ -11,6 +11,8 @@ import { getNodeStatus } from "@/lib/zcash/nodeStatus";
 import { getReserveReconciler } from "@/lib/reserve/reconciler";
 import { readMinerHeartbeat } from "@/lib/miner/read";
 import { isActive } from "@/lib/miner/heartbeat";
+import { readCtazRecency } from "@/lib/crosslink/read";
+import { canServeCtaz } from "@/lib/crosslink/recency";
 import { withApi } from "@/lib/api";
 
 export const runtime = "nodejs";
@@ -18,6 +20,38 @@ export const dynamic = "force-dynamic";
 
 /** Whole seconds on the wire. Null stays null: an age we do not have is not zero. */
 const round = (n: number | null) => (n == null ? null : Math.round(n));
+
+/**
+ * The cTAZ half of the status (#326).
+ *
+ * A BLOCK OF ITS OWN rather than per-network variants of the keys above, so everything
+ * at the top level keeps meaning TAZ exactly as it did before the toggle existed. A
+ * page built against the old shape is not silently re-pointed at a different chain,
+ * which is the failure mode that makes shared-surface changes expensive.
+ *
+ * `reserve` is the literal string "unknown", not null and not 0. Their RPC surface has
+ * no shielded balance method at all, so this is an ANSWER, not a missing field, and it
+ * has to survive the trip as one. A zero would say the wallet is empty; a null would
+ * let a `?? 0` downstream turn it into one. Same reasoning that put the throw in
+ * CrosslinkSender.balance instead of a return.
+ */
+async function ctazBlock() {
+  if (!config.crosslink.enabled) return { enabled: false as const };
+  const [reading, drips] = await Promise.all([readCtazRecency(), countDrips(Date.now(), "ctaz")]);
+  return {
+    enabled: true as const,
+    // Five states, not a boolean. "cannot-verify" is not "behind" and neither is "off".
+    readiness: reading.state,
+    servable: canServeCtaz(reading.state),
+    height: reading.height,
+    roundLag: reading.roundLag,
+    finalizers: reading.finalizers,
+    ageSeconds: reading.ageSeconds,
+    dripZat: config.crosslink.expectedZat.toString(),
+    drips,
+    reserve: "unknown" as const,
+  };
+}
 
 export const GET = withApi("status", async () => {
   const [backend, balanceZat, node] = await Promise.all([pingBackend(), safeBalance(), getNodeStatus()]);
@@ -78,5 +112,6 @@ export const GET = withApi("status", async () => {
     // Refill loop state. spendableTaz uses this request's balance read (fresher
     // than the reconciler's last tick); refilling is the reconciler's decision.
     reserve: { ...getReserveReconciler().status, spendableTaz: balanceTaz },
+    ctaz: await ctazBlock(),
   });
 });

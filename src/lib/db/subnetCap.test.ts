@@ -53,6 +53,9 @@ function claim(
       addressHash: addr,
       ipHash: ip,
       subnetHash: subnet,
+      // The subnet cap is GLOBAL, so every claim here is on one network deliberately:
+      // splitting them would be testing a rule this cap does not have.
+      network: "taz",
       amountZat: DRIP,
       now: at,
       cooldownSeconds: COOLDOWN,
