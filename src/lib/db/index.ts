@@ -166,12 +166,18 @@ export async function reserveClaim(opts: {
  */
 export type NoTxidReason = "network-has-no-txid";
 
+/** Which faucet a drip belongs to. TAZ is ours; cTAZ arrives with the crosslink
+ * sender (#322). Part of the counter's key from day one, because a mixed count
+ * cannot be split retroactively. */
+export type DripNetwork = "taz" | "ctaz";
+
 export async function finalizeClaim(
   claimId: number,
   status: "sent" | "failed",
   txid: string | null,
   noTxid?: NoTxidReason,
   nowMs: number = Date.now(),
+  network: DripNetwork = "taz",
 ) {
   if (status === "sent" && !txid && !noTxid) {
     throw new Error(
@@ -194,7 +200,7 @@ export async function finalizeClaim(
   // should quote.
   if (status === "sent") {
     driver()
-      .run(DRIP_BUMP_SQL, [utcDay(nowMs)])
+      .run(DRIP_BUMP_SQL, [network, utcDay(nowMs)])
       .catch((e) => console.error(`[drips] count bump failed: ${e instanceof Error ? e.message : e}`));
   }
 }
@@ -224,14 +230,22 @@ let seedOnce: Promise<void> | null = null;
  * otherwise. Returns null when the ledger will not answer: an unknown count is not
  * zero, same rule as the balance.
  */
-export async function countDrips(nowMs: number): Promise<DripCounts | null> {
+export async function countDrips(nowMs: number, network: DripNetwork = "taz"): Promise<DripCounts | null> {
   try {
-    seedOnce ??= seedDripDays(nowMs);
+    // A rejected seed must not be cached: awaiting a poisoned promise forever
+    // returns null past the transient failure, and worse, the one-time fold of
+    // retention's survivors never happens and retention then deletes them. One
+    // transient error at the wrong moment would permanently lose exactly the
+    // history this counter exists to preserve. App found it and the fix is theirs.
+    seedOnce ??= seedDripDays(nowMs).catch((e) => {
+      seedOnce = null;
+      throw e;
+    });
     await seedOnce;
     const cutoff = (days: number) => utcDay(nowMs - (days - 1) * 86_400_000);
     const row = await driver().get<{ allTime: number; last30d: number; last7d: number }>(
       DRIP_TOTALS_SQL,
-      [cutoff(30), cutoff(7)],
+      [cutoff(30), cutoff(7), network],
     );
     if (!row) return null;
     return { allTime: Number(row.allTime), last7d: Number(row.last7d), last30d: Number(row.last30d) };
@@ -261,7 +275,9 @@ async function seedDripDays(nowMs: number): Promise<void> {
       [startSec, startSec + 86_400],
     );
     const sent = r ? Number(r.n) : 0;
-    if (sent > 0) await driver().run(DRIP_SEED_SQL, [day, sent]);
+    // Everything retention has kept was served by the TAZ sender: the crosslink
+    // sender does not exist yet, and by the time it does, this seed has run.
+    if (sent > 0) await driver().run(DRIP_SEED_SQL, ["taz", day, sent]);
   }
 }
 

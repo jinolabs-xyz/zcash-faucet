@@ -28,8 +28,8 @@ const NOW_SEC = Math.floor(NOW_MS / 1000);
 const day = (msBack: number) => new Date(NOW_MS - msBack).toISOString().slice(0, 10);
 
 const raw = new SqliteDriver();
-const bucketOf = async (d: string) =>
-  (await raw.get<{ sent: number }>(`SELECT sent FROM drip_days WHERE day = ?`, [d]))?.sent ?? null;
+const bucketOf = async (d: string, network = "taz") =>
+  (await raw.get<{ sent: number }>(`SELECT sent FROM drip_days WHERE network = ? AND day = ?`, [network, d]))?.sent ?? null;
 
 async function serveOne(addr: string, nowSec: number, nowMs: number) {
   const r = await reserveClaim({
@@ -69,9 +69,9 @@ test("a sent claim bumps today's bucket; a failed one does not", async () => {
 
 test("the three windows cut where they claim to", async () => {
   // Buckets planted directly: inside 7d, inside 30d but not 7d, outside both.
-  await raw.run(`INSERT INTO drip_days (day, sent) VALUES (?, ?)`, [day(6 * 86_400_000), 10]);
-  await raw.run(`INSERT INTO drip_days (day, sent) VALUES (?, ?)`, [day(29 * 86_400_000), 100]);
-  await raw.run(`INSERT INTO drip_days (day, sent) VALUES (?, ?)`, [day(31 * 86_400_000), 1000]);
+  await raw.run(`INSERT INTO drip_days (network, day, sent) VALUES ('taz', ?, ?)`, [day(6 * 86_400_000), 10]);
+  await raw.run(`INSERT INTO drip_days (network, day, sent) VALUES ('taz', ?, ?)`, [day(29 * 86_400_000), 100]);
+  await raw.run(`INSERT INTO drip_days (network, day, sent) VALUES ('taz', ?, ?)`, [day(31 * 86_400_000), 1000]);
 
   const c = await countDrips(NOW_MS);
   assert.ok(c, "counter should answer");
@@ -87,6 +87,31 @@ test("the boundary day itself is inside the window", async () => {
   const c = await countDrips(NOW_MS);
   assert.ok(c);
   assert.ok(c.last7d >= 10, "the 7th day back must be counted, >= not >");
+});
+
+test("networks do not pollute each other's counts", async () => {
+  // A cTAZ drip lands in its own bucket. The TAZ readout must not move: mixed
+  // rows cannot be separated retroactively, which is why network is part of the
+  // key from day one rather than a migration later.
+  const before = await countDrips(NOW_MS, "taz");
+  assert.ok(before);
+  const r = await reserveClaim({
+    address: "addr-ctaz",
+    ipHash: "ip-ctaz",
+    subnetHash: null,
+    amountZat: 100n,
+    now: NOW_SEC,
+    cooldownSeconds: 60,
+    dailyCapZat: 1_000_000n,
+    subnetDailyMax: 100,
+  });
+  assert.equal(r.ok, true);
+  if (r.ok) await finalizeClaim(r.claimId, "sent", null, "network-has-no-txid", NOW_MS, "ctaz");
+  assert.equal(await bucketOf(day(0), "ctaz"), 1, "the cTAZ drip lands in the ctaz bucket");
+  const after = await countDrips(NOW_MS, "taz");
+  assert.equal(after?.allTime, before.allTime, "the TAZ count must not move");
+  const ctaz = await countDrips(NOW_MS, "ctaz");
+  assert.equal(ctaz?.allTime, 1);
 });
 
 test("counts survive the claims purge, which is the reason this table exists", async () => {

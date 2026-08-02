@@ -48,7 +48,7 @@ export const GET = withApi("status", async () => {
     // How many drips this faucet has served: ever, last 7 UTC days, last 30. From the
     // privacy-safe per-day counter, not the claims table, whose rows retention deletes.
     // Null when the ledger will not answer; an unknown count is not zero.
-    drips: await countDrips(Date.now()),
+    drips: await countDrips(Date.now(), "taz"),
     backend,
     // Does the box have what the repo says it must? COUNTS ONLY, never file names:
     // this endpoint is public, and naming what is missing from a production box is
