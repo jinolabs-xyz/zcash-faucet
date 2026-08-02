@@ -46,6 +46,20 @@ BACKUP_UPLOAD_CMD="${BACKUP_UPLOAD_CMD:-}"    # optional: run <cmd> <archive> af
 log() { echo "$(date -u +%FT%TZ) faucet-backup: $*"; }
 die() { log "ERROR: $*"; exit 1; }
 
+# KEEP=0 makes the rotation below `tail -n +1`, which deletes EVERY archive including the
+# one this run just created: a backup job whose successful outcome is no backup. Checked
+# HERE rather than beside the assignment because die() has to exist first; my first
+# version put it with the config and produced `die: command not found`, exit 127, which
+# is a worse failure than the one it was guarding against.
+#
+# Refused rather than clamped: someone who wrote 0 meant something, and guessing which is
+# worse than asking.
+case "$BACKUP_KEEP" in
+  ''|*[!0-9]*) die "BACKUP_KEEP must be a whole number, got '$BACKUP_KEEP'" ;;
+esac
+[ "$BACKUP_KEEP" -ge 1 ] \
+  || die "BACKUP_KEEP must be at least 1, got $BACKUP_KEEP: rotation would delete the archive this run just made"
+
 command -v gpg >/dev/null     || die "gpg is not installed"
 command -v python3 >/dev/null || die "python3 is not installed"
 command -v flock >/dev/null   || die "flock is not installed (util-linux)"
@@ -132,6 +146,97 @@ mv "$archive.part" "$archive"
 chmod 600 "$archive"
 sha256sum "$archive" | awk '{print $1}' > "${archive%.tar.gz.gpg}.sha256"
 
+# POST-CONDITION: PROVE THE ARCHIVE OPENS.
+#
+# Until now this script wrote a file and reported done. Whether that file could ever be
+# decrypted was untested on every run, and the whole point of a backup is the day you
+# find out. The CTO's own summary of our position was "backups are encrypted and run on a
+# timer, AND we have never restored one".
+#
+# So the run now decrypts what it just wrote and checks the payload against the MANIFEST
+# it built. Streamed, never extracted to disk: this box has been at 100% disk once
+# already, and a verification step that needs another copy of the archive is a
+# verification step that gets removed the first time it fills the volume.
+#
+# This does NOT make a restore tested end to end; restore-backup.sh and its refusals are
+# still their own path. It makes "the bytes we wrote are the bytes we meant, and they
+# decrypt with the passphrase we used" true on every run instead of assumed.
+# VERIFY_FAIL is set to a short token at whichever check fails, so the note beside a kept
+# archive can name it. App's point, and it is the right one: the note is meant to be the
+# thing that survives, and "see the log" is the one fact it cannot carry, because logs
+# rotate and get read on a different day than the file is found.
+VERIFY_FAIL=""
+verify_archive() {
+  local a="$1" manifest name want got
+  VERIFY_FAIL=""
+  manifest="$(gpg --batch --quiet --decrypt --passphrase-fd 3 "$a" 3<<<"$BACKUP_PASSPHRASE" \
+                | tar -xzO faucet-backup/MANIFEST 2>/dev/null)" \
+    || { VERIFY_FAIL="did-not-decrypt"; log "ERROR: the archive did not decrypt with the passphrase this run used"; return 1; }
+  [ -n "$manifest" ] || { VERIFY_FAIL="no-manifest"; log "ERROR: no MANIFEST inside the archive"; return 1; }
+
+  # sha256sum lines only: the manifest also carries created/host/network headers.
+  #
+  # Fed by here-doc, NOT by a pipe. `... | while read` runs the loop in a SUBSHELL, so a
+  # `return 1` inside it would exit the subshell and leave this function reporting
+  # success: a verification that cannot fail, which is the exact thing this whole change
+  # exists to remove. I wrote it as a pipe first and caught it before running it, having
+  # already been bitten by the same subshell rule swallowing probe_state's globals.
+  local lines
+  lines="$(printf '%s\n' "$manifest" | grep -E '^[0-9a-f]{64}  \./' || true)"
+  [ -n "$lines" ] || { VERIFY_FAIL="manifest-has-no-hashes"; log "ERROR: the MANIFEST carries no file hashes, so there is nothing to verify against"; return 1; }
+  local checked=0
+  while read -r want name; do
+    [ -n "$want" ] || continue
+    name="${name#./}"
+    got="$(gpg --batch --quiet --decrypt --passphrase-fd 3 "$a" 3<<<"$BACKUP_PASSPHRASE" \
+             | tar -xzO "faucet-backup/$name" 2>/dev/null | sha256sum | cut -d' ' -f1)"
+    if [ "$got" != "$want" ]; then
+      log "ERROR: $name inside the archive does not match the manifest"
+      log "  manifest: $want"
+      log "  archive:  ${got:-<could not read>}"
+      VERIFY_FAIL="content-mismatch:$name"
+      return 1
+    fi
+    checked=$((checked + 1))
+    log "verified $name"
+  done <<EOF
+$lines
+EOF
+  # A loop that ran zero times must not read as success. Same shape as the empty-source
+  # refusal in install-ops: nothing compared is not everything matching.
+  [ "$checked" -gt 0 ] || { VERIFY_FAIL="verified-nothing"; log "ERROR: verified nothing, so the archive is unproven"; return 1; }
+  return 0
+}
+
+verified_note=""
+if verify_archive "$archive"; then
+  # The word "verified" in the done line is set HERE, by the check succeeding, rather than
+  # written into the message. Sabotaging the call turned two assertions red and left the
+  # done line still claiming verified, because I had hardcoded it: a report derived from
+  # the text I typed instead of from the thing it describes, which is the same fault as
+  # the watchdog announcing 812 recoveries it never observed.
+  verified_note=", verified"
+else
+  # Kept as evidence, renamed so rotation and any restore cannot mistake it for a good
+  # one, and AT MOST ONE.
+  #
+  # App found the loop in my first version: rotation globs *.tar.gz.gpg, so a .unverified
+  # is never swept, and a disk-full event would permanently consume disk with the evidence
+  # OF the disk-full event. Smaller stakes here than for a multi-GB snapshot, but the same
+  # unbounded growth, and the two scripts must behave the same way rather than one being
+  # the surprise.
+  rm -f "$BACKUP_DIR/archives/"*.tar.gz.gpg.unverified "$BACKUP_DIR/archives/"*.unverified.txt 2>/dev/null || true
+  mv "$archive" "$archive.unverified" 2>/dev/null || true
+  rm -f "${archive%.tar.gz.gpg}.sha256"
+  {
+    echo "failed: $(date -u +%FT%TZ)"
+    echo "network: $BACKUP_NETWORK"
+    echo "bytes: $(wc -c < "$archive.unverified" 2>/dev/null || echo unknown)"
+    echo "failed check: ${VERIFY_FAIL:-unknown}"
+  } > "$archive.unverified.txt" 2>/dev/null || true
+  die "the archive this run produced did not verify, kept as $(basename "$archive").unverified"
+fi
+
 # Rotate: newest BACKUP_KEEP stay, older archives and their checksums go.
 find "$BACKUP_DIR/archives" -maxdepth 1 -name "faucet-backup-$BACKUP_NETWORK-*.tar.gz.gpg" -printf '%T@ %p\n' \
   | sort -rn | cut -d' ' -f2- | tail -n +"$((BACKUP_KEEP + 1))" \
@@ -140,7 +245,7 @@ find "$BACKUP_DIR/archives" -maxdepth 1 -name "faucet-backup-$BACKUP_NETWORK-*.t
       rm -f "$old" "${old%.tar.gz.gpg}.sha256"
     done
 
-log "done: $(basename "$archive"), $(du -h "$archive" | cut -f1)"
+log "done: $(basename "$archive"), $(du -h "$archive" | cut -f1)${verified_note}"
 
 if [ -n "$BACKUP_UPLOAD_CMD" ]; then
   log "running upload hook"
