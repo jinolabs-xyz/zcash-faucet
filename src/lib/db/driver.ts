@@ -8,6 +8,14 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { MIGRATIONS, SCHEMA, TABLE_COLUMNS_SQL } from "./sql.ts";
 
+/**
+ * A bound SQL parameter. NULL is a value SQLite and Postgres both take, and the type
+ * excluding it is what pushed `finalizeClaim` into writing "" for a missing txid: the
+ * absence could not be expressed, so it was converted at the write and became
+ * unrecoverable downstream.
+ */
+export type SqlParam = string | number | null;
+
 export interface Row {
   [k: string]: unknown;
 }
@@ -16,8 +24,8 @@ export interface RunResult {
   lastInsertRowid: number;
 }
 export interface DbDriver {
-  run(sql: string, params: (string | number)[]): Promise<RunResult>;
-  get<T = Row>(sql: string, params: (string | number)[]): Promise<T | undefined>;
+  run(sql: string, params: SqlParam[]): Promise<RunResult>;
+  get<T = Row>(sql: string, params: SqlParam[]): Promise<T | undefined>;
 }
 
 /** Local file SQLite — dev and single-box deploys. */
@@ -60,12 +68,12 @@ export class SqliteDriver implements DbDriver {
     }
   }
 
-  async run(sql: string, params: (string | number)[]): Promise<RunResult> {
+  async run(sql: string, params: SqlParam[]): Promise<RunResult> {
     const r = this.db.prepare(sql).run(...params);
     return { changes: r.changes, lastInsertRowid: Number(r.lastInsertRowid) };
   }
 
-  async get<T = Row>(sql: string, params: (string | number)[]): Promise<T | undefined> {
+  async get<T = Row>(sql: string, params: SqlParam[]): Promise<T | undefined> {
     return this.db.prepare(sql).get(...params) as T | undefined;
   }
 }
@@ -83,7 +91,7 @@ export class D1Driver implements DbDriver {
     this.secret = secret;
   }
 
-  private async query(sql: string, params: (string | number)[]) {
+  private async query(sql: string, params: SqlParam[]) {
     const res = await fetch(this.url, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${this.secret}` },
@@ -97,12 +105,12 @@ export class D1Driver implements DbDriver {
     return (await res.json()) as { results?: Row[]; meta?: { changes?: number; last_row_id?: number } };
   }
 
-  async run(sql: string, params: (string | number)[]): Promise<RunResult> {
+  async run(sql: string, params: SqlParam[]): Promise<RunResult> {
     const { meta } = await this.query(sql, params);
     return { changes: meta?.changes ?? 0, lastInsertRowid: meta?.last_row_id ?? 0 };
   }
 
-  async get<T = Row>(sql: string, params: (string | number)[]): Promise<T | undefined> {
+  async get<T = Row>(sql: string, params: SqlParam[]): Promise<T | undefined> {
     const { results } = await this.query(sql, params);
     return (results?.[0] as T) ?? undefined;
   }

@@ -143,9 +143,45 @@ export async function reserveClaim(opts: {
   return whyBlocked(addressHash, opts.ipHash, opts.subnetHash, opts.subnetDailyMax, opts.now, opts.cooldownSeconds);
 }
 
-/** Finalise a reserved claim once the send resolves. */
-export async function finalizeClaim(claimId: number, status: "sent" | "failed", txid: string | null) {
-  await driver().run(FINALIZE_SQL, [status, txid ?? "", claimId]);
+/**
+ * Finalise a reserved claim once the send resolves.
+ *
+ * NULL RATHER THAN "". The old body wrote `txid ?? ""`, so a claim that finished with no
+ * transaction id was recorded as one carrying an empty string, which is indistinguishable
+ * from having stored an empty id on purpose. Same shape as the balance `?? 0` that hid an
+ * unreadable wallet behind a number: the absence was converted at the write, so nothing
+ * downstream could recover it.
+ *
+ * A SENT CLAIM MUST CARRY A TXID unless the network has none to give. Crosslink's
+ * `requestfaucetdonation` answers with an amount and no transaction id at all, so its
+ * claims genuinely have nothing to record. Every other sender does, and the day a Zallet
+ * bug drops one that must land as a failure rather than be filed as an expected absence.
+ *
+ * The exemption is a spelled-out reason rather than a boolean, so it cannot be passed by
+ * accident and reads at the call site as the claim it is making.
+ */
+export type NoTxidReason = "network-has-no-txid";
+
+export async function finalizeClaim(
+  claimId: number,
+  status: "sent" | "failed",
+  txid: string | null,
+  noTxid?: NoTxidReason,
+) {
+  if (status === "sent" && !txid && !noTxid) {
+    throw new Error(
+      `finalizeClaim: a sent claim must carry a txid (claim ${claimId}). ` +
+        "If this network's send path genuinely returns none, say so explicitly with " +
+        "the \"network-has-no-txid\" reason.",
+    );
+  }
+  // `||` rather than `??`, and the difference is deliberate: it folds an EMPTY STRING to
+  // NULL as well as undefined. An empty txid is never a valid transaction id, so if a
+  // sender ever hands one over it should be recorded as the absence it is rather than
+  // preserved as a value someone later has to decide about. The `sent` guard above
+  // already refuses "" outright, so this only governs the paths that legitimately have
+  // no id: a failed send, and a network that returns none.
+  await driver().run(FINALIZE_SQL, [status, txid || null, claimId]);
 }
 
 /**
