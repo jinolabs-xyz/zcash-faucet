@@ -31,7 +31,12 @@ ACC
   export CTAZ_ACCESS_SH="$T/deploy/z3/audit-access.sh"
   # A listener double, so "what is live" is something a test can state rather than inherit
   # from whatever happens to be running on the machine executing the suite.
-  printf '' > "$T/listeners"
+  #
+  # SEEDED WITH sshd AND https, not left empty. An empty listing now means "the tool cannot
+  # see" rather than "quiet host", so an empty default would make every test here run in
+  # cannot-verify and quietly stop testing what it claims to. The faithful double is a box
+  # you could actually have reached. Neither port collides with any base used below.
+  printf '0.0.0.0:22\n0.0.0.0:443\n' > "$T/listeners"
   cat > "$T/fake-listen" <<'FL'
 #!/usr/bin/env bash
 cat "$FAKE_LISTEN_FILE"
@@ -130,9 +135,12 @@ check "losing ACCESS_PUBLIC_PORTS exits 2, despite a healthy loopback block" "[ 
 check "and names that source" "grep -q 'ACCESS_PUBLIC_PORTS' '$T/partial2.log'"
 
 echo "== ctaz-port-check: a listener tool that FAILED is not the same as one that is ABSENT"
-# SDE-App's (#332). The old code piped lsof into awk, so the exit status came from AWK: an
-# lsof that failed on permissions produced empty output and success, and every port then
-# read as free. A tool that cannot answer must not look like a quiet machine.
+# SDE-App's (#332), with the rationale CORRECTED. I first wrote that the old code took
+# awk's status through the pipe so a failing lsof read as free. That was wrong: `set -uo
+# pipefail` predates all of this and App proved the old code already exited 2 here. The
+# split between absent and failed is still worth keeping, because a missing package and a
+# tool denied by permissions are different things to tell an operator, but this case was
+# never the hole. The hole is the empty-but-successful one below.
 pc_env
 printf '#!/usr/bin/env bash\nexit 9\n' > "$T/failing-listen"; chmod +x "$T/failing-listen"
 CTAZ_LISTEN_CMD="$T/failing-listen" bash "$PC" 19233 > "$T/failed.log" 2>&1
@@ -146,15 +154,22 @@ check "and does not report an UNQUALIFIED all-clear" \
 check "and the free-claim it does print is qualified as repo-declared only" \
   "grep -q 'free of REPO-DECLARED ports, but live listeners were not checked' '$T/failed.log'"
 
-echo "== ctaz-port-check: a tool that succeeds with NO listeners is still usable"
-# The other direction, so the fix above cannot be over-applied: an empty list from a
-# working tool is a real answer about a quiet host, not a failure.
+echo "== ctaz-port-check: EMPTY BUT SUCCESSFUL is cannot-verify, not a quiet machine"
+# I argued the other way and the CTO overruled me on App's reasoning, which is better than
+# mine: on any box this runs against you arrived over sshd, so zero listening sockets is
+# not a plausible silent host, it is a tool that cannot see. lsof warns to stderr and
+# 2>/dev/null eats it, so blind-but-exit-zero is the realistic permissions shape.
+#
+# The asymmetry decides it. Cannot-verify on a genuinely silent host costs one double
+# check. Free while the tool is blind recommends taking a port we already hold.
 pc_env
 : > "$T/listeners"
 bash "$PC" 19233 > "$T/quiet.log" 2>&1
-check "an empty-but-successful listing still exits 0" "[ $? -eq 0 ]"
-check "and does not warn about the live half" \
-  "! grep -q 'live listeners were not checked' '$T/quiet.log'"
+check "an empty-but-successful listing exits exactly 2" "[ $? -eq 2 ]"
+check "and says why, naming sshd as what should have been visible" \
+  "grep -q 'sshd alone should have been visible' '$T/quiet.log'"
+check "and does not give an unqualified all-clear" \
+  "! grep -q '^.*all four slots are free$' '$T/quiet.log'"
 
 echo "== ctaz-port-check: no lsof and no ss is cannot-verify, not a pass"
 pc_env

@@ -101,12 +101,18 @@ slot_role() {
 # having it free are different claims, and only one of them stops a bind from failing.
 # Returns 0 with the port list, 1 when NO tool exists, 2 when a tool exists and FAILED.
 #
-# Those last two were one case, and SDE-App was right that they should not be. The old
-# version piped straight into awk, so the exit status came from AWK: an lsof that failed
-# on permissions produced empty output and a success status, and every port then read as
-# free. A tool that cannot answer must not be indistinguishable from a quiet machine.
+# CORRECTED RATIONALE. An earlier version of this comment claimed the old code took awk's
+# status through the pipe, so a failing lsof read as a clean empty list. THAT WAS WRONG and
+# App disproved it by checking out the previous commit and faking a failing lsof: it
+# already exited 2. `set -uo pipefail` is on line 26 and predates all of this, so the
+# pipeline never returned awk's status. Leaving that claim in would have taught the next
+# reader that pipefail does not work in this file.
 #
-# The raw output is captured first so the status belongs to the TOOL, then filtered.
+# The gap that IS real is the fourth direction: lsof exiting ZERO while printing nothing.
+# That is the realistic permissions shape, because lsof warns on stderr and `2>/dev/null`
+# eats the warning, so the caller sees success and an empty list. Splitting absent from
+# failed is still worth having on its own, and capturing the raw output first means the
+# status belongs to the TOOL rather than to the filter.
 listening_ports() {
   local raw
   if [ -n "$LISTEN_CMD" ]; then
@@ -159,13 +165,30 @@ if [ "$live_rc" -eq 1 ]; then
   log "NOTE: neither lsof nor ss is installed, so live listeners were not checked."
   log "  The repo-declaration half still runs."
 elif [ "$live_rc" -ne 0 ]; then
-  # Different fact, and the more alarming one: the tool is here and could not answer.
-  # Absent is a missing package. Failed is usually permissions, and it is the case that
-  # would otherwise report an empty list as a quiet machine.
+  # Different fact from absent: the tool is here and could not answer. Absent is a missing
+  # package, failed is usually permissions.
   live_known=0
   log "NOTE: the listener command exists but FAILED, so live listeners were not checked."
   log "  That is not the same as a host with nothing listening, and it is usually"
   log "  permissions. The repo-declaration half still runs."
+elif ! printf '%s\n' "$live" | grep -q '[0-9]'; then
+  # EMPTY BUT SUCCESSFUL IS CANNOT-VERIFY, NOT A QUIET MACHINE.
+  #
+  # This is the real gap, and the CTO ruled on it after I argued the other way. My version
+  # treated an empty listing from a working tool as a legitimate answer about a silent
+  # host. App's argument is better: on any box this will ever run against you arrived over
+  # sshd, so ZERO listening sockets is not a plausible quiet machine, it is a tool that
+  # cannot see. lsof warns to stderr and `2>/dev/null` eats it, so blind-but-exit-zero is
+  # the realistic permissions shape rather than an exotic one.
+  #
+  # The cost decides it. Saying cannot-verify on a genuinely silent host costs an operator
+  # one double-check. Saying free while the tool is blind recommends taking a port we
+  # already hold, which is the failure this whole script exists to prevent.
+  live_known=0
+  log "NOTE: the listener command succeeded but reported NOTHING listening, which is not"
+  log "  believable on a host you reached over ssh. sshd alone should have been visible,"
+  log "  so this is being read as a tool that cannot see rather than a quiet machine."
+  log "  The repo-declaration half still runs."
 fi
 
 check_base() { # $1 base port -> 0 free, 1 collision; prints findings
