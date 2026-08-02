@@ -698,25 +698,38 @@ Every correction came from the same few habits, so the habits are rules.
     THIS RULE CAUGHT ITSELF WHILE BEING WRITTEN, which is the best argument for it.
 
     The paragraph above originally carried a fourth example, handed over secondhand and
-    plausible: that under the empty seed a bad-input test kept passing because the
-    listener looked blind rather than because the input was rejected. A coincidental
-    pass, invisible where a red test is not. It is exactly the sort of thing this rule
-    says to distrust, and it was about to go in unrun.
+    plausible: that under one fixture a bad-input test kept passing because the listener
+    looked blind rather than because the input was rejected. A coincidental pass,
+    invisible where a red test is not. It is exactly the sort of thing this rule says to
+    distrust, and it was about to go in unrun.
 
-    Running it says otherwise. Both seeds, base 80:
+    Running it says otherwise. All four cells, `ctaz-port-check.sh` at `431ed45`:
 
-        seeded   rc=2   reasons=[must be above 1024]
-        empty    rc=2   reasons=[reported NOTHING, must be above 1024]
+        seeded  not-a-port   rc=2   usage printed
+        seeded  80           rc=2   ERROR: base port must be above 1024
+        empty   not-a-port   rc=2   NOTE reported NOTHING, then usage printed
+        empty   80           rc=2   NOTE reported NOTHING, then ERROR: must be above 1024
 
-    The input rejection fires either way and still says why. The empty seed adds a line,
-    it does not stand in for one. The claim was false in the same way as the three above,
-    derived by reasoning backwards from a fix that was independently correct.
+    The input rejection fires in every cell and still says why. The empty fixture adds a
+    line, it never stands in for one, because the blind-listener branch only logs and
+    continues. The claim was false in the same way as the three above, derived by
+    reasoning backwards from a fix that was independently correct.
 
-    What survives is better than the story, and it is the useful half. `[ $? -eq 2 ]` on
-    its own CAN be satisfied by any path that exits 2. That assertion is safe here only
-    because the line after it greps for the reason. So the rule is: ASSERT THE REASON,
-    NOT ONLY THE CODE. A verdict has a why, and an assertion that checks the verdict
-    without the why is one refactor away from passing for something else entirely.
+    THE INSTINCT WAS RIGHT AND THE MECHANISM WAS WRONG, which is worth separating. The
+    non-numeric case really is the weak assertion in that block, just not for the stated
+    reason. Of the four bad-input checks there, three pair an exit code with a grep for
+    the reason. One does not:
+
+        check "a non-numeric base exits 2" "[ $? -eq 2 ]"
+
+    It passes for the right reason today, measured above. It is simply the only one that
+    could not tell you if that changed. So the surviving rule is: ASSERT THE REASON, NOT
+    ONLY THE CODE. A verdict has a why, and an assertion that checks the verdict without
+    the why is one refactor away from passing for something else entirely.
+
+    That line is left as it is on purpose. The programme it belongs to was stopped, and
+    editing shipped code to illustrate a documentation rule would be the tail wagging the
+    dog. It stays here as the worked example instead.
 
     Comments are not decoration here. Most of this file is comments that outlived the
     argument that produced them, which is the point of writing them down, and it is also
