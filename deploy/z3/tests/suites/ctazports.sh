@@ -31,7 +31,28 @@ ACC
   export CTAZ_ACCESS_SH="$T/deploy/z3/audit-access.sh"
   # A listener double, so "what is live" is something a test can state rather than inherit
   # from whatever happens to be running on the machine executing the suite.
-  printf '' > "$T/listeners"
+  #
+  # SEEDED WITH sshd AND https, not left empty, because an empty listing now means "the
+  # tool cannot see" rather than "quiet host".
+  #
+  # I first wrote that an empty seed would leave every assertion here green and checking
+  # nothing. NOT TRUE, and App ran it rather than arguing: reverting the seed gives
+  # 52 passed 3 FAILED, naming the cause. I reproduced that number before rewriting this.
+  #
+  # The real hazard is narrower and worse, because it is silent. An assertion that checks
+  # only the EXIT CODE can pass for a completely different reason than the one it names.
+  # Measured, with the same declarations and only the seed changed:
+  #
+  #   seed=empty    arg=not-a-port  rc=2  because "reported NOTHING listening"
+  #   seed=sshd     arg=not-a-port  rc=2  because "usage:"
+  #
+  # So `a non-numeric base exits 2` passes either way, and under an empty seed it passes
+  # because the listener tool looked blind, not because bad input was rejected. It never
+  # goes red, so nothing tells you the test stopped testing its subject.
+  #
+  # The faithful double is a box you could actually have reached. Neither port collides
+  # with any base used below.
+  printf '0.0.0.0:22\n0.0.0.0:443\n' > "$T/listeners"
   cat > "$T/fake-listen" <<'FL'
 #!/usr/bin/env bash
 cat "$FAKE_LISTEN_FILE"
@@ -128,6 +149,43 @@ printf '#!/usr/bin/env bash\n' > "$T/deploy/z3/audit-access.sh"
 bash "$PC" 19233 > "$T/partial2.log" 2>&1
 check "losing ACCESS_PUBLIC_PORTS exits 2, despite a healthy loopback block" "[ $? -eq 2 ]"
 check "and names that source" "grep -q 'ACCESS_PUBLIC_PORTS' '$T/partial2.log'"
+
+echo "== ctaz-port-check: a listener tool that FAILED is not the same as one that is ABSENT"
+# SDE-App's (#332), with the rationale CORRECTED. I first wrote that the old code took
+# awk's status through the pipe so a failing lsof read as free. That was wrong: `set -uo
+# pipefail` predates all of this and App proved the old code already exited 2 here. The
+# split between absent and failed is still worth keeping, because a missing package and a
+# tool denied by permissions are different things to tell an operator, but this case was
+# never the hole. The hole is the empty-but-successful one below.
+pc_env
+printf '#!/usr/bin/env bash\nexit 9\n' > "$T/failing-listen"; chmod +x "$T/failing-listen"
+CTAZ_LISTEN_CMD="$T/failing-listen" bash "$PC" 19233 > "$T/failed.log" 2>&1
+check "a FAILING listener tool exits 2" "[ $? -eq 2 ]"
+check "and says it failed rather than that it is missing" \
+  "grep -q 'exists but FAILED' '$T/failed.log'"
+check "and does not report an UNQUALIFIED all-clear" \
+  "! grep -q '^.*all four slots are free$' '$T/failed.log'"
+# The qualified line is the correct output here and is worth pinning, so a future edit
+# cannot quietly drop the caveat and leave the bare claim behind.
+check "and the free-claim it does print is qualified as repo-declared only" \
+  "grep -q 'free of REPO-DECLARED ports, but live listeners were not checked' '$T/failed.log'"
+
+echo "== ctaz-port-check: EMPTY BUT SUCCESSFUL is cannot-verify, not a quiet machine"
+# I argued the other way and the CTO overruled me on App's reasoning, which is better than
+# mine: on any box this runs against you arrived over sshd, so zero listening sockets is
+# not a plausible silent host, it is a tool that cannot see. lsof warns to stderr and
+# 2>/dev/null eats it, so blind-but-exit-zero is the realistic permissions shape.
+#
+# The asymmetry decides it. Cannot-verify on a genuinely silent host costs one double
+# check. Free while the tool is blind recommends taking a port we already hold.
+pc_env
+: > "$T/listeners"
+bash "$PC" 19233 > "$T/quiet.log" 2>&1
+check "an empty-but-successful listing exits exactly 2" "[ $? -eq 2 ]"
+check "and says why, naming sshd as what should have been visible" \
+  "grep -q 'sshd alone should have been visible' '$T/quiet.log'"
+check "and does not give an unqualified all-clear" \
+  "! grep -q '^.*all four slots are free$' '$T/quiet.log'"
 
 echo "== ctaz-port-check: no lsof and no ss is cannot-verify, not a pass"
 pc_env
