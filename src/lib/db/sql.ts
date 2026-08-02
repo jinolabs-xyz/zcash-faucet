@@ -34,6 +34,25 @@ CREATE TABLE IF NOT EXISTS used_challenges (
   exp  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_used_exp ON used_challenges(exp);
+
+-- Drips served, by network and UTC day. The claims table cannot answer "how
+-- many, ever": data minimization deletes its rows after ~25 hours, and that is
+-- a feature we will not weaken for a statistic. So the statistic lives here, as
+-- a count per day and NOTHING else: no address hash, no ip hash, no amount, no
+-- timestamps finer than the day. Nothing in this table is about anyone.
+--
+-- The network is part of the key from day one, before anything ships, because
+-- mixed rows cannot be separated retroactively: the day the cTAZ sender lands,
+-- a single counter would silently change meaning from "TAZ drips" to "TAZ plus
+-- cTAZ", and the information needed to split it would already be destroyed at
+-- the write. Third instance of that pattern this week (balance ?? 0,
+-- txid ?? ""), each cheap to prevent and impossible to undo.
+CREATE TABLE IF NOT EXISTS drip_days (
+  network TEXT    NOT NULL,
+  day     TEXT    NOT NULL,
+  sent    INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (network, day)
+);
 `;
 
 /**
@@ -246,6 +265,30 @@ ORDER BY created_at DESC LIMIT 1
 `;
 
 export const FINALIZE_SQL = `UPDATE claims SET status = ?, txid = ? WHERE id = ?`;
+
+/** One more drip served today. The day arrives as a param: SQL date functions differ
+ * between backends, an ISO string compares correctly everywhere, and the caller's
+ * clock is the one the rest of the ledger already runs on. */
+export const DRIP_BUMP_SQL = `
+INSERT INTO drip_days (network, day, sent) VALUES (?, ?, 1)
+ON CONFLICT(network, day) DO UPDATE SET sent = sent + 1`;
+
+/** All three windows in one read. ISO days compare lexicographically, so >= on
+ * strings is a correct date comparison and works on both backends. */
+export const DRIP_TOTALS_SQL = `
+SELECT COALESCE(SUM(sent), 0)                              AS allTime,
+       COALESCE(SUM(CASE WHEN day >= ? THEN sent END), 0)  AS last30d,
+       COALESCE(SUM(CASE WHEN day >= ? THEN sent END), 0)  AS last7d
+  FROM drip_days
+ WHERE network = ?`;
+
+export const DRIP_ANY_SQL = `SELECT COUNT(*) AS n FROM drip_days`;
+
+/** MAX rather than +: the seed writes absolute per-day counts, so replaying it
+ * (two processes, a restart mid-seed) cannot double-count. */
+export const DRIP_SEED_SQL = `
+INSERT INTO drip_days (network, day, sent) VALUES (?, ?, ?)
+ON CONFLICT(network, day) DO UPDATE SET sent = MAX(sent, excluded.sent)`;
 
 /**
  * Data minimization: once a row is older than the retention window it can no
