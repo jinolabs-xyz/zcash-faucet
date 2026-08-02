@@ -99,13 +99,25 @@ slot_role() {
 # ── what is actually listening ───────────────────────────────────────────────────
 # Separate from the declaration on purpose. The repo saying a port is free and the box
 # having it free are different claims, and only one of them stops a bind from failing.
+# Returns 0 with the port list, 1 when NO tool exists, 2 when a tool exists and FAILED.
+#
+# Those last two were one case, and SDE-App was right that they should not be. The old
+# version piped straight into awk, so the exit status came from AWK: an lsof that failed
+# on permissions produced empty output and a success status, and every port then read as
+# free. A tool that cannot answer must not be indistinguishable from a quiet machine.
+#
+# The raw output is captured first so the status belongs to the TOOL, then filtered.
 listening_ports() {
+  local raw
   if [ -n "$LISTEN_CMD" ]; then
-    $LISTEN_CMD 2>/dev/null
+    raw="$($LISTEN_CMD 2>/dev/null)" || return 2
+    printf '%s\n' "$raw"
   elif command -v lsof >/dev/null 2>&1; then
-    lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR>1 {print $9}'
+    raw="$(lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null)" || return 2
+    printf '%s\n' "$raw" | awk 'NR>1 {print $9}'
   elif command -v ss >/dev/null 2>&1; then
-    ss -ltnH 2>/dev/null | awk '{print $4}'
+    raw="$(ss -ltnH 2>/dev/null)" || return 2
+    printf '%s\n' "$raw" | awk '{print $4}'
   else
     return 1
   fi
@@ -142,10 +154,18 @@ declared_count="$(printf '%s\n' "$declared" | grep -c '[0-9]' || true)"
 live="$(listening_ports)"
 live_rc=$?
 live_known=1
-if [ "$live_rc" -ne 0 ]; then
+if [ "$live_rc" -eq 1 ]; then
   live_known=0
-  log "NOTE: no lsof or ss on this host, so nothing could be checked against what is"
-  log "  actually listening. The repo-declaration half still runs."
+  log "NOTE: neither lsof nor ss is installed, so live listeners were not checked."
+  log "  The repo-declaration half still runs."
+elif [ "$live_rc" -ne 0 ]; then
+  # Different fact, and the more alarming one: the tool is here and could not answer.
+  # Absent is a missing package. Failed is usually permissions, and it is the case that
+  # would otherwise report an empty list as a quiet machine.
+  live_known=0
+  log "NOTE: the listener command exists but FAILED, so live listeners were not checked."
+  log "  That is not the same as a host with nothing listening, and it is usually"
+  log "  permissions. The repo-declaration half still runs."
 fi
 
 check_base() { # $1 base port -> 0 free, 1 collision; prints findings

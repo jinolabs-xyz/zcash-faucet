@@ -129,6 +129,33 @@ bash "$PC" 19233 > "$T/partial2.log" 2>&1
 check "losing ACCESS_PUBLIC_PORTS exits 2, despite a healthy loopback block" "[ $? -eq 2 ]"
 check "and names that source" "grep -q 'ACCESS_PUBLIC_PORTS' '$T/partial2.log'"
 
+echo "== ctaz-port-check: a listener tool that FAILED is not the same as one that is ABSENT"
+# SDE-App's (#332). The old code piped lsof into awk, so the exit status came from AWK: an
+# lsof that failed on permissions produced empty output and success, and every port then
+# read as free. A tool that cannot answer must not look like a quiet machine.
+pc_env
+printf '#!/usr/bin/env bash\nexit 9\n' > "$T/failing-listen"; chmod +x "$T/failing-listen"
+CTAZ_LISTEN_CMD="$T/failing-listen" bash "$PC" 19233 > "$T/failed.log" 2>&1
+check "a FAILING listener tool exits 2" "[ $? -eq 2 ]"
+check "and says it failed rather than that it is missing" \
+  "grep -q 'exists but FAILED' '$T/failed.log'"
+check "and does not report an UNQUALIFIED all-clear" \
+  "! grep -q '^.*all four slots are free$' '$T/failed.log'"
+# The qualified line is the correct output here and is worth pinning, so a future edit
+# cannot quietly drop the caveat and leave the bare claim behind.
+check "and the free-claim it does print is qualified as repo-declared only" \
+  "grep -q 'free of REPO-DECLARED ports, but live listeners were not checked' '$T/failed.log'"
+
+echo "== ctaz-port-check: a tool that succeeds with NO listeners is still usable"
+# The other direction, so the fix above cannot be over-applied: an empty list from a
+# working tool is a real answer about a quiet host, not a failure.
+pc_env
+: > "$T/listeners"
+bash "$PC" 19233 > "$T/quiet.log" 2>&1
+check "an empty-but-successful listing still exits 0" "[ $? -eq 0 ]"
+check "and does not warn about the live half" \
+  "! grep -q 'live listeners were not checked' '$T/quiet.log'"
+
 echo "== ctaz-port-check: no lsof and no ss is cannot-verify, not a pass"
 pc_env
 CTAZ_LISTEN_CMD="$T/no-such-tool" bash "$PC" 19233 > "$T/nolsof.log" 2>&1
