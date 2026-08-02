@@ -28,7 +28,6 @@ SOURCE_REPO="${CTAZ_SOURCE_REPO:-https://github.com/ShieldedLabs/crosslink_monol
 # Pinned in the repo so the revision that ships goes through review like anything else.
 SOURCE_REV="${CTAZ_SOURCE_REV:-2c346b29c06ec19cd5ad4e58752d531888342157}"
 OUT_DIR="${CTAZ_OUT_DIR:-$HERE/ctaz-build/out}"
-IMAGE_TAG="${CTAZ_IMAGE_TAG:-ctaz-zebrad-build:local}"
 DOCKER="${CTAZ_DOCKER:-docker}"
 
 log() { echo "$(date -u +%FT%TZ) ctaz-build: $*"; }
@@ -49,29 +48,29 @@ log "platform  $PLATFORM"
 log "source    $SOURCE_REPO @ $SOURCE_REV"
 log "note      an emulated cross build takes considerably longer than a native one"
 
+# EXPORT THE ARTIFACT DIRECTLY RATHER THAN VIA A CONTAINER.
+#
+# The first version built the image and then ran `docker create` against it to copy the
+# binary out. That cannot work: the artifact stage is FROM scratch, which has no command,
+# and `docker create` refuses an image it cannot give an entrypoint. The build itself
+# succeeded and the extraction was what failed, which is a good argument for the script
+# treating those as separate outcomes rather than one "it worked".
+#
+# `--output type=local` writes the stage's filesystem straight to the host, so nothing has
+# to be instantiated. That also matters on principle: an amd64 binary cannot execute on an
+# arm64 host, and an artifact should never need to RUN in order to be collected.
 if ! "$DOCKER" build \
       --platform "$PLATFORM" \
       --build-arg "SOURCE_REPO=$SOURCE_REPO" \
       --build-arg "SOURCE_REV=$SOURCE_REV" \
       --target artifact \
-      -t "$IMAGE_TAG" \
+      --output "type=local,dest=$OUT_DIR" \
       "$HERE/ctaz-build"; then
-  log "ERROR: the build failed. Nothing was extracted."
+  log "ERROR: the build or the export failed. Check above for which."
   exit 1
 fi
 
-# `docker create` against a scratch image gives a container to copy from without running
-# anything, which is what we want: an amd64 binary is not executable on an arm64 host, so
-# the artifact must never need to run in order to be extracted.
-cid="$("$DOCKER" create --platform "$PLATFORM" "$IMAGE_TAG" 2>/dev/null)"
-[ -n "$cid" ] || die_unverifiable "could not create a container to extract from"
-# shellcheck disable=SC2064
-trap "$DOCKER rm -f '$cid' >/dev/null 2>&1" EXIT
-
-if ! "$DOCKER" cp "$cid:/zebrad" "$OUT_DIR/zebrad" >/dev/null 2>&1; then
-  log "ERROR: the image exists but /zebrad could not be copied out of it"
-  exit 1
-fi
+[ -f "$OUT_DIR/zebrad" ] || { log "ERROR: the build reported success but no zebrad was exported"; exit 1; }
 [ -s "$OUT_DIR/zebrad" ] || { log "ERROR: extracted an EMPTY zebrad"; exit 1; }
 
 # ── the assertion this script exists for ─────────────────────────────────────────
@@ -100,9 +99,7 @@ esac
 # The compiler is not pinned (their rust-toolchain.toml says `stable`), so record what
 # actually built this. Cannot reproduce it, can at least identify it.
 rustc_used="unknown"
-if "$DOCKER" cp "$cid:/rustc-version.txt" "$OUT_DIR/rustc-version.txt" >/dev/null 2>&1; then
-  rustc_used="$(tr -d '\r\n' < "$OUT_DIR/rustc-version.txt")"
-fi
+[ -f "$OUT_DIR/rustc-version.txt" ] && rustc_used="$(tr -d '\r\n' < "$OUT_DIR/rustc-version.txt")"
 
 sum="$(sha256sum "$OUT_DIR/zebrad" 2>/dev/null | awk '{print $1}')"
 [ -n "$sum" ] || sum="$(shasum -a 256 "$OUT_DIR/zebrad" 2>/dev/null | awk '{print $1}')"

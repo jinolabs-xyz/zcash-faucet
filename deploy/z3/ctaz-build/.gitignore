@@ -1,0 +1,4 @@
+# Build output. A 107 MB binary does not belong in git: it is regenerable from the pinned
+# rev by ctaz-build.sh, and its sha256 is printed on every run so what shipped is still
+# identifiable without storing it.
+out/

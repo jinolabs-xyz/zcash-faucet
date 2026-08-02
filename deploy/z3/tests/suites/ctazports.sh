@@ -302,20 +302,30 @@ build_env() {
   export CTAZ_OUT_DIR="$T/out"
   export CTAZ_DOCKER="$T/bin/docker"
   export STUB_ARCH="${STUB_ARCH:-x86-64}"
-  export STUB_BUILD_RC=0 STUB_EMPTY=0 STUB_NOCOPY=0
+  export STUB_BUILD_RC=0 STUB_EMPTY=0 STUB_NOARTIFACT=0
   # A docker double that behaves like docker: build succeeds, create returns an id, cp
   # writes a file. Faithful rather than convenient, so the script's real path is exercised.
+  # Speaks the interface the script actually uses: ONE `docker build` that exports the
+  # stage to --output dest. The first version of this double answered create/cp as well,
+  # which is how the suite stayed green against a script whose extraction could not work
+  # at all: `docker create` cannot instantiate a FROM scratch image. The double has to be
+  # able to fail the way docker fails.
   cat > "$T/bin/docker" <<'DK'
 #!/usr/bin/env bash
 case "$1" in
-  build)  exit "${STUB_BUILD_RC:-0}" ;;
-  create) echo "stubcid0001"; exit 0 ;;
-  cp)     [ "${STUB_NOCOPY:-0}" = "1" ] && exit 1
-          dst="${3:-}"
-          if [ "${STUB_EMPTY:-0}" = "1" ]; then : > "$dst"; else printf 'ELF-ish\n' > "$dst"; fi
-          exit 0 ;;
-  rm)     exit 0 ;;
-  *)      exit 0 ;;
+  build)
+    [ "${STUB_BUILD_RC:-0}" != "0" ] && exit "${STUB_BUILD_RC}"
+    dest=""
+    for a in "$@"; do case "$a" in type=local,dest=*) dest="${a#type=local,dest=}" ;; esac; done
+    [ -n "$dest" ] || { echo "stub: no --output dest given" >&2; exit 1; }
+    mkdir -p "$dest"
+    # STUB_NOARTIFACT: the build reports success and exports nothing, which is the shape
+    # that actually bit here.
+    [ "${STUB_NOARTIFACT:-0}" = "1" ] && exit 0
+    if [ "${STUB_EMPTY:-0}" = "1" ]; then : > "$dest/zebrad"; else printf 'ELF-ish\n' > "$dest/zebrad"; fi
+    printf 'rustc 1.97.1 (stub)\n' > "$dest/rustc-version.txt"
+    exit 0 ;;
+  *) exit 0 ;;
 esac
 DK
   chmod +x "$T/bin/docker"
@@ -361,7 +371,11 @@ echo "== ctaz-build: a failed build extracts nothing"
 build_env
 STUB_BUILD_RC=1 bash "$BUILD" > "$T/failed.log" 2>&1
 check "a failed build exits 1" "[ $? -eq 1 ]"
-check "and says nothing was extracted" "grep -q 'Nothing was extracted' '$T/failed.log'"
+# The message points at WHICH of the two steps failed, because they are now one docker
+# invocation and the distinction still matters: a compile failure is their code, an export
+# failure is ours. That distinction is exactly what the first version got wrong.
+check "and says the build or the export failed" \
+  "grep -q 'the build or the export failed' '$T/failed.log'"
 check "and leaves no binary behind" "[ ! -f '$T/out/zebrad' ]"
 
 echo "== ctaz-build: an EMPTY extracted binary is caught"
@@ -372,10 +386,15 @@ STUB_EMPTY=1 bash "$BUILD" > "$T/empty.log" 2>&1
 check "an empty binary FAILS" "[ $? -eq 1 ]"
 check "and says so" "grep -q 'EMPTY zebrad' '$T/empty.log'"
 
-echo "== ctaz-build: a binary that cannot be copied out is caught"
+echo "== ctaz-build: a build that reports success and exports NOTHING is caught"
+# This is the shape that actually bit: the build genuinely succeeded, the image was
+# written, and the extraction produced no file. Success from the builder is not the same
+# as an artifact on disk.
 build_env
-STUB_NOCOPY=1 bash "$BUILD" > "$T/nocopy.log" 2>&1
-check "a failed copy exits 1" "[ $? -eq 1 ]"
+STUB_NOARTIFACT=1 bash "$BUILD" > "$T/noartifact.log" 2>&1
+check "a successful build with no artifact exits 1" "[ $? -eq 1 ]"
+check "and says the build reported success but nothing was exported" \
+  "grep -q 'reported success but no zebrad was exported' '$T/noartifact.log'"
 
 echo "== ctaz-build: no \`file\` means CANNOT-VERIFY, never a silent pass"
 # Without file we cannot answer the one question this script exists to answer.
