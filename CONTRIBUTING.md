@@ -573,6 +573,56 @@ Every correction came from the same few habits, so the habits are rules.
     the code. A sabotage result is a claim about a PAIR, and neither half is safe to
     assume.
 
+34. THE SETUP IS THE PART NOBODY CHECKS, AND IT FAILS IN BOTH DIRECTIONS. Rules 29, 31
+    and 33 are each about one way a result can be untrue. This is what they have in
+    common, and it is worth stating on its own because the instances keep landing in the
+    work that builds the checks rather than in the code being checked.
+
+    Six of them in one day, all mine, three caught in review and three by me:
+
+        A `grep` run from the wrong working directory matched zero files, and the empty
+        result read as "no conflicts found".
+
+        A guard compared a COMBINED count from two sources against a threshold. One
+        source alone cleared it, so the other could go to zero and the guard could never
+        fire. Losing an entire block of port declarations still reported every port free.
+
+        A test whose comment stated the right property used a fixture that only tripped
+        the threshold, so it verified the threshold and not the property. In the same
+        change as the comment claiming otherwise.
+
+        A script exited 1 for a usage error while its own header reserved 1 for a real
+        collision, so a caller honouring the documented contract would have retried
+        forever.
+
+        A sabotage patch failed to apply and the suite came back green.
+
+        A unit shipped pointing at documentation that did not exist, and nothing objected.
+
+    None of these were wrong ANSWERS. Every one was a wrong QUESTION that produced a
+    well-formed answer, which is why reading the output could not catch them. Three
+    needed another engineer, which is the argument for review and not against the list.
+
+    So: make the setup assert itself, and prefer the assertion that cannot be satisfied
+    by accident.
+
+        A read that can return nothing proves it returned something, PER SOURCE. Any
+        total is guessable-past. "Each list I depend on came back non-empty" is not.
+
+        A fixture is the DANGEROUS shape, not merely a failing one. If the scenario you
+        fear is "one source healthy, one silently empty", the fixture has a healthy
+        source in it.
+
+        A script's own contract is part of its setup. Exit codes a caller is told to
+        branch on are load-bearing, and a usage error that collides with a real verdict
+        is a bug even when every test passes.
+
+        If a reference can dangle, something checks that it resolves.
+
+    The habit generalises past tests. Ask what the setup would have to be for this
+    output to be meaningless, then check that specific thing, once, cheaply.
+
+
     AND RUN THE HARNESS AGAINST THE UNMODIFIED TREE FIRST. Everything above treats the
     harness as the instrument and the code as the subject. The harness is a fixture too,
     and it broke three times in two days, each time producing a number that read as an
