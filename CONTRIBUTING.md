@@ -552,6 +552,27 @@ Every correction came from the same few habits, so the habits are rules.
     hours apart. When a test cannot see its subject, suspect the fixture before the
     assertion: the honest double and the working test are usually the same change.
 
+    AND PIN THE SCRIPT UNDER TEST, not only the code you sabotaged. A worktree or a
+    container copy gets both at once, which is the cheap way to be sure. Three of us share
+    the main checkout, so HEAD moves under a long experiment, and the run then measures a
+    pairing that never existed.
+
+    Three times in one week, in two shapes, each producing a number that looked like an
+    answer:
+
+        HEAD moved mid-review, so a sabotaged build was measured by MAIN's copy of the
+        harness. Green, and it meant nothing: the code under test and the test were from
+        different commits.
+
+        A sabotage patch silently failed to apply, twice, because an anchor string did not
+        match. The suite ran clean and the clean run reads exactly like the assertion
+        holding. Both times the only thing that caught it was asserting the patch landed
+        before trusting the result.
+
+    So: assert the patch applied, and assert you are running the harness that belongs to
+    the code. A sabotage result is a claim about a PAIR, and neither half is safe to
+    assume.
+
 
 Money paths (send, ledger, reservation, PoW verify) never skip review, no
 matter how urgent the window. Docs and pure test additions may fast-track
