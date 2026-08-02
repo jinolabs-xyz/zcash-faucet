@@ -32,10 +32,26 @@ ACC
   # A listener double, so "what is live" is something a test can state rather than inherit
   # from whatever happens to be running on the machine executing the suite.
   #
-  # SEEDED WITH sshd AND https, not left empty. An empty listing now means "the tool cannot
-  # see" rather than "quiet host", so an empty default would make every test here run in
-  # cannot-verify and quietly stop testing what it claims to. The faithful double is a box
-  # you could actually have reached. Neither port collides with any base used below.
+  # SEEDED WITH sshd AND https, not left empty, because an empty listing now means "the
+  # tool cannot see" rather than "quiet host".
+  #
+  # I first wrote that an empty seed would leave every assertion here green and checking
+  # nothing. NOT TRUE, and App ran it rather than arguing: reverting the seed gives
+  # 52 passed 3 FAILED, naming the cause. I reproduced that number before rewriting this.
+  #
+  # The real hazard is narrower and worse, because it is silent. An assertion that checks
+  # only the EXIT CODE can pass for a completely different reason than the one it names.
+  # Measured, with the same declarations and only the seed changed:
+  #
+  #   seed=empty    arg=not-a-port  rc=2  because "reported NOTHING listening"
+  #   seed=sshd     arg=not-a-port  rc=2  because "usage:"
+  #
+  # So `a non-numeric base exits 2` passes either way, and under an empty seed it passes
+  # because the listener tool looked blind, not because bad input was rejected. It never
+  # goes red, so nothing tells you the test stopped testing its subject.
+  #
+  # The faithful double is a box you could actually have reached. Neither port collides
+  # with any base used below.
   printf '0.0.0.0:22\n0.0.0.0:443\n' > "$T/listeners"
   cat > "$T/fake-listen" <<'FL'
 #!/usr/bin/env bash
