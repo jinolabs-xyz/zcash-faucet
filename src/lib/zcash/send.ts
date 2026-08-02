@@ -26,9 +26,26 @@ export interface SendRequest {
   amountZat: bigint;
 }
 
+/**
+ * WHEN THE DATA IS MISSING, THE TYPE WIDENS. THE DATA IS NEVER MANUFACTURED.
+ *
+ * `txid` is optional because Crosslink's faucet primitive answers with an amount and no
+ * transaction id at all, so a cTAZ send genuinely has none to report. Every other sender
+ * returns one, and `finalizeClaim` refuses a sent claim without one unless the caller
+ * names the network as having none, so this widening does not weaken the TAZ path.
+ *
+ * The alternative was a placeholder, and that is the same mistake as `balance ?? 0` and
+ * the ledger's old `txid ?? ""`: both converted an absence into a value at the boundary
+ * and left nothing downstream able to recover it.
+ *
+ * `amountZat` is here because their reply is the only authoritative statement of what was
+ * paid. Their amount is fixed and ignores what we asked for, so the receipt renders what
+ * the network answered rather than what we requested.
+ */
 export interface SendResult {
-  txid: string;
+  txid?: string;
   explorerUrl?: string;
+  amountZat?: bigint;
 }
 
 /**
