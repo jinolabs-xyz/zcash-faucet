@@ -31,7 +31,10 @@ ACCESS_SH="${CTAZ_ACCESS_SH:-$REPO_DIR/deploy/z3/audit-access.sh}"
 LISTEN_CMD="${CTAZ_LISTEN_CMD:-}"
 
 log() { echo "$(date -u +%FT%TZ) ctaz-port-check: $*"; }
-die() { log "ERROR: $*"; exit 1; }
+# Usage and range errors exit 2, NOT 1. Exit 1 is reserved above for "a slot collides",
+# and a caller honouring that contract would read an out-of-range argument as a real
+# collision and retry another port forever. Found in review (SDE-App, #332).
+die() { log "ERROR: $*"; exit 2; }
 
 usage() {
   cat <<USAGE
@@ -46,11 +49,24 @@ USAGE
 # ── what the repo says it already uses ───────────────────────────────────────────
 # Parsed out of the repo rather than restated here, because a copy would drift and a
 # drifted copy is worse than none: it would report "free" for a port we had taken since.
-declared_ports() {
+# EACH SOURCE IS ASSERTED SEPARATELY, not summed.
+#
+# The first version checked a COMBINED count against a threshold, and SDE-App broke it
+# against real sockets: audit-access.sh alone yields five ports, so losing the ENTIRE
+# loopback block still cleared a threshold of four and the guard could never fire. Their
+# demo -- block intact, COLLISION 18137 rc=1; block renamed, ALL FOUR SLOTS FREE rc=0 --
+# had the script recommending 18137, which is our own zaino gRPC. That is exactly the
+# report-free-for-something-we-hold failure this guard exists to prevent, reached through a
+# PARTIAL read rather than an empty one.
+#
+# Any total is guessable-past. "Each list I depend on returned something" is not.
+declared_from_deploy() {
   # every port in the loopback-bindings block, both networks, since the block declares both
   sed -n '/^Z3_LOOPBACK_BINDINGS=(/,/^)/p' "$DEPLOY_SH" 2>/dev/null \
     | grep -oE '[0-9]{4,5}' || true
-  # and the ports we deliberately expose
+}
+declared_from_access() {
+  # the ports we deliberately expose
   sed -n 's/^ACCESS_PUBLIC_PORTS="\${ACCESS_PUBLIC_PORTS:-\([0-9 ]*\)}".*/\1/p' "$ACCESS_SH" 2>/dev/null \
     | tr ' ' '\n' | grep -oE '[0-9]{2,5}' || true
 }
@@ -101,14 +117,27 @@ listening_ports() {
 # An earlier version of this check ran its greps against the wrong working directory,
 # matched zero files, and reported every port free. A check that cannot see its subject
 # says so; it does not pass.
-declared="$(declared_ports | sort -un)"
-declared_count="$(printf '%s\n' "$declared" | grep -c '[0-9]' || true)"
-if [ "${declared_count:-0}" -lt 4 ]; then
-  log "CANNOT VERIFY: read only ${declared_count:-0} declared port(s) from the repo."
-  log "  Expected the loopback-bindings block in $DEPLOY_SH and ACCESS_PUBLIC_PORTS in"
-  log "  $ACCESS_SH. Reporting ports free on this basis would be a guess wearing a result."
+dep_ports="$(declared_from_deploy | sort -un)"
+acc_ports="$(declared_from_access | sort -un)"
+dep_count="$(printf '%s\n' "$dep_ports" | grep -c '[0-9]' || true)"
+acc_count="$(printf '%s\n' "$acc_ports" | grep -c '[0-9]' || true)"
+
+missing=""
+[ "${dep_count:-0}" -gt 0 ] || missing="$missing the loopback-bindings block in $DEPLOY_SH;"
+[ "${acc_count:-0}" -gt 0 ] || missing="$missing ACCESS_PUBLIC_PORTS in $ACCESS_SH;"
+if [ -n "$missing" ]; then
+  log "CANNOT VERIFY: a source this check depends on returned no ports."
+  log " missing:$missing"
+  log "  Read $dep_count from deploy.sh and $acc_count from audit-access.sh. Each source is"
+  log "  checked on its own rather than summed, because one healthy list can carry a"
+  log "  threshold while the other has silently gone to zero -- and then the check reports"
+  log "  a port free that we already hold."
+  log "  Reporting on this basis would be a guess wearing a result."
   exit 2
 fi
+
+declared="$(printf '%s\n%s\n' "$dep_ports" "$acc_ports" | grep '[0-9]' | sort -un)"
+declared_count="$(printf '%s\n' "$declared" | grep -c '[0-9]' || true)"
 
 live="$(listening_ports)"
 live_rc=$?

@@ -98,15 +98,36 @@ check "and refuses to call that a result" \
   "grep -q 'a guess wearing a result' '$T/blind.log'"
 check "and does NOT claim anything is free" "! grep -q 'all four slots are free' '$T/blind.log'"
 
-echo "== ctaz-port-check: a PARTIAL declaration read is also cannot-verify"
-# Half a list is the dangerous case: enough to look like it worked, not enough to be right.
+echo "== ctaz-port-check: LOSING ONE SOURCE ENTIRELY is cannot-verify, even though the other is healthy"
+# THE PREMISE OF THIS TEST WAS WRONG AND SDE-App CAUGHT IT (#332). The old fixture emptied
+# both files, totalling ONE port, which is under any threshold -- so it verified the
+# threshold and not the property. The property is that EACH source must have returned
+# something.
+#
+# The fixture below is the dangerous shape: audit-access is fully intact and yields FIVE
+# ports, comfortably past any combined threshold, while the loopback block is gone. App
+# demonstrated the consequence against real sockets: with the block renamed the script
+# reported ALL FOUR SLOTS FREE for a base whose P+10000 is 18137 -- our own zaino gRPC.
 pc_env
-printf 'ACCESS_PUBLIC_PORTS="${ACCESS_PUBLIC_PORTS:-22}"\n' > "$T/deploy/z3/audit-access.sh"
-printf '#!/usr/bin/env bash\n' > "$T/deploy/deploy.sh"
-bash "$PC" 19233 > "$T/partial.log" 2>&1
-check "a partial read exits 2" "[ $? -eq 2 ]"
-check "and reports how many it actually read" \
-  "grep -qE 'read only [0-9]+ declared port' '$T/partial.log'"
+printf '#!/usr/bin/env bash\n# the loopback block has been renamed or removed\nZ3_OTHER=(\n)\n' \
+  > "$T/deploy/deploy.sh"
+bash "$PC" 8137 > "$T/partial.log" 2>&1
+check "losing the loopback block alone exits 2, despite five ports from the other file" \
+  "[ $? -eq 2 ]"
+check "and it names WHICH source came back empty" \
+  "grep -q 'the loopback-bindings block' '$T/partial.log'"
+check "and reports each source's count separately, not a total" \
+  "grep -qE 'Read 0 from deploy.sh and [1-9][0-9]* from audit-access.sh' '$T/partial.log'"
+check "and above all does NOT report 18137 free, which we already hold" \
+  "! grep -q 'all four slots are free' '$T/partial.log'"
+
+echo "== ctaz-port-check: losing the OTHER source is caught too"
+# Both directions, so the per-source check cannot be half-implemented and still pass.
+pc_env
+printf '#!/usr/bin/env bash\n' > "$T/deploy/z3/audit-access.sh"
+bash "$PC" 19233 > "$T/partial2.log" 2>&1
+check "losing ACCESS_PUBLIC_PORTS exits 2, despite a healthy loopback block" "[ $? -eq 2 ]"
+check "and names that source" "grep -q 'ACCESS_PUBLIC_PORTS' '$T/partial2.log'"
 
 echo "== ctaz-port-check: no lsof and no ss is cannot-verify, not a pass"
 pc_env
@@ -127,14 +148,17 @@ sug=$(sed -n 's/.*suggested base P2P port: \([0-9]*\).*/\1/p' "$T/suggest.log" |
 check "and the base it suggested actually passes its own check" \
   "bash '$PC' '$sug' >/dev/null 2>&1"
 
-echo "== ctaz-port-check: bad input is refused rather than guessed at"
+echo "== ctaz-port-check: bad input exits 2, NOT 1, because 1 means a real collision"
+# Also App's (#332). die() exited 1, which the header reserves for "a slot collides". A
+# caller honouring that contract reads an out-of-range argument as a collision and goes
+# looking for another port -- forever. Usage errors are cannot-verify, not known-bad.
 pc_env
 bash "$PC" 80 > "$T/low.log" 2>&1
-check "a privileged base is refused" "[ $? -ne 0 ]"
+check "a privileged base exits exactly 2" "[ $? -eq 2 ]"
 check "and says why" "grep -q 'must be above 1024' '$T/low.log'"
 pc_env
 bash "$PC" 60000 > "$T/high.log" 2>&1
-check "a base whose P+10001 would overflow the range is refused" "[ $? -ne 0 ]"
+check "a base whose P+10001 would overflow exits exactly 2" "[ $? -eq 2 ]"
 check "and says why" "grep -q 'must be below 55535' '$T/high.log'"
 pc_env
 bash "$PC" not-a-port > "$T/nan.log" 2>&1
@@ -143,3 +167,62 @@ pc_env
 bash "$PC" > "$T/noarg.log" 2>&1
 check "no argument at all exits 2 and prints usage" \
   "[ $? -eq 2 ] && grep -q 'usage:' '$T/noarg.log'"
+
+# ── ctaz-datadir-guard.sh ────────────────────────────────────────────────────────
+# Refuses to START a cTAZ node whose state already exceeds what the box can spare.
+# Not a quota, and the tests say so: nothing here stops a running node growing.
+
+GUARD="$REPO/deploy/z3/ctaz-datadir-guard.sh"
+
+guard_env() { mk_scratch "${TMPDIR:-/tmp}/ctazguard.XXXXXX"; mkdir -p "$T/data"; }
+
+echo "== ctaz-datadir-guard: a datadir under the ceiling starts"
+guard_env
+dd if=/dev/zero of="$T/data/blob" bs=1024 count=2048 2>/dev/null   # 2 MB
+bash "$GUARD" "$T/data" 1 > "$T/ok.log" 2>&1
+check "under the ceiling exits 0" "[ $? -eq 0 ]"
+check "and reports what it measured against what it allows" \
+  "grep -qE 'holds [0-9.]+ GB of a 1 GB ceiling' '$T/ok.log'"
+
+echo "== ctaz-datadir-guard: a datadir OVER the ceiling refuses to start"
+# The assertion that matters. A guard that never fires is decoration.
+guard_env
+dd if=/dev/zero of="$T/data/blob" bs=1048576 count=12 2>/dev/null  # 12 MB
+CEIL_KB=1 bash -c "true"
+# ceiling of 0 is rejected, so express the small ceiling by making the dir big instead:
+dd if=/dev/zero of="$T/data/blob2" bs=1048576 count=1100 2>/dev/null  # ~1.1 GB total
+bash "$GUARD" "$T/data" 1 > "$T/over.log" 2>&1
+check "over the ceiling exits exactly 1" "[ $? -eq 1 ]"
+check "and says it is refusing to start" "grep -q 'REFUSING TO START' '$T/over.log'"
+check "and names both the size and the ceiling" \
+  "grep -qE 'holds [0-9.]+ GB, ceiling is 1 GB' '$T/over.log'"
+check "and tells the operator what their options are" \
+  "grep -q 'CTAZ_MAX_STATE_GB' '$T/over.log'"
+
+echo "== ctaz-datadir-guard: a datadir that does not exist yet is fine, not a fault"
+guard_env
+bash "$GUARD" "$T/not-created-yet" 10 > "$T/absent.log" 2>&1
+check "first boot exits 0" "[ $? -eq 0 ]"
+check "and says why rather than being silent" "grep -q 'nothing to check' '$T/absent.log'"
+
+echo "== ctaz-datadir-guard: an unmeasurable datadir is CANNOT-VERIFY, never a pass"
+# The whole point is to remove the assumption that unmeasured means small.
+guard_env
+mkdir -p "$T/stub"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$T/stub/du"; chmod +x "$T/stub/du"
+PATH="$T/stub:$PATH" bash "$GUARD" "$T/data" 10 > "$T/nodu.log" 2>&1
+check "an unmeasurable datadir exits exactly 2" "[ $? -eq 2 ]"
+check "and refuses to assume it is small" \
+  "grep -q 'exactly what' '$T/nodu.log'"
+check "and does not report ok" "! grep -q '^.*ok: ' '$T/nodu.log'"
+
+echo "== ctaz-datadir-guard: bad arguments are refused rather than guessed at"
+guard_env
+bash "$GUARD" "$T/data" not-a-number > "$T/nan.log" 2>&1
+check "a non-numeric ceiling exits 2" "[ $? -eq 2 ]"
+guard_env
+bash "$GUARD" "$T/data" 0 > "$T/zero.log" 2>&1
+check "a zero ceiling exits 2 rather than refusing everything" "[ $? -eq 2 ]"
+guard_env
+bash "$GUARD" > "$T/noargs.log" 2>&1
+check "no arguments exits 2 with usage" "[ $? -eq 2 ] && grep -q 'usage:' '$T/noargs.log'"
