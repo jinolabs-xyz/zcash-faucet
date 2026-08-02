@@ -45,6 +45,10 @@ check_order() {
 # and curl on PATH, fake docker volumes on disk, everything under TMPDIR so a
 # read-only checkout works.
 fresh_env() {
+  # Per-scratch tip counter, so the zebrad stub's height advances within a test and
+  # cannot leak between suites.
+  export STUB_HEIGHT_FILE="${TMPDIR:-/tmp}/zsnap-stub-height.$$"
+  rm -f "$STUB_HEIGHT_FILE"
   mk_scratch "${TMPDIR:-/tmp}/zsnap-test.XXXXXX"
   export STUB_LOG="$T/stub.log"; : > "$STUB_LOG"
   export STUB_VOLROOT="$T/volumes"; mkdir -p "$STUB_VOLROOT"

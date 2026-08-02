@@ -73,7 +73,16 @@ suite_deps() { # $1 suite name -> commands it needs beyond the base set
     # curl is the trap. stubs/curl is first on PATH under fresh_env and
     # redeploy symlinks stubs/redeploy-curl over it, so most suites never touch
     # the real one. Only metrics and alerts deliberately step past the stub.
-    zsnap)    echo "zstd python3" ;;   # stubs/curl fakes the readiness gate
+    # curl was MISSING from this list and it cost an hour. stubs/curl does fake the
+    # readiness gate, which is why it was left out, but the publish and pointer tests
+    # serve real archives over `python3 -m http.server` and fetch them with the REAL
+    # curl. Without it seven assertions go red naming generations and pointer parsing,
+    # which reads as a product bug in code that is fine.
+    #
+    # That is precisely what this guard exists to prevent, so its own list being
+    # incomplete is the guard failing at its one job. Found by running the same suite
+    # against origin/main in the same container and seeing the identical seven failures.
+    zsnap)    echo "zstd python3 curl" ;;
     backup)   echo "gpg zstd python3" ;;
     redeploy) echo "" ;;               # stubs/redeploy-curl stands in for curl
     deploy)   echo "python3" ;;        # readiness is a stub script, lib.sh:60
