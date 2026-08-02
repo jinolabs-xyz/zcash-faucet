@@ -129,6 +129,12 @@ suite_caps() { # $1 suite -> capability keys it needs
     drift)    echo "sha256sum" ;;
     # Not a tool, a property of who we are. See cap_probe.
     watchdog) echo "nonroot" ;;
+    # box-report decides `stale` by comparing the binary against the COMMIT time of the
+    # miner sources. Without git it falls back to mtime, and in that mode an older binary
+    # is `unknown`, never `stale`, so the staleness assertions stop testing staleness and
+    # go red for a reason that has nothing to do with the code. Infra hit exactly that and
+    # nearly reported a bug on main.
+    boxreport) echo "git" ;;
     *)        echo "" ;;
   esac
 }
@@ -144,6 +150,7 @@ cap_probe() { # $1 key -> 0 when this host really has it
     # Exactly the #164 shape, with the missing capability being a user rather than
     # a GNU flag.
     nonroot)     [ "$(id -u)" != 0 ] ;;
+    git)         command -v git >/dev/null 2>&1 ;;
     *)           return 0 ;;
   esac
 }
@@ -154,6 +161,7 @@ cap_reason() { # $1 key -> what is missing, in the operator's terms
     find_printf) echo "find -printf   GNU findutils. BSD/macOS find has no -printf." ;;
     sha256sum)   echo "sha256sum      GNU coreutils. macOS ships shasum instead." ;;
     nonroot)     echo "a non-root user  running as root, so chmod cannot make a path unwritable." ;;
+    git)         echo "git            box-report dates sources by commit time; without it staleness is untestable." ;;
   esac
 }
 
