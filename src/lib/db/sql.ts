@@ -23,17 +23,26 @@ CREATE TABLE IF NOT EXISTS claims (
   -- cloud range without limiting a person (#196). NULLABLE on purpose, because
   -- rows written before it existed have none and a migration cannot invent one,
   -- so the cap treats a NULL as out of scope rather than as a shared bucket.
-  subnet_hash   TEXT
+  subnet_hash   TEXT,
+  -- Which chain this claim was paid on: 'taz' or 'ctaz' (#326). NOT NULL with a
+  -- default, so every row that predates the toggle is TAZ, which is what it was.
+  --
+  -- WHY A COLUMN AND NOT A FOLD INTO THE HASH. The cheap version is to fingerprint
+  -- ('ctaz' + address) and get a separate bucket for free, no migration, three
+  -- lines. It is wrong, and it is wrong quietly. It hides the dimension inside a
+  -- hash where no query can reach it, and it CORRUPTS THE FARMING SIGNALS: one
+  -- honest person claiming on both networks becomes two distinct address hashes,
+  -- so claims-per-distinct-address drifts toward 1 in exactly the way a farm makes
+  -- it drift, and the number we built to catch farming would be reading our own
+  -- toggle. Same family as the drip counter one table down: a dimension not stored
+  -- at the write cannot be recovered later.
+  network       TEXT    NOT NULL DEFAULT 'taz'
 );
-CREATE INDEX IF NOT EXISTS idx_claims_addrhash ON claims(address_hash, created_at);
-CREATE INDEX IF NOT EXISTS idx_claims_iphash   ON claims(ip_hash, created_at);
-CREATE INDEX IF NOT EXISTS idx_claims_created  ON claims(created_at);
 
 CREATE TABLE IF NOT EXISTS used_challenges (
   sig  TEXT    PRIMARY KEY,
   exp  INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_used_exp ON used_challenges(exp);
 
 -- Drips served, by network and UTC day. The claims table cannot answer "how
 -- many, ever": data minimization deletes its rows after ~25 hours, and that is
@@ -53,6 +62,35 @@ CREATE TABLE IF NOT EXISTS drip_days (
   sent    INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (network, day)
 );
+`;
+
+/**
+ * Indexes, applied AFTER the migrations rather than with the tables.
+ *
+ * They used to live at the bottom of SCHEMA, and that ordering only worked while no
+ * index mentioned a migrated column. `idx_claims_addr_net` covers `network`, and the
+ * driver runs SCHEMA before migrate(), so on an existing database the CREATE INDEX
+ * would have hit "no such column: network" at boot, before the ALTER that adds it.
+ * Fresh boxes would have been fine and every existing one would have died, which is
+ * the #213 shape again: the artifact that defines the contract only reaching the
+ * thing that does not exist yet.
+ *
+ * An index cannot be created before its columns exist, so this ordering is not a
+ * workaround, it is the only correct one. Separated as data rather than fixed by
+ * shuffling statements inside one string, so the constraint is visible.
+ */
+export const INDEXES = `
+-- The cooldown lookup is keyed (address_hash, network) now, so network comes BEFORE
+-- created_at: the first two are equalities and the third is a range, which is the
+-- only order sqlite can use the whole index for. The old two-column index is dropped
+-- rather than left behind, because a stale index is write cost with no read benefit.
+DROP INDEX IF EXISTS idx_claims_addrhash;
+CREATE INDEX IF NOT EXISTS idx_claims_addr_net ON claims(address_hash, network, created_at);
+-- ip and subnet are deliberately NOT keyed by network, and that matches their queries
+-- rather than being an omission: those two limits are global. See RESERVE_SQL.
+CREATE INDEX IF NOT EXISTS idx_claims_iphash   ON claims(ip_hash, created_at);
+CREATE INDEX IF NOT EXISTS idx_claims_created  ON claims(created_at);
+CREATE INDEX IF NOT EXISTS idx_used_exp        ON used_challenges(exp);
 `;
 
 /**
@@ -88,6 +126,14 @@ export const MIGRATIONS: readonly Migration[] = [
     id: "claims.subnet_hash",
     presentWhen: { table: "claims", column: "subnet_hash" },
     sql: "ALTER TABLE claims ADD COLUMN subnet_hash TEXT",
+  },
+  {
+    // NOT NULL needs a default in an ALTER, and 'taz' is not a convenience here: every
+    // row that predates the toggle WAS a TAZ claim, so backfilling them as TAZ records
+    // what happened rather than guessing at it.
+    id: "claims.network",
+    presentWhen: { table: "claims", column: "network" },
+    sql: "ALTER TABLE claims ADD COLUMN network TEXT NOT NULL DEFAULT 'taz'",
   },
 ];
 
@@ -149,12 +195,29 @@ export const PENDING_LEASE_SECONDS = 120;
  * this can't all succeed — exactly one wins the race. No app-side lock needed,
  * so it's correct on D1-over-HTTP too (where we can't rely on Node being
  * single-threaded). Anonymous `?` params for portability across drivers.
+ *
+ * TWO OF THESE FOUR LIMITS ARE PER NETWORK AND TWO ARE NOT, and the split is the
+ * design rather than an oversight (#326).
+ *
+ *   address cooldown   PER NETWORK. Different chains are different money. Someone
+ *                      trying the feature net should not spend their TAZ drip to do it.
+ *   daily cap          PER NETWORK. It is a drain guard and they are different wallets:
+ *                      a busy cTAZ day must not close the TAZ faucet.
+ *   ip cap             GLOBAL.
+ *   subnet cap         GLOBAL.
+ *
+ * The last two are the point. Those are ANTI-ABUSE budgets, not accounting, and
+ * splitting them per network would turn the toggle into a doubling device: a farmer
+ * alternates networks and takes twice as much from one address range, using a lever
+ * we built and handed over. So they stay global, and the consequence is deliberate: a
+ * legitimate person claiming on both networks spends two slots of their subnet budget.
+ * That is correct. The budget is per person-ish, not per network.
  */
 export const RESERVE_SQL = `
-INSERT INTO claims (address_hash, ip_hash, subnet_hash, amount_zat, status, created_at)
-SELECT ?, ?, ?, ?, 'pending', ?
+INSERT INTO claims (address_hash, ip_hash, subnet_hash, amount_zat, status, created_at, network)
+SELECT ?, ?, ?, ?, 'pending', ?, ?
 WHERE NOT EXISTS (
-  SELECT 1 FROM claims WHERE address_hash = ?
+  SELECT 1 FROM claims WHERE address_hash = ? AND network = ?
     AND ((status='sent' AND created_at > ?) OR (status='pending' AND created_at > ?))
 )
 AND (
@@ -171,7 +234,8 @@ AND (
 )
 AND (
   (SELECT COALESCE(SUM(amount_zat), 0) FROM claims
-     WHERE (status='sent' AND created_at >= ?) OR (status='pending' AND created_at >= ?))
+     WHERE network = ?
+       AND ((status='sent' AND created_at >= ?) OR (status='pending' AND created_at >= ?)))
   + ?
 ) <= ?
 `;
@@ -185,18 +249,20 @@ export function reserveParams(o: {
   amountZat: number;
   now: number;
   cooldownSeconds: number;
+  /** This network's cap, not a global one. cTAZ carries its own (config.crosslink). */
   dailyCapZat: number;
   subnetDailyMax: number;
+  network: string;
 }): (string | number)[] {
   const cooldownCut = o.now - o.cooldownSeconds;
   const leaseCut = o.now - PENDING_LEASE_SECONDS;
   const since = o.now - 86_400;
   return [
-    o.addressHash, o.ipHash, o.subnetHash, o.amountZat, o.now, // INSERT ... SELECT
-    o.addressHash, cooldownCut, leaseCut, //                      address NOT EXISTS
-    o.ipHash, o.ipHash, cooldownCut, leaseCut, //                 ip branch (guard + NOT EXISTS)
-    o.subnetHash, o.subnetHash, since, leaseCut, o.subnetDailyMax, // subnet branch
-    since, leaseCut, o.amountZat, o.dailyCapZat, //               global daily cap
+    o.addressHash, o.ipHash, o.subnetHash, o.amountZat, o.now, o.network, // INSERT ... SELECT
+    o.addressHash, o.network, cooldownCut, leaseCut, //           address NOT EXISTS, per network
+    o.ipHash, o.ipHash, cooldownCut, leaseCut, //                 ip branch, GLOBAL (guard + NOT EXISTS)
+    o.subnetHash, o.subnetHash, since, leaseCut, o.subnetDailyMax, // subnet branch, GLOBAL
+    o.network, since, leaseCut, o.amountZat, o.dailyCapZat, //    daily cap, per network
   ];
 }
 
@@ -256,10 +322,17 @@ WHERE subnet_hash = ?
   AND ((status='sent' AND created_at >= ?) OR (status='pending' AND created_at >= ?))
 `;
 
-/** Most-recent live (blocking) claim for a column, for the "why blocked" message. */
+/**
+ * Most-recent live (blocking) claim for a column, for the "why blocked" message.
+ *
+ * Scoped exactly as the matching branch of RESERVE_SQL is, which is why the network
+ * clause is conditional rather than always on: address is per network, ip is global.
+ * If these two ever disagree the reserve refuses and the explanation cannot find a
+ * reason, and the user is told the daily cap was reached when it was not.
+ */
 export const LIVE_BLOCK_SQL = (column: "address_hash" | "ip_hash") => `
 SELECT created_at, status FROM claims
-WHERE ${column} = ?
+WHERE ${column} = ?${column === "address_hash" ? " AND network = ?" : ""}
   AND ((status='sent' AND created_at > ?) OR (status='pending' AND created_at > ?))
 ORDER BY created_at DESC LIMIT 1
 `;

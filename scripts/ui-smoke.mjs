@@ -6,11 +6,17 @@
 //   npm run build
 //   node scripts/fake-zallet.mjs &                 # PORT=28299 wallet double
 //   PORT=28324 node scripts/fake-hosh.mjs &        # tip oracle fixture, see below
+//   PORT=28611 node scripts/fake-crosslink.mjs &   # cTAZ node double (#326)
 //   FAUCET_SENDER=zallet ZALLET_RPC_URL=http://127.0.0.1:28299/ ZALLET_ACCOUNT=fake-account \
 //   ZALLET_ADDRESS=utest1fake ZALLET_MIN_CONF=0 FAUCET_CHALLENGE=pow FAUCET_POW_BITS=12 \
-//   RATE_LIMIT_SALT=ui-smoke HOSH_URL=http://127.0.0.1:28324/ PORT=3120 npm start
+//   RATE_LIMIT_SALT=ui-smoke HOSH_URL=http://127.0.0.1:28324/ \
+//   FAUCET_CTAZ_ENABLED=true CROSSLINK_RPC_URL=http://127.0.0.1:28611/ PORT=3120 npm start
 //
-// BOTH doubles, and fake-hosh must be answering BEFORE the app starts. Leave it out
+// The crosslink double is optional: without it the toggle does not render and the cTAZ
+// checks announce themselves as SKIPPED rather than passing quietly. A skipped check
+// that prints "ok" is worse than no check, so this one says what it did not cover.
+//
+// BOTH of the other doubles are required, and fake-hosh must be answering BEFORE the app starts. Leave it out
 // and the oracle compares the wallet double's tip against the real network, decides
 // our node is half a million blocks behind and refuses every claim, so the run fails
 // on the LIVE dot and then times out waiting 120s for a "Sent ✓" that cannot come.
@@ -467,6 +473,98 @@ async function checkMinerPanel(page) {
   await page.getByRole("button", { name: /Hide details/ }).click();
 }
 
+/**
+ * The TAZ/cTAZ toggle and a real cTAZ claim (#326).
+ *
+ * Everything below is asserted from the RENDERED PAGE rather than from the API, because
+ * the whole risk in this change is a page that says the wrong thing about a correct
+ * response: a manufactured txid, a copy button for an id that does not exist, an
+ * explorer link to a chain we cannot look anything up on.
+ *
+ * SKIPS LOUDLY when cTAZ is off. Returning early with no output would leave a run that
+ * covered none of this looking identical to one that covered all of it.
+ */
+async function checkCtazToggle(page, base) {
+  const status = await (await fetch(`${base}/api/status`)).json();
+  if (!status?.ctaz?.enabled) {
+    console.log("SKIP: cTAZ is off on this run, so the toggle, the cTAZ claim and the no-txid receipt were NOT covered");
+    console.log("      (start scripts/fake-crosslink.mjs and set FAUCET_CTAZ_ENABLED=true to exercise them)");
+    return;
+  }
+
+  await page.goto(base, { waitUntil: "networkidle", timeout: 60_000 });
+  const tabs = page.getByRole("tab");
+  ok("the network toggle offers both networks", (await tabs.count()) === 2, `${await tabs.count()} tabs`);
+
+  // The beta marking has to be part of the tab's ACCESSIBLE NAME, not only its pixels.
+  // Two spans in a flex row compute as "cTAZfeature net, beta" with no separator, which
+  // is why the button carries an explicit label. Caught in a browser, not in a unit test.
+  const ctazTab = page.getByRole("tab", { name: /cTAZ/ });
+  const label = await ctazTab.getAttribute("aria-label");
+  ok("cTAZ is marked as a feature net in its accessible name", /feature net/i.test(label ?? ""), label ?? "(none)");
+  ok("TAZ is selected first, so nobody lands on the feature net by default",
+    (await page.getByRole("tab", { name: /^TAZ/ }).getAttribute("aria-selected")) === "true");
+
+  // Arrow keys must move within the tablist, which is the half of the pattern that is
+  // easy to leave out and impossible to notice with a mouse.
+  await ctazTab.focus();
+  await page.keyboard.press("ArrowLeft");
+  await page.waitForTimeout(200);
+  ok("arrow keys move between the tabs",
+    (await page.getByRole("tab", { name: /^TAZ/ }).getAttribute("aria-selected")) === "true");
+
+  await ctazTab.click();
+  await page.waitForTimeout(300);
+  ok("the claim button quotes the cTAZ amount, not the TAZ one",
+    /0\.5 cTAZ/.test((await page.locator("button.btn-primary").first().textContent()) ?? ""),
+    (await page.locator("button.btn-primary").first().textContent())?.trim());
+
+  // The panel's cTAZ rows. `reserve` is the one that matters: their surface has no
+  // balance method, so anything numeric here would be invented.
+  await page.getByRole("button", { name: /More details/ }).click();
+  const rows = Object.fromEntries(
+    await page.evaluate(() =>
+      [...document.querySelectorAll(".panel-grid > *")]
+        .map((c) => [c.firstElementChild?.textContent?.trim(), c.lastElementChild?.textContent?.trim()])
+        .filter(([k]) => k?.startsWith("ctaz"))),
+  );
+  ok("the panel gains a cTAZ readiness row", /ready|behind|stale|not-activated|cannot-verify/.test(rows["ctaz node"] ?? ""), rows["ctaz node"]);
+  ok("the cTAZ reserve reads unknown, never a number", rows["ctaz reserve"] === "unknown", rows["ctaz reserve"]);
+  ok("the cTAZ drip counter is its own", rows["ctaz drips ever/7d/30d"] !== undefined, rows["ctaz drips ever/7d/30d"]);
+  await page.getByRole("button", { name: /Hide details/ }).click();
+
+  // A real claim on the feature net, through the button and the proof of work.
+  const address = await freshAddress();
+  await page.locator("input.input").first().fill(address);
+  await page.locator("button.btn-primary").first().click();
+  await page.getByText("Sent ✓").waitFor({ timeout: 120_000 });
+  ok("a cTAZ claim driven through the UI succeeds", true);
+
+  const body = await page.textContent("body");
+  ok("the receipt shows what the network PAID", /0\.5 cTAZ/.test(body));
+  // The #323 ruling, three ways. Each is a separate assertion because each is a
+  // separate way to imply an id exists.
+  ok("the receipt SAYS there is no transaction id", /none, this network returns none/.test(body));
+  ok("no copy-txid button is offered when there is no txid",
+    (await page.getByRole("button", { name: /Copy txid/ }).count()) === 0);
+  ok("no explorer link is offered when there is nothing to look up",
+    (await page.getByRole("link", { name: /Open in explorer/ }).count()) === 0);
+  // A manufactured id would most likely be an empty string or a run of zeros, and both
+  // would render as a txid row rather than as the explanation.
+  ok("no fabricated txid appears anywhere on the receipt", !/[0-9a-f]{32}/.test(body));
+
+  // The pasteable receipt has to carry the absence too. A dropped line reads as a
+  // truncated paste to whoever receives it.
+  await page.getByRole("button", { name: /Copy receipt/ }).click();
+  await page.waitForTimeout(300);
+  const receipt = String(await page.evaluate(() => navigator.clipboard.readText().catch(() => "")));
+  ok("the copied receipt states the absence rather than omitting the line",
+    /txid:\s+none/.test(receipt), receipt.split("\n").find((l) => l.startsWith("txid")) ?? "(no txid line)");
+  ok("the copied receipt names the chain it was paid on", /Crosslink/.test(receipt));
+
+  await page.getByRole("button", { name: /Another address/ }).click();
+}
+
 // The 404 must wear the site chrome, not Next's bare default. A broken not-found
 // route renders as the framework default, which has no mark, so this fails on it.
 async function check404(page, base) {
@@ -539,6 +637,9 @@ try {
   await page.waitForTimeout(300);
   const copied = String(await page.evaluate(() => navigator.clipboard.readText().catch(() => "")));
   ok("copy txid puts a 64-hex txid on the clipboard", /^[0-9a-f]{64}$/.test(copied), copied.slice(0, 16));
+
+  // After the TAZ claim, so the TAZ path is proven unregressed before the new one runs.
+  await checkCtazToggle(page, BASE);
 
   // Assert the clean-console guarantee on the whole claim flow BEFORE the 404
   // check, which deliberately loads a 404 and would otherwise pollute this.

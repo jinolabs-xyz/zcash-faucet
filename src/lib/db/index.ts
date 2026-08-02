@@ -8,6 +8,7 @@
  */
 import { config } from "../config.ts";
 import { fingerprintAddress } from "../privacy.ts";
+import type { FaucetNetwork } from "../network.ts";
 import { SqliteDriver, D1Driver, type DbDriver } from "./driver.ts";
 import {
   FARMING_SIGNALS_SQL,
@@ -53,13 +54,18 @@ async function whyBlocked(
   subnetDailyMax: number,
   now: number,
   cooldownSeconds: number,
+  network: DripNetwork,
 ): Promise<ReserveResult & { ok: false }> {
   const keys: [("address_hash" | "ip_hash"), string, string][] = [["address_hash", addressHash, "address"]];
   if (ipHash) keys.push(["ip_hash", ipHash, "client"]);
 
   for (const [col, val, label] of keys) {
+    // Params follow the statement, and the statement only carries a network clause on
+    // the address branch. Built here rather than always passing one, so a mismatch is
+    // a compile-visible shape difference instead of a silently ignored extra param.
     const row = await driver().get<{ created_at: number; status: string }>(LIVE_BLOCK_SQL(col), [
       val,
+      ...(col === "address_hash" ? [network] : []),
       now - cooldownSeconds,
       now - PENDING_LEASE_SECONDS,
     ]);
@@ -117,9 +123,16 @@ export async function reserveClaim(opts: {
   amountZat: bigint;
   now: number;
   cooldownSeconds: number;
+  /** THIS NETWORK'S cap. The caller picks it; the ledger does not know the config. */
   dailyCapZat: bigint;
   subnetDailyMax: number;
+  /**
+   * Which chain the claim is for. Defaulted so every existing caller and test keeps
+   * meaning what it meant, rather than being silently re-pointed by a new parameter.
+   */
+  network?: DripNetwork;
 }): Promise<ReserveResult> {
+  const network = opts.network ?? "taz";
   const addressHash = fingerprintAddress(opts.address);
   const ipHash = opts.ipHash ?? "";
   const subnetHash = opts.subnetHash ?? "";
@@ -140,11 +153,20 @@ export async function reserveClaim(opts: {
       cooldownSeconds: opts.cooldownSeconds,
       dailyCapZat: Number(opts.dailyCapZat),
       subnetDailyMax: opts.subnetDailyMax,
+      network,
     }),
   );
 
   if (res.changes === 1) return { ok: true, claimId: res.lastInsertRowid };
-  return whyBlocked(addressHash, opts.ipHash, opts.subnetHash, opts.subnetDailyMax, opts.now, opts.cooldownSeconds);
+  return whyBlocked(
+    addressHash,
+    opts.ipHash,
+    opts.subnetHash,
+    opts.subnetDailyMax,
+    opts.now,
+    opts.cooldownSeconds,
+    network,
+  );
 }
 
 /**
@@ -166,10 +188,17 @@ export async function reserveClaim(opts: {
  */
 export type NoTxidReason = "network-has-no-txid";
 
-/** Which faucet a drip belongs to. TAZ is ours; cTAZ arrives with the crosslink
- * sender (#322). Part of the counter's key from day one, because a mixed count
- * cannot be split retroactively. */
-export type DripNetwork = "taz" | "ctaz";
+/**
+ * Which faucet a claim belongs to. TAZ is ours; cTAZ arrives with the crosslink
+ * sender (#322).
+ *
+ * An ALIAS, not a second declaration. `FaucetNetwork` is the one definition, over in
+ * lib/network.ts where the labels live, and two independent unions of the same two
+ * strings would typecheck against each other forever while being free to diverge the
+ * day a third network lands. The name stays because the ledger's callers read in terms
+ * of drips and this is exported API.
+ */
+export type DripNetwork = FaucetNetwork;
 
 export async function finalizeClaim(
   claimId: number,

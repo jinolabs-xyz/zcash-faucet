@@ -126,6 +126,12 @@ jobs:
       # smoke test waits out its 120s timeout for a "Sent ✓" that can never
       # appear. Same root cause as the api-tests job (#171).
       HOSH_URL: http://127.0.0.1:28324/
+      # cTAZ ON for this job, against the crosslink double (#326). Without it the
+      # toggle does not render and ui-smoke reports its cTAZ checks as SKIPPED, which
+      # is honest but covers nothing: the toggle, the no-txid receipt and the unknown
+      # reserve would ship behind unit tests alone.
+      FAUCET_CTAZ_ENABLED: "true"
+      CROSSLINK_RPC_URL: http://127.0.0.1:28611/
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -164,10 +170,17 @@ jobs:
           # rather than removing it.
           PORT=28324 node scripts/fake-hosh.mjs &
           hosh=$!
-          # Declared before the trap so the early exit below still reaps the two
+          # The cTAZ node double. Unlike the other two this one is not load-bearing for
+          # the TAZ flow: if it never comes up the app reports cTAZ as cannot-verify and
+          # ui-smoke says its cTAZ checks were skipped, so the job stays honest rather
+          # than going red for an unrelated reason. The readiness wait below is what
+          # turns "did not come up" into a visible skip instead of a silent one.
+          PORT=28611 node scripts/fake-crosslink.mjs &
+          crosslink=$!
+          # Declared before the trap so the early exit below still reaps the
           # doubles rather than leaking them on a failure path.
           server=""
-          trap 'kill "$server" "$double" "$hosh" 2>/dev/null || true' EXIT
+          trap 'kill "$server" "$double" "$hosh" "$crosslink" 2>/dev/null || true' EXIT
           for _ in $(seq 1 30); do
             curl -sf "$HOSH_URL" >/dev/null && break
             sleep 1
@@ -179,6 +192,14 @@ jobs:
             curl -sf "$UI_SMOKE_URL/api/status" >/dev/null && break
             sleep 1
           done
+          # Say out loud whether cTAZ came up, BEFORE the smoke runs. ui-smoke skips its
+          # cTAZ checks when the flag is off, and a skip buried in 30 lines of "ok" is
+          # exactly the sort of thing that goes unread for a month.
+          if curl -sf "$UI_SMOKE_URL/api/status" | grep -q '"ctaz":{"enabled":true'; then
+            echo "cTAZ is up, the toggle checks will run"
+          else
+            echo "::warning::cTAZ did not come up, so the #326 toggle checks will be SKIPPED in this run"
+          fi
           node scripts/ui-smoke.mjs
 
   api-tests:

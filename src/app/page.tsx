@@ -5,6 +5,8 @@ import { BrandMark } from "./BrandMark";
 import { reserveRows } from "@/lib/reserveLabel";
 import { minerChip, minerRow, minerErrorRow, readingFromStatus } from "@/lib/minerLabel";
 import { boxRow, boxChip, boxIsBad } from "@/lib/boxLabel";
+import { networkFacts, formatAmount, type FaucetNetwork } from "@/lib/network";
+import type { CtazState } from "@/lib/crosslink/recency";
 import type { IntegrityStatus } from "@/lib/boxIntegrity";
 import type { MinerReading } from "@/lib/miner/heartbeat";
 
@@ -50,9 +52,43 @@ interface Status {
   /** Mainnet, for project upkeep. Empty when unset OR rejected by config validation. */
   maintenanceAddress?: string;
   challenge?: "pow" | "turnstile" | "none";
+  /**
+   * cTAZ (#326). Everything above stays TAZ, so nothing here re-points an existing
+   * field. Optional because a deploy older than this one sends no block at all, and
+   * absent has to read as "this faucet does not offer cTAZ" rather than as an error.
+   */
+  ctaz?:
+    | { enabled: false }
+    | {
+        enabled: true;
+        readiness: CtazState;
+        servable: boolean;
+        height: number | null;
+        roundLag: number | null;
+        finalizers: number | null;
+        ageSeconds: number | null;
+        /** Their fixed payout, as a decimal string: a bigint does not survive JSON. */
+        dripZat: string;
+        drips?: { allTime: number; last7d: number; last30d: number } | null;
+        /** The literal string. Their surface has no balance method, so this is an
+         *  answer rather than a gap, and it must not be rendered as a number. */
+        reserve: "unknown";
+      };
 }
 type CopyTarget = "txid" | "receipt" | "donation";
-interface Tx { txid: string; to: string; priv: boolean; explorerUrl?: string; at: number }
+/**
+ * A completed drip.
+ *
+ * `txid` IS OPTIONAL, and everything the receipt says about a missing one is driven by
+ * this field being absent, never by which network was picked. The API leaves the key
+ * out when the network returned none, so the page reads what happened. A `network`
+ * field here would be enough to render "no transaction id" for cTAZ even on a response
+ * that carried one, which is the difference between reporting and predicting.
+ *
+ * `network` is still here, for the WORDING of the explanation and the ticker, and it
+ * is only ever consulted once the absence has already been established.
+ */
+interface Tx { txid?: string; to: string; priv: boolean; explorerUrl?: string; at: number; network: FaucetNetwork; amountText: string }
 interface PowSolution { seed: string; difficulty: number; exp: number; sig: string; nonce: string }
 
 /**
@@ -182,13 +218,50 @@ export default function Home() {
   const powWorker = useRef<Worker | null>(null);
   const firing = useRef(false); // a queued claim mid-fire, don't fire twice
 
-  const drip = status?.dripTaz ?? 0.1;
-  const dripText = (drip % 1 === 0 ? drip.toFixed(0) : String(drip)) + " TAZ";
+  // Which chain the claim goes to. Not persisted to localStorage on purpose: the held
+  // claim is, and restoring a network someone picked yesterday would fire that hold at
+  // a feature net they have since forgotten choosing.
+  const [network, setNetwork] = useState<FaucetNetwork>("taz");
+  const ctaz = status?.ctaz?.enabled ? status.ctaz : null;
+  // The toggle only exists when there is something to toggle to. One tab is not a
+  // choice, and rendering it as one implies a second network that is not there.
+  const showToggle = !!ctaz;
 
-  const basePhase = useCallback((s: Status | null): Phase => {
+  const drip = status?.dripTaz ?? 0.1;
+  const dripText =
+    network === "ctaz" && ctaz
+      ? formatAmount(BigInt(ctaz.dripZat), "ctaz")
+      : (drip % 1 === 0 ? drip.toFixed(0) : String(drip)) + " TAZ";
+
+  // A stale pick must not survive the flag being turned off. If the deploy stops
+  // offering cTAZ while a tab is open, the poll takes the toggle away, and without
+  // this the page would keep the hidden selection and post it to an endpoint that now
+  // answers 503. Snapping back to TAZ is the only state the page can still serve.
+  useEffect(() => {
+    if (network === "ctaz" && status && !status.ctaz?.enabled) setNetwork("taz");
+  }, [status, network]);
+
+  const basePhase = useCallback((s: Status | null, net: FaucetNetwork = "taz"): Phase => {
     // Null means we have not asked. Unreachable means we asked and got nothing, which
     // is a real finding about the backend and keeps reading as syncing.
     if (!s) return "checking";
+
+    // cTAZ answers a DIFFERENT set of questions, so it returns before any of the TAZ
+    // ones. Not one of them applies: the backend ping is our lightwalletd, the node
+    // block is our Zebra, and the balance is our wallet. Their node pays cTAZ out of
+    // its own wallet, and the only thing that decides whether it can is the recency
+    // gate it reports about itself.
+    //
+    // There is no "empty" here and that is not an omission. Their surface has no
+    // balance method, so we cannot know the wallet is empty, and a faucet that says
+    // EMPTY on no evidence is the `balance ?? 0` bug wearing a different hat. A dry
+    // node surfaces when a claim comes back refused, which is a true statement made
+    // at the moment we have grounds for it.
+    if (net === "ctaz") {
+      if (!s.ctaz?.enabled) return "syncing";
+      return s.ctaz.servable ? "ready" : "syncing";
+    }
+
     if (!s.backend?.reachable) return "syncing";
     if (s.node && s.node.ready === false) return "syncing";
     // Our chain view is too stale to build a drip that could confirm, so hold rather
@@ -231,11 +304,11 @@ export default function Home() {
 
   useEffect(() => {
     if (inFlow.current) return;
-    const base = basePhase(status);
+    const base = basePhase(status, network);
     // A held claim shows as "queued" while the node syncs; anything else
     // (ready, empty) falls through so the fire effect below can take over.
     setPhase(queuedAddr && holding(base) ? "queued" : base);
-  }, [status, basePhase, queuedAddr]);
+  }, [status, basePhase, queuedAddr, network]);
 
   // Restore a held claim from a previous visit. The stored shape gained a timestamp
   // for the freshness deadline, so a bare string is a hold from before that and
@@ -289,7 +362,7 @@ export default function Home() {
   // have expired). Once-guarded: polling keeps re-running this effect.
   useEffect(() => {
     if (!queuedAddr || firing.current) return;
-    if (basePhase(status) !== "ready") return;
+    if (basePhase(status, network) !== "ready") return;
     firing.current = true;
     const target = queuedAddr;
     setQueuedAddr(null);
@@ -298,7 +371,7 @@ export default function Home() {
       firing.current = false;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, queuedAddr, basePhase]);
+  }, [status, queuedAddr, basePhase, network]);
   useEffect(() => {
     setNow(Date.now()); // immediately, so the first tick is not up to a second late
     const iv = setInterval(() => setNow(Date.now()), 1000);
@@ -317,12 +390,17 @@ export default function Home() {
   // budget (#101). It deliberately keeps polling on "not seen" and on "cannot
   // say", because both of those can still change.
   useEffect(() => {
-    if (!tx?.txid) { setTxSeen(null); return; }
+    // Bound to a local, not read off `tx` inside the closure. Now that txid is
+    // optional the guard above does not narrow through the callback, and tsc said so:
+    // without this the poll would build `/api/tx?txid=undefined` the moment the guard
+    // and the read disagreed. cTAZ makes that reachable rather than theoretical.
+    const txid = tx?.txid;
+    if (!txid) { setTxSeen(null); return; }
     let alive = true;
     let iv: ReturnType<typeof setInterval> | undefined;
     const stop = () => { clearInterval(iv); iv = undefined; };
     const check = () =>
-      fetch("/api/tx?txid=" + encodeURIComponent(tx.txid))
+      fetch("/api/tx?txid=" + encodeURIComponent(txid))
         .then((r) => r.json())
         .then((d) => {
           if (!alive) return;
@@ -382,7 +460,7 @@ export default function Home() {
     // Node still syncing: hold the claim instead of turning the user away.
     // It fires on its own the moment the node is ready (the effect above).
     // `target` set means we ARE the fire, never re-queue.
-    if (!target && holding(basePhase(status))) {
+    if (!target && holding(basePhase(status, network))) {
       setQueuedAddr(address);
       setQueuedAt(Date.now());
       setPhase("queued");
@@ -414,12 +492,27 @@ export default function Home() {
       const res = await fetch("/api/faucet", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ address, ...(pow ? { pow } : {}) }),
+        body: JSON.stringify({ address, network, ...(pow ? { pow } : {}) }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok) {
         const d = detect(address);
-        setTx({ txid: data.txid, to: address, priv: "priv" in d ? !!d.priv : true, explorerUrl: data.explorerUrl, at: Date.now() });
+        setTx({
+          // Copied straight through, INCLUDING its absence. The receipt decides what to
+          // say about a missing id by finding it missing, so a `?? ""` here would put a
+          // blank txid row on screen instead of the explanation.
+          txid: data.txid,
+          to: address,
+          priv: "priv" in d ? !!d.priv : true,
+          explorerUrl: data.explorerUrl,
+          at: Date.now(),
+          // What the server says it did, not what we asked it to do. They agree today
+          // and reading the reply costs nothing, and it is the reply that is true.
+          network: data.network === "ctaz" ? "ctaz" : "taz",
+          // The amount the NETWORK paid when it reports one (cTAZ's is fixed and ignores
+          // the request), falling back to what we asked for.
+          amountText: data.paidZat ? formatAmount(BigInt(data.paidZat), data.network === "ctaz" ? "ctaz" : "taz") : dripText,
+        });
         setPhase("success");
       } else if (res.status === 429) {
         setCooldownEnd(Date.now() + (data.retryAfterSeconds ?? status?.cooldownSeconds ?? 86400) * 1000);
@@ -443,7 +536,7 @@ export default function Home() {
     inFlow.current = false;
     setAddr(""); setTouched(false); setTx(null); setCopied(null); setErrMsg("");
     setQueuedAddr(null);
-    setPhase(basePhase(status));
+    setPhase(basePhase(status, network));
   };
 
   // Clipboard is unavailable on http origins and in some in-app browsers, so
@@ -468,13 +561,19 @@ export default function Home() {
     }
   };
 
-  /** Plain-text receipt, the thing people actually paste into an issue or chat. */
+  /**
+   * Plain-text receipt, the thing people actually paste into an issue or chat.
+   *
+   * The txid line SAYS there is none rather than being dropped. A missing line reads as
+   * a truncated paste, and someone chasing a drip that never arrived would spend their
+   * time wondering whether the receipt was complete instead of reading the answer.
+   */
   const receiptText = (t: Tx) =>
     [
-      `Zcash testnet faucet drip`,
-      `amount:  ${dripText}`,
+      `Zcash ${networkFacts(t.network).chain} faucet drip`,
+      `amount:  ${t.amountText}`,
       `to:      ${t.to}`,
-      `txid:    ${t.txid}`,
+      t.txid ? `txid:    ${t.txid}` : `txid:    none (this network's faucet returns no transaction id)`,
       `privacy: ${t.priv ? "shielded (z to z)" : "transparent (public on-chain)"}`,
       `sent:    ${new Date(t.at).toISOString()}`,
       t.explorerUrl ? `explorer: ${t.explorerUrl}` : "",
@@ -693,6 +792,10 @@ export default function Home() {
           // reachable from the app at all: everything goes via zallet or
           // lightwalletd, so it needs a data path we do not have (#193).
           ...(indexer ? [{ k: "indexer", v: `${indexer.vendor} ${indexer.version}` }] : []),
+          // Only while it is NOT servable, same rule as the box chip. A permanent
+          // "ctaz ready" would spend a slot on the terse strip saying nothing, but a
+          // feature net that cannot pay has to be visible without opening the panel.
+          ...(ctaz && !ctaz.servable ? [{ k: "ctaz", v: ctaz.readiness }] : []),
           ...(reserve
             ? [
                 {
@@ -765,6 +868,26 @@ export default function Home() {
               // a zero that would read as "this faucet has never served anyone".
               { k: "drips ever/7d/30d", v: status?.drips ? num(status.drips.allTime) + " / " + num(status.drips.last7d) + " / " + num(status.drips.last30d) : "unknown" },
               { k: "backend", v: status?.backend?.reachable ? "reachable" : "unreachable", bad: status != null && !status.backend?.reachable },
+              // The cTAZ dimension, one line per fact and every key naming its network,
+              // so no row here can be mistaken for one of the TAZ rows above it.
+              ...(ctaz
+                ? [
+                    {
+                      k: "ctaz node",
+                      // The gate's own word. Five states rather than a boolean, because
+                      // "cannot-verify" is a different instruction from "behind".
+                      v: ctaz.readiness + (ctaz.roundLag != null ? ` (round lag ${ctaz.roundLag})` : ""),
+                      bad: !ctaz.servable,
+                    },
+                    { k: "ctaz height", v: num(ctaz.height) + (ctaz.finalizers != null ? " · " + ctaz.finalizers + " finalizers" : "") },
+                    // The literal string from the response, rendered as given. Their RPC
+                    // surface has no shielded balance method, so this is an answer and
+                    // not a gap, and "0" here would be the balance ?? 0 bug all over
+                    // again on a wallet we have never been able to read.
+                    { k: "ctaz reserve", v: ctaz.reserve },
+                    { k: "ctaz drips ever/7d/30d", v: ctaz.drips ? num(ctaz.drips.allTime) + " / " + num(ctaz.drips.last7d) + " / " + num(ctaz.drips.last30d) : "unknown" },
+                  ]
+                : []),
             ].map((r) => (
               // A bad row is marked in the VALUE, not with a badge or an icon: the grid
               // is monospace k/v and anything else would need a column nothing else
@@ -797,7 +920,11 @@ export default function Home() {
           </div>
         )}
 
-        {phase === "syncing" && (
+        {/* TAZ only. Every number in it (sync percent, our block height, our node
+            height) is about OUR Zebra, and rendering it under a cTAZ hold would show
+            someone a progress bar for a chain their claim has nothing to do with. The
+            cTAZ equivalent is the readiness block above, which reads their node. */}
+        {phase === "syncing" && network === "taz" && (
           <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 11 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
               <span style={kicker}>Getting ready</span>
@@ -824,12 +951,12 @@ export default function Home() {
               The moment the node is ready, {dripText} goes to <span style={{ fontFamily: "var(--mono)", fontSize: 11.5 }}>{short(queuedAddr, 12, 6)}</span>. Keep this tab open or come back later, your place survives a reload.
             </p>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-              <button className="btn btn-secondary btn-sm" onClick={() => { setQueuedAddr(null); setQueuedAt(null); setPhase(basePhase(status)); }}>Cancel and change address</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => { setQueuedAddr(null); setQueuedAt(null); setPhase(basePhase(status, network)); }}>Cancel and change address</button>
             </div>
           </div>
         )}
 
-        {phase === "ready" && refilling && (
+        {phase === "ready" && refilling && network === "taz" && (
           <div style={{ border: "1px solid var(--color-divider)", padding: "10px 14px", display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: "4px 12px", fontFamily: "var(--mono)", fontSize: 11.5 }}>
             <span style={{ ...kicker, fontSize: 10 }}>Topping up</span>
             <span style={{ color: muted(60) }}>The reserve is being topped up in the background. Claims are unaffected.</span>
@@ -837,7 +964,7 @@ export default function Home() {
           </div>
         )}
 
-        {phase === "empty" && refilling && (
+        {phase === "empty" && refilling && network === "taz" && (
           <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 11 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
               <span style={kicker}>Topping up</span>
@@ -857,7 +984,7 @@ export default function Home() {
           </div>
         )}
 
-        {phase === "empty" && !refilling && (
+        {phase === "empty" && !refilling && network === "taz" && (
           <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 9 }}>
             <span style={kicker}>Empty</span>
             <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>The faucet is out of TAZ right now.</h2>
@@ -880,6 +1007,101 @@ export default function Home() {
                 <a className="btn btn-ghost btn-sm" href="/donate" style={{ padding: 0 }}>Why, and how it helps →</a>
               </div>
             )}
+          </div>
+        )}
+
+        {/* THE TOGGLE. A tablist rather than two buttons, because that is what it is:
+            picking one of a set changes the panel below it, and a screen reader user
+            gets arrow-key movement and a spoken "2 of 2" for free. Only rendered when
+            there is a second network, since one tab is not a choice.
+
+            Brutalist like everything else: 2px borders, square corners, the selected
+            tab inverted. The selection is carried by the border weight, the inversion
+            AND aria-selected, never by colour alone. */}
+        {showToggle && (phase === "ready" || phase === "checking" || phase === "syncing" || phase === "empty" || phase === "queued") && (
+          <div>
+            <div role="tablist" aria-label="Which network to claim on" style={{ display: "flex", flexWrap: "wrap", gap: 0, border: "2px solid var(--color-text)" }}>
+              {(["taz", "ctaz"] as const).map((n) => {
+                const f = networkFacts(n);
+                const on = network === n;
+                return (
+                  <button
+                    key={n}
+                    role="tab"
+                    id={`net-tab-${n}`}
+                    aria-selected={on}
+                    aria-controls="net-panel"
+                    // Spelled out, because the two spans below compute an accessible
+                    // name of "cTAZfeature net, beta" with no separator: a flex gap is
+                    // a visual space, not a textual one. Verified in a browser, which
+                    // is the only place that difference shows up.
+                    aria-label={f.beta ? `${f.tab}, ${f.beta}` : f.tab}
+                    // Only the selected tab is in the tab order, per the tablist
+                    // pattern: arrow keys move within the set, Tab leaves it.
+                    tabIndex={on ? 0 : -1}
+                    onClick={() => setNetwork(n)}
+                    onKeyDown={(e) => {
+                      if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+                      e.preventDefault();
+                      const next: FaucetNetwork = n === "taz" ? "ctaz" : "taz";
+                      setNetwork(next);
+                      document.getElementById(`net-tab-${next}`)?.focus();
+                    }}
+                    style={{
+                      flex: "1 1 140px",
+                      padding: "10px 12px",
+                      minHeight: 44,
+                      border: "none",
+                      borderRight: n === "taz" ? "2px solid var(--color-text)" : undefined,
+                      background: on ? "var(--color-text)" : "transparent",
+                      color: on ? "var(--color-bg)" : "var(--color-text)",
+                      fontFamily: "var(--mono)",
+                      fontSize: 12,
+                      fontWeight: 700,
+                      letterSpacing: ".08em",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "baseline",
+                      justifyContent: "center",
+                      gap: 8,
+                    }}
+                  >
+                    <span>{f.tab}</span>
+                    {f.beta && (
+                      <span style={{ fontSize: 9, letterSpacing: ".1em", textTransform: "uppercase", opacity: on ? 0.85 : 0.65 }}>
+                        {f.beta}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            {/* Says what the selected network IS, under the tabs, because a four-letter
+                ticker does not tell anyone what chain they are about to be paid on. */}
+            <p id="net-panel" role="tabpanel" aria-labelledby={`net-tab-${network}`} style={{ margin: "9px 0 0", fontSize: 12.5, lineHeight: 1.5, color: muted(62) }}>
+              {network === "ctaz"
+                ? "Crosslink is a feature net running an unreleased consensus change. Coins here are for trying that out, they are not testnet TAZ, and the chain can be reset without notice."
+                : "Public Zcash testnet. This is the one to use unless you know you want the other."}
+            </p>
+          </div>
+        )}
+
+        {/* The cTAZ node's own readiness, in the words the gate uses. Five states, and
+            each says something different about what to do next. Shown only when it is
+            NOT ready, because a green line telling someone a healthy thing is healthy
+            is the sort of decoration that gets ignored when it changes. */}
+        {network === "ctaz" && ctaz && !ctaz.servable && (
+          <div style={{ border: "2px solid var(--color-divider)", padding: "14px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
+            <span style={kicker}>{ctaz.readiness === "not-activated" ? "Not available" : "Not ready"}</span>
+            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(70), maxWidth: "52ch" }}>
+              {ctaz.readiness === "behind"
+                ? "The Crosslink node is trailing the finality layer, so it is not current enough to pay out. It usually catches up within a couple of rounds."
+                : ctaz.readiness === "stale"
+                  ? "The Crosslink node last answered too long ago for us to act on, so we are not sending on its word. Nothing is wrong with your address."
+                  : ctaz.readiness === "not-activated"
+                    ? "This node does not have the finality layer switched on, so there is no cTAZ to hand out from it."
+                    : "We cannot read the Crosslink node's status right now, so we will not claim it is ready. That is different from knowing it is broken."}
+            </p>
           </div>
         )}
 
@@ -940,47 +1162,80 @@ export default function Home() {
             </div>
             <div style={{ padding: "18px 16px", display: "flex", flexDirection: "column", gap: 14 }}>
               <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-                <span style={{ fontSize: "clamp(30px,8vw,42px)", fontWeight: 800, letterSpacing: "-.03em", lineHeight: 1 }}>{dripText}</span>
+                {/* What was PAID, from the response, not what the form offered. cTAZ's
+                    amount is fixed by their node and ignores what we ask for, so the
+                    two can differ and only one of them is true. */}
+                <span style={{ fontSize: "clamp(30px,8vw,42px)", fontWeight: 800, letterSpacing: "-.03em", lineHeight: 1 }}>{tx.amountText}</span>
                 <span style={{ fontFamily: "var(--mono)", fontSize: 12, color: muted(55) }}>on its way</span>
               </div>
               <div>
                 {/* Full values in title + a copyable receipt below: the shortened
                     forms are for reading, never the only way to get the data. */}
                 <div style={rowLine}><span style={{ color: muted(55) }}>to</span><span title={tx.to} style={{ fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "60%" }}>{short(tx.to, 12, 6)}</span></div>
-                <div style={rowLine}><span style={{ color: muted(55) }}>txid</span><span title={tx.txid} style={{ fontWeight: 700 }}>{short(tx.txid, 10, 8)}</span></div>
+                {/* The row is here either way, and it answers the question either way.
+                    Hiding it on cTAZ would leave someone looking for a txid that the
+                    receipt never mentions, which reads as an omission rather than as
+                    the network's answer. `tx.txid` decides this, not `tx.network`: the
+                    page reports what came back. */}
                 <div style={rowLine}>
-                  <span style={{ color: muted(55) }}>our node</span>
-                  <span style={{ fontWeight: 700, textAlign: "right", maxWidth: "62%" }}>
-                    {txSeen === null
-                      ? "checking…"
-                      : txSeen.known === true
-                        ? txSeen.confirmations
-                          ? `seen it, ${txSeen.confirmations} confirmation${txSeen.confirmations === 1 ? "" : "s"}`
-                          : "seen it, in the mempool"
-                        : txSeen.known === false
-                          ? "not seen yet"
-                          : "cannot say right now"}
-                  </span>
+                  <span style={{ color: muted(55) }}>txid</span>
+                  {tx.txid ? (
+                    <span title={tx.txid} style={{ fontWeight: 700 }}>{short(tx.txid, 10, 8)}</span>
+                  ) : (
+                    <span style={{ fontWeight: 700, textAlign: "right", maxWidth: "66%" }}>none, this network returns none</span>
+                  )}
                 </div>
+                {/* Only asked when there is something to ask about. /api/tx queries OUR
+                    node, which has never heard of a Crosslink transaction and could not
+                    look one up without an id anyway. */}
+                {tx.txid && (
+                  <div style={rowLine}>
+                    <span style={{ color: muted(55) }}>our node</span>
+                    <span style={{ fontWeight: 700, textAlign: "right", maxWidth: "62%" }}>
+                      {txSeen === null
+                        ? "checking…"
+                        : txSeen.known === true
+                          ? txSeen.confirmations
+                            ? `seen it, ${txSeen.confirmations} confirmation${txSeen.confirmations === 1 ? "" : "s"}`
+                            : "seen it, in the mempool"
+                          : txSeen.known === false
+                            ? "not seen yet"
+                            : "cannot say right now"}
+                    </span>
+                  </div>
+                )}
                 <div style={rowLine}>
                   <span style={{ color: muted(55) }}>privacy</span>
                   <span style={{ fontWeight: 700, textAlign: "right", maxWidth: "62%" }}>
                     {tx.priv ? <span className="tag tag-outline" style={{ fontSize: 9 }}>shielded z→z</span> : "transparent, public on-chain"}
                   </span>
                 </div>
-                <div style={rowLine}><span style={{ color: muted(55) }}>network</span><span style={{ fontWeight: 700 }}>{status?.network ?? "testnet"}</span></div>
+                <div style={rowLine}>
+                  <span style={{ color: muted(55) }}>network</span>
+                  {/* The chain's name and nothing else. Appending the beta marker read
+                      "Crosslink feature net · feature net, beta", which says the same
+                      thing twice and is the sort of line that only shows up once it is
+                      in front of you. The marker's job is done at the toggle, where it
+                      is a warning before the choice rather than a label after it. */}
+                  <span style={{ fontWeight: 700 }}>{networkFacts(tx.network).chain}</span>
+                </div>
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-                <button className="btn btn-secondary btn-sm" onClick={() => void copy("txid", tx.txid)}>{copied === "txid" ? "Copied ✓" : "Copy txid"}</button>
+                {/* No copy-txid and no explorer link when there is no id: a disabled
+                    button offering something that does not exist is worse than the
+                    button not being there (#323 ruling). Both keyed off the data. */}
+                {tx.txid && <button className="btn btn-secondary btn-sm" onClick={() => void copy("txid", tx.txid!)}>{copied === "txid" ? "Copied ✓" : "Copy txid"}</button>}
                 <button className="btn btn-secondary btn-sm" onClick={() => void copy("receipt", receiptText(tx))}>{copied === "receipt" ? "Copied ✓" : "Copy receipt"}</button>
                 {tx.explorerUrl && <a className="btn btn-secondary btn-sm" href={tx.explorerUrl} target="_blank" rel="noreferrer">Open in explorer ↗</a>}
                 <button className="btn btn-ghost btn-sm" onClick={again} style={{ padding: 0 }}>Another address</button>
               </div>
               <p aria-live="polite" className="sr-only">{copied === "txid" ? "Transaction id copied." : copied === "receipt" ? "Receipt copied." : ""}</p>
               <p style={{ margin: 0, fontSize: 12, lineHeight: 1.5, color: muted(55) }}>
-                {tx.priv
-                  ? "Shielded sends take a moment to show up in an explorer, and the amount stays private there."
-                  : "It can take a minute to appear in an explorer while the transaction is mined."}
+                {!tx.txid
+                  ? networkFacts(tx.network).noTxidReason
+                  : tx.priv
+                    ? "Shielded sends take a moment to show up in an explorer, and the amount stays private there."
+                    : "It can take a minute to appear in an explorer while the transaction is mined."}
               </p>
             </div>
           </div>

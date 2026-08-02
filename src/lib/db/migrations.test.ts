@@ -17,12 +17,18 @@ import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 const require_ = createRequire(import.meta.url);
 const Database = require_("better-sqlite3");
 
 process.env.RATE_LIMIT_SALT = "migrations-test-salt";
 const { SqliteDriver } = await import("./driver.ts");
-const { MIGRATIONS, SCHEMA } = await import("./sql.ts");
+const { MIGRATIONS, SCHEMA, INDEXES } = await import("./sql.ts");
+
+// Resolved from this file, not from cwd: every test here chdirs into a scratch dir.
+const REPO = fileURLToPath(new URL("../../..", import.meta.url));
 
 /** The claims table as it stood before subnet_hash, which is what the live box has. */
 const OLD_CLAIMS = `
@@ -49,6 +55,19 @@ function columns(dbPath = "data/faucet.db"): string[] {
   const cols = (db.prepare("PRAGMA table_info(claims)").all() as { name: string }[]).map((c) => c.name);
   db.close();
   return cols;
+}
+
+/** Index name → the columns it covers, in order. Autoindexes excluded: they are
+ *  sqlite's own and say nothing about what we declared. */
+function indexes(dbPath = "data/faucet.db"): Record<string, string[]> {
+  const db = new Database(dbPath, { readonly: true });
+  const out: Record<string, string[]> = {};
+  for (const idx of db.prepare("PRAGMA index_list(claims)").all() as { name: string; origin: string }[]) {
+    if (idx.origin !== "c") continue;
+    out[idx.name] = (db.prepare(`PRAGMA index_info(${idx.name})`).all() as { name: string }[]).map((c) => c.name);
+  }
+  db.close();
+  return out;
 }
 
 test("an OLD-schema database GAINS the column when the app opens it", () => {
@@ -130,6 +149,88 @@ test("every migration's column is also in SCHEMA, or the two paths cannot conver
       new RegExp(`\\b${m.presentWhen.column}\\b`),
       `${m.id} adds ${m.presentWhen.column} but SCHEMA never declares it`,
     );
+  }
+});
+
+test("AN INDEX OVER A MIGRATED COLUMN REACHES AN EXISTING DATABASE", () => {
+  // The bug this ordering exists to prevent, and it is not hypothetical: with the
+  // indexes still at the bottom of SCHEMA, the driver ran them BEFORE migrate(), so
+  // `idx_claims_addr_net ON claims(address_hash, network, created_at)` would have
+  // thrown "no such column: network" at boot on every existing box while every fresh
+  // one came up clean. Constructing the driver at all is the assertion.
+  scratch();
+  const old = new Database("data/faucet.db");
+  old.exec(OLD_CLAIMS);
+  old.close();
+
+  new SqliteDriver();
+
+  const idx = indexes();
+  assert.deepEqual(
+    idx.idx_claims_addr_net,
+    ["address_hash", "network", "created_at"],
+    "the cooldown index did not reach a migrated database, or covers the wrong columns",
+  );
+  assert.equal(idx.idx_claims_addrhash, undefined, "the superseded two-column index should be dropped");
+});
+
+test("indexes converge between a fresh database and a migrated one, like the columns do", () => {
+  // Columns converging while indexes do not would leave two boxes with identical
+  // schemas and different query plans, which is the same class of invisible
+  // difference the column convergence test exists to stop.
+  scratch();
+  new SqliteDriver();
+  const fresh = indexes();
+
+  scratch();
+  const old = new Database("data/faucet.db");
+  old.exec(OLD_CLAIMS);
+  old.close();
+  new SqliteDriver();
+
+  assert.deepEqual(indexes(), fresh);
+});
+
+test("the cooldown index leads with the two EQUALITY columns, not the range one", () => {
+  // (address_hash, network) are equalities and created_at is a range. Putting the
+  // range first would leave sqlite unable to use anything past it, so this pins the
+  // ORDER rather than just the membership: a set-equal assertion would pass on the
+  // arrangement that makes the index useless.
+  scratch();
+  new SqliteDriver();
+  assert.deepEqual(indexes().idx_claims_addr_net, ["address_hash", "network", "created_at"]);
+});
+
+test("THE D1 SCHEMA FILE ACTUALLY MIRRORS SCHEMA", () => {
+  // worker/schema.sql says it mirrors sql.ts and had fallen three changes behind
+  // before anyone checked: no subnet_hash, no used_challenges, no drip_days. D1 has
+  // no migration runner, so that file is the whole story there, and a claims table
+  // without subnet_hash cannot satisfy RESERVE_SQL at all. Every claim on a D1
+  // deployment would have failed, and the only thing asserting otherwise was a
+  // comment at the top of the file.
+  //
+  // Checked by CONTENT rather than by diffing text: the two files are legitimately
+  // different documents (D1 needs the migrated columns inline, sqlite gets them from
+  // the runner), so the property is that every column and table the code needs is
+  // declared, not that the bytes match.
+  const d1 = readFileSync(join(REPO, "worker/schema.sql"), "utf8");
+
+  for (const table of ["claims", "used_challenges", "drip_days"]) {
+    assert.match(d1, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`), `D1 is missing the ${table} table`);
+  }
+  // Every column the sqlite side ends up with, whether it got there via SCHEMA or via
+  // a migration. D1 has no runner, so both kinds have to be inline.
+  scratch();
+  new SqliteDriver();
+  for (const col of columns()) {
+    assert.match(d1, new RegExp(`^\\s*${col}\\s`, "m"), `D1's claims table is missing ${col}`);
+  }
+  for (const m of MIGRATIONS) {
+    assert.match(d1, new RegExp(`\\b${m.presentWhen.column}\\b`), `${m.id} never reached the D1 schema`);
+  }
+  // And the indexes, which are a separate statement block on our side now.
+  for (const name of INDEXES.matchAll(/CREATE INDEX IF NOT EXISTS (\w+)/g)) {
+    assert.match(d1, new RegExp(`\\b${name[1]}\\b`), `D1 is missing index ${name[1]}`);
   }
 });
 

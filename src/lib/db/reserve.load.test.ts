@@ -31,6 +31,10 @@ function reserve(db: InstanceType<typeof Database>, addr: string, ip: string, no
       // "" is the skip sentinel for the subnet rule, so this file keeps testing the
       // cap and the per-IP cooldown under concurrency and nothing else.
       subnetHash: "",
+      // Named rather than defaulted, because this file is about the per-IP cooldown
+      // and the daily cap, and both of those are now network-scoped. A default here
+      // would let a change to which network is default quietly move what is tested.
+      network: "taz",
       amountZat: DRIP,
       now,
       cooldownSeconds: COOLDOWN,
