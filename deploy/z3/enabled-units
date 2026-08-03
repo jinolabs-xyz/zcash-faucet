@@ -44,6 +44,31 @@ faucet-backup.timer
 # Chain snapshots, so a rebuilt box does not sync from genesis.
 zsnap-export.timer
 
+# The Crosslink feature-net node. This file used to list it under DELIBERATELY ABSENT, for
+# two reasons, and they have not aged the same way, so both are answered here rather than
+# quietly dropped.
+#
+# The disk reason IS resolved. It read "measured growth extrapolates to roughly the box's
+# entire free space", which was true when the state shared a disk with the TAZ chain. The
+# state is now on its own 59 GB volume, the unit will not start without that volume
+# mounted, and the datadir guard trips at 45 GB. cTAZ filling its storage no longer
+# touches the faucet.
+#
+# The launch reason is NOT resolved, and enabling this does not resolve it. Nothing
+# user-facing ships until #328 observes a real drip and the owner says go on the day. That
+# gate lives in the faucet's sender toggle, not here: this line starts a node that syncs
+# and mines, and a synced node serves nobody by itself. Do not read this as the launch.
+#
+# What it fixes is the failure this whole file exists for. The node is running on the box
+# by the owner's decision, and it is not enabled, so the next reboot stops it and says
+# nothing. That is "installed-but-not-enabled works until the next reboot and then quietly
+# does not", verbatim, and it would cost days of syncing before anyone noticed.
+#
+# The honest cost: any box installing this repo now starts syncing a second chain. That is
+# the intended behaviour of a box at spec now that we have decided to run cTAZ, and it is
+# one line to reverse if that decision changes.
+ctaz-node.service
+
 # DELIBERATELY ABSENT, and each for its own reason:
 #
 #   zcash-testnet-miner.service  Mining is always-on by the owner's decision, but it is
@@ -52,15 +77,6 @@ zsnap-export.timer
 #                                that installs this repo starts mining.
 #   faucet-alert@.service        A template. `systemctl enable` on a template without an
 #                                instance is an error, not a no-op.
-#   ctaz-node.service            The Crosslink feature-net node. Installed so the box spec
-#                                counts it, deliberately NOT enabled: nothing user-facing
-#                                launches before #328 observes a real drip and the owner
-#                                says go on the day, and enabling it here would have every
-#                                box that installs this repo start syncing a second chain.
-#                                It also has an unresolved disk question — measured growth
-#                                extrapolates to roughly the box's entire free space — so
-#                                arming it by file sync would be the wrong default twice
-#                                over.
 #   *.service behind a *.timer   A service pulled in by its own timer is not independently
 #                                enabled, and asking systemd about it reports disabled on a
 #                                correct box.
