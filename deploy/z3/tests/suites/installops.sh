@@ -200,3 +200,65 @@ ops_env
 "$OPS_SYSTEMCTL" disable faucet-thing.timer >/dev/null 2>&1
 check "a disable call IS recorded, so the assertion above can fail" "[ -s '$STUB_DISABLED' ]"
 check "and it names the unit" "grep -qx 'faucet-thing.timer' '$STUB_DISABLED'"
+
+echo "== install-ops: A DROP-IN IN A .service.d DIRECTORY REACHES THE BOX"
+# The gap this closes. Every glob in this script was top-level, so a file in a
+# subdirectory was reviewed, merged, and never installed -- and because it was in the
+# repo, it read as shipped. Found the day ctaz-node.service.d landed, where the missing
+# file would have cost a rebuilt box its sync tuning with nothing saying so.
+ops_env
+mkdir -p "$T/src/faucet-thing.service.d"
+printf '[Service]\nCPUQuota=200%%\n' > "$T/src/faucet-thing.service.d/10-tuning.conf"
+bash "$INSTALL_OPS" "$T/src" > "$T/dropin.log" 2>&1
+check "exits 0" "[ $? -eq 0 ]"
+check "the drop-in arrived beside the unit, not in the install dir" \
+  "[ -f '$T/units/faucet-thing.service.d/10-tuning.conf' ] && [ ! -f '$T/install/10-tuning.conf' ]"
+check "and it is the same file, not an empty one with the right name" \
+  "cmp -s '$T/src/faucet-thing.service.d/10-tuning.conf' '$T/units/faucet-thing.service.d/10-tuning.conf'"
+check "a changed unit tree triggers the daemon-reload" "grep -q 'reloaded systemd' '$T/dropin.log'"
+
+echo "== install-ops: a drop-in that CANNOT be written fails the run and is named"
+# The post-condition half. An install rule without a matching post-condition check is
+# how a file goes missing quietly, which is the whole reason those loops exist.
+ops_env
+mkdir -p "$T/src/faucet-thing.service.d"
+printf '[Service]\nCPUQuota=200%%\n' > "$T/src/faucet-thing.service.d/10-tuning.conf"
+mkdir -p "$T/units/faucet-thing.service.d"
+chmod 500 "$T/units/faucet-thing.service.d"
+bash "$INSTALL_OPS" "$T/src" > "$T/dropinfail.log" 2>&1
+dropin_rc=$?
+chmod 700 "$T/units/faucet-thing.service.d"
+check "a drop-in that could not be installed exits NONZERO" "[ $dropin_rc -ne 0 ]"
+check "and the run names the file rather than the directory alone" \
+  "grep -q '10-tuning.conf' '$T/dropinfail.log'"
+
+echo "== install-ops: a DECLARED asset directory reaches the box"
+# ctaz-build/Dockerfile is not a script and not a unit, but ctaz-build.sh reads it from
+# /opt/faucet. Declared in ASSET_DIRS rather than globbed: "install every subdirectory"
+# would sweep in miner/target, which is hundreds of megabytes of build output.
+ops_env
+mkdir -p "$T/src/ctaz-build"
+printf 'FROM scratch\n' > "$T/src/ctaz-build/Dockerfile"
+bash "$INSTALL_OPS" "$T/src" > "$T/asset.log" 2>&1
+check "exits 0" "[ $? -eq 0 ]"
+check "the Dockerfile arrived under its own directory" "[ -f '$T/install/ctaz-build/Dockerfile' ]"
+check "and matches the source" "cmp -s '$T/src/ctaz-build/Dockerfile' '$T/install/ctaz-build/Dockerfile'"
+
+echo "== install-ops: A SUBDIRECTORY NOTHING INSTALLS IS NAMED, not passed over in silence"
+# The bug was never a missing rule, it was that the absence was silent: an unwired
+# subdirectory looked exactly like one that needs nothing. This is what makes the next
+# one visible on the first run instead of on the first rebuild.
+ops_env
+mkdir -p "$T/src/somethingnew" "$T/src/tests" "$T/src/miner/target"
+printf 'x\n' > "$T/src/somethingnew/thing.conf"
+printf 'x\n' > "$T/src/tests/run.sh"
+printf 'x\n' > "$T/src/miner/target/artifact"
+bash "$INSTALL_OPS" "$T/src" > "$T/unknown.log" 2>&1
+check "exits 0, because an unwired directory is a note and not a failure" "[ $? -eq 0 ]"
+check "the run NAMES the unwired directory" "grep -q 'somethingnew/ holds files' '$T/unknown.log'"
+check "and does not nag about tests/, which never runs on the box" \
+  "! grep -q 'tests/ holds files' '$T/unknown.log'"
+check "nor about miner/, which ships as a built binary and not as a tree" \
+  "! grep -q 'miner/ holds files' '$T/unknown.log'"
+check "and it did not install the unwired directory behind our backs" \
+  "[ ! -e '$T/install/somethingnew' ]"

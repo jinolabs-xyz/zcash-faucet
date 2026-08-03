@@ -134,6 +134,49 @@ for src in "$SRC"/*.service "$SRC"/*.timer; do
   [ "$changed" != "$before" ] && units=$((units + 1))
 done
 
+# DROP-INS, because this script globbed the top level only and a file in a subdirectory
+# was therefore reviewed, merged, and never installed. That is worse than not having it:
+# it is in the repo, so it reads as shipped. Found the day ctaz-node.service.d landed,
+# which would have cost a rebuilt box its sync tuning with nothing anywhere saying so.
+for dir in "$SRC"/*.service.d; do
+  [ -d "$dir" ] || continue
+  destdir="$UNIT_DIR/$(basename "$dir")"
+  [ "$DRY" = "1" ] || mkdir -p "$destdir" || { log "ERROR: cannot create $destdir"; rc=1; continue; }
+  for src in "$dir"/*.conf; do
+    [ -e "$src" ] || continue
+    before="$changed"
+    place "$src" "$destdir/$(basename "$src")" 644 || rc=1
+    [ "$changed" != "$before" ] && units=$((units + 1))
+  done
+done
+
+# Build assets: not scripts, not units, but the box needs them. DECLARED here rather
+# than globbed, because "install every subdirectory" would sweep in miner/target, which
+# is hundreds of megabytes of build output.
+ASSET_DIRS="ctaz-build"
+for name in $ASSET_DIRS; do
+  [ -d "$SRC/$name" ] || continue
+  destdir="$INSTALL_DIR/$name"
+  [ "$DRY" = "1" ] || mkdir -p "$destdir" || { log "ERROR: cannot create $destdir"; rc=1; continue; }
+  for src in "$SRC/$name"/*; do
+    [ -f "$src" ] || continue
+    place "$src" "$destdir/$(basename "$src")" 644 || rc=1
+  done
+done
+
+# ANYTHING ELSE WITH FILES IN IT GETS NAMED. The bug above was not that a rule was
+# missing, it was that its absence was silent, so a subdirectory nobody wired up looks
+# exactly like one that needs nothing. Excluded: tests (never runs on the box) and
+# miner (source and build output; the miner ships as a built binary, not as a tree).
+for dir in "$SRC"/*/; do
+  [ -d "$dir" ] || continue
+  name="$(basename "$dir")"
+  case "$name" in tests|miner|*.service.d) continue ;; esac
+  case " $ASSET_DIRS " in *" $name "*) continue ;; esac
+  find "$dir" -type f -print -quit 2>/dev/null | grep -q . && \
+    log "NOTE: $name/ holds files and no rule installs it. Add it to ASSET_DIRS or say why not."
+done
+
 # Only reload when a unit actually changed. A reload is cheap but not free, and a
 # log line saying we reloaded when nothing changed is the kind of noise that
 # teaches people to stop reading the log.
@@ -194,6 +237,31 @@ if [ "$DRY" != "1" ]; then
     if [ ! -f "$dest" ]; then missing="$missing $name"
     elif ! cmp -s "$src" "$dest"; then differs="$differs $name"
     fi
+  done
+  # The same two checks over the files the top-level globs do not reach. An install rule
+  # without a matching post-condition is how a file goes missing quietly, which is the
+  # exact shape of the bug these loops were added for.
+  for dir in "$SRC"/*.service.d; do
+    [ -d "$dir" ] || continue
+    for src in "$dir"/*.conf; do
+      [ -e "$src" ] || continue
+      name="$(basename "$dir")/$(basename "$src")"
+      dest="$UNIT_DIR/$name"
+      if [ ! -f "$dest" ]; then missing="$missing $name"
+      elif ! cmp -s "$src" "$dest"; then differs="$differs $name"
+      fi
+    done
+  done
+  for adir in $ASSET_DIRS; do
+    [ -d "$SRC/$adir" ] || continue
+    for src in "$SRC/$adir"/*; do
+      [ -f "$src" ] || continue
+      name="$adir/$(basename "$src")"
+      dest="$INSTALL_DIR/$name"
+      if [ ! -f "$dest" ]; then missing="$missing $name"
+      elif ! cmp -s "$src" "$dest"; then differs="$differs $name"
+      fi
+    done
   done
   not_enabled=""
   if [ -f "$ENABLED_UNITS_FILE" ]; then
