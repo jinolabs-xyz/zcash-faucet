@@ -194,12 +194,19 @@ check "exits 2, the non-paging code" "[ $rc_pf -eq 2 ]"
 check "says nothing changed" "grep -q 'nothing has changed' '$T/pf.log'"
 check "never built" "! grep -q 'compose.*build' '$STUB_LOG'"
 
-echo "== redeploy: --no-pull skips git entirely"
+echo "== redeploy: --no-pull never MOVES the checkout"
+# This assertion used to read "git was never called", and the heading said --no-pull skips
+# git entirely. That was the right invariant stated too broadly, and labelling the build
+# with its commit needs a read-only `rev-parse`. What --no-pull actually promises is that
+# it builds and swaps WHAT IS ALREADY CHECKED OUT, so the thing to forbid is a git command
+# that changes the tree. Reads are fine and are now required.
 redeploy_env
 touch "$STUB_HEALTH" "$STUB_READY"
 bash "$REDEPLOY" --no-pull > "$T/np.log" 2>&1
 check "exits 0" "[ $? -eq 0 ]"
-check "git was never called" "! grep -q '^git ' '$STUB_LOG'"
+check "no git command that MOVES the checkout" \
+  "! grep -qE '^git .*(pull|fetch|reset|checkout|merge)' '$STUB_LOG'"
+check "and specifically no pull" "! grep -q '^git pull' '$STUB_LOG'"
 
 echo "== redeploy: manual rollback and status"
 redeploy_env
@@ -361,3 +368,52 @@ check "a real rollback exits 0" "[ $? -eq 0 ]"
 check "and says rolled back and live" "grep -q 'rolled back and live' '$T/rbok.log'"
 check "and the running container is the previous image" \
   "[ \"\$(cat '$STUB_IMAGES/.running')\" = 'sha256:good' ]"
+
+echo "== redeploy: THE RUNNING BUILD'S COMMIT IS PASSED TO THE APP"
+# Nothing could answer "which commit is the live site built from" from outside. box-report
+# covers the ops FILES; the app BUILD had no external signal, and the deploy is pull-based,
+# so a stalled timer or a rebuild that quietly failed looks exactly like being up to date.
+# #131 step 1 is specified as "poll /api/status until the build reflects the merge", which
+# was not implementable.
+#
+# Driven through the git STUB, not a real repo. The first version of these tests built a
+# real repo in the fixture and proved nothing: the stub is first on PATH, so init, commit
+# and status all hit it, and the expected sha was computed with the stub too. The
+# assertion compared the double's answer to itself and passed while testing nothing.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_GIT_SHA="feedface" bash "$REDEPLOY" --no-pull > "$T/commit.log" 2>&1
+check "the commit is handed to compose" \
+  "grep -qx 'FAUCET_BUILD_COMMIT=feedface' '$STUB_LOG'"
+check "and it is not left unset" "! grep -q 'FAUCET_BUILD_COMMIT=<unset>' '$STUB_LOG'"
+check "and not left empty, which would read as a deployed unknown" \
+  "! grep -qx 'FAUCET_BUILD_COMMIT=' '$STUB_LOG'"
+
+echo "== redeploy: a DIRTY tree is reported as dirty, not as a clean commit"
+# A bare commit id would describe code that is not what is running.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_GIT_SHA="feedface" STUB_GIT_DIRTY=1 bash "$REDEPLOY" --no-pull > /dev/null 2>&1
+check "a dirty tree is marked -dirty" "grep -qx 'FAUCET_BUILD_COMMIT=feedface-dirty' '$STUB_LOG'"
+
+echo "== redeploy: a CLEAN tree is not marked dirty"
+# The other direction, so the marker cannot be unconditional and go unnoticed.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_GIT_SHA="feedface" bash "$REDEPLOY" --no-pull > /dev/null 2>&1
+check "a clean tree has no -dirty suffix" "! grep -q 'FAUCET_BUILD_COMMIT=.*-dirty' '$STUB_LOG'"
+
+echo "== redeploy: no git answer is UNKNOWN, never blank"
+# unknown and absent are different facts: one says we asked and could not tell, the other
+# says an older build never reported. The route has to tell them apart.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_GIT_NOREPO=1 bash "$REDEPLOY" --no-pull > /dev/null 2>&1
+check "no repo yields unknown" "grep -qx 'FAUCET_BUILD_COMMIT=unknown' '$STUB_LOG'"
+check "and never an empty value" "! grep -qx 'FAUCET_BUILD_COMMIT=' '$STUB_LOG'"
+
+echo "== redeploy: an explicit override wins, for CI that builds outside a checkout"
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+REDEPLOY_BUILD_COMMIT="deadbee" bash "$REDEPLOY" --no-pull > /dev/null 2>&1
+check "the override is used verbatim" "grep -qx 'FAUCET_BUILD_COMMIT=deadbee' '$STUB_LOG'"

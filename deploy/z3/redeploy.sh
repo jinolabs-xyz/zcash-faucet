@@ -60,7 +60,33 @@ not_shipped() {
 
 command -v docker >/dev/null || not_shipped "docker is not installed, nothing was attempted"
 
+# WHICH COMMIT IS THE RUNNING SITE BUILT FROM. Nothing could answer that from outside.
+#
+# box-report tells an external check whether the ops FILES on the box match the repo. It
+# says nothing about the app BUILD, and auto-deploy is pull-based, so a stalled timer or a
+# rebuild that quietly failed leaves the site serving old code with every signal green.
+# #131 step 1 is written as "poll /api/status until the build reflects the merge", which
+# was not possible: no route exposed a commit and nothing plumbed one in.
+#
+# Computed here rather than baked in as a build arg, deliberately. A build arg invalidates
+# the Docker layer cache on every commit and makes each deploy a full rebuild. This is the
+# checkout the image is built FROM, read immediately before building it.
+#
+# `-dirty` is appended when the tree has uncommitted changes, because a commit id alone
+# would describe code that is not what is running. Unknown when git cannot answer, never
+# omitted, so a consumer can tell "we asked and could not tell" from an older build that
+# never reported.
+build_commit() {
+  local c d=""
+  c="$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null)" || { echo unknown; return; }
+  [ -n "$c" ] || { echo unknown; return; }
+  [ -n "$(git -C "$REPO_DIR" status --porcelain 2>/dev/null)" ] && d="-dirty"
+  printf '%s%s\n' "$c" "$d"
+}
+FAUCET_BUILD_COMMIT="${REDEPLOY_BUILD_COMMIT:-$(build_commit)}"
+
 compose() { ( cd "$OVERLAY_DIR" && Z3_NETWORK_NAME="$Z3_NETWORK_NAME" \
+                FAUCET_BUILD_COMMIT="$FAUCET_BUILD_COMMIT" \
                 FAUCET_DOMAIN="${FAUCET_DOMAIN:-$(cat /etc/faucet-domain 2>/dev/null || true)}" \
                 docker compose -f "$COMPOSE_FILE" "$@" ); }
 
