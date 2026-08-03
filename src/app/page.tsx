@@ -5,6 +5,7 @@ import { BrandMark } from "./BrandMark";
 import { reserveRows } from "@/lib/reserveLabel";
 import { minerChip, minerRow, minerErrorRow, readingFromStatus } from "@/lib/minerLabel";
 import { boxRow, boxChip, boxIsBad } from "@/lib/boxLabel";
+import { syncLabel, syncBarWidth } from "@/lib/syncLabel";
 import { networkFacts, formatAmount, type FaucetNetwork } from "@/lib/network";
 import type { CtazState } from "@/lib/crosslink/recency";
 import type { IntegrityStatus } from "@/lib/boxIntegrity";
@@ -624,6 +625,9 @@ export default function Home() {
   const live = !holding(phase) && phase !== "queued";
   const node = status?.node;
   const syncPct = node?.syncPercent ?? null;
+  // Never rounds up to 100 while the node is unready: 99.994 printed as "100%" beside
+  // a "Syncing" headline during the 2026-08-03 incident, which reads as a stuck page.
+  const syncText = syncLabel(syncPct, node?.ready === true);
   const height = node?.height ?? null;
   const nodeHeight = node?.nodeHeight ?? null;
   // Keeps null rather than ?? 0. The default erased the difference between "the
@@ -780,7 +784,7 @@ export default function Home() {
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "4px 18px", padding: `9px ${pad}`, borderBottom: "1px solid var(--color-divider)", fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".05em", color: muted(55) }}>
         {[
           { k: "node", v: status == null ? "–" : node?.ready ? "ready" : "syncing" },
-          { k: "sync", v: syncPct != null ? Math.round(syncPct) + "%" : "–" },
+          { k: "sync", v: syncText ?? "–" },
           { k: "height", v: num(height) },
           { k: "balance", v: balance != null ? balance.toFixed(1) + " TAZ" : status == null ? "–" : "0 TAZ" },
           // Terse here, per the user, but "off" is not available as the terse word:
@@ -841,7 +845,7 @@ export default function Home() {
             {[
               // Same rule as the header strip. The panel opens on a click, and nothing
               // stops that click landing before the first status does.
-              { k: "node", v: status == null ? "–" : node?.ready ? "ready" : "syncing" + (syncPct != null ? " (" + Math.round(syncPct) + "%)" : ""), bad: status != null && node?.ready === false },
+              { k: "node", v: status == null ? "–" : node?.ready ? "ready" : "syncing" + (syncText ? " (" + syncText + ")" : ""), bad: status != null && node?.ready === false },
               { k: "block height", v: num(height) + (nodeHeight ? " / " + num(nodeHeight) : "") },
               { k: "wallet balance", v: status?.balanceTaz != null ? status.balanceTaz.toFixed(2) + " TAZ" : "–", bad: status?.empty === true },
               // The detail belongs here, per the user: he asked that the miner's real
@@ -934,11 +938,11 @@ export default function Home() {
           <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 11 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
               <span style={kicker}>Getting ready</span>
-              <span style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700 }}>{syncPct != null ? Math.round(syncPct) + "%" : "starting…"}</span>
+              <span style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700 }}>{syncText ?? "starting…"}</span>
             </div>
             <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>Syncing the node. The faucet will be ready shortly.</h2>
-            <div role="progressbar" aria-label="Node sync progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={syncPct != null ? Math.round(syncPct) : undefined} style={{ height: 10, border: "2px solid var(--color-divider)", position: "relative", overflow: "hidden" }}>
-              <i aria-hidden="true" style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: syncPct != null ? Math.round(syncPct) + "%" : "100%", background: "repeating-linear-gradient(135deg,var(--color-accent) 0 3px,transparent 3px 7px)", backgroundSize: "26px 26px", animation: "hatch 1.1s linear infinite", opacity: syncPct != null ? 1 : 0.55 }} />
+            <div role="progressbar" aria-label="Node sync progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={syncPct != null ? Math.min(syncPct, node?.ready === true ? 100 : 99.5) : undefined} style={{ height: 10, border: "2px solid var(--color-divider)", position: "relative", overflow: "hidden" }}>
+              <i aria-hidden="true" style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: syncBarWidth(syncPct, node?.ready === true), background: "repeating-linear-gradient(135deg,var(--color-accent) 0 3px,transparent 3px 7px)", backgroundSize: "26px 26px", animation: "hatch 1.1s linear infinite", opacity: syncPct != null ? 1 : 0.55 }} />
             </div>
             <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.5, color: muted(60) }}>
               {height != null ? "Block " + num(height) + (nodeHeight ? " of " + num(nodeHeight) : "") + " · " : "Bringing the node online · "}first sync takes a while, one time. It becomes the real faucet automatically.
@@ -950,7 +954,7 @@ export default function Home() {
           <div style={{ border: "2px solid var(--color-text)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 11 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
               <span style={kicker}>Queued</span>
-              <span style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700 }}>{syncPct != null ? Math.round(syncPct) + "%" : "syncing…"}</span>
+              <span style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700 }}>{syncText ?? "syncing…"}</span>
             </div>
             <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>You&apos;re in line. It sends on its own.</h2>
             <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
@@ -1285,6 +1289,19 @@ export default function Home() {
             We run the whole stack ourselves, and the community keeps it full.{" "}
             <a href="/donate">Chip in</a> if it saved you time.
           </p>
+          {/* DRIPS SERVED, ON THE LANDING PAGE. It was rendered only inside More
+              details, where the owner looked straight past it while asking where
+              it was; a number nobody finds is not published. Absent stays absent
+              rather than rendering a zero, which would read as "never served
+              anyone" on the one line meant to show the opposite. The 7-day figure
+              rides along only when it is non-zero, so a quiet week says nothing
+              instead of advertising a nought. */}
+          {status?.drips && status.drips.allTime > 0 ? (
+            <p className="about-strip-line drips-line">
+              <strong>{num(status.drips.allTime)}</strong> drips served
+              {status.drips.last7d > 0 ? <> · <strong>{num(status.drips.last7d)}</strong> in the last 7 days</> : null}
+            </p>
+          ) : null}
         </div>
 
         <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 16px", alignItems: "center" }}>
