@@ -56,22 +56,63 @@ fields — and both committed configs use a network magic (`ClRn`, `ClTn`) that 
 has no genesis for, so it panics with `unhandled special-case genesis`.
 
 The only magic with a genesis is **`ClT0`** (`[67,108,84,48]`), and it appears in none of
-their sample files. Generate instead:
+their sample files. Run `ctaz-config.sh`, which generates with the pinned binary and applies
+our deltas on top:
 
 ```sh
-ctaz-zebrad generate -o /etc/faucet/ctaz-zebrad.toml
+/opt/faucet/ctaz-config.sh /etc/faucet/ctaz-zebrad.toml
 ```
 
-That emits `crosslink_default()`: ClT0 magic, genesis `05a60a92…`, and four bootstrap peers
+`generate` emits `crosslink_default()`: ClT0 magic, genesis `05a60a92…`, NU6 at height 1,
+funding streams, ten lockbox disbursements, a trusted checkpoint, and four bootstrap peers
 compiled into the binary. There is no DNS seed and no seeder behind them.
 
-Then change **only**:
+**Hand-writing this config does not work, and the failure is not obvious.** `network =
+"Testnet"` without the `[network.testnet_parameters]` block is the *real* Zcash testnet, and
+their node aborts on it with `unhandled special-case genesis` (`start.rs:428`). The network
+parameters are not decoration around the keys you care about.
 
-- `[network] listen_addr` — your chosen base (see above)
-- `[rpc] listen_addr` — must be `base - 1`; zaino assumes it
-- `[state] cache_dir` — `/var/lib/ctaz-node`
-- `[mining] internal_miner` — leave `false` unless funding says otherwise
-- **`[crosslink] bft_peers`** — see the trap below
+The script changes only these, and prints the diff against their default every run:
+
+| key | value | why |
+|---|---|---|
+| `[network] listen_addr` | `[::]:19233` | our chosen base |
+| `[rpc] listen_addr` | `127.0.0.1:19232` | must be `base - 1`; zaino derives it |
+| `[rpc] cookie_dir` | `/mnt/ctaz-chain/node` | default is `/root/.cache/zebra`, unwritable as `ctaz` |
+| `[rpc] enable_cookie_auth` | `false` | their shipped value; see below |
+| `[state] cache_dir` | `/mnt/ctaz-chain/node` | the dedicated volume |
+| `[mining] internal_miner` | `false` | until synced; see below |
+
+`[crosslink] bft_peers` is left exactly as generated — see the trap below.
+
+**Cookie auth stays off, which is not the instinct.** Turning it on kills the node: their
+zaino runs in-process, fails with `correct authorisation details have been entered`, and
+takes zebrad down about nine seconds after start. Their embedded indexer is built against
+the no-cookie path. The exposure is bounded — the RPC is loopback-only and our containers
+are bridged, so they cannot reach the host's loopback; what can reach it is any process on
+the host itself. Acceptable for a feature-net node, and the reason the TAZ wallet is not
+configured this way.
+
+### Turning the miner on
+
+Two changes, and they are deliberately coupled so neither is forgotten alone. Do them
+**only once the node is at their tip** (`sync_percent` at 100%, `remaining_sync_blocks` ~0):
+
+```sh
+sed -i 's/^internal_miner = false/internal_miner = true/' /etc/faucet/ctaz-zebrad.toml
+rm /etc/systemd/system/ctaz-node.service.d/10-initial-sync.conf
+systemctl daemon-reload && systemctl restart ctaz-node
+```
+
+The drop-in raises `CPUQuota` to 200% for the sync, which is CPU-bound. Dropping it back to
+100% at the same moment matters: a miner uses every bit of quota it is given, forever, and
+past this point cTAZ mining competes with TAZ mining for a 4-core box. TAZ is what funds
+the faucet people actually use.
+
+A node with no peers believes it is at the tip, so leaving the miner on for a fresh sync
+mines a fork of genesis within seconds — measured: four blocks before the first peer
+handshake completed. Those blocks are orphaned when the real chain arrives, so the cost is
+wasted CPU, not a wrong chain.
 
 ### The `bft_peers` trap
 
@@ -80,7 +121,17 @@ Then change **only**:
 "private" regtest node here did exactly that on the first attempt — the giveaway was
 `Connected to new server` and `BFT_UPDATE` in a log that should have been silent.
 
-Set it explicitly, always. To verify isolation, check the connections **for that PID**:
+**The production node keeps their four peers, which reverses the spike's advice, because
+the goal reversed.** The spike wanted an isolated node and got an accidental participant.
+This node is a deliberate participant: it exists to serve the real cTAZ chain, so it has to
+follow their finality layer. Connecting to BFT peers is how a node *learns* finality; it
+does not make it a validator, which needs a registered key we do not have and have not
+asked for.
+
+What matters either way is that the value is *stated*. Isolated means `bft_peers = []`
+written down, never the key left out.
+
+To check what a node is actually connected to, look at the connections **for that PID**:
 
 ```sh
 lsof -nP -iTCP -a -p "$(pgrep -f ctaz-zebrad)" | grep -v LISTEN
@@ -88,7 +139,31 @@ lsof -nP -iTCP -a -p "$(pgrep -f ctaz-zebrad)" | grep -v LISTEN
 
 Config-says-isolated and is-isolated are different claims.
 
-## Disk, which is the open risk
+## Disk: a dedicated volume, and why the pathing is the way it is
+
+The chain state lives on its own block device, **not** on the disk that runs the faucet:
+
+| | |
+|---|---|
+| device | `/dev/sdc`, 59 GB ext4 |
+| mount | `/mnt/ctaz-chain`, `nofail` in fstab |
+| datadir | `/mnt/ctaz-chain/node`, owned by the `ctaz` system user |
+| alias | `/var/lib/ctaz-node` is a symlink there for humans; nothing depends on it |
+
+`nofail` matters: without it a detached volume stops the **box** from booting, which would
+turn a best-effort feature net into a total outage.
+
+The trap on the other side is that a detached volume leaves `/mnt/ctaz-chain` as a
+perfectly good empty directory on the root disk, so a node pointed at it would start and
+sync the entire chain onto the disk it was moved off to protect. `RequiresMountsFor=` in
+the unit is what closes that: no mount, no start. A full root disk is what took the faucet
+down on 2026-08-03, so this is a repeat, not a hypothetical.
+
+`ProtectSystem=strict` mounts everything read-only, `/mnt` included, so the unit punches
+the datadir back through with `ReadWritePaths=`. Without it the node starts and fails on
+its first write, which reads like a bad volume rather than a config choice.
+
+## How big it gets, which is still unknown
 
 Measured growth on their chain, syncing from genesis:
 
@@ -100,13 +175,15 @@ Measured growth on their chain, syncing from genesis:
 | 36,676 | 2.8 G | 80.1 |
 
 **Per-block cost rises with height**, so every extrapolation from an early prefix
-understates. Successive estimates went 7.4 GB → 10.6 → 23.5 → **28.5 GB**, against ~28 GB
-free on the box. Treat the final figure as **UNKNOWN until a node reaches the tip**, and do
-not plan against any of those numbers.
+understates. Successive estimates went 7.4 GB, then 10.6, then 23.5, then **28.5 GB**.
+Treat the final figure as **UNKNOWN until a node reaches the tip**, and do not plan
+against any of those numbers. The 59 GB volume was sized against the largest of them with
+room for the estimate to keep climbing, which on this chain it has done every time.
 
 `ctaz-datadir-guard.sh` refuses to *start* a node whose state already exceeds
-`CTAZ_MAX_STATE_GB`. **It is not a quota** — nothing stops a running node growing. A real
-ceiling needs a filesystem quota or a dedicated volume, and that is still open.
+`CTAZ_MAX_STATE_GB` (45 GB in `ctaz.env`, deliberately under the volume). **It is not a
+quota** — nothing stops a running node growing. The volume is what makes that survivable;
+the guard is the early warning, not the ceiling.
 
 Note the indexer's database lives **inside the same tree**, at `<chain-name>/zaino/local`,
 so the state directory is not purely chain state.

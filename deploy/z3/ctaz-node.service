@@ -3,8 +3,10 @@
 # Part of #327. Every limit here comes from something observed in the spike rather than
 # from a general instinct about hardening, and the comments say which.
 #
-# Install:
-#   useradd --system --home-dir /var/lib/ctaz-node --shell /usr/sbin/nologin ctaz
+# Install (the volume must be mounted and in fstab with nofail first, see CTAZ.md):
+#   useradd --system --home-dir /mnt/ctaz-chain/node --shell /usr/sbin/nologin ctaz
+#   install -d -o ctaz -g ctaz /mnt/ctaz-chain/node
+#   ln -sfn /mnt/ctaz-chain/node /var/lib/ctaz-node        # convenience alias only
 #   cp ctaz-zebrad /opt/faucet/ctaz-zebrad && chmod +x /opt/faucet/ctaz-zebrad
 #   cp ctaz-node.service /etc/systemd/system/
 #   # config in /etc/faucet/ctaz-zebrad.toml  (see CTAZ.md for the required keys)
@@ -30,6 +32,19 @@ Documentation=file:/opt/zcash-faucet/deploy/z3/CTAZ.md
 After=network-online.target
 Wants=network-online.target
 
+# ── THE STATE LIVES ON A DEDICATED VOLUME, AND THIS LINE IS WHY THAT IS SAFE ─────
+# The chain state is on a separate block device mounted at /mnt/ctaz-chain, so cTAZ
+# growth cannot squeeze the disk the TAZ faucet runs on.
+#
+# The pathing has one trap and this line is the answer to it. If the volume is ever
+# detached, /mnt/ctaz-chain is still a perfectly good empty directory on the ROOT
+# disk, so a node pointed there would start happily and sync the whole chain onto
+# the disk it was moved off to protect. That is not hypothetical: a full root disk
+# is what took the faucet down on 2026-08-03. RequiresMountsFor pulls in the .mount
+# unit and fails the start if it is not there, so a detached volume stops the node
+# instead of silently redirecting it.
+RequiresMountsFor=/mnt/ctaz-chain
+
 # OnFailure IS WIRED, and #327's "best-effort tier" is NOT yet honoured. Read this before
 # assuming the tiering exists.
 #
@@ -54,12 +69,21 @@ Type=simple
 User=ctaz
 Group=ctaz
 
-# systemd creates and chowns /var/lib/ctaz-node. Their node then makes its own
-# chain-name subdirectory underneath, which is where the state actually lands:
-#   /var/lib/ctaz-node/<chain-name>/state/v27/unknowntestnet
-#   /var/lib/ctaz-node/<chain-name>/zaino/local     <- the indexer db lives in the tree too
-StateDirectory=ctaz-node
-Environment=CTAZ_DATADIR=/var/lib/ctaz-node
+# The datadir is named in full rather than through StateDirectory=. StateDirectory
+# creates and chowns a path under /var/lib, which is the disk we are deliberately
+# keeping this chain off; /var/lib/ctaz-node is left as a symlink to the real path
+# for anyone who goes looking there, but nothing in this unit depends on it.
+#
+# ProtectSystem=strict below mounts the whole hierarchy read-only, /mnt included, so
+# the datadir has to be punched back through as writable explicitly. Without this the
+# node starts and then fails on its first write, which reads like a corrupt volume.
+#
+# Their node makes its own chain-name subdirectory underneath, which is where the
+# state actually lands:
+#   /mnt/ctaz-chain/node/<chain-name>/state/v27/unknowntestnet
+#   /mnt/ctaz-chain/node/<chain-name>/zaino/local   <- the indexer db lives in the tree too
+Environment=CTAZ_DATADIR=/mnt/ctaz-chain/node
+ReadWritePaths=/mnt/ctaz-chain/node
 
 # ── REFUSE TO START ON A PORT COLLISION ──────────────────────────────────────────
 # A crosslink node derives four listeners from one config value (P-1, P, P+10000,
@@ -67,21 +91,41 @@ Environment=CTAZ_DATADIR=/var/lib/ctaz-node
 # dangerous one is zaino's JSON-RPC at P+10000: with their default base that lands on
 # 18233, which is our zebra P2P port. Checking at start time rather than trusting whoever
 # edited the toml, because the failure mode is stealing a port from the TAZ node.
-ExecStartPre=/opt/faucet/ctaz-port-check.sh ${CTAZ_BASE_PORT}
+#
+# THE `+` IS LOAD-BEARING: it runs this one check as root, outside the sandbox. Seeing
+# every listener on the box is inherently privileged, and `lsof` run as ctaz exits 1 with
+# nothing on stderr, so the check reported CANNOT-VERIFY and the node refused to start.
+# The guard was right to refuse; a port check that can only see its own user's sockets
+# cannot answer the question it exists to answer. The script is read-only, so the cost of
+# the privilege is bounded.
+ExecStartPre=+/opt/faucet/ctaz-port-check.sh ${CTAZ_BASE_PORT}
 
 # ── REFUSE TO START IF THE DATADIR IS ALREADY OVER ITS CEILING ───────────────────
-# systemd has no size limit for StateDirectory, so this is NOT a quota and must not be
-# read as one: a real ceiling needs a filesystem quota or a dedicated volume, and that is
-# recorded as an open item on #327. What this does give is a floor under the worst case,
-# refusing to start a node whose state has already grown past what the box can spare.
+# This is still NOT a quota: nothing here stops a RUNNING node from growing. What has
+# changed since it was written is what happens when it does. The dedicated volume is now
+# the real ceiling, so unbounded growth fills 59 GB of storage that holds nothing else
+# and the TAZ faucet does not notice. The guard's job shrank accordingly, from the only
+# line of defence to an early warning: it refuses to restart a node whose state has
+# already passed the tripwire, so we hear about it with room to act.
 #
 # The number matters more here than usual. Measured growth on this chain was 20.8 KB/block
 # at height 428, 29.8 at 1.6k and 66.1 at 22k, so per-block cost RISES with height and
-# every early extrapolation understates. The box has 28 GB free. Until the sync reaches
-# the tip and the real figure is known, this ceiling is a guess with a safety margin, and
-# it is deliberately low enough to trip before the TAZ chain is squeezed.
+# every early extrapolation understates. Until the sync reaches the tip and the real
+# figure is known, the ceiling is a guess with a safety margin, set in ctaz.env below the
+# volume size rather than at it.
 ExecStartPre=/opt/faucet/ctaz-datadir-guard.sh ${CTAZ_DATADIR} ${CTAZ_MAX_STATE_GB}
 
+# These are FALLBACKS, not the settings. /etc/faucet/ctaz.env is the operator's
+# declaration and it wins: EnvironmentFile= overrides Environment= no matter which order
+# they appear in, which is worth stating because reading top-to-bottom suggests the
+# opposite. Verified on this box rather than taken from the man page (systemd 255, a
+# oneshot echoing the variable with the file setting 45 and Environment= setting 14
+# printed 45), because a fallback that silently won would cap the ceiling at 14 GB on a
+# 59 GB volume and look like the guard misfiring.
+#
+# The fallbacks stay deliberately small. If ctaz.env is ever missing, we know nothing
+# about the storage this node landed on, and refusing to start too early is recoverable
+# in a way that filling a disk is not.
 EnvironmentFile=-/etc/faucet/ctaz.env
 Environment=CTAZ_BASE_PORT=19233
 Environment=CTAZ_MAX_STATE_GB=14
@@ -96,7 +140,15 @@ ExecStart=/opt/faucet/ctaz-zebrad -c /etc/faucet/ctaz-zebrad.toml start
 # genuinely starves the miner the answer is fewer cores here, not a lower priority number.
 CPUQuota=100%
 Nice=19
-IOSchedulingClass=idle
+
+# IO is best-effort/7, NOT idle, and the volume is the reason. `idle` was right when this
+# chain shared a spindle with the TAZ node: yield, always. The state now lives on its own
+# block device with nothing else on it, so idle priority is not yielding to anything, it
+# is just refusing to use a device we are paying for. Nice=19 and CPUQuota still handle
+# the resource that IS shared, which is the CPU.
+#
+# If cTAZ state ever moves back onto the root disk, this must go back to idle.
+IOSchedulingClass=best-effort
 IOSchedulingPriority=7
 
 # Their node holds the chain state plus zaino's cache in one process. This cap exists so a
