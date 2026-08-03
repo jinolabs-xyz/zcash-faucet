@@ -1308,7 +1308,11 @@ export default function Home() {
 
       </main>
 
-      <div style={{ position: "sticky", bottom: 0, borderTop: "2px solid var(--color-divider)", background: "var(--color-surface)", padding: `10px ${pad}`, display: "flex", flexWrap: "wrap", gap: "8px 14px", alignItems: "center" }}>
+      {/* `position` lives in globals.css, NOT here. An inline style is a normal author
+          declaration and a plain class rule cannot override one, which is the same trap
+          the brand-mark media query hit. Sticking it inline is what would stop the
+          mobile rule below from working, and it would fail silently. */}
+      <div className="site-footer" style={{ borderTop: "2px solid var(--color-divider)", background: "var(--color-surface)", padding: `10px ${pad}`, display: "flex", flexWrap: "wrap", gap: "8px 14px", alignItems: "center" }}>
         {/* Canonical Jino Labs attribution lockup, committed verbatim from the
             brand kit. Do not restyle it toward our palette or resize it below
             native: the kit sets a 16px mark and 11px cap-height minimum, and the
@@ -1316,7 +1320,7 @@ export default function Home() {
 
             The variant follows OUR theme state, which is client state and not
             prefers-color-scheme, so <picture> with a media query cannot do it. */}
-        <a href="https://jinolabs.xyz" style={{ display: "inline-flex", flex: "none", lineHeight: 0 }}>
+        <a className="footer-brand" href="https://jinolabs.xyz" style={{ display: "inline-flex", flex: "none", lineHeight: 0 }}>
           {/* eslint-disable-next-line @next/next/no-img-element -- a fixed-size
               SVG from public/ has nothing for next/image to optimise, and Next
               declines to optimise SVG anyway, so Image would just need
@@ -1332,7 +1336,7 @@ export default function Home() {
             Foundation's policy for projects that work with Zcash. That policy turns
             on not looking official, so this says plainly that we are not, and links
             the mark's owner. Cheap to add, and it is the condition of using it. */}
-        <span style={{ fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".05em", color: muted(50) }}>not an official Zcash service</span>
+        <span className="footer-note" style={{ fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".05em", color: muted(50) }}>not an official Zcash service</span>
         <a className="btn btn-ghost btn-sm" href="/donate" style={{ padding: 0 }}>Donate TAZ</a>
         {/* A terms page nobody can reach protects nobody, so it is linked from the
             footer of the page every visitor lands on. */}
@@ -1349,7 +1353,6 @@ export default function Home() {
           <a
             className="btn btn-secondary btn-sm fund-cta"
             href="/fund"
-            style={{ marginLeft: "auto" }}
           >
             {/* A heart, not a coin or a card. This is upkeep for a free tool, and a
                 payment glyph would read as a price for using the faucet, which is the

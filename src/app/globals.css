@@ -187,6 +187,57 @@ a:hover { color: var(--color-accent-800); }
   .app .btn-sm { min-height: 44px; }
 }
 
+/* ── The footer, and why it stops sticking on a phone ────────────────────────
+   It is `sticky; bottom: 0`, which pins it to the viewport while the page can
+   still scroll. On a desktop that costs a 40px strip. On a 375x812 phone it
+   wraps to three rows, 110px, and it was sitting ON TOP of live content:
+   measured unscrolled, "Balance lookup" and "How it works" were both at y=745
+   under a footer starting at y=702, so two working controls were unreachable
+   until you scrolled. That is functionality loss, not polish, and it is the
+   page people arrive on from the forum post.
+
+   Padding the main column by the footer's height would not hold, because the
+   height is what changes: it depends on how many rows the footer wraps into,
+   which depends on the viewport. So below the breakpoint the footer simply
+   stops sticking and sits at the end of the document, where it cannot cover
+   anything by construction. On a phone a permanently pinned 13% of the screen
+   was a bad trade anyway. */
+.site-footer { position: sticky; bottom: 0; }
+
+@media (max-width: 700px) {
+  .site-footer { position: static; }
+
+  /* And the stack, which was ragged for one reason: margin-left:auto on the
+     fund CTA. With everything on one wrapped row that pushed it alone to the
+     right with dead space beside it, while the disclaimer and the two links
+     collided on the line above. Giving the brand and the note a full row each
+     lets the three links share the last one, in reading order. */
+  .site-footer .footer-brand,
+  .site-footer .footer-note { flex: 1 0 100%; }
+  .site-footer .fund-cta { margin-left: 0; }
+}
+
+/* Desktop keeps the CTA hard right. It was an inline style, which no media
+   query can override, so it lives here now with the rule that undoes it. */
+@media (min-width: 701px) {
+  .site-footer .fund-cta { margin-left: auto; }
+}
+
+/* ── The masthead, which wrapped to two rows and left LIVE stranded ──────────
+   At 375px the brand, the two icon buttons and the status badge need more than
+   one row, so the badge dropped alone to a second row with the rest ragged
+   above it. The mark and the wordmark are not negotiable and the badge is the
+   one thing a visitor checks first, so nothing here can be dropped.
+
+   Two rows is fine. Two rows that look accidental is not. So below the
+   breakpoint the brand takes a full row and the controls share the next one,
+   which reads as a deliberate two-row masthead rather than a wrap. */
+@media (max-width: 700px) {
+  .nav { row-gap: 10px; }
+  .nav .nav-brand { flex: 1 0 100%; margin-right: 0; }
+  .nav > :not(.nav-brand):first-of-type { margin-left: 0; }
+}
+
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.2; } }
 @keyframes hatch { to { background-position: 26px 0; } }
 
