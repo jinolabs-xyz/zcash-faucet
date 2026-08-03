@@ -78,3 +78,49 @@ test("every bad state is flagged, so none of them can render as ordinary", () =>
   assert.equal(boxIsBad(classifyIntegrity(report({ at: NOW - 3 * 3600_000 }), NOW)), true);
   assert.equal(boxIsBad(classifyIntegrity(null, NOW)), true);
 });
+
+/* ── Undeclared units, which the API has been sending and nothing rendered ──────── */
+
+test("a clean box SAYS when units are enabled that the repo never declared", () => {
+  // Measured against production before writing this: /api/status answers
+  // enabledUndeclared 2 and the panel row said "34 of 34 files, all enabled". The
+  // figure was on the wire since #338 and this file had never read it, so the one
+  // place a person looks was the only place it did not reach.
+  const row = boxRow(classifyIntegrity(report({ expected: 34, present: 34, enabledUndeclared: 2 }), NOW));
+  assert.match(row, /34 of 34 files, all enabled/, "the existing clause must survive");
+  assert.match(row, /2 enabled but undeclared/);
+});
+
+test("and it is NOT a fault, so the chip and the marker stay quiet", () => {
+  // classifyIntegrity's own comment: drift is a fact to surface, not a fault. The two
+  // on production are faucet.service and the autodeploy timer, both meant to be there
+  // and merely undeclared. Marking that red would train an operator to ignore red.
+  const s = classifyIntegrity(report({ expected: 34, present: 34, enabledUndeclared: 2 }), NOW);
+  assert.equal(boxIsBad(s), false, "drift must not turn the row red");
+  assert.equal(boxChip(s), null, "and must not spend a slot on the terse strip");
+});
+
+test("zero and unknown both render nothing, and they are different facts", () => {
+  // 0 is a box that reported no drift. null is a report too old to carry the field.
+  // Neither earns a clause: "0 undeclared" is noise and "undeclared unknown" would
+  // imply a problem where there is only an older deploy.
+  assert.doesNotMatch(boxRow(classifyIntegrity(report({ expected: 9, present: 9, enabledUndeclared: 0 }), NOW)), /undeclared/);
+  assert.doesNotMatch(boxRow(classifyIntegrity(report({ expected: 9, present: 9, enabledUndeclared: null }), NOW)), /undeclared/);
+});
+
+test("an INCOMPLETE box reports drift too, without it displacing the real fault", () => {
+  // The fault has to lead. Drift is additional information, never a substitute for
+  // "2 units are missing", and appending it must not push the count out of the row.
+  const row = boxRow(classifyIntegrity(report({ expected: 34, present: 32, notEnabled: 1, enabledUndeclared: 3 }), NOW));
+  assert.match(row, /2 of 34 MISSING/);
+  assert.match(row, /1 NOT ENABLED/);
+  assert.match(row, /3 enabled but undeclared/);
+  assert.ok(row.indexOf("MISSING") < row.indexOf("undeclared"), "the fault must come first");
+});
+
+test("DRIFT IS NEVER FOLDED INTO THE COUNTS, or a drifted box outranks a clean one", () => {
+  // The entry this helper exists to avoid. If undeclared units were added to
+  // `present`, a box with 32 of 34 files and 2 stray units would render as 34 of 34.
+  const drifted = boxRow(classifyIntegrity(report({ expected: 34, present: 32, notEnabled: 0, enabledUndeclared: 2 }), NOW));
+  assert.doesNotMatch(drifted, /34 of 34/, "an extra enabled unit is not a present file");
+});
