@@ -328,6 +328,13 @@ a.contribute {
   .app .contribute-label { display: none; }
 }
 
+.drips-line strong {
+  /* The figure carries the weight; the words stay quiet. Same ink as body text
+     rather than the accent, because this is a fact and not a call to action. */
+  font-family: var(--mono);
+  font-weight: 700;
+}
+
 .theme-toggle:hover,
 a.theme-toggle:hover {
   color: var(--color-text);
