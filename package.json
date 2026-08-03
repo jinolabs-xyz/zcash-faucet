@@ -23,7 +23,7 @@
     "@noble/hashes": "^2.2.0",
     "@noble/secp256k1": "^3.1.0",
     "@scure/base": "^2.2.0",
-    "better-sqlite3": "^11.8.1",
+    "better-sqlite3": "^13.0.2",
     "next": "^16.2.12",
     "qrcode-generator": "^2.0.4",
     "react": "^19.0.0",
