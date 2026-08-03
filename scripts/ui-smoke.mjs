@@ -30,7 +30,7 @@
 // it is a CI-only concern, and keeping it out means `npm ci` stays fast for
 // everyone and production installs no browser tooling. Invoked as a plain
 // node script for the same reason, no shared package.json entry needed.
-import { chromium } from "playwright";
+import { chromium, devices } from "playwright";
 
 const BASE = (process.env.UI_SMOKE_URL ?? "http://localhost:3120").replace(/\/$/, "");
 let failures = 0;
@@ -565,6 +565,108 @@ async function checkCtazToggle(page, base) {
   await page.getByRole("button", { name: /Another address/ }).click();
 }
 
+/**
+ * THE PHONE (#337). Everything above runs at the default desktop viewport, which is
+ * how a footer ended up sitting on top of two working controls on the page most
+ * visitors land on. The desktop pass was green throughout.
+ *
+ * Runs in its OWN context, because a viewport and a touch profile are context-level
+ * and cannot be set on a page that already exists. `devices["iPhone 13"]` brings
+ * `hasTouch` with it, which is what makes the `pointer: coarse` rules apply: without
+ * it the 44px tap-target floor is never exercised and the check would pass by never
+ * asking.
+ *
+ * Three properties, chosen because each one is a way the page stops WORKING rather
+ * than a way it looks wrong:
+ *
+ *   NO HORIZONTAL OVERFLOW. Content off the right edge is content nobody reads.
+ *   NOTHING PINNED SITS ON A CONTROL. This is the reported bug, generalised: any
+ *     fixed or sticky element whose box intersects an interactive element's box.
+ *     Stated as geometry rather than as "the footer", so the next pinned thing is
+ *     covered by a test nobody has to remember to extend.
+ *   TAP TARGETS REACH 44px. The floor, and the rule that enforces it keyed on a
+ *     class the masthead's two icon controls do not have, so both were 30px.
+ */
+async function checkMobile(browser, base) {
+  const ctx = await browser.newContext({ ...devices["iPhone 13"], viewport: { width: 375, height: 812 } });
+  const page = await ctx.newPage();
+  // Its own error collector. The desktop run asserts a clean console over its own
+  // flow, and folding these in would blame this pass for anything it inherited.
+  const seen = [];
+  page.on("pageerror", (e) => seen.push(`uncaught: ${e.message}`));
+  page.on("console", (m) => { if (m.type() === "error") seen.push(`console: ${m.text()}`); });
+
+  const audit = async (label) => {
+    await page.waitForTimeout(400);
+    const r = await page.evaluate(() => {
+      const vw = window.innerWidth;
+      const wide = [...document.querySelectorAll("body *")]
+        .filter((e) => { const b = e.getBoundingClientRect(); return b.width > 0 && b.right > vw + 1; })
+        .slice(0, 3)
+        .map((e) => `${e.tagName}${e.className ? "." + String(e.className).split(" ")[0] : ""}`);
+      const pinned = [...document.querySelectorAll("body *")]
+        .filter((e) => ["fixed", "sticky"].includes(getComputedStyle(e).position) && e.getBoundingClientRect().height > 0);
+      const covered = new Set();
+      for (const p of pinned) {
+        const pr = p.getBoundingClientRect();
+        for (const e of document.querySelectorAll("a,button,input,summary")) {
+          if (p.contains(e)) continue;                 // its own children are not covered
+          const er = e.getBoundingClientRect();
+          if (er.height === 0) continue;
+          if (er.top < pr.bottom && er.bottom > pr.top && er.left < pr.right && er.right > pr.left) {
+            covered.add((e.textContent || e.getAttribute("aria-label") || e.tagName).trim().slice(0, 30));
+          }
+        }
+      }
+      const small = [...document.querySelectorAll("a.btn,a.theme-toggle,button,input")]
+        .filter((e) => { const b = e.getBoundingClientRect(); return b.height > 0 && b.height < 44; })
+        .slice(0, 3)
+        .map((e) => `${(e.textContent || e.getAttribute("aria-label") || "").trim().slice(0, 22)} h=${Math.round(e.getBoundingClientRect().height)}`);
+      return { docW: document.documentElement.scrollWidth, vw, wide, covered: [...covered].slice(0, 3), small };
+    });
+    ok(`mobile ${label}: no horizontal overflow`, r.docW <= r.vw, `${r.docW} vs ${r.vw}${r.wide.length ? " :: " + r.wide.join(", ") : ""}`);
+    ok(`mobile ${label}: nothing pinned covers a control`, r.covered.length === 0, r.covered.join(", "));
+    ok(`mobile ${label}: tap targets reach 44px`, r.small.length === 0, r.small.join(", "));
+  };
+
+  try {
+    // Every page a visitor can reach, both themes. /fund is in here deliberately:
+    // that is where the sticky bar was covering "Copy address", and it is the page
+    // whose address is real money.
+    for (const theme of ["ink", "paper"]) {
+      await page.goto(base, { waitUntil: "networkidle", timeout: 60_000 });
+      await page.evaluate((t) => localStorage.setItem("zfaucet_theme", t), theme);
+      for (const path of ["/", "/donate", "/fund", "/terms"]) {
+        await page.goto(base + path, { waitUntil: "networkidle", timeout: 60_000 });
+        await audit(`${path} ${theme}`);
+      }
+    }
+
+    // The panel open, which is the tallest the home page gets before a claim.
+    await page.goto(base, { waitUntil: "networkidle", timeout: 60_000 });
+    await page.getByRole("button", { name: /More details/ }).click();
+    await audit("/ panel open");
+
+    // And the receipt, the one state that only exists after a real claim. Checked on
+    // a phone because it is the state a claimant is actually looking at, and it is
+    // the longest card on the page.
+    await page.getByRole("button", { name: /Hide details/ }).click();
+    await page.getByRole("button", { name: "Generate a test address" }).first().click();
+    await page
+      .waitForFunction(() => (document.querySelector("input.input")?.value ?? "").length > 100, null, { timeout: 20_000 })
+      .catch(() => {});
+    await page.locator("button.btn-primary").first().click();
+    await page.getByText("Sent ✓").waitFor({ timeout: 120_000 });
+    await audit("/ receipt");
+
+    ok("mobile: no page or console errors at 375x812", seen.length === 0, seen.slice(0, 2).join(" | "));
+  } catch (err) {
+    ok("mobile pass ran to completion", false, err instanceof Error ? err.message : String(err));
+  } finally {
+    await ctx.close();
+  }
+}
+
 // The 404 must wear the site chrome, not Next's bare default. A broken not-found
 // route renders as the framework default, which has no mark, so this fails on it.
 async function check404(page, base) {
@@ -644,6 +746,11 @@ try {
   // Assert the clean-console guarantee on the whole claim flow BEFORE the 404
   // check, which deliberately loads a 404 and would otherwise pollute this.
   ok("no page errors, console errors or failed requests", problems.length === 0, problems.slice(0, 3).join(" | "));
+
+  // The phone. Its own browser context, so it cannot disturb the desktop page above
+  // it, and after the desktop claim so a mobile failure is never the first thing to
+  // go red when something more basic is broken.
+  await checkMobile(browser, BASE);
 
   // Last, because it navigates away and intentionally hits a 404.
   await check404(page, BASE);
