@@ -69,7 +69,21 @@ fi
 
 if [ "$app" = "1" ]; then
   "$INSTALL_DIR/redeploy.sh"
-  exit $?
+  app_rc=$?
+  # A HEALTHY REBUILD MUST NOT ERASE A FAILED OPS INSTALL.
+  #
+  # This used to be `exit $?`, which is redeploy's status and discards rc from the ops
+  # install above. So on a commit touching BOTH -- ops install fails, rebuild succeeds --
+  # the script exited 0. The timer reported success, the site was fine, and the box was
+  # silently not at spec. That is precisely what the closing comment below forbids,
+  # defeated by an earlier exit, and it is the shape that let 19 missing files stay
+  # invisible: a real failure with a green signal in front of it.
+  #
+  # redeploy's own code wins when redeploy failed, because it spends 0/1/2 to distinguish
+  # a broken deploy from an unverified one and that distinction decides who gets paged.
+  # Otherwise a failed ops install still fails the run.
+  [ "$app_rc" -ne 0 ] && exit "$app_rc"
+  exit "$rc"
 fi
 
 [ "$ops" = "1" ] || log "main moved but touched neither the app nor ops, nothing to install"
