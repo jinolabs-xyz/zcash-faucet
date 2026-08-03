@@ -18,6 +18,7 @@ import { getSenderFor, safeBalance, SendOutcomeUnknownError, type SendResult } f
 import { getNodeStatus } from "@/lib/zcash/nodeStatus";
 import { mayBuildTransaction, readChainFreshnessAsking } from "@/lib/zcash/shieldGate";
 import { getSendQueue, getCtazSendQueue, QueueFullError, TaskDeadlineError } from "@/lib/zcash/queue";
+import { recordSend } from "@/lib/zcash/sendHealth";
 import { DEFAULT_NETWORK, NETWORKS, parseNetwork } from "@/lib/network";
 import { canServeCtaz } from "@/lib/crosslink/recency";
 import { readCtazRecency } from "@/lib/crosslink/read";
@@ -305,6 +306,10 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
       // exemption even on cTAZ: there IS something to record, it just is not a
       // transaction id. The network is still passed, because the drip counted here is
       // as real as any other and belongs in its own bucket.
+      // NOT a failure for health purposes. The wallet holds an opid and may have
+      // broadcast, so counting it against the money path would let a slow wallet trip
+      // readiness and roll a good deploy back.
+      recordSend("unknown");
       const marker = err instanceof SendOutcomeUnknownError ? `unknown:${err.opid}` : "unknown:deadline";
       try {
         await finalizeClaim(reservation.claimId, "sent", marker, undefined, Date.now(), network);
@@ -322,6 +327,12 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
 
     // Everything else genuinely did not send. Release the reservation so the
     // user can retry immediately.
+    //
+    // Counted, because this is the only place in the app that knows a drip failed. A
+    // 502 to one caller and a log line is not a signal anything can act on, which is
+    // how a crash-looping wallet stays invisible behind a readiness probe that only
+    // reads a balance.
+    recordSend("failed");
     try {
       await finalizeClaim(reservation.claimId, "failed", null, undefined, Date.now(), network);
     } catch (finErr) {
@@ -335,6 +346,8 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     api.logError(err, "send failed");
     return apiError(502, "The send failed on our side. Nothing left the wallet. Try again in a moment.", api);
   }
+
+  recordSend("ok");
 
   // The send is broadcast. If recording it fails, that is an operator problem
   // (the cooldown may not commit), never a reason to tell the user it failed.
