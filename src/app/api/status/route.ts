@@ -64,6 +64,11 @@ export const GET = withApi("status", async () => {
     balanceZat !== null && balanceZat < config.dripZatoshi + config.minReserveZatoshi;
 
   return NextResponse.json({
+    // Which commit this running build came from, so an external check can tell whether a
+    // merge actually reached production. The deploy is pull-based, so a stalled timer or a
+    // silently failed rebuild otherwise looks identical to being up to date.
+    // "unknown" when the deploy did not supply one, never omitted.
+    buildCommit: process.env.FAUCET_BUILD_COMMIT || "unknown",
     network: config.network,
     dripTaz: config.dripTaz,
     cooldownSeconds: config.cooldownSeconds,

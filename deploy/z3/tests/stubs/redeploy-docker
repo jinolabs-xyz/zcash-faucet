@@ -4,6 +4,15 @@
 # be made to fail. Everything is logged to $STUB_LOG.
 set -uo pipefail
 echo "docker $*" >> "${STUB_LOG:?}"
+# Record the build-commit env as compose RECEIVED it. A real compose interpolates this
+# into the container, so observing it here is how a test tells that redeploy computed and
+# passed one rather than leaving it empty.
+#
+# COMPOSE ONLY. The first version logged on every docker call, including `image inspect`,
+# which runs outside compose() and therefore legitimately has no such env. Those <unset>
+# lines were accurate and meaningless, and they made a correct run look broken.
+[ "${1:-}" = "compose" ] && \
+  printf 'FAUCET_BUILD_COMMIT=%s\n' "${FAUCET_BUILD_COMMIT-<unset>}" >> "${STUB_LOG:?}"
 IMG="${STUB_IMAGES:?}"
 
 case "${1:-}" in

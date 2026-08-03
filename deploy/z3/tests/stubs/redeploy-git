@@ -1,10 +1,37 @@
 #!/usr/bin/env bash
-# Stub git for the redeploy pull step. STUB_PULL_FAIL=1 makes the pull fail.
+# Stub git for redeploy. STUB_PULL_FAIL=1 makes the pull fail.
+#
+# It also answers the two read-only questions redeploy asks to LABEL the build with its
+# commit. Those were added because nothing could tell, from outside, which commit the live
+# site was built from.
+#
+#   STUB_GIT_SHA     what rev-parse --short HEAD returns   (default abc1234)
+#   STUB_GIT_DIRTY   non-empty -> status --porcelain reports a modified file
+#   STUB_GIT_NOREPO  1 -> rev-parse and status both FAIL, as outside a checkout
+#
+# WHY THIS IS STUBBED RATHER THAN TESTED AGAINST A REAL REPO. The first version of those
+# tests built a real git repo in the fixture, and every one of them was meaningless: this
+# stub is first on PATH, so `git init`, `git commit` and `git status` all hit it, the
+# fixture's "expected sha" was computed with the stub too, and the assertion compared the
+# stub's answer to itself. It passed while testing nothing. If a double is on PATH, the
+# double is the thing to teach.
 set -uo pipefail
 echo "git $*" >> "${STUB_LOG:?}"
+
+if [ "${STUB_GIT_NOREPO:-0}" = "1" ]; then
+  case " $* " in
+    *" rev-parse "*|*" status "*)
+      echo "fatal: not a git repository (stub)" >&2; exit 128 ;;
+  esac
+fi
+
 for a in "$@"; do
   case "$a" in
-    rev-parse) echo "abc1234"; exit 0 ;;
+    rev-parse) echo "${STUB_GIT_SHA:-abc1234}"; exit 0 ;;
+    status)
+      # --porcelain: empty means clean, which is what the real thing does.
+      [ -n "${STUB_GIT_DIRTY:-}" ] && echo " M some-file"
+      exit 0 ;;
     pull) [ "${STUB_PULL_FAIL:-0}" = "1" ] && { echo "pull failed (stub)" >&2; exit 1; }; echo "Already up to date."; exit 0 ;;
   esac
 done

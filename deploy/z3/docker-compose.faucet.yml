@@ -48,6 +48,10 @@ services:
       # Single box has a real disk — local SQLite ledger (persisted on a volume)
       # is enough; no need for the Cloudflare D1 fallback used on ephemeral hosts.
       DB_BACKEND: sqlite
+      # The commit this image was built from, set by redeploy.sh. Makes deploy staleness
+      # externally visible: box-report covers ops FILES, nothing covered the app BUILD.
+      # `unknown` rather than unset, so the route can tell not-reported from not-asked.
+      FAUCET_BUILD_COMMIT: ${FAUCET_BUILD_COMMIT:-unknown}
     volumes:
       # Persist the rate-limit / cooldown ledger across restarts.
       - faucet_data:/app/data
