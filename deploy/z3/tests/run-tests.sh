@@ -62,7 +62,7 @@ BASE_PATH="$PATH"
 # shellcheck source=lib.sh
 . "$SCRATCH/lib.sh"
 
-SELECTED="${SUITES:-zsnap backup deploy metrics redeploy drift alerts access watchdog repo installops boxreport bringtospec ctazports}"
+SELECTED="${SUITES:-zsnap backup deploy metrics redeploy drift alerts access watchdog repo installops boxreport bringtospec ctazports autodeploy}"
 
 # A missing dependency used to look exactly like broken code. With no sshd on
 # PATH the access suite reports 3 plain FAILs, and an `apt-get install` that
