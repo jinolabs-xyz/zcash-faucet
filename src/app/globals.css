@@ -297,6 +297,37 @@ a:hover { color: var(--color-accent-800); }
    order alone. It currently resolves this way round by luck of line numbers.
    Moving either block would silently turn the icon accent red on hover with
    nothing to tell you, which is a bug that only ever shows up in a screenshot. */
+/* The contribute link: the theme-toggle box, widened to carry its word. The label
+   is styled like the LIVE badge's text so the masthead's three boxes read as one
+   family, and it disappears below 560px, returning the control to the 44px square
+   the mobile audit measured, so the pinned no-wrap masthead stays true. Hidden
+   with display:none rather than visibility, so the box actually narrows. */
+a.contribute {
+  width: auto;
+  padding: 0 10px;
+  gap: 7px;
+  /* 72% rather than the box family's 62%: with a visible word this is TEXT and
+     owes 4.5:1, and 62% measures 4.47:1 on paper, three hundredths short. Caught
+     by ui-smoke's text check the moment the label existed, which is the check
+     working, not pedantry. The icon inherits the bump too and only gains. */
+  color: color-mix(in srgb, var(--color-text) 72%, transparent);
+}
+.contribute-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+@media (max-width: 560px) {
+  /* Back to the base square. 30px stated here, and the coarse-pointer rule above
+     outweighs this selector (0-2-0 beats 0-1-1) so touch devices still get their
+     44px floor; stating 44 here instead would win on narrow MOUSE windows where
+     the height stays 30, leaving a 44x30 mismatch nobody asked for. */
+  a.contribute { width: 30px; padding: 0; }
+  .app .contribute-label { display: none; }
+}
+
 .theme-toggle:hover,
 a.theme-toggle:hover {
   color: var(--color-text);

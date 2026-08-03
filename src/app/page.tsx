@@ -741,14 +741,20 @@ export default function Home() {
             project whose repo is only findable by guessing the org name is open
             source in licence rather than in practice. Same box as the theme toggle
             so the two utility controls read as a pair. */}
+        {/* Labelled on wide screens, icon-only on narrow ones: the masthead's
+            no-wrap behaviour at phone widths was measured and pinned in #337, and
+            a permanent label would re-break exactly what that fixed. The word is
+            CONTRIBUTE rather than SOURCE because the owner wants the link to read
+            as an invitation, not a citation. */}
         <a
-          className="theme-toggle"
+          className="theme-toggle contribute"
           href="https://github.com/jinolabs-xyz/zcash-faucet"
           target="_blank"
           rel="noopener noreferrer"
-          aria-label="Source code on GitHub, opens in a new tab"
-          title="Source code on GitHub, opens in a new tab"
+          aria-label="Contribute on GitHub, opens in a new tab"
+          title="Contribute on GitHub, opens in a new tab"
         >
+          <span className="contribute-label">Contribute</span>
           <RepoIcon />
         </a>
         {/* Left of the status badge, which is where every site puts this and so

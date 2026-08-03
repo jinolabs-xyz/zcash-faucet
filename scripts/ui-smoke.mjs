@@ -58,6 +58,49 @@ async function freshAddress() {
 // Scripted here so a regression is caught by CI rather than noticed on prod. The
 // native rubber-band overscroll bounce is the one thing still not scriptable, so
 // it stays a manual check after deploys.
+const COLOUR_LIB = `
+    const parse = (colour, over) => {
+      const c = document.createElement("canvas");
+      c.width = c.height = 1;
+      const ctx = c.getContext("2d", { willReadFrequently: true });
+      // An unparseable fillStyle is DISCARDED, leaving the previous value, so a bad
+      // colour would otherwise be measured as whatever we happened to paint before it.
+      // Two different sentinels disagree exactly when the value did not take.
+      ctx.fillStyle = "#000"; ctx.fillStyle = colour; const a = ctx.fillStyle;
+      ctx.fillStyle = "#fff"; ctx.fillStyle = colour; const b = ctx.fillStyle;
+      if (a !== b) return null;
+      // Backdrop first, colour on top, so a semi-transparent token composites the way
+      // the browser paints it instead of being read at full strength.
+      ctx.clearRect(0, 0, 1, 1);
+      if (over) { ctx.fillStyle = over; ctx.fillRect(0, 0, 1, 1); }
+      ctx.fillStyle = colour; ctx.fillRect(0, 0, 1, 1);
+      const d = ctx.getImageData(0, 0, 1, 1).data;
+      return [d[0], d[1], d[2]];
+    };
+    const lum = (rgb) => {
+      const [r, g, b] = rgb.map((n) => {
+        const s = n / 255;
+        return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const opaque = (c) => c && !/rgba\\(.*,\\s*0\\)$|transparent/.test(c);
+    const bgBehind = (el) => {
+      let bg = getComputedStyle(el).backgroundColor;
+      while (el && !opaque(bg)) { el = el.parentElement; bg = el ? getComputedStyle(el).backgroundColor : "rgb(255, 255, 255)"; }
+      return bg;
+    };
+    // null when either colour will not parse, so "cannot measure" can be reported as
+    // itself rather than arriving as a number that looks like a finding.
+    const ratioOf = (fg, el) => {
+      const back = parse(bgBehind(el));
+      const front = parse(fg, bgBehind(el));
+      if (!back || !front) return null;
+      const [hi, lo] = [lum(front), lum(back)].sort((x, y) => y - x);
+      return (hi + 0.05) / (lo + 0.05);
+    };
+  `;
+
 async function checkAppearance(page) {
   // The masthead mark, same identity as the favicon. aria-hidden by design, so
   // assert its presence, not an accessible name.
@@ -114,48 +157,7 @@ async function checkAppearance(page) {
   // divides by 255 and returns a confident wrong number: reviewing #297 that produced
   // 1.10:1 for an icon that is plainly legible. Painting to a 1x1 canvas and reading
   // the pixel back means whatever CSS invents next is already handled.
-  const COLOUR_LIB = `
-    const parse = (colour, over) => {
-      const c = document.createElement("canvas");
-      c.width = c.height = 1;
-      const ctx = c.getContext("2d", { willReadFrequently: true });
-      // An unparseable fillStyle is DISCARDED, leaving the previous value, so a bad
-      // colour would otherwise be measured as whatever we happened to paint before it.
-      // Two different sentinels disagree exactly when the value did not take.
-      ctx.fillStyle = "#000"; ctx.fillStyle = colour; const a = ctx.fillStyle;
-      ctx.fillStyle = "#fff"; ctx.fillStyle = colour; const b = ctx.fillStyle;
-      if (a !== b) return null;
-      // Backdrop first, colour on top, so a semi-transparent token composites the way
-      // the browser paints it instead of being read at full strength.
-      ctx.clearRect(0, 0, 1, 1);
-      if (over) { ctx.fillStyle = over; ctx.fillRect(0, 0, 1, 1); }
-      ctx.fillStyle = colour; ctx.fillRect(0, 0, 1, 1);
-      const d = ctx.getImageData(0, 0, 1, 1).data;
-      return [d[0], d[1], d[2]];
-    };
-    const lum = (rgb) => {
-      const [r, g, b] = rgb.map((n) => {
-        const s = n / 255;
-        return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
-      });
-      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    };
-    const opaque = (c) => c && !/rgba\\(.*,\\s*0\\)$|transparent/.test(c);
-    const bgBehind = (el) => {
-      let bg = getComputedStyle(el).backgroundColor;
-      while (el && !opaque(bg)) { el = el.parentElement; bg = el ? getComputedStyle(el).backgroundColor : "rgb(255, 255, 255)"; }
-      return bg;
-    };
-    // null when either colour will not parse, so "cannot measure" can be reported as
-    // itself rather than arriving as a number that looks like a finding.
-    const ratioOf = (fg, el) => {
-      const back = parse(bgBehind(el));
-      const front = parse(fg, bgBehind(el));
-      if (!back || !front) return null;
-      const [hi, lo] = [lum(front), lum(back)].sort((x, y) => y - x);
-      return (hi + 0.05) / (lo + 0.05);
-    };
-  `;
+
 
   const worstReadableLink = () =>
     page.evaluate(`(() => {
@@ -334,7 +336,13 @@ async function checkAppearance(page) {
   const foundIcons = icons.every((i) => i && !i.unparseable);
   const worstIcon = foundIcons ? icons.slice().sort((a, b) => a.ratio - b.ratio)[0] : null;
   const unparseableIcon = icons.find((i) => i && i.unparseable);
-  const missing = !foundIcons ? [] : ["source link", "theme toggle"].filter((_, i) => !icons.every((c) => (i === 0 ? c.sawSource : c.sawToggle)));
+  // The named set is the THEME TOGGLE only, since the contribute link grew a visible
+  // label at desktop widths and is therefore covered by the text-contrast check above,
+  // not this one. This guard fired BY NAME when the label landed, which is exactly the
+  // substitution case it was built for, and moving the requirement rather than deleting
+  // it keeps the contract honest: the link is icon-only below 560px, so its icon-contrast
+  // assertion lives in the MOBILE pass, where that state actually exists.
+  const missing = !foundIcons ? [] : ["theme toggle"].filter(() => !icons.every((c) => c.sawToggle));
   ok(
     "icon-only controls meet WCAG 1.4.11 in both themes",
     foundIcons && missing.length === 0 && worstIcon.ratio >= 3,
@@ -627,6 +635,27 @@ async function checkMobile(browser, base) {
     ok(`mobile ${label}: no horizontal overflow`, r.docW <= r.vw, `${r.docW} vs ${r.vw}${r.wide.length ? " :: " + r.wide.join(", ") : ""}`);
     ok(`mobile ${label}: nothing pinned covers a control`, r.covered.length === 0, r.covered.join(", "));
     ok(`mobile ${label}: tap targets reach 44px`, r.small.length === 0, r.small.join(", "));
+    // The contribute link is icon-only ONLY at this width (its label shows from
+    // 560px up, where the text-contrast check owns it). So its icon-contrast home
+    // is here: the named guard moved with the state, rather than being deleted
+    // when the desktop check lost the subject. Landing page only, both themes
+    // arrive via the caller's sweep.
+    if (label.startsWith("/ ") || label === "/ ink" || label === "/ paper") {
+      const icon = await page.evaluate(`(() => {
+        ${COLOUR_LIB}
+        const el = [...document.querySelectorAll("a.contribute")].find((e) => e.getBoundingClientRect().width > 0);
+        if (!el) return { missing: true };
+        const lbl = el.querySelector(".contribute-label");
+        if (lbl && getComputedStyle(lbl).display !== "none") return { labelled: true };
+        const ratio = ratioOf(getComputedStyle(el).color, el);
+        return { ratio };
+      })()`);
+      ok(
+        `mobile ${label}: the contribute icon keeps 1.4.11 contrast`,
+        !icon.missing && !icon.labelled && icon.ratio != null && icon.ratio >= 3,
+        icon.missing ? "contribute link not found, so nothing was measured" : icon.labelled ? "label visible at mobile width, state contract broken" : `glyph ${icon.ratio?.toFixed(2)}:1`,
+      );
+    }
   };
 
   try {
