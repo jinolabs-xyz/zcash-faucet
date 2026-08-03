@@ -396,12 +396,18 @@ check "a successful build with no artifact exits 1" "[ $? -eq 1 ]"
 check "and says the build reported success but nothing was exported" \
   "grep -q 'reported success but no zebrad was exported' '$T/noartifact.log'"
 
-echo "== ctaz-build: no \`file\` means CANNOT-VERIFY, never a silent pass"
-# Without file we cannot answer the one question this script exists to answer.
+echo "== ctaz-build: a \`file\` that cannot answer means CANNOT-VERIFY, never a silent pass"
+# Without a working file(1) we cannot answer the one question this script exists to
+# answer. The first version of this test DELETED the stub and assumed absence, which
+# only holds on hosts that ship no system file(1): green in one container, red on a
+# mac and on CI, for reasons that had nothing to do with the code. Rule 34's shape,
+# a fixture premise the environment decides. Failure is the deterministic form of
+# cannot-answer, so the stub FAILS instead, and the script treats absent and failed
+# identically, the #334 lsof lesson.
 build_env
-rm -f "$T/bin/file"
+printf '#!/bin/sh\nexit 1\n' > "$T/bin/file"; chmod +x "$T/bin/file"
 bash "$BUILD" > "$T/nofile.log" 2>&1
-check "a host without \`file\` exits exactly 2" "[ $? -eq 2 ]"
+check "a \`file\` that cannot answer exits exactly 2" "[ $? -eq 2 ]"
 check "and refuses to ship on the assumption it is correct" \
   "grep -q 'may well be correct' '$T/nofile.log'"
 

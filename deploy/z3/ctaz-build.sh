@@ -74,13 +74,23 @@ fi
 [ -s "$OUT_DIR/zebrad" ] || { log "ERROR: extracted an EMPTY zebrad"; exit 1; }
 
 # ── the assertion this script exists for ─────────────────────────────────────────
+# Absent and FAILED both mean the same thing here: the architecture was not checked.
+# The failure case matters as much as the absence, the lsof lesson from #334: a tool
+# that cannot answer must never be indistinguishable from a satisfied check, and a
+# test can only pin this deterministically through failure, since real absence
+# depends on what the host happens to ship.
 if ! command -v file >/dev/null 2>&1; then
   log "CANNOT VERIFY: no \`file\` on this host, so the binary's architecture was not"
   log "  checked. It may well be correct. Shipping it on that basis is how a wrong-arch"
   log "  binary reaches a box and fails at exec time."
   exit 2
 fi
-desc="$(file -b "$OUT_DIR/zebrad" 2>/dev/null)"
+if ! desc="$(file -b "$OUT_DIR/zebrad" 2>/dev/null)" || [ -z "$desc" ]; then
+  log "CANNOT VERIFY: \`file\` exists but could not read the binary, so the architecture"
+  log "  was not checked. It may well be correct. Shipping it on that basis is how a"
+  log "  wrong-arch binary reaches a box and fails at exec time."
+  exit 2
+fi
 log "extracted $OUT_DIR/zebrad"
 log "  $desc"
 case "$desc" in
