@@ -26,6 +26,9 @@ box_env() {
   printf '[Unit]\nDescription=t\n[Timer]\nOnCalendar=hourly\n[Install]\nWantedBy=timers.target\n' \
     > "$S/faucet-thing.timer"
   printf 'fn main() {}\n' > "$S/miner/src/main.rs"
+  # The declaration the reporter now reads: which units MUST be enabled. Without
+  # this file the report is cannot-say by design, so every fixture ships one.
+  printf 'faucet-thing.timer\n' > "$S/enabled-units"
   export STUB_UNIT_DIR="$T/units"
   export STUB_DISABLED="$T/disabled"; : > "$STUB_DISABLED"
   # A box that matches: script installed, unit installed and enabled.
@@ -107,7 +110,61 @@ touch -d '2026-01-01 00:00:00' "$S/miner/src/main.rs"
 printf 'ELF-ish\n' > "$T/install/zcash-testnet-miner"
 : > "$STUB_ENABLED"
 bash "$BOX_REPORT" > /dev/null 2>&1
-check "notEnabled counts the disabled unit" "[ \"\$(jqf '$BOX_REPORT_OUT' notEnabled)\" = '1' ]"
+check "notEnabled counts the DECLARED disabled unit" "[ \"\$(jqf '$BOX_REPORT_OUT' notEnabled)\" = '1' ]"
+
+echo "== box-report: an UNDECLARED disabled unit is the operator's business, not a failure"
+# The live incident: ctaz-node.service shipped with [Install], deliberately dark,
+# documented as such in enabled-units, and the panel went red for 11 hours because
+# the reporter enforced an [Install] heuristic the repo had already replaced with
+# the declaration. Undeclared + disabled must be GREEN.
+box_env
+touch -d '2026-01-01 00:00:00' "$S/miner/src/main.rs"
+printf 'ELF-ish\n' > "$T/install/zcash-testnet-miner"
+printf '[Unit]\nDescription=dark\n[Service]\nExecStart=/bin/true\n[Install]\nWantedBy=multi-user.target\n' > "$S/ctaz-node.service"
+cp "$S/ctaz-node.service" "$T/units/ctaz-node.service"
+bash "$BOX_REPORT" > /dev/null 2>&1
+check "undeclared+disabled does not count as notEnabled" "[ \"\$(jqf '$BOX_REPORT_OUT' notEnabled)\" = '0' ]"
+# expected: watchdog.sh + faucet-thing.timer + ctaz-node.service + miner binary = 4.
+# Asserted as the exact number rather than present==expected, because the binary's
+# present-ness depends on GNU touch honouring -d, which this host may not have; the
+# unit's own inclusion is what this test is about.
+check "and the dark unit is still counted in expected" "[ \"\$(jqf '$BOX_REPORT_OUT' expected)\" = '4' ]"
+
+echo "== box-report: an undeclared ENABLED unit is surfaced as drift, and does not fail"
+# enabled-units line 21 has promised this surfacing since the file was written;
+# this is the first code to honour it. Informational count, never a failure:
+# faucet.service and the autodeploy timer legitimately live in this state.
+box_env
+touch -d '2026-01-01 00:00:00' "$S/miner/src/main.rs"
+printf 'ELF-ish\n' > "$T/install/zcash-testnet-miner"
+printf '[Unit]\nDescription=op\n[Service]\nExecStart=/bin/true\n[Install]\nWantedBy=multi-user.target\n' > "$S/operator-armed.service"
+cp "$S/operator-armed.service" "$T/units/operator-armed.service"
+printf 'operator-armed.service\n' >> "$STUB_ENABLED"
+bash "$BOX_REPORT" > /dev/null 2>&1
+check "enabledUndeclared counts it" "[ \"\$(jqf '$BOX_REPORT_OUT' enabledUndeclared)\" = '1' ]"
+check "and notEnabled stays zero" "[ \"\$(jqf '$BOX_REPORT_OUT' notEnabled)\" = '0' ]"
+
+echo "== box-report: a TEMPLATE unit is excluded from the drift count"
+# is-enabled cannot be asked of an uninstantiated template; asking anyway would
+# make every box with the alert template report drift forever.
+box_env
+touch -d '2026-01-01 00:00:00' "$S/miner/src/main.rs"
+printf 'ELF-ish\n' > "$T/install/zcash-testnet-miner"
+printf '[Unit]\nDescription=tmpl\n[Service]\nExecStart=/bin/true\n[Install]\nWantedBy=multi-user.target\n' > "$S/faucet-alert@.service"
+cp "$S/faucet-alert@.service" "$T/units/faucet-alert@.service"
+printf 'faucet-alert@.service\n' >> "$STUB_ENABLED"
+bash "$BOX_REPORT" > /dev/null 2>&1
+check "a template never lands in enabledUndeclared" "[ \"\$(jqf '$BOX_REPORT_OUT' enabledUndeclared)\" = '0' ]"
+
+echo "== box-report: a MISSING declaration file is cannot-say, not healthy"
+# The declaration is load-bearing now: with it absent, every enablement claim is
+# unverifiable, and unverifiable must not read as complete.
+box_env
+touch -d '2026-01-01 00:00:00' "$S/miner/src/main.rs"
+printf 'ELF-ish\n' > "$T/install/zcash-testnet-miner"
+rm -f "$S/enabled-units"
+bash "$BOX_REPORT" > /dev/null 2>&1
+check "no declaration file reports readable=false" "[ \"\$(jqf '$BOX_REPORT_OUT' readable)\" = 'False' ]"
 
 echo "== box-report: an empty source tree says cannot-say rather than perfect"
 # 0 of 0 reported as complete is the false pass this script exists to prevent.

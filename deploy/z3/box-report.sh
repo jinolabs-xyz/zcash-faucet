@@ -45,8 +45,28 @@ for src in "$SRC"/*.sh; do
   [ -f "$dst" ] && cmp -s "$src" "$dst" && present=$((present + 1))
 done
 
-# Units: installed, identical, AND enabled. Installed-but-disabled works until the
-# next reboot and then silently does not, which is worse than never installed.
+# Units: installed, identical, AND, where the repo says so, enabled.
+#
+# WHICH UNITS MUST BE ENABLED IS DECLARED IN enabled-units, NOT INFERRED HERE.
+# The old rule inferred it: any unit carrying [Install] with no companion timer
+# had to be enabled. That heuristic and the declaration disagreed the first time
+# a unit shipped deliberately dark: ctaz-node.service carries [Install], is
+# documented in enabled-units as deliberately NOT enabled, and the panel went
+# red for ten hours over a unit behaving exactly as reviewed. Two files carried
+# the contract and only the installers read the file, so this reporter enforced
+# a rule the repo had already replaced.
+#
+# Now the declaration is the single authority, same as for install-ops and
+# bring-to-spec: notEnabled counts units LISTED there that are not enabled.
+# A unit absent from the file is the operator's business in both directions,
+# EXCEPT that enabled-without-being-declared is counted separately below,
+# because that file explicitly promises this reporter surfaces that drift.
+declared_units() {
+  # Comments and blanks ignored, same parse the installers use.
+  sed -e 's/#.*$//' -e 's/[[:space:]]*$//' -e '/^$/d' "$SRC/enabled-units" 2>/dev/null
+}
+
+enabled_undeclared=0
 for src in "$SRC"/*.service "$SRC"/*.timer; do
   [ -e "$src" ] || continue
   expected=$((expected + 1))
@@ -54,24 +74,26 @@ for src in "$SRC"/*.service "$SRC"/*.timer; do
   dst="$UNIT_DIR/$unit"
   if [ -f "$dst" ] && cmp -s "$src" "$dst"; then
     present=$((present + 1))
-    # A .service activated by its OWN .timer must not be independently enabled:
-    # enabling it would additionally run it at boot, which is not what a timer
-    # means. So the question is only asked of units nothing else activates.
-    #
-    # My first version asked it of anything carrying an [Install] section, which
-    # flagged four correctly configured units and made a healthy box report as
-    # incomplete. faucet-backup.service is the proof: `disabled`, and backups have
-    # been running on schedule the whole time. A gate that cries wolf gets muted,
-    # so a false alarm here is not the harmless direction.
-    ask=1
-    case "$unit" in
-      *.service) [ -e "${src%.service}.timer" ] && ask=0 ;;
-    esac
-    if [ "$ask" = "1" ] && grep -q '^\[Install\]' "$src" 2>/dev/null; then
+    if declared_units | grep -qxF "$unit"; then
       "$SYSTEMCTL" is-enabled --quiet "$unit" 2>/dev/null || not_enabled=$((not_enabled + 1))
+    else
+      # Not declared: disabled is fine (ctaz-node, the miner pattern), and a
+      # TEMPLATE cannot be asked at all. Enabled-but-undeclared is reported as
+      # its own count, INFORMATIONAL, never failing the gate: faucet.service and
+      # the autodeploy timer are legitimately operator-enabled and undeclared,
+      # and a gate that cries wolf on a correct box is one people learn to mute.
+      # A count, never names: this reaches a public endpoint.
+      case "$unit" in
+        *@.service) ;;
+        *) "$SYSTEMCTL" is-enabled --quiet "$unit" 2>/dev/null && enabled_undeclared=$((enabled_undeclared + 1)) ;;
+      esac
     fi
   fi
 done
+
+# The declaration file itself is load-bearing now: absent means every enablement
+# claim below is unverifiable, and unverifiable must not read as healthy.
+[ -f "$SRC/enabled-units" ] || cannot_say
 
 # THE COMPILED MINER BINARY, which this report could not see at all until now.
 #
@@ -194,4 +216,4 @@ platform="$(uname -m 2>/dev/null || echo unknown)"
 # minerBinary is emitted as its own field as well as counted, so the panel can say WHY
 # the count is short instead of only that it is. A number that drops with no reason
 # attached sends someone to the box to find out.
-write "{\"expected\":${expected},\"present\":${present},\"notEnabled\":${not_enabled},\"minerBinary\":\"${miner_state}\",\"platform\":\"${platform}\",\"at\":$(( $(date +%s) * 1000 )),\"readable\":true}"
+write "{\"expected\":${expected},\"present\":${present},\"notEnabled\":${not_enabled},\"enabledUndeclared\":${enabled_undeclared},\"minerBinary\":\"${miner_state}\",\"platform\":\"${platform}\",\"at\":$(( $(date +%s) * 1000 )),\"readable\":true}"
