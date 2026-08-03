@@ -284,3 +284,137 @@ check "a zero ceiling exits 2 rather than refusing everything" "[ $? -eq 2 ]"
 guard_env
 bash "$GUARD" > "$T/noargs.log" 2>&1
 check "no arguments exits 2 with usage" "[ $? -eq 2 ] && grep -q 'usage:' '$T/noargs.log'"
+
+# ── ctaz-build.sh ────────────────────────────────────────────────────────────────
+# Builds the crosslink node in a container so nothing compiles on the box. The whole
+# reason it is a script rather than a docker command is the architecture assertion: on an
+# arm64 laptop a misconfigured buildx produces an arm64 binary and every step reports
+# success, right up until the amd64 box says "cannot execute binary file".
+#
+# Tested with doubles, because a real build takes tens of minutes and the logic under test
+# is what happens AFTER one.
+
+BUILD="$REPO/deploy/z3/ctaz-build.sh"
+
+build_env() {
+  mk_scratch "${TMPDIR:-/tmp}/ctazbuild.XXXXXX"
+  mkdir -p "$T/bin" "$T/out"
+  export CTAZ_OUT_DIR="$T/out"
+  export CTAZ_DOCKER="$T/bin/docker"
+  export STUB_ARCH="${STUB_ARCH:-x86-64}"
+  export STUB_BUILD_RC=0 STUB_EMPTY=0 STUB_NOARTIFACT=0
+  # A docker double that behaves like docker: build succeeds, create returns an id, cp
+  # writes a file. Faithful rather than convenient, so the script's real path is exercised.
+  # Speaks the interface the script actually uses: ONE `docker build` that exports the
+  # stage to --output dest. The first version of this double answered create/cp as well,
+  # which is how the suite stayed green against a script whose extraction could not work
+  # at all: `docker create` cannot instantiate a FROM scratch image. The double has to be
+  # able to fail the way docker fails.
+  cat > "$T/bin/docker" <<'DK'
+#!/usr/bin/env bash
+case "$1" in
+  build)
+    [ "${STUB_BUILD_RC:-0}" != "0" ] && exit "${STUB_BUILD_RC}"
+    dest=""
+    for a in "$@"; do case "$a" in type=local,dest=*) dest="${a#type=local,dest=}" ;; esac; done
+    [ -n "$dest" ] || { echo "stub: no --output dest given" >&2; exit 1; }
+    mkdir -p "$dest"
+    # STUB_NOARTIFACT: the build reports success and exports nothing, which is the shape
+    # that actually bit here.
+    [ "${STUB_NOARTIFACT:-0}" = "1" ] && exit 0
+    if [ "${STUB_EMPTY:-0}" = "1" ]; then : > "$dest/zebrad"; else printf 'ELF-ish\n' > "$dest/zebrad"; fi
+    printf 'rustc 1.97.1 (stub)\n' > "$dest/rustc-version.txt"
+    exit 0 ;;
+  *) exit 0 ;;
+esac
+DK
+  chmod +x "$T/bin/docker"
+  # `file` double, so the test can state what came out of the build rather than inherit it.
+  cat > "$T/bin/file" <<'FI'
+#!/usr/bin/env bash
+echo "ELF 64-bit LSB pie executable, ${STUB_ARCH}, version 1 (SYSV), dynamically linked"
+FI
+  chmod +x "$T/bin/file"
+  export PATH="$T/bin:$BASE_PATH"
+}
+
+echo "== ctaz-build: THE ARCH ASSERTION. an arm64 binary for an amd64 box is REFUSED"
+# The entire reason this script exists. Every other step reports success here.
+build_env
+STUB_ARCH="aarch64" CTAZ_PLATFORM=linux/amd64 bash "$BUILD" > "$T/wrongarch.log" 2>&1
+check "a wrong-architecture binary FAILS the build" "[ $? -eq 1 ]"
+check "and says it is refusing, naming what was asked for" \
+  "grep -q 'REFUSING: asked for linux/amd64' '$T/wrongarch.log'"
+check "and explains the cost, which is a failure at exec time on the box" \
+  "grep -q 'fails at exec' '$T/wrongarch.log'"
+
+echo "== ctaz-build: the matching architecture passes and reports a sha256"
+build_env
+STUB_ARCH="x86-64" CTAZ_PLATFORM=linux/amd64 bash "$BUILD" > "$T/ok.log" 2>&1
+check "a correct-architecture build exits 0" "[ $? -eq 0 ]"
+check "and prints a sha256 so what shipped can be identified later" \
+  "grep -qE 'sha256:   [0-9a-f]{64}' '$T/ok.log'"
+check "and pins the source revision in the output" \
+  "grep -qE 'rev:      [0-9a-f]{40}' '$T/ok.log'"
+check "and the binary really exists on disk" "[ -s '$T/out/zebrad' ]"
+
+echo "== ctaz-build: arm64 targets verify against aarch64, so the check is not amd64-only"
+# Otherwise the assertion could be hardcoded to pass for one platform and nobody notices.
+build_env
+STUB_ARCH="aarch64" CTAZ_PLATFORM=linux/arm64 bash "$BUILD" > "$T/arm.log" 2>&1
+check "an arm64 build of an arm64 target exits 0" "[ $? -eq 0 ]"
+build_env
+STUB_ARCH="x86-64" CTAZ_PLATFORM=linux/arm64 bash "$BUILD" > "$T/armbad.log" 2>&1
+check "an amd64 binary for an arm64 target is refused" "[ $? -eq 1 ]"
+
+echo "== ctaz-build: a failed build extracts nothing"
+build_env
+STUB_BUILD_RC=1 bash "$BUILD" > "$T/failed.log" 2>&1
+check "a failed build exits 1" "[ $? -eq 1 ]"
+# The message points at WHICH of the two steps failed, because they are now one docker
+# invocation and the distinction still matters: a compile failure is their code, an export
+# failure is ours. That distinction is exactly what the first version got wrong.
+check "and says the build or the export failed" \
+  "grep -q 'the build or the export failed' '$T/failed.log'"
+check "and leaves no binary behind" "[ ! -f '$T/out/zebrad' ]"
+
+echo "== ctaz-build: an EMPTY extracted binary is caught"
+# A build that 'succeeds' and yields nothing is a real shape, and an empty file passes a
+# plain existence check.
+build_env
+STUB_EMPTY=1 bash "$BUILD" > "$T/empty.log" 2>&1
+check "an empty binary FAILS" "[ $? -eq 1 ]"
+check "and says so" "grep -q 'EMPTY zebrad' '$T/empty.log'"
+
+echo "== ctaz-build: a build that reports success and exports NOTHING is caught"
+# This is the shape that actually bit: the build genuinely succeeded, the image was
+# written, and the extraction produced no file. Success from the builder is not the same
+# as an artifact on disk.
+build_env
+STUB_NOARTIFACT=1 bash "$BUILD" > "$T/noartifact.log" 2>&1
+check "a successful build with no artifact exits 1" "[ $? -eq 1 ]"
+check "and says the build reported success but nothing was exported" \
+  "grep -q 'reported success but no zebrad was exported' '$T/noartifact.log'"
+
+echo "== ctaz-build: a \`file\` that cannot answer means CANNOT-VERIFY, never a silent pass"
+# Without a working file(1) we cannot answer the one question this script exists to
+# answer. The first version of this test DELETED the stub and assumed absence, which
+# only holds on hosts that ship no system file(1): green in one container, red on a
+# mac and on CI, for reasons that had nothing to do with the code. Rule 34's shape,
+# a fixture premise the environment decides. Failure is the deterministic form of
+# cannot-answer, so the stub FAILS instead, and the script treats absent and failed
+# identically, the #334 lsof lesson.
+build_env
+printf '#!/bin/sh\nexit 1\n' > "$T/bin/file"; chmod +x "$T/bin/file"
+bash "$BUILD" > "$T/nofile.log" 2>&1
+check "a \`file\` that cannot answer exits exactly 2" "[ $? -eq 2 ]"
+check "and refuses to ship on the assumption it is correct" \
+  "grep -q 'may well be correct' '$T/nofile.log'"
+
+echo "== ctaz-build: an unverifiable platform is refused before building anything"
+build_env
+CTAZ_PLATFORM=linux/riscv64 bash "$BUILD" > "$T/riscv.log" 2>&1
+check "an unsupported platform exits 2" "[ $? -eq 2 ]"
+check "and says building without verifying is the thing it prevents" \
+  "grep -q 'building without verifying' '$T/riscv.log'"
+check "and nothing was built" "[ ! -f '$T/out/zebrad' ]"
