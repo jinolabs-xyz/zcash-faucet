@@ -9,6 +9,22 @@ Description=Zcash faucet stack watchdog (self-healing supervision)
 After=docker.service
 Requires=docker.service
 OnFailure=faucet-alert@%n.service
+# NEVER GIVE UP ON THIS SERVICE. 0 DISABLES start rate limiting, so no number of
+# rapid restarts can make systemd stop trying. That is the intent for a watchdog:
+# the thing that notices other things are broken must not be the thing that quietly
+# stays dead.
+#
+# It lives in [Unit], not [Service], and that is not a style choice. systemd parses
+# it here and nowhere else, confirmed rather than looked up:
+#
+#   [Service]  systemd-analyze verify -> Unknown key name 'StartLimitIntervalSec'
+#                                        in section 'Service', ignoring.
+#   [Unit]     systemd-analyze verify -> no complaint
+#
+# The comment that used to sit beside it in [Service] said "don't let a bad loop
+# hammer the box", which describes the OPPOSITE of what 0 does, attached to a line
+# systemd was discarding. A protection claimed twice over and delivered neither time.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -19,8 +35,6 @@ ExecStart=/opt/faucet/watchdog.sh
 # The watchdog must itself never stay down. Bring it back on any exit.
 Restart=always
 RestartSec=5
-# Don't let a bad loop hammer the box.
-StartLimitIntervalSec=0
 
 [Install]
 WantedBy=multi-user.target
