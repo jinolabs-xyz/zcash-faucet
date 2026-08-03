@@ -82,10 +82,11 @@ test("every bad state is flagged, so none of them can render as ordinary", () =>
 /* ── Undeclared units, which the API has been sending and nothing rendered ──────── */
 
 test("a clean box SAYS when units are enabled that the repo never declared", () => {
-  // Measured against production before writing this: /api/status answers
-  // enabledUndeclared 2 and the panel row said "34 of 34 files, all enabled". The
-  // figure was on the wire since #338 and this file had never read it, so the one
-  // place a person looks was the only place it did not reach.
+  // /api/status answers enabledUndeclared 2 and the panel row said "34 of 34 files,
+  // all enabled". Three additions were needed to get it here: #338 wrote it on the
+  // box, #341 passed it through to the API, this renders it. My commit claimed the API
+  // had always sent it, which was a live probe of an already-fixed world mistaken for
+  // history. See the corrected note in boxLabel.ts.
   const row = boxRow(classifyIntegrity(report({ expected: 34, present: 34, enabledUndeclared: 2 }), NOW));
   assert.match(row, /34 of 34 files, all enabled/, "the existing clause must survive");
   assert.match(row, /2 enabled but undeclared/);

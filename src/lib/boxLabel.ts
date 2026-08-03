@@ -46,11 +46,17 @@ export function boxRow(s: IntegrityStatus): string {
     case "complete":
       // Undeclared units are appended rather than folded into the count, and they do
       // NOT make the row bad. classifyIntegrity's own comment says drift is a fact to
-      // surface rather than a fault, and it has been passing the figure through since
-      // #338: production answers enabledUndeclared 2 right now. This file never read
-      // it, so the one place a person looks said "all enabled" while two enabled units
-      // nobody declared went unmentioned. Measured, not deduced, and the layer matters:
-      // the API was never the problem.
+      // surface rather than a fault.
+      //
+      // THE HISTORY, CORRECTED, because I got it wrong in the commit that added this
+      // clause and a wrong one here is worse than none. The figure reaches the panel
+      // through three separate additions: #338 taught box-report.sh to write it, #341
+      // passed it through boxIntegrity and boxIntegrityFile to the API, and this is the
+      // third. I checked production with curl, saw the field present, and concluded the
+      // API had never dropped it. It had: before #341 neither src file mentioned the
+      // name at all. I was reading the world after the fix and calling it never-broken,
+      // which is rule 35 running backwards, so the same counter applies. `git show
+      // <commit>^:<file>` is what settles a question about the past, not a live probe.
       return `${s.expected} of ${s.expected} files, all enabled${undeclared(s)}`;
 
     case "incomplete": {
