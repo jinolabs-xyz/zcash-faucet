@@ -143,15 +143,35 @@ test("a history longer than the page cap is reported INCOMPLETE, not partial", a
   assert.equal(await safeDonations(), null, "an incomplete tally was published anyway");
 });
 
-test("safeDonations caches, because /donate renders per visitor", async () => {
+test("safeDonations never blocks a render: null first, value once the scan lands, one scan total", async () => {
+  // The contract changed deliberately: the scan measured ~9s cold on production
+  // and the old shape charged it inline to the first visitor after every cache
+  // expiry, on the money page. Now the first cold call returns null immediately
+  // and STARTS the scan; later calls serve the landed value; and the caching
+  // property this test always guarded still holds, exactly one wallet hit.
   resetDonationCache();
   const calls = mockRpc({ z_listtransactions: (p) => (Number(p[3]) === 0 ? [donationTx(1)] : []) });
 
+  const t0 = Date.now();
   const first = await safeDonations();
-  assert.equal(first?.count, 1);
+  assert.ok(Date.now() - t0 < 500, "the cold call must not await the scan");
+  assert.equal(first, null, "cold render omits the counter rather than waiting");
+
+  // Let the background refresh land, then the value is served without a re-scan.
+  await new Promise((r) => setTimeout(r, 25));
   const second = await safeDonations();
-  assert.equal(second?.count, 1);
-  assert.equal(calls.length, 1, "the second render hit the wallet again");
+  assert.equal(second?.count, 1, "the background result is served once landed");
+  const third = await safeDonations();
+  assert.equal(third?.count, 1);
+  assert.equal(calls.length, 1, "a later render hit the wallet again");
+});
+
+test("safeDonations single-flight: concurrent cold renders share one scan", async () => {
+  resetDonationCache();
+  const calls = mockRpc({ z_listtransactions: (p) => (Number(p[3]) === 0 ? [donationTx(1)] : []) });
+  await Promise.all([safeDonations(), safeDonations(), safeDonations()]);
+  await new Promise((r) => setTimeout(r, 25));
+  assert.equal(calls.length, 1, "three simultaneous expiries stampeded the wallet");
 });
 
 test("safeDonations is null, never a throw, when the wallet is unreachable", async () => {

@@ -188,27 +188,66 @@ export async function safeBalance(): Promise<bigint | null> {
  */
 const DONATION_CACHE_MS = 120_000;
 let donationCache: { at: number; value: DonationTally | null } | null = null;
+/** Single-flight guard for the background refresh. */
+let donationRefresh: Promise<void> | null = null;
+/** Bumped by resetDonationCache. A refresh publishes only into the epoch it was
+ * started in, so an orphaned in-flight scan from before a reset cannot land late
+ * and clobber the cache with older data. A stale write winning is the class this
+ * removes; the test suite found it as a cross-test clobber, and "only reachable
+ * via reset today" is how such things stay latent until they are not. */
+let donationEpoch = 0;
 
+/**
+ * NEVER BLOCKS THE PAGE. The tally is a full wallet-history scan, measured at
+ * ~9 seconds cold on production, and the old shape made the first visitor after
+ * every 2-minute cache expiry pay that scan inline in /donate's server render.
+ * A 9-second money page because a display-only counter wanted freshness is the
+ * wrong trade in both directions.
+ *
+ * Now: whatever is cached is returned immediately, stale included, and expiry
+ * kicks off ONE background refresh for future requests instead of taxing the
+ * present one. The only render that sees null for freshness reasons is the very
+ * first after boot, where the page simply omits the counter, which it already
+ * does whenever the tally is unavailable. Staleness is bounded by cache age plus
+ * one scan, against a counter that only ever grows slowly.
+ *
+ * The refresh guard clears on completion AND rejection, the #324 poisoned-seed
+ * lesson: a cached rejected promise would freeze the counter at its last value
+ * forever with nothing left to retry.
+ */
 export async function safeDonations(): Promise<DonationTally | null> {
   if (config.sender !== "zallet") return null;
   const now = Date.now();
-  if (donationCache && now - donationCache.at < DONATION_CACHE_MS) return donationCache.value;
+  const fresh = donationCache !== null && now - donationCache.at < DONATION_CACHE_MS;
 
-  let value: DonationTally | null = null;
-  try {
-    const { tally, complete } = await (getSender() as ZalletSender).donations();
-    // A partial scan of a cumulative total is wrong, not small, so publish nothing.
-    value = complete ? tally : null;
-  } catch (e) {
-    // Display-only, so this fails OPEN: /donate is the page that still matters when
-    // the faucet is dry, and it must not 500 because a counter could not load.
-    console.warn(`[donations] tally unavailable, hiding the counter: ${(e as Error).message}`);
+  if (!fresh) {
+    const epoch = donationEpoch;
+    donationRefresh ??= (async () => {
+      let value: DonationTally | null = null;
+      try {
+        const { tally, complete } = await (getSender() as ZalletSender).donations();
+        // A partial scan of a cumulative total is wrong, not small, so publish nothing.
+        value = complete ? tally : null;
+      } catch (e) {
+        // Display-only, so this fails OPEN: /donate is the page that still matters when
+        // the faucet is dry, and it must not 500 because a counter could not load.
+        console.warn(`[donations] tally unavailable, hiding the counter: ${(e as Error).message}`);
+      }
+      if (epoch === donationEpoch) donationCache = { at: Date.now(), value };
+    })().finally(() => {
+      if (epoch === donationEpoch) donationRefresh = null;
+    });
   }
-  donationCache = { at: now, value };
-  return value;
+
+  return donationCache?.value ?? null;
 }
 
 /** Test seam: the cache is module state and would leak between cases. */
 export function resetDonationCache(): void {
+  donationEpoch += 1;
   donationCache = null;
+  // The guard resets too, or a refresh started by one caller would swallow the
+  // next caller's expiry; and the epoch bump above orphans that old refresh so
+  // its late result cannot publish into the new world.
+  donationRefresh = null;
 }
