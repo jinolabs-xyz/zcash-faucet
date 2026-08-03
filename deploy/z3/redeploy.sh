@@ -72,15 +72,34 @@ command -v docker >/dev/null || not_shipped "docker is not installed, nothing wa
 # the Docker layer cache on every commit and makes each deploy a full rebuild. This is the
 # checkout the image is built FROM, read immediately before building it.
 #
-# `-dirty` is appended when the tree has uncommitted changes, because a commit id alone
+# A suffix is appended when the tree differs from the commit, because a commit id alone
 # would describe code that is not what is running. Unknown when git cannot answer, never
 # omitted, so a consumer can tell "we asked and could not tell" from an older build that
 # never reported.
+#
+# TWO SUFFIXES, NOT ONE, and the reason is #366. The old code appended a single `-dirty`
+# from `git status --porcelain`, which counts UNTRACKED files. The box has five stale env
+# backups from July, so it reported `-dirty` permanently while `git diff` was empty and
+# the running code was exactly the commit. A flag whose only two states are on and on
+# carries no information, and the failure mode is the one we keep naming: the checker
+# learns to ignore it, and the day the box really does run modified code nobody looks.
+#
+# The obvious fix is `--untracked-files=no`, and it is WRONG HERE. This repo's Dockerfile
+# does `COPY . .` from the repo root, and `.dockerignore` does not exclude backups, so an
+# untracked file in the checkout IS copied into the image. Untracked genuinely can change
+# what runs. Dropping it would trade a noisy true claim for a quiet false one.
+#
+# So both facts are kept and named separately. `-modified` is tracked content differing
+# from HEAD. `-untracked` is files present that the commit does not describe. A tree with
+# both says so. Each is individually actionable, which is what the single flag was not.
 build_commit() {
   local c d=""
   c="$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null)" || { echo unknown; return; }
   [ -n "$c" ] || { echo unknown; return; }
-  [ -n "$(git -C "$REPO_DIR" status --porcelain 2>/dev/null)" ] && d="-dirty"
+  # Tracked changes only: --quiet exits non-zero when HEAD and the worktree differ.
+  git -C "$REPO_DIR" diff --quiet HEAD 2>/dev/null || d="-modified"
+  # Untracked, asked separately so it cannot be mistaken for a tracked edit.
+  [ -n "$(git -C "$REPO_DIR" ls-files --others --exclude-standard 2>/dev/null)" ] && d="$d-untracked"
   printf '%s%s\n' "$c" "$d"
 }
 FAUCET_BUILD_COMMIT="${REDEPLOY_BUILD_COMMIT:-$(build_commit)}"

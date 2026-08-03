@@ -6,7 +6,8 @@
 # site was built from.
 #
 #   STUB_GIT_SHA     what rev-parse --short HEAD returns   (default abc1234)
-#   STUB_GIT_DIRTY   non-empty -> status --porcelain reports a modified file
+#   STUB_GIT_MODIFIED  non-empty -> `diff --quiet HEAD` fails, a TRACKED file differs
+#   STUB_GIT_UNTRACKED non-empty -> `ls-files --others` lists a file the commit lacks
 #   STUB_GIT_NOREPO  1 -> rev-parse and status both FAIL, as outside a checkout
 #
 # WHY THIS IS STUBBED RATHER THAN TESTED AGAINST A REAL REPO. The first version of those
@@ -20,7 +21,7 @@ echo "git $*" >> "${STUB_LOG:?}"
 
 if [ "${STUB_GIT_NOREPO:-0}" = "1" ]; then
   case " $* " in
-    *" rev-parse "*|*" status "*)
+    *" rev-parse "*|*" status "*|*" diff "*|*" ls-files "*)
       echo "fatal: not a git repository (stub)" >&2; exit 128 ;;
   esac
 fi
@@ -28,9 +29,14 @@ fi
 for a in "$@"; do
   case "$a" in
     rev-parse) echo "${STUB_GIT_SHA:-abc1234}"; exit 0 ;;
-    status)
-      # --porcelain: empty means clean, which is what the real thing does.
-      [ -n "${STUB_GIT_DIRTY:-}" ] && echo " M some-file"
+    diff)
+      # --quiet: exit 1 when tracked content differs, 0 when it matches. Only tracked
+      # files, which is the whole point of asking this instead of `status --porcelain`.
+      [ -n "${STUB_GIT_MODIFIED:-}" ] && exit 1
+      exit 0 ;;
+    ls-files)
+      # --others --exclude-standard: the untracked list. Empty means none.
+      [ -n "${STUB_GIT_UNTRACKED:-}" ] && echo "faucet.env.bak-20260730"
       exit 0 ;;
     pull) [ "${STUB_PULL_FAIL:-0}" = "1" ] && { echo "pull failed (stub)" >&2; exit 1; }; echo "Already up to date."; exit 0 ;;
   esac

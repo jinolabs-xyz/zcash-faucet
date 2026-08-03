@@ -389,12 +389,36 @@ check "and it is not left unset" "! grep -q 'FAUCET_BUILD_COMMIT=<unset>' '$STUB
 check "and not left empty, which would read as a deployed unknown" \
   "! grep -qx 'FAUCET_BUILD_COMMIT=' '$STUB_LOG'"
 
-echo "== redeploy: a DIRTY tree is reported as dirty, not as a clean commit"
-# A bare commit id would describe code that is not what is running.
+echo "== redeploy: MODIFIED and UNTRACKED are named separately, not both as -dirty"
+# #366. The old marker came from `status --porcelain`, which counts untracked files, so
+# the box reported -dirty forever over five stale env backups while `git diff` was empty
+# and the running code was exactly the commit. A flag whose only two states are on and on
+# carries no information.
+#
+# Untracked still counts, and `--untracked-files=no` would have been the wrong fix: the
+# Dockerfile does COPY . . from the repo root, so an untracked file IS copied into the
+# image. Both facts are true and each is separately actionable, so each gets its own word.
 redeploy_env
 touch "$STUB_HEALTH" "$STUB_READY"
-STUB_GIT_SHA="feedface" STUB_GIT_DIRTY=1 bash "$REDEPLOY" --no-pull > /dev/null 2>&1
-check "a dirty tree is marked -dirty" "grep -qx 'FAUCET_BUILD_COMMIT=feedface-dirty' '$STUB_LOG'"
+STUB_GIT_SHA="feedface" STUB_GIT_MODIFIED=1 bash "$REDEPLOY" --no-pull > /dev/null 2>&1
+check "a tracked edit is marked -modified" \
+  "grep -qx 'FAUCET_BUILD_COMMIT=feedface-modified' '$STUB_LOG'"
+
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_GIT_SHA="feedface" STUB_GIT_UNTRACKED=1 bash "$REDEPLOY" --no-pull > /dev/null 2>&1
+check "an untracked file is marked -untracked, NOT -modified" \
+  "grep -qx 'FAUCET_BUILD_COMMIT=feedface-untracked' '$STUB_LOG'"
+# The distinction is the whole point of #366: the box's real state is untracked-only, and
+# calling that "modified" is what made the flag useless.
+check "and an untracked-only tree is never called modified" \
+  "! grep -q 'FAUCET_BUILD_COMMIT=feedface-modified' '$STUB_LOG'"
+
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_GIT_SHA="feedface" STUB_GIT_MODIFIED=1 STUB_GIT_UNTRACKED=1 bash "$REDEPLOY" --no-pull > /dev/null 2>&1
+check "a tree with both says both" \
+  "grep -qx 'FAUCET_BUILD_COMMIT=feedface-modified-untracked' '$STUB_LOG'"
 
 echo "== redeploy: a CLEAN tree is not marked dirty"
 # The other direction, so the marker cannot be unconditional and go unnoticed.
