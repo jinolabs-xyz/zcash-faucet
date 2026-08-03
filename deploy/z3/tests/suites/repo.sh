@@ -160,3 +160,37 @@ done
 # requires that every reference which EXISTS resolves.
 check "every Documentation= file a unit points at actually exists" \
   "[ -z '$DOC_MISSING' ] || { echo '   dangling:$DOC_MISSING'; false; }"
+
+echo "== repo: StartLimit* keys are in [Unit], the only section systemd reads them in"
+# faucet-watchdog.service had StartLimitIntervalSec in [Service], where systemd
+# discards it: `Unknown key name 'StartLimitIntervalSec' in section 'Service',
+# ignoring.` Confirmed against systemd 255 rather than looked up, both directions:
+# the same key in [Unit] draws no complaint.
+#
+# Worth a guard rather than a one-off fix because the failure is SILENT. The unit
+# loads, the service runs, and the setting simply does nothing. Nothing in a deploy
+# surfaces an ignored key, so the only way this comes back is quietly.
+#
+# `find` rather than a glob, and the first version of this check is why. It used
+# "$REPO/deploy"/**/*.service, which without globstar reaches exactly one directory
+# deep and silently skipped every .timer. The check passed against a file I had
+# deliberately broken.
+UNIT_FILES="$(find "$REPO/deploy" \( -name '*.service' -o -name '*.timer' \) | sort)"
+BADSEC=""
+UNITS_SCANNED=0
+for u in $UNIT_FILES; do
+  UNITS_SCANNED=$((UNITS_SCANNED + 1))
+  hit="$(awk '/^\[/ { sec = $0 } /^[[:space:]]*StartLimit/ { if (sec != "[Unit]") print FILENAME ":" FNR " " sec }' "$u")"
+  [ -n "$hit" ] && BADSEC="$BADSEC $hit"
+done
+check "no StartLimit* key sits outside [Unit], where systemd would ignore it" \
+  "[ -z '$BADSEC' ] || { echo '   wrong section:$BADSEC'; false; }"
+
+# THE CONTROL, and it counts what the LOOP ABOVE ACTUALLY ITERATED rather than
+# re-deriving the set. The first version ran its own `ls` over a different pattern,
+# so it proved units exist on disk and said nothing about whether the scanner read
+# any of them. A control that does not exercise the same path as the thing it
+# guards is decoration: mine reported a healthy count while the scanner was reading
+# nothing, which is the exact false pass this suite exists to prevent.
+check "and the scan actually iterated the units, so a clean result means something" \
+  "[ '$UNITS_SCANNED' -ge 8 ] || { echo '   only scanned $UNITS_SCANNED unit(s)'; false; }"
