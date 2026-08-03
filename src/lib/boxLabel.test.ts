@@ -11,7 +11,7 @@ import { boxRow, boxChip, boxIsBad } from "./boxLabel.ts";
 import { classifyIntegrity } from "./boxIntegrity.ts";
 
 const NOW = Date.parse("2026-07-31T12:00:00Z");
-const report = (over = {}) => ({ expected: 14, present: 14, notEnabled: 0, at: NOW - 30_000, readable: true, ...over });
+const report = (over = {}) => ({ expected: 14, present: 14, notEnabled: 0, enabledUndeclared: null, at: NOW - 30_000, readable: true, ...over });
 
 test("THE STATE NOTHING RENDERED: two files gone and a unit disabled says so", () => {
   const s = classifyIntegrity(report({ present: 12, notEnabled: 1 }), NOW);

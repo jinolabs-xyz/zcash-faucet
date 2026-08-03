@@ -8,10 +8,11 @@ import assert from "node:assert/strict";
 import { classifyIntegrity, isIntegrityFailing, STALE_AFTER_MS } from "./boxIntegrity.ts";
 
 const NOW = 1_700_000_000_000;
-const rep = (o: Partial<{ expected: number; present: number; notEnabled: number; agoMs: number; readable: boolean }> = {}) => ({
+const rep = (o: Partial<{ expected: number; present: number; notEnabled: number; enabledUndeclared: number | null; agoMs: number; readable: boolean }> = {}) => ({
   expected: o.expected ?? 25,
   present: o.present ?? 25,
   notEnabled: o.notEnabled ?? 0,
+  enabledUndeclared: o.enabledUndeclared ?? null,
   at: NOW - (o.agoMs ?? 60_000),
   readable: o.readable ?? true,
 });
@@ -72,4 +73,22 @@ test("present exceeding expected cannot fake a negative missing count", () => {
   const s = classifyIntegrity(rep({ expected: 5, present: 9 }), NOW);
   assert.equal(s.missing, 0);
   assert.equal(s.state, "complete");
+});
+
+test("enabledUndeclared passes through untouched, and never shapes the verdict", () => {
+  // #339: the box wrote this field and the app silently dropped it, so the
+  // declaration file's oldest promise was recorded on the box and invisible
+  // everywhere else. Drift is a fact to surface, not a fault to classify on.
+  const withDrift = classifyIntegrity(rep({ enabledUndeclared: 2 }), NOW);
+  assert.equal(withDrift.state, "complete", "drift alone must not fail the gate");
+  assert.equal(withDrift.enabledUndeclared, 2);
+
+  // A pre-#338 report has no field at all: unmeasured is not zero.
+  const preField = classifyIntegrity(rep({}), NOW);
+  assert.equal(preField.enabledUndeclared, null);
+
+  // Drift rides along on a failing report too, rather than being dropped there.
+  const failing = classifyIntegrity(rep({ notEnabled: 1, enabledUndeclared: 2 }), NOW);
+  assert.equal(failing.state, "incomplete");
+  assert.equal(failing.enabledUndeclared, 2);
 });

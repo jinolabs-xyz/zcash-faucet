@@ -36,6 +36,10 @@ export interface IntegrityReport {
   present: number;
   /** Units installed but not enabled: they die at the next reboot. */
   notEnabled: number;
+  /** Units enabled without being declared in enabled-units: operator drift,
+   * informational, never part of the verdict. Null when the report predates the
+   * field, because unmeasured is not zero. */
+  enabledUndeclared: number | null;
   /** When the box wrote this, epoch ms. */
   at: number | null;
   /** The writer could not determine the answer, so it said so. */
@@ -48,12 +52,14 @@ export interface IntegrityStatus {
   present: number | null;
   missing: number | null;
   notEnabled: number | null;
+  /** Passed through, never classified on: drift is a fact to surface, not a fault. */
+  enabledUndeclared: number | null;
   ageSeconds: number | null;
   reason: string;
 }
 
 export function classifyIntegrity(r: IntegrityReport | null, now: number): IntegrityStatus {
-  const none = { expected: null, present: null, missing: null, notEnabled: null, ageSeconds: null };
+  const none = { expected: null, present: null, missing: null, notEnabled: null, enabledUndeclared: null, ageSeconds: null };
 
   // No report at all is the state the box was ACTUALLY in all week, so it must not
   // be quiet. It is not "complete" and it is not a proven fault: it is unverified,
@@ -94,6 +100,7 @@ export function classifyIntegrity(r: IntegrityReport | null, now: number): Integ
       present: r.present,
       missing,
       notEnabled: r.notEnabled,
+      enabledUndeclared: r.enabledUndeclared,
       ageSeconds: age,
       reason: parts.join(", "),
     };
@@ -105,6 +112,7 @@ export function classifyIntegrity(r: IntegrityReport | null, now: number): Integ
     present: r.present,
     missing: 0,
     notEnabled: 0,
+    enabledUndeclared: r.enabledUndeclared,
     ageSeconds: age,
     reason: `all ${r.expected} required files installed, current and enabled`,
   };
