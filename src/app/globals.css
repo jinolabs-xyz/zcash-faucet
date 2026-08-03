@@ -185,6 +185,12 @@ a:hover { color: var(--color-accent-800); }
 /* fingers need bigger targets than mice: 44px is the accessibility floor */
 @media (pointer: coarse) {
   .app .btn-sm { min-height: 44px; }
+  /* The icon controls were missed by the rule above, because it keys on .btn-sm
+     and these are .theme-toggle. Both the theme button and the source link were
+     30x30 on a phone, which is under the floor for the two controls in the
+     masthead that a finger is most likely to reach for. The square shape is the
+     point of them, so both dimensions grow together rather than just the height. */
+  .app .theme-toggle { width: 44px; height: 44px; }
 }
 
 /* ── The footer, and why it stops sticking on a phone ────────────────────────
