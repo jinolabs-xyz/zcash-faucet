@@ -18,7 +18,6 @@ import Link from "next/link";
 import { config, ZATOSHI_PER_TAZ } from "@/lib/config";
 import { safeBalance, safeDonations } from "@/lib/zcash/send";
 import { CopyAddress } from "./CopyAddress";
-import { AddressQR } from "./AddressQR";
 import { BrandMark } from "../BrandMark";
 
 export const runtime = "nodejs";
@@ -150,7 +149,6 @@ export default async function Donate() {
             <span style={kicker}>Donate TAZ (shielded)</span>
             <span style={addrText}>{donation}</span>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-start" }}>
-              <AddressQR address={donation} label="QR code of the faucet donation address" />
               <div style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0, alignItems: "flex-start", flex: "1 1 18ch" }}>
                 <span style={{ fontSize: 12.5, lineHeight: 1.5, color: muted(65) }}>
                   Arrives shielded. Testnet only, so it costs you nothing and goes straight back

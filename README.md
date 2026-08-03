@@ -25,11 +25,6 @@ success without checking what it left behind. Every status field distinguishes
 "working" from "broken" from "cannot tell", and only one of those reads as good news.
 That discipline runs from the claim endpoint all the way down to the systemd units.
 
-<picture>
-  <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/ready-paper.png">
-  <img src="docs/screenshots/ready-ink.png" alt="The faucet ready to serve: address field, Request 0.1 TAZ button, and the live status strip showing node, sync, balance and reserve.">
-</picture>
-
 > `zcashd` reached end of life on 2026-07-18 and every node auto-halted. This
 > project is built on what replaced it: **Zebra** (full node) and **Zallet**
 > (wallet, with the Zaino indexer embedded).
@@ -180,8 +175,6 @@ Every number on the page comes off the node, and every state is a claim the syst
 defend. The distinction that took the longest to learn: **"working", "broken" and "I
 cannot tell" are three different answers, and only one of them is good news.**
 
-<img src="docs/screenshots/panel.png" alt="The expanded details panel on production: node ready, block height 4,228,211 of 4,228,211, wallet balance 843.47 TAZ, miner mining with a template 12 seconds old, box 29 of 29 files all enabled, refill waiting with nothing to shield, queue 0 pending, backend reachable.">
-
 That is production, not a mock. The `box` row is the integrity gate answering over every
 script, unit and binary it tracks; `miner mining, template 4s ago` is a
 heartbeat file written by the miner itself, not an environment variable; `refill
@@ -218,8 +211,6 @@ what the backend is doing:
 - **Ready**, then a receipt with the txid, a working explorer link, and a
   copyable plain-text summary.
 
-<img src="docs/screenshots/success-receipt.png" alt="The success receipt: amount, recipient, txid, a shielded z to z badge, and buttons to copy the txid or the whole receipt.">
-
 **The receipt is the thing you paste into an issue**: amount, recipient, txid, a
 shielded z2z badge, a working explorer link, and one button that copies the lot as
 plain text. Frame taken from a local run, since shooting it against production would
@@ -253,27 +244,41 @@ network is a defence that does not depend on reading carefully.
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/donate.png" alt="The donate page: the shielded unified address in full with a copy button, a tank gauge showing the reserve level, and the transparent address for anyone pointing a miner at the faucet."></td>
-    <td width="50%"><img src="docs/screenshots/fund.png" alt="The fund page: the mainnet unified address, a large QR code of that address, a copy button, and a red warning that mainnet sends cannot be reversed."></td>
-  </tr>
-  <tr>
     <td><b>Donate TAZ.</b> Testnet, costs the giver nothing, goes back out as drips.</td>
     <td><b>Fund the project.</b> Mainnet, real money, and the only page on the site outlined in red.</td>
   </tr>
 </table>
 
-Both carry a QR of the address itself. The scheme-prefixed ZIP-321 form opens a
-prefilled send screen in theory, and in practice a real wallet showed an error on it
-while the same address pasted by hand went through, so the QR encodes what every
-scanner accepts. They are generated server side, so nothing leaves the browser to draw
-them and no third party learns who read the page. Each is sized for about four device
-pixels per module and always renders black on white, because an inverted or under-dense
-code fails on real phone cameras, and a QR that does not scan is decoration.
+Both pages show the address in full with a copy button. **The addresses are here too, so
+you can verify what the site serves against a second source rather than trusting one
+page.** Check them before sending anything.
+
+**Mainnet ZEC** — running costs. Real money, and irreversible.
+
+```
+u1qj7c2kr4ygv6cn0u5t5gd2kna9q48afg4hwx3reql2fhqmdt6v2pvztcy8xmmklnanlzev7vflxzn72v7eu3vgvj7c9sjwvjkhtecfj0cvryn95cyr9sana9vs07yftgeemrv9uckasjaju4wgsy69u0t6c98cqqtsu3cpmxdyc39qaa
+```
+
+**Testnet TAZ** — tops the faucet up. Costs the giver nothing and goes straight back out
+as drips.
+
+```
+utest17rnhex9h0grncus4ax40w2xkmvhz843mvp6c2sp2lcvnup85t9c7n806z099g0hkktx9rgy6cd4z68xthzp5tcz09gvlw4d4m6ynmm0qgj2svdsmw3s6f3d63uur5gyr57kdvnj47gxzsqcc83h6n56gxagen9len4e2dd5rkd36r0s04k56q0zy0gqk0evv06qt9llsqtjsuv2xkgd
+```
+
+**Testnet mining** — point a testnet miner here and the block rewards become drips.
+
+```
+tmUiVxo1bbZLP5z6KYfM4dh3PcX5wkd7on8
+```
+
+Both unified addresses carry Sapling and Orchard receivers, so a wallet that cannot spend
+from one pool can still pay the other. That is not decoration: on 2026-08-03 a wallet
+vendor disabled Orchard sending during a network upgrade, and a single-receiver address
+would have left donors with no route at all.
 
 `/terms` says who operates the faucet and on what basis, including that it is provided
 as is, that donations are not refundable, and that trademarks belong to their owners.
-
-<img src="docs/screenshots/terms.png" alt="The terms page: operator identity, no-warranty statement, fair use, donations non-refundable, privacy, and trademark attribution.">
 
 ## Running it
 
