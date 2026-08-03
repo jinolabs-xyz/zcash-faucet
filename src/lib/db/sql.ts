@@ -135,6 +135,31 @@ export const MIGRATIONS: readonly Migration[] = [
     presentWhen: { table: "claims", column: "network" },
     sql: "ALTER TABLE claims ADD COLUMN network TEXT NOT NULL DEFAULT 'taz'",
   },
+  {
+    // #351, and it is #213 for the fourth time: the network column went into SCHEMA
+    // with no migration beside it, so it reached fresh databases and no existing one.
+    //
+    // A REBUILD, not an ALTER, and that is forced rather than cautious: the column
+    // belongs to the PRIMARY KEY, and sqlite's ALTER TABLE ADD COLUMN cannot extend
+    // one. Adding it as a plain column would leave the table keyed on `day` alone,
+    // which is worse than the bug it fixes: the first cTAZ drip on a day TAZ already
+    // served would collide on the key instead of opening its own bucket.
+    //
+    // Backfilling 'taz' is the same reasoning as claims.network above. Every bucket
+    // that predates the split was counted before a second asset existed.
+    id: "drip_days.network",
+    presentWhen: { table: "drip_days", column: "network" },
+    sql: `
+CREATE TABLE drip_days_rebuild (
+  network TEXT    NOT NULL,
+  day     TEXT    NOT NULL,
+  sent    INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (network, day)
+);
+INSERT INTO drip_days_rebuild (network, day, sent) SELECT 'taz', day, sent FROM drip_days;
+DROP TABLE drip_days;
+ALTER TABLE drip_days_rebuild RENAME TO drip_days;`,
+  },
 ];
 
 /** Columns a table currently has. The idempotence check, and the test's read too. */

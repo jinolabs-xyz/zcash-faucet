@@ -42,6 +42,14 @@ CREATE TABLE claims (
   created_at    INTEGER NOT NULL
 );`;
 
+/** A database in the shape the live box had before any of these migrations. */
+function makeOldDatabase(): void {
+  const old = new Database("data/faucet.db");
+  old.exec(OLD_CLAIMS);
+  old.exec(OLD_DRIP_DAYS);
+  old.close();
+}
+
 /** A scratch cwd with a data/ dir, so each test gets its own ledger. */
 function scratch(): string {
   const dir = mkdtempSync(join(tmpdir(), "faucet-migrations-"));
@@ -50,23 +58,53 @@ function scratch(): string {
   return dir;
 }
 
-function columns(dbPath = "data/faucet.db"): string[] {
+/** The old drip_days: keyed on the day alone, before the network split (#351). */
+const OLD_DRIP_DAYS = `
+CREATE TABLE drip_days (
+  day  TEXT    NOT NULL PRIMARY KEY,
+  sent INTEGER NOT NULL DEFAULT 0
+);`;
+
+// These take a table because they used to be hardcoded to `claims`, and that is exactly
+// how #351 got past this file: drip_days gained a column in SCHEMA with no migration, the
+// convergence test below went green, and it went green because it was never looking. A
+// convergence check that covers one table is not a weaker guard, it is a guard that
+// cannot fail about everything else.
+function columns(table = "claims", dbPath = "data/faucet.db"): string[] {
   const db = new Database(dbPath, { readonly: true });
-  const cols = (db.prepare("PRAGMA table_info(claims)").all() as { name: string }[]).map((c) => c.name);
+  const cols = (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
   db.close();
   return cols;
 }
 
 /** Index name → the columns it covers, in order. Autoindexes excluded: they are
  *  sqlite's own and say nothing about what we declared. */
-function indexes(dbPath = "data/faucet.db"): Record<string, string[]> {
+function indexes(table = "claims", dbPath = "data/faucet.db"): Record<string, string[]> {
   const db = new Database(dbPath, { readonly: true });
   const out: Record<string, string[]> = {};
-  for (const idx of db.prepare("PRAGMA index_list(claims)").all() as { name: string; origin: string }[]) {
+  for (const idx of db.prepare(`PRAGMA index_list(${table})`).all() as { name: string; origin: string }[]) {
     if (idx.origin !== "c") continue;
     out[idx.name] = (db.prepare(`PRAGMA index_info(${idx.name})`).all() as { name: string }[]).map((c) => c.name);
   }
   db.close();
+  return out;
+}
+
+/** Every table we declared, discovered rather than listed, so a NEW table is covered
+ *  by the convergence test the day it lands and not the day someone remembers. */
+function tables(dbPath = "data/faucet.db"): string[] {
+  const db = new Database(dbPath, { readonly: true });
+  const rows = db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+    .all() as { name: string }[];
+  db.close();
+  return rows.map((r) => r.name);
+}
+
+/** The whole declared shape of a database: every table, its columns and its indexes. */
+function shape(dbPath = "data/faucet.db"): Record<string, { columns: string[]; indexes: Record<string, string[]> }> {
+  const out: Record<string, { columns: string[]; indexes: Record<string, string[]> }> = {};
+  for (const t of tables(dbPath)) out[t] = { columns: columns(t, dbPath), indexes: indexes(t, dbPath) };
   return out;
 }
 
@@ -122,22 +160,82 @@ test("running twice is a no-op, so a restart is not a second migration", () => {
   assert.deepEqual(columns(), afterFirst, "a repeat open changed the table");
 });
 
-test("a FRESH database and a MIGRATED one converge exactly", () => {
+test("a FRESH database and a MIGRATED one converge exactly, ACROSS EVERY TABLE", () => {
   // Otherwise a box's behaviour depends on when its database was created, which is
   // the worst kind of difference to debug because nothing about it is visible.
+  //
+  // This compared `claims` alone until #351, and that is how #351 happened: drip_days
+  // gained a column in SCHEMA with no migration and this test stayed green, because
+  // the one table it read was not the one that broke. Comparing the whole shape, with
+  // the table list DISCOVERED from sqlite_master, is what makes it a guard rather than
+  // a guard-shaped assertion about claims.
   const freshDir = scratch();
   new SqliteDriver();
-  const fresh = columns();
+  const fresh = shape();
 
+  scratch();
+  makeOldDatabase();
+  new SqliteDriver();
+  const migrated = shape();
+
+  assert.deepEqual(
+    migrated,
+    fresh,
+    `migrated and fresh databases differ:\n  migrated ${JSON.stringify(migrated)}\n  fresh    ${JSON.stringify(fresh)}`,
+  );
+  // The comparison is only worth anything if it actually looked at more than claims.
+  assert.ok(Object.keys(fresh).length > 1, "convergence checked a single table, which is the #351 hole");
+  assert.ok(Object.keys(fresh).includes("drip_days"), "drip_days is not in the compared shape");
+  assert.ok(freshDir.length > 0);
+});
+
+test("an OLD drip_days GAINS the network column, and its counts survive (#351)", () => {
+  // The direct regression. A rebuild rather than an ALTER because network is part of
+  // the PRIMARY KEY and sqlite cannot extend one, so this also pins that the rebuild
+  // does not quietly drop the history it is rebuilding around.
   scratch();
   const old = new Database("data/faucet.db");
   old.exec(OLD_CLAIMS);
+  old.exec(OLD_DRIP_DAYS);
+  old.prepare("INSERT INTO drip_days (day, sent) VALUES (?, ?)").run("2026-08-01", 7);
+  old.prepare("INSERT INTO drip_days (day, sent) VALUES (?, ?)").run("2026-08-02", 3);
   old.close();
-  new SqliteDriver();
-  const migrated = columns();
+  assert.ok(!columns("drip_days").includes("network"), "precondition: the old table lacks it");
 
-  assert.deepEqual(migrated, fresh, `migrated ${migrated} does not match fresh ${fresh}`);
-  assert.ok(freshDir.length > 0);
+  new SqliteDriver();
+
+  assert.ok(columns("drip_days").includes("network"), "the migration did not reach an existing database");
+
+  const db = new Database("data/faucet.db", { readonly: true });
+  const rows = db.prepare("SELECT network, day, sent FROM drip_days ORDER BY day").all() as {
+    network: string; day: string; sent: number;
+  }[];
+  db.close();
+  assert.deepEqual(rows, [
+    { network: "taz", day: "2026-08-01", sent: 7 },
+    { network: "taz", day: "2026-08-02", sent: 3 },
+  ], "counts served before the split were all TAZ, and must survive as TAZ");
+});
+
+test("the rebuilt drip_days is keyed on (network, day), not on day alone", () => {
+  // The failure an ALTER would have left behind, and it is worse than the bug it
+  // fixes: keyed on day alone, the first cTAZ drip on a day TAZ already served
+  // collides with the TAZ bucket instead of opening its own.
+  scratch();
+  const old = new Database("data/faucet.db");
+  old.exec(OLD_CLAIMS);
+  old.exec(OLD_DRIP_DAYS);
+  old.prepare("INSERT INTO drip_days (day, sent) VALUES (?, ?)").run("2026-08-01", 7);
+  old.close();
+
+  new SqliteDriver();
+
+  const db = new Database("data/faucet.db");
+  db.prepare("INSERT INTO drip_days (network, day, sent) VALUES ('ctaz', '2026-08-01', 1)").run();
+  const rows = db.prepare("SELECT network, sent FROM drip_days WHERE day = '2026-08-01' ORDER BY network").all();
+  db.close();
+  assert.deepEqual(rows, [{ network: "ctaz", sent: 1 }, { network: "taz", sent: 7 }],
+    "a same-day cTAZ bucket collided with the TAZ one, so the primary key did not survive the rebuild");
 });
 
 test("every migration's column is also in SCHEMA, or the two paths cannot converge", () => {
