@@ -51,12 +51,32 @@ rpc_port=$((BASE_PORT - 1))
 #
 # internal_miner is false because a fresh node with no peers believes it is at the tip and
 # starts mining a fork of genesis within seconds. Turn it on after the sync (CTAZ.md).
+#
+# THE SYNC LIMITS ARE A MEMORY BOUND, NOT A SPEED SETTING, and they are here because the
+# node OOM-killed four times: twice at MemoryMax=2G and twice more at 3G, with
+# memory.events recording 18012 hits against the 3G ceiling. Raising the cap a third time
+# was explicitly ruled out when it was raised the second time (#363): a limit that has to
+# keep growing is not a limit.
+#
+# Their defaults (1000 / 50 / 20) are sized for a machine doing nothing else. This box
+# also runs the TAZ node, the wallet and a miner, and the buffers these govern are held in
+# memory per in-flight block. Lowering them trades sync throughput for a ceiling we can
+# actually hold, which is the right trade now that the chain is AT TIP and there is no
+# throughput left to want.
+#
+# If it still climbs to the cap at tip, the concurrency was never the consumer and the
+# next suspect is the in-process indexer: `crosslink.disable_zaino`. Do NOT flip that
+# blind, the headless wallet may source its balance through it, and that wallet is what
+# `requestfaucetdonation` pays from.
 edits=$(printf '%s\n' \
   "network	listen_addr	\"[::]:${BASE_PORT}\"" \
   "rpc	listen_addr	\"127.0.0.1:${rpc_port}\"" \
   "rpc	enable_cookie_auth	false" \
   "rpc	cookie_dir	\"${DATADIR}\"" \
   "state	cache_dir	\"${DATADIR}\"" \
+  "sync	checkpoint_verify_concurrency_limit	250" \
+  "sync	download_concurrency_limit	20" \
+  "sync	full_verify_concurrency_limit	10" \
   "mining	internal_miner	false")
 
 awk -v edits="$edits" '
