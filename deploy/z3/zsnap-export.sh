@@ -103,6 +103,196 @@ if [ "${1:-}" = "recover" ]; then
   exit 0
 fi
 
+# THE FIRST VERSION OF THIS COMPARED TWO DIFFERENT QUANTITIES AND SO COULD NEVER
+# PASS. It took sha256 of MANIFEST.json's raw bytes and compared it to the hash
+# zebrad reports. Those are unrelated numbers, so from the day it shipped
+# (2026-08-02) it rejected every export: seven in a row, none of them faulty,
+# `latest` frozen at a two-day-old height while a good snapshot sat beside it
+# renamed `.unverified`. Nobody saw it, because the unit fails on purpose so
+# systemctl is the last signal and no alert reaches a human (#215). #404.
+#
+# It also rejects the snapshot that is `latest` right now, which is how the
+# diagnosis was settled: a check that fails against a KNOWN-GOOD artefact is
+# broken in itself, not reporting on the artefact.
+#
+# WHAT THE HASH ACTUALLY IS: BLAKE2b-256 personalized with "ZebraSnapshotV1",
+# over a canonical text ("zsnap-canonical-v2") built from the identity fields
+# and the sorted per-chunk entries of the CONSENSUS column families only. It is
+# not a hash of the JSON file, and no amount of trying sha256/blake2b/sha3 over
+# the file, the compacted JSON, or the concatenated chunk hashes finds it -
+# twenty-odd candidates, all wrong. The answer is in the fork,
+# `zebra-state/src/snapshot.rs`, `canonical_manifest_hash`.
+#
+# THE TEXT BELOW IS A THIRD COPY and can drift from the fork's two (the Rust
+# function and `attestations/verify.sh`). Drift shows up as a mismatch on a
+# perfectly good archive, which is precisely the failure being fixed here, so
+# that message names drift as the likely cause instead of blaming the snapshot.
+#
+# AND IT NOW CHECKS THE PAYLOAD, NOT ONLY ITS DESCRIPTION. The old check read
+# the manifest and never opened a chunk, so once the hash comparison was right
+# it would still have passed an archive whose chunks were truncated - the
+# disk-full case this whole step exists for. Every chunk is hashed against its
+# manifest entry now.
+#
+# ONE STREAMING PASS, and that makes it cheaper than what it replaces: the old
+# code decompressed the whole 9 GB archive three separate times (zstd -t, then
+# tar -tf, then tar -xO). Nothing is expanded to disk, for the reason the header
+# gives - a verification step that needs a third copy of the state is the one
+# that gets deleted the first time it fills the volume.
+VERIFY_FAIL=""
+verify_snapshot() { # $1 archive, $2 expected manifest hash
+  local a="$1" want="$2" out rc
+  VERIFY_FAIL=""
+  set +e
+  out="$(zstd -dc "$a" 2>/dev/null | verify_stream "$want" 2>&1)"
+  rc=$?
+  set -e
+  if [ "$rc" -eq 0 ]; then
+    printf '%s\n' "$out" | while IFS= read -r line; do log "  $line"; done
+    return 0
+  fi
+  # The first line is the machine-readable reason, kept beside a rejected
+  # archive so the file can be read on its own months later; the rest is detail.
+  VERIFY_FAIL="$(printf '%s' "$out" | head -1)"
+  [ -n "$VERIFY_FAIL" ] || VERIFY_FAIL="verifier-produced-nothing"
+  log "ERROR: the snapshot did not verify: $VERIFY_FAIL"
+  printf '%s\n' "$out" | tail -n +2 | while IFS= read -r line; do log "  $line"; done
+  log "  zsnap-import authenticates against this hash, so it would refuse this snapshot."
+  return 1
+}
+
+# Reads a tar stream on stdin. Exit 0 verified, 1 rejected with the reason on
+# the first stdout line, 2 could not run - which is not a pass.
+#
+# python3 rather than jq: jq is not on this box's dependency list, python3 is
+# (the zsnap, backup and deploy suites all require it), and this needs a real
+# JSON parser plus a personalized BLAKE2b that shell has no way to reach.
+#
+# THE PROGRAM IS PASSED WITH -c, NOT FED ON STDIN, and that is not a style choice.
+# `python3 - "$1" <<'PY'` reads the PROGRAM from stdin, so the heredoc replaces the
+# tar stream this function is supposed to read and every archive comes back
+# "not-a-readable-tar: empty file". Stdin cannot be both the source code and the
+# data. Caught by running it against a known-good archive, which is the same
+# control that caught the bug this whole function exists to fix.
+verify_stream() {
+  local prog
+  prog="$(cat <<'PY'
+import hashlib, json, sys, tarfile
+
+# All three constants are from zebra-state/src/snapshot.rs in the fork and none
+# is derivable from the manifest, which is why they are quoted with their source.
+PERSON = b"ZebraSnapshotV1"
+PREFIX = "zsnap-canonical-v2\n"
+# Excluded from the identity so two honest nodes at the same height agree on it.
+NON_CONSENSUS = {"block_info"}
+MANIFEST = "snapshot/MANIFEST.json"
+CHUNKS = "snapshot/"
+
+def fail(reason, *detail):
+    print(reason)
+    for d in detail:
+        print(d)
+    sys.exit(1)
+
+if len(sys.argv) != 2:
+    print("usage: <tar stream> | verify_stream EXPECTED_HASH")
+    sys.exit(2)
+want = sys.argv[1].strip().lower()
+
+raw, seen = None, {}
+try:
+    # "r|" is the streaming mode: sequential, no seeking, nothing to disk.
+    with tarfile.open(fileobj=sys.stdin.buffer, mode="r|") as tf:
+        for m in tf:
+            if not m.isfile():
+                continue
+            f = tf.extractfile(m)
+            if f is None:
+                continue
+            if m.name == MANIFEST:
+                raw = f.read()
+                continue
+            if not m.name.startswith(CHUNKS):
+                continue
+            h = hashlib.blake2b(digest_size=32, person=PERSON)
+            n = 0
+            while True:
+                b = f.read(1 << 20)
+                if not b:
+                    break
+                n += len(b)
+                h.update(b)
+            seen[m.name[len(CHUNKS):]] = (n, h.hexdigest())
+except tarfile.TarError as e:
+    fail("not-a-readable-tar", "  tar error: %s" % e)
+except (OSError, EOFError) as e:
+    # A truncated stream lands here, which is the disk-full case this exists for.
+    fail("archive-truncated-or-unreadable", "  %s" % e)
+
+if raw is None:
+    fail("no-manifest", "  no %s inside the archive" % MANIFEST)
+try:
+    man = json.loads(raw)
+    chunks = man["chunks"]
+except ValueError as e:
+    fail("manifest-not-json", "  %s" % e)
+except (KeyError, TypeError) as e:
+    fail("manifest-shape-unexpected", "  %s" % e)
+
+missing, bad_size, bad_hash = [], [], []
+for c in chunks:
+    got = seen.get(c["file"])
+    if got is None:
+        missing.append(c["file"])
+        continue
+    n, h = got
+    if n != c["bytes"]:
+        bad_size.append("  %s: manifest says %d bytes, archive has %d" % (c["file"], c["bytes"], n))
+    elif h != c["blake2b256"]:
+        bad_hash.append("  %s: content hash differs from the manifest" % c["file"])
+if missing:
+    fail("chunk-missing", *["  " + m for m in missing[:10]])
+if bad_size:
+    fail("chunk-size-mismatch", *bad_size[:10])
+if bad_hash:
+    fail("chunk-hash-mismatch", *bad_hash[:10])
+
+try:
+    parts = [PREFIX]
+    for k in ("network", "tip_height", "tip_hash", "db_format_version", "snapshot_format"):
+        parts.append("%s=%s\n" % (k, man[k]))
+    cs = sorted((c for c in chunks if c["name"] not in NON_CONSENSUS), key=lambda c: c["name"])
+    for c in cs:
+        parts.append("chunk=%s,%s,%s,%s\n" % (c["name"], c["records"], c["bytes"], c["blake2b256"]))
+    got = hashlib.blake2b("".join(parts).encode(), digest_size=32, person=PERSON).hexdigest()
+except (KeyError, TypeError) as e:
+    fail("manifest-missing-identity-field", "  %s" % e)
+
+if got != want:
+    fail("manifest-hash-mismatch",
+         "  zebrad reported: %s" % want,
+         "  recomputed     : %s" % got,
+         "  Every chunk verified against the manifest, so the PAYLOAD is intact and only",
+         "  the identity differs. The likeliest cause is the canonical text in this script",
+         "  drifting from canonical_manifest_hash in zebra-state/src/snapshot.rs, not a bad",
+         "  snapshot. Check attestations/verify.sh in the fork before blaming the export.")
+
+print("verified: %d chunks, each present with the listed size and content hash" % len(chunks))
+print("manifest hash %s matches what zebrad reported" % got)
+PY
+  )"
+  python3 -c "$prog" "$1"
+}
+
+# A seam for the suite, so the verifier is tested through the code that runs in
+# production rather than through a copy of it. Placed before the export work
+# because everything below assumes it is about to snapshot a node.
+if [ "${1:-}" = "--verify-only" ]; then
+  [ $# -eq 3 ] || { echo "usage: $0 --verify-only ARCHIVE EXPECTED_HASH" >&2; exit 2; }
+  verify_snapshot "$2" "$3" || exit 1
+  exit 0
+fi
+
 # `zsnap-export.sh preflight` answers one question: can THIS export binary
 # open THIS node's chain state? That is the only real compatibility question,
 # and it has a cheap definitive answer, so nobody has to reason about version
@@ -355,35 +545,11 @@ echo "$manifest_hash" > "$archive.manifest-hash"
 # The failure would then surface at import, on the day someone is rebuilding a box,
 # which is the worst possible moment to discover it.
 #
-# What is checked is what zsnap-import will demand: the archive decompresses, it contains
-# MANIFEST.json, and that manifest hashes to the value in the sidecar. Verifying the
-# consumer's contract here means we never publish something the importer will reject.
-#
-# Streamed, never expanded to disk. An export already needs state plus one archive of
-# room (#262 headroom logic), and a verification step that needs a third copy is one that
-# gets removed the first time it fills the volume.
-# VERIFY_FAIL names the failing check, so the note beside a kept archive can be read on
-# its own. App's point and it is right: logs rotate, and the file is usually found on a
-# different day than the log that explains it.
-VERIFY_FAIL=""
-verify_snapshot() { # $1 archive, $2 expected manifest hash
-  local a="$1" want="$2" got
-  VERIFY_FAIL=""
-  zstd -t "$a" 2>/dev/null || { VERIFY_FAIL="does-not-decompress"; log "ERROR: the archive does not decompress"; return 1; }
-  zstd -dc "$a" 2>/dev/null | tar -tf - >/dev/null 2>&1 \
-    || { VERIFY_FAIL="not-a-readable-tar"; log "ERROR: the archive decompresses but is not a readable tar"; return 1; }
-  got="$(zstd -dc "$a" 2>/dev/null | tar -xO snapshot/MANIFEST.json 2>/dev/null | sha256sum | cut -d' ' -f1)"
-  [ -n "$got" ] || { VERIFY_FAIL="no-manifest"; log "ERROR: no snapshot/MANIFEST.json inside the archive"; return 1; }
-  if [ "$got" != "$want" ]; then
-    log "ERROR: the manifest inside the archive does not match the hash zebrad reported"
-    log "  zebrad said: $want"
-    log "  archive has: $got"
-    log "  zsnap-import authenticates against this hash, so it would refuse this snapshot."
-    VERIFY_FAIL="manifest-hash-mismatch"
-    return 1
-  fi
-  return 0
-}
+# What is checked is what zsnap-import will demand: every chunk present with its listed
+# size and content hash, and a manifest whose canonical hash is the value in the sidecar.
+# Verifying the consumer's contract here means we never publish something the importer
+# will reject. verify_snapshot is defined near the top, with the long note on why its
+# first version could never pass.
 
 if ! verify_snapshot "$archive" "$manifest_hash"; then
   # Kept, renamed, NOT published, and AT MOST ONE.
@@ -411,7 +577,6 @@ if ! verify_snapshot "$archive" "$manifest_hash"; then
   } > "$archive.unverified.txt" 2>/dev/null || true
   die "the snapshot this run produced did not verify, kept as $(basename "$archive").unverified, latest is unchanged"
 fi
-log "verified: decompresses, and its manifest matches the hash zebrad reported"
 
 # Only now is it safe to call this the newest good snapshot.
 ln -sfn "$name.tar.zst" "$ZSNAP_DIR/snapshots/latest.tar.zst"
