@@ -89,16 +89,20 @@ dockerignored() {
   while IFS= read -r pat; do
     pat="${pat%%#*}"; pat="${pat#"${pat%%[![:space:]]*}"}"; pat="${pat%"${pat##*[![:space:]]}"}"
     [ -z "$pat" ] && continue
+    # THE GLOBS BELOW ARE INTENTIONAL, and SC2254 is a false positive here. $pat and
+    # $base are dockerignore patterns: they MUST expand as globs or nothing is ever
+    # excluded and the comparison is defeated. Quoting them to satisfy the linter would
+    # turn CI green by making the check wrong, which is the trade rule 35 forbids.
+    #
+    # In front of the whole `case`, not on the branches: shellcheck directives are only
+    # valid before complete commands (SC1124), and putting them on individual case items
+    # turned one warning into four parse errors. Found by running shellcheck rather than
+    # by reading its docs, after I shipped the branch-level version without running it.
+    # shellcheck disable=SC2254
     case "$pat" in
       # A leading **/ means "at any depth", which is the form #376 had to introduce.
-      # shellcheck disable=SC2254  # The glob is the POINT. $base is a dockerignore
-      # pattern and matching it literally would defeat the whole comparison: `*.env`
-      # has to behave as a wildcard here or nothing is ever excluded. Quoting it to
-      # satisfy the linter would turn CI green by making the check wrong, which is
-      # exactly the trade rule 35 says never to make.
       '**/'*) base="${pat#**/}"; case "${path##*/}" in $base) return 0 ;; esac ;;
       # Anything else is anchored at the context root and its * stops at a /.
-      # shellcheck disable=SC2254  # Same reason: $pat is a glob by design.
       *) case "$path" in $pat) return 0 ;; esac
          # A bare directory name excludes everything under it.
          case "$path" in "$pat"/*) return 0 ;; esac ;;
