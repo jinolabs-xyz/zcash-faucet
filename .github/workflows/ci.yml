@@ -305,7 +305,9 @@ jobs:
   image:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # v7 like every other job here. v4 was an inconsistency, and CI version skew is
+      # what later produces works-in-one-job-not-the-other with no diff to explain it.
+      - uses: actions/checkout@v7
 
       # No cache, no buildx layer reuse. A cold build is the whole point: it is the only
       # way this job can tell us the commit stands on its own.
@@ -318,10 +320,18 @@ jobs:
       - name: no secret-shaped file may enter the image
         run: |
           set -uo pipefail
+          # ALLOWED BY NAME, NOT BY LUCK. deploy/z3/stack-versions.env is a tracked config
+          # file recording which node and wallet images the deploy runs (#247) and it
+          # matches *.env. Today it never reaches the image because .dockerignore's
+          # **/*.env excludes it, so this check passed for a reason nobody had written
+          # down: an ignore rule aggressive enough to hide a file that is not a secret.
+          # The day someone needs it in the image, this job fails and the tempting fix is
+          # loosening the secret pattern, which is the wrong direction. Naming the
+          # exceptions here keeps the pattern strict and the exception reviewable.
           found="$(docker run --rm --entrypoint sh faucet-ci-check:${{ github.sha }} -c '
             find /app -name "*.env" -o -name "*.env.bak-*" -o -name "*.env.pre-*" \
                  -o -name "*.pem" -o -name "*.key" 2>/dev/null |
-            grep -v "\.env\.example$" || true' )"
+            grep -vE "\.env\.example$|/stack-versions\.env$" || true' )"
           if [ -n "$found" ]; then
             echo "SECRET-SHAPED FILES REACHED THE IMAGE:"
             printf '%s\n' "$found" | sed 's/^/  /'

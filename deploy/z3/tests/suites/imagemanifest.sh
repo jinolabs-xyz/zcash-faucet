@@ -123,3 +123,39 @@ check "a repo whose every tracked file is excluded exits 2, never 0" \
   "[ \"\$(vim_run)\" = '2' ]"
 check "and says there was nothing to compare" \
   "grep -q 'nothing to compare' '$T/out'"
+
+echo "== verify-image-manifest: a ! negation un-ignores, because LAST MATCH WINS"
+# Docker evaluates every pattern in order and a later `!` line re-includes what an earlier
+# one excluded. The first version of dockerignored() returned on the first match and did
+# not understand `!` at all, so a negated file was dropped from the expected set while
+# Docker put it in the image: present and never verified. Found reviewing #381, which uses
+# !**/faucet.env.example.
+vim_env
+printf '*.md\n!README.md\n' > "$R/.dockerignore"
+printf '# keep me\n' > "$R/README.md"
+printf '# drop me\n' > "$R/NOTES.md"
+( cd "$R" && git add -A && git -c user.email=t@t -c user.name=t commit -q -m negation )
+# An image carrying README.md (Docker would copy it) and not NOTES.md (excluded).
+# Everything the commit has that this .dockerignore does NOT exclude. Note faucet.env is
+# in here: replacing .dockerignore with *.md plus !README.md means the env file is no
+# longer excluded and so IS expected, which is the fixture's own premise and the thing my
+# first attempt at this test got wrong.
+rm -rf "$T/img"; mkdir -p "$T/img/app/src" "$T/img/app/deploy/z3"
+cp "$R/src/a.ts" "$R/src/b.ts" "$T/img/app/src/"
+cp "$R/deploy/z3/faucet.env" "$T/img/app/deploy/z3/"
+cp "$R/.dockerignore" "$R/README.md" "$T/img/app/"
+( cd "$T/img" && tar -cf "$T/img.tar" app )
+check "a negated file is EXPECTED and matches, so it is verified rather than skipped" \
+  "[ \"\$(vim_run)\" = '0' ]"
+
+echo "== verify-image-manifest: and a negated file MISSING from the image is caught"
+# The half that proves the negation is load-bearing. Before this, README.md was silently
+# excluded from the comparison, so an image missing it passed.
+rm -f "$T/img/app/README.md"; ( cd "$T/img" && tar -cf "$T/img.tar" app )
+check "a negated file absent from the image exits 1" "[ \"\$(vim_run)\" = '1' ]"
+check "and names it" "grep -q 'README.md' '$T/out'"
+
+echo "== verify-image-manifest: an excluded file with no negation stays excluded"
+# The control. If everything were expected, the two checks above would pass for the wrong
+# reason: NOTES.md must NOT be demanded of the image.
+check "NOTES.md is never demanded" "! grep -q 'NOTES.md' '$T/out'"

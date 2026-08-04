@@ -84,31 +84,37 @@ expected_manifest() {
 # nothing; #376 caught it. Implemented with bash pattern matching per path SEGMENT so the
 # same mistake cannot be made here.
 dockerignored() {
-  local path="$1" pat base
+  local path="$1" pat base ig=1 negate matched
   [ -f "$REPO_DIR/.dockerignore" ] || return 1
+  # LAST MATCH WINS, which is why this cannot return on the first hit. Docker evaluates
+  # every pattern in order and a later `!` line un-ignores what an earlier one excluded,
+  # so `*.md` followed by `!README.md` includes README.md. The first version of this
+  # returned early and ignored `!` entirely, which would have dropped a negated file from
+  # the expected set while Docker put it in the image: a file present and never verified.
+  # Found while reviewing the CTO's #381, which uses `!**/faucet.env.example`, not by
+  # rereading my own code - I had looked at this function three times and never asked
+  # what it does with a bang.
   while IFS= read -r pat; do
     pat="${pat%%#*}"; pat="${pat#"${pat%%[![:space:]]*}"}"; pat="${pat%"${pat##*[![:space:]]}"}"
     [ -z "$pat" ] && continue
-    # THE GLOBS BELOW ARE INTENTIONAL, and SC2254 is a false positive here. $pat and
-    # $base are dockerignore patterns: they MUST expand as globs or nothing is ever
-    # excluded and the comparison is defeated. Quoting them to satisfy the linter would
-    # turn CI green by making the check wrong, which is the trade rule 35 forbids.
-    #
-    # In front of the whole `case`, not on the branches: shellcheck directives are only
-    # valid before complete commands (SC1124), and putting them on individual case items
-    # turned one warning into four parse errors. Found by running shellcheck rather than
-    # by reading its docs, after I shipped the branch-level version without running it.
+    negate=0
+    case "$pat" in "!"*) negate=1; pat="${pat#!}" ;; esac
+    [ -z "$pat" ] && continue
+    matched=0
     # shellcheck disable=SC2254
     case "$pat" in
-      # A leading **/ means "at any depth", which is the form #376 had to introduce.
-      '**/'*) base="${pat#**/}"; case "${path##*/}" in $base) return 0 ;; esac ;;
+      # A leading **/ means "at any depth", the form #376 had to introduce.
+      "**/"*) base="${pat#**/}"
+              # shellcheck disable=SC2254
+              case "${path##*/}" in $base) matched=1 ;; esac ;;
       # Anything else is anchored at the context root and its * stops at a /.
-      *) case "$path" in $pat) return 0 ;; esac
+      *) case "$path" in $pat) matched=1 ;; esac
          # A bare directory name excludes everything under it.
-         case "$path" in "$pat"/*) return 0 ;; esac ;;
+         case "$path" in "$pat"/*) matched=1 ;; esac ;;
     esac
+    [ "$matched" = 1 ] && { [ "$negate" = 1 ] && ig=1 || ig=0; }
   done < "$REPO_DIR/.dockerignore"
-  return 1
+  return "$ig"
 }
 
 # ── what the image actually contains ─────────────────────────────────────────────
