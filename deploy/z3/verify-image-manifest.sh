@@ -91,8 +91,14 @@ dockerignored() {
     [ -z "$pat" ] && continue
     case "$pat" in
       # A leading **/ means "at any depth", which is the form #376 had to introduce.
+      # shellcheck disable=SC2254  # The glob is the POINT. $base is a dockerignore
+      # pattern and matching it literally would defeat the whole comparison: `*.env`
+      # has to behave as a wildcard here or nothing is ever excluded. Quoting it to
+      # satisfy the linter would turn CI green by making the check wrong, which is
+      # exactly the trade rule 35 says never to make.
       '**/'*) base="${pat#**/}"; case "${path##*/}" in $base) return 0 ;; esac ;;
       # Anything else is anchored at the context root and its * stops at a /.
+      # shellcheck disable=SC2254  # Same reason: $pat is a glob by design.
       *) case "$path" in $pat) return 0 ;; esac
          # A bare directory name excludes everything under it.
          case "$path" in "$pat"/*) return 0 ;; esac ;;
