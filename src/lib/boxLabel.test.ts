@@ -11,7 +11,7 @@ import { boxRow, boxChip, boxIsBad } from "./boxLabel.ts";
 import { classifyIntegrity } from "./boxIntegrity.ts";
 
 const NOW = Date.parse("2026-07-31T12:00:00Z");
-const report = (over = {}) => ({ expected: 14, present: 14, notEnabled: 0, enabledUndeclared: null, at: NOW - 30_000, readable: true, ...over });
+const report = (over = {}) => ({ expected: 14, present: 14, notEnabled: 0, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, at: NOW - 30_000, readable: true, ...over });
 
 test("THE STATE NOTHING RENDERED: two files gone and a unit disabled says so", () => {
   const s = classifyIntegrity(report({ present: 12, notEnabled: 1 }), NOW);
@@ -124,4 +124,55 @@ test("DRIFT IS NEVER FOLDED INTO THE COUNTS, or a drifted box outranks a clean o
   // `present`, a box with 32 of 34 files and 2 stray units would render as 34 of 34.
   const drifted = boxRow(classifyIntegrity(report({ expected: 34, present: 32, notEnabled: 0, enabledUndeclared: 2 }), NOW));
   assert.doesNotMatch(drifted, /34 of 34/, "an extra enabled unit is not a present file");
+});
+
+/* ── A crash-looping watchdog, which nothing was watching (#365) ─────────────────── */
+
+test("A WATCHDOG IN A RESTART LOOP IS RED, even on a box with every file in place", () => {
+  // The gap: a unit only reaches systemd's failed state if systemd gives up on it, and
+  // faucet-watchdog is Restart=always with no start limit on purpose. So its own
+  // OnFailure= alert can never fire, and the service whose job is noticing that other
+  // things are broken was the one thing nothing watched.
+  const s = classifyIntegrity(report({ watchdogRestarts: 412, watchdogRestartsDelta: 61 }), NOW);
+  assert.equal(s.state, "complete", "every file is present, so the file verdict is clean");
+  assert.match(boxRow(s), /WATCHDOG RESTARTING \(61 since last report\)/);
+  assert.equal(boxIsBad(s), true, "a looping supervisor is a fault, not a note");
+  assert.equal(boxChip(s), "WATCHDOG LOOP", "and it must be visible without opening the panel");
+});
+
+test("THE DELTA DECIDES, NOT THE CUMULATIVE COUNT", () => {
+  // NRestarts never resets. A box up for a month with a few restarts long ago and a box
+  // looping right now print similar numbers, so classifying on the total would flag a
+  // healthy box forever and teach an operator to ignore the flag.
+  const old = classifyIntegrity(report({ watchdogRestarts: 412, watchdogRestartsDelta: 0 }), NOW);
+  assert.equal(boxIsBad(old), false, "412 lifetime restarts with none recently is not a loop");
+  assert.doesNotMatch(boxRow(old), /WATCHDOG/, "and it earns no clause at all");
+  assert.equal(boxChip(old), null);
+});
+
+test("one restart between reports is a restart, not a loop", () => {
+  // Ordinary after a deploy or a daemon-reload. Paging on it trains an operator to
+  // ignore the page, so it is reported without being marked.
+  const s = classifyIntegrity(report({ watchdogRestarts: 9, watchdogRestartsDelta: 1 }), NOW);
+  assert.match(boxRow(s), /watchdog restarted once/);
+  assert.equal(boxIsBad(s), false);
+  assert.equal(boxChip(s), null);
+});
+
+test("an UNREAD counter is not a calm one", () => {
+  // null means systemctl would not answer, or this is the first report so there is no
+  // previous one to diff against. Neither is evidence the watchdog is fine, and neither
+  // is evidence it is looping, so nothing is claimed either way.
+  const s = classifyIntegrity(report({ watchdogRestarts: null, watchdogRestartsDelta: null }), NOW);
+  assert.doesNotMatch(boxRow(s), /WATCHDOG|watchdog/);
+  assert.equal(boxIsBad(s), false, "unmeasured must not be reported as broken");
+  assert.equal(boxChip(s), null);
+});
+
+test("the loop clause does not displace a real file fault", () => {
+  // Both facts, and the file verdict leads because it is the more upstream problem.
+  const row = boxRow(classifyIntegrity(report({ present: 12, notEnabled: 1, watchdogRestartsDelta: 61 }), NOW));
+  assert.match(row, /2 of 14 MISSING/);
+  assert.match(row, /WATCHDOG RESTARTING/);
+  assert.ok(row.indexOf("MISSING") < row.indexOf("WATCHDOG"), "the file fault comes first");
 });

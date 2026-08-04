@@ -12,6 +12,38 @@
 import type { IntegrityStatus } from "./boxIntegrity.ts";
 
 /**
+ * How many restarts the watchdog took since the box's previous report (#365).
+ *
+ * THE DELTA, NEVER THE CUMULATIVE COUNT. NRestarts never resets, so a box up for a
+ * month with three restarts and a box looping right now print similar-looking numbers
+ * and a reader cannot tell which. The delta is per report interval, so it is a rate.
+ *
+ * AND THIS ONE IS A FAULT, unlike undeclared units. A watchdog restarting in a loop
+ * cannot reach systemd's failed state, so its own OnFailure= alert can never fire: the
+ * service whose job is noticing that other things are broken is silently broken itself.
+ * That is worth red.
+ *
+ * The threshold is 1 rather than 0. One restart between two reports is a restart, which
+ * is ordinary after a deploy or a daemon-reload. Two or more inside one report interval
+ * is a loop: at RestartSec=5 a real loop produces about 60 per five minutes.
+ */
+const WATCHDOG_LOOP_RESTARTS = 2;
+
+export function watchdogLooping(s: IntegrityStatus): boolean {
+  return (s.watchdogRestartsDelta ?? 0) >= WATCHDOG_LOOP_RESTARTS;
+}
+
+/** The clause, when there is one. Null and 0 render nothing: an unread counter must not
+ *  arrive as a calm one, and a calm one does not need a word. */
+function watchdog(s: IntegrityStatus): string {
+  const d = s.watchdogRestartsDelta;
+  if (d == null || d < 1) return "";
+  return d >= WATCHDOG_LOOP_RESTARTS
+    ? `, WATCHDOG RESTARTING (${d} since last report)`
+    : `, watchdog restarted once`;
+}
+
+/**
  * Units that are enabled on the box but not declared in the repo, when there are any.
  *
  * A SEPARATE CLAUSE, NEVER PART OF THE COUNT. The counts answer "does the box have
@@ -57,7 +89,7 @@ export function boxRow(s: IntegrityStatus): string {
       // name at all. I was reading the world after the fix and calling it never-broken,
       // which is rule 35 running backwards, so the same counter applies. `git show
       // <commit>^:<file>` is what settles a question about the past, not a live probe.
-      return `${s.expected} of ${s.expected} files, all enabled${undeclared(s)}`;
+      return `${s.expected} of ${s.expected} files, all enabled${undeclared(s)}${watchdog(s)}`;
 
     case "incomplete": {
       const parts: string[] = [];
@@ -69,7 +101,7 @@ export function boxRow(s: IntegrityStatus): string {
       // Defensive, and it should be unreachable: classifyIntegrity only returns
       // incomplete when one of the two is non-zero. Saying "incomplete" with no
       // figures still beats rendering an empty string as though nothing were wrong.
-      return (parts.length ? parts.join(", ") : "incomplete, figures not reported") + undeclared(s);
+      return (parts.length ? parts.join(", ") : "incomplete, figures not reported") + undeclared(s) + watchdog(s);
     }
 
     case "unknown":
@@ -92,11 +124,14 @@ export function boxRow(s: IntegrityStatus): string {
  * nobody makes when they think everything is fine.
  */
 export function boxChip(s: IntegrityStatus): string | null {
+  // Before the complete short-circuit: a box can have every file in place and a
+  // watchdog in a restart loop, and that must not be invisible on the terse strip.
+  if (watchdogLooping(s)) return "WATCHDOG LOOP";
   if (s.state === "complete") return null;
   return s.state === "incomplete" ? "INCOMPLETE" : "unknown";
 }
 
 /** Anything other than a clean report. Matches isIntegrityFailing: unknown counts. */
 export function boxIsBad(s: IntegrityStatus): boolean {
-  return s.state !== "complete";
+  return s.state !== "complete" || watchdogLooping(s);
 }

@@ -323,3 +323,49 @@ check "a failing uname still emits the field" \
   "[ -n \"\$(jqf '$BOX_REPORT_OUT' platform)\" ]"
 check "and its value is unknown" \
   "[ \"\$(jqf '$BOX_REPORT_OUT' platform)\" = 'unknown' ]"
+
+echo "== box-report: the watchdog's restart count, and the DELTA that gives it a rate"
+# #365. faucet-watchdog is Restart=always with no start limit, so systemd never gives up
+# on it, so it never reaches the failed state, so its own OnFailure= alert can never
+# fire. A watchdog whose script is broken restarts every 5s forever and pages nobody.
+# We keep never-give-up and report the loop instead of trading recovery for an alert.
+#
+# The DELTA is the figure that means something. NRestarts is cumulative and never
+# resets, so a box up for a month and a box looping now print similar numbers.
+box_env
+STUB_NRESTARTS=7 BOX_REPORT_STATE="$T/wd.state" bash "$BOX_REPORT" > /dev/null 2>&1
+check "the cumulative count is reported" "[ \"\$(jqf '$BOX_REPORT_OUT' watchdogRestarts)\" = '7' ]"
+# No previous report to diff against, so the delta is null rather than 7. Calling the
+# first reading a delta of 7 would flag every fresh box as looping.
+# 'None' not 'null': jqf prints through python, so JSON null arrives as None, the same
+# reason the readable assertion above compares to 'True'. Comparing to 'null' here
+# matched nothing and the test failed for its own reason rather than the code's.
+check "and the FIRST report has no delta, because there is nothing to diff" \
+  "[ \"\$(jqf '$BOX_REPORT_OUT' watchdogRestartsDelta)\" = 'None' ]"
+
+# Second report, counter climbed by 54: that is a loop.
+STUB_NRESTARTS=61 BOX_REPORT_STATE="$T/wd.state" bash "$BOX_REPORT" > /dev/null 2>&1
+check "the second report diffs against the first" \
+  "[ \"\$(jqf '$BOX_REPORT_OUT' watchdogRestartsDelta)\" = '54' ]"
+
+# Counter unchanged: a calm watchdog, whatever the lifetime total says.
+STUB_NRESTARTS=61 BOX_REPORT_STATE="$T/wd.state" bash "$BOX_REPORT" > /dev/null 2>&1
+check "an unchanged counter is a delta of zero, not of 61" \
+  "[ \"\$(jqf '$BOX_REPORT_OUT' watchdogRestartsDelta)\" = '0' ]"
+
+echo "== box-report: a counter that went BACKWARDS is unknown, not a negative delta"
+# A daemon-reload or a reboot resets NRestarts. That is a new baseline, not minus fifty
+# restarts, and nothing downstream would know how to read a negative number.
+STUB_NRESTARTS=2 BOX_REPORT_STATE="$T/wd.state" bash "$BOX_REPORT" > /dev/null 2>&1
+check "a reset counter reports null rather than a negative delta" \
+  "[ \"\$(jqf '$BOX_REPORT_OUT' watchdogRestartsDelta)\" = 'None' ]"
+
+echo "== box-report: an unreadable counter is null, never zero"
+# The control for all of the above, and the direction that matters most: 0 would say the
+# watchdog is calm, which is a claim we did not measure.
+box_env
+BOX_REPORT_STATE="$T/wd2.state" bash "$BOX_REPORT" > /dev/null 2>&1
+check "no answer from systemctl reports null" \
+  "[ \"\$(jqf '$BOX_REPORT_OUT' watchdogRestarts)\" = 'None' ]"
+check "and not zero, which would read as a calm watchdog" \
+  "[ \"\$(jqf '$BOX_REPORT_OUT' watchdogRestarts)\" != '0' ]"

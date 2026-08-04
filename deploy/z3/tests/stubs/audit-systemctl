@@ -30,5 +30,11 @@ case "${args[0]:-}" in
     printf '%s\n' "${args[1]:-<no-unit>}" >> "${STUB_DISABLED:-/dev/null}"
     echo "stub systemctl: disable was called, which nothing in this repo should do" >&2
     exit 1 ;;
+  show)
+    # `show -p NRestarts --value <unit>`. STUB_NRESTARTS unset means the catch-all
+    # behaviour box-report already handles: empty output, which it records as null
+    # rather than as a calm zero.
+    [ -n "${STUB_NRESTARTS:-}" ] && printf '%s\n' "$STUB_NRESTARTS"
+    exit 0 ;;
   *) exit 0 ;;
 esac
