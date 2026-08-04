@@ -262,3 +262,49 @@ check "nor about miner/, which ships as a built binary and not as a tree" \
   "! grep -q 'miner/ holds files' '$T/unknown.log'"
 check "and it did not install the unwired directory behind our backs" \
   "[ ! -e '$T/install/somethingnew' ]"
+
+echo "== install-ops: THE DROP-IN POST-CONDITION CAN ACTUALLY FAIL"
+# #361 added an install loop for .service.d drop-ins AND a matching post-condition, on the
+# stated grounds that "an install rule without a matching post-condition is how a file goes
+# missing quietly". The install loop was tested three ways. The post-condition was tested by
+# nothing: deleting only that loop left the suite at 64 passed 0 failed.
+#
+# So the guard against silent-missing was itself unguarded, in the PR about a file that was
+# reviewed, merged and never installed. That is the same shape one level up.
+#
+# The scenario the post-condition exists for is a drop-in that cannot be placed. Made real by
+# taking write permission off the destination directory, so `place` fails for that ONE file
+# while everything else installs normally - which is what makes this a test of the
+# post-condition rather than of the whole run collapsing.
+ops_env
+mkdir -p "$T/src/faucet-thing.service.d"
+printf '[Service]\nCPUQuota=200%%\n' > "$T/src/faucet-thing.service.d/10-tuning.conf"
+mkdir -p "$T/units/faucet-thing.service.d"
+chmod 500 "$T/units/faucet-thing.service.d"
+bash "$INSTALL_OPS" "$T/src" > "$T/dropfail.log" 2>&1
+rc=$?
+chmod 700 "$T/units/faucet-thing.service.d"   # restore before assertions so cleanup works
+check "a drop-in that cannot be placed FAILS the run" "[ $rc -ne 0 ]"
+check "and the post-condition names it by <dir>/<file>, not just the basename" \
+  "grep -q 'never arrived:.*faucet-thing.service.d/10-tuning.conf' '$T/dropfail.log'"
+check "and the run does not report the box as installed" \
+  "! grep -qE 'all [0-9]+ (file|item)s? installed' '$T/dropfail.log'"
+# The scripts and top-level units must still have landed. If the whole run aborted early this
+# assertion fails, and the test above would have been passing for the wrong reason.
+check "and the rest of the tree DID install, so this isolates the post-condition" \
+  "[ -f '$T/install/watchdog.sh' ] && [ -f '$T/units/faucet-thing.timer' ]"
+
+echo "== install-ops: a drop-in that is present but STALE is reported as differing"
+# The other half of the same post-condition. Missing and stale are different repairs: absent
+# points at the install rule, stale points at a copy that silently did not overwrite.
+ops_env
+mkdir -p "$T/src/faucet-thing.service.d" "$T/units/faucet-thing.service.d"
+printf '[Service]\nCPUQuota=200%%\n' > "$T/src/faucet-thing.service.d/10-tuning.conf"
+printf '[Service]\nCPUQuota=999%%\n' > "$T/units/faucet-thing.service.d/10-tuning.conf"
+chmod 500 "$T/units/faucet-thing.service.d"
+bash "$INSTALL_OPS" "$T/src" > "$T/dropstale.log" 2>&1
+rc=$?
+chmod 700 "$T/units/faucet-thing.service.d"
+check "a drop-in that could not be updated FAILS the run" "[ $rc -ne 0 ]"
+check "and it is reported, by one of the two states, rather than passing silently" \
+  "grep -qE '(never arrived|differ).*10-tuning.conf' '$T/dropstale.log'"
