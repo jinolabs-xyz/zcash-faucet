@@ -28,7 +28,11 @@ set -uo pipefail
 RPC="${CTAZ_RPC_URL:-http://127.0.0.1:19232/}"
 OUT="${CTAZ_STATUS_OUT:-/var/lib/docker/volumes/zcash-faucet_faucet_data/_data/ctaz-status.json}"
 CURL="${CTAZ_CURL:-curl}"
-TIMEOUT="${CTAZ_TIMEOUT:-5}"
+# 15s, NOT 5. Measured on the live box: 8 of 16 runs in twenty minutes failed with "the
+# node did not answer at all", which is curl giving up rather than the node refusing. The
+# node is SLOW under mining, not dead - it answers, past five seconds. A writer that runs
+# once a minute can afford to wait fifteen.
+TIMEOUT="${CTAZ_TIMEOUT:-15}"
 
 log() { echo "$(date -u +%FT%TZ) ctaz-status: $*"; }
 
@@ -82,6 +86,34 @@ if [ "$rpc_rc" -ne 0 ] || [ -z "$info" ] || [ -z "$blocks" ]; then
   if [ "$rpc_rc" -ne 0 ]; then why="the node did not answer at all"
   elif [ -z "$info" ]; then why="the node answered with an EMPTY body, which is what zaino flapping looks like"
   else why="the node answered without a blocks field"; fi
+  # A FAILED READ MUST NOT CLOBBER A GOOD ONE THAT IS STILL FRESH.
+  #
+  # This is what made the panel flap. With the node answering about half the time, every
+  # other run replaced a perfectly good file with readable:false, and the page showed
+  # "we cannot read the Crosslink node's status" about a node that had answered sixty
+  # seconds earlier and would answer again sixty seconds later.
+  #
+  # Keeping the last good reading is not stale-data-as-fresh: `at` is untouched, and the
+  # READER already decides staleness from it. So a run that cannot read leaves the previous
+  # answer standing with its own timestamp, and if the node is genuinely gone the file ages
+  # out and the panel says stale on its own. That is the honest split - this script reports
+  # what it saw, the reader decides how old is too old.
+  #
+  # Only overwrite when there is nothing good to keep, or when what is there is already
+  # older than the reader's own staleness window.
+  keep=0
+  if [ -f "$OUT" ]; then
+    prev_at="$(num "$(cat "$OUT" 2>/dev/null)" at)"
+    if [ -n "$prev_at" ] && grep -q '"readable":true' "$OUT" 2>/dev/null; then
+      age_s=$(( (now_ms - prev_at) / 1000 ))
+      [ "$age_s" -lt "${CTAZ_KEEP_SECONDS:-150}" ] && keep=1
+    fi
+  fi
+  if [ "$keep" = "1" ]; then
+    log "cannot read the node's state: $why. KEEPING the previous good reading, which the reader will age out on its own."
+    exit 0
+  fi
+
   log "cannot read the node's state: $why. Writing readable:false rather than a hopeful true."
   write "{\"readable\":false,\"at\":${now_ms},\"recency\":null,\"blocks\":null,\"tip\":null,\"syncPercent\":null}"
   exit 0
