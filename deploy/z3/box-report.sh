@@ -216,4 +216,49 @@ platform="$(uname -m 2>/dev/null || echo unknown)"
 # minerBinary is emitted as its own field as well as counted, so the panel can say WHY
 # the count is short instead of only that it is. A number that drops with no reason
 # attached sends someone to the box to find out.
-write "{\"expected\":${expected},\"present\":${present},\"notEnabled\":${not_enabled},\"enabledUndeclared\":${enabled_undeclared},\"minerBinary\":\"${miner_state}\",\"platform\":\"${platform}\",\"at\":$(( $(date +%s) * 1000 )),\"readable\":true}"
+
+# ── IS THE WATCHDOG CRASH-LOOPING? (#365) ───────────────────────────────────────
+# A unit only triggers OnFailure= when it reaches the FAILED state, and a unit systemd
+# keeps restarting never reaches it. faucet-watchdog has Restart=always and no start
+# limit, deliberately, because a stack that recovers should find its supervisor still
+# trying. The cost is that a watchdog whose script is broken restarts every 5 seconds
+# forever and pages nobody. The service whose whole job is noticing that other things
+# are broken was the one thing nothing watched.
+#
+# We keep never-give-up and report the loop instead of trading recovery for an alert.
+#
+# TWO FIGURES, AND THE DELTA IS THE ONE THAT MEANS ANYTHING. NRestarts is cumulative
+# since the unit last started and never resets, so a box up thirty days with three
+# restarts and a box looping right now can print similar numbers and a reader cannot
+# tell which. A count with no rate is the same on-and-on flag as the old -dirty. The
+# delta is measured against OUR OWN previous report, so it is restarts per report
+# interval: at RestartSec=5 a real loop is around 60 per five minutes, while a box that
+# restarted twice last week reads 0.
+#
+# Absent rather than zero when systemctl will not answer, because a number we could not
+# read must not arrive as a reassuring one.
+WATCHDOG_UNIT="${BOX_REPORT_WATCHDOG_UNIT:-faucet-watchdog.service}"
+STATE="${BOX_REPORT_STATE:-/var/lib/faucet/box-report.state}"
+
+watchdog_restarts=""
+watchdog_restarts_delta=""
+if n="$("$SYSTEMCTL" show -p NRestarts --value "$WATCHDOG_UNIT" 2>/dev/null)" \
+   && [ -n "$n" ] && [ "$n" -eq "$n" ] 2>/dev/null; then
+  watchdog_restarts="$n"
+  prev="$(cat "$STATE" 2>/dev/null || true)"
+  if [ -n "$prev" ] && [ "$prev" -eq "$prev" ] 2>/dev/null; then
+    d=$((n - prev))
+    # A negative delta means the counter reset under us, a daemon-reload or a reboot.
+    # That is not "minus four restarts", it is a new baseline, so the delta is unknown
+    # for this one report rather than a negative number nothing would know how to read.
+    [ "$d" -ge 0 ] && watchdog_restarts_delta="$d"
+  fi
+  mkdir -p "$(dirname "$STATE")" 2>/dev/null && printf '%s\n' "$n" > "$STATE" 2>/dev/null || true
+fi
+
+# JSON numbers or the literal null. `null` is what an unread figure has to be on the
+# wire: 0 would say the watchdog is calm, which is a claim we did not measure.
+wr_json="${watchdog_restarts:-null}"
+wrd_json="${watchdog_restarts_delta:-null}"
+
+write "{\"expected\":${expected},\"present\":${present},\"notEnabled\":${not_enabled},\"enabledUndeclared\":${enabled_undeclared},\"minerBinary\":\"${miner_state}\",\"platform\":\"${platform}\",\"watchdogRestarts\":${wr_json},\"watchdogRestartsDelta\":${wrd_json},\"at\":$(( $(date +%s) * 1000 )),\"readable\":true}"

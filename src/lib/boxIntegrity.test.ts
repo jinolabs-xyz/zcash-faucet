@@ -8,11 +8,13 @@ import assert from "node:assert/strict";
 import { classifyIntegrity, isIntegrityFailing, STALE_AFTER_MS } from "./boxIntegrity.ts";
 
 const NOW = 1_700_000_000_000;
-const rep = (o: Partial<{ expected: number; present: number; notEnabled: number; enabledUndeclared: number | null; agoMs: number; readable: boolean }> = {}) => ({
+const rep = (o: Partial<{ expected: number; present: number; notEnabled: number; enabledUndeclared: number | null; watchdogRestarts: number | null; watchdogRestartsDelta: number | null; agoMs: number; readable: boolean }> = {}) => ({
   expected: o.expected ?? 25,
   present: o.present ?? 25,
   notEnabled: o.notEnabled ?? 0,
   enabledUndeclared: o.enabledUndeclared ?? null,
+  watchdogRestarts: o.watchdogRestarts ?? null,
+  watchdogRestartsDelta: o.watchdogRestartsDelta ?? null,
   at: NOW - (o.agoMs ?? 60_000),
   readable: o.readable ?? true,
 });

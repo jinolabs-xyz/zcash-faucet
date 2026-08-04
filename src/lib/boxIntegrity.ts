@@ -40,6 +40,11 @@ export interface IntegrityReport {
    * informational, never part of the verdict. Null when the report predates the
    * field, because unmeasured is not zero. */
   enabledUndeclared: number | null;
+  /** Cumulative restarts of the watchdog unit (#365). Context only. */
+  watchdogRestarts: number | null;
+  /** Restarts since the box's previous report, which is the figure that carries a rate.
+   * Null on the first report and after the counter resets. */
+  watchdogRestartsDelta: number | null;
   /** When the box wrote this, epoch ms. */
   at: number | null;
   /** The writer could not determine the answer, so it said so. */
@@ -54,12 +59,18 @@ export interface IntegrityStatus {
   notEnabled: number | null;
   /** Passed through, never classified on: drift is a fact to surface, not a fault. */
   enabledUndeclared: number | null;
+  /** Cumulative restarts of the watchdog unit. Context only, never classified on: it
+   *  never resets, so it cannot distinguish an old fault from a live one. */
+  watchdogRestarts: number | null;
+  /** Restarts since the box's PREVIOUS report, which is the figure that means
+   *  something. Null when there is no previous report or the counter reset. */
+  watchdogRestartsDelta: number | null;
   ageSeconds: number | null;
   reason: string;
 }
 
 export function classifyIntegrity(r: IntegrityReport | null, now: number): IntegrityStatus {
-  const none = { expected: null, present: null, missing: null, notEnabled: null, enabledUndeclared: null, ageSeconds: null };
+  const none = { expected: null, present: null, missing: null, notEnabled: null, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, ageSeconds: null };
 
   // No report at all is the state the box was ACTUALLY in all week, so it must not
   // be quiet. It is not "complete" and it is not a proven fault: it is unverified,
@@ -101,6 +112,8 @@ export function classifyIntegrity(r: IntegrityReport | null, now: number): Integ
       missing,
       notEnabled: r.notEnabled,
       enabledUndeclared: r.enabledUndeclared,
+      watchdogRestarts: r.watchdogRestarts,
+      watchdogRestartsDelta: r.watchdogRestartsDelta,
       ageSeconds: age,
       reason: parts.join(", "),
     };
@@ -113,6 +126,8 @@ export function classifyIntegrity(r: IntegrityReport | null, now: number): Integ
     missing: 0,
     notEnabled: 0,
     enabledUndeclared: r.enabledUndeclared,
+    watchdogRestarts: r.watchdogRestarts,
+    watchdogRestartsDelta: r.watchdogRestartsDelta,
     ageSeconds: age,
     reason: `all ${r.expected} required files installed, current and enabled`,
   };

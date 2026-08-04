@@ -20,7 +20,7 @@ export function readBoxIntegrity(): IntegrityReport | null {
   try {
     const j = JSON.parse(readFileSync(PATH, "utf8")) as Record<string, unknown>;
     if (j.readable === false)
-      return { expected: 0, present: 0, notEnabled: 0, enabledUndeclared: null, at: null, readable: false };
+      return { expected: 0, present: 0, notEnabled: 0, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, at: null, readable: false };
     const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
     const expected = n(j.expected), present = n(j.present), notEnabled = n(j.notEnabled), at = n(j.at);
     // Any missing field means we cannot form a verdict. Say so rather than
@@ -32,7 +32,11 @@ export function readBoxIntegrity(): IntegrityReport | null {
     // on the box and invisible everywhere else (#339). Absent (a pre-#338 report)
     // stays null rather than zero: an unmeasured drift is not a measured zero.
     const enabledUndeclared = n(j.enabledUndeclared);
-    return { expected, present, notEnabled, enabledUndeclared, at, readable: true };
+    // Both nullable, and null is the honest answer when systemctl would not say. 0 would
+    // report a calm watchdog, which is a claim the box did not make.
+    const watchdogRestarts = n(j.watchdogRestarts);
+    const watchdogRestartsDelta = n(j.watchdogRestartsDelta);
+    return { expected, present, notEnabled, enabledUndeclared, watchdogRestarts, watchdogRestartsDelta, at, readable: true };
   } catch {
     return null;
   }
