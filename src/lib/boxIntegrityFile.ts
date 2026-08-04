@@ -20,8 +20,13 @@ export function readBoxIntegrity(): IntegrityReport | null {
   try {
     const j = JSON.parse(readFileSync(PATH, "utf8")) as Record<string, unknown>;
     if (j.readable === false)
-      return { expected: 0, present: 0, notEnabled: 0, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, at: null, readable: false };
+      return { expected: 0, present: 0, notEnabled: 0, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, platform: null, minerBinary: null, at: null, readable: false };
     const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+    // Strings, and empty is not a value. box-report defaults platform to the literal
+    // "unknown" when uname says nothing, so an empty string here means the field was
+    // damaged in transit rather than honestly unset - null says that, "" would render
+    // as a blank cell that looks like a measurement.
+    const s = (v: unknown) => (typeof v === "string" && v !== "" ? v : null);
     const expected = n(j.expected), present = n(j.present), notEnabled = n(j.notEnabled), at = n(j.at);
     // Any missing field means we cannot form a verdict. Say so rather than
     // defaulting a number to zero, which would read as "nothing missing".
@@ -36,7 +41,18 @@ export function readBoxIntegrity(): IntegrityReport | null {
     // report a calm watchdog, which is a claim the box did not make.
     const watchdogRestarts = n(j.watchdogRestarts);
     const watchdogRestartsDelta = n(j.watchdogRestartsDelta);
-    return { expected, present, notEnabled, enabledUndeclared, watchdogRestarts, watchdogRestartsDelta, at, readable: true };
+    // WRITTEN BY THE BOX SINCE #332 AND #338 AND PARSED HERE BY NOBODY UNTIL #392.
+    // Two fields measured on the box, serialised, shipped through a volume, and
+    // dropped one line before they became visible. `platform` was added because the
+    // architecture "had to be fetched by hand", and it still had to. `minerBinary`
+    // exists so the panel can say WHY a file count is short, and the panel could not.
+    //
+    // The round-trip test added with this compares the SET of keys the writer emits
+    // against the set this function returns, because a test that checks only the
+    // fields we already read is the test that missed these two.
+    const platform = s(j.platform);
+    const minerBinary = s(j.minerBinary);
+    return { expected, present, notEnabled, enabledUndeclared, watchdogRestarts, watchdogRestartsDelta, platform, minerBinary, at, readable: true };
   } catch {
     return null;
   }

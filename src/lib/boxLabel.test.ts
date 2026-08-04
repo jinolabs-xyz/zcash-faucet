@@ -11,7 +11,7 @@ import { boxRow, boxChip, boxIsBad } from "./boxLabel.ts";
 import { classifyIntegrity } from "./boxIntegrity.ts";
 
 const NOW = Date.parse("2026-07-31T12:00:00Z");
-const report = (over = {}) => ({ expected: 14, present: 14, notEnabled: 0, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, at: NOW - 30_000, readable: true, ...over });
+const report = (over = {}) => ({ expected: 14, present: 14, notEnabled: 0, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, platform: null, minerBinary: null, at: NOW - 30_000, readable: true, ...over });
 
 test("THE STATE NOTHING RENDERED: two files gone and a unit disabled says so", () => {
   const s = classifyIntegrity(report({ present: 12, notEnabled: 1 }), NOW);
@@ -178,4 +178,43 @@ test("the loop clause does not displace a real file fault", () => {
   assert.match(row, /2 of 14 MISSING/);
   assert.match(row, /WATCHDOG RESTARTING/);
   assert.ok(row.indexOf("MISSING") < row.indexOf("WATCHDOG"), "the file fault comes first");
+});
+
+// ── minerBinary: the clause box-report's own comment was written for (#392) ──────────
+//
+// The field has been on the box since #332 "so the panel can say WHY the count is short
+// instead of only that it is". It never reached the panel, because the reader dropped
+// it. These pin the sentence, not the plumbing.
+
+test("a short count says the miner binary is stale, not just that something is missing", () => {
+  const s = classifyIntegrity(report({ expected: 41, present: 40, minerBinary: "stale" }), NOW);
+  const row = boxRow(s);
+  assert.match(row, /1 of 41 MISSING/);
+  assert.match(row, /miner binary STALE/, "the count is short and the row does not say why");
+});
+
+test("an absent binary is named as absent, which is a different fix from stale", () => {
+  const s = classifyIntegrity(report({ expected: 41, present: 40, minerBinary: "absent" }), NOW);
+  assert.match(boxRow(s), /miner binary ABSENT/);
+});
+
+test("an unverified binary says so, because unmeasured is not working", () => {
+  const s = classifyIntegrity(report({ minerBinary: "unknown" }), NOW);
+  assert.match(boxRow(s), /miner binary unverified/);
+});
+
+test("a current binary adds no words to an already long row", () => {
+  const s = classifyIntegrity(report({ minerBinary: "current" }), NOW);
+  assert.doesNotMatch(boxRow(s), /miner binary/);
+});
+
+test("untracked adds nothing either: the repo pins no binary, which is not this box's fault", () => {
+  const s = classifyIntegrity(report({ minerBinary: "untracked" }), NOW);
+  assert.doesNotMatch(boxRow(s), /miner binary/);
+});
+
+test("a report with no minerBinary at all renders exactly as before", () => {
+  const withField = boxRow(classifyIntegrity(report({ minerBinary: "current" }), NOW));
+  const without = boxRow(classifyIntegrity(report({ minerBinary: null }), NOW));
+  assert.equal(without, withField, "an older report must not change the row's shape");
 });
