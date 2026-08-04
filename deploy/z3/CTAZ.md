@@ -167,23 +167,64 @@ its first write, which reads like a bad volume rather than a config choice.
 
 Measured growth on their chain, syncing from genesis:
 
-| height | on disk | KB/block |
-|---|---|---|
-| 428 | 8.7 M | 20.8 |
-| 1,648 | 48 M | 29.8 |
-| 22,193 | 1.4 G | 66.1 |
-| 36,676 | 2.8 G | 80.1 |
+## MID-SYNC DISK READINGS ON THIS CHAIN ARE MEANINGLESS. SETTLED SIZE AT TIP IS 2.2 GB.
 
-**Per-block cost rises with height**, so every extrapolation from an early prefix
-understates. Successive estimates went 7.4 GB, then 10.6, then 23.5, then **28.5 GB**.
-Treat the final figure as **UNKNOWN until a node reaches the tip**, and do not plan
-against any of those numbers. The 59 GB volume was sized against the largest of them with
-room for the estimate to keep climbing, which on this chain it has done every time.
+Read this before you extrapolate anything, because two of us independently spent a day
+being wrong about it in the same direction.
+
+| height | on disk mid-sync | KB/block | who |
+|---|---|---|---|
+| 428 | 8.7 M | 20.8 | |
+| 1,648 | 48 M | 29.8 | |
+| 22,193 | 1.4 G | 66.1 | |
+| 26,000 | 1.9 G | 75.0 | second, independent sync |
+| 36,676 | 2.8 G | 80.1 | |
+| 65,758 | 5.9 G | 94.1 | |
+| 157,969 | 17.9 G | 118.8 | 54% of the chain |
+| **293,300 (TIP)** | **2.2 G** | **7.7** | settled |
+
+Every row above the last is real bytes on disk at that instant and **none of them predicts
+the last one**. The curve rises to 118.8 KB/block and then the settled cost is 7.7.
+
+**The cause is RocksDB compaction.** During a sync the node holds uncompacted SST files;
+they are reclaimed later. The guard's own log caught it happening: **9.8 GB at 04:02, 4.6 GB
+at 09:30**, going down while the height went up. That is not possible for real data.
+
+Two independent extrapolations were built on these numbers, one predicting 40-50 GB and one
+predicting a 42.2 GB floor. **The answer was 2.2 GB.** Both were arithmetically fine and both
+were measuring the wrong thing. So: do not extrapolate per-block cost from any prefix of a
+sync on this chain. Measure at tip or say unknown.
 
 `ctaz-datadir-guard.sh` refuses to *start* a node whose state already exceeds
-`CTAZ_MAX_STATE_GB` (45 GB in `ctaz.env`, deliberately under the volume). **It is not a
-quota** — nothing stops a running node growing. The volume is what makes that survivable;
-the guard is the early warning, not the ceiling.
+`CTAZ_MAX_STATE_GB` (45 GB, which against a settled 2.2 GB is roughly 20x headroom). **It is
+not a quota** — nothing stops a running node growing, and see the gap below. The volume is
+what makes that survivable; the guard is the early warning, not the ceiling.
+
+### The guard cannot stop a running node, and that is a real gap
+
+It is an `ExecStartPre`. It refuses to **start** a node already over the ceiling; it does
+nothing to one that grows past it while running. So the sequence is: node exceeds the
+ceiling with nothing complaining, then the next restart refuses, and the unit stays down
+until a human edits `ctaz.env`. `ctaz-node` being enabled at boot makes a reboot the likely
+trigger.
+
+Not urgent at 2.2 GB against 45. Still worth fixing on its own merits, because the failure
+mode is a node that will not come back rather than one that warns.
+
+### One value, one home
+
+`CTAZ_MAX_STATE_GB` is set in **`/etc/faucet/ctaz.env`**. The unit carries a deliberately
+small fallback for the case where that file is missing.
+
+**`EnvironmentFile=` wins over `Environment=` regardless of the order they appear in.**
+Verified on this box with a oneshot that echoed the merged value: file 45, `Environment=` 14,
+result **45**. The guard's own log agrees, printing `of a 45 GB ceiling` at three separate
+restarts.
+
+**Do not verify this with `systemctl show -p Environment`.** That property reports the
+`Environment=` directives only and never merges `EnvironmentFile=` contents, so it prints
+`14` and looks authoritative. It is the wrong question confidently answered. Read the value
+the guard actually used, in its own log line, or echo the merged variable from a oneshot.
 
 Note the indexer's database lives **inside the same tree**, at `<chain-name>/zaino/local`,
 so the state directory is not purely chain state.
