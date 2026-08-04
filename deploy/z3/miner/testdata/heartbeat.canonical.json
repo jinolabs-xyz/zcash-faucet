@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "writtenAt": "2026-07-26T00:00:00Z",
+  "beatSeconds": 10,
+  "staleAfterSeconds": 60,
+  "templateSeconds": 8,
+  "templateStaleAfterSeconds": 48,
+  "mode": "submit",
+  "startedAt": "2026-07-25T23:00:00Z",
+  "lastTemplateAt": "2026-07-25T23:59:52Z",
+  "lastTemplateHeight": 4237523,
+  "lastErrorStage": "template",
+  "lastErrorAt": "2026-07-25T23:30:00Z",
+  "consecutiveErrors": 0,
+  "solvedCount": 3,
+  "lastSolvedAt": "2026-07-25T23:45:00Z",
+  "submittedAccepted": 3,
+  "submittedRejected": 1,
+  "lastSubmittedAt": "2026-07-25T23:45:01Z"
+}
