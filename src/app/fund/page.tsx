@@ -16,7 +16,6 @@ import type { CSSProperties } from "react";
 import Link from "next/link";
 import { config } from "@/lib/config";
 import { CopyAddress } from "../donate/CopyAddress";
-import { AddressQR } from "../donate/AddressQR";
 import { BrandMark } from "../BrandMark";
 
 export const runtime = "nodejs";
@@ -89,11 +88,10 @@ export default function Fund() {
             <span style={kicker}>Mainnet ZEC</span>
             <span style={addrText}>{maintenance}</span>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-start" }}>
-              <AddressQR address={maintenance} label="QR code of the mainnet donation address" />
               <div style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0, alignItems: "flex-start", flex: "1 1 18ch" }}>
                 <span style={{ fontSize: 12.5, lineHeight: 1.5, color: muted(65) }}>
-                  Scan it with a Zcash wallet, or copy the address. It arrives shielded, and it
-                  pays for the server and domain.
+                  Copy the address into your wallet. It arrives shielded, and it pays for the
+                  server and domain.
                 </span>
                 <CopyAddress address={maintenance} label="Mainnet donation address" />
               </div>
