@@ -136,6 +136,18 @@ suite_caps() { # $1 suite -> capability keys it needs
     zsnap)    echo "find_printf sha256sum" ;;
     metrics)  echo "stat_c" ;;
     drift)    echo "sha256sum" ;;
+    # bring-to-spec.sh dates files with `stat -c %Y` too, and one assertion - the one that
+    # skips a build and says why - goes red without it. Found by grepping which SHIPPED
+    # scripts use a GNU-only flag and checking each one's suite against this table, rather
+    # than by waiting for the next person to lose an hour to a red that was never real.
+    bringtospec) echo "stat_c" ;;
+    # verify-image-manifest.sh hashes with sha256sum; 7 assertions go red without it.
+    # MEASURED, not assumed: sha256sum was replaced with an exit-127 stub and the suite
+    # was run. Worth stating that it FAILS rather than silently passing, unlike drift's
+    # read-only assertion described above - two empty listings compare equal, seven broken
+    # hashes do not. A loud environmental red is still the wrong exit code, so it is
+    # declared here, but it is not the dangerous shape.
+    imagemanifest) echo "sha256sum" ;;
     # Not a tool, a property of who we are. See cap_probe.
     watchdog) echo "nonroot" ;;
     # box-report decides `stale` by comparing the binary against the COMMIT time of the
@@ -143,7 +155,21 @@ suite_caps() { # $1 suite -> capability keys it needs
     # is `unknown`, never `stale`, so the staleness assertions stop testing staleness and
     # go red for a reason that has nothing to do with the code. Infra hit exactly that and
     # nearly reported a bug on main.
-    boxreport) echo "git" ;;
+    #
+    # stat_c WAS MISSING FROM THIS LINE AND THE SAME THING HAPPENED AGAIN, one comment
+    # further down the file that warns about it. box-report.sh dates both the sources and
+    # the binary with `stat -c %Y`, and its `|| echo 0` fallback is correct on the box but
+    # collapses every mtime to 0 on macOS, so the script reports `unknown` - which is the
+    # honest answer to "could you read the timestamps" - and nine assertions expecting
+    # `current` or `stale` go red as though box-report were broken.
+    #
+    # The full run already refused here, because backup and metrics declare stat_c. The
+    # hole was only reachable through a NARROWED run, which is what this file's own
+    # refusal message recommends: `SUITES="boxreport" ./run-tests.sh` exited 1 with nine
+    # failures rather than exiting 2 with a reason. Exit 1 means the code is wrong; exit 2
+    # means we could not tell. Spending the wrong one costs somebody the hour it takes to
+    # prove main is fine, which is the hour it cost to find this.
+    boxreport) echo "git stat_c" ;;
     *)        echo "" ;;
   esac
 }
