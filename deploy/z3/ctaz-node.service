@@ -154,7 +154,22 @@ IOSchedulingPriority=7
 # Their node holds the chain state plus zaino's cache in one process. This cap exists so a
 # leak trips a cgroup kill on THIS service rather than the OOM killer choosing zebra or
 # zallet, which is the outcome that takes the faucet down.
-MemoryMax=2G
+# 3G, AND THIS IS THE FIRST TIME THIS NUMBER HAS BEEN MEASURED RATHER THAN GUESSED.
+#
+# 2G was a guess made before the node had ever run. At tip, with the sync concurrency
+# bounded (#370), it settles at 2.2-2.3 GB and stays there: flat for half an hour, zero
+# restarts, zero hits against the ceiling. 2G is BELOW the steady state, so it is not a
+# safety margin, it is a guaranteed kill.
+#
+# THIS IS NOT #363 AGAIN. That raise chased a number we did not understand, which is why
+# #370 said the next move must be to bound the demand instead. The demand is now bounded
+# and observed. Setting the ceiling from the observation is the opposite move.
+#
+# WHY IT MATTERED URGENTLY: the documented miner-on step removes the initial-sync drop-in,
+# and that drop-in was the only thing holding 3G. Following our own procedure would have
+# dropped the cap under the live usage and killed the node at the moment we turned it on,
+# which is the worst possible time to discover it.
+MemoryMax=3G
 MemorySwapMax=0
 
 # Best-effort and long-running: come back, but slowly enough that a misconfigured node
