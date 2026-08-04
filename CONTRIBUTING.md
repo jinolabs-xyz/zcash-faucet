@@ -799,6 +799,26 @@ Every correction came from the same few habits, so the habits are rules.
     have caught the interesting bug. Cheap, too. Mine is thirty lines and a stub for the
     one thing genuinely outside the boundary.
 
+    AND IT HAS TO COMPARE THE SETS. A round-trip test that only checks the fields the
+    consumer ALREADY READS is still two guesses agreeing. It passes, it looks like
+    coverage, and it cannot see a field the writer emits and the reader silently drops.
+
+    Which is the bug found within the hour of writing the paragraph above.
+    `box-report.sh` writes ten fields and `boxIntegrityFile.ts` reads eight. `platform`
+    was added because the box's architecture was recorded nowhere in the repo, and it is
+    STILL nowhere, because nothing reads it: the change closed the gap it described on the
+    writing side only. `minerBinary` carries a comment saying it exists so the panel can
+    explain a short count, and the panel cannot. Both survived a suite that tests the
+    fields we happen to read.
+
+    So the assertion is "THE READER LOST NOTHING", not "the fields we read are right". The
+    second is what we already had and it is what missed this twice.
+
+    And when the same boundary produces this repeatedly, the format has no OWNER. Three
+    instances on one file is not bad luck. A test that notices drift is worth having
+    because it fails loudly, but the deeper fix is one declared field list that both sides
+    derive from, so drifting requires editing the thing that defines it.
+
     THIS RULE CAUGHT ITSELF WHILE BEING WRITTEN, which is the best argument for it.
 
     The paragraph above originally carried a fourth example, handed over secondhand and
