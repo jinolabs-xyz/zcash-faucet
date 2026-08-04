@@ -354,6 +354,41 @@ if ! compose build faucet 2>&1 | tail -n 20 | sed 's/^/    /'; then
   not_shipped "build failed, the running faucet was left alone"
 fi
 
+# ── VERIFY THE ARTEFACT, NOT THE BUILD (#377) ───────────────────────────────────
+# BETWEEN BUILD AND START, and that placement is the point rather than convenience.
+# A container that will not start is exactly when you most want to know what is inside
+# the image, and refusing here costs nothing: the running faucet has not been touched.
+#
+# THIS EXISTS BECAUSE `compose build` SAYING YES IS NOT EVIDENCE. On 2026-08-04 a deploy
+# reported success while serving a CACHED layer that ignored the committed .dockerignore:
+# the secrets fix merged, deployed green, and changed nothing in the image. buildCommit
+# could not catch it either, being a build ARG that updates when the layers beneath it do
+# not. Nothing compared the artefact to the commit until App's verify-image-manifest.sh.
+#
+# Three outcomes, not two, and the third is the one that matters. A boolean would force
+# this layer to invent cannot-compare, which is where it would be wrong.
+manifest_unverified=0
+if [ -x "$HERE/verify-image-manifest.sh" ]; then
+  log "verifying the built image against the commit"
+  "$HERE/verify-image-manifest.sh" "$IMAGE" 2>&1 | sed 's/^/    /'
+  case "${PIPESTATUS[0]}" in
+    0) log "the image matches the commit" ;;
+    1) # The image is NOT what we committed. Do not start it. Nothing has been touched
+       # yet, so the running faucet keeps serving the old build, which is the outcome we
+       # want: a stale or wrong image never reaches traffic.
+       not_shipped "the built image does not match the commit, so it was never started" ;;
+    *) # CANNOT-COMPARE. Deliberately NOT a refusal: an unreadable image is not a wrong
+       # one, and blocking every deploy because the comparison broke would make this check
+       # an outage source. It is also not a pass, so the deploy ends UNVERIFIED below.
+       manifest_unverified=1
+       log "could not compare the image to the commit, continuing but this deploy is UNVERIFIED" ;;
+  esac
+else
+  # Absent script is unknown, not fine. Same reasoning as everywhere else here.
+  manifest_unverified=1
+  log "verify-image-manifest.sh is not installed, so the image was not compared: UNVERIFIED"
+fi
+
 log "starting the new image"
 if ! compose up -d faucet 2>&1 | sed 's/^/    /'; then
   log "the new image would not start, rolling back"
@@ -369,7 +404,14 @@ if wait_healthy "$want_ready"; then
   # explanation is captured and discarded is only half a check.
   assert_running_is "$new" "the image we just built"
   case $? in
-    0) log "deployed and healthy: $new" ; exit 0 ;;
+    0) if [ "$manifest_unverified" = "1" ]; then
+         # Healthy, and running an image nobody could compare to the commit. That is
+         # exit 2's existing meaning here and it must not collapse into success: the
+         # whole failure this check was added for looked exactly like a healthy deploy.
+         log "deployed and healthy but UNVERIFIED against the commit: $new"
+         exit 2
+       fi
+       log "deployed and healthy: $new" ; exit 0 ;;
     2) log "the build is healthy but unverified, treat this deploy as incomplete" ; exit 2 ;;
     *) log "the health gate passed on code that is not this build, so this deploy shipped nothing"
        exit 1 ;;
