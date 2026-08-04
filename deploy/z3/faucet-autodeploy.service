@@ -1,0 +1,29 @@
+[Unit]
+Description=Deploy the faucet when origin/main moves
+Documentation=https://github.com/jinolabs-xyz/zcash-faucet
+# THE LAST HOP OF THE DEPLOY PATH, AND UNTIL NOW THE ONLY PART OF IT NOT IN THE REPO.
+#
+# auto-deploy.sh was tracked in #181; the unit that runs it was not, so the schedule and
+# the failure wiring were invisible to review and to audit-drift. App could not answer
+# "does an unverified deploy reach a human" from the repo at all, because the answer is
+# these two directives and neither existed here.
+#
+# The answer is yes, and it is this line plus the absence of SuccessExitStatus below:
+# redeploy.sh spends exit 2 on "deployed but not verified", auto-deploy.sh propagates it,
+# a Type=oneshot with no SuccessExitStatus treats any nonzero as failure, so the unit
+# enters failed and OnFailure fires. Do not add SuccessExitStatus here: it would convert
+# "I could not verify the site is up" into a green deploy, which is the exact shape of
+# every false pass this tree has chased.
+#
+# What it reaches is alert.sh, which has no severity tiering yet - a cannot-verify pages
+# identically to a hard outage. That is #327's open item, not a defect in this unit.
+OnFailure=faucet-alert@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/faucet/auto-deploy.sh
+
+# NO [Install] SECTION, DELIBERATELY, AND THAT IS WHY THE PANEL'S COUNT IS WHAT IT IS.
+# This service is pulled in by faucet-autodeploy.timer and is never independently enabled,
+# so enabled-units lists the timer and not this file - the same convention every other
+# timer-driven service here follows - and a correct box reports this unit as disabled.
