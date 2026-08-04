@@ -322,8 +322,19 @@ check "and still applies the pin" \
 deploy_fresh_env
 printf 'Z3_ZEBRA_IMAGE=zfnd/zebra:6.2.3\n' > "$D/z3/stack-versions.env"
 FAUCET_MINER_ADDRESS="$GOOD_ADDR" run_deploy > /dev/null 2>&1
-sed -i 's/ZEBRA_MINING__MINER_ADDRESS: .*/ZEBRA_MINING__MINER_ADDRESS: "t1UiVxo1bbZLP5z6KYfM4dh3PcX5wkd7on8"/' \
-  "$D/z3-stack/docker-compose.override.yml"
+# NOT `sed -i`. GNU takes no argument after -i; BSD/macOS REQUIRES a backup extension, so
+# `sed -i 's/x/y/' file` there consumes the SCRIPT as the extension, fails with "invalid
+# command code", and leaves the file untouched. Both assertions below then went red on
+# macOS while the code was fine - the bad address was never planted, so the deploy it was
+# supposed to refuse had nothing wrong with it. Rule 34: the setup is the part nobody
+# checks. Verified on Linux at 139 passed 0 failed while macOS read 137/2.
+OVR="$D/z3-stack/docker-compose.override.yml"
+sed 's/ZEBRA_MINING__MINER_ADDRESS: .*/ZEBRA_MINING__MINER_ADDRESS: "t1UiVxo1bbZLP5z6KYfM4dh3PcX5wkd7on8"/' \
+  "$OVR" > "$OVR.tmp" && mv "$OVR.tmp" "$OVR"
+# And PROVE the plant landed, because a rewrite that silently no-ops turns the two
+# assertions below into a test of an unmodified file that correctly deploys.
+grep -q 't1UiVxo1bbZLP5z6KYfM4dh3PcX5wkd7on8' "$OVR" \
+  || bad "fixture did not plant the mainnet address; the two assertions below prove nothing"
 run_deploy > "$T/carrybad.log" 2>&1
 check "a carried address is validated, not trusted because we wrote the file" \
   "[ $? -ne 0 ]"
