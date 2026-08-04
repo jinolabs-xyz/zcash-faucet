@@ -77,6 +77,33 @@ function undeclared(s: IntegrityStatus): string {
 }
 
 /**
+ * Why the file count is short, when the miner binary is the reason.
+ *
+ * box-report has emitted `minerBinary` as its own field since #332, with a comment
+ * saying it exists "so the panel can say WHY the count is short instead of only that
+ * it is". The panel could not, because the reader dropped the field (#392). This is
+ * the clause that comment was written for.
+ *
+ * ONLY THE STATES THAT EXPLAIN SOMETHING. `current` is the normal case and needs no
+ * words on a row that is already long; `untracked` means the repo does not pin a
+ * binary, which is not a fault of this box. `stale` and `absent` are the two that turn
+ * "one file missing" into an actionable sentence, and `unknown` is worth saying out
+ * loud because an unmeasured binary is not a working one.
+ */
+function miner(s: IntegrityStatus): string {
+  switch (s.minerBinary) {
+    case "stale":
+      return ", miner binary STALE";
+    case "absent":
+      return ", miner binary ABSENT";
+    case "unknown":
+      return ", miner binary unverified";
+    default:
+      return "";
+  }
+}
+
+/**
  * The panel line. Counts only, never file names: this endpoint is public, and naming
  * what is missing from a production box is reconnaissance. That constraint is #287's
  * and it holds all the way to the screen, not just to the API.
@@ -97,7 +124,7 @@ export function boxRow(s: IntegrityStatus): string {
       // name at all. I was reading the world after the fix and calling it never-broken,
       // which is rule 35 running backwards, so the same counter applies. `git show
       // <commit>^:<file>` is what settles a question about the past, not a live probe.
-      return `${s.expected} of ${s.expected} files, all enabled${undeclared(s)}${watchdog(s)}`;
+      return `${s.expected} of ${s.expected} files, all enabled${miner(s)}${undeclared(s)}${watchdog(s)}`;
 
     case "incomplete": {
       const parts: string[] = [];
@@ -109,7 +136,7 @@ export function boxRow(s: IntegrityStatus): string {
       // Defensive, and it should be unreachable: classifyIntegrity only returns
       // incomplete when one of the two is non-zero. Saying "incomplete" with no
       // figures still beats rendering an empty string as though nothing were wrong.
-      return (parts.length ? parts.join(", ") : "incomplete, figures not reported") + undeclared(s) + watchdog(s);
+      return (parts.length ? parts.join(", ") : "incomplete, figures not reported") + miner(s) + undeclared(s) + watchdog(s);
     }
 
     case "unknown":

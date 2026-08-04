@@ -51,6 +51,21 @@ export interface IntegrityReport {
   /** Restarts since the box's previous report, which is the figure that carries a rate.
    * Null on the first report and after the counter resets. */
   watchdogRestartsDelta: number | null;
+  /** The box's CPU architecture, from `uname -m`. Context only, never classified on.
+   *
+   * It exists because the architecture was written down nowhere anyone could see and
+   * had to be fetched by hand (#332). Adding it to the writer did not close that gap,
+   * because this reader dropped it on the floor for two more days (#392): a field that
+   * is measured, transmitted and then discarded is indistinguishable from one nobody
+   * added. Null on a report that predates the field. */
+  platform: string | null;
+  /** Whether the compiled miner binary on the box matches the repo: current, stale,
+   * absent, untracked, or unknown.
+   *
+   * box-report emits it as its own field AS WELL AS counting it, in its own words "so
+   * the panel can say WHY the count is short instead of only that it is". The panel
+   * could not, because this reader never parsed it. Null on an older report. */
+  minerBinary: string | null;
   /** When the box wrote this, epoch ms. */
   at: number | null;
   /** The writer could not determine the answer, so it said so. */
@@ -71,12 +86,18 @@ export interface IntegrityStatus {
   /** Restarts since the box's PREVIOUS report, which is the figure that means
    *  something. Null when there is no previous report or the counter reset. */
   watchdogRestartsDelta: number | null;
+  /** Passed through from the report. Context, never classified on. */
+  platform: string | null;
+  /** Passed through from the report, and the reason `missing` can be explained rather
+   *  than only counted. Never classified on: the file count already carries the
+   *  verdict, and counting the same fact twice would double a single fault. */
+  minerBinary: string | null;
   ageSeconds: number | null;
   reason: string;
 }
 
 export function classifyIntegrity(r: IntegrityReport | null, now: number): IntegrityStatus {
-  const none = { expected: null, present: null, missing: null, notEnabled: null, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, ageSeconds: null };
+  const none = { expected: null, present: null, missing: null, notEnabled: null, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, platform: null, minerBinary: null, ageSeconds: null };
 
   // No report at all is the state the box was ACTUALLY in all week, so it must not
   // be quiet. It is not "complete" and it is not a proven fault: it is unverified,
@@ -120,6 +141,8 @@ export function classifyIntegrity(r: IntegrityReport | null, now: number): Integ
       enabledUndeclared: r.enabledUndeclared,
       watchdogRestarts: r.watchdogRestarts,
       watchdogRestartsDelta: r.watchdogRestartsDelta,
+      platform: r.platform,
+      minerBinary: r.minerBinary,
       ageSeconds: age,
       reason: parts.join(", "),
     };
@@ -134,6 +157,8 @@ export function classifyIntegrity(r: IntegrityReport | null, now: number): Integ
     enabledUndeclared: r.enabledUndeclared,
     watchdogRestarts: r.watchdogRestarts,
     watchdogRestartsDelta: r.watchdogRestartsDelta,
+    platform: r.platform,
+    minerBinary: r.minerBinary,
     ageSeconds: age,
     reason: `all ${r.expected} required files installed, current and enabled`,
   };
