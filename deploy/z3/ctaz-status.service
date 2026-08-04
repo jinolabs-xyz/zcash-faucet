@@ -1,0 +1,17 @@
+[Unit]
+Description=Publish the Crosslink node's state where the faucet container can read it
+Documentation=https://github.com/jinolabs-xyz/zcash-faucet
+# Every service on this box routes its failures here. This one matters for the reason
+# faucet-box-report's comment gives: a reporter that fails silently leaves the app reading
+# `cannot-verify`, which is correct and says nothing about WHY. Without this the one signal
+# naming the cause goes nowhere.
+OnFailure=faucet-alert@%n.service
+# The node has to be up for there to be anything to report. Not Requires=: a node that is
+# down is a state worth PUBLISHING, and the script writes an explicit cannot-read file for
+# exactly that case. Refusing to run would leave the last good file to go stale instead,
+# which reads as "the writer died" rather than "the node did".
+After=ctaz-node.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/faucet/ctaz-status.sh

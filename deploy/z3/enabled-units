@@ -69,6 +69,13 @@ zsnap-export.timer
 # one line to reverse if that decision changes.
 ctaz-node.service
 
+# The Crosslink node's state, written where the faucet container can read it. Enabled
+# rather than left to a human because it is the failure this file exists for: without the
+# timer running, the status file goes stale and the app reports cannot-verify forever, so
+# the cTAZ panel would show nothing on a node that is healthy and at tip. It publishes a
+# JSON file and nothing else, so there is no money-path decision in arming it.
+ctaz-status.timer
+
 # DELIBERATELY ABSENT, and each for its own reason:
 #
 #   zcash-testnet-miner.service  Mining is always-on by the owner's decision, but it is

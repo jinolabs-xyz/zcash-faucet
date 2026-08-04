@@ -1,0 +1,15 @@
+[Unit]
+Description=Refresh the Crosslink node status file
+
+[Timer]
+# Every minute, and the number is tied to the reader rather than chosen for feel.
+# statusFile.ts calls a file stale after 3 minutes, so three runs fit inside that window
+# and one missed run cannot flip the panel to unknown on its own. Same relationship the
+# box report has with its own 30-minute window, at a shorter scale because this one feeds
+# a live readiness gate rather than an external probe.
+OnBootSec=90s
+OnUnitActiveSec=1min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target
