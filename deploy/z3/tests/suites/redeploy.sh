@@ -14,6 +14,13 @@ redeploy_env() {
   ln -sf "$SCRATCH/stubs/redeploy-curl"   "$T/bin/curl"
   ln -sf "$SCRATCH/stubs/redeploy-git"    "$T/bin/git"
   export PATH="$T/bin:$BASE_PATH"
+  # The manifest verifier defaults to MATCHES so every pre-existing assertion keeps
+  # testing what it was written to test. Without this the real verifier runs against the
+  # stubbed docker, lands on cannot-compare, and turns 34 assertions into exit 2 for a
+  # reason none of them are about. Cases that care about the check set STUB_MANIFEST_RC.
+  printf '#!/usr/bin/env bash\necho "manifest stub: rc=${STUB_MANIFEST_RC:-0}"\nexit "${STUB_MANIFEST_RC:-0}"\n' > "$T/bin/verify-manifest"
+  chmod +x "$T/bin/verify-manifest"
+  export REDEPLOY_VERIFY_MANIFEST="$T/bin/verify-manifest"
   export REDEPLOY_OVERLAY_DIR="$T/overlay" REDEPLOY_REPO_DIR="$T"
   export REDEPLOY_HEALTH_TIMEOUT=6 REDEPLOY_HEALTH_INTERVAL=1
   # These tests drive the URL probe path. The container-exec default is
@@ -441,3 +448,46 @@ redeploy_env
 touch "$STUB_HEALTH" "$STUB_READY"
 REDEPLOY_BUILD_COMMIT="deadbee" bash "$REDEPLOY" --no-pull > /dev/null 2>&1
 check "the override is used verbatim" "grep -qx 'FAUCET_BUILD_COMMIT=deadbee' '$STUB_LOG'"
+
+echo "== redeploy: AN IMAGE THAT DOES NOT MATCH THE COMMIT IS NEVER STARTED"
+# The #377 failure in one assertion. A cached layer produced an image that did not match
+# the commit, the build said yes, and it shipped. The container must not start at all:
+# nothing has been touched at that point, so the old build keeps serving.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_MANIFEST_RC=1 bash "$REDEPLOY" > "$T/differs.log" 2>&1
+check "a mismatched image exits NONZERO" "[ $? -ne 0 ]"
+check "and says it was never started" "grep -qi 'does not match the commit' '$T/differs.log'"
+# The stub logs "docker compose -f <file> up -d faucet", so grepping for "compose up"
+# would never match and this assertion would pass vacuously - on the exact PR about
+# checks that answer an easier question. Matching the real string.
+check "and the container was NEVER started" "! grep -q 'up -d faucet' '$T/stub.log'"
+
+echo "== redeploy: CANNOT-COMPARE ships but refuses to call it verified"
+# Deliberately not a refusal: an unreadable image is not a wrong one, and blocking every
+# deploy when the comparison breaks would make this check an outage source. Equally not a
+# pass, because the whole failure it exists for looked exactly like a healthy deploy.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_MANIFEST_RC=2 bash "$REDEPLOY" > "$T/cannot.log" 2>&1
+rc=$?
+check "an uncomparable image still DEPLOYS, it does not refuse" "grep -q 'up -d faucet' '$T/stub.log'"
+check "but the deploy ends at 2, not 0" "[ $rc -eq 2 ]"
+check "and says UNVERIFIED rather than healthy" "grep -qi 'UNVERIFIED' '$T/cannot.log'"
+
+echo "== redeploy: an ABSENT verifier is unknown, not fine"
+# Same three-state discipline as everywhere else here. A missing check cannot report a pass.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+REDEPLOY_VERIFY_MANIFEST="$T/bin/not-a-real-verifier" bash "$REDEPLOY" > "$T/absent.log" 2>&1
+check "an absent verifier ends the deploy at 2" "[ $? -eq 2 ]"
+check "and says the image was not compared" "grep -qi 'not compared\|UNVERIFIED' '$T/absent.log'"
+
+echo "== redeploy: and the happy path still reaches 0, so the above can fail"
+# Rule 29. Without this the three cases above would pass on a redeploy that refused
+# everything, and a check that cannot succeed proves nothing about one that fails.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_MANIFEST_RC=0 bash "$REDEPLOY" > "$T/match.log" 2>&1
+check "a matching image deploys and exits 0" "[ $? -eq 0 ]"
+check "and says the image matches" "grep -qi 'matches the commit' '$T/match.log'"

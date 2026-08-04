@@ -35,6 +35,14 @@ set -uo pipefail
 
 REPO_DIR="${REDEPLOY_REPO_DIR:-/opt/zcash-faucet}"
 OVERLAY_DIR="${REDEPLOY_OVERLAY_DIR:-$REPO_DIR/deploy/z3}"
+# Where this script lives, so it can find its siblings. Added with the manifest check and
+# it was missing on the first push: $HERE was referenced and never assigned, and under
+# `set -u` that is fatal at exactly the wrong moment - after tagging the rollback target and
+# building, before compose up. Safe direction by luck rather than design, and it exits
+# through set -u instead of not_shipped, so the script fails in the one way it is built
+# never to fail. Found by SDE-Infra RUNNING it; shellcheck cannot see it, because it does
+# not flag uppercase names on the assumption they may come from the environment.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="${REDEPLOY_COMPOSE_FILE:-docker-compose.faucet.yml}"
 IMAGE="${REDEPLOY_IMAGE:-zcash-faucet:latest}"
 PREVIOUS_TAG="${REDEPLOY_PREVIOUS_TAG:-zcash-faucet:previous}"
@@ -367,10 +375,17 @@ fi
 #
 # Three outcomes, not two, and the third is the one that matters. A boolean would force
 # this layer to invent cannot-compare, which is where it would be wrong.
+#
+# The path is a SEAM so the suite can drive all three outcomes. Without it the tests run
+# the real verifier against a stubbed docker, which lands on cannot-compare and turns every
+# existing redeploy assertion into an unverified exit 2. That is what happened on the first
+# push of this change: I ran shellcheck and bash -n and never ran the suite, so I verified
+# the thing I had built rather than the thing CI runs. #382, same day, my name on it.
 manifest_unverified=0
-if [ -x "$HERE/verify-image-manifest.sh" ]; then
+VERIFY_MANIFEST="${REDEPLOY_VERIFY_MANIFEST:-$HERE/verify-image-manifest.sh}"
+if [ -x "$VERIFY_MANIFEST" ]; then
   log "verifying the built image against the commit"
-  "$HERE/verify-image-manifest.sh" "$IMAGE" 2>&1 | sed 's/^/    /'
+  "$VERIFY_MANIFEST" "$IMAGE" 2>&1 | sed 's/^/    /'
   case "${PIPESTATUS[0]}" in
     0) log "the image matches the commit" ;;
     1) # The image is NOT what we committed. Do not start it. Nothing has been touched
