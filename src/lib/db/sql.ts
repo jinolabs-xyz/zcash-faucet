@@ -246,8 +246,22 @@ WHERE NOT EXISTS (
     AND ((status='sent' AND created_at > ?) OR (status='pending' AND created_at > ?))
 )
 AND (
+  -- PER NETWORK, BY THE OWNER'S DECISION 2026-08-04: one drip of each asset per 24h.
+  -- This clause used to be global, and the comment above still explains why that was
+  -- defensible. It is being overridden deliberately, not by accident.
+  --
+  -- What it costs: a client can now take one TAZ and one cTAZ in the same day, so the
+  -- per-connection budget is two drips rather than one. What it buys is the thing the
+  -- owner actually wanted - the two assets are separate faucets, and claiming one must
+  -- not silently spend the other's entitlement. The failure it fixes was worse than the
+  -- abuse it permits: someone who claimed TAZ was told their address "got its 0.5 cTAZ"
+  -- when the ledger held zero cTAZ claims, ever.
+  --
+  -- The SUBNET cap below stays global on purpose. That one is a volume control against a
+  -- range, not a per-person entitlement, and splitting it would hand a farmer exactly the
+  -- lever the comment above warns about: alternate networks, take twice as much.
   ? = '' OR NOT EXISTS (
-    SELECT 1 FROM claims WHERE ip_hash = ?
+    SELECT 1 FROM claims WHERE ip_hash = ? AND network = ?
       AND ((status='sent' AND created_at > ?) OR (status='pending' AND created_at > ?))
   )
 )
@@ -285,7 +299,7 @@ export function reserveParams(o: {
   return [
     o.addressHash, o.ipHash, o.subnetHash, o.amountZat, o.now, o.network, // INSERT ... SELECT
     o.addressHash, o.network, cooldownCut, leaseCut, //           address NOT EXISTS, per network
-    o.ipHash, o.ipHash, cooldownCut, leaseCut, //                 ip branch, GLOBAL (guard + NOT EXISTS)
+    o.ipHash, o.ipHash, o.network, cooldownCut, leaseCut, //      ip branch, PER NETWORK since 2026-08-04
     o.subnetHash, o.subnetHash, since, leaseCut, o.subnetDailyMax, // subnet branch, GLOBAL
     o.network, since, leaseCut, o.amountZat, o.dailyCapZat, //    daily cap, per network
   ];
@@ -357,7 +371,7 @@ WHERE subnet_hash = ?
  */
 export const LIVE_BLOCK_SQL = (column: "address_hash" | "ip_hash") => `
 SELECT created_at, status FROM claims
-WHERE ${column} = ?${column === "address_hash" ? " AND network = ?" : ""}
+WHERE ${column} = ? AND network = ?
   AND ((status='sent' AND created_at > ?) OR (status='pending' AND created_at > ?))
 ORDER BY created_at DESC LIMIT 1
 `;
