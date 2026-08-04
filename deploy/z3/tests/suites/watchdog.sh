@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Watchdog supervision tests. The bug these exist for: the watchdog announced
 # "recovered <name>" whenever `docker start` exited 0, which for a crash-looping
 # container is every single time. In production that produced 812 "recovered"

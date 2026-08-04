@@ -499,7 +499,20 @@ echo "== zsnap-export: kept failures are BOUNDED AT ONE, or a full disk feeds it
 fresh_env; with_chain
 bash "$EXPORT" > /dev/null 2>&1
 STUB_MANIFEST_MISMATCH=1 bash "$EXPORT" > /dev/null 2>&1
-first_note="$(ls '$ZSNAP_DIR'/snapshots/*.unverified.txt 2>/dev/null | head -1)"
+# A `first_note=` capture used to sit here, never compared to anything, and broken twice
+# over: '$ZSNAP_DIR' was single-quoted inside a live command substitution, so it listed a
+# literal directory named $ZSNAP_DIR and the variable was empty regardless.
+#
+# It read like a missing assertion, and I assumed it was one. The archive name is
+# zsnap-$NETWORK-$height-${hash:0:12} with no timestamp, so I expected two consecutive
+# failure runs to collide on one name and the two counts below to hold by overwrite whether
+# or not the sweep at zsnap-export.sh:400 exists - which would have made this whole block
+# unfalsifiable, on App's unbounded-failures catch.
+#
+# MEASURED INSTEAD OF FIXED. Deleted the sweep and ran the suite: 147 passed, 2 failed, both
+# of them these two. The names do differ between the runs, the block catches exactly what it
+# claims, and the capture was only ever dead code. Removed rather than completed, and this
+# note is here so the next person does not re-add an assertion the suite already makes.
 STUB_MANIFEST_MISMATCH=1 bash "$EXPORT" > /dev/null 2>&1
 check "two failures in a row leave exactly ONE kept archive" \
   "[ \"\$(ls '$ZSNAP_DIR/snapshots/'*.tar.zst.unverified 2>/dev/null | wc -l | tr -d ' ')\" = '1' ]"
