@@ -21,7 +21,7 @@ import { getSendQueue, getCtazSendQueue, QueueFullError, TaskDeadlineError } fro
 import { recordSend } from "@/lib/zcash/sendHealth";
 import { DEFAULT_NETWORK, NETWORKS, parseNetwork } from "@/lib/network";
 import { canServeCtaz } from "@/lib/crosslink/recency";
-import { readCtazRecency } from "@/lib/crosslink/read";
+import { readCtazNodeState } from "@/lib/crosslink/read";
 import { reserveClaim, finalizeClaim } from "@/lib/db";
 import { fingerprintIp, fingerprintSubnet } from "@/lib/privacy";
 import { clientIp } from "@/lib/clientIp";
@@ -207,11 +207,16 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
   //    refuses, and cannot-verify never serves. Before the reservation, like every
   //    other ours-not-yours refusal: no cooldown consumed, nothing counted.
   if (network === "ctaz") {
-    const reading = await readCtazRecency();
-    if (!canServeCtaz(reading.state)) {
+    const node = await readCtazNodeState();
+    const reading = node.reading;
+    // Finality AND sync distance. A node reporting current rounds while a quarter synced
+    // would accept this claim and fail to pay (#322), and their wallet needs the chain to
+    // spend. Fails closed when either figure is unreadable.
+    if (!canServeCtaz(reading.state, node.blocks ?? reading.height, node.tip)) {
       api.logError(
         `cTAZ drip refused, crosslink node ${reading.state} ` +
-          `(round lag ${reading.roundLag ?? "unknown"}, answer ${reading.ageSeconds ?? "unknown"}s old)`,
+          `(round lag ${reading.roundLag ?? "unknown"}, answer ${reading.ageSeconds ?? "unknown"}s old, ` +
+          `sync ${node.syncPercent ?? "unknown"}%)`,
         "cTAZ readiness gate",
       );
       return apiError(

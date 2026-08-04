@@ -107,7 +107,39 @@ export function notActivated(): CtazReading {
   return { ...UNVERIFIABLE, state: "not-activated" };
 }
 
-/** Only one state may hand out cTAZ. cannot-verify never does. */
-export function canServeCtaz(state: CtazState): boolean {
-  return state === "ready";
+/**
+ * How far behind the network tip the node may be and still pay out.
+ *
+ * BLOCKS, NOT A PERCENT, matching how the TAZ side's freshness gate thinks. A percent
+ * hides scale: 99.9% of 362,000 blocks is still 362 blocks behind, and a transaction built
+ * against a view that stale is the #172 hazard on a different chain. Two blocks is ordinary
+ * propagation lag; more than that and the node has not caught up.
+ */
+export const MAX_SYNC_LAG_BLOCKS = 2;
+
+/**
+ * MAY WE HAND OUT cTAZ? Two independent questions, and the gate has to ask both.
+ *
+ * This used to take the state alone, and #322 proved that insufficient: the five states
+ * describe the FINALITY view, and a node can report current rounds while being a quarter
+ * synced. My own test row read READY at 23.1%. Their wallet needs the chain to spend, so
+ * serving from that node would accept a claim and fail to pay, and it would look like a
+ * faucet bug rather than a gate that never asked. The CTO made it a hard block on #328.
+ *
+ * The two questions stay separate everywhere EXCEPT here, which is the point. The panel
+ * renders the state and the percent side by side, because "23% synced" and "cannot reach
+ * the node" must not look alike. Only the SERVING decision needs them combined, and it is
+ * combined in the one function whose name is the serving decision, so no caller can reach
+ * for a weaker check by accident.
+ *
+ * FAILS CLOSED ON UNKNOWN. A missing height or tip refuses, exactly as cannot-verify does.
+ * An unmeasured sync distance is not a short one, and defaulting either side to zero would
+ * make an unreadable node look perfectly caught up.
+ */
+export function canServeCtaz(state: CtazState, blocks: number | null, tip: number | null): boolean {
+  if (state !== "ready") return false;
+  if (blocks == null || tip == null) return false;
+  // A node AHEAD of the reported tip is not behind. The tip is an estimate and can lag the
+  // node by a block, so this is ordinary rather than suspicious.
+  return tip - blocks <= MAX_SYNC_LAG_BLOCKS;
 }
