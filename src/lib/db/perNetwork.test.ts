@@ -92,15 +92,32 @@ test("THE DAILY CAP SPLITS: a busy cTAZ day does not close the TAZ faucet", () =
   );
 });
 
-test("THE IP CAP STAYS GLOBAL, so the toggle is not a doubling device", () => {
-  // The one that matters. If this ever goes red because someone made it per network,
-  // the change handed every farmer twice the take from one address range.
+test("THE IP CAP IS PER NETWORK: one drip of EACH asset per day, by the owner's decision", () => {
+  // POLICY REVERSAL, 2026-08-04, and the previous version of this test argued the other
+  // way in strong terms - it said a per-network ip cap "handed every farmer twice the
+  // take from one address range". That cost is real and it is being accepted knowingly,
+  // not overlooked.
+  //
+  // What changed the decision: the two assets are separate faucets with separate wallets,
+  // and a shared client cap meant claiming TAZ silently spent the cTAZ entitlement. The
+  // symptom that surfaced it was worse than the abuse it prevented - someone who claimed
+  // TAZ was told their address "got its 0.5 cTAZ" while the ledger held ZERO cTAZ claims,
+  // ever. The faucet asserted a payment it had never made to anyone.
+  //
+  // The SUBNET cap stays global, and that is what still bounds a farmer: a range gets
+  // subnetDailyMax claims a day whatever mix of assets they are, so the doubling is one
+  // extra drip per client rather than twice the take per range. The test below pins it.
   const d = db();
   assert.equal(claim(d, "addr-a", "shared-ip", { network: "taz" }), true);
   assert.equal(
     claim(d, "addr-b", "shared-ip", { network: "ctaz" }),
+    true,
+    "each asset is claimable once per day from the same client",
+  );
+  assert.equal(
+    claim(d, "addr-c", "shared-ip", { network: "taz" }),
     false,
-    "one client must not get a second drip by switching networks",
+    "and WITHIN one asset the client cap still holds, or this became no cap at all",
   );
 });
 

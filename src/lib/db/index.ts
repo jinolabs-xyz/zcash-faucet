@@ -65,7 +65,11 @@ async function whyBlocked(
     // a compile-visible shape difference instead of a silently ignored extra param.
     const row = await driver().get<{ created_at: number; status: string }>(LIVE_BLOCK_SQL(col), [
       val,
-      ...(col === "address_hash" ? [network] : []),
+      // BOTH branches carry the network now. The ip branch became per-network on
+      // 2026-08-04 so each asset is claimable once a day, and a whyBlocked that still
+      // asked globally would diagnose a block the gate did not make - telling someone
+      // they were rate-limited when the reserve would have succeeded.
+      network,
       now - cooldownSeconds,
       now - PENDING_LEASE_SECONDS,
     ]);

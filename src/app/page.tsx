@@ -712,7 +712,7 @@ export default function Home() {
     : phase === "empty" ? (refilling ? "Topping up the reserve. Drips resume in a moment." : "The faucet is out of TAZ right now.")
     : phase === "submitting" ? (powState ? "Checking you are human. Nothing to do, it runs on its own." : "Sending your testnet ZEC. Keep this tab open.")
     : phase === "success" ? "Sent. Your testnet ZEC is on its way."
-    : phase === "cooldown" ? "Already claimed. This address got its drip in the last 24 hours."
+    : phase === "cooldown" ? "Already claimed. A drip went out on this address or this connection in the last 24 hours."
     : phase === "error" ? "The send failed. Nothing left the wallet."
     : "Faucet ready.";
 
@@ -1294,7 +1294,24 @@ export default function Home() {
           <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
             <span style={kicker}>Already claimed</span>
             <h2 style={{ margin: 0, fontSize: 19, lineHeight: 1.25 }}>Come back in {dur(remain)}.</h2>
-            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>One drip per address every 24 hours keeps the faucet standing up for everybody. <span style={{ fontFamily: "var(--mono)", fontSize: 11.5 }}>{short(addr.trim(), 10, 6)}</span> got its {dripText}.</p>
+            {/* THE SERVER'S REASON, NOT OUR GUESS AT IT. This sentence used to read
+                "<address> got its 0.5 cTAZ", which asserted two things the page cannot
+                know: that THIS address was the one blocked, and that it received THIS
+                asset. Both were wrong in the case that surfaced it - the ledger held
+                ZERO cTAZ claims, and the block came from the per-client limit after a
+                TAZ claim. So the page told someone they had been paid an asset the
+                faucet had never sent to anyone.
+
+                The API already distinguishes the cases ("This address already claimed
+                recently" vs "This client already claimed recently"), and whyBlocked
+                only puts a network clause on the address branch precisely because the
+                client limit is shared. Rendering that instead of inventing one is the
+                whole fix. */}
+            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
+              {errMsg || "This claim is on cooldown."}{" "}
+              One drip per address every 24 hours, and the per-connection limit is shared
+              across TAZ and cTAZ so the budget is per person rather than per asset.
+            </p>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}><button className="btn btn-secondary btn-sm" onClick={again}>Try a different address</button></div>
           </div>
         )}
