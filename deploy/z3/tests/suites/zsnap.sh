@@ -12,17 +12,21 @@ n_archives="$(find "$ZSNAP_DIR/snapshots" -name 'zsnap-testnet-*.tar.zst' | wc -
 check "three generations kept (got $n_archives)" "[ '$n_archives' = '3' ]"
 check "S1 rotated out when S4 landed" "! find '$ZSNAP_DIR/snapshots' -name '*3652101*' | grep -q ."
 check "S2, S3, S4 all still present" "[ \"\$(find '$ZSNAP_DIR/snapshots' -name '*365210[234]*.tar.zst' | wc -l | tr -d ' ')\" = '3' ]"
-# Derived from the stub's known MANIFEST bytes, not hardcoded to a fake hash. The
-# archive name carries the first 12 characters of the
-# manifest hash, and the stub now reports the REAL hash of the MANIFEST.json it writes
-# rather than a constant, because an exporter that verifies the manifest against the
-# reported hash cannot pass against a stub that reports an unrelated one.
+# NOT DERIVED FROM sha256 OF THE MANIFEST BYTES ANY MORE, and that is the whole of #404.
+# These two used to compute `sha256('{"stub":true}')` and demand the exporter agree. The
+# stub reported that, the production check compared against that, and both were wrong
+# about zebrad, which hashes a canonical text with a personalized BLAKE2b. Two fixtures
+# agreeing with each other while both differ from the real thing - so the suite stayed
+# green for two days while every export on the live box was rejected.
+#
+# The relationship is asserted instead: whatever identity the exporter recorded, the
+# archive NAME carries its first twelve characters and the sidecar carries all of it.
+# That holds for any correct hash function and cannot be satisfied by agreeing with a
+# fixture, because the value now comes from the stub computing zebrad's real function.
 check "latest symlink points at the newest height" \
-  "[ \"\$(readlink '$ZSNAP_DIR/snapshots/latest.tar.zst')\" = \"zsnap-testnet-3652104-\$(printf '{\"stub\":true}\\n' | sha256sum | cut -c1-12).tar.zst\" ]"
+  "[ \"\$(readlink '$ZSNAP_DIR/snapshots/latest.tar.zst')\" = \"zsnap-testnet-3652104-\$(cut -c1-12 < '$ZSNAP_DIR/snapshots/latest.manifest-hash').tar.zst\" ]"
 check "sidecar has the FULL manifest hash, not the truncated name form" \
-  "[ \"\$(cat '$ZSNAP_DIR/snapshots/latest.manifest-hash')\" = \"\$(printf '{\"stub\":true}\\n' | sha256sum | cut -d' ' -f1)\" ]"
-check "and the sidecar is longer than the 12 characters in the filename" \
-  "[ \"\$(wc -c < '$ZSNAP_DIR/snapshots/latest.manifest-hash' | tr -d ' ')\" -gt 13 ]"
+  "[ \"\$(wc -c < '$ZSNAP_DIR/snapshots/latest.manifest-hash' | tr -d ' ')\" = '65' ]"
 check "archive unpacks to snapshot/MANIFEST.json" "zstd -dc \"$ZSNAP_DIR/snapshots/\$(readlink '$ZSNAP_DIR/snapshots/latest.tar.zst')\" | tar -tf - | grep -q 'snapshot/MANIFEST.json'"
 check "workdir cleaned up" "[ -z \"\$(ls -A '$ZSNAP_DIR/work')\" ]"
 check "hot mode never stops a container" "! grep -q 'docker stop' '$STUB_LOG'"
@@ -463,8 +467,14 @@ echo "== zsnap-export: a good export says it verified, and publishes"
 fresh_env; with_chain
 bash "$EXPORT" > "$T/vok.log" 2>&1
 check "a verified export exits 0" "[ $? -eq 0 ]"
-check "it says what it verified" \
-  "grep -q 'verified: decompresses, and its manifest matches' '$T/vok.log'"
+# The old line said "verified: decompresses, and its manifest matches", which described
+# a check that could not pass and never did. What the log has to carry now is what was
+# actually examined, so an operator reading it knows the payload was opened and not just
+# the manifest read.
+check "it says how many chunks it checked, not just that something verified" \
+  "grep -qE 'verified: [0-9]+ chunks, each present with the listed size and content hash' '$T/vok.log'"
+check "and that the identity matched what zebrad reported" \
+  "grep -q 'matches what zebrad reported' '$T/vok.log'"
 check "and the done line carries it" "grep -qE 'done: .*verified$' '$T/vok.log'"
 check "and latest points at the new snapshot" \
   "[ -L '$ZSNAP_DIR/snapshots/latest.tar.zst' ]"
@@ -527,3 +537,94 @@ check "and says rotation would delete the snapshot this run just made" \
   "grep -q 'would delete the snapshot this run just made' '$T/k0.log'"
 check "and it is the guard talking, not a command-not-found" \
   "! grep -q 'command not found' '$T/k0.log'"
+
+# ── THE VERIFIER ITSELF, AGAINST ARCHIVES BUILT TO FAIL ─────────────────────────────
+#
+# The check this replaces had no test that could tell a working verifier from a broken
+# one. It compared sha256 of MANIFEST.json against zebrad's hash - two unrelated
+# quantities - and the stub was written to the same wrong belief, so the pair agreed and
+# the suite was green while every export on the live box was rejected for two days (#404).
+#
+# So these drive `zsnap-export.sh --verify-only` against hand-built archives whose faults
+# are known, through the production code path rather than a copy of it. Every one of them
+# went red against the old implementation, which is the only reason to trust them.
+echo "== verify: a well-formed archive verifies, and each way of breaking one is caught"
+mk_scratch "${TMPDIR:-/tmp}/zsnap-verify.XXXXXX"
+VDIR="$T/v"; mkdir -p "$VDIR/snapshot/chunks"
+
+# Built here rather than by the stub, because these need faults the stub must never have.
+head -c 65536 /dev/urandom > "$VDIR/snapshot/chunks/hash_by_height.zsnap"
+head -c 4096  /dev/urandom > "$VDIR/snapshot/chunks/block_info.zsnap"
+VHASH="$(VD="$VDIR" python3 - <<'PY'
+import hashlib, json, os
+P = b"ZebraSnapshotV1"
+vd = os.environ["VD"]
+def h(b): return hashlib.blake2b(b, digest_size=32, person=P).hexdigest()
+chunks = []
+for name, fn in (("hash_by_height", "hash_by_height.zsnap"), ("block_info", "block_info.zsnap")):
+    d = open(os.path.join(vd, "snapshot/chunks", fn), "rb").read()
+    chunks.append({"name": name, "file": "chunks/" + fn, "records": len(d)//100,
+                   "bytes": len(d), "blake2b256": h(d)})
+man = {"snapshot_format": 2, "db_format_version": "28.0.0", "network": "Testnet",
+       "tip_height": 4236099, "tip_hash": "00b57128", "chunks": chunks}
+json.dump(man, open(os.path.join(vd, "snapshot/MANIFEST.json"), "w"), indent=2)
+s = "zsnap-canonical-v2\n"
+for k in ("network","tip_height","tip_hash","db_format_version","snapshot_format"):
+    s += "%s=%s\n" % (k, man[k])
+for c in sorted((c for c in chunks if c["name"] != "block_info"), key=lambda c: c["name"]):
+    s += "chunk=%s,%s,%s,%s\n" % (c["name"], c["records"], c["bytes"], c["blake2b256"])
+print(h(s.encode()))
+PY
+)"
+mkv() { tar -C "$VDIR" -cf - snapshot | zstd -q -o "$1"; }   # $1 archive path
+mkv "$T/good.tar.zst"
+
+bash "$EXPORT" --verify-only "$T/good.tar.zst" "$VHASH" > "$T/vgood.log" 2>&1
+check "a well-formed archive verifies" "[ $? -eq 0 ]"
+check "and it says how many chunks it actually checked" "grep -qE '2 chunks' '$T/vgood.log'"
+
+# THE CONTROL FOR THE BUG. block_info is excluded from the identity, so if that exclusion
+# were dropped the hash above would not be reachable at all.
+check "the identity is not the sha256 of MANIFEST.json, which is what shipped" \
+  "[ \"\$(sha256sum '$VDIR/snapshot/MANIFEST.json' | cut -d' ' -f1)\" != '$VHASH' ]"
+
+bash "$EXPORT" --verify-only "$T/good.tar.zst" "0000000000000000000000000000000000000000000000000000000000000000" > "$T/vwrong.log" 2>&1
+check "a wrong expected hash is refused" "[ $? -ne 0 ]"
+check "and the reason names the mismatch" "grep -q 'manifest-hash-mismatch' '$T/vwrong.log'"
+check "and it says the payload was intact, so nobody re-exports for nothing" \
+  "grep -q 'PAYLOAD is intact' '$T/vwrong.log'"
+
+# A CHUNK WITH ONE BYTE CHANGED. The old check never opened a chunk, so this passed it
+# even in the world where its hash comparison had been right.
+cp -r "$VDIR" "$T/vt"; printf 'x' | dd of="$T/vt/snapshot/chunks/hash_by_height.zsnap" bs=1 seek=100 conv=notrunc 2>/dev/null
+tar -C "$T/vt" -cf - snapshot | zstd -q -o "$T/tampered.tar.zst"
+bash "$EXPORT" --verify-only "$T/tampered.tar.zst" "$VHASH" > "$T/vtamp.log" 2>&1
+check "a chunk with one byte changed is caught" "[ $? -ne 0 ]"
+check "and the reason is the chunk, not the manifest" "grep -q 'chunk-hash-mismatch' '$T/vtamp.log'"
+
+# A TRUNCATED CHUNK, which is the disk-full case this whole step exists for.
+cp -r "$VDIR" "$T/vs"; head -c 60000 "$VDIR/snapshot/chunks/hash_by_height.zsnap" > "$T/vs/snapshot/chunks/hash_by_height.zsnap"
+tar -C "$T/vs" -cf - snapshot | zstd -q -o "$T/short.tar.zst"
+bash "$EXPORT" --verify-only "$T/short.tar.zst" "$VHASH" > "$T/vshort.log" 2>&1
+check "a truncated chunk is caught" "[ $? -ne 0 ]"
+check "and it names the byte counts" "grep -q 'chunk-size-mismatch' '$T/vshort.log'"
+
+# A MISSING CHUNK.
+cp -r "$VDIR" "$T/vm"; rm -f "$T/vm/snapshot/chunks/hash_by_height.zsnap"
+tar -C "$T/vm" -cf - snapshot | zstd -q -o "$T/missing.tar.zst"
+bash "$EXPORT" --verify-only "$T/missing.tar.zst" "$VHASH" > "$T/vmiss.log" 2>&1
+check "a chunk the manifest lists but the archive lacks is caught" "[ $? -ne 0 ]"
+check "and the reason says which" "grep -q 'chunk-missing' '$T/vmiss.log'"
+
+# NO MANIFEST AT ALL.
+cp -r "$VDIR" "$T/vn"; rm -f "$T/vn/snapshot/MANIFEST.json"
+tar -C "$T/vn" -cf - snapshot | zstd -q -o "$T/nomanifest.tar.zst"
+bash "$EXPORT" --verify-only "$T/nomanifest.tar.zst" "$VHASH" > "$T/vnm.log" 2>&1
+check "an archive with no manifest is refused" "[ $? -ne 0 ]"
+check "and says so plainly" "grep -q 'no-manifest' '$T/vnm.log'"
+
+# A TRUNCATED ARCHIVE, cut mid-stream rather than mid-file.
+head -c 20000 "$T/good.tar.zst" > "$T/cut.tar.zst"
+bash "$EXPORT" --verify-only "$T/cut.tar.zst" "$VHASH" > "$T/vcut.log" 2>&1
+check "an archive cut off partway is refused" "[ $? -ne 0 ]"
+check "and is never reported as verified" "! grep -q '^verified' '$T/vcut.log'"

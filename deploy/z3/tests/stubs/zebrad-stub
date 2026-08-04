@@ -35,14 +35,68 @@ case "$cmd" in
     fi
     [ -e "$out/MANIFEST.json" ] && { echo "manifest already exists" >&2; exit 1; }
     mkdir -p "$out/chunks"
+    # A REAL MANIFEST SHAPE AND THE REAL IDENTITY FUNCTION.
+    #
+    # This used to write `{"stub":true}` and report its SHA256, with a comment
+    # explaining that this was self-consistent "because real zebrad's reported hash
+    # IS the hash of this file". It is not. zebrad's hash is a personalized
+    # BLAKE2b-256 over a canonical text, and the production check was written to
+    # the same wrong belief - so the double and the code under test agreed with each
+    # other and both differed from zebrad. The suite was green for two days while
+    # every single export on the box was rejected. #404, and #391's thesis in one
+    # artefact: fixtures on both sides of a boundary are two guesses that can agree.
+    #
+    # So the stub now produces a manifest zebrad could produce and reports the hash
+    # zebrad would report. If our canonical text is wrong, this stub fails to satisfy
+    # it and the suite goes red, which is the whole point of a double.
     head -c 300000 /dev/urandom > "$out/chunks/chunk-000001.bin"
-    # SELF-CONSISTENT, because real zebrad's reported hash IS the hash of this file.
-    # It used to write one thing and report an unrelated constant, which modelled a
-    # state zebrad cannot produce, so an exporter that verified the contract could not
-    # pass against the stub. A double that cannot satisfy the real contract forces the
-    # check to be weakened to match the double.
-    echo '{"stub":true}' > "$out/MANIFEST.json"
-    STUB_MANIFEST_HASH="$(sha256sum "$out/MANIFEST.json" | cut -d' ' -f1)"
+    # A non-consensus chunk too. block_info is excluded from the identity, so its
+    # presence proves the exclusion is implemented rather than merely written down:
+    # forget it and the recomputed hash stops matching.
+    head -c 4096 /dev/urandom > "$out/chunks/block_info.zsnap"
+    STUB_HEIGHT_FILE="${STUB_HEIGHT_FILE:-${TMPDIR:-/tmp}/zsnap-stub-height}"
+    STUB_HEIGHT="$(cat "$STUB_HEIGHT_FILE" 2>/dev/null || echo 3652108)"
+    STUB_MANIFEST_HASH="$(STUB_OUT="$out" STUB_H="$STUB_HEIGHT" python3 - <<'PY'
+import hashlib, json, os
+
+PERSON = b"ZebraSnapshotV1"
+NON_CONSENSUS = {"block_info"}
+out = os.environ["STUB_OUT"]
+height = int(os.environ["STUB_H"])
+
+def h(b):
+    return hashlib.blake2b(b, digest_size=32, person=PERSON).hexdigest()
+
+chunks = []
+for name, fn in (("hash_by_height", "chunk-000001.bin"), ("block_info", "block_info.zsnap")):
+    data = open(os.path.join(out, "chunks", fn), "rb").read()
+    chunks.append({
+        "name": name,
+        "file": "chunks/" + fn,
+        "records": len(data) // 100,
+        "bytes": len(data),
+        "blake2b256": h(data),
+    })
+
+man = {
+    "snapshot_format": 2,
+    "db_format_version": "28.0.0",
+    "network": "Testnet",
+    "tip_height": height,
+    "tip_hash": "00000000stub",
+    "chunks": chunks,
+}
+with open(os.path.join(out, "MANIFEST.json"), "w") as f:
+    json.dump(man, f, indent=2)
+
+s = "zsnap-canonical-v2\n"
+for k in ("network", "tip_height", "tip_hash", "db_format_version", "snapshot_format"):
+    s += "%s=%s\n" % (k, man[k])
+for c in sorted((c for c in chunks if c["name"] not in NON_CONSENSUS), key=lambda c: c["name"]):
+    s += "chunk=%s,%s,%s,%s\n" % (c["name"], c["records"], c["bytes"], c["blake2b256"])
+print(h(s.encode()))
+PY
+)"
     # STUB_MANIFEST_MISMATCH: report a hash that is NOT this file's. Models zebrad and the
     # written manifest disagreeing, which is the condition the exporter's verification
     # exists to catch and the only way to reach that path from a test.
@@ -57,8 +111,6 @@ case "$cmd" in
     # "exactly one kept failure" holds whether or not anything bounds it. App's catch, and
     # the same move as making the manifest hash self-consistent: remove the fiction and
     # the assertion becomes real for free.
-    STUB_HEIGHT_FILE="${STUB_HEIGHT_FILE:-${TMPDIR:-/tmp}/zsnap-stub-height}"
-    STUB_HEIGHT="$(cat "$STUB_HEIGHT_FILE" 2>/dev/null || echo 3652108)"
     echo "$((STUB_HEIGHT + 1))" > "$STUB_HEIGHT_FILE"
     echo "tip height:           $STUB_HEIGHT"
     echo "tip hash:             00000000stub"
