@@ -851,17 +851,26 @@ export default function Home() {
             {[
               // Same rule as the header strip. The panel opens on a click, and nothing
               // stops that click landing before the first status does.
-              { k: "node", v: status == null ? "–" : node?.ready ? "ready" : "syncing" + (syncText ? " (" + syncText + ")" : ""), bad: status != null && node?.ready === false },
-              { k: "block height", v: num(height) + (nodeHeight ? " / " + num(nodeHeight) : "") },
-              { k: "wallet balance", v: status?.balanceTaz != null ? status.balanceTaz.toFixed(2) + " TAZ" : "–", bad: status?.empty === true },
+              // EVERY ROW DECLARES WHICH ASSET IT IS ABOUT, and the panel then shows only
+              // the selected one. Asked for directly: picking cTAZ and still reading TAZ's
+              // balance, miner and drip counts is how someone concludes the cTAZ wallet
+              // holds 1000 TAZ. Two assets in one grid is a mixing hazard, not a density
+              // win.
+              //
+              // "both" is for facts about the BOX rather than either chain - the integrity
+              // count and the lightwalletd backend serve whichever asset you are looking at,
+              // so hiding them behind a toggle would just make them harder to find.
+              { net: "taz", k: "node", v: status == null ? "–" : node?.ready ? "ready" : "syncing" + (syncText ? " (" + syncText + ")" : ""), bad: status != null && node?.ready === false },
+              { net: "taz", k: "block height", v: num(height) + (nodeHeight ? " / " + num(nodeHeight) : "") },
+              { net: "taz", k: "wallet balance", v: status?.balanceTaz != null ? status.balanceTaz.toFixed(2) + " TAZ" : "–", bad: status?.empty === true },
               // The detail belongs here, per the user: he asked that the miner's real
               // state be knowable from More details.
-              { k: "miner", v: status == null ? "–" : minerRow(miner), bad: status != null && miner.state !== "running" },
-              ...(status != null && minerError ? [{ k: "miner error", v: minerError, bad: true }] : []),
+              { net: "taz", k: "miner", v: status == null ? "–" : minerRow(miner), bad: status != null && miner.state !== "running" },
+              ...(status != null && minerError ? [{ net: "taz", k: "miner error", v: minerError, bad: true }] : []),
               // The box's own integrity. Measured since #287 and never rendered until
               // now: the endpoint knew two files were missing and the panel said
               // nothing, so the one place a person looks did not carry it.
-              ...(box ? [{ k: "box", v: boxRow(box), bad: boxIsBad(box) }] : []),
+              ...(box ? [{ net: "both", k: "box", v: boxRow(box), bad: boxIsBad(box) }] : []),
               ...(reserve
                 ? [
                     // Wording lives in reserveRows and is unit-tested, because
@@ -873,23 +882,24 @@ export default function Home() {
                     // a different number of decimals. Two rows, one figure, and a
                     // reader at 3am reasonably assumes two different quantities. If the
                     // route ever sources them separately, bring the row back.
-                    ...(() => { const rr = reserveRows({ ...reserve, refilling }); return [{ k: "refill", v: rr.refill, bad: rr.refillBad }]; })(),
+                    ...(() => { const rr = reserveRows({ ...reserve, refilling }); return [{ net: "taz", k: "refill", v: rr.refill, bad: rr.refillBad }]; })(),
                   ]
                 : []),
-              { k: "queue", v: (status?.queueDepth ?? 0) + " pending" },
+              { net: "taz", k: "queue", v: (status?.queueDepth ?? 0) + " pending" },
               // One line, per the standing rule. The legend lives in the KEY so the
               // value stays short at any magnitude; "10 all time · 10 in 7d · 10 in
               // 30d" wrapped the cell on first render. Same slash idiom as the block
               // height row. An unreadable counter says unknown rather than rendering
               // a zero that would read as "this faucet has never served anyone".
-              { k: "drips ever/7d/30d", v: status?.drips ? num(status.drips.allTime) + " / " + num(status.drips.last7d) + " / " + num(status.drips.last30d) : "unknown" },
-              { k: "backend", v: status?.backend?.reachable ? "reachable" : "unreachable", bad: status != null && !status.backend?.reachable },
+              { net: "taz", k: "drips ever/7d/30d", v: status?.drips ? num(status.drips.allTime) + " / " + num(status.drips.last7d) + " / " + num(status.drips.last30d) : "unknown" },
+              { net: "both", k: "backend", v: status?.backend?.reachable ? "reachable" : "unreachable", bad: status != null && !status.backend?.reachable },
               // The cTAZ dimension, one line per fact and every key naming its network,
               // so no row here can be mistaken for one of the TAZ rows above it.
               ...(ctaz
                 ? [
                     {
-                      k: "ctaz node",
+                      net: "ctaz",
+                      k: "node",
                       // The gate's own word. Five states rather than a boolean, because
                       // "cannot-verify" is a different instruction from "behind".
                       v: ctaz.readiness + (ctaz.roundLag != null ? ` (round lag ${ctaz.roundLag})` : ""),
@@ -900,7 +910,8 @@ export default function Home() {
                     // same, which is the whole reason the gate has five states and no
                     // syncing state. Unknown says unknown rather than 0%.
                     {
-                      k: "ctaz sync",
+                      net: "ctaz",
+                      k: "sync",
                       v: ctaz.syncPercent != null
                         ? ctaz.syncPercent.toFixed(1) + "%" +
                           (ctaz.blocks != null && ctaz.tip != null ? ` (${num(ctaz.blocks)} of ${num(ctaz.tip)})` : "")
@@ -911,16 +922,22 @@ export default function Home() {
                       // not being served yet either way.
                       bad: false,
                     },
-                    { k: "ctaz height", v: num(ctaz.blocks ?? ctaz.height) + (ctaz.finalizers != null ? " · " + ctaz.finalizers + " finalizers" : "") },
+                    { net: "ctaz", k: "block height", v: num(ctaz.blocks ?? ctaz.height) + (ctaz.finalizers != null ? " · " + ctaz.finalizers + " finalizers" : "") },
                     // The literal string from the response, rendered as given. Their RPC
                     // surface has no shielded balance method, so this is an answer and
                     // not a gap, and "0" here would be the balance ?? 0 bug all over
                     // again on a wallet we have never been able to read.
-                    { k: "ctaz reserve", v: ctaz.reserve },
-                    { k: "ctaz drips ever/7d/30d", v: ctaz.drips ? num(ctaz.drips.allTime) + " / " + num(ctaz.drips.last7d) + " / " + num(ctaz.drips.last30d) : "unknown" },
+                    { net: "ctaz", k: "reserve", v: ctaz.reserve },
+                    { net: "ctaz", k: "drips ever/7d/30d", v: ctaz.drips ? num(ctaz.drips.allTime) + " / " + num(ctaz.drips.last7d) + " / " + num(ctaz.drips.last30d) : "unknown" },
                   ]
                 : []),
-            ].map((r) => (
+            ]
+              // The filter. A row survives if it is about the asset in front of you or
+              // about the box itself. The prefixes came off the cTAZ keys in the same
+              // change: "ctaz sync" was disambiguating against a TAZ row that is no
+              // longer on screen, and a redundant prefix on every key is noise.
+              .filter((r) => r.net === "both" || r.net === network)
+              .map((r) => (
               // A bad row is marked in the VALUE, not with a badge or an icon: the grid
               // is monospace k/v and anything else would need a column nothing else
               // uses. Colour alone would fail anyone who cannot see it, so the marker

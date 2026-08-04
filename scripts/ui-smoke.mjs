@@ -529,16 +529,43 @@ async function checkCtazToggle(page, base) {
 
   // The panel's cTAZ rows. `reserve` is the one that matters: their surface has no
   // balance method, so anything numeric here would be invented.
+  //
+  // NO "ctaz" PREFIX ON THE KEYS ANY MORE, and no filtering by one either. The panel now
+  // shows only the selected asset, so the prefix that used to disambiguate against a TAZ
+  // row on the same screen is gone. Reading every row is also what lets the next two
+  // assertions exist: they check what is ABSENT, which a prefix filter could never see.
+  const panelRows = async () =>
+    Object.fromEntries(
+      await page.evaluate(() =>
+        [...document.querySelectorAll(".panel-grid > *")].map((c) => [
+          c.firstElementChild?.textContent?.trim(),
+          c.lastElementChild?.textContent?.trim(),
+        ])),
+    );
+
   await page.getByRole("button", { name: /More details/ }).click();
-  const rows = Object.fromEntries(
-    await page.evaluate(() =>
-      [...document.querySelectorAll(".panel-grid > *")]
-        .map((c) => [c.firstElementChild?.textContent?.trim(), c.lastElementChild?.textContent?.trim()])
-        .filter(([k]) => k?.startsWith("ctaz"))),
-  );
-  ok("the panel gains a cTAZ readiness row", /ready|behind|stale|not-activated|cannot-verify/.test(rows["ctaz node"] ?? ""), rows["ctaz node"]);
-  ok("the cTAZ reserve reads unknown, never a number", rows["ctaz reserve"] === "unknown", rows["ctaz reserve"]);
-  ok("the cTAZ drip counter is its own", rows["ctaz drips ever/7d/30d"] !== undefined, rows["ctaz drips ever/7d/30d"]);
+  const rows = await panelRows();
+  ok("the panel gains a cTAZ readiness row", /ready|behind|stale|not-activated|cannot-verify/.test(rows["node"] ?? ""), rows["node"]);
+  ok("the cTAZ reserve reads unknown, never a number", rows["reserve"] === "unknown", rows["reserve"]);
+  ok("the cTAZ drip counter is its own", rows["drips ever/7d/30d"] !== undefined, rows["drips ever/7d/30d"]);
+
+  // THE SEPARATION ITSELF, which is the point of the change and the thing a reader is
+  // hurt by if it regresses. A TAZ wallet balance under a cTAZ tab is how someone
+  // concludes the cTAZ wallet holds 1000 TAZ.
+  ok("no TAZ-only row leaks onto the cTAZ tab",
+    rows["wallet balance"] === undefined && rows["miner"] === undefined && rows["refill"] === undefined,
+    Object.keys(rows).join(", "));
+  ok("box and backend stay on both tabs, being about the machine not the chain",
+    rows["box"] !== undefined && rows["backend"] !== undefined);
+
+  // And the mirror, so neither assertion can pass by the panel simply being empty.
+  await page.getByRole("tab", { name: /^TAZ/ }).click();
+  await page.waitForTimeout(300);
+  const tazRows = await panelRows();
+  ok("the TAZ tab carries its own rows back", tazRows["wallet balance"] !== undefined && tazRows["miner"] !== undefined);
+  ok("and the cTAZ-only rows are gone from it", tazRows["reserve"] === undefined, Object.keys(tazRows).join(", "));
+  await ctazTab.click();
+  await page.waitForTimeout(300);
   await page.getByRole("button", { name: /Hide details/ }).click();
 
   // A real claim on the feature net, through the button and the proof of work.
