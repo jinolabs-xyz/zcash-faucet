@@ -17,9 +17,37 @@ tsconfig.tsbuildinfo
 # to hold an RPC password or the rate-limit salt, and an image layer is not a place to
 # put one. I have NOT confirmed what those particular files contain, only that nothing
 # stopped them being copied.
+# THESE SIX MATCH THE ROOT OF THE CONTEXT ONLY, AND THAT IS NOT WHERE THE FILES ARE.
+# Docker's `*` does not cross a `/`, so `*.env` matches `foo.env` and never
+# `deploy/z3/faucet.env`. Added in #369 against exactly these files, and it excluded none
+# of them. Verified by building a throwaway image with this context: `root.env` was
+# dropped and all three of `deploy/z3/faucet.env{,.bak-*,.pre-*}` landed in `/app`.
+#
+# Kept anyway, because they are correct for anything that really does sit at the root.
 *.bak
 *.bak-*
 *.env
 env.*
 *.pem
 *.key
+
+# THE ONES THAT DO THE WORK. `**/` is what reaches a nested path.
+#
+# This is not theoretical tidying. The RUNNING production image carries
+# /app/deploy/z3/faucet.env with RATE_LIMIT_SALT and TURNSTILE_SECRET_KEY in it, plus
+# all five July backups. The image is local to the box and never pushed, so the exposure
+# is bounded to someone who could already read the file, but a secret in an image layer
+# survives the file being deleted and outlives whoever remembers it is there.
+**/*.env
+**/*.pem
+**/*.key
+**/*.bak
+**/*.bak-*
+**/faucet.env
+**/faucet.env.bak-*
+**/faucet.env.pre-*
+
+# The tracked template is documentation, carries no values, and the README points at it.
+# Negation last: .dockerignore takes the LAST matching rule, so this has to follow the
+# patterns it is exempting itself from.
+!**/faucet.env.example
