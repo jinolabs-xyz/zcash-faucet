@@ -296,8 +296,15 @@ mod tests {
         let _ = rpc.call("getblockcount", json!([]));
 
         let seen = rx.recv().unwrap().to_lowercase();
-        // base64("__cookie__:s3cret"), trimmed of the trailing newline.
-        let expected = B64.encode("__cookie__:s3cret".as_bytes()).to_lowercase();
+        // A LITERAL, NOT B64.encode(...). This line used to compute the expected value with
+        // the same encoder the production path uses, so the test asserted that B64 agrees
+        // with B64 - true no matter what B64 does. Encoding the wrong bytes, or a base64
+        // variant zebra will not accept, passes that shape of assertion silently.
+        //
+        // base64("__cookie__:s3cret"), trailing newline trimmed, lowercased to match `seen`.
+        // Cross-checked against the RFC 4648 vector pinned in
+        // basic_auth_header_matches_the_rfc4648_vector below.
+        let expected = "X19jb29raWVfXzpzM2NyZXQ=".to_lowercase();
         assert!(
             seen.contains(&format!("authorization: basic {expected}")),
             "no basic auth header on the wire, request was:\n{seen}"
@@ -317,5 +324,85 @@ mod tests {
         let _ = rpc.call("getblockcount", json!([]));
         let seen = rx.recv().unwrap().to_lowercase();
         assert!(!seen.contains("authorization:"), "unexpected auth header:\n{seen}");
+    }
+
+    fn cookie_file(name: &str, contents: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("miner-rpc-cookie-{name}-{}", std::process::id()));
+        fs::write(&p, contents).expect("write cookie");
+        p
+    }
+
+    /// KNOWN-ANSWER TEST, and the answer comes from RFC 4648 section 10 rather than
+    /// from us: BASE64("foobar") = "Zm9vYmFy". Driven through `Rpc::new` so it pins the
+    /// path we actually ship - read the file, trim, encode, prefix with "Basic " - and
+    /// not the base64 crate, which needs no test from this repo.
+    #[test]
+    fn basic_auth_header_matches_the_rfc4648_vector() {
+        let path = cookie_file("rfc4648", "foobar");
+        let rpc = Rpc::new("http://127.0.0.1:1", &path, 1);
+        assert_eq!(rpc.auth.as_deref(), Some("Basic Zm9vYmFy"));
+        fs::remove_file(path).ok();
+    }
+
+    /// Zebra writes the cookie with a trailing newline. Encoding it produces a credential
+    /// that is correct apart from one byte, and the node rejects it as a wrong password
+    /// rather than as a malformed header - so the symptom points at the secret, not here.
+    #[test]
+    fn a_trailing_newline_is_stripped_before_encoding() {
+        let path = cookie_file("newline", "foobar\n");
+        let rpc = Rpc::new("http://127.0.0.1:1", &path, 1);
+        assert_eq!(rpc.auth.as_deref(), Some("Basic Zm9vYmFy"), "the newline reached the header");
+        fs::remove_file(path).ok();
+    }
+
+    /// THE ALPHABET, which the vector above cannot see. BASE64("foobar") = "Zm9vYmFy" uses
+    /// only letters and digits, and standard and URL-safe base64 agree on every one of
+    /// them - they differ solely at indices 62 and 63 (`+` `/` vs `-` `_`, RFC 4648 tables
+    /// 1 and 2). Swapping the engine to URL_SAFE therefore passes every other test in this
+    /// file, and zebra would reject every call we made.
+    ///
+    /// I found that by running the swap rather than by reasoning about it: the first
+    /// version of this KAT used only the published vector, the sabotage came back green,
+    /// and the test I had just written to catch a wrong encoder could not catch one.
+    ///
+    /// Expected value derived rather than published, because RFC 4648 section 10 has no
+    /// vector reaching index 62 or 63. Only the FOURTH character of each 4-char group can,
+    /// from ASCII input: it is `byte & 0x3F` outright, so `~` (0x7E) -> 62 -> `+` and `?`
+    /// (0x3F) -> 63 -> `/`. Both sit at an index divisible-by-3-plus-2 in the input below,
+    /// which is what puts them in that position.
+    #[test]
+    fn the_header_uses_the_standard_alphabet_not_the_url_safe_one() {
+        let path = cookie_file("alphabet", "__cookie__:~ab?cd");
+        let rpc = Rpc::new("http://127.0.0.1:1", &path, 1);
+        assert_eq!(
+            rpc.auth.as_deref(),
+            Some("Basic X19jb29raWVfXzp+YWI/Y2Q="),
+            "URL-safe base64 would give ...p-YWI_Y2Q= here, and zebra takes only the standard alphabet",
+        );
+        fs::remove_file(path).ok();
+    }
+
+    /// A realistic credential round-trips. This one is allowed to use the encoder on both
+    /// sides because it asserts a different property: whatever we send must decode back to
+    /// exactly the bytes zebra wrote, for a secret too long to keep as a literal.
+    #[test]
+    fn a_realistic_cookie_round_trips_through_the_header() {
+        let secret = "__cookie__:9f2c4e7a1b8d";
+        let path = cookie_file("roundtrip", secret);
+        let rpc = Rpc::new("http://127.0.0.1:1", &path, 1);
+        let encoded = rpc.auth.as_deref().unwrap().strip_prefix("Basic ").expect("Basic prefix");
+        let decoded = B64.decode(encoded).expect("valid base64");
+        assert_eq!(String::from_utf8(decoded).unwrap(), secret);
+        fs::remove_file(path).ok();
+    }
+
+    /// A node with `enable_cookie_auth = false` takes unauthenticated calls, so a missing
+    /// file must stay None rather than becoming an empty credential - "Basic " with nothing
+    /// after it is a header we would send forever and never understand.
+    #[test]
+    fn a_missing_cookie_is_no_header_at_all() {
+        let rpc = Rpc::new("http://127.0.0.1:1", std::path::Path::new("/nope/not/here"), 1);
+        assert!(rpc.auth.is_none());
+        assert!(!rpc.has_cookie());
     }
 }
