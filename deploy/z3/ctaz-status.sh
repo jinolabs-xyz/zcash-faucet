@@ -53,17 +53,39 @@ write() {
 # file means the script ran and the node did not answer.
 now_ms=$(( $(date +%s) * 1000 ))
 
-if ! info="$(rpc getinfo)"; then
-  log "node did not answer getinfo, writing an explicit cannot-read rather than nothing"
-  write "{\"readable\":false,\"at\":${now_ms},\"recency\":null,\"blocks\":null,\"syncPercent\":null}"
-  exit 0
-fi
-
 # jq is not on the box's dependency list, so this stays in grep/sed like the rest of these
 # scripts. Numbers only, and a field that does not match yields empty, which becomes null.
 num() { printf '%s' "$1" | grep -oE "\"$2\"[[:space:]]*:[[:space:]]*-?[0-9]+" | head -1 | grep -oE '\-?[0-9]+$'; }
 
+# AN EMPTY ANSWER IS NOT AN ANSWER, and the first version of this got it wrong. It tested
+# only whether curl FAILED, so a node returning HTTP 200 with an empty body left info="" and
+# the script went on to write readable:true with every figure null. It claimed the node
+# answered when the node answered with nothing.
+#
+# Not hypothetical: zaino on the cTAZ box flaps Syncing <-> RecoverableError and getinfo
+# returns empty while the node is healthy and mining. The CTO was watching that when I found
+# this. Nothing had broken yet because the sync gate fails closed on null figures, so the
+# only visible symptom would have been a panel saying sync unknown with readable:true beside
+# it - an operator reading the raw file would have believed the node had been asked and
+# replied.
+#
+# So readable:true now requires a USABLE answer, not a successful transport. `blocks` is the
+# test because it is the field everything else depends on: no blocks means no percent, and a
+# reading with no percent is what the gate refuses on anyway.
+info=""
+rpc_rc=0
+info="$(rpc getinfo)" || rpc_rc=$?
 blocks="$(num "$info" blocks)"
+if [ "$rpc_rc" -ne 0 ] || [ -z "$info" ] || [ -z "$blocks" ]; then
+  # THREE DISTINCT CAUSES, named, because they send an operator to different places: the
+  # node is down, the node answered with nothing (zaino), or it answered without the field.
+  if [ "$rpc_rc" -ne 0 ]; then why="the node did not answer at all"
+  elif [ -z "$info" ]; then why="the node answered with an EMPTY body, which is what zaino flapping looks like"
+  else why="the node answered without a blocks field"; fi
+  log "cannot read the node's state: $why. Writing readable:false rather than a hopeful true."
+  write "{\"readable\":false,\"at\":${now_ms},\"recency\":null,\"blocks\":null,\"tip\":null,\"syncPercent\":null}"
+  exit 0
+fi
 headers="$(num "$info" headers)"
 # estimatedheight is what zebra reports while it is still catching up. Preferred over
 # headers when present, because it is the node's own estimate of the network tip.
@@ -91,7 +113,24 @@ if r="$(rpc get_tfl_recency_status)"; then
   # Passed through as the raw result object so the app's own readingFor() classifies it,
   # rather than this script deciding a verdict the app already knows how to reach. Two
   # copies of that rule would drift, and the shell copy would be the untested one.
-  inner="$(printf '%s' "$r" | sed -n 's/.*"result"[[:space:]]*:[[:space:]]*\({.*}\).*/\1/p')"
+  #
+  # EXTRACTED WITH A JSON PARSER, NOT A REGEX, and the regex is why. `\({.*}\)` is greedy,
+  # so on {"result":{...},"error":null,"id":1} it captured everything to the LAST brace and
+  # embedded `,"error":null,"id":1}` into the file. The output was malformed JSON on the
+  # HAPPY PATH, which statusFile.ts correctly treats as absent - so a perfectly healthy node
+  # would have shown as unknown forever.
+  #
+  # It survived because I tested the reader against hand-written fixtures and the writer's
+  # failure paths, and never once ran the writer's output into the reader. Two halves each
+  # verified alone, and the pair never was.
+  #
+  # python3 is already a box dependency (the zsnap, backup and deploy suites require it).
+  inner="$(printf '%s' "$r" | python3 -c 'import json,sys
+try:
+    r = json.load(sys.stdin).get("result")
+    print(json.dumps(r) if isinstance(r, dict) else "")
+except Exception:
+    print("")' 2>/dev/null)"
   [ -n "$inner" ] && recency="$inner"
 fi
 
