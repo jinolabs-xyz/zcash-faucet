@@ -36,9 +36,15 @@ export interface IntegrityReport {
   present: number;
   /** Units installed but not enabled: they die at the next reboot. */
   notEnabled: number;
-  /** Units enabled without being declared in enabled-units: operator drift,
-   * informational, never part of the verdict. Null when the report predates the
-   * field, because unmeasured is not zero. */
+  /** Units THIS REPO SHIPS that are enabled without being declared in enabled-units:
+   * operator drift, informational, never part of the verdict. Null when the report
+   * predates the field, because unmeasured is not zero.
+   *
+   * SCOPE MATTERS AND IT IS NARROWER THAN THE NAME. box-report walks deploy/z3/*.service
+   * and *.timer only, so units we do not ship are invisible here. The box had eleven
+   * undeclared units on 2026-08-04 while this said 2, and both were correct: the other
+   * nine are dbus aliases and syslog, which will never be repo-declared and would be
+   * permanent noise. Anyone widening this should widen the label with it. */
   enabledUndeclared: number | null;
   /** Cumulative restarts of the watchdog unit (#365). Context only. */
   watchdogRestarts: number | null;

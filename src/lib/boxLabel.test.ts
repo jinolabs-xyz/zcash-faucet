@@ -89,7 +89,10 @@ test("a clean box SAYS when units are enabled that the repo never declared", () 
   // history. See the corrected note in boxLabel.ts.
   const row = boxRow(classifyIntegrity(report({ expected: 34, present: 34, enabledUndeclared: 2 }), NOW));
   assert.match(row, /34 of 34 files, all enabled/, "the existing clause must survive");
-  assert.match(row, /2 enabled but undeclared/);
+  // "of ours" is asserted deliberately. box-report only walks units this repo ships, so
+  // the bare phrasing claimed a scope the figure does not have: the box had ELEVEN
+  // undeclared units while this said 2, and both were right.
+  assert.match(row, /2 of ours enabled but undeclared/);
 });
 
 test("and it is NOT a fault, so the chip and the marker stay quiet", () => {
@@ -115,7 +118,7 @@ test("an INCOMPLETE box reports drift too, without it displacing the real fault"
   const row = boxRow(classifyIntegrity(report({ expected: 34, present: 32, notEnabled: 1, enabledUndeclared: 3 }), NOW));
   assert.match(row, /2 of 34 MISSING/);
   assert.match(row, /1 NOT ENABLED/);
-  assert.match(row, /3 enabled but undeclared/);
+  assert.match(row, /3 of ours enabled but undeclared/);
   assert.ok(row.indexOf("MISSING") < row.indexOf("undeclared"), "the fault must come first");
 });
 
