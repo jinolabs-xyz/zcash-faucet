@@ -100,14 +100,35 @@ Two changes, and they are deliberately coupled so neither is forgotten alone. Do
 
 ```sh
 sed -i 's/^internal_miner = false/internal_miner = true/' /etc/faucet/ctaz-zebrad.toml
-rm /etc/systemd/system/ctaz-node.service.d/10-initial-sync.conf
-systemctl daemon-reload && systemctl restart ctaz-node
+systemctl restart ctaz-node
 ```
 
-The drop-in raises `CPUQuota` to 200% for the sync, which is CPU-bound. Dropping it back to
-100% at the same moment matters: a miner uses every bit of quota it is given, forever, and
-past this point cTAZ mining competes with TAZ mining for a 4-core box. TAZ is what funds
-the faucet people actually use.
+**There is no longer a drop-in to remove, and that is a fix rather than a simplification.**
+The old recipe said to delete `10-initial-sync.conf`, and `install-ops` put it straight back
+on the next deploy — because the file was in the repo and the installer installs drop-ins
+(#361). So the documented step was silently undone every two minutes, and the box ran at the
+sync quota for hours after someone had "turned it off". One value, one home: `CPUQuota` lives
+in the unit.
+
+### The CPU split, and why it is the shape it is
+
+**cTAZ 250%, TAZ miner 50%, on a 4-core (400%) box.** Owner's decision, 2026-08-04.
+
+The quota is about **RPC responsiveness**, not mining speed. At 200% this node was
+CFS-throttled for **4557 seconds in an hour**, and when a cgroup exhausts its quota *every*
+thread in it stalls — including the RPC thread. The symptom was a socket listening on 19232
+with a connection queued and never accepted, and a panel reading `cannot-verify` about a node
+that was mining, at tip, and healthy. A starved node, not a hung one.
+
+The internal miner takes whatever is left, so the cure is headroom above demand rather than a
+smaller share. Measured demand was 193% of a 200% quota.
+
+TAZ mining went to 50% because it earns close to nothing — a dominant miner takes nearly every
+block on public testnet, which is why this faucet runs on donations (#42). The CPU goes where
+it can actually earn.
+
+`Nice=19` is still what protects the TAZ side under contention. The quota bounds the worst
+case; the nice value decides who yields.
 
 A node with no peers believes it is at the tip, so leaving the miner on for a fresh sync
 mines a fork of genesis within seconds — measured: four blocks before the first peer

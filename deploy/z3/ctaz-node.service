@@ -138,7 +138,21 @@ ExecStart=/opt/faucet/ctaz-zebrad -c /etc/faucet/ctaz-zebrad.toml start
 # left is the priority within it and a deeper nice. Being honest about the ceiling: on a
 # contended box the difference between idle/4 and idle/7 is small, and if cTAZ ever
 # genuinely starves the miner the answer is fewer cores here, not a lower priority number.
-CPUQuota=100%
+# 250%, AND THE REASON IS RPC RESPONSIVENESS RATHER THAN MINING SPEED.
+#
+# At 200% this node was CFS-throttled for 4557 seconds in one hour. When a cgroup exhausts
+# its quota EVERY thread in it stalls until the next period - including the RPC thread. The
+# visible symptom was a socket listening on 19232 with a connection queued and never
+# accepted, so the panel read "cannot-verify" about a node that was mining, at tip, and
+# healthy. Not a hung node: a starved one.
+#
+# The internal miner takes whatever is left, so the fix is headroom above demand rather
+# than a smaller share. Measured demand was 193% of a 200% quota, which is saturation.
+# 250% against a 400% box, with the TAZ miner cut to 50%, leaves the RPC thread able to run.
+#
+# Nice=19 is still what protects the TAZ side under contention. The quota bounds the worst
+# case; the nice value decides who yields, and cTAZ still yields to everything.
+CPUQuota=250%
 Nice=19
 
 # IO is best-effort/7, NOT idle, and the volume is the reason. `idle` was right when this
