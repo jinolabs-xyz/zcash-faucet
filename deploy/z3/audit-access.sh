@@ -7,6 +7,26 @@ set -uo pipefail
 # are the point. Everything else must be loopback or docker-internal, above all
 # the node RPC and the wallet RPC.
 ACCESS_PUBLIC_PORTS="${ACCESS_PUBLIC_PORTS:-22 80 443 18233 8233}"
+# THE THIRD CASE, and it exists because the crosslink node forced it. These
+# ports are bound wide by software we do not control and are deliberately NOT
+# public: the firewall is the whole control, not the bind.
+#
+#   19233  crosslink P2P, binds [::] as shipped. We take outbound peers only.
+#   29234  crosslink zaino gRPC, binds 0.0.0.0 as shipped and has no config key
+#          to move it. Issue #322 called for forcing it to loopback; their build
+#          offers no way, so ufw is what holds it.
+#
+# Before this list existed the audit had two categories, so these two came back
+# as findings on every run - five findings a night, three of them permanent. A
+# report that is always wrong about the same things is how a real finding gets
+# skipped, and this box has no alert delivery (#215) so the log is the only
+# place either would appear.
+#
+# Silencing them would be the easy version and the wrong one. Listing a port
+# here does not excuse it: it MOVES the assertion from the bind to the firewall,
+# and the firewall section below now checks that ufw really denies each one.
+# An allow rule appearing for a port in this list is a finding of its own.
+ACCESS_FIREWALLED_PORTS="${ACCESS_FIREWALLED_PORTS:-19233 29234}"
 ACCESS_SSHD_CONFIG="${ACCESS_SSHD_CONFIG:-/etc/ssh/sshd_config}"
 # sshd -T resolves Include directives and reports what sshd will actually
 # enforce. Grepping the main file misses sshd_config.d drop-ins, which win.
@@ -22,6 +42,9 @@ unverified=""
 # port nothing serves is not a finding, and the mainnet P2P port on a testnet
 # box is exactly that case.
 listening_public=""
+# Same idea for the firewalled-by-intent set: a port nothing serves needs no
+# check, and checking one would report on a socket that does not exist.
+listening_firewalled=""
 say()   { echo "$*"; }
 ok()    { [ "$VERBOSE" = "1" ] && echo "  ok       $*"; return 0; }
 found() { findings=$((findings + 1)); echo "  FINDING  $1"; [ -n "${2:-}" ] && echo "           fix: $2"; return 0; }
@@ -29,6 +52,7 @@ skip()  { unverified="${unverified}${unverified:+
 }  - $1"; }
 
 is_public_port() { case " $ACCESS_PUBLIC_PORTS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+is_firewalled_port() { case " $ACCESS_FIREWALLED_PORTS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 say "access audit for $(hostname 2>/dev/null || echo this box)"
 say ""
@@ -38,12 +62,19 @@ if command -v "$ACCESS_SS" >/dev/null 2>&1; then
   # Wildcard binds (0.0.0.0 or ::) are reachable unless the firewall says no.
   while read -r addr port; do
     [ -n "${port:-}" ] || continue
+    # THE WHOLE 127.0.0.0/8 IS LOOPBACK, not just 127.0.0.1. systemd-resolved
+    # listens on 127.0.0.54, and this line used to match only the .1, so the box
+    # has reported "port 53 is bound on 127.0.0.54, which is off-box reachable"
+    # every night since the audit shipped. It is not reachable and never was.
     case "$addr" in
-      127.0.0.1|::1|localhost) continue ;;
+      127.*|::1|localhost) continue ;;
     esac
     if is_public_port "$port"; then
       case " $listening_public " in *" $port "*) ;; *) listening_public="$listening_public $port" ;; esac
       ok "port $port on $addr is public by intent"
+    elif is_firewalled_port "$port"; then
+      case " $listening_firewalled " in *" $port "*) ;; *) listening_firewalled="$listening_firewalled $port" ;; esac
+      ok "port $port on $addr is bound wide but firewalled by intent, checked below"
     else
       found "port $port is bound on $addr, which is off-box reachable and not in the intended set ($ACCESS_PUBLIC_PORTS)" \
             "if it is a docker-published port, REBIND it to 127.0.0.1 (docker writes its own iptables chain, so ufw deny will not close it). Host services: bind to 127.0.0.1 or ufw deny $port/tcp"
@@ -73,12 +104,31 @@ if command -v "$ACCESS_UFW" >/dev/null 2>&1; then
         || found "port $p is serving and intended to be public but has no ufw rule" "ufw allow $p/tcp"
     done
     [ -n "$listening_public" ] || skip "which public ports need a ufw rule: no listening sockets were read, so rules were not cross-checked"
+    # The other direction, and the reason the firewalled list is not just a mute
+    # button: these ports are wide open at the bind, so an ALLOW rule for one is
+    # a public wallet-adjacent socket the moment it appears. ufw's default-deny
+    # is doing the work, and this asserts it is still doing it.
+    for p in $listening_firewalled; do
+      if printf '%s' "$ufw_out" | grep -qiE "(^|[^0-9])$p(/tcp)?[[:space:]]+ALLOW"; then
+        found "port $p has a ufw ALLOW rule, and it is bound wide - the firewall was the only thing keeping it off the internet" \
+              "ufw delete allow $p/tcp, then confirm from OFF the box that it is closed"
+      else
+        ok "port $p is bound wide but ufw has no allow rule for it"
+      fi
+    done
   else
     found "ufw is installed but NOT active, so nothing is filtered" \
           "ufw allow OpenSSH && ufw allow 80/tcp && ufw allow 443/tcp && ufw --force enable   # keep a session open while doing this"
+    # Named separately because the generic finding above understates it: for
+    # these ports the firewall is not defence in depth, it is the only layer.
+    for p in $listening_firewalled; do
+      found "port $p is bound wide and ufw is INACTIVE, so it is reachable from the internet right now" \
+            "re-enable ufw (above). These ports cannot be rebound: their listener has no config key for it"
+    done
   fi
 else
   skip "firewall: no $ACCESS_UFW on this host"
+  [ -z "$listening_firewalled" ] || skip "whether$listening_firewalled are closed: they are bound wide and the firewall is their only control, and it could not be read"
 fi
 say ""
 
