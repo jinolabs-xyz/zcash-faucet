@@ -64,6 +64,12 @@ interface Status {
         enabled: true;
         readiness: CtazState;
         servable: boolean;
+        /** Beside the verdict, never inside it. Null is unknown, never 0. */
+        syncPercent?: number | null;
+        blocks?: number | null;
+        tip?: number | null;
+        /** "file" | "rpc" | "none": which half to blame when something is wrong. */
+        source?: string;
         height: number | null;
         roundLag: number | null;
         finalizers: number | null;
@@ -889,7 +895,23 @@ export default function Home() {
                       v: ctaz.readiness + (ctaz.roundLag != null ? ` (round lag ${ctaz.roundLag})` : ""),
                       bad: !ctaz.servable,
                     },
-                    { k: "ctaz height", v: num(ctaz.height) + (ctaz.finalizers != null ? " · " + ctaz.finalizers + " finalizers" : "") },
+                    // The percent is its own row, next to the state and not folded into
+                    // it. "23% synced" and "cannot reach the node" must never render the
+                    // same, which is the whole reason the gate has five states and no
+                    // syncing state. Unknown says unknown rather than 0%.
+                    {
+                      k: "ctaz sync",
+                      v: ctaz.syncPercent != null
+                        ? ctaz.syncPercent.toFixed(1) + "%" +
+                          (ctaz.blocks != null && ctaz.tip != null ? ` (${num(ctaz.blocks)} of ${num(ctaz.tip)})` : "")
+                        : ctaz.source === "file"
+                          ? "unknown, the box's status file is stale or unreadable"
+                          : "unknown",
+                      // Not a fault. A syncing node is doing what it should, and cTAZ is
+                      // not being served yet either way.
+                      bad: false,
+                    },
+                    { k: "ctaz height", v: num(ctaz.blocks ?? ctaz.height) + (ctaz.finalizers != null ? " · " + ctaz.finalizers + " finalizers" : "") },
                     // The literal string from the response, rendered as given. Their RPC
                     // surface has no shielded balance method, so this is an answer and
                     // not a gap, and "0" here would be the balance ?? 0 bug all over

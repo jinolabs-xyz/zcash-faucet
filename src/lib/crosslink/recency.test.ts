@@ -21,7 +21,7 @@ const HEALTHY = {
 test("a node keeping up with its own finality view is ready", () => {
   const r = readingFor(HEALTHY, NOW);
   assert.equal(r.state, "ready");
-  assert.equal(canServeCtaz(r.state), true);
+  assert.equal(canServeCtaz(r.state, 100, 100), true);
   assert.equal(r.height, 372_104);
   assert.equal(r.roundLag, 1);
   assert.equal(r.finalizers, 2);
@@ -29,7 +29,7 @@ test("a node keeping up with its own finality view is ready", () => {
 
 test("READY IS THE ONLY STATE THAT SERVES", () => {
   for (const s of ["behind", "stale", "not-activated", "cannot-verify"] as const) {
-    assert.equal(canServeCtaz(s), false, `${s} must not hand out cTAZ`);
+    assert.equal(canServeCtaz(s, 100, 100), false, `${s} must not hand out cTAZ`);
   }
 });
 
@@ -90,12 +90,50 @@ test("locked ahead of seen is unexplained, so cannot-verify rather than behind",
 test("no finalizers means no finality view, whatever the rounds say", () => {
   const r = readingFor({ ...HEALTHY, finalizer_statuses: [] }, NOW);
   assert.equal(r.state, "not-activated");
-  assert.equal(canServeCtaz(r.state), false);
+  assert.equal(canServeCtaz(r.state, 100, 100), false);
 });
 
 test("TFL being off is its own answer, distinct from an unreadable one", () => {
   const off = notActivated();
   assert.equal(off.state, "not-activated");
   assert.notEqual(off.state, readingFor(null, NOW).state);
-  assert.equal(canServeCtaz(off.state), false);
+  assert.equal(canServeCtaz(off.state, 100, 100), false);
+});
+
+/* ── The gate asks TWO questions now (#322) ──────────────────────────────────────── */
+
+test("A NODE WITH CURRENT ROUNDS AND A QUARTER OF THE CHAIN DOES NOT SERVE", () => {
+  // The defect this closes, and it was live: the five states describe the FINALITY view,
+  // so a node can report fresh rounds while being nowhere near tip. My own #322 test row
+  // read READY at 23.1% synced. Their wallet needs the chain to spend, so serving from it
+  // would accept a claim and fail to pay, and that reads as a faucet bug rather than as a
+  // gate that never asked. Hard block on #328 per the CTO.
+  assert.equal(canServeCtaz("ready", 83_633, 362_000), false);
+});
+
+test("and a synced node with current rounds does serve, or the gate is just off", () => {
+  // The control. Without this, refusing everything would pass the test above.
+  assert.equal(canServeCtaz("ready", 293_300, 293_300), true);
+});
+
+test("the lag budget is small but not zero, because a tip estimate lags by a block", () => {
+  assert.equal(canServeCtaz("ready", 293_298, 293_300), true, "two blocks is propagation");
+  assert.equal(canServeCtaz("ready", 293_290, 293_300), false, "ten is not caught up");
+  // A node AHEAD of the reported tip is not behind. The tip is an estimate.
+  assert.equal(canServeCtaz("ready", 293_305, 293_300), true);
+});
+
+test("AN UNREADABLE HEIGHT REFUSES, exactly as cannot-verify does", () => {
+  // Fails closed. An unmeasured sync distance is not a short one, and defaulting either
+  // side to zero would make an unreadable node look perfectly caught up.
+  assert.equal(canServeCtaz("ready", null, 293_300), false);
+  assert.equal(canServeCtaz("ready", 293_300, null), false);
+  assert.equal(canServeCtaz("ready", null, null), false);
+});
+
+test("a bad state still refuses however well synced the node is", () => {
+  // Sync completeness is an ADDITIONAL requirement, never a substitute for the verdict.
+  for (const s of ["behind", "stale", "not-activated", "cannot-verify"] as const) {
+    assert.equal(canServeCtaz(s, 293_300, 293_300), false, `${s} must not serve`);
+  }
 });
