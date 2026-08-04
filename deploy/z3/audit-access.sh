@@ -54,6 +54,36 @@ skip()  { unverified="${unverified}${unverified:+
 is_public_port() { case " $ACCESS_PUBLIC_PORTS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 is_firewalled_port() { case " $ACCESS_FIREWALLED_PORTS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
+# A UFW RULE ADDED BY APPLICATION PROFILE SHOWS THE PROFILE NAME, NOT THE PORT.
+# This box's ssh rule reads "OpenSSH  ALLOW  Anywhere", so a numeric grep finds
+# nothing and the audit reported "port 22 is serving and intended to be public
+# but has no ufw rule" every night, offering `ufw allow 22/tcp` as the fix for a
+# port that is already allowed.
+#
+# Resolved by ASKING ufw rather than by a table of well-known profiles. A table
+# would be a second copy of ufw's own data, wrong the first time this box gains
+# a profile nobody thought of, and wrong silently.
+#
+# $1 port, $2 the `ufw status` text. Returns 0 only when a profile in that text
+# really lists the port. A profile ufw cannot describe is NOT treated as cover:
+# an unanswerable question must not read as a yes.
+ufw_profile_covers() {
+  local port="$1" status="$2" name info
+  # Rule lines are "<target>  <ACTION>  <From>". Take the target, keep only the
+  # ones that are not numeric, and drop ufw's "(v6)" suffix.
+  while read -r name; do
+    [ -n "$name" ] || continue
+    info="$("$ACCESS_UFW" app info "$name" 2>/dev/null)" || continue
+    printf '%s' "$info" | grep -qE "(^|[^0-9])$port(/(tcp|udp))?([^0-9]|$)" && return 0
+  done <<PROFILES
+$(printf '%s\n' "$status" \
+    | sed -nE 's/^([A-Za-z][A-Za-z0-9 ._-]*[A-Za-z0-9])[[:space:]]+(ALLOW|LIMIT|DENY|REJECT)[[:space:]].*/\1/p' \
+    | sed -E 's/[[:space:]]*\(v6\)$//' \
+    | sort -u)
+PROFILES
+  return 1
+}
+
 say "access audit for $(hostname 2>/dev/null || echo this box)"
 say ""
 
@@ -100,8 +130,13 @@ if command -v "$ACCESS_UFW" >/dev/null 2>&1; then
             "prefer client-side multiplexing, which needs no box change (see OPERATIONS.md). 'ufw allow OpenSSH' also fixes it but REMOVES brute-force limiting from a public port, so only with keys-only auth and fail2ban"
     fi
     for p in $listening_public; do
-      printf '%s' "$ufw_out" | grep -qE "(^|[^0-9])$p(/tcp)?[[:space:]]" \
-        || found "port $p is serving and intended to be public but has no ufw rule" "ufw allow $p/tcp"
+      if printf '%s' "$ufw_out" | grep -qE "(^|[^0-9])$p(/tcp)?[[:space:]]"; then
+        ok "port $p has a ufw rule by number"
+      elif ufw_profile_covers "$p" "$ufw_out"; then
+        ok "port $p is covered by a ufw application profile"
+      else
+        found "port $p is serving and intended to be public but has no ufw rule" "ufw allow $p/tcp"
+      fi
     done
     [ -n "$listening_public" ] || skip "which public ports need a ufw rule: no listening sockets were read, so rules were not cross-checked"
     # The other direction, and the reason the firewalled list is not just a mute

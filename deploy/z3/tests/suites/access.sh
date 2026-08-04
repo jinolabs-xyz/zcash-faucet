@@ -10,6 +10,7 @@ access_env() {
   export ACCESS_SS="$SCRATCH/stubs/access-ss" ACCESS_UFW="$SCRATCH/stubs/access-ufw"
   export ACCESS_SSHD_CONFIG="$T/sshd_config"
   export ACCESS_SSHD="$SCRATCH/stubs/access-sshd" STUB_SSHD_T="$T/sshd_effective"
+  export STUB_UFW_APPDIR="$T/ufw-apps"; mkdir -p "$STUB_UFW_APPDIR"
   : > "$T/sshd_effective"
   : > "$STUB_LISTEN"; : > "$STUB_UFW_STATUS"; : > "$ACCESS_SSHD_CONFIG"
   export PATH="$BASE_PATH"
@@ -203,6 +204,47 @@ bash "$AUDIT_A" > "$T/fwunver.log" 2>&1
 check "exits 2, not 0" "[ $? -eq 2 ]"
 check "the port is listed as unverified" "grep -q 'they are bound wide and the firewall is their only control' '$T/fwunver.log'"
 check "and is never reported as ok" "! grep -q 'no allow rule for it' '$T/fwunver.log'"
+
+echo "== access: a rule added by APPLICATION PROFILE covers its port"
+# The live box's ssh rule reads "OpenSSH  ALLOW  Anywhere" and never mentions
+# 22, so the numeric grep found nothing and the audit told us every night to run
+# 'ufw allow 22/tcp' on a port that was already allowed.
+access_env
+printf '0.0.0.0:22\n0.0.0.0:80\n0.0.0.0:443\n' > "$STUB_LISTEN"
+printf 'Status: active\n\nOpenSSH                    ALLOW       Anywhere\n80/tcp                     ALLOW       Anywhere\n443/tcp                    ALLOW       Anywhere\nOpenSSH (v6)               ALLOW       Anywhere (v6)\n' > "$STUB_UFW_STATUS"
+printf 'Profile: OpenSSH\nTitle: Secure shell server\n\nPort:\n  22/tcp\n' > "$STUB_UFW_APPDIR/OpenSSH"
+printf 'maxstartups 30:30:100\n' > "$STUB_SSHD_T"
+bash "$AUDIT_A" > "$T/appprof.log" 2>&1
+check "exits 0" "[ $? -eq 0 ]"
+check "port 22 is not reported as ruleless" "! grep -q 'port 22 is serving and intended to be public' '$T/appprof.log'"
+check "and it does not tell us to allow a port already allowed" "! grep -q 'ufw allow 22/tcp' '$T/appprof.log'"
+
+echo "== access: a profile that does NOT cover the port is still a finding"
+# The half that keeps the resolver honest. If any profile name counted as cover
+# for any port, this check would have become decorative.
+access_env
+printf '0.0.0.0:22\n0.0.0.0:80\n0.0.0.0:443\n' > "$STUB_LISTEN"
+printf 'Status: active\n\nOpenSSH                    ALLOW       Anywhere\nSomeApp                    ALLOW       Anywhere\n80/tcp                     ALLOW       Anywhere\n' > "$STUB_UFW_STATUS"
+printf 'Profile: OpenSSH\n\nPort:\n  22/tcp\n' > "$STUB_UFW_APPDIR/OpenSSH"
+printf 'Profile: SomeApp\n\nPort:\n  9999/tcp\n' > "$STUB_UFW_APPDIR/SomeApp"
+printf 'maxstartups 30:30:100\n' > "$STUB_SSHD_T"
+bash "$AUDIT_A" > "$T/appmiss.log" 2>&1
+check "exits 1" "[ $? -eq 1 ]"
+check "443 is still reported, no profile covers it" "grep -q 'port 443 is serving and intended to be public' '$T/appmiss.log'"
+check "and 22 is still not reported" "! grep -q 'port 22 is serving' '$T/appmiss.log'"
+
+echo "== access: a profile ufw cannot describe is NOT treated as cover"
+# An unanswerable question must not read as a yes. If 'ufw app info' fails and
+# the resolver shrugged, every ruleless public port would go quiet the moment
+# some unrelated named rule existed.
+access_env
+printf '0.0.0.0:22\n' > "$STUB_LISTEN"
+printf 'Status: active\n\nMysteryProfile             ALLOW       Anywhere\n' > "$STUB_UFW_STATUS"
+# No file for MysteryProfile, so the stub exits nonzero, as real ufw does.
+printf 'maxstartups 30:30:100\n' > "$STUB_SSHD_T"
+bash "$AUDIT_A" > "$T/appfail.log" 2>&1
+check "exits 1" "[ $? -eq 1 ]"
+check "22 is reported, because nothing proved it was covered" "grep -q 'port 22 is serving and intended to be public' '$T/appfail.log'"
 
 echo "== access: a publicly bound WALLET rpc is the worst case, and says why ufw cannot fix it"
 access_env
