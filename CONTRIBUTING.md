@@ -695,6 +695,29 @@ Every correction came from the same few habits, so the habits are rules.
     reproducing it is awkward, that is the finding: you may be describing a defect that
     was not there.
 
+    AND VERIFY WITH THE THING, NOT WITH SOMETHING THAT RESEMBLES IT. A check written
+    against a REIMPLEMENTATION of the rule under test is a second thing that can be
+    wrong, and when it agrees with you it is indistinguishable from a pass.
+
+    Mine, and it shipped. `#369` added six `.dockerignore` patterns to stop leaked env
+    backups reaching the production image. I verified them with python `fnmatch` against
+    each file's BASENAME and got a confident green on all six. Docker's matcher is
+    path-based and its `*` does not cross a `/`, so `*.env` matches `foo.env` at the
+    context root and never `deploy/z3/faucet.env`, which is where every one of those
+    files actually lived. Six patterns, nothing excluded, shipped as verified. Caught in
+    `#376` with a throwaway `docker build` that listed what landed in `/app`.
+
+    The tell is that I DID verify. There was a check, it ran, it passed, and it was
+    measuring a different rule than the one production would apply. That is worse than
+    not checking, because a green from the wrong instrument buys the same confidence as
+    a green from the right one.
+
+    So: to check a `.dockerignore`, build the image and list its files. To check systemd
+    semantics, run `systemd-analyze verify`. To check a glob, let the shell expand it. To
+    check what a service returns, call it. If running the real thing is awkward, that
+    awkwardness is the finding and not a licence to approximate: it usually means the
+    thing is hard to test, which is worth knowing on its own.
+
     THIS RULE CAUGHT ITSELF WHILE BEING WRITTEN, which is the best argument for it.
 
     The paragraph above originally carried a fourth example, handed over secondhand and
