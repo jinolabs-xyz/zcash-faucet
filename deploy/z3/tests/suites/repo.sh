@@ -194,3 +194,41 @@ check "no StartLimit* key sits outside [Unit], where systemd would ignore it" \
 # nothing, which is the exact false pass this suite exists to prevent.
 check "and the scan actually iterated the units, so a clean result means something" \
   "[ '$UNITS_SCANNED' -ge 8 ] || { echo '   only scanned $UNITS_SCANNED unit(s)'; false; }"
+
+echo "== repo: an Environment= default cannot sit where it silently beats its own EnvironmentFile"
+# systemd applies Environment= and EnvironmentFile= in the order written, and a later
+# setting wins. So an `Environment=VAR=x` BELOW an `EnvironmentFile=` makes that file
+# unable to override VAR, silently.
+#
+# ctaz-node.service had exactly that: the unit set CTAZ_MAX_STATE_GB=14 below the
+# EnvironmentFile, /etc/faucet/ctaz.env said 45, the unit's 14 won, and nothing anywhere
+# reported the disagreement. The guard is an ExecStartPre, so the consequence was a node
+# that syncs past the real ceiling in silence and then refuses to restart.
+#
+# The rule is not "never write Environment after EnvironmentFile" — forcing a value is a
+# legitimate thing to want. It is that doing so must be a decision someone made, so this
+# names the variable and the unit rather than passing quietly.
+ENV_SHADOWED=""
+for f in "$REPO"/deploy/z3/*.service; do
+  [ -e "$f" ] || continue
+  name="$(basename "$f")"
+  envfile_line="$(grep -nE '^EnvironmentFile=' "$f" | head -1 | cut -d: -f1)"
+  [ -n "$envfile_line" ] || continue
+  while IFS=: read -r ln var; do
+    [ -n "$ln" ] || continue
+    [ "$ln" -gt "$envfile_line" ] && ENV_SHADOWED="$ENV_SHADOWED $name:$var"
+  done <<INNER
+$(grep -nE '^Environment=[A-Za-z_][A-Za-z0-9_]*=' "$f" | sed -E 's/^([0-9]+):Environment=([A-Za-z_][A-Za-z0-9_]*)=.*/\1:\2/')
+INNER
+done
+check "no Environment= default is shadowing its own EnvironmentFile" \
+  "[ -z '$ENV_SHADOWED' ] || { echo '   shadowed:$ENV_SHADOWED'; false; }"
+
+echo "== repo: the cTAZ ceiling is not the pre-measurement 14 GB"
+# 14 was set when the state shared the box's 28 GB free. Measured to 42% of the chain the
+# optimistic floor is 42.2 GB, so 14 is crossed at about a third of the sync. Pinned as a
+# number rather than a range because getting it wrong is silent until a restart.
+ctaz_ceiling="$(grep -oE '^Environment=CTAZ_MAX_STATE_GB=[0-9]+' "$REPO/deploy/z3/ctaz-node.service" 2>/dev/null | grep -oE '[0-9]+$')"
+check "a ceiling is set at all" "[ -n '$ctaz_ceiling' ]"
+check "and it is above the measured 42.2 GB floor" "[ '${ctaz_ceiling:-0}' -gt 42 ]"
+check "and still under the 59 GB volume" "[ '${ctaz_ceiling:-99}' -lt 59 ]"

@@ -173,17 +173,32 @@ Measured growth on their chain, syncing from genesis:
 | 1,648 | 48 M | 29.8 |
 | 22,193 | 1.4 G | 66.1 |
 | 36,676 | 2.8 G | 80.1 |
+| 65,758 | 5.9 G | 94.1 |
+| 157,969 | 17.9 G | 118.8 |
+
+The last two rows were measured and then not written down for a day, which is why the
+sizing below was done against 28.5 GB. **Height 157,969 is 42% of the chain**, so the
+figure to extrapolate from is 118.8 KB/block, not the 75 you get at 26k.
 
 **Per-block cost rises with height**, so every extrapolation from an early prefix
-understates. Successive estimates went 7.4 GB, then 10.6, then 23.5, then **28.5 GB**.
-Treat the final figure as **UNKNOWN until a node reaches the tip**, and do not plan
-against any of those numbers. The 59 GB volume was sized against the largest of them with
-room for the estimate to keep climbing, which on this chain it has done every time.
+understates. Successive estimates went 7.4 GB, then 10.6, then 23.5, then 28.5, and from
+the furthest measurement **42.2 GB — and that is the optimistic floor**, because it assumes
+the remaining 58% costs what the average so far cost, which this curve has never once done.
+
+Treat the final figure as **UNKNOWN until a node reaches the tip**. Do not plan against a
+single number, and in particular do not extrapolate from an early prefix: every attempt to
+do so on this chain has undershot, including all four of mine.
 
 `ctaz-datadir-guard.sh` refuses to *start* a node whose state already exceeds
-`CTAZ_MAX_STATE_GB` (45 GB in `ctaz.env`, deliberately under the volume). **It is not a
-quota** — nothing stops a running node growing. The volume is what makes that survivable;
-the guard is the early warning, not the ceiling.
+`CTAZ_MAX_STATE_GB`, **52 GB, set in the unit**. **It is not a quota** — nothing stops a
+running node growing. The volume is what makes that survivable; the guard is the early
+warning, not the ceiling.
+
+The value lives in `ctaz-node.service` and `ctaz.env` may override it, because the
+`Environment=` defaults now sit **above** the `EnvironmentFile=`. They used to sit below
+it, where systemd's later-wins ordering meant the unit's 14 silently beat the 45 written in
+`ctaz.env`, and nothing reported the disagreement. If you change the ceiling, change it in
+one place and check with `systemctl show -p Environment ctaz-node.service`.
 
 Note the indexer's database lives **inside the same tree**, at `<chain-name>/zaino/local`,
 so the state directory is not purely chain state.

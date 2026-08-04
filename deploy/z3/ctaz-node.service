@@ -126,9 +126,33 @@ ExecStartPre=/opt/faucet/ctaz-datadir-guard.sh ${CTAZ_DATADIR} ${CTAZ_MAX_STATE_
 # The fallbacks stay deliberately small. If ctaz.env is ever missing, we know nothing
 # about the storage this node landed on, and refusing to start too early is recoverable
 # in a way that filling a disk is not.
-EnvironmentFile=-/etc/faucet/ctaz.env
+# ONE FILE OWNS EACH VALUE, AND THE ORDER HERE DECIDES WHICH.
+#
+# systemd applies Environment= and EnvironmentFile= in the order written, and a later
+# setting overrides an earlier one. So these Environment= lines sitting BELOW the
+# EnvironmentFile= silently beat anything /etc/faucet/ctaz.env says. The box had 45 in that
+# file and the unit was enforcing 14, which nothing anywhere reported.
+#
+# Defaults now sit ABOVE the file, so ctaz.env can actually override them, which is what an
+# optional EnvironmentFile is for.
 Environment=CTAZ_BASE_PORT=19233
-Environment=CTAZ_MAX_STATE_GB=14
+# THE CEILING, and it is not a round number by accident.
+#
+# 14 was set when the state shared the box's 28 GB and nothing had synced far enough to
+# know better. Measured on this chain to height 157,969, 42% of the way, the cost is
+# 118.8 KB/block and still rising, which puts the OPTIMISTIC floor at 42.2 GB at the tip.
+# 14 GB is crossed at roughly height 128,000, about a third of the chain.
+#
+# That mattered because the guard is an ExecStartPre: it refuses to START a node over the
+# ceiling and does not stop a running one. A node syncing past 14 GB is silent, and then
+# the first reboot refuses to come back. Enabling the unit at boot made a reboot the
+# likely trigger rather than an unlikely one.
+#
+# 52 GB keeps it a real guard, under the 59 GB volume, above the floor the measurements
+# actually support. It is still an early warning and NOT a quota: nothing stops a running
+# node growing, which is what the volume is for.
+Environment=CTAZ_MAX_STATE_GB=52
+EnvironmentFile=-/etc/faucet/ctaz.env
 
 ExecStart=/opt/faucet/ctaz-zebrad -c /etc/faucet/ctaz-zebrad.toml start
 
