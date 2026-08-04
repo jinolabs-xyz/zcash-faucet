@@ -718,6 +718,51 @@ Every correction came from the same few habits, so the habits are rules.
     awkwardness is the finding and not a licence to approximate: it usually means the
     thing is hard to test, which is worth knowing on its own.
 
+    AND A CHECK THAT HAS NEVER FAILED IS A SUSPECT, NOT A CREDENTIAL. The clause above is
+    about HOW to verify. This one is about WHAT TO SUSPECT, and it is the more useful half
+    because it tells you where to look before anything has gone visibly wrong.
+
+    Seven of these landed in one day across three engineers, and the list is the argument:
+
+        readiness probing a proxy for the money path, so a crash-looping wallet read
+        healthy because a balance still answered
+
+        a systemd key sitting in a section systemd discards, under a comment describing
+        the opposite of what the key does
+
+        a delivery hook exiting 0 while blind, so it reported "nothing waiting" for days
+        when the truth was "I cannot tell"
+
+        a cached Docker layer answering "the build succeeded" when the question was
+        whether the image contains this commit
+
+        a finality gate answering "can we serve" when it had only asked whether the
+        rounds were current, and a node a quarter synced passed it
+
+        `buildCommit` answering `-dirty` about untracked backups, so a flag whose only two
+        states were on and on
+
+        `fnmatch` on a basename answering for Docker's path matcher, greenlighting six
+        ignore patterns that excluded nothing
+
+    NOT ONE OF THOSE WAS A WRONG ANSWER. Every one was a well-formed answer to a question
+    nobody asked. That is precisely why reading the output never caught any of them and
+    measuring always did: a wrong answer looks wrong, and a well-formed answer to the
+    wrong question looks like success.
+
+    Which gives the heuristic. When a check has never failed, the likely explanation is
+    not that the system is healthy. It is that the check is answering something easier
+    than the question you care about. Long green streaks on cheap checks are the place to
+    look, not the place to relax.
+
+    The cheapest way to use it: say out loud, in one sentence, what question the check
+    actually asks. Not what it is called, not what the issue wanted, what it asks. If
+    that sentence is not the thing you care about, you have found it. "Did the build
+    command exit 0" is not "does the image contain this commit". "Does a balance read" is
+    not "can we send". "Are the rounds current" is not "can we pay". Every one of the
+    seven above is visible in a single honest sentence, and every one survived review
+    until somebody wrote that sentence down.
+
     THIS RULE CAUGHT ITSELF WHILE BEING WRITTEN, which is the best argument for it.
 
     The paragraph above originally carried a fourth example, handed over secondhand and
