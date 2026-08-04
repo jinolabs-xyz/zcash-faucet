@@ -52,6 +52,37 @@ check "workflows were actually found and read" "[ '$WF_COUNT' -gt 0 ]"
 check "every node-version pin matches the Dockerfile's node $PROD_MAJOR" \
   "[ -z '$WF_BAD' ] || { echo '   mismatched:$WF_BAD'; false; }"
 
+echo "== repo: CI lints EVERY tracked shell script, not a glob's worth of them"
+# WHY THIS IS A RULE AND NOT A ONE-TIME FIX. CI ran `shellcheck -S warning deploy/deploy.sh
+# deploy/z3/*.sh`, which is 22 of this repo's 41 tracked .sh files. The 19 it missed are the
+# whole test harness - and sixteen of those open with `# shellcheck shell=bash`, a directive
+# that does nothing unless a linter is reading the file. People wrote it believing they were
+# covered.
+#
+# The harness is the thing that caught the $HERE bug shellcheck cannot see at any severity,
+# so the least-linted code in the tree was the code the gate depends on. A glob cannot say
+# which files it failed to match, so the gap was invisible from inside CI: the step was
+# green, and it was green about 22 files.
+#
+# The rule is the enumeration, not the current file count. `git ls-files` covers a new
+# script the day it is added; a pattern covers it the day somebody remembers.
+# Asserted against the whole file rather than an extracted step. The first attempt pulled the
+# step out with `awk '/shellcheck/,/- name:/'`, and ci.yml's own header comment on line 1 says
+# the word shellcheck, so the range started at line 1 and the assertions read a region that
+# had nothing to do with the step. It passed. Anchoring on the invocation itself has no such
+# ambiguity, and there is only one shellcheck step to be confused about.
+CI_YML="$REPO/.github/workflows/ci.yml"
+check "ci.yml still runs shellcheck at all" "grep -q 'shellcheck -S' '$CI_YML'"
+check "and it enumerates the files from git rather than globbing a directory" \
+  "grep -q 'git ls-files -z' '$CI_YML'"
+check "and NO shellcheck invocation uses the deploy/z3/*.sh glob that silently missed 19 files" \
+  "! grep -qE 'shellcheck[^|]*deploy/z3/\*\.sh' '$CI_YML'"
+# THE FLOOR IS PART OF THE RULE. xargs on an empty list runs shellcheck with no arguments, so
+# a checkout that produced no files would pass while linting nothing - the same shape as the
+# two empty sha256sum listings that compare equal in drift.
+check "and it refuses a suspiciously short file list instead of linting nothing" \
+  "grep -qE 'ge 30' '$CI_YML'"
+
 echo "== repo: the npm test script's floor is compatible with the pinned major"
 # `npm test` runs .ts through `node --test`, which needs type stripping. That is
 # unflagged from 22.18. Below the floor the script needs --experimental-strip-types,

@@ -360,7 +360,9 @@ check "the pwhash VERIFIES against the password in faucet.env" \
 echo "== zallet RPC auth: a re-run does not rotate a credential that is already hashed"
 # Rotating on every deploy would invalidate the running faucet's password twice per
 # deploy and produce auth failures that look like a wallet fault.
-PWHASH_BEFORE="$(grep '^pwhash = ' "$ZCFG_T")"
+# No PWHASH_BEFORE here on purpose. It used to be captured for a hash-stability assertion
+# that was correctly abandoned - see the comment below - and the leftover capture read as a
+# comparison this block makes and does not.
 PW_BEFORE="$(grep '^ZALLET_RPC_PASSWORD=' "$D/z3/faucet.env")"
 run_deploy > "$T/auth-rerun.log" 2>&1
 check "a re-run keeps the same password" \

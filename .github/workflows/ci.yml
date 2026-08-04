@@ -251,8 +251,32 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: shellcheck deploy scripts
-        run: shellcheck -S warning deploy/deploy.sh deploy/z3/*.sh
+      - name: shellcheck every tracked shell script
+        # NOT A GLOB, AND THAT IS THE WHOLE POINT. `deploy/z3/*.sh` matched 22 of the 41
+        # tracked .sh files in this repo and silently excluded 19: the entire test harness,
+        # run-tests.sh, lib.sh, all sixteen suites, and scripts/worktree-deps.sh.
+        #
+        # Sixteen of the excluded files open with `# shellcheck shell=bash`, a directive
+        # that only means anything to a linter that is looking at them, written by people
+        # who reasonably assumed they were being checked. They were not, since the day the
+        # harness landed.
+        #
+        # The harness is what caught the $HERE bug in redeploy.sh that shellcheck cannot
+        # see at any severity, so the least-linted code in this tree was the code the gate
+        # depends on. A glob cannot report what it failed to match, so from inside CI this
+        # step was green and it was green about 22 files.
+        #
+        # Enumerating from git means a new script is covered by this existing, rather than
+        # by somebody remembering to widen a pattern.
+        #
+        # THE FLOOR IS PART OF THE CHECK. `xargs` on an empty list runs shellcheck with no
+        # arguments at all, so a checkout that produced no files would otherwise sail
+        # through as a pass having linted nothing. Do not add --no-run-if-empty.
+        run: |
+          n=$(git ls-files '*.sh' | wc -l | tr -d ' ')
+          echo "shellchecking $n tracked shell scripts"
+          [ "$n" -ge 30 ] || { echo "only $n tracked .sh found; that is a broken checkout, not a clean repo"; exit 1; }
+          git ls-files -z '*.sh' | xargs -0 shellcheck -S warning
       - name: z3 test harness
         # run-tests.sh is the single entrypoint and runs every suite under
         # deploy/z3/tests/suites/ with one tally. Never glob the tests dir:
