@@ -65,7 +65,15 @@ function watchdog(s: IntegrityStatus): string {
  */
 function undeclared(s: IntegrityStatus): string {
   const n = s.enabledUndeclared ?? 0;
-  return n > 0 ? `, ${n} enabled but undeclared` : "";
+  // "OF OURS" IS LOAD-BEARING AND I SHIPPED IT WITHOUT IT. box-report only walks the units
+  // THIS REPO SHIPS, so the figure is "how many of our own units are enabled without being
+  // declared". The bare phrasing read as "how many undeclared units are on this box", and
+  // on 2026-08-04 the panel said 2 while the box had ELEVEN: ours plus four dbus aliases
+  // and syslog, which we do not ship and would be permanent noise to count.
+  //
+  // The count was never wrong. The label answered a narrower question than it appeared to,
+  // which is the whole of rule 35's second clause, in a row I rendered myself.
+  return n > 0 ? `, ${n} of ours enabled but undeclared` : "";
 }
 
 /**
