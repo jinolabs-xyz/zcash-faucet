@@ -86,10 +86,25 @@ if [ "$rpc_rc" -ne 0 ] || [ -z "$info" ] || [ -z "$blocks" ]; then
   write "{\"readable\":false,\"at\":${now_ms},\"recency\":null,\"blocks\":null,\"tip\":null,\"syncPercent\":null}"
   exit 0
 fi
-headers="$(num "$info" headers)"
-# estimatedheight is what zebra reports while it is still catching up. Preferred over
-# headers when present, because it is the node's own estimate of the network tip.
-est="$(num "$info" estimatedheight)"
+# THE TIP COMES FROM getblockchaininfo, NOT getinfo, and that is measured rather than
+# assumed. This build's getinfo returns exactly twelve fields and NONE of them is a tip:
+#
+#   getinfo            blocks, build, connections, difficulty, errors, errorstimestamp,
+#                      paytxfee, protocolversion, relayfee, subversion, testnet, version
+#   getblockchaininfo  blocks 294124, headers 294124, estimatedheight 294125
+#
+# So the original code looked for estimatedheight and headers in a response that has never
+# carried either, found nothing, and correctly refused to invent a percent. The refusal was
+# right and the question was aimed at the wrong method: the panel read "sync unknown" on a
+# node sitting at the tip, forever, and no amount of waiting would have changed it.
+headers=""
+est=""
+if chain="$(rpc getblockchaininfo)" && [ -n "$chain" ]; then
+  headers="$(num "$chain" headers)"
+  est="$(num "$chain" estimatedheight)"
+fi
+# estimatedheight is the node's own estimate of the network tip and is preferred while it is
+# still catching up; headers is the fallback. Both absent still means null, not a guess.
 tip="${est:-$headers}"
 
 # THE PERCENT IS DERIVED HERE AND IT IS ALLOWED TO BE null. Integer arithmetic with one
