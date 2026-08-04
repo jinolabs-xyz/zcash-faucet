@@ -285,3 +285,58 @@ jobs:
           else
             echo "no deploy/z3/miner on this ref, skipping"
           fi
+
+  # THE IMAGE IS BUILT IN CI BECAUSE, UNTIL NOW, IT WAS ONLY EVER BUILT ON THE BOX (#374).
+  #
+  # Every other job here runs `npm ci` on the runner, which proves the dependency tree
+  # installs. None of them proved the IMAGE builds. Those differ: the Dockerfile installs
+  # build tooling for better-sqlite3, runs `npm run build` inside node:22-slim, and copies
+  # a context filtered by .dockerignore. A dependency that breaks any of that was
+  # discovered when redeploy failed on the box, in production, after the merge.
+  #
+  # WHAT A GREEN RUN HERE DOES NOT MEAN, and this is load-bearing rather than a caveat.
+  # A CI runner starts with an EMPTY layer cache. The box does not. #377 was exactly that
+  # divergence: a stale cached COPY layer on the box shipped secrets that the committed
+  # .dockerignore excluded, and a CI build of that same commit would have produced a
+  # correct image and passed. So this job answers "would this COMMIT build a correct image
+  # on a clean cache" and it CANNOT answer "is the image on the box correct". The second
+  # question belongs to redeploy's post-condition and nothing here substitutes for it.
+  # Anyone citing this job as evidence about the box is making the #377 mistake again.
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # No cache, no buildx layer reuse. A cold build is the whole point: it is the only
+      # way this job can tell us the commit stands on its own.
+      - name: build the app image
+        run: docker build --no-cache --progress=plain -t faucet-ci-check:${{ github.sha }} .
+
+      # The cheap half of #377's contract, run where it is free. An absence check only
+      # catches what someone listed, so it is not the whole answer, but a secret reaching
+      # a layer is the failure with the longest tail and it costs one command to refuse.
+      - name: no secret-shaped file may enter the image
+        run: |
+          set -uo pipefail
+          found="$(docker run --rm --entrypoint sh faucet-ci-check:${{ github.sha }} -c '
+            find /app -name "*.env" -o -name "*.env.bak-*" -o -name "*.env.pre-*" \
+                 -o -name "*.pem" -o -name "*.key" 2>/dev/null |
+            grep -v "\.env\.example$" || true' )"
+          if [ -n "$found" ]; then
+            echo "SECRET-SHAPED FILES REACHED THE IMAGE:"
+            printf '%s\n' "$found" | sed 's/^/  /'
+            echo
+            echo "The committed .dockerignore did not exclude these. Note Docker's * does"
+            echo "not cross a /, so a root-level pattern never matches deploy/z3/foo.env."
+            exit 1
+          fi
+          echo "no secret-shaped files in the image"
+
+      # A build that produces nothing runnable is a build that proved nothing.
+      - name: the image actually starts
+        run: |
+          set -uo pipefail
+          out="$(docker run --rm --entrypoint node faucet-ci-check:${{ github.sha }} -e 'console.log("node-ok")' 2>&1)" || {
+            echo "the built image could not run node:"; printf '%s\n' "$out"; exit 1; }
+          [ "$out" = "node-ok" ] || { echo "unexpected: $out"; exit 1; }
+          echo "image runs"
