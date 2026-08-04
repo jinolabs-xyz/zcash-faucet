@@ -1,4 +1,22 @@
 #!/usr/bin/env bash
-# Stub ufw. $STUB_UFW_STATUS holds the text `ufw status` should print.
+# Stub ufw. $STUB_UFW_STATUS holds the text `ufw status` should print, and
+# $STUB_UFW_APPDIR/<profile> holds what `ufw app info <profile>` should print.
+#
+# The app-info arm exists because `ufw status` prints an application PROFILE
+# name ("OpenSSH") wherever a rule was added by profile, never the port it
+# covers, so the audit has to ask. A stub that answered only `status` would have
+# left the resolver untestable, and it would have shipped on the strength of one
+# manual check against the live box.
 set -uo pipefail
-[ "${1:-}" = "status" ] && cat "${STUB_UFW_STATUS:-/dev/null}"
+case "${1:-}" in
+  status) cat "${STUB_UFW_STATUS:-/dev/null}" ;;
+  app)
+    [ "${2:-}" = "info" ] || exit 1
+    f="${STUB_UFW_APPDIR:-/nonexistent}/${3:-}"
+    # Real ufw exits nonzero for a profile it does not know, and the audit has
+    # to read that as "no answer", not as "no ports".
+    [ -r "$f" ] || exit 1
+    cat "$f"
+    ;;
+  *) exit 1 ;;
+esac
