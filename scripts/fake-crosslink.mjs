@@ -23,6 +23,10 @@
 import { createServer } from "node:http";
 
 const PORT = Number(process.env.PORT ?? 28399);
+// Sync position. Equal by default, because the double's job is to let a claim succeed;
+// set CTAZ_BLOCKS below CTAZ_TIP to model a node that is behind.
+const CTAZ_TIP = Number(process.env.CTAZ_TIP ?? 293_300);
+const CTAZ_BLOCKS = Number(process.env.CTAZ_BLOCKS ?? CTAZ_TIP);
 const TFL_ACTIVATED = process.env.TFL_ACTIVATED !== "false";
 const RECENCY_HEIGHT = Number(process.env.RECENCY_HEIGHT ?? 372000);
 const RECENCY_LAG = Number(process.env.RECENCY_LAG ?? 0);
@@ -108,6 +112,11 @@ createServer((req, res) => {
       case "requestfaucetdonation": out = faucetDonation(id, params); break;
       case "get_tfl_recency_status": out = recencyStatus(id); break;
       case "is_tfl_activated": out = rpcOk(id, TFL_ACTIVATED); break;
+      // getinfo, which real zebrad answers and this double did not. Its absence is why a
+      // change that made the sync gate require a tip passed every local check and failed
+      // CI: the RPC path had no way to learn either figure, so it could never serve.
+      // CTAZ_BLOCKS below its tip models a node still catching up.
+      case "getinfo": out = rpcOk(id, { blocks: CTAZ_BLOCKS, estimatedheight: CTAZ_TIP }); break;
       // Deliberately absent: there is no balance method in the observed surface. The
       // spike found get_wallet_ufvk and the TFL family, and nothing that reports what
       // the mining wallet holds. Answering one here would let us build a balance the

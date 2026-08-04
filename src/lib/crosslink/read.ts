@@ -71,8 +71,51 @@ export async function readCtazNodeState(nowMs: number = Date.now()): Promise<Cta
   }
 
   // No file at all: a dev host, or cTAZ enabled before the writer was installed.
+  //
+  // getinfo AS WELL AS the recency status, and the reason is a regression I shipped. The
+  // sync gate needs blocks AND tip, and the first version of this path returned tip: null,
+  // so canServeCtaz refused every claim on the RPC path while passing on the file path.
+  // Every local check I ran used the file, so I verified the configuration I had built
+  // rather than the one CI uses, and CI caught it. Both paths must supply both figures or
+  // the gate is not the same gate.
   const reading = await readCtazRecency(nowMs);
-  return { reading, syncPercent: null, blocks: reading.height, tip: null, source: "rpc" };
+  const info = await readCtazInfo();
+  return {
+    reading,
+    syncPercent:
+      info.blocks != null && info.tip != null && info.tip > 0
+        ? Math.min(100, Math.round((info.blocks / info.tip) * 1000) / 10)
+        : null,
+    blocks: info.blocks ?? reading.height,
+    tip: info.tip,
+    source: "rpc",
+  };
+}
+
+/**
+ * The node's sync position over RPC. Nulls on every failure, never zeros: an unread tip
+ * must refuse at the gate rather than look like a caught-up node.
+ */
+async function readCtazInfo(): Promise<{ blocks: number | null; tip: number | null }> {
+  const none = { blocks: null, tip: null };
+  if (!config.crosslink.rpcUrl) return none;
+  try {
+    const res = await fetch(config.crosslink.rpcUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getinfo", params: [] }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (!res.ok) return none;
+    const j = (await res.json()) as { result?: { blocks?: unknown; estimatedheight?: unknown } };
+    const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+    const blocks = n(j.result?.blocks);
+    // estimatedheight is zebra's own guess at the network tip while it catches up. Falling
+    // back to blocks would make any node look synced by definition, so it does not.
+    return { blocks, tip: n(j.result?.estimatedheight) };
+  } catch {
+    return none;
+  }
 }
 
 export async function readCtazRecency(nowMs: number = Date.now()): Promise<CtazReading> {
