@@ -237,6 +237,9 @@ export const config = {
      * and the honest default for a budget you cannot measure is a low one. Raise it
      * once a real cTAZ day has been observed, not before.
      */
+    /** Where the box writes the node's state for the container to read (#322). Empty
+     *  disables the file path and falls back to the RPC, which only works on a host. */
+    statusFile: process.env.FAUCET_CTAZ_STATUS_FILE ?? "/app/data/ctaz-status.json",
     get dailyCapZatoshi() {
       return tazToZatoshi(num("FAUCET_CTAZ_DAILY_CAP", 25));
     },

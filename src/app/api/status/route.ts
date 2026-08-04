@@ -11,7 +11,7 @@ import { getNodeStatus } from "@/lib/zcash/nodeStatus";
 import { getReserveReconciler } from "@/lib/reserve/reconciler";
 import { readMinerHeartbeat } from "@/lib/miner/read";
 import { isActive } from "@/lib/miner/heartbeat";
-import { readCtazRecency } from "@/lib/crosslink/read";
+import { readCtazNodeState } from "@/lib/crosslink/read";
 import { canServeCtaz } from "@/lib/crosslink/recency";
 import { withApi } from "@/lib/api";
 
@@ -37,7 +37,8 @@ const round = (n: number | null) => (n == null ? null : Math.round(n));
  */
 async function ctazBlock() {
   if (!config.crosslink.enabled) return { enabled: false as const };
-  const [reading, drips] = await Promise.all([readCtazRecency(), countDrips(Date.now(), "ctaz")]);
+  const [node, drips] = await Promise.all([readCtazNodeState(), countDrips(Date.now(), "ctaz")]);
+  const reading = node.reading;
   return {
     enabled: true as const,
     // Five states, not a boolean. "cannot-verify" is not "behind" and neither is "off".
@@ -47,6 +48,17 @@ async function ctazBlock() {
     roundLag: reading.roundLag,
     finalizers: reading.finalizers,
     ageSeconds: reading.ageSeconds,
+    // SYNC PROGRESS, BESIDE THE VERDICT AND NEVER INSIDE IT (#322). The five states answer
+    // "can we serve", and a syncing node cannot, so there is no syncing state by design.
+    // A percent folded into a readiness verdict is how "23% synced" and "cannot reach the
+    // node" end up rendering the same. Null when either side of the ratio was missing:
+    // 0% would say barely-started about a node that may be at tip.
+    syncPercent: node.syncPercent,
+    blocks: node.blocks,
+    tip: node.tip,
+    // Which half is broken when something is. A stale writer and an unreachable node are
+    // different fixes and the panel must not blame the node for the script.
+    source: node.source,
     dripZat: config.crosslink.expectedZat.toString(),
     drips,
     reserve: "unknown" as const,
