@@ -763,6 +763,42 @@ Every correction came from the same few habits, so the habits are rules.
     seven above is visible in a single honest sentence, and every one survived review
     until somebody wrote that sentence down.
 
+    AND WHEN BOTH HALVES ARE VERIFIED AND STILL WRONG, NOBODY ASKED ABOUT THE SEAM. The
+    clause above is a check answering an EASIER question than the one it was for, and the
+    fix is to verify with the real thing. This one is different in cause and cannot be
+    fixed the same way: two checks each answer their own question CORRECTLY, both against
+    the real thing, and nothing asks about the JOIN between them.
+
+    Mine, and it is the sharper of the two bugs because it was a SUCCESS path failing.
+    `ctaz-status.sh` writes a JSON file, `statusFile.ts` reads it. The writer built the
+    file with a greedy regex, `\({.*}\)`, which on `{"result":{...},"error":null,"id":1}`
+    captures to the LAST brace and embedded `,"error":null,"id":1}` into the output. So the
+    file was malformed JSON WHENEVER THE CALL SUCCEEDED. The reader treated it as absent,
+    which is exactly right, so a healthy node at tip would have rendered as unknown
+    forever.
+
+    Both sides were tested. The reader had ten cases against hand-written fixtures. The
+    writer's failure paths were checked by running the script. Neither test was weak and
+    neither was measuring the wrong thing. Nothing in the repo ever fed the writer's real
+    output to the real reader, and that single gap hid a broken happy path from both sides
+    at once.
+
+    THE SAME SHAPE ONE LEVEL DOWN, found the same day: `ipc-activate` wrote a session
+    mapping and a delivery hook read it. Both were correct in isolation. Nobody ran the
+    activate and then the hook, so an empty mapping directory meant the hook exited 0 and
+    delivered nothing for days while appearing to run on every tool call.
+
+    Fixtures on BOTH sides of a boundary are two guesses about a format, and two guesses
+    can agree with each other while both differ from what the code does. That is the whole
+    mechanism.
+
+    So: for every producer and consumer pair, one test runs the REAL producer and hands its
+    REAL output to the REAL consumer, with no fixture anywhere in it. A file, an exit code,
+    an env var, a JSON payload, a log line another script greps: if one thing writes it and
+    another reads it, the pair needs its own test and it is usually the only one that would
+    have caught the interesting bug. Cheap, too. Mine is thirty lines and a stub for the
+    one thing genuinely outside the boundary.
+
     THIS RULE CAUGHT ITSELF WHILE BEING WRITTEN, which is the best argument for it.
 
     The paragraph above originally carried a fourth example, handed over secondhand and
