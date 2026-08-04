@@ -1,0 +1,18 @@
+[Unit]
+Description=Check for new main every 2 minutes
+
+[Timer]
+# Every 2 minutes from 2 minutes after boot. This is the cadence at which merged work
+# actually reaches the box, so it is the real answer to "how long until a merge is live",
+# and it was not written down anywhere in this repo until now.
+#
+# NO AccuracySec, TRANSCRIBED AS-IS. systemd's default accuracy is 1 minute, so the true
+# interval is 2 minutes give or take a minute. That is fine for a deploy poll and it is
+# NOT a defect - it is recorded here so nobody reads "every 2 minutes" as exact and then
+# builds a timing assumption on it. Adding AccuracySec would change the box's behaviour,
+# and this file exists to describe the box, not to quietly retune it.
+OnBootSec=2min
+OnUnitActiveSec=2min
+
+[Install]
+WantedBy=timers.target

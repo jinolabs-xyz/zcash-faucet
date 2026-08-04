@@ -28,6 +28,17 @@
 # and the public probe correctly went red on a faucet that was actually serving fine.
 faucet-box-report.timer
 
+# The deploy path itself. Every other line in this file protects something the box does;
+# this one protects the box's ability to receive a fix at all. If this timer is not enabled,
+# main can move and nothing happens - no error, no alert, just merged work that never lands,
+# and the next reboot is when you find out. It was already enabled on the box by hand, which
+# is exactly the state this file exists to end: correct today, undeclared, and one reimage
+# away from silently not being true.
+#
+# faucet-autodeploy.service is NOT listed, per the rule at the bottom of this file: it is
+# pulled in by this timer and never independently enabled.
+faucet-autodeploy.timer
+
 # Container supervision. Without this a crash-looping wallet is nobody's problem until a
 # human looks, which is how pre-#175 watchdog code served for a day.
 faucet-watchdog.service
