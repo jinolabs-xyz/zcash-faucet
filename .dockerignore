@@ -8,3 +8,18 @@ worker
 .claude
 *.md
 tsconfig.tsbuildinfo
+
+# NOTHING THAT IS NOT IN THE COMMIT, because `COPY . .` above copies the build context
+# and the context is the repo root. An untracked file in the checkout lands in the image.
+#
+# Found via #366: the box carries five stale env backups from July, faucet.env.bak-*,
+# none of which any pattern here excluded. Env backups are exactly the file most likely
+# to hold an RPC password or the rate-limit salt, and an image layer is not a place to
+# put one. I have NOT confirmed what those particular files contain, only that nothing
+# stopped them being copied.
+*.bak
+*.bak-*
+*.env
+env.*
+*.pem
+*.key
