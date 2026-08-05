@@ -21,7 +21,7 @@ const HEALTHY = {
 test("a node keeping up with its own finality view is ready", () => {
   const r = readingFor(HEALTHY, NOW);
   assert.equal(r.state, "ready");
-  assert.equal(canServeCtaz(r.state, 100, 100), true);
+  assert.equal(canServeCtaz(r.state, 100, 100, "rpc"), true);
   assert.equal(r.height, 372_104);
   assert.equal(r.roundLag, 1);
   assert.equal(r.finalizers, 2);
@@ -29,7 +29,7 @@ test("a node keeping up with its own finality view is ready", () => {
 
 test("READY IS THE ONLY STATE THAT SERVES", () => {
   for (const s of ["behind", "stale", "not-activated", "cannot-verify"] as const) {
-    assert.equal(canServeCtaz(s, 100, 100), false, `${s} must not hand out cTAZ`);
+    assert.equal(canServeCtaz(s, 100, 100, "rpc"), false, `${s} must not hand out cTAZ`);
   }
 });
 
@@ -90,14 +90,14 @@ test("locked ahead of seen is unexplained, so cannot-verify rather than behind",
 test("no finalizers means no finality view, whatever the rounds say", () => {
   const r = readingFor({ ...HEALTHY, finalizer_statuses: [] }, NOW);
   assert.equal(r.state, "not-activated");
-  assert.equal(canServeCtaz(r.state, 100, 100), false);
+  assert.equal(canServeCtaz(r.state, 100, 100, "rpc"), false);
 });
 
 test("TFL being off is its own answer, distinct from an unreadable one", () => {
   const off = notActivated();
   assert.equal(off.state, "not-activated");
   assert.notEqual(off.state, readingFor(null, NOW).state);
-  assert.equal(canServeCtaz(off.state, 100, 100), false);
+  assert.equal(canServeCtaz(off.state, 100, 100, "rpc"), false);
 });
 
 /* ── The gate asks TWO questions now (#322) ──────────────────────────────────────── */
@@ -108,32 +108,77 @@ test("A NODE WITH CURRENT ROUNDS AND A QUARTER OF THE CHAIN DOES NOT SERVE", () 
   // read READY at 23.1% synced. Their wallet needs the chain to spend, so serving from it
   // would accept a claim and fail to pay, and that reads as a faucet bug rather than as a
   // gate that never asked. Hard block on #328 per the CTO.
-  assert.equal(canServeCtaz("ready", 83_633, 362_000), false);
+  assert.equal(canServeCtaz("ready", 83_633, 362_000, "rpc"), false);
 });
 
 test("and a synced node with current rounds does serve, or the gate is just off", () => {
   // The control. Without this, refusing everything would pass the test above.
-  assert.equal(canServeCtaz("ready", 293_300, 293_300), true);
+  assert.equal(canServeCtaz("ready", 293_300, 293_300, "rpc"), true);
 });
 
 test("the lag budget is small but not zero, because a tip estimate lags by a block", () => {
-  assert.equal(canServeCtaz("ready", 293_298, 293_300), true, "two blocks is propagation");
-  assert.equal(canServeCtaz("ready", 293_290, 293_300), false, "ten is not caught up");
+  assert.equal(canServeCtaz("ready", 293_298, 293_300, "rpc"), true, "two blocks is propagation");
+  assert.equal(canServeCtaz("ready", 293_290, 293_300, "rpc"), false, "ten is not caught up");
   // A node AHEAD of the reported tip is not behind. The tip is an estimate.
-  assert.equal(canServeCtaz("ready", 293_305, 293_300), true);
+  assert.equal(canServeCtaz("ready", 293_305, 293_300, "rpc"), true);
 });
 
 test("AN UNREADABLE HEIGHT REFUSES, exactly as cannot-verify does", () => {
   // Fails closed. An unmeasured sync distance is not a short one, and defaulting either
   // side to zero would make an unreadable node look perfectly caught up.
-  assert.equal(canServeCtaz("ready", null, 293_300), false);
-  assert.equal(canServeCtaz("ready", 293_300, null), false);
-  assert.equal(canServeCtaz("ready", null, null), false);
+  assert.equal(canServeCtaz("ready", null, 293_300, "rpc"), false);
+  assert.equal(canServeCtaz("ready", 293_300, null, "rpc"), false);
+  assert.equal(canServeCtaz("ready", null, null, "rpc"), false);
 });
 
 test("a bad state still refuses however well synced the node is", () => {
   // Sync completeness is an ADDITIONAL requirement, never a substitute for the verdict.
   for (const s of ["behind", "stale", "not-activated", "cannot-verify"] as const) {
-    assert.equal(canServeCtaz(s, 293_300, 293_300), false, `${s} must not serve`);
+    assert.equal(canServeCtaz(s, 293_300, 293_300, "rpc"), false, `${s} must not serve`);
   }
+});
+
+// ── THE THIRD QUESTION: CAN THE PAYER REACH THE NODE? (#409) ─────────────────────────
+//
+// Production answered the first two questions perfectly and still could not pay. The
+// panel showed ready and servable, and every cTAZ claim died at `fetch("")` because the
+// faucet container has no route to the node's RPC - which read.ts's own header had said
+// all along, while building a file fallback so READING would work. Nobody asked what
+// PAYING would do.
+//
+// These fail against the two-argument gate. That is the only reason to trust them.
+
+test("a node known ONLY through the status file cannot be served from", () => {
+  // The file proves the node is well. It proves nothing about our route to it, and the
+  // payment is an RPC call. This is the production case exactly: a healthy node, a fresh
+  // file, and no way to spend from either.
+  assert.equal(canServeCtaz("ready", 294_800, 294_801, "file"), false);
+});
+
+test("and the same reading over RPC IS servable, so this is not just a blanket refusal", () => {
+  // The mirror. Without it, the test above would pass against a gate that had simply been
+  // wired to false, and cTAZ would be dark forever with a green suite.
+  assert.equal(canServeCtaz("ready", 294_800, 294_801, "rpc"), true);
+});
+
+test("no source at all refuses, like every other unknown here", () => {
+  assert.equal(canServeCtaz("ready", 294_800, 294_801, "none"), false);
+});
+
+test("reachability does not excuse a node that is behind or not final", () => {
+  // The third question is an AND, not an OR. A reachable node still has to be current.
+  assert.equal(canServeCtaz("ready", 294_000, 294_801, "rpc"), false);
+  assert.equal(canServeCtaz("cannot-verify", 294_800, 294_801, "rpc"), false);
+});
+
+test("THE GATE FLIPS ON ITS OWN when the transport lands, with no config to remember", () => {
+  // Why `source` rather than "is CROSSLINK_RPC_URL set". Checking configuration would turn
+  // this true the moment someone exported the variable, whether or not a route existed -
+  // the same trap one level down. Reaching the node over RPC is the thing that cannot be
+  // faked by setting a string, so the day the transport exists this starts serving without
+  // anyone having to notice a second switch.
+  const behindTheFile = canServeCtaz("ready", 294_800, 294_801, "file");
+  const overTheWire = canServeCtaz("ready", 294_800, 294_801, "rpc");
+  assert.equal(behindTheFile, false);
+  assert.equal(overTheWire, true);
 });

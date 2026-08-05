@@ -212,7 +212,7 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     // Finality AND sync distance. A node reporting current rounds while a quarter synced
     // would accept this claim and fail to pay (#322), and their wallet needs the chain to
     // spend. Fails closed when either figure is unreadable.
-    if (!canServeCtaz(reading.state, node.blocks ?? reading.height, node.tip)) {
+    if (!canServeCtaz(reading.state, node.blocks ?? reading.height, node.tip, node.source)) {
       api.logError(
         `cTAZ drip refused, crosslink node ${reading.state} ` +
           `(round lag ${reading.roundLag ?? "unknown"}, answer ${reading.ageSeconds ?? "unknown"}s old, ` +

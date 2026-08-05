@@ -47,7 +47,7 @@ test("the gate reads the double's reply as ready, so the shapes agree", async ()
   const { result } = await rpc("get_tfl_recency_status");
   const r = readingFor(result, Date.now());
   assert.equal(r.state, "ready", `the double's own reply did not classify: ${JSON.stringify(result)}`);
-  assert.equal(canServeCtaz(r.state, 100, 100), true);
+  assert.equal(canServeCtaz(r.state, 100, 100, "rpc"), true);
   assert.ok(r.height && r.height > 0, "height should come through as a real number");
   assert.equal(r.finalizers, 2);
 });
@@ -102,6 +102,6 @@ test("a node with TFL off is not-activated, not ready", async () => {
     }
     assert.match(res?.error?.message ?? "", /not activated/i);
     // An error reply is not a reading, so the gate refuses rather than guessing.
-    assert.equal(canServeCtaz(readingFor(null, Date.now()).state, 100, 100), false);
+    assert.equal(canServeCtaz(readingFor(null, Date.now()).state, 100, 100, "rpc"), false);
   } finally { off.kill(); }
 });
