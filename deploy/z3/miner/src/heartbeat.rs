@@ -427,3 +427,122 @@ mod tests {
         fs::remove_dir_all(&dir).ok();
     }
 }
+
+// ── THE SHARED ARTEFACT, WHICH IS THE WHOLE OF #391 ─────────────────────────────────
+//
+// The producer of this file is Rust and its only consumer is TypeScript, and until now
+// nothing ran the pair. Each side was tested against fixtures a person wrote, which is
+// two guesses that can agree with each other while both differ from what the code does.
+//
+// That is not hypothetical any more. The same shape shipped in zsnap-export (#404): the
+// production check and its test double were written to the same wrong belief about a
+// hash, agreed perfectly, and rejected every real snapshot for two days while the suite
+// stayed green.
+//
+// So `testdata/heartbeat.canonical.json` is ONE artefact with two owners. This test
+// asserts the real writer produces exactly those bytes; the node suite asserts the real
+// reader parses that same file. Neither suite gains a dependency on the other's
+// toolchain, and a change to either side that breaks the contract reds one of them.
+//
+// WRITE-ON-DRIFT IS DELIBERATELY NOT DONE. A test that regenerates the fixture when it
+// disagrees would go green on every change and silently move the goalposts, which is the
+// failure mode this fixture exists to prevent. It prints the new bytes and fails; a human
+// pastes them in and, in doing so, notices that the consumer needs updating too.
+#[cfg(test)]
+mod contract {
+    use super::*;
+
+    /// The one field that cannot be pinned: it is `now()` at render time. Substituted for
+    /// the fixture's constant so every OTHER field is compared exactly, rather than
+    /// loosening the whole comparison to accommodate one value.
+    ///
+    /// CHOSEN TO BE COHERENT WITH THE OTHER TIMESTAMPS, eight seconds after
+    /// lastTemplateAt. The first version used an unrelated date, which made the fixture
+    /// describe a miner whose last template was ten days old - so the reader read it as
+    /// STALLED and the seam test failed on its first run for a reason that had nothing to
+    /// do with the seam. A fixture has to describe a moment that could actually happen.
+    const FIXED_WRITTEN_AT: &str = "2026-07-26T00:00:00Z";
+
+    fn canonical_state() -> State {
+        // Values chosen so no field can be confused with another: every number differs,
+        // every optional is Some, and mode is the one that moves money. An all-zero
+        // fixture would pass against a writer that emitted the wrong field order.
+        State {
+            mode: "submit".into(),
+            // The comments are the WRITER'S OWN rendering of these epochs, taken from its
+            // output rather than computed by hand. My hand-computed values were ten days
+            // out, and the fixture is the producer's bytes by definition, so the producer
+            // settles it. A small instance of the same rule this whole test encodes.
+            started_at: 1_785_020_400, // 2026-07-25T23:00:00Z
+            beat_secs: 10,
+            template_secs: 8,
+            last_template_at: Some(1_785_023_992),
+            last_template_height: Some(4_237_523),
+            last_error_stage: Some("template"),
+            last_error_at: Some(1_785_022_200),
+            consecutive_errors: 0,
+            solved_count: 3,
+            last_solved_at: Some(1_785_023_100),
+            submitted_accepted: 3,
+            submitted_rejected: 1,
+            last_submitted_at: Some(1_785_023_101),
+        }
+    }
+
+    #[test]
+    fn the_writer_still_produces_the_shared_fixture_byte_for_byte() {
+        let rendered = render(&canonical_state());
+
+        // Replace only the writtenAt VALUE, and fail loudly if the line is not where it
+        // is expected: a substitution that silently matches nothing would compare the
+        // fixture against itself minus one field.
+        let mut out = String::new();
+        let mut replaced = 0;
+        for line in rendered.lines() {
+            if line.trim_start().starts_with("\"writtenAt\":") {
+                out.push_str(&format!("  \"writtenAt\": \"{FIXED_WRITTEN_AT}\","));
+                replaced += 1;
+            } else {
+                out.push_str(line);
+            }
+            out.push('\n');
+        }
+        assert_eq!(replaced, 1, "expected exactly one writtenAt line, found {replaced}");
+
+        let fixture = include_str!("../testdata/heartbeat.canonical.json");
+        assert_eq!(
+            out, fixture,
+            "\nThe miner's heartbeat format changed and deploy/z3/miner/testdata/heartbeat.canonical.json \
+             did not.\n\nThat file is the ONE artefact shared with the TypeScript reader \
+             (src/lib/miner/read.ts). Paste the bytes above into it AND check whether \
+             src/lib/miner/heartbeat.ts needs the new field - the node suite asserts the \
+             reader against this same file, and a field added here and ignored there is \
+             exactly #392.\n"
+        );
+    }
+
+    #[test]
+    fn every_field_the_reader_needs_is_present_in_the_fixture() {
+        // Named here so a rename on the Rust side cannot quietly orphan the reader. This
+        // list is the TypeScript `Heartbeat` interface, copied deliberately: two files, one
+        // contract, and the copy is checked rather than trusted.
+        let fixture = include_str!("../testdata/heartbeat.canonical.json");
+        for field in [
+            "schema",
+            "writtenAt",
+            "staleAfterSeconds",
+            "templateStaleAfterSeconds",
+            "mode",
+            "lastTemplateAt",
+            "lastTemplateHeight",
+            "lastErrorStage",
+            "lastErrorAt",
+            "consecutiveErrors",
+        ] {
+            assert!(
+                fixture.contains(&format!("\"{field}\":")),
+                "the reader needs {field} and the writer's fixture has no such key"
+            );
+        }
+    }
+}
