@@ -3,6 +3,17 @@ Description=One Crosslink RPC call from the faucet container (#409)
 Documentation=file:/opt/zcash-faucet/deploy/z3/CTAZ.md
 # Instance-per-connection, started by ctaz-rpc.socket. Never enabled directly: the socket
 # is what is enabled, and systemd instantiates this on each accept.
+#
+# ROUTES ITS FAILURES LIKE EVERY OTHER SERVICE, and the repo suite caught that this was
+# missing rather than a reviewer. The rule's one exemption is faucet-alert@.service, which
+# is exempt because pointing the handler at itself is a loop; nothing about being a
+# template exempts this one.
+#
+# It is not noisy, because the broker EXITS 0 on every failure it handles - bad JSON, a
+# refused method, a node that will not answer are all answers it returns down the socket.
+# Reaching this handler means the broker itself died or hit the backstop below, which is
+# rare and worth someone knowing about.
+OnFailure=faucet-alert@%n.service
 
 [Service]
 Type=simple
