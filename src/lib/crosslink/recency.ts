@@ -135,8 +135,32 @@ export const MAX_SYNC_LAG_BLOCKS = 2;
  * FAILS CLOSED ON UNKNOWN. A missing height or tip refuses, exactly as cannot-verify does.
  * An unmeasured sync distance is not a short one, and defaulting either side to zero would
  * make an unreadable node look perfectly caught up.
+ *
+ * AND A THIRD QUESTION, ADDED AFTER PRODUCTION ANSWERED THE FIRST TWO PERFECTLY AND STILL
+ * COULD NOT PAY (#409). Both questions above are about the NODE. Neither asks whether the
+ * code that hands out the money can reach it, and in the container it cannot: measured from
+ * inside zcash-faucet-faucet-1, the container's loopback is its own, 172.17.0.1 times out
+ * because the node binds loopback only, and host.docker.internal is not defined here.
+ *
+ * That was known. read.ts says it in its own header - "in the container the RPC cannot work
+ * at all" - and builds a file fallback so READING works. Nobody asked what PAYING would do.
+ * The result was a panel showing ready and servable while every cTAZ claim died at
+ * `fetch("")`, burning the user's attempt and showing them a red box.
+ *
+ * `source` is the honest test, and it is better than checking whether the URL is set. The
+ * file can only tell us the node is WELL. Only the RPC can tell us we can REACH it, which
+ * is what the payment needs, so serving is allowed exactly when the state came back over
+ * the path the sender will use. Checking configuration instead would flip this to true the
+ * moment someone exported CROSSLINK_RPC_URL, without a route existing - which is the same
+ * trap one level down.
  */
-export function canServeCtaz(state: CtazState, blocks: number | null, tip: number | null): boolean {
+export function canServeCtaz(
+  state: CtazState,
+  blocks: number | null,
+  tip: number | null,
+  source: "file" | "rpc" | "none",
+): boolean {
+  if (source !== "rpc") return false;
   if (state !== "ready") return false;
   if (blocks == null || tip == null) return false;
   // A node AHEAD of the reported tip is not behind. The tip is an estimate and can lag the

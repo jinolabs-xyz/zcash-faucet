@@ -44,7 +44,7 @@ async function ctazBlock() {
     // Five states, not a boolean. "cannot-verify" is not "behind" and neither is "off".
     readiness: reading.state,
     // Both questions, per #322. The panel still shows state and percent apart.
-    servable: canServeCtaz(reading.state, node.blocks ?? reading.height, node.tip),
+    servable: canServeCtaz(reading.state, node.blocks ?? reading.height, node.tip, node.source),
     height: reading.height,
     roundLag: reading.roundLag,
     finalizers: reading.finalizers,
