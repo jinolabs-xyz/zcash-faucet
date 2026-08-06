@@ -34,6 +34,34 @@
 		-Server
 	}
 
+	# CHAIN SNAPSHOTS, so a rebuilt box downloads instead of syncing from genesis (#7).
+	#
+	# Served from the box we already pay for. The alternatives all cost money for a file
+	# that is public chain data: object storage is a bill, and GitHub Releases caps assets
+	# at 2 GB against an 8.5 GB archive.
+	#
+	# THE BANDWIDTH MATH, because this is the one thing here that can turn into a charge.
+	# Measured 45 GB egress in 10 days (~135 GB/month) against Linode's ~1 TB included
+	# transfer, and each download is 8.5 GB. So roughly 100 downloads a month fit in the
+	# headroom. That is ample for disaster recovery and nowhere near enough to survive
+	# being treated as a public mirror, which is why there is no directory listing: you
+	# need the pointer file to know what to ask for.
+	handle /snapshots/* {
+		root * /srv
+		# No `browse`. A listing invites crawlers to walk 8.5 GB files, and the pointer
+		# below is the supported way in.
+		file_server
+		header {
+			# The archives are content-addressed by the hash in their filename, so a name
+			# never means two different files and a long cache is safe. latest-*.txt is the
+			# mutable one and gets no-cache, or a rebuild follows a stale pointer to an
+			# archive rotation has already deleted.
+			Cache-Control "public, max-age=604800, immutable"
+		}
+	}
+	@snapshot_pointer path /snapshots/latest-*.txt
+	header @snapshot_pointer Cache-Control "no-cache"
+
 	reverse_proxy faucet:3000
 
 	# Access logs to stdout so they land in the same docker logging pipeline
