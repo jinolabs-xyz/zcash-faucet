@@ -94,6 +94,13 @@ const CONSUMED = [
   "lastErrorStage",
   "lastErrorAt",
   "consecutiveErrors",
+  // Moved out of KNOWINGLY_IGNORED by #408. Writing that ignore list is what made these
+  // visible: six fields the box measured and nobody read, four of them the only record
+  // of whether this miner has ever won anything.
+  "solvedCount",
+  "lastSolvedAt",
+  "submittedAccepted",
+  "submittedRejected",
 ];
 
 const KNOWINGLY_IGNORED: Record<string, string> = {
@@ -102,15 +109,10 @@ const KNOWINGLY_IGNORED: Record<string, string> = {
   // interval is there for a human reading the file.
   beatSeconds: "superseded by staleAfterSeconds, which is the derived threshold",
   templateSeconds: "superseded by templateStaleAfterSeconds, for the same reason",
-  // Deliberate for now, and worth naming rather than leaving as an accident: these four
-  // are the only record of whether this miner has ever WON anything, and the panel cannot
-  // say. That is a product gap, not a parsing bug, so it gets its own issue rather than a
-  // silent addition here.
+  // startedAt is the last one still unread. Kept deliberately: it would let the panel
+  // separate "just started and has not fetched yet" from "up an hour and idle", and both
+  // already render as stalled, so it changes the words rather than the verdict.
   startedAt: "would let the panel separate 'just started' from 'up an hour and idle'",
-  solvedCount: "whether the miner has ever solved a block - not surfaced anywhere yet",
-  lastSolvedAt: "when it last solved one - not surfaced anywhere yet",
-  submittedAccepted: "blocks the network accepted - not surfaced anywhere yet",
-  submittedRejected: "blocks the network rejected - not surfaced anywhere yet",
   lastSubmittedAt: "when it last submitted - not surfaced anywhere yet",
 };
 

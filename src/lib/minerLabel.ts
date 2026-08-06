@@ -34,6 +34,10 @@ export function readingFromStatus(m: (Partial<MinerReading> & { active?: boolean
     mode: m?.mode ?? null,
     lastErrorStage: m?.lastErrorStage ?? null,
     consecutiveErrors: m?.consecutiveErrors ?? null,
+    solvedCount: m?.solvedCount ?? null,
+    submittedAccepted: m?.submittedAccepted ?? null,
+    submittedRejected: m?.submittedRejected ?? null,
+    solvedAgoSeconds: m?.solvedAgoSeconds ?? null,
   };
 }
 
@@ -75,6 +79,47 @@ export function minerChip(r: MinerReading): string {
  * The panel line. This is where the detail belongs, per the user: he asked that the
  * miner's real state be knowable from More details.
  */
+/**
+ * Whether this miner has ever actually WON anything (#408).
+ *
+ * The row above says "mining", which means the process is alive and fetching templates.
+ * A miner that has fetched forty thousand templates and solved nothing renders exactly
+ * like one that won a block a minute ago, and the box has known the difference since
+ * #286 - the heartbeat has carried solvedCount all along and nothing read it.
+ *
+ * It cost real time: the owner asked twice whether mining was working, and the answer
+ * had to be assembled by hand from journald. The watcher written to answer it grepped
+ * for log lines zebra never emits and reported zero wins for ten minutes after a block
+ * had been won. This field was sitting in the file the whole time.
+ *
+ * NULL RENDERS NOTHING, and never "0 blocks". A heartbeat that predates the counter and
+ * a miner that has genuinely never won are different claims, and only one of them is
+ * about the miner.
+ *
+ * THE COUNT IS PER PROCESS, NOT LIFETIME, and the row must not imply otherwise. The
+ * miner holds it in memory, so a restart resets it to zero - which is why this says
+ * "won" with a time rather than "has won N in total". A deploy that restarts the miner
+ * makes a busy day read as a fresh one, and a row claiming a lifetime total it does not
+ * have would be worse than no row. Observed straight after writing this: the box read 1
+ * within minutes of a restart, having won many more before it.
+ *
+ * REJECTIONS COME FIRST when there are any. A miner that solves and is REFUSED is
+ * failing in the way that looks like success at every other layer: alive, fetching,
+ * solving, and none of it counted.
+ */
+function wins(r: MinerReading): string {
+  const solved = r.solvedCount;
+  if (solved == null) return "";
+  if (solved === 0) return ", no blocks won yet";
+
+  const ago = r.solvedAgoSeconds != null ? ` ${humanAge(r.solvedAgoSeconds)} ago` : "";
+  const rejected = r.submittedRejected ?? 0;
+  const blocks = `${solved} block${solved === 1 ? "" : "s"} won`;
+  return rejected > 0
+    ? `, ${blocks}${ago}, ${rejected} REJECTED`
+    : `, ${blocks}${ago}`;
+}
+
 export function minerRow(r: MinerReading): string {
   const at = r.lastTemplateHeight != null ? ` at ${groupDigits(r.lastTemplateHeight)}` : "";
 
@@ -92,7 +137,7 @@ export function minerRow(r: MinerReading): string {
       // The FAILING rows below keep the height, because there the two numbers differ
       // and that gap is the finding: a miner stuck at a height the node has left
       // behind is exactly what a stale template looks like.
-      return `${verb}, template ${age} ago`;
+      return `${verb}, template ${age} ago${wins(r)}`;
     }
 
     // The today case, and the one that must not sound survivable. Naming the age is

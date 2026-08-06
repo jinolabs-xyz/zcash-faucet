@@ -17,6 +17,10 @@ const base: MinerReading = {
   mode: "submit",
   lastErrorStage: null,
   consecutiveErrors: 0,
+  solvedCount: null,
+  submittedAccepted: null,
+  submittedRejected: null,
+  solvedAgoSeconds: null,
 };
 
 test("running names the age, because 'on' was the whole problem", () => {
@@ -194,4 +198,56 @@ test("not-configured is still NOT active and still not silent", () => {
 
 test("a payload carrying not-configured is trusted, not flattened to cannot-verify", () => {
   assert.equal(readingFromStatus({ state: "not-configured", active: false }).state, "not-configured");
+});
+
+// ── DOES THIS MINER ACTUALLY WIN ANYTHING? (#408) ────────────────────────────────────
+//
+// "mining" means the process is alive and fetching templates. It said exactly that
+// whether the miner had won a block a minute ago or had never won one in its life, and
+// the box has known the difference since #286 - the heartbeat carried solvedCount and
+// nothing read it. These pin the sentence.
+
+test("a miner that has won blocks says so, and when", () => {
+  const row = minerRow(({ ...base,  state: "running", solvedCount: 7, solvedAgoSeconds: 900  }));
+  assert.match(row, /mining/);
+  assert.match(row, /7 blocks won/);
+  assert.match(row, /ago/, "when it last won separates 'has ever' from 'is currently'");
+});
+
+test("one block is singular, because a row that says '1 blocks' reads as a bug", () => {
+  assert.match(minerRow(({ ...base,  state: "running", solvedCount: 1, solvedAgoSeconds: 60  })), /1 block won/);
+});
+
+test("A MINER THAT HAS NEVER WON SAYS SO, which is the case the old row hid", () => {
+  const row = minerRow(({ ...base,  state: "running", solvedCount: 0  }));
+  assert.match(row, /no blocks won yet/);
+  assert.match(row, /mining/, "and it is still mining: never-won is not broken");
+});
+
+test("REJECTIONS ARE NAMED, because that failure looks like success everywhere else", () => {
+  // Alive, fetching, solving - and none of it counted. Nothing else on the panel moves
+  // when this happens.
+  const row = minerRow(({ ...base,  state: "running", solvedCount: 3, submittedRejected: 2, solvedAgoSeconds: 120  }));
+  assert.match(row, /2 REJECTED/);
+});
+
+test("no rejections adds no words", () => {
+  assert.doesNotMatch(
+    minerRow(({ ...base,  state: "running", solvedCount: 3, submittedRejected: 0, solvedAgoSeconds: 120  })),
+    /REJECTED/,
+  );
+});
+
+test("NULL IS NOT ZERO: a heartbeat predating the counter says nothing about wins", () => {
+  // The distinction the whole field exists for. Rendering "0 blocks won" on a report
+  // that never carried the number would be a claim about the miner made from its
+  // absence - the `balance ?? 0` shape, one panel over.
+  const row = minerRow(({ ...base,  state: "running", solvedCount: null  }));
+  assert.doesNotMatch(row, /block/);
+  assert.doesNotMatch(row, /won/);
+});
+
+test("and an older reading renders exactly as it did before this change", () => {
+  const before = minerRow(({ ...base,  state: "running", templateAgoSeconds: 8  }));
+  assert.equal(before, minerRow(({ ...base,  state: "running", templateAgoSeconds: 8, solvedCount: null  })));
 });
