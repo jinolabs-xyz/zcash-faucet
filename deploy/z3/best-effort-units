@@ -1,0 +1,44 @@
+# Units whose failure must NOT read like a faucet outage. One per line, comments and
+# blanks ignored.
+#
+# WHY THIS EXISTS. #327 asked for it in one line: "watchdog tier best-effort, a
+# feature-net stall must never page like a TAZ outage." Every unit on this box routes
+# failures through the same handler with the same words, so a Crosslink node wobbling at
+# 3am arrives looking exactly like the TAZ faucet being down. One of those means people
+# cannot get testnet coins. The other means an experimental chain we run alongside it
+# hiccupped, and it can wait for morning.
+#
+# An alerting channel that cries wolf is worse than no channel, and this repo has the
+# receipt: live-smoke was correctly red for two days over a stale miner binary, and the
+# noise taught a reader to dismiss it as infrastructure. Tiering is how that is avoided
+# before the channel exists rather than after it has already been learned-around.
+#
+# NOT LISTED IS THE LOUD DEFAULT. A unit absent from this file alerts exactly as it
+# always has, and an unreadable file means nothing is best-effort. Under-alerting is the
+# worse failure of the two, so every ambiguity resolves toward noise.
+#
+# THIS CHANGES THE MESSAGE, NOT WHETHER ANYONE SEES IT. No alert reaches a human today
+# (#215, deferred by the owner). This is the structure being right for the day it does,
+# and it costs nothing to have now.
+
+# The Crosslink node. Feature-net, explicitly beta on the page, and its being down stops
+# nobody getting TAZ. It is also the unit most likely to wobble: an experimental chain
+# with four compiled-in bootstrap peers and a restart history.
+ctaz-node.service
+
+# Publishes the node's state into a file. Its failing degrades the cTAZ panel to
+# cannot-verify, which is a visible and correct degradation, not an outage.
+ctaz-status.service
+
+# One instance per RPC call from the faucet container. Instance names arrive as
+# ctaz-rpc@<n>-<addr>.service; alert.sh strips the instance before matching, so the
+# template name listed here covers all of them.
+ctaz-rpc@.service
+
+# DELIBERATELY ABSENT, and each for its own reason:
+#
+#   zcash-testnet-miner.service   Mining funds the faucet. A miner that has stopped is a
+#                                 wallet that stops refilling, which is a TAZ problem.
+#   faucet-watchdog.service       The thing that notices other things are broken.
+#   zsnap-export.timer            A failed export is how recovery quietly stops existing,
+#                                 which is exactly the two-day silence this file cites.

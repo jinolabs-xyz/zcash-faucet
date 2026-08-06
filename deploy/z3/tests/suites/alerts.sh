@@ -95,6 +95,70 @@ export WATCHDOG_ALERT_URL="http://127.0.0.1:$HOOK_PORT/hook"
 bash "$ALERT" "legacy config" > /dev/null 2>&1
 check "legacy var honoured" "grep -q 'legacy config' '$HOOK_LOG'"
 
+# NOTE: these sit ABOVE `kill $HOOK_PID` on purpose. Appended after it, they ran
+# against a dead receiver: nothing arrived, and the negative assertion
+# "does not use the wake-someone wording" PASSED on an empty file. A vacuous pass
+# is why the positive assertions beside it are not optional.
+# ── BEST-EFFORT TIER: a feature-net stall must not read like an outage (#327) ────────
+#
+# Every failure on this box routes through one handler with one wording, so a Crosslink
+# node wobbling at 3am arrives looking exactly like the TAZ faucet being down. One means
+# nobody can get testnet coins; the other means an experimental chain hiccupped.
+#
+# The repo decides which is which, the same way enabled-units decides enablement, so the
+# tiering goes through review rather than being edited on the box.
+
+echo "== alert: a best-effort unit does not read like a faucet outage"
+alerts_env
+BE="$T/best-effort"
+printf '# comment\nctaz-node.service\nctaz-rpc@.service\n' > "$BE"
+FAUCET_BEST_EFFORT_UNITS="$BE" bash "$ALERT" --unit ctaz-node.service > "$T/be.log" 2>&1
+check "it still alerts, rather than swallowing the failure" "[ -s '$HOOK_LOG' ]"
+check "and says it is NOT an outage" "grep -q 'NOT a faucet outage' '$HOOK_LOG'"
+check "and does not use the wake-someone wording" "! grep -q 'unit FAILED' '$HOOK_LOG'"
+check "the unit is still named, or the alert costs an SSH session to act on" \
+  "grep -q 'ctaz-node.service' '$HOOK_LOG'"
+
+echo "== alert: A UNIT NOT ON THE LIST IS STILL LOUD"
+# The mirror, and the one that matters: without it the tier could be applied to
+# everything and these tests would still pass.
+alerts_env
+printf 'ctaz-node.service\n' > "$BE"
+FAUCET_BEST_EFFORT_UNITS="$BE" bash "$ALERT" --unit faucet-watchdog.service > "$T/loud.log" 2>&1
+check "an unlisted unit uses the outage wording" "grep -q 'unit FAILED' '$HOOK_LOG'"
+check "and is not softened" "! grep -q 'NOT a faucet outage' '$HOOK_LOG'"
+
+echo "== alert: a TEMPLATE INSTANCE matches the template line"
+# ctaz-rpc@3-172.17.0.2:9.service must match `ctaz-rpc@.service`. Without stripping the
+# instance, the one unit type that produces the most failures could never be tiered and
+# the list would silently do nothing for it.
+alerts_env
+printf 'ctaz-rpc@.service\n' > "$BE"
+FAUCET_BEST_EFFORT_UNITS="$BE" bash "$ALERT" --unit 'ctaz-rpc@3-172.17.0.2:9.service' > "$T/inst.log" 2>&1
+check "an instance is tiered by its template" "grep -q 'NOT a faucet outage' '$HOOK_LOG'"
+
+echo "== alert: FAILS LOUD when the list cannot be read"
+# Under-alerting is the worse failure, so every ambiguity resolves toward noise. A
+# missing file must not quietly make everything best-effort.
+alerts_env
+FAUCET_BEST_EFFORT_UNITS="$T/no-such-file" bash "$ALERT" --unit ctaz-node.service > "$T/nofile.log" 2>&1
+check "no list means nothing is best-effort" "grep -q 'unit FAILED' '$HOOK_LOG'"
+check "and the cTAZ unit is loud, despite being the one we would tier" \
+  "! grep -q 'NOT a faucet outage' '$HOOK_LOG'"
+
+echo "== alert: a separate best-effort channel is used when one is configured"
+# The harness runs ONE receiver, so this asserts the URL SWITCH rather than a second
+# inbox: pointing the best-effort channel at a dead port must send there and fail, not
+# quietly fall back to the paging channel. A fallback would defeat the whole tier.
+alerts_env
+printf 'ctaz-node.service\n' > "$BE"
+FAUCET_BEST_EFFORT_UNITS="$BE" \
+  FAUCET_ALERT_BESTEFFORT_URL="http://127.0.0.1:1/nope" \
+  bash "$ALERT" --unit ctaz-node.service > "$T/split.log" 2>&1
+check "the paging channel received NOTHING" "[ ! -s '$HOOK_LOG' ]"
+check "and the failure to reach the best-effort channel is reported" \
+  "grep -q 'POST FAILED' '$T/split.log'"
+
 kill "$HOOK_PID" 2>/dev/null
 
 echo "== alerts: the webhook URL never reaches the log (it is a credential)"
