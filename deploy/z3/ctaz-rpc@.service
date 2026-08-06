@@ -1,0 +1,48 @@
+[Unit]
+Description=One Crosslink RPC call from the faucet container (#409)
+Documentation=file:/opt/zcash-faucet/deploy/z3/CTAZ.md
+# Instance-per-connection, started by ctaz-rpc.socket. Never enabled directly: the socket
+# is what is enabled, and systemd instantiates this on each accept.
+
+[Service]
+Type=simple
+ExecStart=/opt/faucet/ctaz-rpc-broker.sh
+# Accept=yes hands the connection in on stdin. Explicit rather than inherited, because a
+# broker whose stdin is not the socket reads EOF, answers nothing, and looks to the
+# caller exactly like a node that is down.
+StandardInput=socket
+StandardOutput=socket
+# Errors go to the journal, NOT down the socket, so a refusal reaches an operator without
+# also handing the caller a stack trace.
+StandardError=journal
+
+EnvironmentFile=-/etc/faucet/ctaz.env
+
+# NOT the ctaz user. This process talks to the node's loopback RPC and does not touch the
+# chain state, so it gets its own minimal footprint instead of the node's privileges.
+DynamicUser=yes
+# The socket is root:root 0660 and systemd hands the connection in already accepted, so
+# the broker never opens it itself and needs no access to the volume at all.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# One call is a request and a reply. Anything longer is a wedged node, and the broker's
+# own timeout should have fired first - this is the backstop for the case where it did
+# not, so a stuck instance cannot hold a connection slot forever.
+TimeoutStartSec=45
+RuntimeMaxSec=60
+
+MemoryMax=64M
+CPUQuota=25%

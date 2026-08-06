@@ -18,6 +18,7 @@
  *   NULL through the one exemption that exists for it, and the receipt says so.
  */
 import { config } from "../config.ts";
+import { ctazRpc } from "../crosslink/transport.ts";
 import type { Sender, SendRequest, SendResult } from "./send.ts";
 
 /** Their fixed FAUCET_VALUE arrives here to be CHECKED, never to be displayed on trust. */
@@ -48,7 +49,7 @@ interface RpcReply {
 export class CrosslinkSender implements Sender {
   readonly name = "crosslink";
 
-  private readonly rpcUrl: string;
+  private readonly transport: { socketPath: string; rpcUrl: string; timeoutMs: number };
   private readonly expectedZat: bigint;
 
   // Both injected, defaulting to config. The expectation especially: reading it straight
@@ -56,20 +57,37 @@ export class CrosslinkSender implements Sender {
   // env once at ITS module load and no amount of setting the variable afterwards changes
   // it. Injecting is also the honest shape, since the expectation is a fact about THEIR
   // constant rather than about this class.
-  constructor(rpcUrl: string = config.crosslink.rpcUrl, expectedZat: bigint = config.crosslink.expectedZat) {
-    this.rpcUrl = rpcUrl;
+  constructor(
+    transport: { socketPath: string; rpcUrl: string; timeoutMs: number } = {
+      socketPath: config.crosslink.rpcSocket,
+      rpcUrl: config.crosslink.rpcUrl,
+      timeoutMs: config.crosslink.rpcTimeoutMs,
+    },
+    expectedZat: bigint = config.crosslink.expectedZat,
+  ) {
+    this.transport = transport;
     this.expectedZat = expectedZat;
   }
 
+  /**
+   * THIS USED TO BE fetch(this.rpcUrl) AND IT COULD NEVER WORK IN PRODUCTION (#409).
+   *
+   * CROSSLINK_RPC_URL was unset, so it was `fetch("")`, which throws "Failed to parse URL
+   * from " before touching the network - the error an owner saw as SEND FAILED, NOTHING
+   * LEFT THE WALLET. Setting the variable would not have fixed it either: the container
+   * has no route to that RPC by design, because the node binds loopback only and it holds
+   * funds.
+   *
+   * Now it goes through the unix socket the host broker serves, which is the one channel
+   * that exists. See src/lib/crosslink/transport.ts.
+   */
   private async rpc(method: string, params: unknown[]): Promise<RpcReply> {
-    const res = await fetch(this.rpcUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!res.ok) throw new Error(`crosslink rpc ${method}: HTTP ${res.status}`);
-    return (await res.json()) as RpcReply;
+    const { reply, failure } = await ctazRpc(this.transport, method, params);
+    // A transport failure is NOT an empty reply and must not read as one. Throwing here
+    // means the send path treats "we could not ask" the same as any other refusal to pay,
+    // rather than falling through to inspect fields on a null.
+    if (!reply) throw new Error(`crosslink rpc ${method}: ${failure ?? "no reply"}`);
+    return reply as RpcReply;
   }
 
   /**

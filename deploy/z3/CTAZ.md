@@ -250,6 +250,65 @@ the guard actually used, in its own log line, or echo the merged variable from a
 Note the indexer's database lives **inside the same tree**, at `<chain-name>/zaino/local`,
 so the state directory is not purely chain state.
 
+## Paying: the container cannot reach the node, so a socket does it
+
+The faucet runs in a container. The node's RPC binds loopback on the HOST, because it
+holds funds. Those two facts do not meet, and measuring is the only way to be sure of it
+— from inside `zcash-faucet-faucet-1`:
+
+| target | result |
+|---|---|
+| `127.0.0.1:19232` | fails; that is the CONTAINER's loopback, not the host's |
+| `172.17.0.1:19232` | times out; the node binds loopback only |
+| `host.docker.internal:19232` | fails; not defined in this compose setup |
+
+The same call from the host returns HTTP 200.
+
+`ctaz-status.sh` already answers this for READING: the host writes the node's state to a
+file in the volume the container mounts. **Paying cannot use a file** — it needs a request
+and a reply — and that gap is how a cTAZ toggle shipped showing `ready` while every claim
+died at `fetch("")` (#409). Readiness and payment are different questions, and only one of
+them had a transport.
+
+### What runs
+
+    ctaz-rpc.socket        a unix socket in the faucet's data volume, Accept=yes
+    ctaz-rpc@.service      one short-lived broker per connection
+    ctaz-rpc-broker.sh     reads one JSON-RPC request, allowlists it, forwards it
+
+No new host, no new port, nothing listening on a network interface, nothing new to pay
+for. The socket is `root:root 0660` in a directory only the container and root can see.
+
+### The allowlist is the point
+
+The thing on the other end is an internet-facing web app. A plain proxy would make an app
+compromise into full control of a funded node — **worse** than the bridge binding this
+design exists to avoid. Five methods, and adding one is a decision about what a
+compromised web app could do:
+
+    get_tfl_recency_status   the readiness gate
+    getinfo                  sync position
+    getblockchaininfo        sync position, and the tip this build actually reports
+    requestfaucetdonation    the money path, the only reason the socket exists
+    getrawtransaction        confirming a drip landed
+
+The broker rebuilds the request rather than forwarding the caller's bytes, so the
+allowlist check describes the request that actually gets sent.
+
+### Why not bind the RPC to the docker bridge
+
+One config line, and worse. It turns a loopback-only surface into one reachable by every
+container on the box, on a node holding faucet funds, and it needs firewall care forever
+to stay off the public interface. Rejected when `ctaz-status.sh` was written, and rejected
+again here.
+
+### The gate knows the difference
+
+`canServeCtaz` refuses unless the node's state came back over the **RPC path**, not the
+file. The file can only say the node is well; only the RPC can say we can reach it. So
+cTAZ stays not-ready until this socket is actually working, and starts serving on its own
+once it is — no second switch to remember.
+
 ## Syncing: do it off the box
 
 Initial sync measured ~114 blocks/min, so roughly **54 hours from genesis**. Sync

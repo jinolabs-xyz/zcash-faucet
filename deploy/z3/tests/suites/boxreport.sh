@@ -369,3 +369,18 @@ check "no answer from systemctl reports null" \
   "[ \"\$(jqf '$BOX_REPORT_OUT' watchdogRestarts)\" = 'None' ]"
 check "and not zero, which would read as a calm watchdog" \
   "[ \"\$(jqf '$BOX_REPORT_OUT' watchdogRestarts)\" != '0' ]"
+
+echo "== box-report: a missing .socket unit makes the box INCOMPLETE (#409)"
+# The mirror of the install-ops check. If this loop does not glob socket units, the box
+# can be missing one and still report every required file present - a green light on a
+# cTAZ that cannot pay.
+fresh_env
+printf '[Unit]\nDescription=t\n[Socket]\nListenStream=/tmp/t.sock\n' > "$SRC/probe-rpc.socket"
+bash "$BOX_REPORT" > "$T/sockmissing.log" 2>&1
+missing="$(python3 -c "import json;print(json.load(open('$OUT'))['expected']-json.load(open('$OUT'))['present'])" 2>/dev/null)"
+check "the uninstalled socket unit is counted as missing" "[ '${missing:-0}' -ge 1 ]"
+cp "$SRC/probe-rpc.socket" "$UNIT_DIR/probe-rpc.socket"
+bash "$BOX_REPORT" > "$T/sockthere.log" 2>&1
+missing2="$(python3 -c "import json;print(json.load(open('$OUT'))['expected']-json.load(open('$OUT'))['present'])" 2>/dev/null)"
+check "and installing it clears the finding, so this is not a constant" "[ '${missing2:-9}' -lt '${missing:-0}' ]"
+rm -f "$SRC/probe-rpc.socket" "$UNIT_DIR/probe-rpc.socket"

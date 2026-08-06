@@ -87,6 +87,18 @@ ctaz-node.service
 # JSON file and nothing else, so there is no money-path decision in arming it.
 ctaz-status.timer
 
+# The channel the faucet container pays through (#409). Enabled rather than left to a
+# human for the same reason as ctaz-status.timer: a socket unit is the one type nothing
+# else starts, so installed-but-not-enabled means cTAZ answers nothing after the next
+# reboot, silently, and the panel says not-ready on a node that is perfectly healthy.
+#
+# ARMING THIS DOES NOT ARM A MONEY PATH, which is the test every line in this file has to
+# pass. It creates a socket that accepts a connection and forwards five allowlisted RPC
+# methods. Whether a drip is ever ATTEMPTED is still decided by the faucet's sender
+# toggle and by the readiness gate, neither of which this line touches. What it does fix
+# is the case where the decision to serve is made and the channel is not there.
+ctaz-rpc.socket
+
 # DELIBERATELY ABSENT, and each for its own reason:
 #
 #   zcash-testnet-miner.service  Mining is always-on by the owner's decision, but it is
@@ -98,3 +110,6 @@ ctaz-status.timer
 #   *.service behind a *.timer   A service pulled in by its own timer is not independently
 #                                enabled, and asking systemd about it reports disabled on a
 #                                correct box.
+#   ctaz-rpc@.service            Instantiated per connection by ctaz-rpc.socket. Enabling a
+#                                template is an error, and the socket above is the thing
+#                                that has to survive a reboot.

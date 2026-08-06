@@ -1,0 +1,39 @@
+[Unit]
+Description=Crosslink RPC socket for the faucet container (#409)
+Documentation=file:/opt/zcash-faucet/deploy/z3/CTAZ.md
+# The socket lives INSIDE the faucet's data volume, which is the only filesystem both the
+# host and the container can see. Without the volume mounted there is no socket worth
+# creating, and a socket on the root disk under a mountpoint that later appears would be
+# invisible to the container while looking perfectly healthy from the host.
+RequiresMountsFor=/var/lib/docker/volumes/zcash-faucet_faucet_data/_data
+
+[Socket]
+# The same directory ctaz-status.json is written to, which the container mounts at
+# /app/data. No new host, no new port, nothing listening on any network interface.
+ListenStream=/var/lib/docker/volumes/zcash-faucet_faucet_data/_data/ctaz-rpc.sock
+
+# ONE INSTANCE PER CONNECTION. The broker then reads one request from stdin and writes
+# one reply to stdout, with no server loop to leak and no shared state between callers.
+# A wedged node call ties up its own instance and nothing else.
+Accept=yes
+
+# The container runs as root and the volume is root-owned, so 0660 root:root is reachable
+# from the container and from nothing else on the box. Deliberately NOT 0666: every other
+# process on this host is outside the trust boundary this socket defines.
+SocketUser=root
+SocketGroup=root
+SocketMode=0660
+
+# A stale socket file from an unclean shutdown would otherwise make the unit fail to
+# start, which turns a reboot into a dark cTAZ.
+RemoveOnStop=yes
+
+# BOUNDED, because the thing on the other end is an internet-facing web app. Without this
+# a burst of claims - or a loop in the app - forks broker instances until the box is out
+# of pids. The faucet serialises its own sends through a queue, so a small number here is
+# not a throughput ceiling in normal operation.
+MaxConnections=8
+MaxConnectionsPerSource=8
+
+[Install]
+WantedBy=sockets.target

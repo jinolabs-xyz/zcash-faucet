@@ -67,7 +67,11 @@ declared_units() {
 }
 
 enabled_undeclared=0
-for src in "$SRC"/*.service "$SRC"/*.timer; do
+# *.socket TOO, and it was missing until a socket unit needed to exist (#409). A unit type
+# the repo ships and this loop does not glob is a required file the box can be missing
+# while reporting complete - which is the exact failure install-ops's own header describes,
+# "19 of 25 required files sat uninstalled for weeks".
+for src in "$SRC"/*.service "$SRC"/*.timer "$SRC"/*.socket; do
   [ -e "$src" ] || continue
   expected=$((expected + 1))
   unit="$(basename "$src")"
