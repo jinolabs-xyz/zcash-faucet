@@ -186,3 +186,72 @@ check "and it says the new copy runs on the NEXT tick" \
   "grep -q 'runs on the NEXT tick' '$T/self.log'"
 check "and it did not re-exec itself in this run" \
   "[ \$(grep -c 'auto-deploy.sh updated' '$T/self.log') -eq 1 ]"
+
+# ── THE MINER IS A BINARY, AND NOTHING REBUILT IT (#412) ─────────────────────────────
+#
+# install-ops syncs scripts and units; it cannot rebuild a binary. So a commit touching
+# miner source left the installed binary older than its sources, box-report reported
+# `minerBinary: stale`, the box sat at 40 of 41, and live-smoke went red until a human
+# ran two commands from MINING.md.
+#
+# Not theoretical: #402 merged 2026-08-04 17:32 UTC and the next probe run went red and
+# stayed red for two days. These assert the routing and the failure paths; a real cargo
+# build is out of scope for a shell suite, so MINER_CARGO injects a stub.
+
+echo "== auto-deploy: a commit touching miner source triggers a rebuild"
+ad_env
+CARGO_STUB="$T/cargo-ok"
+cat > "$CARGO_STUB" <<'STUB'
+#!/usr/bin/env bash
+echo "cargo $*" >> "${CARGO_LOG:?}"
+# Real cargo writes the binary where --manifest-path says. Mirror that, or the install
+# step below has nothing to move and the test would pass on an empty rebuild.
+mp=""; for a in "$@"; do case "$prev" in --manifest-path) mp="$a";; esac; prev="$a"; done
+out="$(dirname "$mp")/target/release"
+mkdir -p "$out"; printf 'built %s\n' "$RANDOM" > "$out/zcash-testnet-miner"
+STUB
+chmod +x "$CARGO_STUB"
+export CARGO_LOG="$T/cargo.calls"; : > "$CARGO_LOG"
+ad_advance deploy/z3/miner/src/main.rs
+MINER_CARGO="$CARGO_STUB" bash "$AD" > "$T/miner.log" 2>&1
+check "a miner-source commit exits 0" "[ $? -eq 0 ]"
+check "cargo was invoked" "grep -q 'cargo build --release' '$CARGO_LOG'"
+check "and it built the repo's manifest, not whatever was in cwd" \
+  "grep -q -- '--manifest-path' '$CARGO_LOG'"
+check "the binary landed in the install dir" "[ -f '$T/install/zcash-testnet-miner' ]"
+check "and the run says so, with the hash, so the log is evidence" \
+  "grep -qE 'miner rebuilt and restarted \(' '$T/miner.log'"
+check "no temp file was left behind" "[ ! -e '$T/install/.zcash-testnet-miner.new' ]"
+
+echo "== auto-deploy: a commit NOT touching miner source does not rebuild it"
+# The mirror. Without it the check above would pass against a script that rebuilt on
+# every commit, which would restart the miner - a money path - on unrelated deploys.
+ad_env
+export CARGO_LOG="$T/cargo.calls"; : > "$CARGO_LOG"
+ad_advance src/page.tsx
+MINER_CARGO="$CARGO_STUB" bash "$AD" > "$T/nominer.log" 2>&1
+check "an app-only commit exits 0" "[ $? -eq 0 ]"
+check "cargo was NOT invoked" "[ ! -s '$CARGO_LOG' ]"
+
+echo "== auto-deploy: A FAILED MINER BUILD FAILS THE RUN"
+# The rule this file already states for installs: reporting success for a box that is
+# not at spec is how the missing 19 files stayed invisible. shellcheck caught that the
+# exit code was set and never read, which would have made this path decorative.
+ad_env
+FAIL_STUB="$T/cargo-fail"
+printf '#!/usr/bin/env bash\nexit 101\n' > "$FAIL_STUB"; chmod +x "$FAIL_STUB"
+ad_advance deploy/z3/miner/src/main.rs
+MINER_CARGO="$FAIL_STUB" bash "$AD" > "$T/minerfail.log" 2>&1
+check "a failed build exits NONZERO" "[ $? -ne 0 ]"
+check "and says the old binary was kept rather than implying a swap" \
+  "grep -q 'keeping the binary that is already installed' '$T/minerfail.log'"
+check "and nothing was installed" "[ ! -f '$T/install/zcash-testnet-miner' ]"
+
+echo "== auto-deploy: no cargo at all is an error, not a silent skip"
+# Found the hard way: cargo is not on a non-login shell's PATH on the box, so the first
+# rebuild I ran by hand compiled nothing and reported success.
+ad_env
+ad_advance deploy/z3/miner/Cargo.lock
+MINER_CARGO="$T/no-such-cargo" bash "$AD" > "$T/nocargo.log" 2>&1
+check "a missing cargo exits NONZERO" "[ $? -ne 0 ]"
+check "and names the path it looked for" "grep -q 'no cargo at' '$T/nocargo.log'"

@@ -71,14 +71,35 @@ live submission.
 
 ## Build and install
 
+**You should not normally need this.** `auto-deploy.sh` rebuilds and reinstalls the miner
+whenever a commit touches `deploy/z3/miner/src/` or its `Cargo.toml`/`Cargo.lock` (#412).
+Before that it did not, and the consequence was not subtle: the binary is compiled, so
+`install-ops` could not refresh it, `box-report` correctly reported `minerBinary: stale`,
+the box sat at 40 of 41, and the external probe was red for two days after #402 landed.
+
+For a first install, or to recover by hand:
+
 ```bash
 cd /opt/zcash-faucet/deploy/z3/miner
-cargo build --release                       # builds the tromp solver too
-cp target/release/zcash-testnet-miner /opt/faucet/
+/root/.cargo/bin/cargo build --release      # builds the tromp solver too; cargo is NOT on
+                                            # a non-login shell's PATH, and a plain `cargo`
+                                            # here silently compiles nothing
+# RENAME, never cp onto the running binary: `cp` gives "Text file busy", does nothing, and
+# the restart then relaunches the OLD build while every status signal reads healthy.
+install -m 755 target/release/zcash-testnet-miner /opt/faucet/.zcash-testnet-miner.new
+mv -f /opt/faucet/.zcash-testnet-miner.new /opt/faucet/zcash-testnet-miner
 cp ../zcash-testnet-miner.service /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now zcash-testnet-miner
+sha256sum /opt/faucet/zcash-testnet-miner   # confirm the swap actually happened
 journalctl -u zcash-testnet-miner -f
 ```
+
+Roughly 41 seconds on the box, measured while cTAZ was mining at its 250% quota. That is
+why this one is built in place while the Crosslink node is not: `SNAPSHOTS.md`'s
+never-compile-on-the-box rule is about a build that takes hours and would starve the node
+it serves. Shipping a 3 MB artefact instead would need a release asset or a registry —
+a fetch path, a credential and a storage bill for something that rebuilds in under a
+minute.
 
 Config in `/etc/faucet/miner.env`:
 
