@@ -127,7 +127,7 @@ for src in "$SRC"/*.sh; do
 done
 
 units=0
-for src in "$SRC"/*.service "$SRC"/*.timer; do
+for src in "$SRC"/*.service "$SRC"/*.timer "$SRC"/*.socket; do
   [ -e "$src" ] || continue
   before="$changed"
   place "$src" "$UNIT_DIR/$(basename "$src")" 644 || rc=1
@@ -230,7 +230,7 @@ if [ "$DRY" != "1" ]; then
     elif ! cmp -s "$src" "$dest"; then differs="$differs $name"
     fi
   done
-  for src in "$SRC"/*.service "$SRC"/*.timer; do
+  for src in "$SRC"/*.service "$SRC"/*.timer "$SRC"/*.socket; do
     [ -e "$src" ] || continue
     name="$(basename "$src")"
     dest="$UNIT_DIR/$name"

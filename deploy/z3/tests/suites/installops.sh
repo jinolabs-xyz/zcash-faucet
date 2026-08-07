@@ -308,3 +308,25 @@ chmod 700 "$T/units/faucet-thing.service.d"
 check "a drop-in that could not be updated FAILS the run" "[ $rc -ne 0 ]"
 check "and it is reported, by one of the two states, rather than passing silently" \
   "grep -qE '(never arrived|differ).*10-tuning.conf' '$T/dropstale.log'"
+
+echo "== install-ops: a .socket unit is installed and enabled like any other (#409)"
+# A unit type the repo ships and install-ops does not glob is a required file that is
+# never installed, on a box that reports complete. That is this script's own founding
+# bug - its header says "19 of 25 required files sat uninstalled for weeks" - and socket
+# units were outside the glob until cTAZ needed one.
+ops_env
+mkdir -p "$T/src"
+printf '#!/usr/bin/env bash\ntrue\n' > "$T/src/probe.sh"
+printf '[Unit]\nDescription=t\n[Socket]\nListenStream=/tmp/t.sock\n[Install]\nWantedBy=sockets.target\n' > "$T/src/probe-rpc.socket"
+bash "$INSTALL_OPS" "$T/src" > "$T/sock.log" 2>&1
+check "exits 0" "[ $? -eq 0 ]"
+check "the socket unit landed in the unit dir" "[ -f '$OPS_UNIT_DIR/probe-rpc.socket' ]"
+check "and matches the source, so a stale copy is not counted as installed" \
+  "cmp -s '$T/src/probe-rpc.socket' '$OPS_UNIT_DIR/probe-rpc.socket'"
+# And a DECLARED socket is enabled. Socket units are the one type where this matters
+# most: nothing else starts them, so an installed-but-not-enabled socket is a channel
+# that exists on disk and answers nothing after the next reboot.
+printf 'faucet-thing.timer\nprobe-rpc.socket\n' > "$T/src/enabled-units"
+bash "$INSTALL_OPS" "$T/src" > "$T/sock2.log" 2>&1
+check "a declared socket unit is enabled" "grep -qx 'probe-rpc.socket' '$STUB_ENABLED'"
+check "and nothing was disabled on the way" "[ ! -s '$STUB_DISABLED' ]"

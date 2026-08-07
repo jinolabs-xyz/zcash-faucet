@@ -10,12 +10,20 @@
  * current. The one exception is their own "not activated" error, which IS an answer.
  */
 import { config } from "../config.ts";
+import { ctazRpc } from "./transport.ts";
 import { readingFor, notActivated, type CtazReading } from "./recency.ts";
 import { readCtazStatusFile, statusIsStale } from "./statusFile.ts";
 
 /** Short. This sits in front of a claim, and a slow node should read as unavailable
  *  rather than hold someone's request open. */
-const TIMEOUT_MS = 4000;
+/** One place the transport is described, so the two readers cannot drift apart. */
+function transport() {
+  return {
+    socketPath: config.crosslink.rpcSocket,
+    rpcUrl: config.crosslink.rpcUrl,
+    timeoutMs: config.crosslink.rpcTimeoutMs,
+  };
+}
 
 /**
  * What the page shows about the node, which is MORE than the gate classifies on.
@@ -98,37 +106,23 @@ export async function readCtazNodeState(nowMs: number = Date.now()): Promise<Cta
  */
 async function readCtazInfo(): Promise<{ blocks: number | null; tip: number | null }> {
   const none = { blocks: null, tip: null };
-  if (!config.crosslink.rpcUrl) return none;
-  try {
-    const res = await fetch(config.crosslink.rpcUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getinfo", params: [] }),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-    if (!res.ok) return none;
-    const j = (await res.json()) as { result?: { blocks?: unknown; estimatedheight?: unknown } };
-    const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
-    const blocks = n(j.result?.blocks);
-    // estimatedheight is zebra's own guess at the network tip while it catches up. Falling
-    // back to blocks would make any node look synced by definition, so it does not.
-    return { blocks, tip: n(j.result?.estimatedheight) };
-  } catch {
-    return none;
-  }
+  // getblockchaininfo, NOT getinfo, and that is measured rather than assumed. This build's
+  // getinfo returns twelve fields and none of them is a tip - the same trap ctaz-status.sh
+  // documents, which had the panel reading "sync unknown" on a node sitting at the tip.
+  const { reply } = await ctazRpc(transport(), "getblockchaininfo");
+  if (!reply || reply.error) return none;
+  const r = reply.result as { blocks?: unknown; estimatedheight?: unknown; headers?: unknown } | undefined;
+  const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  // estimatedheight is zebra's own guess at the network tip while it catches up. Falling
+  // back to blocks would make any node look synced by definition, so it does not.
+  return { blocks: n(r?.blocks), tip: n(r?.estimatedheight) ?? n(r?.headers) };
 }
 
 export async function readCtazRecency(nowMs: number = Date.now()): Promise<CtazReading> {
-  if (!config.crosslink.enabled || !config.crosslink.rpcUrl) return readingFor(null, nowMs);
-  try {
-    const res = await fetch(config.crosslink.rpcUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "get_tfl_recency_status", params: [] }),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-    if (!res.ok) return readingFor(null, nowMs);
-    const reply = (await res.json()) as { result?: unknown; error?: { message?: string } };
+  if (!config.crosslink.enabled) return readingFor(null, nowMs);
+  {
+    const { reply } = await ctazRpc(transport(), "get_tfl_recency_status");
+    if (!reply) return readingFor(null, nowMs);
     // Their node answers TFL-off as an error rather than as a status, so this is the
     // one error that carries information. Matched on the message because that is what
     // the spike observed; anything else stays cannot-verify.
@@ -136,7 +130,5 @@ export async function readCtazRecency(nowMs: number = Date.now()): Promise<CtazR
       return /not activated/i.test(reply.error.message ?? "") ? notActivated() : readingFor(null, nowMs);
     }
     return readingFor(reply.result, nowMs);
-  } catch {
-    return readingFor(null, nowMs);
   }
 }

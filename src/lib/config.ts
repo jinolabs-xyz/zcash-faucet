@@ -240,6 +240,22 @@ export const config = {
     /** Where the box writes the node's state for the container to read (#322). Empty
      *  disables the file path and falls back to the RPC, which only works on a host. */
     statusFile: process.env.FAUCET_CTAZ_STATUS_FILE ?? "/app/data/ctaz-status.json",
+    /**
+     * THE ONLY WAY THE CONTAINER CAN REACH THE NODE (#409), and it defaults to on.
+     *
+     * A unix socket in the volume the container already mounts, served by a host-side
+     * broker that allowlists four methods. The default is a path rather than empty
+     * because the empty default on `rpcUrl` is what shipped a cTAZ toggle whose every
+     * claim died at `fetch("")` while the panel said ready - a config value nobody set
+     * because nobody knew it existed.
+     *
+     * Set FAUCET_CTAZ_RPC_SOCKET="" to turn it off, which is what a developer running
+     * against a directly reachable node wants; rpcUrl then carries the call.
+     */
+    rpcSocket: process.env.FAUCET_CTAZ_RPC_SOCKET ?? "/app/data/ctaz-rpc.sock",
+    /** 30s. The node's first request under mining was measured at 11.9 seconds, then
+     *  milliseconds. A payment refused at 5s looks to a claimant like an empty wallet. */
+    rpcTimeoutMs: num("FAUCET_CTAZ_RPC_TIMEOUT_MS", 30_000),
     get dailyCapZatoshi() {
       return tazToZatoshi(num("FAUCET_CTAZ_DAILY_CAP", 25));
     },

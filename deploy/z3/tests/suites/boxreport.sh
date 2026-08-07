@@ -369,3 +369,25 @@ check "no answer from systemctl reports null" \
   "[ \"\$(jqf '$BOX_REPORT_OUT' watchdogRestarts)\" = 'None' ]"
 check "and not zero, which would read as a calm watchdog" \
   "[ \"\$(jqf '$BOX_REPORT_OUT' watchdogRestarts)\" != '0' ]"
+
+echo "== box-report: a missing .socket unit makes the box INCOMPLETE (#409)"
+# The mirror of the install-ops check. If box-report's loop does not glob socket units,
+# the box can be missing one and still report every required file present - a green light
+# on a cTAZ that cannot pay.
+#
+# WRITTEN WITH THIS SUITE'S OWN HELPERS, after the first version used $SRC and $UNIT_DIR
+# from the installops suite and died on `SRC: unbound variable` in CI. I fixed exactly
+# that mistake in installops.sh and did not re-run this one, so it shipped broken to the
+# only place that would tell me.
+box_env
+printf '[Unit]\nDescription=t\n[Socket]\nListenStream=/tmp/t.sock\n' > "$S/probe-rpc.socket"
+bash "$BOX_REPORT" > "$T/sockmissing.log" 2>&1
+missing="$(jqf "$BOX_REPORT_OUT" expected)"
+present="$(jqf "$BOX_REPORT_OUT" present)"
+check "the uninstalled socket unit is counted as EXPECTED" "[ \"$missing\" -gt \"$present\" ]"
+
+cp "$S/probe-rpc.socket" "$BOX_REPORT_UNIT_DIR/probe-rpc.socket"
+bash "$BOX_REPORT" > "$T/sockthere.log" 2>&1
+present2="$(jqf "$BOX_REPORT_OUT" present)"
+check "and installing it raises present, so this is not a constant" \
+  "[ \"$present2\" -gt \"$present\" ]"
