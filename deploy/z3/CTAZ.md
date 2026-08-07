@@ -309,6 +309,71 @@ file. The file can only say the node is well; only the RPC can say we can reach 
 cTAZ stays not-ready until this socket is actually working, and starts serving on its own
 once it is — no second switch to remember.
 
+## Mining into the pool the faucet actually spends from
+
+`requestfaucetdonation` calls `send_orchard_to_orchard_zats`, so it pays out of the
+wallet's **Orchard** pool. Until #328 nothing put anything there, and the failure was
+silent in the worst way: the node accepts the request, returns its compiled-in
+`{"amount": 50000000}`, and moves nothing. That constant is their FAUCET_VALUE, not a
+receipt.
+
+Measured on the live node while diagnosing it:
+
+| | |
+|---|---|
+| blocks we mined and the chain accepted, 24h | **93** (`success=Accepted`) |
+| where the reward landed | a **transparent** address, a fresh one per block |
+| orchard actions in our coinbase | **0** |
+
+So the mining was never the problem. The rewards were simply going somewhere the faucet
+cannot spend from.
+
+### The fix is one config key, not a fork patch
+
+Their coinbase builder already routes a unified address orchard-first
+(`new_coinbase`, `zebra-rpc/src/methods/types/transaction.rs`):
+
+    Address::Unified(addr) => addr.orchard().and_then(add_shielded_reward)
+        .or_else(|| addr.sapling()...)
+        .or_else(|| addr.transparent()...)
+
+Set `miner_address` to a unified address with an Orchard receiver and the reward is
+built as an Orchard output. Their own comment covers what happens later: *"a unified
+miner address with an Orchard receiver just gets routed to the Ironwood output builder
+from NU6.3 onward"*. This chain is NU6 today and Ironwood's value pool stays empty until
+NU6.3 transactions appear, so Orchard is right now and the same key keeps working
+through the upgrade.
+
+### The address is the node's own, and cannot live in the repo
+
+It is derived from that node's seed, so a rebuilt box has a different one. The node
+prints it at every start:
+
+```bash
+journalctl -u ctaz-node | grep "MINER WALLET ADDRESS" | tail -1
+```
+
+Put it in `/etc/faucet/ctaz.env`:
+
+```
+CTAZ_MINER_ADDRESS=utest1...
+```
+
+then regenerate and restart:
+
+```bash
+/opt/faucet/ctaz-config.sh /etc/faucet/ctaz-zebrad.toml && systemctl restart ctaz-node
+```
+
+Unset leaves the config exactly as it is: transparent rewards and a faucet that cannot
+pay. That is a poor state but an honest one, and better than the generator inventing an
+address. A non-unified value is refused outright, because a transparent address there
+would be accepted by their builder and keep the reward out of Orchard, which is the bug
+being fixed.
+
+**Coinbase matures at depth 100**, so a drip cannot succeed until roughly a hundred
+blocks after the first win under the new address.
+
 ## Syncing: do it off the box
 
 Initial sync measured ~114 blocks/min, so roughly **54 hours from genesis**. Sync
