@@ -18,12 +18,13 @@ import { readCtazStatusFile, statusIsStale } from "./statusFile.ts";
  *  rather than hold someone's request open. */
 /** One place the transport is described, so the two readers cannot drift apart.
  *
- * FOUR SECONDS HERE, NOT THE SENDER'S THIRTY. This transport now runs on every
- * /api/status request (the reader is RPC-first), and the broker's own node timeout is
- * 30s - so a wedged node would otherwise hold every status poll for half a minute. The
- * send path keeps the long timeout because a payment refused at 4s looks like an empty
- * wallet; a status read that gives up at 4s just falls back to the file. */
-const READ_TIMEOUT_MS = 4000;
+ * THE LONG TIMEOUT IS BACK, because this reader no longer runs on the request path. The
+ * 4-second version lasted one deploy: measured on the box the node's RPC answers in
+ * 20ms or in 30 seconds depending on whether its own miner is starving the RPC thread,
+ * so 4s abandoned half the calls (and the broker died on the broken pipe), and the
+ * reader fell back to the file forever. cache.ts now calls this on an interval, off the
+ * request path, where waiting out the node's worst case costs nobody a page load. */
+const READ_TIMEOUT_MS = 30_000;
 function transport() {
   return {
     socketPath: config.crosslink.rpcSocket,
