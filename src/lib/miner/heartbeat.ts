@@ -54,6 +54,17 @@ export interface Heartbeat {
   lastErrorStage: string | null;
   lastErrorAt: string | null;
   consecutiveErrors: number;
+  /** Blocks this miner has SOLVED. The writer has emitted it since #286 and nothing
+   *  read it until #408, so a miner that had fetched forty thousand templates and
+   *  solved nothing looked identical to one that won a block a minute ago. */
+  solvedCount: number | null;
+  /** Solved AND accepted by the network. */
+  submittedAccepted: number | null;
+  /** Solved and REFUSED, which is a different fault and the one that looks like success
+   *  at every other layer: the miner is working, and none of its work counts. */
+  submittedRejected: number | null;
+  /** When it last solved one, so "has ever won" can be told from "is winning". */
+  lastSolvedAt: string | null;
 }
 
 export interface MinerReading {
@@ -66,6 +77,14 @@ export interface MinerReading {
   mode: "submit" | "proposal" | null;
   lastErrorStage: string | null;
   consecutiveErrors: number | null;
+  /** Blocks solved. Null means the miner did not say, which is not zero: an older
+   *  writer and a miner that has never won are different claims. */
+  solvedCount: number | null;
+  /** Of those, how many the network took, and how many it refused. */
+  submittedAccepted: number | null;
+  submittedRejected: number | null;
+  /** Seconds since the last solve, null when it has never solved or did not say. */
+  solvedAgoSeconds: number | null;
 }
 
 const NOTHING = {
@@ -75,20 +94,19 @@ const NOTHING = {
   mode: null,
   lastErrorStage: null,
   consecutiveErrors: null,
+  solvedCount: null,
+  submittedAccepted: null,
+  submittedRejected: null,
+  solvedAgoSeconds: null,
 } as const;
 
 /** No heartbeat path configured, so this app was never asked to look. */
 export const UNCONFIGURED: MinerReading = { state: "not-configured", ...NOTHING };
 
-const UNVERIFIABLE: MinerReading = {
-  state: "cannot-verify",
-  beatAgoSeconds: null,
-  templateAgoSeconds: null,
-  lastTemplateHeight: null,
-  mode: null,
-  lastErrorStage: null,
-  consecutiveErrors: null,
-};
+// Spread NOTHING rather than repeating it. The two lists had already drifted apart once
+// in spirit - every new field meant remembering two places - and a cannot-verify reading
+// that carried a stale count from somewhere would be worse than one that carries none.
+const UNVERIFIABLE: MinerReading = { state: "cannot-verify", ...NOTHING };
 
 /**
  * Seconds between an RFC3339 stamp and now, or null if the stamp is unusable.
@@ -144,6 +162,14 @@ export function readingFor(raw: unknown, nowMs: number): MinerReading {
     mode,
     lastErrorStage: typeof h.lastErrorStage === "string" ? h.lastErrorStage : null,
     consecutiveErrors: typeof h.consecutiveErrors === "number" ? h.consecutiveErrors : null,
+    // NULL IS NOT ZERO HERE, and the distinction is the whole point of the field. A
+    // heartbeat written before #286 has no solvedCount, and reporting 0 would say "this
+    // miner has never won anything" on no evidence - the same `balance ?? 0` shape the
+    // reserve panel exists to avoid.
+    solvedCount: typeof h.solvedCount === "number" ? h.solvedCount : null,
+    submittedAccepted: typeof h.submittedAccepted === "number" ? h.submittedAccepted : null,
+    submittedRejected: typeof h.submittedRejected === "number" ? h.submittedRejected : null,
+    solvedAgoSeconds: ageSeconds(h.lastSolvedAt, nowMs),
   };
 
   if (beatAgo > staleAfter) return { ...facts, state: "not-writing" };

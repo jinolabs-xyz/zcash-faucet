@@ -22,6 +22,10 @@ const HEALTHY: Heartbeat = {
   lastErrorStage: null,
   lastErrorAt: null,
   consecutiveErrors: 0,
+  solvedCount: 0,
+  submittedAccepted: 0,
+  submittedRejected: 0,
+  lastSolvedAt: null,
 };
 
 test("TODAY'S OUTAGE: beating every 5s while no template has arrived in 70 minutes", () => {
