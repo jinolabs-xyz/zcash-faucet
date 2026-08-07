@@ -14,8 +14,43 @@ ALERT_URL="${FAUCET_ALERT_URL:-${WATCHDOG_ALERT_URL:-}}"
 ALERT_FORMAT="${FAUCET_ALERT_FORMAT:-${WATCHDOG_ALERT_FORMAT:-slack}}"
 PREFIX="${FAUCET_ALERT_PREFIX:-[zcash-faucet]}"
 JOURNAL_LINES="${FAUCET_ALERT_JOURNAL_LINES:-15}"
+# Read from the repo checkout, the same place install-ops reads enabled-units, so the
+# tiering is reviewed in a pull request rather than decided by whoever edits the box.
+BEST_EFFORT_FILE="${FAUCET_BEST_EFFORT_UNITS:-/opt/zcash-faucet/deploy/z3/best-effort-units}"
+# A separate channel when one is configured, so a best-effort failure can be routed to a
+# place nobody is paged from. Falls back to the main URL: a quieter LABEL on a loud
+# channel still beats losing the message.
+BEST_EFFORT_URL="${FAUCET_ALERT_BESTEFFORT_URL:-}"
 
 log() { echo "$(date -u +%FT%TZ) alert: $*"; }
+
+# IS THIS UNIT ALLOWED TO BE QUIET? (#327)
+#
+# Every failure on this box goes through one handler with one wording, so a Crosslink
+# node wobbling reads exactly like the TAZ faucet being down. #327 asked for a tier and
+# this is it.
+#
+# FAILS LOUD. No file, an unreadable file, or a name not listed all mean NOT best-effort,
+# because under-alerting is the worse failure of the two. Every ambiguity here resolves
+# toward noise.
+#
+# Instance names arrive as ctaz-rpc@3-172.17.0.2:9.service and the file lists the
+# template, so the instance part is stripped before matching. Without that, a template
+# could never be tiered and the list would silently do nothing for the one unit type that
+# produces the most failures.
+is_best_effort() { # $1 unit name
+  local unit="$1" template
+  [ -r "$BEST_EFFORT_FILE" ] || return 1
+  # foo@bar.service -> foo@.service
+  # GREEDY to the LAST dot, because systemd instance names contain dots. The real one
+  # here is ctaz-rpc@3-172.17.0.2:9.service, and a non-greedy strip cut at the first dot
+  # in the IP and produced ctaz-rpc@.17.0.2:9.service - which matches nothing, so the one
+  # unit type that generates the most failures could never be tiered. Caught by testing
+  # with a realistic instance name rather than a tidy one.
+  template="$(printf '%s' "$unit" | sed -E 's/@.*\./@./')"
+  grep -vE '^[[:space:]]*(#|$)' "$BEST_EFFORT_FILE" 2>/dev/null \
+    | grep -qxF -e "$unit" -e "$template"
+}
 
 # JSON forbids raw control characters and journal output is full of tabs, so a
 # sed approximation produces bodies the webhook rejects with no trace. Refuse
@@ -87,8 +122,17 @@ case "${1:-}" in
     tail_lines=""
     command -v journalctl >/dev/null 2>&1 \
       && tail_lines="$(journalctl -u "$unit" -n "$JOURNAL_LINES" --no-pager -o cat 2>/dev/null)"
-    send "unit FAILED: $unit${tail_lines:+
+    # THE WORDS DIFFER, and that is the whole mechanism. "unit FAILED" is what a person
+    # wakes up for; a best-effort line says what is degraded and what is not, so neither
+    # a human nor a routing rule has to already know which units are experimental.
+    if is_best_effort "$unit"; then
+      [ -n "$BEST_EFFORT_URL" ] && ALERT_URL="$BEST_EFFORT_URL"
+      send "best-effort unit failed (feature-net, NOT a faucet outage): $unit${tail_lines:+
 $tail_lines}"
+    else
+      send "unit FAILED: $unit${tail_lines:+
+$tail_lines}"
+    fi
     ;;
   "" )
     echo "usage: alert.sh --self-test | --unit <name> | <message>" >&2
