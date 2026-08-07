@@ -16,12 +16,19 @@ import { readCtazStatusFile, statusIsStale } from "./statusFile.ts";
 
 /** Short. This sits in front of a claim, and a slow node should read as unavailable
  *  rather than hold someone's request open. */
-/** One place the transport is described, so the two readers cannot drift apart. */
+/** One place the transport is described, so the two readers cannot drift apart.
+ *
+ * FOUR SECONDS HERE, NOT THE SENDER'S THIRTY. This transport now runs on every
+ * /api/status request (the reader is RPC-first), and the broker's own node timeout is
+ * 30s - so a wedged node would otherwise hold every status poll for half a minute. The
+ * send path keeps the long timeout because a payment refused at 4s looks like an empty
+ * wallet; a status read that gives up at 4s just falls back to the file. */
+const READ_TIMEOUT_MS = 4000;
 function transport() {
   return {
     socketPath: config.crosslink.rpcSocket,
     rpcUrl: config.crosslink.rpcUrl,
-    timeoutMs: config.crosslink.rpcTimeoutMs,
+    timeoutMs: READ_TIMEOUT_MS,
   };
 }
 
@@ -45,28 +52,54 @@ export interface CtazNodeState {
 }
 
 /**
- * THE FILE IS THE PRODUCTION PATH and the RPC is the local one.
+ * THE RPC IS THE PRODUCTION PATH NOW, AND FILE-FIRST MADE THE FAUCET UNSERVABLE FOREVER.
  *
- * File first, because in the container the RPC cannot work at all and trying it first would
- * spend a 4s timeout on every status request to learn that again. RPC second, because a
- * developer running this on a host WITH the node reachable should not need to run the
- * writer script to see anything.
+ * The old order was file first, and its comment was right when it was written: the
+ * container had no route to the node's RPC, so trying it first burned a timeout on every
+ * status request to learn the same thing again. Then #411 gave the container a working
+ * route (the unix socket and its broker), and #410 made the gate refuse any state that
+ * did NOT arrive over RPC - the file can only say the node is well, never that we can
+ * reach it to pay.
  *
- * A STALE FILE IS cannot-verify, NOT the last thing it said. That is the whole reason the
- * timestamp is written: a file nobody is refreshing describes a node that may have died
- * ten minutes ago, and reporting its last known state as current is how a green page
- * outlives the thing it describes.
+ * Composed, the three parts deadlocked: the socket worked, the gate demanded rpc, and
+ * this function answered from the file before ever trying the socket. Both changes were
+ * individually correct and their composition could never serve. Found on prod, with the
+ * broker answering real chain data on the host while the page said servable:false -
+ * measured, one layer at a time, an hour after I said the work was done.
+ *
+ * So: RPC first. The file stays as the fallback, and it is still load-bearing - a box
+ * where the broker is down keeps a panel that can say WHICH half broke, and dev hosts
+ * without the writer script keep working. A STALE FILE remains cannot-verify, never the
+ * last thing it said.
  */
 export async function readCtazNodeState(nowMs: number = Date.now()): Promise<CtazNodeState> {
   const none = { reading: readingFor(null, nowMs), syncPercent: null, blocks: null, tip: null };
   if (!config.crosslink.enabled) return { ...none, source: "none" };
 
+  // getinfo AS WELL AS the recency status, and the reason is a regression I shipped. The
+  // sync gate needs blocks AND tip, and the first version of this path returned tip: null,
+  // so canServeCtaz refused every claim on the RPC path while passing on the file path.
+  // Both paths must supply both figures or the gate is not the same gate.
+  const reading = await readCtazRecency(nowMs);
+  const info = await readCtazInfo();
+  if (reading.state !== "cannot-verify" || info.blocks != null) {
+    return {
+      reading,
+      syncPercent:
+        info.blocks != null && info.tip != null && info.tip > 0
+          ? Math.min(100, Math.round((info.blocks / info.tip) * 1000) / 10)
+          : null,
+      blocks: info.blocks,
+      tip: info.tip,
+      source: "rpc",
+    };
+  }
+
+  // The RPC did not answer: broker down, socket missing, or a dev host with neither.
+  // The file keeps the PANEL informative here; the GATE still refuses everything from
+  // this branch, because source stays "file" and paying needs the path that just failed.
   const f = readCtazStatusFile(config.crosslink.statusFile);
   if (f.at != null) {
-    // The file exists and parses, so it IS the answer, including when the answer is bad.
-    // Falling through to the RPC here would be worse than useless: it cannot work in the
-    // container, so it would replace a specific "the writer is stale" with a generic
-    // "cannot verify" and lose the only clue about which half is broken.
     if (statusIsStale(f, nowMs)) return { ...none, source: "file" };
     if (!f.readable) return { ...none, source: "file" };
     return {
@@ -78,26 +111,9 @@ export async function readCtazNodeState(nowMs: number = Date.now()): Promise<Cta
     };
   }
 
-  // No file at all: a dev host, or cTAZ enabled before the writer was installed.
-  //
-  // getinfo AS WELL AS the recency status, and the reason is a regression I shipped. The
-  // sync gate needs blocks AND tip, and the first version of this path returned tip: null,
-  // so canServeCtaz refused every claim on the RPC path while passing on the file path.
-  // Every local check I ran used the file, so I verified the configuration I had built
-  // rather than the one CI uses, and CI caught it. Both paths must supply both figures or
-  // the gate is not the same gate.
-  const reading = await readCtazRecency(nowMs);
-  const info = await readCtazInfo();
-  return {
-    reading,
-    syncPercent:
-      info.blocks != null && info.tip != null && info.tip > 0
-        ? Math.min(100, Math.round((info.blocks / info.tip) * 1000) / 10)
-        : null,
-    blocks: info.blocks ?? reading.height,
-    tip: info.tip,
-    source: "rpc",
-  };
+  // Nothing answered anywhere: RPC failed and there is no file. "none" rather than a
+  // pretend source, so the panel says the truth - we could not ask, not "the node said".
+  return { ...none, source: "none" };
 }
 
 /**
