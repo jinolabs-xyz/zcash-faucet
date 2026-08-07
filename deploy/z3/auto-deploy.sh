@@ -36,10 +36,65 @@ changed="$(git diff --name-only "$LOCAL" "$REMOTE")"
 app=0
 ops=0
 printf '%s\n' "$changed" | grep -qE '^(src/|public/|package|Dockerfile|next\.config|tsconfig|deploy/z3/(docker-compose|Caddyfile))' && app=1
-printf '%s\n' "$changed" | grep -qE '^deploy/z3/.*\.(sh|service|timer)$' && ops=1
+printf '%s\n' "$changed" | grep -qE '^deploy/z3/.*\.(sh|service|timer|socket)$' && ops=1
+# THE MINER IS A COMPILED BINARY AND NOTHING REBUILT IT (#412).
+#
+# install-ops syncs scripts and units. It cannot rebuild a binary and does not try, so a
+# commit touching miner source left /opt/faucet/zcash-testnet-miner older than its
+# sources - which is exactly what box-report compares - and the box sat at 40 of 41 with
+# `minerBinary: stale` until a human logged in and ran two commands from MINING.md.
+#
+# It was not theoretical. #402 merged 2026-08-04 17:32 UTC and the next live-smoke run
+# went red and stayed red for two days. The external monitor was correct the whole time
+# and unactionable, which taught at least one reader to treat it as noise.
+miner=0
+printf '%s\n' "$changed" | grep -qE '^deploy/z3/miner/(src/|Cargo\.(toml|lock))' && miner=1
 
 git reset -q --hard "origin/$BRANCH"
-log "advanced to $(git rev-parse --short HEAD) (app=$app ops=$ops)"
+log "advanced to $(git rev-parse --short HEAD) (app=$app ops=$ops miner=$miner)"
+
+# BUILT ON THE BOX, DELIBERATELY, AND THE HOUSE RULE IS NOT BEING BROKEN.
+#
+# SNAPSHOTS.md says the Crosslink node is built in a container and never on the box, and
+# that rule is right FOR THAT BUILD: zebra takes hours and would starve the node it is
+# meant to serve. This one takes 41 seconds, measured on this box while cTAZ was mining
+# at its 250% quota. Shipping an artefact instead would mean a release asset or a
+# registry, which is a fetch path, a credential and a storage bill for a 3 MB file that
+# rebuilds in under a minute. The owner's constraint is no new hosting; this respects it.
+#
+# Niced and ioniced so the node keeps its CPU, and it only runs when miner source moved,
+# which is rare.
+if [ "$miner" = "1" ]; then
+  # cargo is not on a non-login shell's PATH here, which is its own small evidence that
+  # this was never a routine step. Found by watching a "successful" build compile nothing.
+  CARGO="${MINER_CARGO:-/root/.cargo/bin/cargo}"
+  if [ ! -x "$CARGO" ]; then
+    log "ERROR: miner source changed but no cargo at $CARGO, so the binary stays stale"
+    miner_rc=1
+  elif ! nice -n 19 ionice -c3 "$CARGO" build --release \
+        --manifest-path "$REPO_DIR/deploy/z3/miner/Cargo.toml" >/dev/null 2>&1; then
+    log "ERROR: the miner failed to build, keeping the binary that is already installed"
+    miner_rc=1
+  else
+    # RENAME, NEVER cp ONTO THE RUNNING FILE. `cp` over a live binary gives "Text file
+    # busy" and does nothing, and the restart afterwards then relaunches the OLD build
+    # while every status signal reads healthy. I shipped that mistake by hand an hour
+    # before writing this; only comparing the sha caught it.
+    built="$REPO_DIR/deploy/z3/miner/target/release/zcash-testnet-miner"
+    if install -m 755 "$built" "$INSTALL_DIR/.zcash-testnet-miner.new" \
+       && mv -f "$INSTALL_DIR/.zcash-testnet-miner.new" "$INSTALL_DIR/zcash-testnet-miner"; then
+      systemctl restart zcash-testnet-miner 2>/dev/null \
+        || log "ERROR: new miner installed but the restart failed, it is still on the old one"
+      log "miner rebuilt and restarted ($(sha256sum "$INSTALL_DIR/zcash-testnet-miner" | cut -c1-12))"
+      miner_rc=0
+    else
+      log "ERROR: could not install the rebuilt miner"
+      miner_rc=1
+    fi
+  fi
+else
+  miner_rc=0
+fi
 
 if [ "$ops" = "1" ]; then
   # Install the installer first, then run the INSTALLED copy, so /opt/faucet is
@@ -83,6 +138,11 @@ if [ "$app" = "1" ]; then
   # a broken deploy from an unverified one and that distinction decides who gets paged.
   # Otherwise a failed ops install still fails the run.
   [ "$app_rc" -ne 0 ] && exit "$app_rc"
+  # A failed miner rebuild leaves the box at 40 of 41 and the live probe red, which is
+  # the state this whole change exists to end. It must not exit 0 just because the app
+  # and ops halves went fine. shellcheck caught that this variable was set and never
+  # read, which would have made the rebuild's failure path decorative.
+  [ "$rc" -eq 0 ] && [ "$miner_rc" -ne 0 ] && exit "$miner_rc"
   exit "$rc"
 fi
 
@@ -91,4 +151,5 @@ fi
 # A failed install must not exit 0. The timer's own status is the only signal anyone
 # sees for this unit, and reporting success for a box that is not at spec is how the
 # missing 19 files stayed invisible.
+[ "$rc" -eq 0 ] && [ "$miner_rc" -ne 0 ] && exit "$miner_rc"
 exit "$rc"
