@@ -103,3 +103,27 @@ test("a refresh against a dead broker leaves an aged-out cache, not a crash", as
   // No socket at all: the raw reader falls to file (absent) then none.
   assert.equal(s.source, "none");
 });
+
+test("A COLD CACHE WAITS FOR THE WARM-UP instead of racing it", async () => {
+  // The CI flake this closes: server boots, page loads immediately, first status
+  // request beats the boot refresh and renders not-ready against a healthy double.
+  // Against a fast broker the warm variant must return the real answer on the very
+  // first call.
+  await serveBroker();
+  const { cachedCtazNodeStateWarm } = await import("./cache.ts");
+  const s = await cachedCtazNodeStateWarm();
+  assert.equal(s.source, "rpc", "first call after boot must not lose to its own warm-up");
+  await stopBroker();
+});
+
+test("and the cold wait is BOUNDED, so a slow node cannot hang the first request", async () => {
+  // No broker at all: the connect fails fast, the refresh settles, and the bounded
+  // wait returns promptly either way. The assertion is on the clock, because the
+  // property is latency, not the verdict.
+  const { cachedCtazNodeStateWarm } = await import("./cache.ts");
+  const t0 = Date.now();
+  const s = await cachedCtazNodeStateWarm(Date.now(), 500);
+  const ms = Date.now() - t0;
+  assert.ok(ms < 2_000, `first cold call took ${ms}ms against a 500ms cap`);
+  assert.equal(s.reading.state, "cannot-verify", "and the honest cold answer stands");
+});

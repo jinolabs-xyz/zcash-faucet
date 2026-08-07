@@ -11,7 +11,7 @@ import { getNodeStatus } from "@/lib/zcash/nodeStatus";
 import { getReserveReconciler } from "@/lib/reserve/reconciler";
 import { readMinerHeartbeat } from "@/lib/miner/read";
 import { isActive } from "@/lib/miner/heartbeat";
-import { cachedCtazNodeState } from "@/lib/crosslink/cache";
+import { cachedCtazNodeStateWarm } from "@/lib/crosslink/cache";
 import { canServeCtaz } from "@/lib/crosslink/recency";
 import { withApi } from "@/lib/api";
 
@@ -41,7 +41,7 @@ async function ctazBlock() {
   // and a status endpoint that sometimes takes half a minute is down in every way that
   // matters. cache.ts owns the expensive read and its staleness rules.
   const [node, drips] = await Promise.all([
-    Promise.resolve(cachedCtazNodeState()),
+    cachedCtazNodeStateWarm(),
     countDrips(Date.now(), "ctaz"),
   ]);
   const reading = node.reading;
