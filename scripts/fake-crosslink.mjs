@@ -116,7 +116,22 @@ createServer((req, res) => {
       // change that made the sync gate require a tip passed every local check and failed
       // CI: the RPC path had no way to learn either figure, so it could never serve.
       // CTAZ_BLOCKS below its tip models a node still catching up.
-      case "getinfo": out = rpcOk(id, { blocks: CTAZ_BLOCKS, estimatedheight: CTAZ_TIP }); break;
+      //
+      // NO estimatedheight HERE ANY MORE, because the real build has none. Measured on
+      // the live node: getinfo returns exactly twelve fields - blocks, build, connections,
+      // difficulty, errors, errorstimestamp, paytxfee, protocolversion, relayfee,
+      // subversion, testnet, version - and not one of them is a tip. This double answered
+      // with a tip anyway, so it modelled a node that cannot exist, and the reader was
+      // written against the fiction. ctaz-status.sh hit the same wall on the box and its
+      // header records it: the panel read "sync unknown" on a node sitting at the tip.
+      case "getinfo": out = rpcOk(id, { blocks: CTAZ_BLOCKS, subversion: "/CrosslinkDouble/" }); break;
+      // WHERE THE TIP ACTUALLY LIVES. Added when the reader moved to it (#409); without
+      // this the double answers "method not found", blocks and tip come back null, and
+      // canServeCtaz correctly refuses - which is how a faithful gate plus an unfaithful
+      // double produced a red CI on a change that was right.
+      case "getblockchaininfo":
+        out = rpcOk(id, { blocks: CTAZ_BLOCKS, headers: CTAZ_TIP, estimatedheight: CTAZ_TIP });
+        break;
       // Deliberately absent: there is no balance method in the observed surface. The
       // spike found get_wallet_ufvk and the TFL family, and nothing that reports what
       // the mining wallet holds. Answering one here would let us build a balance the

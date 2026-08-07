@@ -132,6 +132,20 @@ jobs:
       # reserve would ship behind unit tests alone.
       FAUCET_CTAZ_ENABLED: "true"
       CROSSLINK_RPC_URL: http://127.0.0.1:28611/
+      # EMPTY ON PURPOSE, and this line is why the job exists at all (#409).
+      #
+      # In production the app reaches the Crosslink node through a unix socket, because
+      # the container has no route to its RPC. That default is right there and wrong
+      # everywhere else: here the node is an HTTP double on 28611, no socket exists, and
+      # ctazRpc deliberately does NOT fall back from a configured socket to HTTP - a
+      # broken socket in production must not silently become a direct call.
+      #
+      # So without this, cTAZ never becomes servable in CI, the toggle renders unready and
+      # every cTAZ assertion in ui-smoke fails. It did: the socket PR was red here and the
+      # Actions outage hid it behind cancelled jobs long enough for me to call the whole
+      # thing infrastructure. The empty value is the documented escape hatch for exactly
+      # this case, a node that is directly reachable.
+      FAUCET_CTAZ_RPC_SOCKET: ""
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
