@@ -49,9 +49,25 @@ ZSNAP_MODE="${ZSNAP_MODE:-hot}"
 ZSNAP_ZEBRAD="${ZSNAP_ZEBRAD:-/opt/zebrad-miner}"
 ZSNAP_CHAIN_VOLUME="${ZSNAP_CHAIN_VOLUME:-z3-${ZSNAP_NETWORK}-chain}"
 ZSNAP_DIR="${ZSNAP_DIR:-/var/lib/zsnap}"
-# Three generations, so no single snapshot is a point of failure and a recent
-# one always exists. zsnap-import.sh walks them newest to oldest.
-ZSNAP_KEEP="${ZSNAP_KEEP:-3}"
+# ONE generation, by the owner's instruction: take a new snapshot, delete the old one.
+#
+# This defaulted to 3 with a written rationale ("no single snapshot is a point of
+# failure"), and the owner had asked for 1. Nothing on the box set ZSNAP_KEEP, so the
+# default quietly won and we sat on three 8.5 GB archives - 25 GB of a 157 GB disk that
+# had already hit 85% and has taken this box down once before. A default that overrides
+# an instruction is the same failure as a config nobody set.
+#
+# THE OLD ARGUMENT IS ANSWERED BY THE VERIFY STEP, which did not exist when it was
+# written. Order in this script is now: verify, then repoint `latest`, THEN rotate. A
+# snapshot is only deleted once a replacement has decompressed, had every chunk checked
+# against its manifest, and matched the hash zebrad reported. We never trade a good
+# archive for an unchecked one.
+#
+# What is genuinely given up: a snapshot that is verified but represents a BAD MOMENT -
+# a node that was at tip and wrong. Nothing detects that, and with one generation there
+# is no older copy to fall back to. The mitigation is that a rebuild fails loudly at
+# import rather than silently, and a resync from genesis stays possible.
+ZSNAP_KEEP="${ZSNAP_KEEP:-1}"
 ZSNAP_FORCE="${ZSNAP_FORCE:-0}"               # 1 = skip the ready and space gates
 ZSNAP_RETRIES="${ZSNAP_RETRIES:-3}"           # export attempts before giving up
 ZSNAP_RETRY_WAIT="${ZSNAP_RETRY_WAIT:-30}"    # seconds between attempts
@@ -589,6 +605,14 @@ find "$ZSNAP_DIR/snapshots" -maxdepth 1 -name "zsnap-$ZSNAP_NETWORK-*.tar.zst" -
       log "rotating out $(basename "$old")"
       rm -f "$old" "$old.manifest-hash"
     done
+
+# A KEPT FAILURE IS ONLY EVIDENCE UNTIL A SUCCESS SUPERSEDES IT. The failure path
+# already bounds itself to one .unverified, but nothing swept it once a later run
+# succeeded, so an 8.5 GB archive from a fault we had already fixed sat on the disk for
+# three days. Reaching this line means a verified snapshot exists, which is a better
+# answer than any evidence the old failure carried.
+find "$ZSNAP_DIR/snapshots" -maxdepth 1 \( -name '*.tar.zst.unverified' -o -name '*.unverified.txt' \) \
+  -print -delete 2>/dev/null | while read -r swept; do log "swept superseded failure evidence: $(basename "$swept")"; done
 
 log "done: height $height, manifest hash $manifest_hash, $(du -h "$archive" | cut -f1) on disk, verified"
 
