@@ -25,12 +25,22 @@
 import { readCtazNodeState, type CtazNodeState } from "./read.ts";
 import { readingFor } from "./recency.ts";
 
-/** How often the background read runs. The node answers in ms when its RPC thread gets
- *  CPU, so this is about bounding staleness, not load. */
-const REFRESH_INTERVAL_MS = 15_000;
-/** Past this, the cache is not an answer. 90s tolerates two slow refreshes back to back;
- *  the recency reading's own 120s staleness rule still applies on top, at read time. */
-const MAX_CACHE_AGE_MS = 90_000;
+/** How often the background read runs. A refresh in flight makes the interval skip, so
+ *  this is the floor between attempts, not a rate. */
+const REFRESH_INTERVAL_MS = 20_000;
+/** Past this, the cache is not an answer.
+ *
+ *  180s, RESIZED AFTER PROD AGED OUT AT 90. The recency call alone measures 8-30s on
+ *  this node (its RPC thread starved by its own miner), the refresher runs recency then
+ *  getblockchaininfo sequentially, and one slow-plus-one-failed cycle overshot 90s - so
+ *  the cache expired between successful refreshes and the gate flapped. 180s tolerates
+ *  one full worst-case cycle plus one failure.
+ *
+ *  THE COST, stated rather than hidden: the gate can serve a reading up to three
+ *  minutes old. The drip itself still goes through the node live at send time, so a
+ *  node that died inside the window fails the send rather than paying blind - the
+ *  staleness bounds the ERROR MESSAGE's accuracy, not the money. */
+export const MAX_CACHE_AGE_MS = 180_000;
 
 interface Cached {
   state: CtazNodeState;

@@ -50,10 +50,12 @@ SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 
 # One call is a request and a reply. Anything longer is a wedged node, and the broker's
-# own timeout should have fired first - this is the backstop for the case where it did
-# not, so a stuck instance cannot hold a connection slot forever.
-TimeoutStartSec=45
-RuntimeMaxSec=60
+# own timeout (80s) should have fired first - this is the backstop for the case where it
+# did not, so a stuck instance cannot hold a connection slot forever. The ladder is
+# client 75s < broker 80s < unit 100s, each layer outliving the one that talks to it,
+# so a timeout always fires at the layer that can name the cause.
+TimeoutStartSec=100
+RuntimeMaxSec=100
 
 MemoryMax=64M
 CPUQuota=25%

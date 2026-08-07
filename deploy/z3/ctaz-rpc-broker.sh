@@ -30,10 +30,12 @@
 set -uo pipefail
 
 CTAZ_RPC_URL="${CTAZ_RPC_URL:-http://127.0.0.1:19232/}"
-# 30s. The node is slow to answer its first request under mining - measured at 11.9s on a
-# cold hit, then milliseconds - and a payment refused because we gave up at five seconds
-# would look to a user exactly like an empty wallet.
-CTAZ_BROKER_TIMEOUT="${CTAZ_BROKER_TIMEOUT:-30}"
+# 80s, above the app's 75s read timeout ON PURPOSE: the layer closest to the node must
+# give up LAST, or the client sees a closed socket and blames the broker for the node's
+# slowness - which is exactly how the broken-pipe crashes read. Measured on this node:
+# get_tfl_recency_status takes 8-30+ seconds routinely (26.3, 30.6, 7.8, 24.4, 20.0 in
+# five samples), because the RPC thread is starved by the node's own miner.
+CTAZ_BROKER_TIMEOUT="${CTAZ_BROKER_TIMEOUT:-80}"
 # Refuse a body that is not a plausible JSON-RPC call before parsing it. 64 KiB is far
 # more than any request here needs; the largest is an address plus envelope.
 CTAZ_BROKER_MAX_BYTES="${CTAZ_BROKER_MAX_BYTES:-65536}"

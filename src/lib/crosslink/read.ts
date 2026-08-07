@@ -24,7 +24,13 @@ import { readCtazStatusFile, statusIsStale } from "./statusFile.ts";
  * so 4s abandoned half the calls (and the broker died on the broken pipe), and the
  * reader fell back to the file forever. cache.ts now calls this on an interval, off the
  * request path, where waiting out the node's worst case costs nobody a page load. */
-const READ_TIMEOUT_MS = 30_000;
+// 75s, sized to a MEASUREMENT, not a preference. Five timed get_tfl_recency_status
+// calls through the socket on the live box: 26.3s, 30.6s, 7.8s, 24.4s, 20.0s. The 30s
+// budget lost roughly one call in five at the wire, and every loss reads as
+// cannot-verify - a gate that flaps on a healthy node. This read runs in cache.ts's
+// background refresher, so the only cost of waiting is staleness, which the cache's
+// age-out already bounds.
+const READ_TIMEOUT_MS = 75_000;
 function transport() {
   return {
     socketPath: config.crosslink.rpcSocket,
