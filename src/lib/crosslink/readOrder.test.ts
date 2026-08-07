@@ -155,3 +155,53 @@ test("a dead broker AND no file is source none, not a pretend answer", async () 
     await serveBroker(294_800, 294_801);
   }
 });
+
+test("A SLOW NODE'S REPLY IS CLASSIFIED AT REPLY TIME, not against the pre-call clock", async () => {
+  // The production failure: this node takes 16-45s to answer recency and stamps now_utc
+  // when it finally does. Classifying against a timestamp captured before the call made
+  // the age negative, and the future-now_utc guard rejected every honest slow reply -
+  // cannot-verify forever, from a healthy node, within every timeout.
+  //
+  // The broker double here delays 1.5s and stamps now_utc at reply time, exactly like
+  // the real node. Under pre-call classification this reads cannot-verify; classified
+  // at reply time it is ready.
+  await stopBroker();
+  const slow: Server = createServer({ allowHalfOpen: true }, (conn) => {
+    let raw = "";
+    conn.on("data", (d) => (raw += d));
+    conn.on("end", () => {
+      const req = JSON.parse(raw) as { id: number; method: string };
+      setTimeout(() => {
+        const result =
+          req.method === "get_tfl_recency_status"
+            ? {
+                // Stamped NOW, after the delay, like the real node.
+                now_utc: Math.floor((NOW + 1_500) / 1000),
+                my_height: 294_800,
+                my_round: 0,
+                // -1 is BFT's "no round locked yet", seen on the live net. It must not
+                // be treated as an invalid field.
+                my_locked_round: -1,
+                finalizer_statuses: Array.from({ length: 47 }, () => ({})),
+              }
+            : { blocks: 294_800, estimatedheight: 294_801, headers: 294_801 };
+        conn.end(JSON.stringify({ jsonrpc: "2.0", id: req.id, result }));
+      }, 1_500);
+    });
+  });
+  await new Promise<void>((r) => slow.listen(SOCK, r));
+  try {
+    const s = await readCtazNodeState(NOW);
+    assert.equal(s.reading.state, "ready", `a slow honest reply must classify ready, got ${s.reading.state}`);
+    assert.equal(
+      canServeCtaz(s.reading.state, s.blocks ?? s.reading.height, s.tip, s.source),
+      true,
+      "and it serves end to end",
+    );
+  } finally {
+    await new Promise<void>((r) => slow.close(() => r()));
+    rmSync(SOCK, { force: true });
+    await serveBroker(294_800, 294_801);
+    writeFreshFile();
+  }
+});
