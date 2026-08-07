@@ -19,7 +19,7 @@ process.env.FAUCET_CTAZ_RPC_SOCKET = SOCK;
 process.env.CROSSLINK_RPC_URL = "";
 process.env.FAUCET_CTAZ_STATUS_FILE = join(dir, "no-such-file.json");
 
-const { cachedCtazNodeState, refreshCtazStateForTests, resetCtazStateCacheForTests } =
+const { cachedCtazNodeState, refreshCtazStateForTests, resetCtazStateCacheForTests, MAX_CACHE_AGE_MS } =
   await import("./cache.ts");
 
 let server: Server | null = null;
@@ -88,16 +88,21 @@ test("A CACHE NOBODY REFRESHES AGES OUT, it does not describe a dead node foreve
   await refreshCtazStateForTests();
   const fresh = cachedCtazNodeState(Date.now());
   assert.equal(fresh.source, "rpc", "fresh: served");
-  // 91 seconds later with no refresh, the answer is withdrawn. This is the property that
-  // makes caching safe here at all: the status file has the same rule, for the same
-  // reason, and cache.ts must not be the one layer allowed to lie about age.
-  const stale = cachedCtazNodeState(Date.now() + 91_000);
+  // One tick past the contract's own cutoff, the answer is withdrawn. The cutoff is
+  // imported rather than copied: the first version hardcoded 91_000, the constant was
+  // resized to the node's measured latency, and the test failed for tracking a number
+  // instead of the contract. This is the property that makes caching safe here at all,
+  // and cache.ts must not be the one layer allowed to lie about age.
+  const stale = cachedCtazNodeState(Date.now() + MAX_CACHE_AGE_MS + 1_000);
   assert.equal(stale.source, "none", "aged out: withdrawn");
   assert.equal(stale.reading.state, "cannot-verify");
   await stopBroker();
 });
 
 test("a refresh against a dead broker leaves an aged-out cache, not a crash", async () => {
+  // Explicitly dead, not incidentally: an assertion failure in an earlier test skips
+  // that test's own stopBroker() and this one then measured a live broker by accident.
+  await stopBroker();
   await refreshCtazStateForTests();
   const s = cachedCtazNodeState();
   // No socket at all: the raw reader falls to file (absent) then none.
