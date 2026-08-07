@@ -79,15 +79,72 @@ edits=$(printf '%s\n' \
   "sync	full_verify_concurrency_limit	10" \
   "mining	internal_miner	false")
 
-awk -v edits="$edits" '
+# KEYS THEIR GENERATED CONFIG DOES NOT CONTAIN, so they are INSERTED rather than replaced.
+# The awk above deliberately fails on a key it cannot find, which is right for keys they
+# ship and might rename - but miner_address is one they support and simply omit from the
+# default, so a missing-key failure would be wrong here.
+#
+# MINING INTO THE POOL THE FAUCET SPENDS FROM, which is the whole point (#328).
+#
+# Measured on the live node: we mine well (93 accepted blocks in 24 hours) and every
+# reward lands in a TRANSPARENT address, a fresh one per block. requestfaucetdonation
+# calls send_orchard_to_orchard_zats, so it spends the ORCHARD pool, which stays empty
+# forever. The faucet accepted a claim, returned its fixed {"amount": 50000000}, and
+# moved nothing - exactly what #328 exists to catch.
+#
+# Their coinbase builder already handles this. From new_coinbase in
+# zebra-rpc/src/methods/types/transaction.rs, a unified address is matched
+# orchard-first: `addr.orchard().and_then(add_shielded_reward)`, falling back to
+# sapling then transparent. So pointing miner_address at a UA with an Orchard receiver
+# routes the reward into Orchard with no code change at all.
+#
+# AND IT BECOMES IRONWOOD ON ITS OWN AT NU6.3. Their comment, verbatim: "a unified miner
+# address with an Orchard receiver just gets routed to the Ironwood output builder from
+# NU6.3 onward". This chain is NU6 today (getblockchaininfo upgrades), and Ironwood's
+# chain value pool is empty until NU6.3 transactions appear, so Orchard is correct now
+# and the same config keeps working through the upgrade.
+#
+# THE ADDRESS IS THE NODE'S OWN WALLET AND CANNOT BE HARDCODED HERE. It is derived from
+# that node's seed, so a rebuilt box has a different one. The node prints it at startup:
+#
+#   journalctl -u ctaz-node | grep "MINER WALLET ADDRESS"
+#
+# Put it in /etc/faucet/ctaz.env as CTAZ_MINER_ADDRESS. Unset leaves the config exactly
+# as it is today - transparent rewards and a faucet that cannot pay - which is a poor
+# state but not a broken one, and better than this script inventing an address.
+inserts=""
+if [ -n "${CTAZ_MINER_ADDRESS:-}" ]; then
+  case "$CTAZ_MINER_ADDRESS" in
+    utest1*|u1*) ;;
+    *) log "KNOWN BAD: CTAZ_MINER_ADDRESS is not a unified address: ${CTAZ_MINER_ADDRESS%%1*}1..."
+       log "  A transparent or sapling address here would keep the reward OUT of the Orchard"
+       log "  pool that requestfaucetdonation spends, which is the bug this setting fixes."
+       exit 1 ;;
+  esac
+  inserts="mining	miner_address	\"${CTAZ_MINER_ADDRESS}\""
+fi
+
+awk -v edits="$edits" -v inserts="$inserts" '
 BEGIN {
   n = split(edits, rows, "\n")
   for (i = 1; i <= n; i++) {
     split(rows[i], f, "\t")
     want[f[1] SUBSEP f[2]] = f[3]
   }
+  m = split(inserts, irows, "\n")
+  for (i = 1; i <= m; i++) {
+    if (irows[i] == "") continue
+    split(irows[i], g, "\t")
+    add[g[1]] = add[g[1]] g[2] " = " g[3] "\n"
+  }
 }
-/^\[+[^]]+\]/ { section = $0; gsub(/^\[+|\]+$/, "", section) }
+# Emitted immediately after the section header, so the key lands INSIDE its own section.
+# Appending at end of file would put it under whatever section happens to be last, which
+# TOML would read as a different key entirely.
+/^\[+[^]]+\]/ {
+  section = $0; gsub(/^\[+|\]+$/, "", section)
+  if (section in add) { print; printf "%s", add[section]; delete add[section]; next }
+}
 {
   if (match($0, /^[A-Za-z_][A-Za-z0-9_]*[ \t]*=/)) {
     key = $0; sub(/[ \t]*=.*$/, "", key)
