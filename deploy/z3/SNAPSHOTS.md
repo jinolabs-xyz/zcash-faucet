@@ -12,6 +12,52 @@ The snapshot commands come from our zebra fork
 ([Giri-Aayush/zebra](https://github.com/Giri-Aayush/zebra), branch
 `feat/snapshot-sync`). The build on the box lives at `/opt/zebrad-miner`.
 
+## Hosting: served from the box we already pay for (#7)
+
+A verified snapshot is hardlinked into a publish directory and served by the Caddy that
+already fronts the faucet:
+
+    https://<domain>/snapshots/latest-testnet.txt              the pointer, 3 lines
+    https://<domain>/snapshots/zsnap-testnet-<h>-<hash12>.tar.zst
+    https://<domain>/snapshots/<same>.tar.zst.sha256           transport checksum
+    https://<domain>/snapshots/<same>.manifest-hash            the identity
+
+Read the pointer, download what it names, and hand the hash to `zsnap-import.sh` or
+`zebrad import-snapshot --expect-hash`. No account, no credential: chain state is public.
+
+### Why the box and not object storage
+
+Every other option costs money for a file that is public data. Object storage is a
+monthly bill that grows with each generation kept; GitHub Releases caps a single asset at
+**2 GB** against an **8.5 GB** archive, so it is not merely expensive but unusable.
+
+**The bandwidth math, because this is the one part that can become a charge.** Measured
+**45 GB of egress in 10 days** (~135 GB/month) against Linode's ~1 TB included transfer,
+with each download at **8.5 GB**. That leaves headroom for roughly **100 downloads a
+month** — ample for disaster recovery, and nowhere near enough to survive being treated
+as a public mirror. If that headroom ever starts disappearing, the transfer graph is the
+place it will show, and object storage becomes the honest answer at that point rather
+than this one.
+
+There is **no directory listing**. You need the pointer to know what to ask for, which
+keeps a crawler from walking three 8.5 GB archives for fun.
+
+### Only verified snapshots are reachable
+
+`/var/lib/zsnap/snapshots` also holds `.unverified` archives — the ones the export's own
+check **rejected**. Caddy does not serve that directory. `zsnap-publish.sh` hardlinks the
+verified artefacts into a separate `public` directory and Caddy serves only that, so an
+archive we refused to trust cannot be handed to someone rebuilding a box.
+
+Hardlinks rather than copies: same filesystem, so publishing 8.5 GB costs **zero extra
+disk** on a box with 46 GB free.
+
+### Disk, which is the other budget
+
+Three generations at 8.5 GB is ~26 GB, and publishing adds nothing on top. `ZSNAP_KEEP`
+is what to turn down if the volume gets tight; it must stay at least 1, and the export
+refuses 0 rather than rotating away the snapshot it just made.
+
 ## Cold vs hot: how the export coexists with a live node
 
 By design, `export-snapshot` opens the state in RocksDB **read-only secondary

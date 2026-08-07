@@ -94,6 +94,16 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+      # PUBLISHED SNAPSHOTS, READ-ONLY, AND A DIFFERENT DIRECTORY FROM THE ONE THE
+      # EXPORTER WRITES (#7). /var/lib/zsnap/snapshots also holds `.unverified`
+      # archives - the ones our own check REJECTED - and serving those would hand a
+      # stranger rebuilding a box exactly the file we refused to trust. zsnap-publish
+      # hardlinks only verified artefacts into `public`, so the served set cannot
+      # include one by accident.
+      #
+      # Hardlinks, not copies: same filesystem, so 8.5 GB is published at zero extra
+      # disk on a box with 46 GB free.
+      - ${ZSNAP_PUBLIC_DIR:-/var/lib/zsnap/public}:/srv/snapshots:ro
     networks:
       - edge
 

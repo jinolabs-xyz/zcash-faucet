@@ -628,3 +628,43 @@ head -c 20000 "$T/good.tar.zst" > "$T/cut.tar.zst"
 bash "$EXPORT" --verify-only "$T/cut.tar.zst" "$VHASH" > "$T/vcut.log" 2>&1
 check "an archive cut off partway is refused" "[ $? -ne 0 ]"
 check "and is never reported as verified" "! grep -q '^verified' '$T/vcut.log'"
+
+# ── HOSTING: ONLY VERIFIED SNAPSHOTS ARE REACHABLE (#7) ─────────────────────────────
+#
+# The export writes verified archives and REJECTED ones into the same directory, the
+# latter renamed `.unverified`. Serving that directory would hand someone rebuilding a
+# box the exact file our own check refused to trust - worse than having no hosting at
+# all, because it arrives looking official.
+#
+# So publishing goes to a separate directory, and these assert the separation rather
+# than assuming it. Proven able to fail: planting an unverified file in the public dir
+# reds the guard below.
+
+echo "== publish: a verified snapshot reaches the public dir, an unverified one never does"
+fresh_env; with_chain
+ZSNAP_PUBLIC="$T/public"; mkdir -p "$ZSNAP_PUBLIC"
+bash "$EXPORT" > "$T/pub1.log" 2>&1
+good="$(readlink "$ZSNAP_DIR/snapshots/latest.tar.zst")"
+# `ln -f` is what the box uses: same filesystem, so 8.5 GB publishes at zero extra disk.
+ZSNAP_PUBLISH_CMD="ln -f" ZSNAP_PUBLISH_BASE="$ZSNAP_PUBLIC" \
+  bash "$PUBLISH" "$ZSNAP_DIR/snapshots/$good" > "$T/pub2.log" 2>&1
+check "publishing a verified snapshot exits 0" "[ $? -eq 0 ]"
+check "the archive is in the public dir" "[ -f '$ZSNAP_PUBLIC/$good' ]"
+check "its identity travels with it" "[ -f '$ZSNAP_PUBLIC/$good.manifest-hash' ]"
+check "and a pointer names what to fetch" "[ -f '$ZSNAP_PUBLIC/latest-testnet.txt' ]"
+check "the pointer carries the hash an importer must verify against" \
+  "grep -q 'manifest_hash=' '$ZSNAP_PUBLIC/latest-testnet.txt'"
+
+echo "== publish: NOTHING .unverified is ever in the public directory"
+STUB_MANIFEST_MISMATCH=1 bash "$EXPORT" > "$T/pub3.log" 2>&1
+check "the rejected archive exists locally, so this test is not vacuous" \
+  "ls '$ZSNAP_DIR/snapshots/'*.unverified >/dev/null 2>&1"
+check "and NOTHING unverified reached the public dir" \
+  "! ls '$ZSNAP_PUBLIC/'*.unverified >/dev/null 2>&1"
+check "the public dir still holds only the good one" \
+  "[ \"\$(find '$ZSNAP_PUBLIC' -name '*.tar.zst' | wc -l | tr -d ' ')\" = '1' ]"
+
+echo "== publish: hardlinked, so publishing costs no extra disk"
+# A copy would double 8.5 GB on a box with 46 GB free. Same inode proves the link.
+check "the published archive is the SAME inode as the local one" \
+  "[ \"\$(stat -c %i '$ZSNAP_PUBLIC/$good')\" = \"\$(stat -c %i '$ZSNAP_DIR/snapshots/$good')\" ]"

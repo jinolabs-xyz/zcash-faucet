@@ -596,3 +596,20 @@ if [ -n "$ZSNAP_UPLOAD_CMD" ]; then
   log "running upload hook"
   $ZSNAP_UPLOAD_CMD "$archive" || log "upload hook failed (snapshot is still good locally)"
 fi
+
+# PUBLISH, AND ONLY EVER FROM HERE (#7).
+#
+# This line sits AFTER verification and after rotation on purpose. zsnap-publish copies
+# whatever it is pointed at, and the directory above also holds `.unverified` archives -
+# the ones this script's own check rejected. Publishing from there would hand a stranger
+# rebuilding a box exactly the file we refused to trust. Reaching this line means the
+# archive verified, so the set that can be published is the set that passed.
+#
+# Failure is logged and NOT fatal. A snapshot that exists locally but is not published is
+# a smaller problem than a run that reports failure and makes an operator go looking for a
+# broken export. The next run republishes.
+if [ -n "${ZSNAP_PUBLISH_CMD:-}" ] && [ -n "${ZSNAP_PUBLISH_BASE:-}" ]; then
+  log "publishing $(basename "$archive")"
+  "$(dirname "$0")/zsnap-publish.sh" "$archive" \
+    || log "publish failed (the snapshot is verified and still here; the next run retries)"
+fi
