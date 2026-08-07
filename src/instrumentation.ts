@@ -74,6 +74,14 @@ export async function register() {
   // does not block serving: a ledger nobody has asked about yet has not failed.
   void refreshLedgerHealthNow();
 
+  // The cTAZ node's state, read in the background because its RPC latency is bimodal:
+  // 20ms or 30 seconds, depending on whether its own miner is starving the RPC thread.
+  // Started here so the first /api/status after a deploy already has an answer instead
+  // of a cold cannot-verify; the first read also self-starts it, so this is a warm-up,
+  // not a dependency.
+  const { startCtazStateRefresher } = await import("@/lib/crosslink/cache");
+  startCtazStateRefresher();
+
   // Warm the independent tip cache so the first readiness check can already tell
   // whether our node is following the chain (#170). Fire-and-forget: never block
   // boot on a public endpoint.

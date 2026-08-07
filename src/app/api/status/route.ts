@@ -11,7 +11,7 @@ import { getNodeStatus } from "@/lib/zcash/nodeStatus";
 import { getReserveReconciler } from "@/lib/reserve/reconciler";
 import { readMinerHeartbeat } from "@/lib/miner/read";
 import { isActive } from "@/lib/miner/heartbeat";
-import { readCtazNodeState } from "@/lib/crosslink/read";
+import { cachedCtazNodeState } from "@/lib/crosslink/cache";
 import { canServeCtaz } from "@/lib/crosslink/recency";
 import { withApi } from "@/lib/api";
 
@@ -37,7 +37,13 @@ const round = (n: number | null) => (n == null ? null : Math.round(n));
  */
 async function ctazBlock() {
   if (!config.crosslink.enabled) return { enabled: false as const };
-  const [node, drips] = await Promise.all([readCtazNodeState(), countDrips(Date.now(), "ctaz")]);
+  // From the cache, never the socket: the node's RPC latency is bimodal (20ms or 30s)
+  // and a status endpoint that sometimes takes half a minute is down in every way that
+  // matters. cache.ts owns the expensive read and its staleness rules.
+  const [node, drips] = await Promise.all([
+    Promise.resolve(cachedCtazNodeState()),
+    countDrips(Date.now(), "ctaz"),
+  ]);
   const reading = node.reading;
   return {
     enabled: true as const,
