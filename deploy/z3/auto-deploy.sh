@@ -24,9 +24,30 @@ log() { echo "$(date -u +%FT%TZ) auto-deploy: $*"; }
 cd "$REPO_DIR" || { log "ERROR: no repo at $REPO_DIR"; exit 1; }
 
 git fetch -q origin "$BRANCH" || { log "ERROR: fetch failed, nothing changed"; exit 1; }
-LOCAL="$(git rev-parse HEAD)"
+# THE BASELINE IS A STATE FILE, NOT THE CHECKOUT'S HEAD, and a real deploy is why.
+#
+# redeploy.sh does its own `git pull` before building. So when main moved twice inside
+# one tick, this script reset to the FIRST commit, classified and installed ops for it,
+# and then redeploy silently advanced the checkout to the SECOND. The image was built
+# from the newer code, but the newer commit's OPS files were never installed - and the
+# next tick compared HEAD (already at the newer commit) to origin and said "nothing to
+# do". #416's alert.sh sat stale on the box while every deploy log read success; the
+# box report was the only thing that noticed.
+#
+# Diffing from the last commit THIS SCRIPT processed closes the window: whatever
+# redeploy pulls underneath us, the swallowed commits are re-examined next tick.
+STATE_FILE="${AUTODEPLOY_STATE_FILE:-/var/lib/faucet-autodeploy/last-processed}"
+mkdir -p "$(dirname "$STATE_FILE")" 2>/dev/null || true
+LOCAL="$(cat "$STATE_FILE" 2>/dev/null || true)"
+# First run, or a state file pointing at a commit this clone no longer has (a force
+# push, or a fresh box restored from backup): fall back to HEAD, which is the old
+# behaviour, and say so rather than failing a deploy over bookkeeping.
+if [ -z "$LOCAL" ] || ! git cat-file -e "$LOCAL^{commit}" 2>/dev/null; then
+  [ -n "$LOCAL" ] && log "state file points at unknown commit ${LOCAL:0:7}, falling back to HEAD"
+  LOCAL="$(git rev-parse HEAD)"
+fi
 REMOTE="$(git rev-parse "origin/$BRANCH")"
-[ "$LOCAL" = "$REMOTE" ] && { log "already at $(git rev-parse --short HEAD), nothing to do"; exit 0; }
+[ "$LOCAL" = "$REMOTE" ] && { log "already processed $(git rev-parse --short "$REMOTE"), nothing to do"; exit 0; }
 
 rc=0
 changed="$(git diff --name-only "$LOCAL" "$REMOTE")"
@@ -52,6 +73,11 @@ printf '%s\n' "$changed" | grep -qE '^deploy/z3/miner/(src/|Cargo\.(toml|lock))'
 
 git reset -q --hard "origin/$BRANCH"
 log "advanced to $(git rev-parse --short HEAD) (app=$app ops=$ops miner=$miner)"
+# Written BEFORE the halves run, deliberately. If ops or the rebuild fails, the tick
+# exits nonzero and the failure is the signal - but re-running the same diff next tick
+# would re-classify from the same baseline and retry the same work, which is what we
+# want, so the state advances only after a fully clean run (see the exit paths).
+PROCESSED="$REMOTE"
 
 # BUILT ON THE BOX, DELIBERATELY, AND THE HOUSE RULE IS NOT BEING BROKEN.
 #
@@ -143,6 +169,7 @@ if [ "$app" = "1" ]; then
   # and ops halves went fine. shellcheck caught that this variable was set and never
   # read, which would have made the rebuild's failure path decorative.
   [ "$rc" -eq 0 ] && [ "$miner_rc" -ne 0 ] && exit "$miner_rc"
+  [ "$rc" -eq 0 ] && printf '%s\n' "$PROCESSED" > "$STATE_FILE"
   exit "$rc"
 fi
 
@@ -152,4 +179,5 @@ fi
 # sees for this unit, and reporting success for a box that is not at spec is how the
 # missing 19 files stayed invisible.
 [ "$rc" -eq 0 ] && [ "$miner_rc" -ne 0 ] && exit "$miner_rc"
+[ "$rc" -eq 0 ] && printf '%s\n' "$PROCESSED" > "$STATE_FILE"
 exit "$rc"
