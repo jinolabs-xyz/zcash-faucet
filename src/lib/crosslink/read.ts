@@ -144,14 +144,30 @@ async function readCtazInfo(): Promise<{ blocks: number | null; tip: number | nu
 export async function readCtazRecency(nowMs: number = Date.now()): Promise<CtazReading> {
   if (!config.crosslink.enabled) return readingFor(null, nowMs);
   {
+    // THE CLOCK ADVANCES WHILE THE NODE COOKS, and classifying against the pre-call
+    // timestamp turned every honest slow answer into cannot-verify. This node takes
+    // 16-45s to answer recency (its RPC thread starved by its own miner), and it stamps
+    // now_utc at REPLY time - so `nowMs` captured before the call sat 16-45s in the
+    // past, the age came out negative, and the future-now_utc guard (right in itself: a
+    // node clock ahead of ours must not pass staleness checks) rejected every reply.
+    // Prod read cannot-verify forever, from a healthy node, over a working socket,
+    // within every timeout. The file path never hit this because a file is classified
+    // at read time, after the write.
+    //
+    // Advancing nowMs by the measured call duration classifies at the moment the
+    // answer actually existed. Elapsed is measured rather than Date.now() taken fresh,
+    // so tests that inject a fake epoch keep their clock: their doubles answer in
+    // milliseconds and elapsed stays ~0.
+    const before = Date.now();
     const { reply } = await ctazRpc(transport(), "get_tfl_recency_status");
-    if (!reply) return readingFor(null, nowMs);
+    const atReply = nowMs + (Date.now() - before);
+    if (!reply) return readingFor(null, atReply);
     // Their node answers TFL-off as an error rather than as a status, so this is the
     // one error that carries information. Matched on the message because that is what
     // the spike observed; anything else stays cannot-verify.
     if (reply.error) {
-      return /not activated/i.test(reply.error.message ?? "") ? notActivated() : readingFor(null, nowMs);
+      return /not activated/i.test(reply.error.message ?? "") ? notActivated() : readingFor(null, atReply);
     }
-    return readingFor(reply.result, nowMs);
+    return readingFor(reply.result, atReply);
   }
 }
