@@ -255,3 +255,55 @@ ad_advance deploy/z3/miner/Cargo.lock
 MINER_CARGO="$T/no-such-cargo" bash "$AD" > "$T/nocargo.log" 2>&1
 check "a missing cargo exits NONZERO" "[ $? -ne 0 ]"
 check "and names the path it looked for" "grep -q 'no cargo at' '$T/nocargo.log'"
+
+# ── THE SWALLOWED COMMIT: redeploy's own pull advanced HEAD past the tick (#416's alert.sh) ──
+#
+# Observed on prod 2026-08-07. One tick processed commit A and ran install-ops for it;
+# redeploy then pulled to B before building, so the image was B's but B's ops files were
+# never installed. The next tick compared HEAD (already B) to origin and said "nothing to
+# do". alert.sh sat stale on the box while every deploy log read success; only the box
+# report noticed. The baseline is now a state file recording what THIS SCRIPT processed,
+# not wherever redeploy left the checkout.
+
+echo "== auto-deploy: a commit swallowed by redeploy's pull is processed next tick"
+ad_env
+export AUTODEPLOY_STATE_FILE="$T/last-processed"
+# Tick 1 processes A cleanly, recording it.
+ad_advance deploy/z3/watchdog.sh
+bash "$AD" > "$T/tick1.log" 2>&1
+check "tick 1 exits 0" "[ $? -eq 0 ]"
+check "and records what it processed" "[ -s '$T/last-processed' ]"
+# Now main gains B (ops-touching), and the CHECKOUT is already at B, exactly as
+# redeploy's pull leaves it. Under HEAD-based detection this is "nothing to do".
+ad_advance deploy/z3/alert.sh
+git -C "$T/repo" fetch -q origin main
+git -C "$T/repo" reset -q --hard origin/main
+: > "$INSTALLOPS_LOG"
+bash "$AD" > "$T/tick2.log" 2>&1
+check "tick 2 exits 0" "[ $? -eq 0 ]"
+check "AND STILL RUNS INSTALL-OPS, despite HEAD already sitting at B" "[ -s '$INSTALLOPS_LOG' ]"
+check "then records B, so tick 3 is a real no-op" \
+  "bash '$AD' > '$T/tick3.log' 2>&1 && grep -q 'nothing to do' '$T/tick3.log'"
+
+echo "== auto-deploy: a FAILED tick does not advance the baseline, so the work is retried"
+ad_env
+export AUTODEPLOY_STATE_FILE="$T/last-processed"
+ad_advance deploy/z3/watchdog.sh
+bash "$AD" > /dev/null 2>&1
+before="$(cat "$T/last-processed")"
+ad_advance deploy/z3/alert.sh
+STUB_INSTALLOPS_RC=1 bash "$AD" > "$T/fail.log" 2>&1
+check "the failing tick exits nonzero" "[ $? -ne 0 ]"
+check "and the baseline did NOT move, so next tick retries the same commits" \
+  "[ \"\$(cat '$T/last-processed')\" = '$before' ]"
+
+echo "== auto-deploy: a state file pointing at an unknown commit falls back to HEAD"
+# A force push or a box restored from backup. Refusing to deploy over bookkeeping would
+# be worse than the race this file exists to close.
+ad_env
+export AUTODEPLOY_STATE_FILE="$T/last-processed"
+echo "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" > "$T/last-processed"
+ad_advance src/page.tsx
+bash "$AD" > "$T/unknown.log" 2>&1
+check "exits 0" "[ $? -eq 0 ]"
+check "says it fell back rather than doing it silently" "grep -q 'falling back to HEAD' '$T/unknown.log'"
