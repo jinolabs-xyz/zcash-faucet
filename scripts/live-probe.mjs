@@ -181,6 +181,39 @@ if (statusUsable) {
       box.reason ?? `state ${box.state}`,
     );
   }
+  // THE COMPOSITION CHECK cTAZ NEVER HAD, and the reason this file grew it. Every
+  // pre-merge layer was green while prod could not serve cTAZ, twice in one day: the
+  // reader preferred the file while the gate demanded the socket (#419), then the
+  // node's own RPC latency starved the request path (#420). CI runs the HTTP double
+  // by necessity, so the socket composition exists ONLY on the box, and only an
+  // outside probe can assert it.
+  //
+  // The invariant: an enabled cTAZ whose node reads ready must be servable, and its
+  // state must have come over the path that can pay (source rpc). A healthy node
+  // that is not servable is precisely the deadlock this week shipped twice.
+  //
+  // Degraded states stay honest rather than red: a node that is behind, stale or
+  // cannot-verify has servable:false as the CORRECT answer, and paging on it would
+  // punish the gate for working. Only the contradiction fails.
+  const ctaz = status.body.ctaz;
+  if (!ctaz) {
+    ok("ctaz composition reported", true, "server does not send `ctaz` yet, cannot verify");
+  } else if (!ctaz.enabled) {
+    ok("ctaz composition", true, "ctaz disabled, nothing to assert");
+  } else if (ctaz.readiness === "ready") {
+    ok(
+      "cTAZ: a ready node is servable over the paying path",
+      ctaz.servable === true && ctaz.source === "rpc",
+      `servable ${ctaz.servable}, source ${ctaz.source}`,
+    );
+  } else {
+    ok(
+      "cTAZ: not servable while the node is not ready, which is the gate working",
+      ctaz.servable !== true,
+      `readiness ${ctaz.readiness}, servable ${ctaz.servable}`,
+    );
+  }
+
   console.log(
     `  balance ${status.body.balanceTaz ?? "unknown"} TAZ` +
       ` · queue ${status.body.queueDepth ?? "?"}` +
