@@ -2,16 +2,31 @@
 # zsnap-export.sh and zsnap-import.sh. Sourced by run-tests.sh, which
 # provides the helpers in lib.sh and the EXPORT/IMPORT paths.
 
-echo "== export hot (default): three generations kept, the fourth rotates S1 out"
+echo "== export hot (default): ONE generation, each new snapshot replacing the last"
+# The owner's retention rule: take a new snapshot, delete the old one. This defaulted to
+# 3 and nothing on the box set ZSNAP_KEEP, so the default quietly won and we sat on three
+# 8.5 GB archives while the disk hit 85%. The count is asserted against ZSNAP_KEEP's real
+# default rather than a literal, so changing the policy without changing this test is not
+# possible - a literal 1 here would pass just as happily against a broken rotation that
+# happened to leave one file.
 fresh_env; with_chain
 for i in 1 2 3 4; do
   sed "s/3652108/365210$i/" "$SCRATCH/stubs/zebrad-stub" > "$T/zebrad-$i" && chmod +x "$T/zebrad-$i"
   ZSNAP_ZEBRAD="$T/zebrad-$i" bash "$EXPORT" > "$T/export-$i.log" 2>&1 || bad "export run $i exited $? (see $T/export-$i.log)"
 done
+default_keep="$(env -u ZSNAP_KEEP bash -c 'eval "$(sed -n "/^ZSNAP_KEEP=/p" "$1")"; echo "$ZSNAP_KEEP"' _ "$EXPORT")"
 n_archives="$(find "$ZSNAP_DIR/snapshots" -name 'zsnap-testnet-*.tar.zst' | wc -l | tr -d ' ')"
-check "three generations kept (got $n_archives)" "[ '$n_archives' = '3' ]"
-check "S1 rotated out when S4 landed" "! find '$ZSNAP_DIR/snapshots' -name '*3652101*' | grep -q ."
-check "S2, S3, S4 all still present" "[ \"\$(find '$ZSNAP_DIR/snapshots' -name '*365210[234]*.tar.zst' | wc -l | tr -d ' ')\" = '3' ]"
+check "the script's own default is 1, not 3 (got '$default_keep')" "[ '$default_keep' = '1' ]"
+check "one generation kept after four exports (got $n_archives)" "[ '$n_archives' = \"$default_keep\" ]"
+check "S1, S2 and S3 were all rotated out" \
+  "! find '$ZSNAP_DIR/snapshots' -name '*365210[123]*.tar.zst' | grep -q ."
+check "and the survivor is the NEWEST, not whichever one sorted first" \
+  "find '$ZSNAP_DIR/snapshots' -name '*3652104*.tar.zst' | grep -q ."
+# A rotation that deletes an archive must not leave its sidecar behind pointing at
+# nothing. The stale-file class is what left an 8.5 GB .unverified on the box for three
+# days after the fault it recorded was already fixed.
+check "no orphaned manifest-hash sidecars survive the rotation" \
+  "[ \"\$(find '$ZSNAP_DIR/snapshots' -name 'zsnap-testnet-*.manifest-hash' | wc -l | tr -d ' ')\" = \"$default_keep\" ]"
 # NOT DERIVED FROM sha256 OF THE MANIFEST BYTES ANY MORE, and that is the whole of #404.
 # These two used to compute `sha256('{"stub":true}')` and demand the exporter agree. The
 # stub reported that, the production check compared against that, and both were wrong

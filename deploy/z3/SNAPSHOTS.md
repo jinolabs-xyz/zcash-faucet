@@ -54,9 +54,14 @@ disk** on a box with 46 GB free.
 
 ### Disk, which is the other budget
 
-Three generations at 8.5 GB is ~26 GB, and publishing adds nothing on top. `ZSNAP_KEEP`
-is what to turn down if the volume gets tight; it must stay at least 1, and the export
+One generation at 8.5 GB is 8.5 GB, and publishing adds nothing on top. `ZSNAP_KEEP`
+is what to turn UP if you want more history; it must stay at least 1, and the export
 refuses 0 rather than rotating away the snapshot it just made.
+
+This defaulted to 3 and nothing on the box ever set it, so three archives accumulated
+and the disk reached 85% on a 157 GB volume that has taken the box down before. A
+default that silently overrides the operator's instruction is worth naming as the bug it
+was.
 
 ## Cold vs hot: how the export coexists with a live node
 
@@ -192,18 +197,26 @@ momentary lag past `READY_MAX_BLOCKS_BEHIND` is normal during min-difficulty
 bursts (a mid-sync snapshot would evict a better one
 from rotation), and the snapshot filesystem must have about 1.5x the state
 size free (raw export plus archive at peak), so a full disk cannot wedge the
-node. `ZSNAP_KEEP` (default 3) bounds how many archives stay around. A flock
+node. `ZSNAP_KEEP` (default 1) bounds how many archives stay around. A flock
 means overlapping timer fires skip instead of stacking.
 
 Config goes in `/etc/faucet/zsnap.env` (both scripts and the units read it):
 `ZSNAP_NETWORK`, `ZSNAP_CHAIN_VOLUME`, `ZSNAP_ZEBRAD`, `ZSNAP_DIR`,
 `ZSNAP_KEEP`, `ZSNAP_UPLOAD_CMD`, `ZSNAP_EXPECT_HASH`, `ZSNAP_ZEBRAD_URL`.
 
-## Three generations, and the restore actually walks them
+## One generation, and the restore still walks what is there
 
-Retention is three archives, S1 to S3, and when S4 lands S1 rotates out. That
-buys two things: a recent snapshot always exists, so a rebuild never resyncs
-from genesis, and no single archive is a point of failure.
+Retention is one archive: when a new snapshot lands the previous one is deleted.
+The ordering is what makes that safe - verify, repoint `latest`, THEN rotate - so a
+good archive is never traded for an unchecked one. A snapshot is only removed once
+its replacement has decompressed, had every chunk checked against its manifest, and
+matched the hash zebrad reported.
+
+The import still walks newest to oldest rather than assuming a single file, because
+`ZSNAP_KEEP` is configurable and a box set higher should restore correctly. What one
+generation gives up is a snapshot that verifies but captures a BAD MOMENT: nothing
+detects that, and there is no older copy to fall back on. Resync from genesis stays
+possible, and import fails loudly rather than silently.
 
 The second guarantee only holds because the restore path uses it.
 `zsnap-import.sh` tries the newest generation, and if it fails its sha256, its
