@@ -106,7 +106,7 @@ export function summarize(readings: readonly EndpointTip[]): ExpiryTip {
  * The obvious stronger design is to cross-check this tip against getExternalTip()
  * and refuse when they disagree. That check can LIE. getExternalTip's primary
  * source is hosh, but when hosh is down it degrades to a direct GetLatestBlock over
- * `config.lightwalletdEndpoints` — the very list we just asked. So in the exact
+ * `config.lightwalletdEndpoints` - the very list we just asked. So in the exact
  * conditions where corroboration matters most, the check compares a source against
  * itself, agrees with itself, and reports a verdict it never established. That is
  * the same false-pass class as two empty sha256sum listings comparing equal, and

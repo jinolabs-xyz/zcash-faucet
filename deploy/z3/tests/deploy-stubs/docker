@@ -91,7 +91,7 @@ case "${1:-}" in
     fi
     # compose ps -q <service>: the container id for one service. deploy.sh asks
     # by SERVICE rather than grepping container names, so the stub has to answer
-    # the same way — see the faucet_status comment in deploy.sh.
+    # the same way - see the faucet_status comment in deploy.sh.
     if printf '%s\n' "$@" | grep -qx "ps"; then
       svc=""; prev=""
       for a in "$@"; do [ "$prev" = "-q" ] && { svc="$a"; break; }; prev="$a"; done
@@ -177,7 +177,7 @@ case "${1:-}" in
       # Line 1 may hold a SEQUENCE of states, consumed one per call, so a
       # container that flips between two reads is representable. A container in a
       # restart loop passes through `running`, so a single sample can land on the
-      # good frame — with only one state available, a one-sample check and a
+      # good frame - with only one state available, a one-sample check and a
       # two-sample check are indistinguishable here and dropping the second
       # sample would stay green. The last state repeats once the list runs out.
       *State.Status*)

@@ -33,7 +33,7 @@ function probe(env: Record<string, string>): { ok: boolean; out: string } {
 
 test("an UNPARSEABLE budget refuses to boot instead of disabling the gate", () => {
   // Before the fix: Number("trlue") is NaN, `lag > NaN` is false for every lag, so
-  // a 40-block lag — and a 220,000-block one — both read "safe" and mayShield
+  // a 40-block lag - and a 220,000-block one - both read "safe" and mayShield
   // returned true. One typo in a .env turned the money gate into a pass-through.
   const r = probe({ FAUCET_SHIELD_MAX_LAG_BLOCKS: "trlue" });
   assert.equal(r.ok, false, "must refuse to start, not start with a NaN budget");
@@ -43,7 +43,7 @@ test("an UNPARSEABLE budget refuses to boot instead of disabling the gate", () =
 
 test("a budget set past the cliff is CLAMPED, not honoured", () => {
   // A test asserting the source default stays small does not run in production. 500
-  // in an env file was honoured, which made a 40-block lag safe again — the exact
+  // in an env file was honoured, which made a 40-block lag safe again - the exact
   // condition that produced a born-expired transaction in #172.
   const r = probe({ FAUCET_SHIELD_MAX_LAG_BLOCKS: "500" });
   assert.equal(r.ok, true, "a too-large value is clamped rather than fatal");

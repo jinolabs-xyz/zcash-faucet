@@ -1,5 +1,5 @@
 /**
- * t2z worker (plain Node, run via worker_thread — deliberately OUTSIDE src/ so
+ * t2z worker (plain Node, run via worker_thread - deliberately OUTSIDE src/ so
  * the Next.js bundler never touches the wasm).
  *
  * DO NOT make the bg import static to please turbopack. It was tried (#139) and it

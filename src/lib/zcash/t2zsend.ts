@@ -1,7 +1,7 @@
 /**
  * Shielded sender: pays a unified (Orchard) recipient by spending the faucet's
  * transparent UTXOs via t2z. Change returns to the faucet's own t-address, so
- * funds re-circulate — see ./t2z.ts for why that matters.
+ * funds re-circulate - see ./t2z.ts for why that matters.
  */
 import type { Sender, SendRequest, SendResult } from "./send.ts";
 import { faucetWallet } from "./wallet.ts";

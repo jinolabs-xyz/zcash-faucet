@@ -1,5 +1,5 @@
 /**
- * POST /api/account — generate a throwaway TESTNET account.
+ * POST /api/account - generate a throwaway TESTNET account.
  * Shielded (default): a real Orchard account (address + spending key) via t2z.
  * Transparent (opt-in): a P2PKH key (WIF + tm… address), pure JS.
  * Server-side randomness, never stored or logged.
@@ -33,7 +33,7 @@ export const POST = withApi("account", async (req: NextRequest, api) => {
         secretLabel: "Orchard spending key (testnet)",
         mock: false,
         warning:
-          "Testnet throwaway. Real Orchard address + spending key — copy the key now, it isn't stored. " +
+          "Testnet throwaway. Real Orchard address + spending key. Copy the key now, it isn't stored. " +
           "Testnet only; never reuse on mainnet.",
       };
       return NextResponse.json({ ok: true, account });

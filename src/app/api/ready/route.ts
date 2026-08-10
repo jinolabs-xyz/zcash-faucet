@@ -1,5 +1,5 @@
 /**
- * GET /api/ready — readiness probe. Unlike /api/health (liveness: "is the web
+ * GET /api/ready - readiness probe. Unlike /api/health (liveness: "is the web
  * process answering"), this reports whether the faucet can actually serve a
  * drip right now: backend reachable, node synced, and a spendable balance above
  * the drip + reserve. Returns 200 when ready, 503 with a reason when not.
@@ -34,7 +34,7 @@ export const GET = withApi("ready", async () => {
   // Order the checks cheapest-signal first so the reason is the most upstream cause.
   // "frozen" comes before "syncing" and is deliberately distinct: syncing is a
   // normal first-boot state, but frozen means our node stopped following the
-  // chain while the network moved on (#170) — the silent failure that took down
+  // chain while the network moved on (#170) - the silent failure that took down
   // Fauzec's faucet. It must page, not look like an ordinary sync.
   //
   // The ledger goes FIRST, and it is the newest of these checks (#217). Measured on

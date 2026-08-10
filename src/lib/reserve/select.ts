@@ -8,8 +8,8 @@
  *   anything else   → noop. The real (transparent) sender has no self-refill.
  *
  * This keys off FAUCET_SHIELD_COINBASE, not FAUCET_MINER_ACTIVE, and the
- * distinction is the whole of #172. The app never mines — that is the miner
- * container and zebra — so the only thing a refiller here can do is shield
+ * distinction is the whole of #172. The app never mines - that is the miner
+ * container and zebra - so the only thing a refiller here can do is shield
  * coinbase we already hold, which is a self-transfer with no fork risk. Gating
  * that on the mining switch meant a correct decision about mining silently
  * disabled fund recovery, and 47.5 TAZ sat unswept through a shortage. Whether

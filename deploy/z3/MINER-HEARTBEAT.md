@@ -7,7 +7,7 @@ both are recorded below with the reason, because the reasons are the useful part
 
 `/api/status` reported the miner's state from `process.env.FAUCET_MINER_ACTIVE === "true"`.
 That is an env flag: it says what an operator configured, not what is happening, and it
-**cannot be false while the miner is broken** — the definition of a check that proves nothing.
+**cannot be false while the miner is broken** - the definition of a check that proves nothing.
 
 It read "miner on" for 70 minutes while the miner errored every 5 seconds on `getblocktemplate`
 with an auth cookie zebra had regenerated on restart. The process was alive, the unit was
@@ -37,14 +37,14 @@ heartbeat. Unset means the miner does not write one and says so once at startup;
 sees an absent file, which is `cannot-verify`. Those compose correctly.
 
 The mount is `:ro` on purpose: the miner is the only writer, so the reader cannot corrupt or
-forge the signal it is judging. Written atomically — temp file in the same directory, then
-`rename(2)` — because App reads this on every `/api/status`, and a half-written file would be a
+forge the signal it is judging. Written atomically - temp file in the same directory, then
+`rename(2)` - because App reads this on every `/api/status`, and a half-written file would be a
 parse error on a hot path. Mode `0644`, directory `0755`: the container runs as a different uid
 and there is nothing secret in here.
 
 ## Shape
 
-Flat, camelCase, no nesting — App reads it in TypeScript on a hot path and nested optionals buy
+Flat, camelCase, no nesting - App reads it in TypeScript on a hot path and nested optionals buy
 nothing here.
 
 ```json
@@ -97,11 +97,11 @@ Let `age(x) = now - x`.
 `startedAt` exists so the panel can word `stalled` honestly when `lastTemplateAt` is null: "started
 40 seconds ago, no template yet" and "up an hour, never fetched a template" are the same two
 fields otherwise, and only the second is a fault. It **explains** the state, it does not excuse
-it — a null `lastTemplateAt` is never `running`, and that is a choice we made rather than fell
+it - a null `lastTemplateAt` is never `running`, and that is a choice we made rather than fell
 into: a miner restart does show `stalled` briefly, which is the fail-loud direction and agreed
 with App.
 
-`cannot-verify` must never render as healthy and never as "mining off" — three different claims,
+`cannot-verify` must never render as healthy and never as "mining off" - three different claims,
 and collapsing them into one boolean is how we got here. State comes from the **timestamps**, not
 from `consecutiveErrors`: a counter can read zero while nothing works.
 
@@ -109,15 +109,15 @@ from `consecutiveErrors`: a counter can read zero while nothing works.
 
 **No `configured` flag.** App asked for the miner's copy of the env flag so the panel could say
 "off, deliberately" without reading env separately. Declined, because the miner does not see
-`FAUCET_MINER_ACTIVE` — that variable belongs to the faucet container — so the miner would be
+`FAUCET_MINER_ACTIVE` - that variable belongs to the faucet container - so the miner would be
 asserting a flag it cannot observe, which is the original bug wearing a different hat. Intent and
 reality are different facts and should come from different sources: App already has the env var in
 its own process for "configured", and this file is only ever observed reality. `mode` is here
 instead, because the miner *does* own that, and it changes what "running" means: a miner in
 `proposal` mode never submits.
 
-**No error messages.** `lastErrorStage` is a short fixed token — `getblocktemplate`, `submitblock`,
-`solve` — never the message text. This is served from a public endpoint, and a raw error string is
+**No error messages.** `lastErrorStage` is a short fixed token - `getblocktemplate`, `submitblock`,
+`solve` - never the message text. This is served from a public endpoint, and a raw error string is
 exactly where an RPC URL with credentials in its userinfo ends up. Also never in this file: the
 RPC URL itself, and the cookie path or its contents.
 

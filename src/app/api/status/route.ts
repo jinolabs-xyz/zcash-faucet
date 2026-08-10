@@ -1,4 +1,4 @@
-/** GET /api/status — backend reachability, faucet policy, and wallet balance. */
+/** GET /api/status - backend reachability, faucet policy, and wallet balance. */
 import { NextResponse } from "next/server";
 import { config, ZATOSHI_PER_TAZ } from "@/lib/config";
 import { classifyIntegrity } from "@/lib/boxIntegrity";

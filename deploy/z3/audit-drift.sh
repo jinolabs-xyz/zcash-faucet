@@ -190,7 +190,7 @@ say ""
 # The app reads env vars the DEPLOYMENT never mentions, and that gap has cost us
 # twice. FAUCET_MINER_ACTIVE gated the reserve loop and appeared nowhere in deploy/,
 # so nobody reading the deployment could know it existed. Then FAUCET_SHIELD_COINBASE
-# was added to faucet.env.example — and write_env only copies the example onto a
+# was added to faucet.env.example - and write_env only copies the example onto a
 # FRESH box, so on an existing one the new line is inert forever. A key can
 # therefore be missing in two independent ways, hence two checks:
 #
@@ -211,7 +211,7 @@ LIVE_ENV="$OVERLAY_DIR/faucet.env"
 
 # Keys that legitimately need no declaration: pure tuning with a safe default, or
 # belonging to a sender/database mode this deploy does not use. Anything that GATES
-# BEHAVIOUR stays off this list — that is the whole point. Written out rather than
+# BEHAVIOUR stays off this list - that is the whole point. Written out rather than
 # pattern-matched so adding one is a visible, reviewable decision.
 env_optional() {
   case "$1" in
@@ -223,7 +223,7 @@ env_optional() {
     DB_BACKEND|D1_PROXY_URL|D1_PROXY_SECRET) return 0 ;;
     # a seed for a sender mode this deploy does not run
     FAUCET_WALLET_SEED) return 0 ;;
-    # ZALLET_PASSPHRASE is NOT "a mode we do not run" — zallet IS our sender and
+    # ZALLET_PASSPHRASE is NOT "a mode we do not run" - zallet IS our sender and
     # this key gates walletpassphrase. It is optional because the default is empty
     # and zalletsend skips unlocking when it is unset, which is the configuration
     # we actually run. Stating the real reason matters: a wrong justification in an
@@ -243,7 +243,7 @@ if [ ! -d "$REPO_DIR/src" ]; then
 elif [ ! -f "$ENV_EXAMPLE" ]; then
   note_unverified "env completeness: no $ENV_EXAMPLE, cannot tell what the deployment declares"
 else
-  # Every env name the app reads, ANYWHERE under src/ — not just config.ts.
+  # Every env name the app reads, ANYWHERE under src/ - not just config.ts.
   #
   # Scanning only config.ts was this check's own false pass: it made the acceptance
   # test (FAUCET_MINER_ACTIVE, which lives in config.ts) succeed while the check was
@@ -252,8 +252,8 @@ else
   # coverage, which is the same shape as every false pass we chased today, aimed at
   # the guard itself (SDE-App).
   # Test files are excluded, and that is a correctness fix rather than a
-  # convenience. A test reads the environment for its OWN harness — the clearest
-  # case is `env: { PATH: process.env.PATH }` when spawning a child — and PATH is
+  # convenience. A test reads the environment for its OWN harness - the clearest
+  # case is `env: { PATH: process.env.PATH }` when spawning a child - and PATH is
   # not deployment configuration. Left in, the check reported PATH as undeclared
   # on every box forever, and a check that always reports drift is a check people
   # learn to ignore. Verified against main: excluding tests drops exactly one key,
@@ -266,14 +266,14 @@ else
     | grep -oE '[A-Z_][A-Z0-9_]{3,}' | sort -u)"
   # The contract is the set of keys actually ASSIGNED somewhere, not every key
   # NAMED somewhere. Matching raw text let a key mentioned only in a comment count
-  # as declared — including comments that exist to explain why the key matters, so
+  # as declared - including comments that exist to explain why the key matters, so
   # documenting the problem would have silenced the check for it. Caught by removing
   # a key and watching the check stay quiet.
   #
   #   faucet.env.example   KEY=...  (a commented-out `# KEY=` still documents it)
   #   compose              `- KEY=` or `KEY:` inside an environment: block
   # One key per LINE, and compared whole-line below. Stripping the separators into a
-  # single blob let `case *KEY*` match across a junction — FOO plus BARBAZ reading as
+  # single blob let `case *KEY*` match across a junction - FOO plus BARBAZ reading as
   # a declaration of OOBAR. No live false positive today, but it is the same
   # mentions-versus-assignments trap one level down, so it gets closed the same way
   # (SDE-App).

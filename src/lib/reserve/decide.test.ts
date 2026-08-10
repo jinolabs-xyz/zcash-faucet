@@ -29,7 +29,7 @@ test("holds state when the balance is unknown", () => {
 });
 
 test("no flapping: balance oscillating around low stays in one refill run", () => {
-  // Drop under low, then bounce just above it repeatedly — must stay on.
+  // Drop under low, then bounce just above it repeatedly - must stay on.
   let on = decideRefilling(false, 4_0000_0000n, levels);
   for (const bal of [5_1000_0000n, 4_9000_0000n, 6_0000_0000n, 5_5000_0000n]) {
     on = decideRefilling(on, bal, levels);

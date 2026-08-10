@@ -131,7 +131,7 @@ mod tests {
     /// 8192]` with one `read()` caps what the harness can receive at 8 KB, and
     /// even a smaller body can arrive split across reads. A block hex is tens of
     /// KB, so the payload that matters most was unrepresentable and therefore
-    /// untestable — the same shape as the docker stub that ignored `-a` (#175).
+    /// untestable - the same shape as the docker stub that ignored `-a` (#175).
     fn serve_once_reading_all(status_line: &str, body: &str) -> (String, mpsc::Receiver<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/", listener.local_addr().unwrap());
@@ -182,7 +182,7 @@ mod tests {
     /// A real submitblock carries the whole block as hex, tens of KB. ureq 3 owns
     /// request-body framing since #146, so a truncated or mis-framed body would
     /// only surface against a server that reads all of it, and against the live
-    /// node (#166) — which needs box access nobody on this branch has. This closes
+    /// node (#166) - which needs box access nobody on this branch has. This closes
     /// the part that does not: the bytes we put on the wire.
     #[test]
     fn a_full_size_submitblock_body_reaches_the_wire_intact() {

@@ -3,7 +3,7 @@
 #
 # IT HAD NO SUITE AT ALL, and that is why it shipped broken for weeks. It took its
 # source directory from its own location, and auto-deploy.sh installs it to /opt/faucet
-# and runs the INSTALLED copy — so on the box the source WAS the destination. It globbed
+# and runs the INSTALLED copy - so on the box the source WAS the destination. It globbed
 # the destination, copied files onto themselves, could not see anything that was missing,
 # and reported "0 installed, N already current" with exit 0. 19 of 25 required files were
 # never installed, audit-drift.sh among them: the auditor that would have said so.

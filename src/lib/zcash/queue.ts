@@ -6,7 +6,7 @@
  *     time would select the same notes → double-spend / conflicting txs.
  *   - A real send builds and broadcasts one tx against the wallet's UTXOs;
  *     serializing avoids two sends racing on the same inputs. (And a shielded
- *     send would generate a zk-proof — CPU + hundreds of MB — which you never
+ *     send would generate a zk-proof - CPU + hundreds of MB - which you never
  *     want several of at once on a small instance.)
  *
  * So the front door stays concurrent (validate, Turnstile, atomic reserve), but
@@ -14,7 +14,7 @@
  * order requests arrived. Callers await their turn and get their own result.
  *
  * `maxPending` bounds the backlog so a surge doesn't queue unbounded work (and
- * make the 20th person wait forever) — past it we reject fast with "busy".
+ * make the 20th person wait forever) - past it we reject fast with "busy".
  *
  * `maxPending` bounds HOW MANY wait. It says nothing about how long any one task
  * may hold the wallet, so a single task that never settles stalls every drip
@@ -26,7 +26,7 @@ import { config } from "../config.ts";
 
 export class QueueFullError extends Error {
   constructor() {
-    super("Faucet is busy — too many sends queued. Try again in a moment.");
+    super("Faucet is busy: too many sends queued. Try again in a moment.");
     this.name = "QueueFullError";
   }
 }

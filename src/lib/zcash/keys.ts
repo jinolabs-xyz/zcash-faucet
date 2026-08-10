@@ -9,7 +9,7 @@
  *
  *   Shielded (MOCK for now):
  *     A real BIP39 mnemonic is generated (valid + importable as a seed), but the
- *     unified address is a placeholder — real utest1 derivation needs the WebZjs
+ *     unified address is a placeholder - real utest1 derivation needs the WebZjs
  *     WASM lib (wired alongside the real sender). Clearly flagged `mock: true`.
  */
 import { randomBytes } from "node:crypto";
@@ -71,7 +71,7 @@ function generateTransparent(): ThrowawayAccount {
     secretLabel: "Private key (WIF)",
     mock: false,
     warning:
-      "Testnet throwaway only. Anyone with this key controls the funds. Not stored by the faucet — copy it now.",
+      "Testnet throwaway only. Anyone with this key controls the funds. Not stored by the faucet. Copy it now.",
   };
 }
 
@@ -84,7 +84,7 @@ function isValidScalar(b: Uint8Array): boolean {
 }
 
 // Transparent generation lives here (pure JS). Shielded (Orchard) accounts are
-// minted via the t2z worker — see generateShieldedAccount in ./t2z.
+// minted via the t2z worker - see generateShieldedAccount in ./t2z.
 export function generateTransparentAccount(): ThrowawayAccount {
   return generateTransparent();
 }

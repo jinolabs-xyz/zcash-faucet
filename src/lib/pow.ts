@@ -4,7 +4,7 @@
  *
  * Challenges are STATELESS: the server signs {seed, difficulty, exp, ipHash}
  * with HMAC(RATE_LIMIT_SALT), so any instance can verify one without a shared
- * store. Difficulty is adaptive — a modest base, plus escalation for a client
+ * store. Difficulty is adaptive - a modest base, plus escalation for a client
  * that keeps hammering, plus a bump when the whole faucet is under pressure.
  *
  * This is one layer. It sits on top of the per-address cooldown and the daily
