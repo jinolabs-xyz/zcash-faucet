@@ -5,7 +5,7 @@
 # install-ops.sh installed units and deliberately enabled nothing, and the reason was
 # good: enabling zcash-testnet-miner.service means the box starts mining, which is a
 # money-path decision an installer must not make on somebody's behalf. So enablement was
-# left to a human, and then it silently was not done — 19 of 25 files were not even
+# left to a human, and then it silently was not done - 19 of 25 files were not even
 # installed, and the reporting timer that would have said so was among them.
 #
 # The fix is not to let the installer decide. It is to move the decision into the REPO,

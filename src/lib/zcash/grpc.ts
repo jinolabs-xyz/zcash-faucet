@@ -1,6 +1,6 @@
 /**
  * lightwalletd / Zaino gRPC client (CompactTxStreamer).
- * Used for read-only chain queries: latest block, node info, and — crucially —
+ * Used for read-only chain queries: latest block, node info, and - crucially -
  * TRANSPARENT address balances (shielded balances are private and not queryable
  * by address). Tries each configured endpoint in order (failover).
  */
@@ -99,7 +99,7 @@ export async function getTaddressBalance(addresses: string[]): Promise<bigint> {
 }
 
 export interface Utxo {
-  txid: string; // internal (little-endian) byte order, hex — as lightwalletd returns it
+  txid: string; // internal (little-endian) byte order, hex - as lightwalletd returns it
   txidBytes: Buffer;
   index: number;
   script: string; // scriptPubKey hex

@@ -31,7 +31,7 @@ wd_env() {
 }
 
 # Bounded twice over. MAX_TICKS is how the watchdog exits on its own; the outer
-# timeout is so a suite can never hang on a build that ignores it — which the
+# timeout is so a suite can never hang on a build that ignores it - which the
 # pre-fix watchdog did, having no way at all to run a finite number of sweeps.
 wd_run() {
   if command -v timeout >/dev/null 2>&1; then

@@ -4,7 +4,7 @@
  * The seed is either a testnet WIF (what the Account tab hands out, prefix
  * byte 0xEF) or a raw 64-hex private key. We keep this transparent on purpose:
  * a t-address is trivially fundable from any existing faucet, its UTXOs are
- * queryable, and spending needs no zk-proof — which is what makes real sends
+ * queryable, and spending needs no zk-proof - which is what makes real sends
  * work on a small box with only a public lightwalletd endpoint.
  */
 import { getPublicKey } from "@noble/secp256k1";

@@ -1,9 +1,9 @@
-# Render Blueprint — deploy the faucet as a free web service.
+# Render Blueprint - deploy the faucet as a free web service.
 # Docs: https://render.com/docs/blueprint-spec
 #
 # Heads up: Render's FREE web service has an EPHEMERAL filesystem, so the local
 # SQLite ledger is wiped on every restart/redeploy/spin-down. For real use, point
-# the ledger at Cloudflare D1 (via the proxy Worker) — see DEPLOY.md. The free
+# the ledger at Cloudflare D1 (via the proxy Worker) - see DEPLOY.md. The free
 # service also spins down after 15 min idle; the UptimeRobot ping keeps it warm.
 services:
   - type: web
@@ -38,7 +38,7 @@ services:
         sync: false
       - key: D1_PROXY_SECRET
         sync: false
-      # Secrets — set these in the Render dashboard, do NOT commit values:
+      # Secrets - set these in the Render dashboard, do NOT commit values:
       - key: RATE_LIMIT_SALT
         sync: false
       - key: FAUCET_WALLET_SEED

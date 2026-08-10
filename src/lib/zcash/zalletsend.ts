@@ -1,8 +1,8 @@
 /**
  * Shielded-native sender backed by a Zallet wallet (the Z3 stack: zebrad +
  * zaino-in-zallet + zallet). Unlike the transparent RealSender and the t2z
- * bridge — both of which spend a *transparent* faucet wallet whose balance and
- * every drip's origin are public — this one holds Orchard notes and pays
+ * bridge - both of which spend a *transparent* faucet wallet whose balance and
+ * every drip's origin are public - this one holds Orchard notes and pays
  * recipients fully shielded (z→z). The faucet's holdings and the link between
  * faucet and claimant stay private.
  *
@@ -214,7 +214,7 @@ export class ZalletSender implements Sender {
     await this.unlockIfNeeded();
 
     // Paying a transparent recipient unavoidably reveals it, so the default
-    // fully-shielded policy would reject the build — opt in explicitly. Shielded
+    // fully-shielded policy would reject the build - opt in explicitly. Shielded
     // recipients (unified/sapling) keep the strict default.
     const policy = req.addressInfo.kind === "transparent" ? "AllowRevealedRecipients" : "FullPrivacy";
     const amount = zatToZecLiteral(req.amountZat);

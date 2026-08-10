@@ -2,8 +2,8 @@
  * Ledger public API. Backend (local SQLite vs Cloudflare D1) is chosen by
  * config; callers just await reserveClaim / finalizeClaim.
  *
- * The ledger never stores plaintext addresses or IPs — only salted fingerprints
- * (see lib/privacy.ts) — and it purges rows past the retention window, so it
+ * The ledger never stores plaintext addresses or IPs - only salted fingerprints
+ * (see lib/privacy.ts) - and it purges rows past the retention window, so it
  * holds the minimum needed to enforce cooldowns and nothing more.
  */
 import { config } from "../config.ts";
@@ -109,7 +109,7 @@ async function whyBlocked(
   return { ok: false, kind: "cap", reason: "Faucet daily cap reached. Please come back tomorrow." };
 }
 
-/** Rows older than this can't affect a cooldown or the 24h cap — safe to delete. */
+/** Rows older than this can't affect a cooldown or the 24h cap - safe to delete. */
 function retentionCutoff(now: number, cooldownSeconds: number): number {
   return now - Math.max(cooldownSeconds, 86_400) - 3_600; // +1h grace
 }

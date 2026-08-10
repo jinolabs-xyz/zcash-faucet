@@ -28,7 +28,7 @@ export interface DbDriver {
   get<T = Row>(sql: string, params: SqlParam[]): Promise<T | undefined>;
 }
 
-/** Local file SQLite — dev and single-box deploys. */
+/** Local file SQLite - dev and single-box deploys. */
 export class SqliteDriver implements DbDriver {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private db: any;

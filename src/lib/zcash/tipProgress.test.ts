@@ -94,7 +94,7 @@ test("an external tip that becomes known mid-stall does not retroactively suppre
 
 test("the window is far longer than any test run, so a fixed-height double cannot trip it", () => {
   // fake-zallet reports a constant NODE_TIP. If the stall window were short, the
-  // integration suite would start reporting a frozen node partway through a run —
+  // integration suite would start reporting a frozen node partway through a run -
   // trading one environment-dependent failure for another.
   assert.ok(
     TIP_STALL_MS >= 10 * 60_000,

@@ -1,6 +1,6 @@
 /**
  * The refill action behind the reconciler. One `step()` is one bounded unit of
- * refill work — the reconciler calls it repeatedly (through the send queue)
+ * refill work - the reconciler calls it repeatedly (through the send queue)
  * while the hysteresis says "refilling", so a drip only ever waits behind a
  * single step, never a whole refill.
  *
@@ -14,7 +14,7 @@
  *
  * `step()` reports its OUTCOME rather than returning void. A shield that finds
  * nothing to sweep used to be indistinguishable from one that moved funds, and
- * from a loop that was not running at all (#172) — so the caller now gets enough
+ * from a loop that was not running at all (#172) - so the caller now gets enough
  * to tell those apart and say so.
  */
 // .ts extensions throughout: Next resolves extensionless specifiers, node --test

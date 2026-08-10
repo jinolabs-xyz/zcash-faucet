@@ -1,4 +1,4 @@
-/** GET /api/network — live testnet chain info via lightwalletd (Network tab). */
+/** GET /api/network - live testnet chain info via lightwalletd (Network tab). */
 import { NextResponse } from "next/server";
 import { getLightdInfo, getLatestBlock } from "@/lib/zcash/grpc";
 import { withApi } from "@/lib/api";

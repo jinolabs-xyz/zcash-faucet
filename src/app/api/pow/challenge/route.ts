@@ -1,5 +1,5 @@
 /**
- * GET /api/pow/challenge — hand out a signed proof-of-work challenge.
+ * GET /api/pow/challenge - hand out a signed proof-of-work challenge.
  * The browser solves it (see the PoW worker) and returns it with the claim.
  * Difficulty adapts to the client's recent request rate and overall faucet load.
  */

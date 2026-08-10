@@ -2,14 +2,14 @@
  * Real sender: spends the faucet's funded transparent wallet on testnet.
  *
  * Transparent recipients (tm…): build a real Zcash v4 (Sapling) transaction with
- * @bitgo/utxo-lib — pick UTXOs, add the drip output + change back to ourselves,
+ * @bitgo/utxo-lib - pick UTXOs, add the drip output + change back to ourselves,
  * sign each input (ZIP-243 sighash, handled by the lib), and broadcast via
  * lightwalletd. No zk-proof, so this runs anywhere.
  *
  * Shielded recipients (utest1…/ztestsapling1…): deliberately NOT enabled for
  * real sends. Creating a shielded output needs a zk-proof (t2z-wasm can do it),
  * but its change lands in an Orchard pool this transparent wallet can't
- * re-spend — the faucet would slowly strand its own funds. Enabling shielded
+ * re-spend - the faucet would slowly strand its own funds. Enabling shielded
  * properly needs a sweep-capable shielded wallet (Zallet/Z3). See DEPLOY.md.
  */
 import type { Sender, SendRequest, SendResult } from "./send.ts";
@@ -62,7 +62,7 @@ export class RealSender implements Sender {
       throw new Error(
         "Real shielded sends aren't enabled: change would land in a shielded pool this " +
           "transparent faucet can't re-spend (funds would be stranded). Use a transparent " +
-          "(tm…) address, or enable shielded via a sweep-capable wallet — see DEPLOY.md.",
+          "(tm…) address, or enable shielded via a sweep-capable wallet. See DEPLOY.md.",
       );
     }
 

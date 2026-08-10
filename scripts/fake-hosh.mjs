@@ -7,7 +7,7 @@
  * gets any real answer, the gap is ~570,000 blocks, our node reads as frozen, and
  * server A returns 503 where the suite expects 200. Whether that happens depends
  * on whether externalTip's first background refresh lands before the assertion
- * runs — which is why the same commit passed locally and failed in CI, twice.
+ * runs - which is why the same commit passed locally and failed in CI, twice.
  *
  * Pointing HOSH_URL here makes the external tip a value the test chooses. Set
  * HEIGHT to match the wallet double for a healthy stack, or far above it to
@@ -28,7 +28,7 @@ const HEIGHT = Number(process.env.HEIGHT ?? 3_650_000);
 const EMPTY = process.env.EMPTY === "true";
 
 // Shape verified against the live endpoint rather than assumed: the payload is an
-// OBJECT with a `servers` array, and only testnet rows carry `chain: "test"` —
+// OBJECT with a `servers` array, and only testnet rows carry `chain: "test"` -
 // mainnet rows omit the field entirely, which is how fromHosh's filter separates
 // them. A bare array here silently matched nothing, so the oracle fell back to a
 // direct lightwalletd call and cached the real network tip, which is the exact

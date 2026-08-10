@@ -3,7 +3,7 @@
  * boot (loads the wasm and builds the Halo2 proving key, ~11s) so the first
  * shielded send isn't penalised by a cold key build.
  *
- * Also the one place that arms the reserve reconciler — status polls read its
+ * Also the one place that arms the reserve reconciler - status polls read its
  * state but never start it. start() is a no-op until FAUCET_MINER_ACTIVE.
  */
 export async function register() {

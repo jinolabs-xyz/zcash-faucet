@@ -1,5 +1,5 @@
 /*
- * PoW solver worker (static asset — loaded as new Worker("/pow-worker.js")).
+ * PoW solver worker (static asset - loaded as new Worker("/pow-worker.js")).
  *
  * Given {seed, difficulty}, find a nonce so sha256("<seed>:<nonce>") has
  * >= difficulty leading zero bits. Runs off the main thread so the tab never

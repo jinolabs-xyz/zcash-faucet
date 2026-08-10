@@ -1,7 +1,7 @@
 # The shielded faucet, deployed on top of the z3 stack (Zebra + Zallet).
 #
-# This overlay runs TWO containers — the Next.js faucet app and a Caddy reverse
-# proxy — and attaches the app to z3's existing Docker network so it can reach
+# This overlay runs TWO containers - the Next.js faucet app and a Caddy reverse
+# proxy - and attaches the app to z3's existing Docker network so it can reach
 # Zallet's JSON-RPC at http://zallet:28232/ (in-network DNS; never public).
 # Only Caddy is exposed to the internet (80/443, auto-TLS).
 #
@@ -29,7 +29,7 @@ x-common: &common
 services:
   faucet:
     build:
-      # Repo root — reuses the existing multi-stage Dockerfile.
+      # Repo root - reuses the existing multi-stage Dockerfile.
       context: ../..
       dockerfile: Dockerfile
     image: zcash-faucet:latest
@@ -45,7 +45,7 @@ services:
       ZALLET_RPC_URL: http://zallet:28232/
       # Caddy is the one proxy in front, so trust exactly one X-Forwarded-For hop.
       TRUSTED_PROXY_COUNT: "1"
-      # Single box has a real disk — local SQLite ledger (persisted on a volume)
+      # Single box has a real disk - local SQLite ledger (persisted on a volume)
       # is enough; no need for the Cloudflare D1 fallback used on ephemeral hosts.
       DB_BACKEND: sqlite
       # The commit this image was built from, set by redeploy.sh. Makes deploy staleness

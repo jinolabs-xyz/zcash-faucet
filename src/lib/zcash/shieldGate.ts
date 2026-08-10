@@ -9,14 +9,14 @@
  *
  * This lives in its own file on purpose. The readiness check in nodeStatus.ts
  * asks a similar-looking question about the same two heights and deliberately
- * FAILS OPEN — a public-endpoint outage must never take down a healthy faucet.
+ * FAILS OPEN - a public-endpoint outage must never take down a healthy faucet.
  * This one must FAIL CLOSED: cannot-verify is not clearance to move money. Those
  * two rules cannot share a neighbourhood without someone eventually copying the
  * wrong one, because the copy reads as consistency.
  *
  * WHY IT EXISTS (#172): on 2026-07-29 the refiller built a 1.25 TAZ coinbase
  * shield at 07:56:45Z. Its expiry height, 4,217,981, had already been mined at
- * 07:56:41Z — four seconds earlier. The transaction was born expired: our node
+ * 07:56:41Z - four seconds earlier. The transaction was born expired: our node
  * believed the tip was 4,217,941 while the network was at least 40 blocks ahead.
  * It could never be mined at any fee, it sat in the wallet as an unfetchable
  * reference, and zallet then crash-looped 400+ times on it.
@@ -30,7 +30,7 @@
  *   is it fresh enough to BUILD a valid transaction?     anything near 40 is fatal
  *
  * So this gate gets its own, much tighter budget, and 40 is the cliff rather than
- * the target — the default leaves an order of magnitude of headroom.
+ * the target - the default leaves an order of magnitude of headroom.
  */
 
 import { num } from "../config.ts";
@@ -39,8 +39,8 @@ import { getExternalTip, warmExternalTip } from "./externalTip.ts";
 /*
  * The decision itself is a PURE function of two heights (see shieldFreshness),
  * following the same convention as the reserve's decide.ts: rules with no imports,
- * so every branch — including the ones that only happen when a public endpoint is
- * down — is reachable in a test without mocking a module or touching a network.
+ * so every branch - including the ones that only happen when a public endpoint is
+ * down - is reachable in a test without mocking a module or touching a network.
  * readChainFreshness() is the thin wrapper that supplies the live oracle value.
  */
 
@@ -80,7 +80,7 @@ export const SHIELD_LAG_CEILING = 10;
  * TWO WAYS THIS USED TO FAIL OPEN, both found by SDE-App running it rather than
  * reading it:
  *
- * 1. Number("trlue") is NaN, and `lag > NaN` is FALSE for every lag — so one typo
+ * 1. Number("trlue") is NaN, and `lag > NaN` is FALSE for every lag - so one typo
  *    in a .env made every possible lag read "safe" and mayShield() return true.
  *    A module whose whole thesis is fail-closed, disabled without touching its
  *    logic. num() throws on a value it cannot parse, so we refuse to boot instead:
@@ -88,7 +88,7 @@ export const SHIELD_LAG_CEILING = 10;
  *    cannot VERIFY.
  * 2. The budget was creepable at deploy time. A test asserts the SOURCE default
  *    stays small, but a test does not run in production, and 500 in an env file was
- *    honoured — which made a 40-block lag "safe" again. Hence the clamp.
+ *    honoured - which made a 40-block lag "safe" again. Hence the clamp.
  */
 export const SHIELD_MAX_LAG_BLOCKS = (() => {
   const configured = num("FAUCET_SHIELD_MAX_LAG_BLOCKS", 5);
@@ -114,7 +114,7 @@ export const SHIELD_MAX_LAG_BLOCKS = (() => {
  * in this deployment the only source of it is the wallet, and a wallet we cannot
  * reach cannot shield anything either. So there is no circularity to escape here,
  * unlike the diagnostic question of "is our node caught up" while the wallet is
- * down — that one needs a direct zebra read and is answered outside the app.
+ * down - that one needs a direct zebra read and is answered outside the app.
  */
 export function chainFreshness(
   nodeHeight: number | null,
@@ -197,7 +197,7 @@ export function chainFreshness(
 /**
  * The only helper callers should use to decide whether to broadcast. It exists so
  * no call site ever writes `state !== "unsafe"`, which would let unverifiable
- * through — the precise mistake this module's shape is designed to prevent.
+ * through - the precise mistake this module's shape is designed to prevent.
  *
  * Named for the general question rather than the shield, because the drip path asks
  * it too (#187). A gate called mayShield() guarding a user's drip is a lie at the

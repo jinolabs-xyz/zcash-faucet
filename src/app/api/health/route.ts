@@ -1,5 +1,5 @@
 /**
- * GET /api/health — cheap liveness check for uptime pingers (UptimeRobot etc.)
+ * GET /api/health - cheap liveness check for uptime pingers (UptimeRobot etc.)
  * and Render's health check. Deliberately does NO backend work (no gRPC, no DB)
  * so keep-alive pings don't hammer lightwalletd every few minutes.
  */
