@@ -48,6 +48,19 @@ RUN git init -q . && \
     git fetch -q --depth 1 origin "${SOURCE_REV}" && \
     git checkout -q FETCH_HEAD
 
+# Our patches on top of the pinned upstream rev. Each exists because the upstream behaviour
+# is wrong for a faucet box and has no config knob (see patches/README.md). `git apply
+# --check` first so a patch that no longer applies - upstream moved, or SOURCE_REV bumped
+# past it - fails the build loudly here rather than silently shipping the unpatched binary.
+# The nullglob guard keeps the build working if the patches dir is ever empty.
+COPY patches /patches
+RUN for p in /patches/*.patch; do \
+      [ -e "$p" ] || continue; \
+      echo "applying $(basename "$p")"; \
+      git apply --check "$p" || { echo "PATCH DOES NOT APPLY: $p - upstream likely moved" >&2; exit 1; }; \
+      git apply "$p"; \
+    done
+
 # DEFAULT FEATURES ONLY. viz_gui is opt-in and absent from `default`, and the
 # cfg(not(viz_gui)) branch of their start command is the one that spawns the headless
 # wallet and the embedded indexer. Adding --all-features here would pull the GUI in.

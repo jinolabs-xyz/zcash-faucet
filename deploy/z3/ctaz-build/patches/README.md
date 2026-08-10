@@ -25,23 +25,17 @@ relying on the firewall for this port.
 
 ## Applying it
 
-`ctaz-build.sh` clones `CTAZ_SOURCE_REPO` at `CTAZ_SOURCE_REV`. Two ways in:
+Automatic. The build Dockerfile `COPY`s this directory to `/patches` and
+`git apply`s every `*.patch` here on top of the pinned `CTAZ_SOURCE_REV`, right
+after checkout and before the compile. It runs `git apply --check` first, so a
+patch that no longer applies (upstream moved, or the rev was bumped past it)
+fails the build loudly instead of silently shipping an unpatched binary. Adding
+a new patch here is all it takes; no Dockerfile change per patch.
 
-1. **Fork (cleanest).** Fork `ShieldedLabs/crosslink_monolith`, apply the patch
-   on a branch off `2c346b2`, push, then build with:
-
-   ```
-   CTAZ_SOURCE_REPO=<fork-url> CTAZ_SOURCE_REV=<patched-sha> ./ctaz-build.sh
-   ```
-
-2. **Patch at build time.** Have the build `git apply` this file after checkout
-   (add a `git apply /patches/ctaz-grpc-loopback.patch` step to the build
-   Dockerfile). Keeps the source pin unchanged.
-
-Either way the build is a heavy containerized Rust compile — do it off the
-faucet box (it competes with the running node for CPU/memory), ship the binary,
-install by rename (a `cp` onto the running binary gives "Text file busy"), then
-restart `ctaz-node`.
+The build itself is a heavy containerized Rust compile — do it off the faucet
+box (it competes with the running node for CPU/memory), ship the binary, install
+by rename (a `cp` onto the running binary gives "Text file busy"), then restart
+`ctaz-node`.
 
 ## Verifying after deploy
 
