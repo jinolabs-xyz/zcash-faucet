@@ -34,7 +34,7 @@ monthly bill that grows with each generation kept; GitHub Releases caps a single
 **The bandwidth math, because this is the one part that can become a charge.** Measured
 **45 GB of egress in 10 days** (~135 GB/month) against Linode's ~1 TB included transfer,
 with each download at **8.5 GB**. That leaves headroom for roughly **100 downloads a
-month** — ample for disaster recovery, and nowhere near enough to survive being treated
+month** - ample for disaster recovery, and nowhere near enough to survive being treated
 as a public mirror. If that headroom ever starts disappearing, the transfer graph is the
 place it will show, and object storage becomes the honest answer at that point rather
 than this one.
@@ -44,7 +44,7 @@ keeps a crawler from walking three 8.5 GB archives for fun.
 
 ### Only verified snapshots are reachable
 
-`/var/lib/zsnap/snapshots` also holds `.unverified` archives — the ones the export's own
+`/var/lib/zsnap/snapshots` also holds `.unverified` archives - the ones the export's own
 check **rejected**. Caddy does not serve that directory. `zsnap-publish.sh` hardlinks the
 verified artefacts into a separate `public` directory and Caddy serves only that, so an
 archive we refused to trust cannot be handed to someone rebuilding a box.

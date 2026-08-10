@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # One-command deploy for the shielded faucet on a fresh VM (DigitalOcean Droplet,
-# Linode, Vultr, Hetzner — any Ubuntu box with Docker).
+# Linode, Vultr, Hetzner - any Ubuntu box with Docker).
 #
 # It stands the whole thing up as containers:
 #   zebra + zallet   ← the z3 stack (official, maintained Docker Compose)
 #   faucet + caddy   ← this repo's overlay (deploy/z3/)
 #
 # Everything is `restart: unless-stopped`, so once it's up it survives reboots
-# and crashes on its own — no babysitting.
+# and crashes on its own - no babysitting.
 #
 # Usage:   NETWORK=testnet FAUCET_DOMAIN=faucet.example.org \
 #            FAUCET_MINER_ADDRESS=tm... ./deploy.sh
@@ -174,7 +174,7 @@ validate_miner_address() {
     # shielded coinbase it did not itself create, credits it to our account, and can
     # spend it once mature. Until that is tested (#195, on the third-party build of
     # #184), pointing mining at a UA risks rewards that are real on-chain and
-    # invisible to us — which is the same money-we-cannot-see failure as before,
+    # invisible to us - which is the same money-we-cannot-see failure as before,
     # arriving from the other end.
     echo "Zebra WOULD mine this shielded (it prefers a unified address's Orchard or" >&2
     echo "Sapling receiver over its transparent one), but we have not verified that" >&2
@@ -486,7 +486,7 @@ case "$(faucet_auth_kind "$ZCFG")" in
     exit 1 ;;
 esac
 
-say "Starting Zebra (the node) — first sync takes hours, one time"
+say "Starting Zebra (the node) - first sync takes hours, one time"
 z3 up -d zebra
 
 # 2. Site up first, before the sync wait --------------------------------------
@@ -758,10 +758,10 @@ fi
 
 # 5. Fund it -----------------------------------------------------------------
 # The faucet comes up fine unfunded (it reports "empty" until coins arrive), so
-# only pause for funding in an interactive shell — never under cloud-init.
+# only pause for funding in an interactive shell - never under cloud-init.
 BAL="$(zrpc z_getbalanceforaccount "\"$UUID\"" 1 | python3 -c 'import sys,json;p=json.load(sys.stdin).get("pools",{});print(sum(int(v.get("valueZat",0)) for v in p.values()))' 2>/dev/null || echo 0)"
 if [ "${BAL:-0}" -eq 0 ] && [ -t 0 ] && [ "${NONINTERACTIVE:-0}" != "1" ]; then
-  say "Fund the faucet, then press Enter (or Ctrl-C — it also runs fine unfunded)"
+  say "Fund the faucet, then press Enter (or Ctrl-C - it also runs fine unfunded)"
   echo "    Send $NETWORK ZEC to:  $ADDR"
   read -r _ || true
 fi
@@ -797,7 +797,7 @@ overlay_up
 #
 # Asked of compose by SERVICE name rather than grepped for a container name:
 # compose derives the project from the directory, so the real containers are
-# z3-faucet-1 while the harness models zcash-faucet-faucet-1 — a name grep would
+# z3-faucet-1 while the harness models zcash-faucet-faucet-1 - a name grep would
 # pass in tests and go blind in production, which is backwards for a check whose
 # only job is honesty.
 #
@@ -805,7 +805,7 @@ overlay_up
 # on its way round and one look can land on the good frame.
 #
 # This proves the process STAYS UP. It does not prove the faucet serves correct
-# responses — a container answering 500 to everything reads as running here — so
+# responses - a container answering 500 to everything reads as running here - so
 # the wording claims only what was observed.
 faucet_status(){  # running | not-running | cannot-tell
   local cid s1 s2
@@ -821,7 +821,7 @@ faucet_status(){  # running | not-running | cannot-tell
 case "$(faucet_status)" in
   not-running)
     say "DEPLOY INCOMPLETE: everything is installed, but the faucet container is
-   not staying up, so the site is NOT serving. Nothing above failed — this is the
+   not staying up, so the site is NOT serving. Nothing above failed - this is the
    app refusing to boot or crashing on start, and the reason is in its log:
        cd $HERE/z3 && docker compose -f docker-compose.faucet.yml logs --tail=50 faucet
    Re-run this script once the cause is fixed; it is safe to re-run."
@@ -913,4 +913,4 @@ fi
 say "Done. The faucet is live${FAUCET_DOMAIN:+ at https://$FAUCET_DOMAIN}."
 echo "   Check:   curl -s ${FAUCET_DOMAIN:+https://$FAUCET_DOMAIN}${FAUCET_DOMAIN:-http://localhost}/api/status"
 echo "   Fund it: send $NETWORK ZEC to  $ADDR"
-echo "            (until funded, claims answer 'faucet empty' — everything else works)"
+echo "            (until funded, claims answer 'faucet empty' - everything else works)"

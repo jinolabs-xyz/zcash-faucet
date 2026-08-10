@@ -1,5 +1,5 @@
 #cloud-config
-# Zcash shielded faucet — cloud-init user-data (Linode, DigitalOcean, Vultr,
+# Zcash shielded faucet - cloud-init user-data (Linode, DigitalOcean, Vultr,
 # Hetzner… anything that takes cloud-init with an Ubuntu 24.04 image).
 #
 # Paste this whole file into the provider's user-data box when creating the VM
@@ -9,7 +9,7 @@
 #   faucet.example.org  →  your hostname (or delete that line for plain HTTP)
 #
 # Recommended size: 4 vCPU / 8 GB / 160 GB (2 vCPU / 8 GB works for light
-# testnet duty — sends just queue a little longer).
+# testnet duty - sends just queue a little longer).
 #
 # The box then sets itself up unattended: Docker (with log rotation), firewall,
 # swap, clone, full stack bring-up. Zebra's initial sync takes a few hours;
@@ -64,7 +64,7 @@ write_files:
       # still bring the stack up: zebra just does a full sync instead.
       ./deploy/z3/zsnap-import.sh || echo "snapshot restore failed, falling back to full sync"
       # Compose services are restart:unless-stopped, so this is only needed on
-      # first boot — but it is idempotent, so running it again is harmless.
+      # first boot - but it is idempotent, so running it again is harmless.
       NONINTERACTIVE=1 NETWORK="${NETWORK:-testnet}" \
         FAUCET_DOMAIN="$(cat /etc/faucet-domain 2>/dev/null || true)" \
         ./deploy/deploy.sh

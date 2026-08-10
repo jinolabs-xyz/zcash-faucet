@@ -2,7 +2,7 @@
  * Best-effort live node/wallet sync for /api/status, so the UI can honestly show
  * "preparing / X% / ready". In zallet mode we ask the wallet for getwalletstatus
  * (its view of node_tip vs its own scanned wallet_tip). If the wallet isn't up
- * yet — which is exactly the case while zebra does its first sync — this returns
+ * yet - which is exactly the case while zebra does its first sync - this returns
  * null and the UI shows an indeterminate "bringing the node online" state.
  */
 import { config, num } from "../config.ts";
@@ -24,7 +24,7 @@ export interface NodeStatus {
   /** The network is not producing blocks either, so a static tip is expected. */
   networkQuiet: boolean;
   /**
-   * Whether our chain view is fresh enough to BUILD a transaction — a different and
+   * Whether our chain view is fresh enough to BUILD a transaction - a different and
    * much tighter question than `frozen`, and deliberately not derived from it. See
    * shieldGate.ts for why they must not share a threshold: a 40-block lag produces
    * born-expired transactions while `frozen` (200) still reads false (#172).
@@ -78,7 +78,7 @@ export async function getNodeStatus(): Promise<NodeStatus | null> {
 
   try {
     // Ask our own node where it thinks the tip is. This is the only network call
-    // on the readiness path — the independent tip is a cached, non-blocking read
+    // on the readiness path - the independent tip is a cached, non-blocking read
     // (see externalTip.ts) so a slow public endpoint can never slow /api/ready.
     const res = await fetch(endpoint, {
       method: "POST",
@@ -97,12 +97,12 @@ export async function getNodeStatus(): Promise<NodeStatus | null> {
     //
     // DISTANCE: the network is reachable AND our tip is far below it. A null
     // external tip means we could not verify, and we do NOT flip to frozen on that
-    // — a public-endpoint outage must never take down a healthy faucet.
+    // - a public-endpoint outage must never take down a healthy faucet.
     const externalHeight = getExternalTip();
     const behind = externalHeight != null && externalHeight - n > FREEZE_BLOCKS;
 
     // MOTION: our own tip has not advanced in a long time. This needs no second
-    // opinion, so it still works while the oracle is down — which is exactly when
+    // opinion, so it still works while the oracle is down - which is exactly when
     // the distance check goes quiet. It also catches a node wedged just behind the
     // tip, which is close enough to look fine by distance and just as stuck.
     const progress = tipProgress(lastTip, n, externalHeight, Date.now());

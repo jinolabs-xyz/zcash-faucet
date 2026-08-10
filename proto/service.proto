@@ -36,7 +36,7 @@ message Balance {
   int64 valueZat = 1;
 }
 
-// Unspent outputs for a transparent address — the faucet's spendable inputs.
+// Unspent outputs for a transparent address - the faucet's spendable inputs.
 message GetAddressUtxosArg {
   repeated string addresses = 1;
   uint64 startHeight = 2;

@@ -4,7 +4,7 @@
  * Mining runs in its own container at cutover; this is only the shield leg.
  *
  * Concurrency note, because it's the whole point: this step spends transparent
- * coinbase UTXOs, drips spend Orchard notes — disjoint input sets, so it can
+ * coinbase UTXOs, drips spend Orchard notes - disjoint input sets, so it can
  * never select a note a live send is spending. It still runs through the send
  * queue (the reconciler enqueues it) so the wallet builds one tx at a time and
  * proving CPU isn't contended.
@@ -91,7 +91,7 @@ export class ZalletRefiller implements Refiller {
       return { moved: false, refused: { state: gate.state, reason: gate.reason, lag: gate.lag } };
     }
 
-    // z_shieldcoinbase <account-uuid> <toaddress> <fee=null> <limit> — sweep
+    // z_shieldcoinbase <account-uuid> <toaddress> <fee=null> <limit> - sweep
     // mature coinbase from the account's transparent receivers into the faucet
     // UA. This zallet rejects zcashd's "*" wildcard on purpose (it would link
     // unrelated accounts on-chain), so we scope by our account UUID; the
@@ -99,7 +99,7 @@ export class ZalletRefiller implements Refiller {
     // one valid for a UUID sweep. Fee must be null (always ZIP 317).
     //
     // No opid means nothing was shieldable this tick. That is NOT necessarily
-    // "the miner hasn't produced anything" — it reads identically when the
+    // "the miner hasn't produced anything" - it reads identically when the
     // coinbase exists but belongs to receivers outside this account, or is not
     // yet mature. #172 is what that ambiguity cost, so return remainingUTXOs
     // instead of discarding it and let the reconciler decide when a run of

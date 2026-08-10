@@ -122,7 +122,7 @@ jobs:
       # Point the tip oracle at a local fixture instead of the live hosh
       # dashboard. Without this the app compares the wallet double's tip
       # (3,650,000) against the real network (past 4,220,000), decides our node is
-      # ~570,000 blocks behind, marks it frozen and refuses the claim — so the
+      # ~570,000 blocks behind, marks it frozen and refuses the claim - so the
       # smoke test waits out its 120s timeout for a "Sent ✓" that can never
       # appear. Same root cause as the api-tests job (#171).
       HOSH_URL: http://127.0.0.1:28324/
@@ -180,7 +180,7 @@ jobs:
           # The oracle fixture must be answering BEFORE the app starts. If the
           # app's first background tip refresh finds it missing, the oracle falls
           # back to a direct lightwalletd call, caches the real network tip, and
-          # the run is frozen from then on — starting it late only narrows the race
+          # the run is frozen from then on - starting it late only narrows the race
           # rather than removing it.
           PORT=28324 node scripts/fake-hosh.mjs &
           hosh=$!

@@ -20,7 +20,7 @@ export interface ReserveLevels {
 /**
  * Next value of `refilling` given the current spendable balance.
  * `spendableZat` is null when the wallet can't report a balance (backend down,
- * still syncing) — hold the current state rather than reacting to a blind spot.
+ * still syncing) - hold the current state rather than reacting to a blind spot.
  */
 export function decideRefilling(
   refilling: boolean,

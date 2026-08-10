@@ -137,7 +137,7 @@ export const config = {
 
   // How many reverse proxies YOU operate in front of the app (nginx, Cloudflare,
   // Vercel, …). Each appends to X-Forwarded-For, so only the last N hops are
-  // trustworthy — anything further left is client-supplied and spoofable. 0 =
+  // trustworthy - anything further left is client-supplied and spoofable. 0 =
   // no trusted proxy, so X-Forwarded-For is ignored entirely.
   trustedProxyCount: Math.max(0, Math.floor(num("TRUSTED_PROXY_COUNT", 0))),
 
@@ -160,7 +160,7 @@ export const config = {
     user: process.env.ZALLET_RPC_USER ?? "",
     password: process.env.ZALLET_RPC_PASSWORD ?? "",
     // The faucet's own account UUID (z_getnewaccount) and one of its unified
-    // addresses (z_getaddressforaccount) — spent-from in z_sendmany.
+    // addresses (z_getaddressforaccount) - spent-from in z_sendmany.
     account: process.env.ZALLET_ACCOUNT ?? "",
     address: process.env.ZALLET_ADDRESS ?? "",
     // Confirmations a note needs before the wallet will spend it (Zallet default 10).
@@ -353,7 +353,7 @@ export const config = {
 
   pow: {
     // Base difficulty in leading zero bits of sha256(challenge:nonce). ~20 bits
-    // is a couple seconds on a laptop, more on a phone — modest on purpose so a
+    // is a couple seconds on a laptop, more on a phone - modest on purpose so a
     // first-time real user barely waits. Repeat claims escalate above this.
     baseBits: Math.max(8, Math.min(28, Math.floor(num("FAUCET_POW_BITS", 20)))),
     // Each recent claim from the same client adds this many bits (quadratic cost

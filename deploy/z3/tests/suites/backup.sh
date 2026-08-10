@@ -6,7 +6,7 @@ mkdb()   { python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.exe
 dumpdb() { python3 -c "import sqlite3,sys; print(*[r[0] for r in sqlite3.connect(sys.argv[1]).execute('select v from t order by v')])" "$1"; }
 # A database as a KILLED process leaves it: rows committed to the -wal, never
 # checkpointed, sidecars still on disk. os._exit skips SQLite's close, which is
-# the whole point — a clean exit checkpoints and truncates the -wal to 0 bytes,
+# the whole point - a clean exit checkpoints and truncates the -wal to 0 bytes,
 # and a "crashed" db built that way has an empty -wal that proves nothing. I
 # wrote that version of this helper first and it passed identically with and
 # without the fix (#216).
@@ -98,7 +98,7 @@ echo "== backup captures state that lives ONLY in the -wal (#216)"
 # whole ledger is uncheckpointed. A backup that copied the .db file would archive
 # almost nothing, and would report success doing it.
 #
-# backup.sh does NOT copy the file — sqlite_backup() reads through a connection
+# backup.sh does NOT copy the file - sqlite_backup() reads through a connection
 # with sqlite's online backup API, which sees the logical database including
 # uncheckpointed WAL frames. That property was only ever asserted in a comment,
 # so this pins it. Measured directly: a plain `cp` of the same db yields
@@ -123,7 +123,7 @@ check "and the archived ledger CONTAINS the uncheckpointed row" \
 
 echo "== the sidecar removal happens BEFORE the install, not after (#216)"
 # A source-order assertion, which is unusual, and it is here because the two orders
-# are indistinguishable from the outside on a completed run — every behavioural test
+# are indistinguishable from the outside on a completed run - every behavioural test
 # below passes either way. The difference only shows in the crash window: with the
 # rm AFTER the install, a crash between them leaves the new db wearing the old db's
 # WAL and the next reader silently gets PRE-CRASH data. I shipped that order first

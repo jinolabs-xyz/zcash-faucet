@@ -1,5 +1,5 @@
 /**
- * POST /api/faucet — the drip endpoint.
+ * POST /api/faucet - the drip endpoint.
  * Order matters: cheap rejects first, expensive send last.
  *   1. parse + validate address
  *   2. anti-abuse gate (proof-of-work or Turnstile, per config)
@@ -107,7 +107,7 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
       ? { amountZat: config.crosslink.expectedZat, dailyCapZat: config.crosslink.dailyCapZatoshi }
       : { amountZat: config.dripZatoshi, dailyCapZat: config.dailyCapZatoshi };
 
-  // 2. Anti-abuse gate — proof-of-work, Turnstile, or nothing, per config.
+  // 2. Anti-abuse gate - proof-of-work, Turnstile, or nothing, per config.
   //    PoW is verified against the same salted IP fingerprint the challenge was
   //    issued to, so a solution can't be reused from a different client.
   if (config.challenge === "pow") {
@@ -125,7 +125,7 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     }
   }
 
-  // 3. Low-balance guard — protect the single hot wallet from being drained
+  // 3. Low-balance guard - protect the single hot wallet from being drained
   //    below its reserve floor. `null` means the backend can't report a balance
   //    yet (real sender not wired); we skip the guard and let send() surface it.
   //
@@ -231,7 +231,7 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
 
   // 4. Reserve atomically (cooldown + daily cap in one transaction). This is the
   //    concurrency gate: with N simultaneous requests from the same client, only
-  //    one reservation succeeds — the rest are blocked before any coins move.
+  //    one reservation succeeds - the rest are blocked before any coins move.
   const reservation = await reserveClaim({
     address,
     ipHash,
@@ -264,7 +264,7 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     });
   }
 
-  // 5. Send through the serial FIFO queue — one transaction touches the single
+  // 5. Send through the serial FIFO queue - one transaction touches the single
   //    hot wallet at a time. The send and the ledger commit are separate try
   //    blocks on purpose: "nothing left the wallet" may only ever be said when
   //    the send itself failed.

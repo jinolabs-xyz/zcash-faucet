@@ -1,11 +1,11 @@
 /**
  * SQL shared by both ledger backends (local SQLite + Cloudflare D1). Both are
- * SQLite dialects, so the exact same statements run on either — which keeps the
+ * SQLite dialects, so the exact same statements run on either - which keeps the
  * concurrency guarantees identical no matter where the ledger lives.
  *
  * Privacy note: we store only SALTED HASHES of the recipient address and client
  * IP (see lib/privacy.ts), never the plaintext. The ledger can enforce cooldowns
- * without ever being a record of who got funded — which matters most for
+ * without ever being a record of who got funded - which matters most for
  * shielded recipients, whom the chain itself does not reveal.
  */
 
@@ -210,14 +210,14 @@ DELETE FROM used_challenges WHERE exp < ?
 `;
 
 // A 'pending' row that never finalises (e.g. process died mid-send) shouldn't
-// lock a user out for the whole cooldown — it only blocks for this lease.
+// lock a user out for the whole cooldown - it only blocks for this lease.
 export const PENDING_LEASE_SECONDS = 120;
 
 /**
  * Atomic reserve: insert a 'pending' claim ONLY IF no live claim exists for this
  * address/client AND the daily cap wouldn't be exceeded. Because SQLite executes
  * a single statement atomically and serialises writers, N concurrent copies of
- * this can't all succeed — exactly one wins the race. No app-side lock needed,
+ * this can't all succeed - exactly one wins the race. No app-side lock needed,
  * so it's correct on D1-over-HTTP too (where we can't rely on Node being
  * single-threaded). Anonymous `?` params for portability across drivers.
  *
@@ -404,7 +404,7 @@ ON CONFLICT(network, day) DO UPDATE SET sent = MAX(sent, excluded.sent)`;
 
 /**
  * Data minimization: once a row is older than the retention window it can no
- * longer affect a cooldown or the 24h cap, so it serves no purpose — delete it.
+ * longer affect a cooldown or the 24h cap, so it serves no purpose - delete it.
  * We keep nothing longer than we must.
  */
 export const PURGE_SQL = `DELETE FROM claims WHERE created_at < ?`;

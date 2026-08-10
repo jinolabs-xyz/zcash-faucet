@@ -1,5 +1,5 @@
 /**
- * GET /api/tx?txid=… — does OUR node know this transaction, and how deep is it.
+ * GET /api/tx?txid=… - does OUR node know this transaction, and how deep is it.
  *
  * Exists because a link to a public explorer is not evidence: they render a
  * page for any 64-hex string (#71).

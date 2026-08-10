@@ -102,7 +102,7 @@ flap_var()  { printf 'FLAP_%s' "$(printf '%s' "$1" | tr -c 'A-Za-z0-9' '_')"; }
 flap_file() { printf '%s/%s.flaps' "$STATE_DIR" "$(printf '%s' "$1" | tr -c 'A-Za-z0-9_.-' '_')"; }
 
 # Never trust the file. Its contents are fed to $(( )) below, and under `set -u`
-# an unbound name inside arithmetic exits the shell — so a torn write (OOM, power
+# an unbound name inside arithmetic exits the shell - so a torn write (OOM, power
 # loss, full disk) would put the watchdog itself into a restart loop that no
 # restart could clear, leaving the box unmonitored until a human deleted a file.
 # Anything that is not all digits is treated as no count at all.
@@ -133,7 +133,7 @@ flap_set() {
   else
     rm -f "$tmp" 2>/dev/null
     if [ "$STATE_WRITE_OK" != "no" ]; then
-      log "WARNING: cannot write $STATE_DIR — flap counts are in-memory only, so escalation still works but resets if this watchdog restarts"
+      log "WARNING: cannot write $STATE_DIR - flap counts are in-memory only, so escalation still works but resets if this watchdog restarts"
     fi
     STATE_WRITE_OK=no
   fi
@@ -160,7 +160,7 @@ recover_if_down() {
   if ! state="$(docker inspect -f '{{.State.Status}}' "$name" 2>/dev/null)" || [ -z "$state" ]; then
     # Could not ask. Absent container and unreachable daemon are different
     # problems and neither is evidence of health, so assert neither.
-    log "cannot determine state of $name (docker inspect gave nothing) — asserting nothing"
+    log "cannot determine state of $name (docker inspect gave nothing) - asserting nothing"
     return 0
   fi
 
@@ -179,7 +179,7 @@ recover_if_down() {
 
   local n=$((prior + 1))
   flap_set "$name" "$n"
-  log "container $name is '$state' — starting it (consecutive attempt $n)"
+  log "container $name is '$state' - starting it (consecutive attempt $n)"
 
   if docker start "$name" >/dev/null 2>&1; then
     log "start command accepted for $name; recovery UNCONFIRMED until a later sweep sees it running"
@@ -190,7 +190,7 @@ recover_if_down() {
   # Page on the threshold, then only periodically: an ongoing outage should keep
   # reminding us without becoming the 812-messages-a-night noise it replaces.
   if [ "$n" -eq "$FLAP_ESCALATE" ] || { [ "$n" -gt "$FLAP_ESCALATE" ] && [ $(( (n - FLAP_ESCALATE) % FLAP_REALERT )) -eq 0 ]; }; then
-    alert "STILL BROKEN: $name has needed $n consecutive restarts (state '$state') — this is a crash loop, not a recovery; it will not fix itself"
+    alert "STILL BROKEN: $name has needed $n consecutive restarts (state '$state') - this is a crash loop, not a recovery; it will not fix itself"
   fi
 }
 
@@ -222,7 +222,7 @@ while true; do
   done
 
   # 3: web-app liveness. Only restart when the container claims to be running
-  # but /api/health has stopped answering — a genuine hang, not a cold start.
+  # but /api/health has stopped answering - a genuine hang, not a cold start.
   if [ -n "$faucet" ] && [ "$(docker inspect -f '{{.State.Status}}' "$faucet" 2>/dev/null)" = "running" ]; then
     if curl -fsS --max-time 5 "$FAUCET_URL/api/health" >/dev/null 2>&1; then
       faucet_misses=0

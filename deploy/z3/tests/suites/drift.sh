@@ -20,7 +20,7 @@ drift_env() {
   # The env-completeness half needs src/ and a declaring env file, or the fixture
   # does not model its inputs at all. It did not, so every clean-box case hit the
   # "no src, cannot list what the app reads" path, which is correctly an UNVERIFIED
-  # and correctly exits 2 — and that broke four exit-0 baselines. The check was
+  # and correctly exits 2 - and that broke four exit-0 baselines. The check was
   # right and the fixture was incomplete, so the fixture is what changes here.
   mkdir -p "$T/repo/src/lib"
   printf 'const a = process.env.FIXTURE_DECLARED_KEY;\nconst b = num("FIXTURE_TUNING_KEY", 5);\n' \
@@ -98,7 +98,7 @@ check "and the audit was complete, not merely quiet" "! grep -q 'NOT VERIFIED' '
 
 echo "== drift: the env-completeness half actually FIRES"
 # The clean case above proves the check is SILENT on a good box, which is only half
-# a proof — a check that never speaks at all passes it too. This is the positive
+# a proof - a check that never speaks at all passes it too. This is the positive
 # control, and exit 1 rather than nonzero because exit 2 would mean it could not
 # look rather than that it looked and found something.
 drift_env; make_clean_box

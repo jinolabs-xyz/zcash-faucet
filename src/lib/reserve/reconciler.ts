@@ -3,7 +3,7 @@
  * without ever pausing service.
  *
  * Each tick reads the spendable balance, runs the hysteresis rule (decide.ts),
- * and — when refilling — enqueues ONE bounded refill step. The rules that keep
+ * and - when refilling - enqueues ONE bounded refill step. The rules that keep
  * the request path unblocked:
  *
  *   - The step goes through the same serial send queue as drips, so the wallet
@@ -12,7 +12,7 @@
  *   - A tick skips its step when the queue has any user traffic in it. Refill
  *     work never consumes a queue slot a person is waiting on.
  *   - At most one step is in flight; a slow step just means later ticks skip.
- *   - Balance reads stay outside the queue — deciding costs nothing.
+ *   - Balance reads stay outside the queue - deciding costs nothing.
  *
  * A failed step is logged and retried on a later tick; the loop itself never
  * dies. Singleton on globalThis to survive dev hot reloads, same pattern as
@@ -35,7 +35,7 @@ export interface ReserveStatus {
   shieldCoinbase: boolean;
   /**
    * Consecutive ticks where the balance could not be read. Non-zero means the
-   * loop is BLIND, not idle — the distinction that hid #172 for sixteen hours.
+   * loop is BLIND, not idle - the distinction that hid #172 for sixteen hours.
    */
   blindTicks: number;
   /** Consecutive sweeps that found nothing to shield. */
@@ -123,7 +123,7 @@ class ReserveReconciler {
   private remainingUTXOs: number | null = null;
 
   /**
-   * Arm the loop. Called from instrumentation.ts only — status polls read
+   * Arm the loop. Called from instrumentation.ts only - status polls read
    * state, they never start work. With the miner inactive this is a full
    * no-op: no timer, no balance polling, invisible until FAUCET_MINER_ACTIVE.
    * Idempotent (Next can run instrumentation more than once per process).
@@ -266,7 +266,7 @@ class ReserveReconciler {
           }
           // A sweep that shields nothing is normal once and suspicious in a run.
           // remainingUTXOs is what separates "there is genuinely nothing here"
-          // from "there is plenty and this account cannot see it" — the question
+          // from "there is plenty and this account cannot see it" - the question
           // #172 could not answer because the value was received and discarded.
           this.emptySweeps++;
           const verdict = classifySweep(outcome);
@@ -341,7 +341,7 @@ class ReserveReconciler {
 // share one reconciler, and dev hot reloads can't stack a second loop.
 const g = globalThis as unknown as { __faucetReserve?: ReserveReconciler };
 
-/** The singleton. Getting it is passive — only start() (instrumentation) arms it. */
+/** The singleton. Getting it is passive - only start() (instrumentation) arms it. */
 export function getReserveReconciler(): ReserveReconciler {
   return (g.__faucetReserve ??= new ReserveReconciler());
 }

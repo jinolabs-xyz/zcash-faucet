@@ -73,7 +73,7 @@ export function tipProgress(
   now: number,
 ): TipProgress {
   // No history: we cannot claim a stall, and absence of evidence is not evidence.
-  // This matches readiness's fail-open posture — a fresh process must not report a
+  // This matches readiness's fail-open posture - a fresh process must not report a
   // frozen node just because it has only looked once.
   if (prev == null) {
     return { stalled: false, stalledMs: null, networkQuiet: false, next: { height, at: now, externalHeight } };
@@ -92,7 +92,7 @@ export function tipProgress(
   // IS THE NETWORK ALSO STANDING STILL? If the independent tip has not moved since
   // our tip last did, nobody is producing blocks and our node is not at fault. A
   // stall drives frozen, and frozen drives /api/ready 503, so without this a quiet
-  // testnet would take a perfectly healthy faucet offline — the exact direction
+  // testnet would take a perfectly healthy faucet offline - the exact direction
   // #170 was filed to avoid. Found by SDE-App.
   //
   // Only a KNOWN-and-unchanged external tip suppresses it. When the oracle is down

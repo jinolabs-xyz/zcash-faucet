@@ -2,8 +2,8 @@
  * Endpoint management for the public lightwalletd / Zaino testnet backend.
  *
  * The Zcash Light Client Protocol is gRPC (service `cash.z.wallet.sdk.rpc.CompactTxStreamer`).
- * The heavy lifting — block scanning, note selection, witness building, and
- * zk-proof generation for a shielded spend — is done inside the wallet library
+ * The heavy lifting - block scanning, note selection, witness building, and
+ * zk-proof generation for a shielded spend - is done inside the wallet library
  * (see ./send.ts). This module holds the ordered endpoint list, a lightweight
  * reachability probe, and failover so a single dead endpoint doesn't sink the
  * faucet.
@@ -20,7 +20,7 @@ export interface BackendStatus {
 
 /**
  * Probe one endpoint. lightwalletd speaks gRPC (HTTP/2), so a plain fetch won't
- * complete an RPC — but a TCP/TLS-level response proves the host is up. Real
+ * complete an RPC - but a TCP/TLS-level response proves the host is up. Real
  * block-height reads happen through the wallet lib in ./send.ts.
  */
 async function probe(endpoint: string): Promise<{ endpoint: string; reachable: boolean; detail?: string }> {

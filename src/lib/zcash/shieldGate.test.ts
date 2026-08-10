@@ -5,8 +5,8 @@ import assert from "node:assert/strict";
 // below are about any transaction build rather than a shield specifically.
 import { shieldFreshness, chainFreshness, mayShield, SHIELD_MAX_LAG_BLOCKS } from "./shieldGate.ts";
 
-// The decision is a pure function of two heights, so every branch — including the
-// ones that only occur when a public endpoint is down — is reachable without
+// The decision is a pure function of two heights, so every branch - including the
+// ones that only occur when a public endpoint is down - is reachable without
 // mocking a module or touching a network. A test whose verdict depends on the
 // public internet is not testing our code, which is exactly what made #171 red in
 // CI while passing locally.
@@ -47,7 +47,7 @@ test("THE #172 CASE: a 40-block lag is caught, where the 200-block freeze flag w
   assert.equal(mayShield(g), false);
 });
 
-test("NO EXTERNAL TIP FAILS CLOSED — the whole point of the module", () => {
+test("NO EXTERNAL TIP FAILS CLOSED - the whole point of the module", () => {
   const g = shieldFreshness(4_220_000, null);
   assert.equal(g.state, "unverifiable");
   assert.equal(mayShield(g), false);

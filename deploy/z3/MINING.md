@@ -97,7 +97,7 @@ journalctl -u zcash-testnet-miner -f
 Roughly 41 seconds on the box, measured while cTAZ was mining at its 250% quota. That is
 why this one is built in place while the Crosslink node is not: `SNAPSHOTS.md`'s
 never-compile-on-the-box rule is about a build that takes hours and would starve the node
-it serves. Shipping a 3 MB artefact instead would need a release asset or a registry —
+it serves. Shipping a 3 MB artefact instead would need a release asset or a registry -
 a fetch path, a credential and a storage bill for something that rebuilds in under a
 minute.
 

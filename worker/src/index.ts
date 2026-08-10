@@ -1,7 +1,7 @@
 /**
  * D1 proxy Worker for the Zcash faucet.
  *
- * The faucet app (on Render) can't bind D1 directly — only Workers can — so this
+ * The faucet app (on Render) can't bind D1 directly - only Workers can - so this
  * tiny Worker sits in front of D1 and runs parameterised SQL the app sends over
  * HTTPS, gated by a shared bearer secret. Cloudflare's recommended pattern for
  * reaching D1 from outside a Worker.

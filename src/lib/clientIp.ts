@@ -3,7 +3,7 @@
  *
  * X-Forwarded-For is client-writable: a request can arrive with any value
  * already in it, and each proxy *appends* the peer it saw. So only the rightmost
- * `trustedProxyCount` entries — the ones our own infra added — are trustworthy;
+ * `trustedProxyCount` entries - the ones our own infra added - are trustworthy;
  * everything to the left is attacker-controlled. With no trusted proxy
  * configured we ignore the header entirely rather than trust a spoofable value.
  */

@@ -113,7 +113,7 @@ install_file() { # $1 src, $2 dest, $3 owner (uid:gid or "keep")
   #
   # A process killed mid-write leaves a populated -wal and -shm beside the db.
   # Install a backup over just the db and the next reader finds that stale -wal,
-  # replays it, and serves the PRE-CRASH data — the backup's contents are gone.
+  # replays it, and serves the PRE-CRASH data - the backup's contents are gone.
   # No error, exit 0, and this function still logs "restored". Reproduced: the
   # restored row is absent with the sidecars left, present with them removed
   # (#216, found by SDE-App).
@@ -126,7 +126,7 @@ install_file() { # $1 src, $2 dest, $3 owner (uid:gid or "keep")
   # other way and the comment justifying it was wrong: I claimed a crash between
   # the two "leaves the old database with its own sidecars", but after the install
   # the db file is the NEW one, so that window leaves the new database wearing the
-  # old one's WAL — precisely the mismatched pair this fix exists to prevent, and
+  # old one's WAL - precisely the mismatched pair this fix exists to prevent, and
   # worse than stale data, because WAL frames carry the old file's page numbers and
   # replaying them over a different database is corruption rather than a rollback.
   #

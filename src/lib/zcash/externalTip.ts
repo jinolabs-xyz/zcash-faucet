@@ -16,7 +16,7 @@
  * (#170): a node that has silently stopped following the chain keeps reporting
  * its own frozen tip as the tip, so any readiness check that trusts our own node
  * is fooled. Comparing our node's tip against a DIFFERENT view is the only way to
- * notice we have diverged from reality. We depend on nobody for money — this is
+ * notice we have diverged from reality. We depend on nobody for money - this is
  * verification only.
  *
  * IMPORTANT: this must never be on the readiness critical path. A public endpoint
@@ -36,7 +36,7 @@ import { config } from "../config.ts";
 
 /**
  * Pull the height (field 1 varint) out of a serialized BlockID. Returns null on
- * anything malformed or truncated — never a fabricated number, so a partial read
+ * anything malformed or truncated - never a fabricated number, so a partial read
  * cannot masquerade as a real (smaller) height and quietly say "not frozen".
  */
 export function heightFromBlockID(buf: Buffer): number | null {
@@ -85,7 +85,7 @@ export function heightFromBlockID(buf: Buffer): number | null {
  * Primary source: the hosh network-health dashboard aggregates the tip across
  * every public testnet lightwalletd and publishes it as plain JSON. Taking the
  * max height over the ONLINE testnet servers is more robust than trusting one
- * node — a single lagging server cannot make us think we are behind, and the
+ * node - a single lagging server cannot make us think we are behind, and the
  * dashboard exists precisely to answer "where is the network right now".
  */
 const HOSH_URL = process.env.HOSH_URL ?? "https://hosh.zec.rocks/api/v0/zec.json";
@@ -123,7 +123,7 @@ function getLatestBlock(host: string, timeoutMs: number): Promise<number | null>
 async function fetchNetworkTip(): Promise<{ height: number | null; source: TipSource; host: string | null }> {
   const h = await fromHosh(5000).catch(() => null);
   if (h != null && h > 0) return { height: h, source: "hosh", host: null };
-  // hosh down or its testnet filter yielded nothing — degrade to a direct node,
+  // hosh down or its testnet filter yielded nothing - degrade to a direct node,
   // and say so, because a silent degrade to a single source defeats the point of
   // the aggregate (App's medium on #171).
   console.warn("[externalTip] hosh gave no testnet height; falling back to direct GetLatestBlock");
@@ -200,7 +200,7 @@ export function warmExternalTip(): Promise<void> {
  * The network tip according to sources that are NOT our own node. NON-BLOCKING:
  * returns the last-known cached value immediately and triggers a background
  * refresh if the cache is stale. Returns null when we have no fresh-enough value
- * — that is "cannot verify freshness", NOT "we are healthy": the caller must not
+ * - that is "cannot verify freshness", NOT "we are healthy": the caller must not
  * treat null as a pass (#75 not-seen vs cannot-say).
  */
 export function getExternalTip(): number | null {

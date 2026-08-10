@@ -1,7 +1,7 @@
 /**
- * GET /api/balance?address=… — balance lookup.
+ * GET /api/balance?address=… - balance lookup.
  * Transparent addresses: queried on-chain via lightwalletd (public UTXOs).
- * Shielded addresses: NOT queryable by address (private by design) — the caller
+ * Shielded addresses: NOT queryable by address (private by design) - the caller
  * needs the viewing key. We return a clear explanation instead of a number.
  */
 import { NextRequest, NextResponse } from "next/server";
@@ -27,7 +27,7 @@ export const GET = withApi("balance", async (req: NextRequest, api) => {
       kind: info.kind,
       shielded: true,
       queryable: false,
-      note: "Shielded balances are private — they can't be read from the address alone. Provide the viewing key in a wallet to see this balance.",
+      note: "Shielded balances are private. They can't be read from the address alone. Provide the viewing key in a wallet to see this balance.",
     });
   }
 

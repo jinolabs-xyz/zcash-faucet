@@ -127,7 +127,7 @@ function bootExpectingExit(port, env, logPath, ms = 60_000) {
  *
  * @param expectTestnetRow when true (the default) we additionally require a usable
  *   testnet row, because a 200 with an unusable body would let the oracle's
- *   fallback fire anyway — the failure this wait exists to prevent.
+ *   fallback fire anyway - the failure this wait exists to prevent.
  *
  *   An EMPTY=true fixture deliberately serves no testnet row, to make the oracle's
  *   cannot-verify path reachable. Waiting for a row there would hang and then throw,
@@ -244,7 +244,7 @@ const fakeHoshEmpty = spawn("node", ["scripts/fake-hosh.mjs"], {
 // Every app gets the same deterministic chain view.
 //
 // Only HOSH_URL is overridden. externalTip does degrade to a direct lightwalletd
-// call when hosh yields nothing, which is a second route to the real network — but
+// call when hosh yields nothing, which is a second route to the real network - but
 // the fixture always answers, so that route is never taken. Pinning
 // LIGHTWALLETD_ENDPOINT at a closed port to block it is NOT safe: the same
 // variable is also the app's read-side backend, so breaking it makes readiness
@@ -318,7 +318,7 @@ try {
   // Wait for the oracle double BEFORE the apps are usable. If an app's first
   // background tip refresh runs while the fixture is still binding, hosh yields
   // nothing, externalTip degrades to a direct lightwalletd call, and the app
-  // caches the REAL network tip — 570,000 blocks above the wallet double's — so it
+  // caches the REAL network tip - 570,000 blocks above the wallet double's - so it
   // reads as frozen for the rest of the run. That is the same race that made this
   // suite pass locally and fail in CI; overriding HOSH_URL is only half the fix if
   // nothing waits for the override to be listening.

@@ -1,7 +1,7 @@
 # The Crosslink (cTAZ) node on our box
 
 Operator notes for `ctaz-node.service`. Everything here was observed by running their
-software, not read off a README — where a number is still a guess, it says so.
+software, not read off a README - where a number is still a guess, it says so.
 
 The background investigation is on the `spike/crosslink-headless` branch
 (`docs/spikes/crosslink-headless.md`). This file is only what you need to run the thing.
@@ -42,7 +42,7 @@ eye**:
 
 The unit runs this as `ExecStartPre` and refuses to start on a collision. The case that
 motivates it: their default base `8233` puts zaino's JSON-RPC on `18233`, **our zebra P2P
-port** — and `audit-access.sh` would not flag it, because `18233` is already on its
+port** - and `audit-access.sh` would not flag it, because `18233` is already on its
 allowed-public list.
 
 The gRPC listener binding `0.0.0.0` is theirs, not ours, and it is not configurable from
@@ -51,8 +51,8 @@ the config file. Until that is patched, the firewall is the only control.
 ## Joining the network
 
 **Do not copy the `.toml` files in their repo.** They do not load against their own current
-code — `do_not_manipulate_config` and `[crosslink] listen_address` are no longer valid
-fields — and both committed configs use a network magic (`ClRn`, `ClTn`) that the binary
+code - `do_not_manipulate_config` and `[crosslink] listen_address` are no longer valid
+fields - and both committed configs use a network magic (`ClRn`, `ClTn`) that the binary
 has no genesis for, so it panics with `unhandled special-case genesis`.
 
 The only magic with a genesis is **`ClT0`** (`[67,108,84,48]`), and it appears in none of
@@ -83,12 +83,12 @@ The script changes only these, and prints the diff against their default every r
 | `[state] cache_dir` | `/mnt/ctaz-chain/node` | the dedicated volume |
 | `[mining] internal_miner` | `false` | until synced; see below |
 
-`[crosslink] bft_peers` is left exactly as generated — see the trap below.
+`[crosslink] bft_peers` is left exactly as generated - see the trap below.
 
 **Cookie auth stays off, which is not the instinct.** Turning it on kills the node: their
 zaino runs in-process, fails with `correct authorisation details have been entered`, and
 takes zebrad down about nine seconds after start. Their embedded indexer is built against
-the no-cookie path. The exposure is bounded — the RPC is loopback-only and our containers
+the no-cookie path. The exposure is bounded - the RPC is loopback-only and our containers
 are bridged, so they cannot reach the host's loopback; what can reach it is any process on
 the host itself. Acceptable for a feature-net node, and the reason the TAZ wallet is not
 configured this way.
@@ -105,7 +105,7 @@ systemctl restart ctaz-node
 
 **There is no longer a drop-in to remove, and that is a fix rather than a simplification.**
 The old recipe said to delete `10-initial-sync.conf`, and `install-ops` put it straight back
-on the next deploy — because the file was in the repo and the installer installs drop-ins
+on the next deploy - because the file was in the repo and the installer installs drop-ins
 (#361). So the documented step was silently undone every two minutes, and the box ran at the
 sync quota for hours after someone had "turned it off". One value, one home: `CPUQuota` lives
 in the unit.
@@ -116,14 +116,14 @@ in the unit.
 
 The quota is about **RPC responsiveness**, not mining speed. At 200% this node was
 CFS-throttled for **4557 seconds in an hour**, and when a cgroup exhausts its quota *every*
-thread in it stalls — including the RPC thread. The symptom was a socket listening on 19232
+thread in it stalls - including the RPC thread. The symptom was a socket listening on 19232
 with a connection queued and never accepted, and a panel reading `cannot-verify` about a node
 that was mining, at tip, and healthy. A starved node, not a hung one.
 
 The internal miner takes whatever is left, so the cure is headroom above demand rather than a
 smaller share. Measured demand was 193% of a 200% quota.
 
-TAZ mining went to 50% because it earns close to nothing — a dominant miner takes nearly every
+TAZ mining went to 50% because it earns close to nothing - a dominant miner takes nearly every
 block on public testnet, which is why this faucet runs on donations (#42). The CPU goes where
 it can actually earn.
 
@@ -131,7 +131,7 @@ it can actually earn.
 case; the nice value decides who yields.
 
 A node with no peers believes it is at the tip, so leaving the miner on for a fresh sync
-mines a fork of genesis within seconds — measured: four blocks before the first peer
+mines a fork of genesis within seconds - measured: four blocks before the first peer
 handshake completed. Those blocks are orphaned when the real chain arrives, so the cost is
 wasted CPU, not a wrong chain.
 
@@ -139,7 +139,7 @@ wasted CPU, not a wrong chain.
 
 **Omitting `bft_peers` does not give you an isolated node.** It inherits
 `crosslink_default()`'s four BFT peers, and the node joins their consensus layer. A
-"private" regtest node here did exactly that on the first attempt — the giveaway was
+"private" regtest node here did exactly that on the first attempt - the giveaway was
 `Connected to new server` and `BFT_UPDATE` in a log that should have been silent.
 
 **The production node keeps their four peers, which reverses the spike's advice, because
@@ -218,7 +218,7 @@ sync on this chain. Measure at tip or say unknown.
 
 `ctaz-datadir-guard.sh` refuses to *start* a node whose state already exceeds
 `CTAZ_MAX_STATE_GB` (45 GB, which against a settled 2.2 GB is roughly 20x headroom). **It is
-not a quota** — nothing stops a running node growing, and see the gap below. The volume is
+not a quota** - nothing stops a running node growing, and see the gap below. The volume is
 what makes that survivable; the guard is the early warning, not the ceiling.
 
 ### The guard cannot stop a running node, and that is a real gap
@@ -254,7 +254,7 @@ so the state directory is not purely chain state.
 
 The faucet runs in a container. The node's RPC binds loopback on the HOST, because it
 holds funds. Those two facts do not meet, and measuring is the only way to be sure of it
-— from inside `zcash-faucet-faucet-1`:
+- from inside `zcash-faucet-faucet-1`:
 
 | target | result |
 |---|---|
@@ -265,8 +265,8 @@ holds funds. Those two facts do not meet, and measuring is the only way to be su
 The same call from the host returns HTTP 200.
 
 `ctaz-status.sh` already answers this for READING: the host writes the node's state to a
-file in the volume the container mounts. **Paying cannot use a file** — it needs a request
-and a reply — and that gap is how a cTAZ toggle shipped showing `ready` while every claim
+file in the volume the container mounts. **Paying cannot use a file** - it needs a request
+and a reply - and that gap is how a cTAZ toggle shipped showing `ready` while every claim
 died at `fetch("")` (#409). Readiness and payment are different questions, and only one of
 them had a transport.
 
@@ -282,7 +282,7 @@ for. The socket is `root:root 0660` in a directory only the container and root c
 ### The allowlist is the point
 
 The thing on the other end is an internet-facing web app. A plain proxy would make an app
-compromise into full control of a funded node — **worse** than the bridge binding this
+compromise into full control of a funded node - **worse** than the bridge binding this
 design exists to avoid. Five methods, and adding one is a decision about what a
 compromised web app could do:
 
@@ -307,7 +307,7 @@ again here.
 `canServeCtaz` refuses unless the node's state came back over the **RPC path**, not the
 file. The file can only say the node is well; only the RPC can say we can reach it. So
 cTAZ stays not-ready until this socket is actually working, and starts serving on its own
-once it is — no second switch to remember.
+once it is - no second switch to remember.
 
 ## Mining into the pool the faucet actually spends from
 
@@ -380,14 +380,14 @@ Initial sync measured ~114 blocks/min, so roughly **54 hours from genesis**. Syn
 elsewhere and ship the directory; the box does catch-up only.
 
 **`zsnap` cannot do this for you.** Their layout is
-`<cache_dir>/<chain-name>/state/v27/unknowntestnet` — an extra chain-name level, and a
-network directory named `unknowntestnet` — so `zsnap`'s probe finds nothing and its
+`<cache_dir>/<chain-name>/state/v27/unknowntestnet` - an extra chain-name level, and a
+network directory named `unknowntestnet` - so `zsnap`'s probe finds nothing and its
 preflight ends `NO-GO`. That is the correct outcome and it fails safely, but it means
 shipping the raw directory is a separate job. `zsnap` stays TAZ-only.
 
 ## Things it will do that look broken and are not
 
-- `WAITING 10 SECONDS BECAUSE ZAINO WILL CRASH IF IT DOES STUFF BEFORE ZEBRA` — theirs, in
+- `WAITING 10 SECONDS BECAUSE ZAINO WILL CRASH IF IT DOES STUFF BEFORE ZEBRA` - theirs, in
   capitals, on every start. zaino runs *in-process*, so no systemd ordering can remove it.
 - `Deferring: … not resolvable yet` in bursts during catch-up.
 - `errors: "configure an indexer_listen_addr…"` in `getinfo` when zaino is disabled.
@@ -401,6 +401,6 @@ shipping the raw directory is a separate job. `zsnap` stays TAZ-only.
 - **Not enabled.** Installed so the box spec counts it; enabling is a separate decision.
 - **No containerized build yet.** It must be built for `x86_64` off the box and shipped as
   a binary; nothing this large should compile beside a live faucet.
-- **No observed drip.** Nothing user-facing ships until one is seen — their
+- **No observed drip.** Nothing user-facing ships until one is seen - their
   `requestfaucetdonation` pays from *the node's own mining wallet*, so an unfunded node
   accepts the request and moves nothing.
