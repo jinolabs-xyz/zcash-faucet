@@ -17,6 +17,7 @@ import { verifySolution } from "@/lib/pow";
 import { getSenderFor, safeBalance, SendOutcomeUnknownError, type SendResult } from "@/lib/zcash/send";
 import { getNodeStatus } from "@/lib/zcash/nodeStatus";
 import { mayBuildTransaction, readChainFreshnessAsking } from "@/lib/zcash/shieldGate";
+import { mayBuildFromWallet, walletLagFreshness } from "@/lib/zcash/walletLagGate";
 import { getSendQueue, getCtazSendQueue, QueueFullError, TaskDeadlineError } from "@/lib/zcash/queue";
 import { recordSend } from "@/lib/zcash/sendHealth";
 import { DEFAULT_NETWORK, NETWORKS, parseNetwork } from "@/lib/network";
@@ -175,10 +176,14 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
   //    their own view. The cTAZ equivalent is right below, and it is a different
   //    question answered by a different source, so it is a separate check rather than
   //    a widened one.
-  const freshness =
-    network === "taz" && config.sender === "zallet"
-      ? await readChainFreshnessAsking((await getNodeStatus())?.nodeHeight ?? null)
-      : null;
+  //    ONE read of getNodeStatus() feeds both gates below. It was two awaits of the same
+  //    call before, which could straddle a block and answer the two questions against
+  //    different chain views - the exact class of skew these gates exist to catch.
+  const gatesApply = network === "taz" && config.sender === "zallet";
+  const nodeForGates = gatesApply ? await getNodeStatus() : null;
+  const freshness = gatesApply
+    ? await readChainFreshnessAsking(nodeForGates?.nodeHeight ?? null)
+    : null;
   if (freshness && !mayBuildTransaction(freshness)) {
     // A string, not an Error: logError only attaches a stack to a real Error, and
     // a synthesised one here would put ten frames of Next internals in the log for
@@ -192,6 +197,47 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
       503,
       "Our node is catching up with the network, so a drip sent right now would expire " +
         "before it could confirm. Nothing was claimed, your cooldown is untouched. Try again shortly.",
+      api,
+      { retryAfterSeconds: FRESHNESS_RETRY_SECONDS },
+    );
+  }
+
+  // 3.55. Our WALLET's lag behind our OWN node, which is a different question to 3.5 and
+  //    the gap between them is what caused the 2026-08-17 outage. 3.5 asks whether our
+  //    node follows the network. This asks whether our wallet has finished scanning what
+  //    our node already has - because zallet stamps a transaction's expiry from the
+  //    height its WALLET has scanned, not from the node's tip.
+  //
+  //    On the day: wallet 4,279,669 (+40 -> expiry 4,279,709) against a node tip of
+  //    4,279,780. zebra rejected every drip with -25 "must not be mined at a block
+  //    greater than its expiry", and 3.5 said "safe" the whole time and was RIGHT on its
+  //    own terms - the node was fresh, four blocks ahead of the independent reference.
+  //    Nothing was watching the wallet, so the faucet cheerfully built four dead
+  //    transactions.
+  //
+  //    Which is worse than four failed drips. A born-expired transaction lands in the
+  //    wallet as a row zallet asks zebra about on every boot; zebra says "no such
+  //    transaction", zaino calls that unrecoverable rather than not-found, and the wallet
+  //    exits into a restart loop that cannot self-heal because the input is stored state.
+  //    That is what took the faucet down for ten hours, and again ten minutes after it
+  //    was repaired. This gate is the tap. deploy/z3/zallet-*.sh are the mop.
+  //
+  //    Same placement and same reasoning as 3.5: BEFORE the reservation, so our own
+  //    catching-up never consumes someone's cooldown, and fails closed via
+  //    mayBuildFromWallet() so an unreadable height refuses too.
+  const walletLag = gatesApply
+    ? walletLagFreshness(nodeForGates?.height ?? null, nodeForGates?.nodeHeight ?? null)
+    : null;
+  if (walletLag && !mayBuildFromWallet(walletLag)) {
+    api.logError(
+      `drip refused, wallet scan ${walletLag.state} (lag ${walletLag.lag ?? "unknown"}): ${walletLag.reason}`,
+      "wallet lag gate",
+    );
+    return apiError(
+      503,
+      "Our wallet is still catching up with our node, so a drip sent right now would " +
+        "expire before it could confirm. Nothing was claimed, your cooldown is untouched. " +
+        "Try again shortly.",
       api,
       { retryAfterSeconds: FRESHNESS_RETRY_SECONDS },
     );
