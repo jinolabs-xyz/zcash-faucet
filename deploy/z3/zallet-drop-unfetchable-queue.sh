@@ -70,25 +70,54 @@ TIP="$(rpc getblockcount '[]' | grep -oE '"result":[0-9]+' | cut -d: -f2)"
 [ -n "$TIP" ] || { echo "ABORT: zebra is not answering getblockcount. Fix the node first; an unreachable node is not proof a transaction is gone." >&2; exit 1; }
 echo "zebra tip: $TIP"
 
-QUEUED="$(sq 'select hex(txid) from tx_retrieval_queue;' | tr -d '\r')"
-[ -n "$QUEUED" ] || { echo "nothing to do: tx_retrieval_queue is empty"; exit 0; }
-echo "queued retrieval requests: $(echo "$QUEUED" | wc -l | tr -d ' ')"
-
+# BOTH QUEUES, because cleaning only the first one is what this incident already proved
+# insufficient. tx_retrieval_queue went 5 -> 0, zallet crash-looped anyway, and the
+# remaining poison was in transparent_spend_search_queue: 12 rows asking "find the spend
+# of output N of transaction T" where T expired unmined and so output N never existed on
+# chain. That question can never be answered, and asking it kills the wallet.
 UNFETCHABLE=()
-for HX in $QUEUED; do
-  LOWER="$(echo "$HX" | tr 'A-F' 'a-f')"
-  if rpc getrawtransaction "[\"$LOWER\"]" | grep -q '"error":null'; then
-    echo "  ${HX:0:12}… zebra has it, leaving alone"
-  else
-    echo "  ${HX:0:12}… UNFETCHABLE"
-    UNFETCHABLE+=("$HX")
-  fi
-done
+echo "-- tx_retrieval_queue --"
+QUEUED="$(sq 'select hex(txid) from tx_retrieval_queue;' | tr -d '\r')"
+if [ -z "$QUEUED" ]; then
+  echo "  empty"
+else
+  for HX in $QUEUED; do
+    LOWER="$(echo "$HX" | tr 'A-F' 'a-f')"
+    if rpc getrawtransaction "[\"$LOWER\"]" | grep -q '"error":null'; then
+      echo "  ${HX:0:12}… zebra has it, leaving alone"
+    else
+      echo "  ${HX:0:12}… UNFETCHABLE"
+      UNFETCHABLE+=("$HX")
+    fi
+  done
+fi
 
-[ "${#UNFETCHABLE[@]}" -gt 0 ] || { echo "nothing to do: every queued transaction is still fetchable"; exit 0; }
+# Candidates are only ever rows anchored to a NEVER-MINED transaction. A spend search
+# against a mined transaction is a legitimate outstanding question and is left alone.
+echo "-- transparent_spend_search_queue --"
+SPEND_TXIDS="$(sq 'select distinct hex(t.txid) from transparent_spend_search_queue q join transactions t on t.id_tx = q.transaction_id where t.mined_height is null;' | tr -d '\r')"
+SPEND_DEAD=()
+if [ -z "$SPEND_TXIDS" ]; then
+  echo "  no rows anchored to unmined transactions"
+else
+  for HX in $SPEND_TXIDS; do
+    LOWER="$(echo "$HX" | tr 'A-F' 'a-f')"
+    if rpc getrawtransaction "[\"$LOWER\"]" | grep -q '"error":null'; then
+      echo "  ${HX:0:12}… unmined but zebra still has it, leaving alone"
+    else
+      echo "  ${HX:0:12}… UNFETCHABLE (its outputs never existed on chain)"
+      SPEND_DEAD+=("$HX")
+    fi
+  done
+fi
+
+if [ "${#UNFETCHABLE[@]}" -eq 0 ] && [ "${#SPEND_DEAD[@]}" -eq 0 ]; then
+  echo "nothing to do: every queued request is still answerable"
+  exit 0
+fi
 
 if [ "$DRY_RUN" = "1" ]; then
-  echo; echo "--dry-run: would delete ${#UNFETCHABLE[@]} row(s), nothing changed"
+  echo; echo "--dry-run: would drop ${#UNFETCHABLE[@]} retrieval row(s) and the spend-search rows for ${#SPEND_DEAD[@]} dead transaction(s), nothing changed"
   exit 0
 fi
 
@@ -103,14 +132,22 @@ echo "backup: $BAK"
 # so a "label" inside it arrives at sqlite as an identifier and dies with
 # `no such column: "queue="`. Bare counts survive any amount of requoting; the labels are
 # added by bash, on this side of the boundary.
-COUNTS_Q='select (select count(*) from tx_retrieval_queue), (select count(*) from transactions), (select count(*) from ironwood_received_notes), (select count(*) from sent_notes), (select count(*) from transparent_received_outputs);'
-label() { echo "queue=$1 transactions=$2 ironwood_notes=$3 sent_notes=$4 transparent_outputs=$5"; }
+COUNTS_Q='select (select count(*) from tx_retrieval_queue), (select count(*) from transparent_spend_search_queue), (select count(*) from transactions), (select count(*) from ironwood_received_notes), (select count(*) from sent_notes), (select count(*) from transparent_received_outputs);'
+label() { echo "retrieval_queue=$1 spend_queue=$2 transactions=$3 ironwood_notes=$4 sent_notes=$5 transparent_outputs=$6"; }
 
 BEFORE="$(sq "$COUNTS_Q" | tr '|' ' ')"
 echo "before: $(label $BEFORE)"
 
-LIST="$(printf "'%s'," "${UNFETCHABLE[@]}")"; LIST="${LIST%,}"
-sq "pragma foreign_keys=ON; delete from tx_retrieval_queue where hex(txid) in ($LIST);"
+if [ "${#UNFETCHABLE[@]}" -gt 0 ]; then
+  LIST="$(printf "'%s'," "${UNFETCHABLE[@]}")"; LIST="${LIST%,}"
+  sq "pragma foreign_keys=ON; delete from tx_retrieval_queue where hex(txid) in ($LIST);"
+fi
+if [ "${#SPEND_DEAD[@]}" -gt 0 ]; then
+  SLIST="$(printf "'%s'," "${SPEND_DEAD[@]}")"; SLIST="${SLIST%,}"
+  # Deletes only the QUEUE rows. The transactions row it points at is left exactly as it
+  # is: it carries notes and sends, and this script does not touch money.
+  sq "pragma foreign_keys=ON; delete from transparent_spend_search_queue where transaction_id in (select id_tx from transactions where hex(txid) in ($SLIST));"
+fi
 
 AFTER="$(sq "$COUNTS_Q" | tr '|' ' ')"
 echo "after:  $(label $AFTER)"
