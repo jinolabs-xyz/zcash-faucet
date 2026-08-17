@@ -96,17 +96,24 @@ BAK="/var/lib/docker/volumes/${VOLUME}/_data/wallet.db.bak-queuefix-$(date +%s)"
 cp -f "/var/lib/docker/volumes/${VOLUME}/_data/wallet.db" "$BAK"
 echo "backup: $BAK"
 
-# Every table's count before and after, so an unexpected cascade is surfaced rather than
-# hidden behind "the queue got shorter". Money tables MUST NOT move.
-COUNTS='select name || "=" || (select count(*) from pragma_table_info(name)) from sqlite_master where type="table" and name not like "sqlite_%"'
-BEFORE="$(sq 'select "queue=" || (select count(*) from tx_retrieval_queue) || " transactions=" || (select count(*) from transactions) || " ironwood_notes=" || (select count(*) from ironwood_received_notes) || " sent_notes=" || (select count(*) from sent_notes) || " transparent_outputs=" || (select count(*) from transparent_received_outputs);')"
-echo "before: $BEFORE"
+# Every money table's count before and after, so an unexpected cascade is surfaced rather
+# than hidden behind "the queue got shorter". Only the queue may move.
+#
+# NO STRING LITERALS IN THE SQL, deliberately. The SQL crosses a docker sh -c boundary,
+# so a "label" inside it arrives at sqlite as an identifier and dies with
+# `no such column: "queue="`. Bare counts survive any amount of requoting; the labels are
+# added by bash, on this side of the boundary.
+COUNTS_Q='select (select count(*) from tx_retrieval_queue), (select count(*) from transactions), (select count(*) from ironwood_received_notes), (select count(*) from sent_notes), (select count(*) from transparent_received_outputs);'
+label() { echo "queue=$1 transactions=$2 ironwood_notes=$3 sent_notes=$4 transparent_outputs=$5"; }
+
+BEFORE="$(sq "$COUNTS_Q" | tr '|' ' ')"
+echo "before: $(label $BEFORE)"
 
 LIST="$(printf "'%s'," "${UNFETCHABLE[@]}")"; LIST="${LIST%,}"
 sq "pragma foreign_keys=ON; delete from tx_retrieval_queue where hex(txid) in ($LIST);"
 
-AFTER="$(sq 'select "queue=" || (select count(*) from tx_retrieval_queue) || " transactions=" || (select count(*) from transactions) || " ironwood_notes=" || (select count(*) from ironwood_received_notes) || " sent_notes=" || (select count(*) from sent_notes) || " transparent_outputs=" || (select count(*) from transparent_received_outputs);')"
-echo "after:  $AFTER"
+AFTER="$(sq "$COUNTS_Q" | tr '|' ' ')"
+echo "after:  $(label $AFTER)"
 echo "integrity: $(sq 'pragma integrity_check;')"
 FK="$(sq 'pragma foreign_key_check;')"
 echo "foreign_key_check: ${FK:-clean}"
