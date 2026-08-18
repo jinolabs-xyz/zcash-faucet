@@ -104,7 +104,13 @@ COUNTS_Q='select (select count(*) from transactions), (select count(*) from sent
 label() { echo "transactions=$1 sent_notes=$2 ironwood=$3 orchard=$4 sapling=$5 transparent_outputs=$6 retrieval_q=$7 spend_q=$8"; }
 
 if [ "$DRY_RUN" = "1" ]; then
-  echo; echo "before: $(label $(sq "$COUNTS_Q" | tr '|' ' '))"
+  # Through a variable, not inlined as $(label $(sq ...)): the counts are meant to word-
+  # split into label's eight positional args, but shellcheck flags an unquoted command
+  # substitution (SC2046, warning) while an unquoted variable is only SC2086 (info), below
+  # the CI floor. Same pattern as zallet-drop-unfetchable-queue.sh.
+  BEFORE="$(sq "$COUNTS_Q" | tr '|' ' ')"
+  # shellcheck disable=SC2086  # deliberate split into label's positional args
+  echo; echo "before: $(label $BEFORE)"
   echo "--dry-run: would abandon ${#DEAD_IDS[@]} transaction(s), nothing changed"
   exit 0
 fi
@@ -113,12 +119,16 @@ BAK="/var/lib/docker/volumes/${VOLUME}/_data/wallet.db.bak-abandon-$(date +%s)"
 cp -f "/var/lib/docker/volumes/${VOLUME}/_data/wallet.db" "$BAK"
 echo "backup: $BAK"
 
-echo "before: $(label $(sq "$COUNTS_Q" | tr '|' ' '))"
+BEFORE="$(sq "$COUNTS_Q" | tr '|' ' ')"
+# shellcheck disable=SC2086  # deliberate split into label's positional args
+echo "before: $(label $BEFORE)"
 IDLIST="$(printf '%s,' "${DEAD_IDS[@]}")"; IDLIST="${IDLIST%,}"
 # foreign_keys=ON so the declared ON DELETE CASCADE actually fires. Without it sqlite
 # leaves dangling children and the wallet reads a note whose transaction is gone.
 sq "pragma foreign_keys=ON; delete from transactions where id_tx in ($IDLIST);"
-echo "after:  $(label $(sq "$COUNTS_Q" | tr '|' ' '))"
+AFTER="$(sq "$COUNTS_Q" | tr '|' ' ')"
+# shellcheck disable=SC2086  # deliberate split into label's positional args
+echo "after:  $(label $AFTER)"
 echo "integrity: $(sq 'pragma integrity_check;')"
 FK="$(sq 'pragma foreign_key_check;')"
 echo "foreign_key_check: ${FK:-clean}"
