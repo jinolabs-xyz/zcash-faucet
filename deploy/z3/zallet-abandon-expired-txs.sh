@@ -31,13 +31,23 @@
 # Nothing real is lost either way: the chain is the source of truth and the wallet holds
 # the seed, so any genuine output is recoverable by rescanning.
 #
-# IT REFUSES TO GUESS. A transaction is only a candidate when all three hold:
-#   1. mined_height IS NULL          - never made it into a block
-#   2. expiry_height < tip - MARGIN  - definitively past expiry, not merely pending
-#   3. zebra cannot serve it         - checked live, per transaction
+# IT REFUSES TO GUESS, and the live-node check is the guard that matters. A transaction is
+# a candidate when:
+#   1. mined_height IS NULL              - never made it into a block, AND
+#   2. its expiry is settled OR absent   - expiry_height < tip - MARGIN, or NULL/0 (a
+#                                          no-expiry tx never expires but can still be dead), AND
+#   3. zebra cannot serve it             - checked live, per transaction: the real proof
 # and it aborts if the node is not answering at all, because an unreachable node is not
-# proof a transaction is gone. A transaction that is unmined but still fetchable, or whose
-# expiry is anywhere near the tip, is left alone.
+# proof a transaction is gone. A tx zebra still has, or one whose expiry is NEAR the tip
+# (so it might yet be mined), is left alone.
+#
+# WHY NO-EXPIRY TXS ARE INCLUDED (2026-08-18, the second outage that day). The first
+# version abandoned only txs with a SETTLED expiry (0 < expiry_height < tip-MARGIN). But a
+# poison tx can carry expiry_height NULL, and that guard skipped it: the auto-heal fired,
+# BOTH repair tools reported "nothing to do", and zallet crash-looped to a human anyway.
+# A no-expiry tx that our OWN node cannot serve is gone the same way a settled-expired one
+# is - condition 3 is the evidence - and anything genuinely still live is recoverable by
+# rescan, whereas a wallet stuck crash-looping on it is not recoverable at all.
 #
 # Usage (on the box):
 #     systemctl stop faucet-watchdog.service      # or it restarts zallet mid-repair
@@ -78,10 +88,14 @@ rpc() {
 TIP="$(rpc getblockcount '[]' | grep -oE '"result":[0-9]+' | cut -d: -f2)"
 [ -n "$TIP" ] || { echo "ABORT: zebra is not answering getblockcount. An unreachable node is not proof a transaction is gone." >&2; exit 1; }
 CUTOFF=$(( TIP - MARGIN ))
-echo "zebra tip: $TIP   abandoning only expiry < $CUTOFF"
+echo "zebra tip: $TIP   candidates: unmined with expiry < $CUTOFF or no expiry (NULL/0); zebra decides each"
 
-CANDIDATES="$(sq "select id_tx || ':' || hex(txid) from transactions where mined_height is null and expiry_height > 0 and expiry_height < $CUTOFF;" | tr -d '\r')"
-[ -n "$CANDIDATES" ] || { echo "nothing to do: no settled expired unmined transactions"; exit 0; }
+# Include no-expiry (NULL/0) unmined txs, not just settled-expired ones: a poison tx with
+# expiry_height NULL slipped the old `expiry_height > 0` guard and the auto-heal could not
+# clear it (2026-08-18). Near-tip expiries stay excluded (they might still be mined); the
+# per-candidate zebra check below is what actually decides.
+CANDIDATES="$(sq "select id_tx || ':' || hex(txid) from transactions where mined_height is null and (expiry_height is null or expiry_height = 0 or expiry_height < $CUTOFF);" | tr -d '\r')"
+[ -n "$CANDIDATES" ] || { echo "nothing to do: no unmined transaction is past expiry or without one"; exit 0; }
 echo "candidates: $(echo "$CANDIDATES" | wc -l | tr -d ' ')"
 
 DEAD_IDS=()
