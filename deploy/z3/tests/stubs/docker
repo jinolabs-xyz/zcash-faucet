@@ -88,5 +88,23 @@ case "${1:-}" in
       *) echo "stub docker inspect: unsupported fmt $fmt" >&2; exit 64 ;;
     esac
     ;;
+  logs)
+    # docker logs [--tail N] <container>. Content is whatever a test wrote to the
+    # container's .logs file, so the poison heal can be driven by modelling the -5
+    # signature (or its absence). No file means empty logs, which is the healthy case and
+    # keeps every existing suite - none of which write a .logs file - unchanged.
+    shift
+    target=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --tail) shift 2 ;;
+        -f|--follow|-t|--timestamps) shift ;;
+        *) target="$1"; shift ;;
+      esac
+    done
+    lf="${STUB_CONTAINERS:?}/$target.logs"
+    [ -f "$lf" ] && cat "$lf"
+    exit 0
+    ;;
   *) echo "stub docker: unsupported: $*" >&2; exit 64 ;;
 esac

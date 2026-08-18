@@ -366,11 +366,19 @@ while true; do
   # So restarting is not enough here: the poison has to be cleared. That is what the
   # deploy/z3/zallet-*.sh tools do, and this runs them.
   #
-  # NARROW ON PURPOSE. It fires only when the log carries that exact signature AND the
-  # app is telling us it cannot read the wallet. Anything else - a hung node, a full
-  # disk, a genuine zebra outage - is left to steps 1-4 and the pager, because a
-  # watchdog that reaches for a database repair whenever something looks wrong is worse
-  # than one that does nothing.
+  # NARROW ON PURPOSE. It fires only when zallet's OWN log carries that exact -5
+  # signature. Anything else - a hung node, a full disk, a genuine zebra outage - is left
+  # to steps 1-4 and the pager, because a watchdog that reaches for a database repair
+  # whenever something looks wrong is worse than one that does nothing.
+  #
+  # JUDGED FROM ZALLET'S LOG, NOT THE APP'S READINESS. This used to also gate on /api/ready
+  # saying "cannot read the wallet", but the watchdog often cannot reach the app at all
+  # (the faucet container publishes no host port), so that probe answers "no answer" every
+  # sweep. Worse, it meant the reset below - which only ran when the app went READY - never
+  # ran, so the budget never came back and the heal gave up PERMANENTLY after two uses.
+  # 2026-08-18: it healed twice, could not (with the old tool) clear the poison, gave up,
+  # and stayed given-up. The -5 line in zallet's log is the direct, reachable evidence; its
+  # ABSENCE while zallet runs is what proves a heal worked.
   #
   # IT ALWAYS ALERTS, including on success. A silent self-heal is how 812 restarts went
   # unnoticed once already; a heal that fixed something is exactly what an operator
@@ -378,43 +386,43 @@ while true; do
   #
   # AND IT GIVES UP. After HEAL_MAX_ATTEMPTS it stops and pages instead of rewriting
   # wallet.db on a loop: at that point the diagnosis is wrong and thrashing the database
-  # is the more dangerous of the two options.
-  if [ -n "$zallet" ] && [ "$ready_ok" = "0" ] && [ "$HEAL_ENABLED" = "1" ]; then
-    case "$reason" in
-      *"balance unknown"*|*"no answer"*)
-        if docker logs --tail 40 "$zallet" 2>&1 | grep -q "No such mempool or main chain transaction"; then
-          if [ "$heal_attempts" -ge "$HEAL_MAX_ATTEMPTS" ]; then
-            if [ "$alerted_heal_giveup" = "0" ]; then
-              alert "zallet poison persists after $heal_attempts repair attempt(s) - NOT retrying, needs a human. reason: ${reason:-unknown}"
-              alerted_heal_giveup=1
-            fi
-          else
-            heal_attempts=$((heal_attempts + 1))
-            log "zallet poison signature detected; running repair $heal_attempts/$HEAL_MAX_ATTEMPTS"
-            # Stopped first, or sqlite and the wallet fight over the file. `docker stop`
-            # beats the restart policy: it marks the container stopped, so step 2's
-            # recover_if_down is what deliberately brings it back afterwards.
-            docker stop "$zallet" >/dev/null 2>&1
-            heal_out=""
-            for tool in zallet-abandon-expired-txs.sh zallet-drop-unfetchable-queue.sh; do
-              if [ -x "$HEAL_TOOLS_DIR/$tool" ] || [ -f "$HEAL_TOOLS_DIR/$tool" ]; then
-                heal_out="$heal_out $(bash "$HEAL_TOOLS_DIR/$tool" 2>&1 | tail -3 | tr '\n' ' ')"
-              else
-                log "WARNING: $HEAL_TOOLS_DIR/$tool missing, cannot heal"
-              fi
-            done
-            docker start "$zallet" >/dev/null 2>&1
-            alert "zallet was crash-looping on dropped-transaction poison; ran the repair tools (attempt $heal_attempts/$HEAL_MAX_ATTEMPTS) and restarted it.${heal_out}"
-          fi
+  # is the more dangerous of the two options. The budget comes back once zallet is running
+  # and its log is clean, so a later, unrelated episode still gets a full budget.
+  if [ -n "$zallet" ] && [ "$HEAL_ENABLED" = "1" ]; then
+    if docker logs --tail 40 "$zallet" 2>&1 | grep -q "No such mempool or main chain transaction"; then
+      if [ "$heal_attempts" -ge "$HEAL_MAX_ATTEMPTS" ]; then
+        if [ "$alerted_heal_giveup" = "0" ]; then
+          alert "zallet poison persists after $heal_attempts repair attempt(s) - NOT retrying, needs a human. reason: ${reason:-unknown}"
+          alerted_heal_giveup=1
         fi
-        ;;
-    esac
-  elif [ "$ready_ok" = "1" ]; then
-    # A ready faucet is the only thing that proves a heal worked, so the budget resets
-    # here rather than on a timer. An episode that recovers gets a full budget next time;
-    # one that never recovers keeps its spent count and stays given-up.
-    heal_attempts=0
-    alerted_heal_giveup=0
+      else
+        heal_attempts=$((heal_attempts + 1))
+        log "zallet poison signature detected; running repair $heal_attempts/$HEAL_MAX_ATTEMPTS"
+        # Stopped first, or sqlite and the wallet fight over the file. `docker stop`
+        # beats the restart policy: it marks the container stopped, so step 2's
+        # recover_if_down is what deliberately brings it back afterwards.
+        docker stop "$zallet" >/dev/null 2>&1
+        heal_out=""
+        for tool in zallet-abandon-expired-txs.sh zallet-drop-unfetchable-queue.sh; do
+          if [ -x "$HEAL_TOOLS_DIR/$tool" ] || [ -f "$HEAL_TOOLS_DIR/$tool" ]; then
+            heal_out="$heal_out $(bash "$HEAL_TOOLS_DIR/$tool" 2>&1 | tail -3 | tr '\n' ' ')"
+          else
+            log "WARNING: $HEAL_TOOLS_DIR/$tool missing, cannot heal"
+          fi
+        done
+        docker start "$zallet" >/dev/null 2>&1
+        alert "zallet was crash-looping on dropped-transaction poison; ran the repair tools (attempt $heal_attempts/$HEAL_MAX_ATTEMPTS) and restarted it.${heal_out}"
+      fi
+    elif [ "$heal_attempts" -ne 0 ] || [ "$alerted_heal_giveup" != "0" ]; then
+      # No -5 in the recent log. If zallet is actually up, the poison is gone (a heal
+      # worked, or there was never one): reset the budget, keyed off zallet being up and
+      # clean rather than the app-readiness probe the watchdog cannot reach.
+      if [ "$(docker inspect -f '{{.State.Status}}' "$zallet" 2>/dev/null)" = "running" ]; then
+        heal_attempts=0
+        alerted_heal_giveup=0
+        log "zallet running and clean of the poison signature; heal budget reset"
+      fi
+    fi
   fi
 
   # 6: miner stall recovery. Independent of the faucet's readiness - the miner funds the

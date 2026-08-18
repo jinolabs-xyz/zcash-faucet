@@ -23,7 +23,10 @@ wd_env() {
   export WATCHDOG_ALERT_SH="$T/alert.sh"
   export WATCHDOG_READY_GRACE_SECS=999999   # never page for readiness in here
   export WATCHDOG_ZEBRA_MATCH=zebra WATCHDOG_ZALLET_MATCH=zallet WATCHDOG_FAUCET_MATCH=faucet-web
-  unset STUB_CRASHLOOP
+  # Exports persist across tests in one shell; clear the per-test switches so a value set
+  # by an earlier case cannot leak into a later one (STUB_HEAL_FIXES=1 leaking into the
+  # give-up case is exactly what made this suite lie once).
+  unset STUB_CRASHLOOP STUB_HEAL_FIXES
   # Capture what would have been paged, without a webhook.
   printf '#!/bin/sh\nprintf "%%s\\n" "$1" >> "%s/alerts.log"\n' "$T" > "$T/alert.sh"
   chmod +x "$T/alert.sh"
@@ -192,8 +195,68 @@ check "silent when there is no heartbeat to judge" "! grep -q 'systemctl restart
 
 echo "== watchdog: a stall that will not clear escalates instead of restart-looping"
 wd_miner_env
-miner_hb 5 3600 3600
-wd_run 5                  # WATCHDOG_MINER_HEAL_MAX defaults to 3
+miner_hb 5 3600 3600      # WATCHDOG_MINER_HEAL_MAX defaults to 3
+wd_run 5
 check "restarts exactly the cap, then stops" \
   "[ \"\$(grep -c 'systemctl restart zcash-testnet-miner.service' '$STUB_LOG')\" = 3 ]"
 check "and pages once it gives up" "grep -q 'miner STILL stalled after 3 restart' '$T/alerts.log'"
+
+# --- step 5: poison auto-heal + budget reset -------------------------------------
+# zallet crash-loops on a dropped tx it can no longer fetch (-5 No such mempool...). The
+# watchdog runs the repair tools and restarts it. This step was shipped UNTESTED, which is
+# how a blind spot (a poison tx with no expiry that the tool skipped) reached production
+# twice in one day. The reset is the subtle part: it must NOT depend on the app readiness
+# probe, which the watchdog cannot even reach, or the budget never comes back.
+SIG='RPC Error (code: -5): No such mempool or main chain transaction'
+
+# Stub repair tools. STUB_HEAL_FIXES=1 makes the abandon stub clear the poison from
+# zallet's log (models the real tool removing the dead tx); unset leaves it (a poison it
+# cannot clear).
+mk_heal_tools() {
+  mkdir -p "$T/tools"
+  cat > "$T/tools/zallet-abandon-expired-txs.sh" <<TOOL
+#!/usr/bin/env bash
+echo "abandon: stub ran"
+[ "\${STUB_HEAL_FIXES:-0}" = "1" ] && : > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
+exit 0
+TOOL
+  printf '#!/usr/bin/env bash\necho "drop-queue: stub ran"\nexit 0\n' > "$T/tools/zallet-drop-unfetchable-queue.sh"
+  chmod +x "$T/tools/"*.sh
+  export WATCHDOG_HEAL_TOOLS_DIR="$T/tools"
+}
+
+echo "== watchdog: the poison signature triggers a repair, and a heal that works frees the budget again"
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+mk_heal_tools
+export STUB_HEAL_FIXES=1
+printf '%s\n' "$SIG" > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
+wd_run 3
+check "runs the repair tools on the -5 signature" "grep -q 'ran the repair tools (attempt 1/2)' '$T/alerts.log'"
+check "does not give up on a heal that worked" "! grep -q 'poison persists' '$T/alerts.log'"
+check "frees the heal budget once zallet is running and clean" "grep -q 'heal budget reset' '$T/run.log'"
+
+echo "== watchdog: a poison the tools cannot clear heals up to the cap, then pages once"
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+mk_heal_tools                 # STUB_HEAL_FIXES unset: the signature never clears
+printf '%s\n' "$SIG" > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
+wd_run 4                       # HEAL_MAX_ATTEMPTS defaults to 2
+check "heals up to the cap" "[ \"\$(grep -c 'ran the repair tools' '$T/alerts.log')\" = 2 ]"
+check "then pages that it needs a human" "grep -q 'poison persists after 2 repair attempt' '$T/alerts.log'"
+check "and pages that once, not every sweep" "[ \"\$(grep -c 'poison persists' '$T/alerts.log')\" = 1 ]"
+
+echo "== watchdog: no poison signature means no repair is ever run"
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+mk_heal_tools
+: > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"   # clean logs
+wd_run 2
+check "does not run the repair tools on a clean log" "! grep -q 'ran the repair tools' '$T/alerts.log'"
+check "and does not log a budget reset it never spent" "! grep -q 'heal budget reset' '$T/run.log'"
