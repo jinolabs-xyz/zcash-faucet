@@ -21,5 +21,8 @@ case "$cmd" in
   start)
     echo active > "$state_file"
     ;;
+  restart)
+    echo active > "$state_file"
+    ;;
   *) echo "stub systemctl: unsupported: $*" >&2; exit 64 ;;
 esac

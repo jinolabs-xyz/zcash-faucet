@@ -330,3 +330,27 @@ printf 'faucet-thing.timer\nprobe-rpc.socket\n' > "$T/src/enabled-units"
 bash "$INSTALL_OPS" "$T/src" > "$T/sock2.log" 2>&1
 check "a declared socket unit is enabled" "grep -qx 'probe-rpc.socket' '$STUB_ENABLED'"
 check "and nothing was disabled on the way" "[ ! -s '$STUB_DISABLED' ]"
+
+echo "== install-ops: a changed watchdog.sh restarts the running watchdog so the new code runs"
+# Installing the file is not applying it. faucet-watchdog is a `while true` loop that read
+# watchdog.sh once at start and never re-reads it, so a new script sits on disk matching
+# the repo while the process runs the old code. 2026-08-18 the step-5 poison heal shipped
+# and sat dormant for hours in exactly that state; a crash loop that should have
+# self-healed ran to 944 restarts.
+ops_env
+export STUB_RESTARTED="$T/restarted"; : > "$STUB_RESTARTED"
+bash "$INSTALL_OPS" "$T/src" > "$T/wd1.log" 2>&1
+check "exits 0" "[ $? -eq 0 ]"
+check "the watchdog was restarted when watchdog.sh was (re)installed" \
+  "grep -qx 'faucet-watchdog.service' '$STUB_RESTARTED'"
+check "and the run says why" "grep -q 'restarted faucet-watchdog.service so the new code' '$T/wd1.log'"
+
+echo "== install-ops: a re-run with an UNCHANGED watchdog.sh does not bounce the watchdog"
+# The restart is gated on the file actually changing. Restarting every deploy tick, change
+# or not, would needlessly bounce the supervisor and could mask a real crash loop.
+ops_env
+bash "$INSTALL_OPS" "$T/src" > /dev/null 2>&1
+export STUB_RESTARTED="$T/restarted2"; : > "$STUB_RESTARTED"
+bash "$INSTALL_OPS" "$T/src" > "$T/wd2.log" 2>&1
+check "a re-run exits 0" "[ $? -eq 0 ]"
+check "and does not restart the watchdog when nothing changed" "[ ! -s '$STUB_RESTARTED' ]"

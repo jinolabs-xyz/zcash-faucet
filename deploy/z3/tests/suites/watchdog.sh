@@ -127,3 +127,73 @@ rm -f "$STUB_CONTAINERS/z3-testnet-zallet-1"
 wd_run 1
 check "does not page about a container it cannot see" "! grep -q 'STILL BROKEN' '$T/alerts.log'"
 check "does not claim it recovered either" "! grep -q 'recovered' '$T/alerts.log'"
+
+# --- step 6: miner stall recovery ------------------------------------------------
+# The miner holds ONE persistent RPC connection to zebra and does not reconnect when
+# zebra restarts: it loops "getblocktemplate: Peer disconnected" while its heartbeat
+# stays fresh, so Restart=always never fires because the process never exits. 2026-08-18
+# that was ~18h of no mining and nothing noticed. The watchdog reads the heartbeat and
+# restarts a miner that is provably alive but not templating - and, crucially, does NOT
+# touch a dead process, a freshly started one, or a healthy one.
+
+# An ISO-8601 Zulu timestamp $1 seconds in the past, matching the heartbeat's format.
+_ago_z() { date -u -d "$1 seconds ago" +%Y-%m-%dT%H:%M:%SZ; }
+
+# Write a heartbeat: writtenAt/startedAt/lastTemplateAt as ages in seconds. A
+# lastTemplateAt of "none" is emitted as JSON null (the miner has never templated).
+miner_hb() {
+  local lt
+  if [ "$3" = "none" ]; then lt='null'; else lt="\"$(_ago_z "$3")\""; fi
+  printf '{"schema":1,"writtenAt":"%s","startedAt":"%s","lastTemplateAt":%s,"lastTemplateHeight":4282310}\n' \
+    "$(_ago_z "$1")" "$(_ago_z "$2")" "$lt" > "$T/heartbeat.json"
+}
+
+wd_miner_env() {
+  wd_env
+  echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+  echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+  echo running > "$STUB_CONTAINERS/faucet-web"
+  export STUB_SYSTEMD="$T/systemd"; mkdir -p "$STUB_SYSTEMD"
+  export WATCHDOG_MINER_HEARTBEAT="$T/heartbeat.json"
+  export WATCHDOG_MINER_UNIT="zcash-testnet-miner.service"
+}
+
+echo "== watchdog: a miner alive but not templating is restarted"
+wd_miner_env
+miner_hb 5 3600 3600      # heartbeat 5s old (alive), started 1h ago, last template 1h ago
+wd_run 1
+check "restarts the miner unit" "grep -q 'systemctl restart zcash-testnet-miner.service' '$STUB_LOG'"
+check "and says why, naming the stall" "grep -q 'miner was stalled' '$T/alerts.log'"
+
+echo "== watchdog: a miner templating normally is left alone"
+wd_miner_env
+miner_hb 5 3600 10        # last template 10s ago: healthy
+wd_run 2
+check "does not restart a healthy miner" "! grep -q 'systemctl restart zcash-testnet-miner' '$STUB_LOG'"
+check "and pages nothing about the miner" "! grep -qi 'miner' '$T/alerts.log'"
+
+echo "== watchdog: a just-restarted miner is inside its start grace and is not bounced"
+wd_miner_env
+miner_hb 5 20 none        # started 20s ago (< grace), no template yet
+wd_run 1
+check "does not restart a miner still starting up" "! grep -q 'systemctl restart zcash-testnet-miner' '$STUB_LOG'"
+
+echo "== watchdog: a dead miner PROCESS is left to Restart=always, not healed here"
+wd_miner_env
+miner_hb 600 3600 3600    # heartbeat 10m old: the process itself is down or hung
+wd_run 1
+check "does not restart when the heartbeat itself is stale" "! grep -q 'systemctl restart zcash-testnet-miner' '$STUB_LOG'"
+
+echo "== watchdog: no heartbeat file means no miner action at all"
+wd_miner_env
+rm -f "$T/heartbeat.json"
+wd_run 2
+check "silent when there is no heartbeat to judge" "! grep -q 'systemctl restart zcash-testnet-miner' '$STUB_LOG'"
+
+echo "== watchdog: a stall that will not clear escalates instead of restart-looping"
+wd_miner_env
+miner_hb 5 3600 3600
+wd_run 5                  # WATCHDOG_MINER_HEAL_MAX defaults to 3
+check "restarts exactly the cap, then stops" \
+  "[ \"\$(grep -c 'systemctl restart zcash-testnet-miner.service' '$STUB_LOG')\" = 3 ]"
+check "and pages once it gives up" "grep -q 'miner STILL stalled after 3 restart' '$T/alerts.log'"

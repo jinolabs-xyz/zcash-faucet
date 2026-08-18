@@ -112,6 +112,10 @@ place() {
 # files that are not there, and the failure would be a silent alert rather than a
 # missing unit.
 rc=0
+# Tracked because a long-running service does NOT pick up a new script on its own (see
+# the restart block after enablement). Only watchdog.sh needs it today; the timer-driven
+# scripts re-exec their installed copy each run and so update themselves.
+watchdog_changed=0
 for src in "$SRC"/*.sh; do
   [ -e "$src" ] || continue
   case "$(basename "$src")" in
@@ -123,7 +127,9 @@ for src in "$SRC"/*.sh; do
     # script. Found by driving this against a fake box, not by reading it.
     install-ops.sh|auto-deploy.sh) continue ;;
   esac
+  before="$changed"
   place "$src" "$INSTALL_DIR/$(basename "$src")" 755 || rc=1
+  [ "$(basename "$src")" = "watchdog.sh" ] && [ "$changed" != "$before" ] && watchdog_changed=1
 done
 
 units=0
@@ -212,6 +218,30 @@ if [ "$DRY" != "1" ] && [ -f "$ENABLED_UNITS_FILE" ]; then
   if [ -n "$enable_failed" ]; then
     log "ERROR: could not enable:$enable_failed"
     rc=1
+  fi
+fi
+
+# --- restart the watchdog when its script changed ------------------------------
+# INSTALLING A SCRIPT IS NOT THE SAME AS APPLYING IT. faucet-watchdog is a bash
+# `while true` loop that read watchdog.sh once at start and never re-reads the file, so a
+# new watchdog.sh sits on disk, matching the repo and passing audit-drift, while the
+# running process keeps executing the old code. 2026-08-18: the step-5 poison auto-heal
+# was on the box for hours in exactly that state, and a crash loop that should have
+# self-healed ran to 944 restarts instead.
+#
+# Restart it, but ONLY when its script actually changed and it is already active. Starting
+# a stopped unit is an arming decision that belongs to enabled-units, not to a file sync -
+# the same line this script draws everywhere else.
+if [ "$watchdog_changed" = "1" ] && [ "$DRY" != "1" ]; then
+  if "$SYSTEMCTL" is-active --quiet faucet-watchdog.service 2>/dev/null; then
+    if "$SYSTEMCTL" restart faucet-watchdog.service >/dev/null 2>&1; then
+      log "watchdog.sh changed; restarted faucet-watchdog.service so the new code actually runs"
+    else
+      log "ERROR: watchdog.sh changed but restarting faucet-watchdog.service failed; it is still running the OLD code"
+      rc=1
+    fi
+  else
+    log "watchdog.sh changed but faucet-watchdog.service is not active; leaving it as the operator has it"
   fi
 fi
 

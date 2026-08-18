@@ -48,6 +48,20 @@ HEAL_TOOLS_DIR="${WATCHDOG_HEAL_TOOLS_DIR:-$(dirname "$0")}"
 heal_attempts=0
 alerted_heal_giveup=0
 
+# Miner stall recovery (step 6). The miner holds ONE persistent RPC connection to zebra
+# and does not reconnect when zebra restarts: it loops `getblocktemplate: Peer
+# disconnected` forever while its heartbeat stays fresh, so Restart=always never fires
+# because the process never exits. 2026-08-18: zebra restarted, the miner went ~18h with
+# no template and nothing recovered it. The heartbeat is the tell - written recently
+# (alive) but lastTemplateAt old (not mining) - and a restart re-establishes the socket.
+MINER_HEAL_ENABLED="${WATCHDOG_MINER_HEAL_ENABLED:-1}"
+MINER_HEARTBEAT="${WATCHDOG_MINER_HEARTBEAT:-/var/lib/faucet-miner/heartbeat.json}"
+MINER_UNIT="${WATCHDOG_MINER_UNIT:-zcash-testnet-miner.service}"
+MINER_STALL_SECS="${WATCHDOG_MINER_STALL_SECS:-300}"          # alive but no template this long = wedged
+MINER_HEARTBEAT_FRESH_SECS="${WATCHDOG_MINER_HEARTBEAT_FRESH_SECS:-60}" # older writtenAt = process itself down (Restart=always' job, not ours)
+MINER_START_GRACE_SECS="${WATCHDOG_MINER_START_GRACE_SECS:-120}"  # just (re)started: give it time to fetch its first template
+MINER_HEAL_MAX="${WATCHDOG_MINER_HEAL_MAX:-3}"               # then page instead of restart-looping the miner
+
 # 0 = loop forever (production). Tests set this to run an exact number of sweeps.
 MAX_TICKS="${WATCHDOG_MAX_TICKS:-0}"
 
@@ -204,6 +218,66 @@ recover_if_down() {
   fi
 }
 
+# One string field out of the miner heartbeat, empty if absent or JSON null. grep, not a
+# json parser, because the watchdog carries no such dependency and the heartbeat is our
+# own flat object, one field per line.
+hb_field() { grep -o "\"$1\":\"[^\"]*\"" "$MINER_HEARTBEAT" 2>/dev/null | head -n1 | cut -d'"' -f4; }
+
+# Age in seconds of an ISO-8601 Zulu timestamp, or empty if it is absent or will not
+# parse. Empty is deliberately different from a large number: "no timestamp" is not
+# evidence of staleness, it is absence of evidence, and the caller distinguishes them.
+ts_age() {
+  local ts="$1" epoch
+  [ -n "$ts" ] || { printf ''; return; }
+  epoch="$(date -u -d "$ts" +%s 2>/dev/null)" || { printf ''; return; }
+  printf '%s' "$(( $(date -u +%s) - epoch ))"
+}
+
+# STEP 6: MINER STALL RECOVERY. Narrow, like the poison heal. It acts ONLY on a miner
+# that is provably alive (heartbeat fresh) yet not templating (lastTemplateAt stale), so
+# it never touches a miner that is merely down - that is Restart=always' job - nor one
+# that just (re)started and has not had time to fetch its first template. Capped, so a
+# stall it cannot fix (zebra genuinely down, RPC endpoint moved) pages a human instead of
+# restart-looping the miner forever.
+heal_miner_if_stalled() {
+  [ "$MINER_HEAL_ENABLED" = "1" ] || return 0
+  [ -f "$MINER_HEARTBEAT" ] || return 0
+  local key="$MINER_UNIT" written_age started_age tmpl_age
+
+  written_age="$(ts_age "$(hb_field writtenAt)")"
+  # No parseable heartbeat: cannot establish the miner is alive, so assert nothing and
+  # leave a dead process to Restart=always.
+  [ -n "$written_age" ] || return 0
+  [ "$written_age" -le "$MINER_HEARTBEAT_FRESH_SECS" ] || return 0
+
+  # A freshly (re)started miner has not fetched a template yet; restarting it now would
+  # thrash exactly the thing a restart just fixed.
+  started_age="$(ts_age "$(hb_field startedAt)")"
+  [ -z "$started_age" ] || [ "$started_age" -ge "$MINER_START_GRACE_SECS" ] || return 0
+
+  # lastTemplateAt absent/null counts as "never templated", which past the start grace is
+  # itself a stall.
+  tmpl_age="$(ts_age "$(hb_field lastTemplateAt)")"
+  if [ -n "$tmpl_age" ] && [ "$tmpl_age" -lt "$MINER_STALL_SECS" ]; then
+    # Templating normally. Clear any prior stall count so the next episode gets a full
+    # budget, the same way a READY faucet resets the poison heal.
+    [ "$(flap_get "$key")" = "0" ] || { flap_set "$key" 0; log "miner templating again (last ${tmpl_age}s ago); stall count reset"; }
+    return 0
+  fi
+
+  local n; n=$(( $(flap_get "$key") + 1 )); flap_set "$key" "$n"
+  if [ "$n" -le "$MINER_HEAL_MAX" ]; then
+    log "miner stalled: alive (heartbeat ${written_age}s old) but no block template for ${tmpl_age:-never}s; restarting $MINER_UNIT ($n/$MINER_HEAL_MAX)"
+    if systemctl restart "$MINER_UNIT" >/dev/null 2>&1; then
+      alert "miner was stalled (heartbeat fresh, no block template for ${tmpl_age:-N/A}s) - restarted $MINER_UNIT ($n/$MINER_HEAL_MAX). Usually zebra restarted and the miner did not reconnect."
+    else
+      alert "miner stalled and 'systemctl restart $MINER_UNIT' FAILED ($n/$MINER_HEAL_MAX) - needs a human."
+    fi
+  elif [ "$n" -eq "$((MINER_HEAL_MAX + 1))" ]; then
+    alert "miner STILL stalled after $MINER_HEAL_MAX restart(s) - not retrying. Likely zebra is down or the RPC endpoint moved; needs a human."
+  fi
+}
+
 faucet_misses=0
 unready_since=0
 alerted_unready=0
@@ -342,6 +416,11 @@ while true; do
     heal_attempts=0
     alerted_heal_giveup=0
   fi
+
+  # 6: miner stall recovery. Independent of the faucet's readiness - the miner funds the
+  # reserve but a stalled miner does not gate drips, so this runs every sweep on its own
+  # signal (the heartbeat) rather than off /api/ready.
+  heal_miner_if_stalled
 
   # Bounded only under test. Production leaves MAX_TICKS at 0 and never exits,
   # and the sleep is skipped on the final tick so a suite is not paying for it.
