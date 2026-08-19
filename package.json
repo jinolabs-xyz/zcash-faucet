@@ -20,22 +20,22 @@
     "@d4mr/t2z-wasm": "^0.0.2",
     "@grpc/grpc-js": "^1.14.4",
     "@grpc/proto-loader": "^0.8.1",
-    "@noble/hashes": "^2.2.0",
+    "@noble/hashes": "^2.3.0",
     "@noble/secp256k1": "^3.1.0",
-    "@scure/base": "^2.2.0",
-    "better-sqlite3": "^13.0.2",
-    "next": "^16.2.12",
+    "@scure/base": "^2.3.0",
+    "better-sqlite3": "^13.0.3",
+    "next": "^16.3.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
-    "@types/node": "^26.1.2",
+    "@types/node": "^26.2.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "eslint": "^9.39.5",
-    "eslint-config-next": "^16.2.12",
+    "eslint-config-next": "^16.3.1",
     "typescript": "^6.0.3"
   },
   "overrides": {
