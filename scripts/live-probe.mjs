@@ -13,20 +13,39 @@
 // cannot drip is what monitoring exists to catch. During a planned un-ready
 // window (initial sync on a fresh box), set SMOKE_ALLOW_UNREADY=1 to keep the
 // schedule green while still failing on unreachable or broken responses.
+//
+// RETRIES BEFORE IT PAGES, because a single 15-second blip is not an outage.
+// The faucet has momentary un-ready windows that are entirely normal: the
+// autodeploy swaps the app container in a few seconds, and zallet occasionally
+// re-syncs to the tip after a mempool-stream drop (the watchdog covers it). A
+// probe that failed on the first bad response emailed on every one of those,
+// training the reader to ignore the one signal that ever caught a real outage.
+// So the faucet checks run up to SMOKE_ATTEMPTS times with SMOKE_RETRY_DELAY_MS
+// between: a transient failure that clears on retry passes, and only a failure
+// that PERSISTS across the whole window (a real outage) exits non-zero.
 const BASE = (process.env.SMOKE_URL ?? "").replace(/\/$/, "");
 const ALLOW_UNREADY = process.env.SMOKE_ALLOW_UNREADY === "1";
 const TIMEOUT_MS = Number(process.env.SMOKE_TIMEOUT_MS ?? 15000);
+const RETRY_ATTEMPTS = Math.max(1, Number(process.env.SMOKE_ATTEMPTS ?? 3));
+const RETRY_DELAY_MS = Number(process.env.SMOKE_RETRY_DELAY_MS ?? 30000);
 
 if (!BASE) {
   console.error("SMOKE_URL is not set, nothing to probe");
   process.exit(2);
 }
 
-let failures = 0;
-const ok = (name, cond, detail = "") => {
-  console.log(`${cond ? "ok" : "FAIL"}: ${name}${detail ? ` (${detail})` : ""}`);
-  if (!cond) failures++;
-};
+// A fresh pass/fail tally. Each retry attempt and the explorer check get their
+// OWN tally, so a retry that clears does not carry a stale failure from the
+// attempt before it, and a real explorer-property break is counted apart from a
+// transient faucet blip.
+function tally() {
+  let failures = 0;
+  const ok = (name, cond, detail = "") => {
+    console.log(`${cond ? "ok" : "FAIL"}: ${name}${detail ? ` (${detail})` : ""}`);
+    if (!cond) failures += 1;
+  };
+  return { ok, count: () => failures };
+}
 
 async function probe(path) {
   const started = Date.now();
@@ -97,9 +116,13 @@ async function explorerHit(explorerTxUrl, txid, ua) {
   }
 }
 
+// Returns its own failure count. Not retried: its only failure is a real property
+// break (an unknown txid rendering), never a transient, and it already downgrades
+// an unreachable/5xx explorer to cannot-verify so a cipherscan outage never pages.
 async function checkExplorerProperty() {
+  const { ok, count } = tally();
   const explorerTxUrl = await loadExplorerTxUrl();
-  if (!explorerTxUrl) return;
+  if (!explorerTxUrl) return count();
 
   // The host, not the template: explorerTxUrl percent-encodes what it is given,
   // so printing a "{txid}" placeholder through it comes out as %7Btxid%7D.
@@ -140,18 +163,27 @@ async function checkExplorerProperty() {
         `explorer rather than a broken property. Repin it from a recent claims.txid.`,
     );
   }
+  return count();
 }
 
-const status = await probe("/api/status");
-ok("GET /api/status answers 200", status.status === 200, status.err ?? `status ${status.status}, ${status.ms}ms`);
-const statusUsable = status.status === 200 && !!status.body;
-if (!statusUsable) {
-  // Recorded, not exited on. This used to exit(1) here, which meant a dead faucet
-  // also skipped the explorer property below, and those two facts are unrelated
-  // (#179). Exit code is unchanged: the failure above still lands at the bottom.
-  console.log(`  ${BASE} is unreachable or broken, skipping the assertions that need its body`);
-}
-if (statusUsable) {
+// One full pass of the faucet health checks. Returns its own failure count so the
+// caller can retry a transient failure without a stale tally leaking between
+// attempts. Everything that was here before is unchanged; it just reports up
+// instead of mutating a module global.
+async function runFaucetChecks() {
+  const { ok, count } = tally();
+
+  const status = await probe("/api/status");
+  ok("GET /api/status answers 200", status.status === 200, status.err ?? `status ${status.status}, ${status.ms}ms`);
+  const statusUsable = status.status === 200 && !!status.body;
+  if (!statusUsable) {
+    // Recorded, not exited on. This used to exit(1) here, which meant a dead faucet
+    // also skipped the explorer property below, and those two facts are unrelated
+    // (#179). Exit code is unchanged: the failure above still lands at the bottom.
+    console.log(`  ${BASE} is unreachable or broken, skipping the assertions that need its body`);
+    return count();
+  }
+
   ok("status body is the faucet's", typeof status.body.balanceTaz !== "undefined" && !!status.body.network, `network ${status.body.network}`);
   ok("backend reachable from the app", status.body.backend?.reachable === true);
 
@@ -230,9 +262,38 @@ if (statusUsable) {
   } else {
     ok("GET /api/ready answers", false, ready.err ?? `status ${ready.status}`);
   }
+
+  return count();
 }
 
-await checkExplorerProperty();
+// Retry the faucet checks: a momentary redeploy swap or re-sync clears on the next
+// attempt and passes; only a failure that survives the whole window pages.
+let faucetFailures = 0;
+for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt += 1) {
+  if (attempt > 1) {
+    console.log(
+      `\n=== attempt ${attempt}/${RETRY_ATTEMPTS} (a previous attempt failed; a momentary app swap or tip re-sync should have cleared) ===`,
+    );
+  }
+  faucetFailures = await runFaucetChecks();
+  if (faucetFailures === 0) break;
+  if (attempt < RETRY_ATTEMPTS) {
+    console.log(
+      `attempt ${attempt}/${RETRY_ATTEMPTS} saw ${faucetFailures} failure(s); waiting ${RETRY_DELAY_MS / 1000}s before retrying`,
+    );
+    await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+  }
+}
 
-console.log(failures === 0 ? "\nlive-probe: healthy" : `\nlive-probe: ${failures} FAILED`);
-process.exit(failures === 0 ? 0 : 1);
+const explorerFailures = await checkExplorerProperty();
+
+const total = faucetFailures + explorerFailures;
+if (total === 0) {
+  console.log(`\nlive-probe: healthy`);
+} else {
+  console.log(
+    `\nlive-probe: ${total} FAILED` +
+      ` (faucet ${faucetFailures} after ${RETRY_ATTEMPTS} attempt(s), explorer ${explorerFailures})`,
+  );
+}
+process.exit(total === 0 ? 0 : 1);
