@@ -80,6 +80,12 @@ const BROWSER_UA =
 // Measured 2026-07-29, both UAs: this 404s, and the real txid below 200s.
 const UNKNOWN_TXID = "0000000000000000000000000000000000000000000000000000000000000000";
 const REAL_TXID = "cab68e6abaa82b4c64931cedbc96f80b606fb7456005ef3c5d443f9b59eb9510";
+// A page that REPORTS a txid as absent. 2026-09-04 cipherscan became a single-page app:
+// it returns 200 for any /tx/<id> and renders found-vs-not-found in the page, so the HTTP
+// status no longer tells them apart. This marker does - the unknown-txid page carries it
+// and a real tx page does not (verified against testnet.cipherscan.app). Matched in the
+// server response, not post-JS, so it holds for a plain fetch.
+const NOT_FOUND_RE = /not found|does not exist|no such transaction|no transaction found/i;
 
 /**
  * The shipped URL builder, loaded at call time rather than imported at the top.
@@ -101,7 +107,7 @@ async function loadExplorerTxUrl() {
   }
 }
 
-/** Fetch an explorer tx page. Returns 0 for unreachable. */
+/** Fetch an explorer tx page. Returns {status, text}; status 0 = unreachable. */
 async function explorerHit(explorerTxUrl, txid, ua) {
   const url = explorerTxUrl(txid);
   try {
@@ -110,9 +116,10 @@ async function explorerHit(explorerTxUrl, txid, ua) {
       signal: AbortSignal.timeout(TIMEOUT_MS),
       redirect: "manual",
     });
-    return res.status;
+    const text = res.status === 200 ? await res.text().catch(() => "") : "";
+    return { status: res.status, text };
   } catch {
-    return 0;
+    return { status: 0, text: "" };
   }
 }
 
@@ -130,37 +137,48 @@ async function checkExplorerProperty() {
   // a deploy that overrides the template should set the same var here.
   console.log(`\nexplorer property (#179): ${new URL(explorerTxUrl(UNKNOWN_TXID)).host}`);
 
-  const unknown = await Promise.all([
+  const [dflt, browser] = await Promise.all([
     explorerHit(explorerTxUrl, UNKNOWN_TXID, null),
     explorerHit(explorerTxUrl, UNKNOWN_TXID, BROWSER_UA),
   ]);
-  const [dflt, browser] = unknown;
-  const unreachable = dflt === 0 && browser === 0;
+  const unreachable = dflt.status === 0 && browser.status === 0;
 
   if (unreachable) {
     // Not a failure. Absence of evidence is not evidence that the property broke.
-    console.log(`cannot-verify: explorer unreachable, so the 404 property is unchecked this run`);
+    console.log(`cannot-verify: explorer unreachable, so the not-found property is unchecked this run`);
   } else {
-    // 404 is the pass. Anything that renders means an invented txid gets a page,
-    // which is exactly #71. A 5xx is the explorer being broken, not lying, so it
-    // reads as cannot-verify per source rather than as a property violation.
-    const verdict = (code) => (code === 404 ? "ok" : code === 0 || code >= 500 ? "cannot-verify" : "RENDERED");
-    const bad = [dflt, browser].some((c) => verdict(c) === "RENDERED");
+    // The property is that an unknown txid is REPORTED ABSENT, not shown as if it exists
+    // (#71). Two ways an explorer can report absent, and both are fine:
+    //   404                              - the classic clean not-found
+    //   200 whose page SAYS not-found    - a single-page-app explorer (cipherscan, 2026-09-04)
+    // A 200 page with tx content and NO not-found marker is the violation: an invented
+    // txid gets a real-looking page. A 5xx/unreachable is the explorer broken, not lying,
+    // so it reads as cannot-verify per source rather than a property break.
+    const verdict = (h) => {
+      if (h.status === 0 || h.status >= 500) return "cannot-verify";
+      if (h.status === 404) return "ok";
+      if (h.status === 200) return NOT_FOUND_RE.test(h.text) ? "ok" : "RENDERED";
+      return "RENDERED";
+    };
+    const [vd, vb] = [verdict(dflt), verdict(browser)];
+    const bad = [vd, vb].some((v) => v === "RENDERED");
     ok(
-      "an unknown txid does NOT render an explorer page",
+      "an unknown txid is reported absent, not shown as a real tx",
       !bad,
-      `default-UA ${dflt} ${verdict(dflt)}, browser-UA ${browser} ${verdict(browser)}`,
+      `default-UA ${dflt.status} ${vd}, browser-UA ${browser.status} ${vb}`,
     );
   }
 
-  // Positive direction, cannot-verify on failure by design: this txid will age.
+  // Positive direction, cannot-verify on failure by design: this txid will age. It must
+  // 200 AND not read as not-found - a SPA explorer 200s an unknown txid too, so the
+  // not-found marker is what proves the real one actually rendered its data.
   const real = await explorerHit(explorerTxUrl, REAL_TXID, BROWSER_UA);
-  if (real === 200) {
-    console.log(`ok: a real txid renders (${REAL_TXID.slice(0, 12)}… 200), so the negative above means something`);
+  if (real.status === 200 && !NOT_FOUND_RE.test(real.text)) {
+    console.log(`ok: a real txid renders its page (${REAL_TXID.slice(0, 12)}… 200), so the negative above means something`);
   } else {
     console.log(
-      `cannot-verify: the pinned real txid answered ${real}, which is a stale fixture or a pruning ` +
-        `explorer rather than a broken property. Repin it from a recent claims.txid.`,
+      `cannot-verify: the pinned real txid answered ${real.status}${real.status === 200 ? " but reads as not-found" : ""}, ` +
+        `a stale fixture or a pruning explorer rather than a broken property. Repin it from a recent claims.txid.`,
     );
   }
   return count();
