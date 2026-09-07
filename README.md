@@ -55,6 +55,8 @@ That discipline runs from the claim endpoint all the way down to the systemd uni
 
 ## How it actually works
 
+![Faucet system architecture: the drip path across the top (browser, Next.js faucet, fail-closed gates, send queue, sender adapters, ledger) over the self-hosted Z3 stack of Zebra, Zaino, Zallet, a solo miner and a Crosslink node, with the ops layer to the side.](docs/faucet-architecture.png)
+
 One box runs four things:
 
 | Piece | What it does |
@@ -68,6 +70,11 @@ A drip is a real shielded transaction. The faucet holds Ironwood-pool notes and
 pays z2z, so the amount and the recipient stay off the public ledger, and so does the
 link between the faucet and whoever claimed. Transparent recipients still work,
 and the UI says plainly that those drips are public.
+
+Here is a single drip end to end. Nothing gets built until the gate proves the node
+is current enough to confirm it:
+
+![One drip, end to end: the browser posts an address and proof-of-work, the faucet checks the cooldown, the fail-closed gate reads the node's height and shield recency, and only if safe does the send queue have Zallet build and sign the z2z transaction for Zebra to broadcast, returning a txid and explorer link.](docs/faucet-flow.png)
 
 The public lightwalletd endpoint (`LIGHTWALLETD_ENDPOINT`) is now only used for
 the read-side balance lookup tool. Nothing that moves money depends on it.
