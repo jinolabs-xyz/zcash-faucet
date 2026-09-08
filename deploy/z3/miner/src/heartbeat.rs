@@ -79,6 +79,11 @@ impl State {
         self.last_error_stage = Some(stage);
         self.last_error_at = Some(now());
         self.consecutive_errors = self.consecutive_errors.saturating_add(1);
+        // A failing RPC is not a wait. Left set, waitingSince would keep reading "idle on
+        // purpose" for a miner whose node connection has wedged, and the watchdog, which
+        // honours a wait, would never restart it: the 18-hour silence of 2026-08-18 with a
+        // calmer label. Only a node that answered and was behind is waiting.
+        self.waiting_since = None;
     }
 
     pub fn solved(&mut self) {
@@ -475,6 +480,56 @@ mod tests {
 #[cfg(test)]
 mod contract {
     use super::*;
+
+    #[test]
+    fn an_rpc_error_ends_a_wait_so_a_wedged_miner_cannot_read_as_waiting() {
+        let mut s = State::default();
+        s.node_lag(1_443, true);
+        assert!(s.waiting_since.is_some());
+        for _ in 0..10_000 {
+            s.error("getblockchaininfo");
+        }
+        assert_eq!(s.waiting_since, None, "10,000 failed calls must not leave the miner labelled as waiting on purpose");
+        assert_eq!(s.node_lag, Some(1_443), "the last measured lag is still a fact worth showing");
+    }
+
+    #[test]
+    fn a_new_wait_starts_the_clock_once_and_a_mineable_node_clears_it() {
+        let mut s = State::default();
+        s.node_lag(120, true);
+        let started = s.waiting_since;
+        s.node_lag(121, true);
+        assert_eq!(s.waiting_since, started, "the wait clock is not reset every poll");
+        s.node_lag(3, false);
+        assert_eq!(s.waiting_since, None);
+    }
+
+    /// THE SECOND SHARED FIXTURE, the waiting shape. The canonical one keeps
+    /// waitingSince null so the reader classifies it as running; this one proves the
+    /// writer's rendering of a SET waitingSince is what the TypeScript reader turns into
+    /// "waiting". Same rules: the bytes are the producer's, writtenAt is substituted.
+    #[test]
+    fn the_writer_still_produces_the_waiting_fixture_byte_for_byte() {
+        let mut st = canonical_state();
+        st.node_lag = Some(1_443);
+        st.waiting_since = Some(1_785_022_800); // 2026-07-25T23:40:00Z, 20 min before writtenAt
+        st.last_template_at = Some(1_785_022_792); // the last template, just before the wait began
+        let rendered = render(&st);
+        let mut out = String::new();
+        let mut replaced = 0;
+        for line in rendered.lines() {
+            if line.trim_start().starts_with("\"writtenAt\":") {
+                out.push_str(&format!("  \"writtenAt\": \"{FIXED_WRITTEN_AT}\","));
+                replaced += 1;
+            } else {
+                out.push_str(line);
+            }
+            out.push('\n');
+        }
+        assert_eq!(replaced, 1);
+        let fixture = include_str!("../testdata/heartbeat.waiting.json");
+        assert_eq!(out, fixture, "\ndeploy/z3/miner/testdata/heartbeat.waiting.json is out of date; paste the bytes above.\n");
+    }
 
     /// The one field that cannot be pinned: it is `now()` at render time. Substituted for
     /// the fixture's constant so every OTHER field is compared exactly, rather than

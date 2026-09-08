@@ -65,8 +65,9 @@ struct Config {
     /// never grinding a height the chain has moved past.
     template_secs: u64,
     /// Refuse to mine while zebra is more than this many blocks behind its own estimate of
-    /// the network. See sync.rs for why 50 and not 2. There is no value that turns the
-    /// guard off, because a miner on a node that is behind extends a fork with our work.
+    /// the network. See sync.rs for why 100 and not 2. Bounded on both sides: 0 and
+    /// anything past sync::MAX_LAG_CEILING are refused, because a miner on a node that is
+    /// behind extends a fork with our work and there is no value that makes that safe.
     max_lag: u64,
 }
 
@@ -142,16 +143,16 @@ fn load_config() -> Result<Config, String> {
             .parse()
             .map_err(|e| format!("MINER_TEMPLATE_SECS: {e}"))?,
         max_lag: {
-            let n: u64 = env_or("MINER_MAX_LAG", "50")
+            let n: u64 = env_or("MINER_MAX_LAG", &sync::DEFAULT_MAX_LAG.to_string())
                 .parse()
                 .map_err(|e| format!("MINER_MAX_LAG: {e}"))?;
-            if n == 0 {
-                return Err(
-                    "MINER_MAX_LAG must be at least 1. There is no off switch: a miner that \
-                     works on a node that is behind extends a private fork with our own \
-                     blocks, which is what happened on 2026-09-07."
-                        .into(),
-                );
+            if n == 0 || n > sync::MAX_LAG_CEILING {
+                return Err(format!(
+                    "MINER_MAX_LAG must be 1..={}, got {n}. There is no off switch: a miner that \
+                     works on a node that is behind extends a private fork with our own blocks, \
+                     which is what happened on 2026-09-07.",
+                    sync::MAX_LAG_CEILING
+                ));
             }
             n
         },
@@ -210,13 +211,10 @@ fn main() {
     let mut last_wait_log: Option<Instant> = None;
     loop {
         match mine_once(&rpc, &config, &hb) {
-            Ok(Outcome::Waiting { lag, blocks, estimated }) => {
+            Ok(Outcome::Waiting { why }) => {
                 let due = last_wait_log.is_none_or(|t| t.elapsed() >= Duration::from_secs(60));
                 if due {
-                    log(&format!(
-                        "node is {lag} blocks behind (verified {blocks}, estimated {estimated}); not mining until it is within {} (MINER_MAX_LAG)",
-                        config.max_lag
-                    ));
+                    log(&format!("not mining: {why}"));
                     last_wait_log = Some(Instant::now());
                 }
                 thread::sleep(Duration::from_secs(config.poll_secs.max(5)));
@@ -252,9 +250,10 @@ fn main() {
 }
 
 enum Outcome {
-    /// The node is behind its own estimate by more than MINER_MAX_LAG. No template was
-    /// fetched and nothing was submitted; see sync.rs.
-    Waiting { lag: u64, blocks: u64, estimated: u64 },
+    /// The sync guard refused: the node is behind its own estimate by more than
+    /// MINER_MAX_LAG, or has no peers, or fell behind between the template and the
+    /// submit. Nothing was submitted; `why` is the sentence for the journal. See sync.rs.
+    Waiting { why: String },
     Accepted { height: u32 },
     ProposalValid { height: u32 },
     Rejected { height: u32, reason: String },
@@ -272,29 +271,10 @@ fn mine_once(rpc: &Rpc, config: &Config, hb: &Arc<Mutex<heartbeat::State>>) -> R
     // solve-to-submit are small fractions of the block interval, latency is
     // not the cause and the answer is hashrate share. See MINING.md.
     // THE SYNC GUARD RUNS FIRST, before any template exists to be tempted by. Asking the
-    // node where it stands costs one cheap call per iteration; mining on a node that is
+    // node where it stands costs two cheap calls per iteration; mining on a node that was
     // behind cost an afternoon of blocks on a private fork (2026-09-07).
-    let info = rpc
-        .call("getblockchaininfo", json!([]))
-        .inspect_err(|_| beat_error(hb, "getblockchaininfo"))?;
-    match sync::verdict(&info, config.max_lag) {
-        Ok(sync::Verdict::Mine { lag }) => {
-            if let Ok(mut g) = hb.lock() {
-                g.node_lag(lag, false);
-            }
-        }
-        Ok(sync::Verdict::Wait { lag, blocks, estimated }) => {
-            if let Ok(mut g) = hb.lock() {
-                g.node_lag(lag, true);
-            }
-            return Ok(Outcome::Waiting { lag, blocks, estimated });
-        }
-        Err(e) => {
-            // A reply we cannot read is recorded under its own stage so the panel can tell
-            // "the node would not answer" from "the node answered something unusable".
-            beat_error(hb, "syncstate");
-            return Err(e);
-        }
+    if let Some(why) = sync_guard(rpc, config, hb)? {
+        return Ok(Outcome::Waiting { why });
     }
 
     let fetched_at = Instant::now();
@@ -364,6 +344,20 @@ fn mine_once(rpc: &Rpc, config: &Config, hb: &Arc<Mutex<heartbeat::State>>) -> R
         return Ok(Outcome::ProposalValid { height: t.height });
     }
 
+    // THE GUARD AGAIN, before the one call that changes the chain. Up to a minute passes
+    // between the first check and here (the solve window plus two RPCs), and the watchdog's
+    // deepest heal rewinds the node ~100 blocks inside that: a block built on the old tip
+    // and submitted into the rewound node is exactly how a wedged tip "comes straight
+    // back". A solved block is discarded rather than submitted into a node that is no
+    // longer where it was.
+    if let Some(why) = sync_guard(rpc, config, hb)? {
+        log(&format!(
+            "height {}: solved block DISCARDED, the node moved under us before submit: {why}",
+            t.height
+        ));
+        return Ok(Outcome::Waiting { why });
+    }
+
     // null from submitblock means accepted, anything else is a rejection
     // reason ("duplicate", "rejected", ...).
     let submitted = rpc
@@ -384,6 +378,44 @@ fn mine_once(rpc: &Rpc, config: &Config, hb: &Arc<Mutex<heartbeat::State>>) -> R
             height: t.height,
             reason: submitted.to_string(),
         })
+    }
+}
+
+/// The two isolation checks, recorded in the heartbeat. `Ok(Some(why))` means do not mine
+/// and says why; `Ok(None)` means the node is fit to build on; `Err` is a node that would
+/// not answer or answered something unreadable, recorded under its own stage so the panel
+/// can tell "would not answer" from "answered nonsense", and never mined on.
+fn sync_guard(rpc: &Rpc, config: &Config, hb: &Arc<Mutex<heartbeat::State>>) -> Result<Option<String>, String> {
+    let info = rpc
+        .call("getblockchaininfo", json!([]))
+        .inspect_err(|_| beat_error(hb, "getblockchaininfo"))?;
+    let verdict = sync::verdict(&info, config.max_lag).inspect_err(|_| beat_error(hb, "syncstate"))?;
+    let peers = rpc
+        .call("getpeerinfo", json!([]))
+        .inspect_err(|_| beat_error(hb, "getpeerinfo"))?;
+    let alone = sync::isolated(&peers).inspect_err(|_| beat_error(hb, "syncstate"))?;
+    match verdict {
+        sync::Verdict::Wait { lag, blocks, estimated } => {
+            if let Ok(mut g) = hb.lock() {
+                g.node_lag(lag, true);
+            }
+            Ok(Some(format!(
+                "node is {lag} blocks behind its own estimate (verified {blocks}, estimated {estimated}); mining resumes within {} (MINER_MAX_LAG)",
+                config.max_lag
+            )))
+        }
+        sync::Verdict::Mine { lag } if alone => {
+            if let Ok(mut g) = hb.lock() {
+                g.node_lag(lag, true);
+            }
+            Ok(Some("node has NO PEERS; a node with no peers believes it is at the tip and mines a fork of it".into()))
+        }
+        sync::Verdict::Mine { lag } => {
+            if let Ok(mut g) = hb.lock() {
+                g.node_lag(lag, false);
+            }
+            Ok(None)
+        }
     }
 }
 

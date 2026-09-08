@@ -93,7 +93,7 @@ Let `age(x) = now - x`.
 | --- | --- | --- |
 | file absent, unreadable, unparseable, or `schema` unrecognised | `cannot-verify` | **Not "off".** We learned nothing. |
 | `age(writtenAt) > staleAfterSeconds` | `not-writing` | The miner is not beating: unit stopped, wedged, or disk full. |
-| `waitingSince` is set (and the beat is fresh) | `waiting` | Idle **on purpose**: the sync guard found the node more than `MINER_MAX_LAG` blocks behind (`nodeLag` says how many). Judged before `stalled`, because a waiting miner's template is stale by construction. Never active. |
+| `waitingSince` is set (and the beat is fresh) | `waiting` | Idle **on purpose**: the sync guard found the node more than `MINER_MAX_LAG` blocks behind (`nodeLag` says how many) or without peers. Judged before `stalled`, because a waiting miner's template is stale by construction. Any RPC error clears `waitingSince`, so a wedged miner cannot wear this label. Never active. |
 | `lastTemplateAt` is null, or `age(lastTemplateAt) > templateStaleAfterSeconds` | `stalled` | **The failure that hid for 70 minutes.** Alive and beating, not getting templates. |
 | otherwise | `running` | Beating and fetching templates. |
 

@@ -11,18 +11,34 @@
 //! spacing. Their difference is how far behind this node believes itself to be. It is the
 //! same pair the watchdog uses to call a stall, so both guards agree on what "behind" is.
 //!
-//! WHY THE DEFAULT IS 50 AND NOT 2. The estimate runs ahead of the real chain whenever
+//! WHY THE DEFAULT IS 100 AND NOT 2. The estimate runs ahead of the real chain whenever
 //! blocks are slow, and on testnet blocks are slow often: a 30-minute gap pushes it ~24
-//! ahead with no one behind at all. That gap is also when the difficulty floor kicks in
-//! and a single core actually wins, so a tight limit would stop mining at exactly the
-//! moment mining pays. 50 (~an hour) is the watchdog's at-tip limit too: past it the node
-//! is behind by anyone's definition. It is a limit on how long a fork can be extended,
-//! not a fork detector; the watchdog stops the miner outright for a node-heal episode.
+//! ahead with no one behind at all, and hour-long gaps happen. Those gaps are also when
+//! the difficulty floor kicks in and a single core actually wins, so a tight limit would
+//! stop mining at exactly the moment mining pays, and keep it stopped, since our own
+//! block is what would have ended the gap. 100 (~two hours of silence) is past any gap
+//! this network has produced in our logs and is the depth of the finalized state, the
+//! point past which a fork cannot be undone by dropping non-finalized state.
+//!
+//! WHAT THIS CANNOT SEE, said plainly. `estimatedheight` extrapolates from the TIP'S
+//! TIMESTAMP, so a fork that we ourselves keep extending at a normal pace has a fresh tip
+//! and a small lag: the guard is blind to exactly the fork it is mining. What it does
+//! catch is the node being LEFT BEHIND: initial sync, a stalled node, a fork nobody
+//! extends. Catching the fork we extend needs a view of the network our node does not
+//! have (the app's external tip), and that is the watchdog's job: it stops this miner
+//! outright for a node-heal episode. The second guard below, no peers, catches the
+//! other 2026-08 shape: a node with no peers believes it is at the tip and mines a fork
+//! of genesis within seconds.
 //!
 //! FAILS CLOSED. No answer, no `blocks`, no `estimatedheight`, a non-integer: the miner
 //! does not mine. A node whose sync state cannot be read is a node whose tip cannot be
 //! trusted, and a template from it is the thing this module exists to refuse.
 use serde_json::Value;
+
+/// Hard ceiling on MINER_MAX_LAG. "There is no off switch" is only true if a value that
+/// switches it off is refused; 500 is ~10 hours of silence, past anything defensible.
+pub const MAX_LAG_CEILING: u64 = 500;
+pub const DEFAULT_MAX_LAG: u64 = 100;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Verdict {
@@ -30,6 +46,16 @@ pub enum Verdict {
     Mine { lag: u64 },
     /// Behind by more than the limit: fetch no template, submit nothing, try again later.
     Wait { lag: u64, blocks: u64, estimated: u64 },
+}
+
+/// The other isolation signal: a node with no peers has nobody to tell it about a better
+/// chain, so whatever it serves is a private view. `getpeerinfo` returns an array; empty
+/// means isolated. Not an array is an answer we cannot read, and that refuses too.
+pub fn isolated(peerinfo: &Value) -> Result<bool, String> {
+    match peerinfo.as_array() {
+        Some(peers) => Ok(peers.is_empty()),
+        None => Err("getpeerinfo did not return a list: the node's peer count is unknown, so this miner will not mine on it".into()),
+    }
 }
 
 /// `blocks` and `estimatedheight` out of a `getblockchaininfo` reply, judged against
@@ -126,10 +152,22 @@ mod tests {
     }
 
     #[test]
-    fn during_initial_sync_it_waits_however_the_limit_is_set() {
-        // A fresh node is millions behind. The largest limit anyone would plausibly set
-        // still refuses it; only a limit past the chain height itself would not.
-        assert!(matches!(verdict(&info(12_000, 4_333_511), 50), Ok(Verdict::Wait { .. })));
-        assert!(matches!(verdict(&info(12_000, 4_333_511), 100_000), Ok(Verdict::Wait { .. })));
+    fn during_initial_sync_it_waits_at_the_ceiling_too() {
+        // A fresh node is millions behind. The largest limit main.rs will accept refuses
+        // it; the ceiling is what makes "no off switch" true.
+        assert!(matches!(verdict(&info(12_000, 4_333_511), DEFAULT_MAX_LAG), Ok(Verdict::Wait { .. })));
+        assert!(matches!(verdict(&info(12_000, 4_333_511), MAX_LAG_CEILING), Ok(Verdict::Wait { .. })));
+    }
+
+    #[test]
+    fn no_peers_is_isolated_and_a_peer_list_is_not() {
+        assert_eq!(isolated(&json!([])), Ok(true));
+        assert_eq!(isolated(&json!([{"addr": "1.2.3.4:18233", "inbound": false}])), Ok(false));
+    }
+
+    #[test]
+    fn a_peer_reply_that_is_not_a_list_refuses() {
+        assert!(isolated(&json!(null)).is_err());
+        assert!(isolated(&json!({"peers": 3})).is_err());
     }
 }

@@ -19,6 +19,8 @@ case "$cmd" in
     echo inactive > "$state_file"
     ;;
   start)
+    # STUB_START_FAIL=1: the unit will not come up, for the "start FAILED pages" case.
+    if [ "${STUB_START_FAIL:-0}" = "1" ]; then echo "Job for $unit failed." >&2; exit 1; fi
     echo active > "$state_file"
     ;;
   restart)

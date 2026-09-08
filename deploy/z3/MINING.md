@@ -71,13 +71,14 @@ live submission.
 
 ## The sync guard: no mining on a node that is behind
 
-Before every template the miner asks zebra `getblockchaininfo` and compares
-`blocks` (what this node has verified) with `estimatedheight` (where zebra
-thinks the network is). If the node is more than `MINER_MAX_LAG` blocks behind
-it fetches no template and submits nothing, logs one line a minute, and its
-heartbeat carries `waitingSince` and `nodeLag` so the panel reads `waiting`
-and the watchdog leaves it alone. There is no off switch: `MINER_MAX_LAG=0` is
-a configuration error.
+Before every template, and again before `submitblock`, the miner asks zebra
+`getblockchaininfo` and `getpeerinfo`. If the node is more than `MINER_MAX_LAG`
+blocks behind its own estimate of the network, or has no peers at all, it
+fetches no template and submits nothing (a block solved in between is
+discarded), logs one line a minute, and its heartbeat carries `waitingSince`
+and `nodeLag` so the panel reads `waiting` and the watchdog leaves it alone.
+Any RPC error ends the wait in the heartbeat, so a wedged connection cannot
+hide behind the label. There is no off switch: `MINER_MAX_LAG` must be 1..500.
 
 Why it exists: on 2026-09-07 zebra lost its peers and sat on a private fork for
 hours. The miner kept solving on that fork, so our own blocks extended it, and
@@ -85,13 +86,21 @@ when the watchdog rewound the node the miner was still submitting on the old
 tip. The rule "only mine on a synced node" was in this file and nothing
 enforced it.
 
-Why 50 and not 2: the estimate runs ahead of the real chain whenever blocks are
-slow, and on testnet they often are. A 30-minute gap puts it ~24 ahead with
-nobody behind, and that gap is exactly when the difficulty floor lets a single
-core win, so a tight limit would stop mining at the moment it pays. 50 is the
-watchdog's at-tip limit too. It bounds how long a fork can be extended; it is
-not a fork detector. The watchdog's node heal stops the miner outright for the
-episode and starts it again once the tip moves.
+Why 100 and not 2: the estimate runs ahead of the real chain whenever blocks
+are slow, and on testnet they often are, for an hour at a time. That gap is
+exactly when the difficulty floor lets a single core win, so a tight limit
+would stop mining at the moment it pays, and keep it stopped, since our own
+block is what ends the gap. 100 is past any gap in our logs and is the depth of
+the finalized state.
+
+What it cannot see, plainly: `estimatedheight` extrapolates from the tip's
+timestamp, so a fork that we ourselves keep extending has a fresh tip and a
+small lag. The guard catches a node left behind (initial sync, a stall, a fork
+nobody extends) and a node with no peers; it does not catch the fork we are
+mining. That needs a view of the network the node does not have, and it is the
+watchdog's job: its node heal stops the miner outright for the episode, writes
+that down so its own restart cannot forget it, and starts the miner again once
+the tip is seen moving.
 
 ## Build and install
 
@@ -134,7 +143,7 @@ Config in `/etc/faucet/miner.env`:
 | `MINER_COOKIE_PATH` | `/var/run/auth/.cookie` | from the `z3-testnet-cookie` volume |
 | `MINER_THREADS` | `1` | 1..=4. `CPUQuota=150%` makes past 2 pointless, and the ceiling is what `MemoryMax=1G` affords at ~144 MB per thread |
 | `MINER_TEMPLATE_SECS` | `60` | refetch the template after this long |
-| `MINER_MAX_LAG` | `50` | no mining while zebra is more than this many blocks behind its own estimate; must be at least 1 |
+| `MINER_MAX_LAG` | `100` | no mining while zebra is more than this many blocks behind its own estimate; 1..500, no off switch |
 | `MINER_POLL_SECS` | `5` | backoff after an RPC error |
 
 Reaching the cookie from the host: the file lives in the
