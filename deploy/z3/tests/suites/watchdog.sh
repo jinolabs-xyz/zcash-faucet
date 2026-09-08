@@ -26,7 +26,11 @@ wd_env() {
   # Exports persist across tests in one shell; clear the per-test switches so a value set
   # by an earlier case cannot leak into a later one (STUB_HEAL_FIXES=1 leaking into the
   # give-up case is exactly what made this suite lie once).
-  unset STUB_CRASHLOOP STUB_HEAL_FIXES STUB_ZEBRA_BLOCKS STUB_ZEBRA_EST STUB_ZEBRA_ADVANCE WATCHDOG_NODE_HEAL_ENABLED
+  # WATCHDOG_MINER_HEARTBEAT too: exported by the miner cases, it otherwise points every
+  # later case at a stale, stalled heartbeat in an old scratch dir, and the miner heal
+  # runs (and gives up, and pages) inside tests that are about something else.
+  unset STUB_CRASHLOOP STUB_HEAL_FIXES STUB_ZEBRA_BLOCKS STUB_ZEBRA_EST STUB_ZEBRA_ADVANCE STUB_ZEBRA_STUCK_CALLS \
+        WATCHDOG_NODE_HEAL_ENABLED WATCHDOG_MINER_HEARTBEAT WATCHDOG_MINER_UNIT
   # Capture what would have been paged, without a webhook.
   printf '#!/bin/sh\nprintf "%%s\\n" "$1" >> "%s/alerts.log"\n' "$T" > "$T/alert.sh"
   chmod +x "$T/alert.sh"
@@ -66,19 +70,19 @@ wd_env
 echo restarting > "$STUB_CONTAINERS/z3-testnet-zallet-1"
 export STUB_CRASHLOOP="z3-testnet-zallet-1"
 wd_run 3
-check "pages STILL BROKEN once the threshold is hit" \
-  "grep -q 'STILL BROKEN: z3-testnet-zallet-1 has needed 3 consecutive restarts' '$T/alerts.log'"
-check "and still never claims a recovery" "! grep -q 'recovered' '$T/alerts.log'"
+check "pages NEEDS YOU once the threshold is hit" \
+  "grep -q 'NEEDS YOU: z3-testnet-zallet-1 crash loop: 3 consecutive restarts' '$T/alerts.log'"
+check "and still never claims a fix" "! grep -q 'FIXED: z3-testnet-zallet-1' '$T/alerts.log'"
 # 812 identical pages is its own outage. One page at the threshold, then silence
 # until the re-alert interval, is the behaviour we actually want.
-check "pages once, not once per sweep" "[ \"\$(grep -c 'STILL BROKEN' '$T/alerts.log')\" = 1 ]"
+check "pages once, not once per sweep" "[ \"\$(grep -c 'NEEDS YOU' '$T/alerts.log')\" = 1 ]"
 
 echo "== watchdog: a real recovery is still reported, one sweep later"
 wd_env
 echo exited > "$STUB_CONTAINERS/z3-testnet-zallet-1"
 wd_run 2   # sweep 1 starts it, sweep 2 sees it running and only then claims it
-check "reports recovery when the container is actually up afterwards" \
-  "grep -q 'recovered z3-testnet-zallet-1: running again, verified' '$T/alerts.log'"
+check "reports the fix when the container is actually up afterwards" \
+  "grep -q 'FIXED: z3-testnet-zallet-1 was down' '$T/alerts.log'"
 check "and names how many attempts it took" \
   "grep -q 'after 1 restart attempt' '$T/alerts.log'"
 
@@ -105,7 +109,7 @@ printf 'not-a-number' > "$WATCHDOG_STATE_DIR/z3-testnet-zallet-1.flaps"
 wd_run 3
 check "survives a corrupt count and keeps sweeping" "grep -q 'consecutive attempt 1' '$T/run.log'"
 check "no unbound-variable death" "! grep -qi 'unbound variable' '$T/run.log'"
-check "still escalates on a garbage count" "grep -q 'STILL BROKEN' '$T/alerts.log'"
+check "still escalates on a garbage count" "grep -q 'NEEDS YOU' '$T/alerts.log'"
 
 echo "== watchdog: an unwritable state dir degrades, it does not go silent"
 wd_env
@@ -117,7 +121,7 @@ chmod 700 "$WATCHDOG_STATE_DIR"
 # The escalation must still fire from the in-memory count. Persisting it is only
 # so a restart remembers; if that is impossible we lose memory across restarts,
 # not the paging itself.
-check "escalates even when the count cannot be persisted" "grep -q 'STILL BROKEN' '$T/alerts.log'"
+check "escalates even when the count cannot be persisted" "grep -q 'NEEDS YOU' '$T/alerts.log'"
 check "and says it is running in memory-only mode" "grep -q 'in-memory only' '$T/run.log'"
 
 echo "== watchdog: an unanswerable docker is not treated as healthy"
@@ -128,8 +132,65 @@ echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
 printf 'zombie\n' > "$STUB_CONTAINERS/z3-testnet-zallet-1"
 rm -f "$STUB_CONTAINERS/z3-testnet-zallet-1"
 wd_run 1
-check "does not page about a container it cannot see" "! grep -q 'STILL BROKEN' '$T/alerts.log'"
-check "does not claim it recovered either" "! grep -q 'recovered' '$T/alerts.log'"
+check "does not page about a container it cannot see" "! grep -q 'NEEDS YOU' '$T/alerts.log'"
+check "does not claim it fixed anything either" "! grep -q 'FIXED' '$T/alerts.log'"
+
+# --- step 3: a hung app, reported as an episode -----------------------------------
+# A restart is an attempt. The report comes only when /api/health is SEEN answering
+# again, and a second restart with no healthy sweep between is a page, not another
+# "fixed". Before this the step claimed "restarted hung faucet-web" on every restart,
+# which on a dead app is one message every 90 seconds and never once a true one.
+HEALTH_PORT="${WATCHDOG_HEALTH_TEST_PORT:-18931}"
+# Serves /api/health with 500 for the first $1 requests, then 200 (-1 = 500 forever).
+# Everything else answers 200, so the readiness probe in the same sweep is not the
+# thing under test. The stub curl only intercepts /ready; health reaches this server.
+health_server() {
+  python3 - "$HEALTH_PORT" "$1" <<'PY' >/dev/null 2>&1 &
+import http.server,sys
+port,fail=int(sys.argv[1]),int(sys.argv[2]); n=[0]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path.startswith('/api/health'):
+            n[0]+=1
+            code=500 if (fail<0 or n[0]<=fail) else 200
+        else:
+            code=200
+        self.send_response(code); self.end_headers(); self.wfile.write(b'{}')
+    def log_message(self,*a): pass
+http.server.HTTPServer(("127.0.0.1",port),H).serve_forever()
+PY
+  HEALTH_PID=$!
+  for _ in $(seq 1 40); do curl -s -o /dev/null "http://127.0.0.1:$HEALTH_PORT/warmup" && break; sleep 0.25; done
+}
+stop_health_server() { kill "$HEALTH_PID" 2>/dev/null; wait "$HEALTH_PID" 2>/dev/null; }
+
+echo "== watchdog: a hung app is restarted, and reported FIXED only once it answers again"
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+health_server 3
+export WATCHDOG_FAUCET_URL="http://127.0.0.1:$HEALTH_PORT"
+wd_run 5   # three misses -> restart; the fourth check answers -> the report; fifth is quiet
+stop_health_server
+check "restarts the app after the miss limit" "grep -q 'docker restart faucet-web' '$STUB_LOG'"
+check "does not claim the fix on the restart itself" "grep -q 'report follows once it answers' '$T/run.log'"
+check "reports the fix once health answers again" "grep -q 'FIXED: faucet app hung' '$T/alerts.log'"
+check "exactly once" "[ \"\$(grep -c 'FIXED: faucet app' '$T/alerts.log')\" = 1 ]"
+check "and no page for an app that came back" "! grep -q 'NEEDS YOU: faucet app' '$T/alerts.log'"
+
+echo "== watchdog: an app that stays dead after a restart is a page, not a second fixed"
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+health_server -1
+export WATCHDOG_FAUCET_URL="http://127.0.0.1:$HEALTH_PORT"
+wd_run 6   # restarts at sweeps 3 and 6; the second one pages
+stop_health_server
+check "restarted twice" "[ \"\$(grep -c 'docker restart faucet-web' '$STUB_LOG')\" = 2 ]"
+check "never claims a fix it has not seen" "! grep -q 'FIXED: faucet app' '$T/alerts.log'"
+check "pages on the second restart" "grep -q 'NEEDS YOU: faucet app not answering /api/health after 2 restart' '$T/alerts.log'"
 
 # --- step 6: miner stall recovery ------------------------------------------------
 # The miner holds ONE persistent RPC connection to zebra and does not reconnect when
@@ -166,7 +227,20 @@ wd_miner_env
 miner_hb 5 3600 3600      # heartbeat 5s old (alive), started 1h ago, last template 1h ago
 wd_run 1
 check "restarts the miner unit" "grep -q 'systemctl restart zcash-testnet-miner.service' '$STUB_LOG'"
-check "and says why, naming the stall" "grep -q 'miner was stalled' '$T/alerts.log'"
+check "the journal says why, naming the stall" "grep -q 'miner stalled' '$T/run.log'"
+# A restart is an attempt, not a result. Claiming FIXED here, before the miner has been
+# seen templating, is the same lie as "recovered" on an accepted docker start.
+check "but does not claim a fix it has not seen" "! grep -q 'FIXED: miner' '$T/alerts.log'"
+
+echo "== watchdog: a miner that templates again after the restart gets ONE fixed report"
+wd_miner_env
+miner_hb 5 3600 3600      # stalled
+wd_run 1                  # restarted; nothing reported yet
+miner_hb 5 3600 10        # now templating; the stall count survived on disk
+wd_run 1
+check "reports the fix once the miner is seen templating" "grep -q 'FIXED: miner stalled' '$T/alerts.log'"
+check "and counts the restart it took" "grep -q '(1 restart' '$T/alerts.log'"
+check "exactly one report" "[ \"\$(grep -c 'FIXED: miner' '$T/alerts.log')\" = 1 ]"
 
 echo "== watchdog: a miner templating normally is left alone"
 wd_miner_env
@@ -199,7 +273,8 @@ miner_hb 5 3600 3600      # WATCHDOG_MINER_HEAL_MAX defaults to 3
 wd_run 5
 check "restarts exactly the cap, then stops" \
   "[ \"\$(grep -c 'systemctl restart zcash-testnet-miner.service' '$STUB_LOG')\" = 3 ]"
-check "and pages once it gives up" "grep -q 'miner STILL stalled after 3 restart' '$T/alerts.log'"
+check "and pages once it gives up" "grep -q 'NEEDS YOU: miner still stalled after 3 restarts' '$T/alerts.log'"
+check "without ever claiming a fix" "! grep -q 'FIXED: miner' '$T/alerts.log'"
 
 # --- step 5: poison auto-heal + budget reset -------------------------------------
 # zallet crash-loops on a dropped tx it can no longer fetch (-5 No such mempool...). The
@@ -234,7 +309,9 @@ mk_heal_tools
 export STUB_HEAL_FIXES=1
 printf '%s\n' "$SIG" > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
 wd_run 3
-check "runs the repair tools on the -5 signature" "grep -q 'ran the repair tools (attempt 1/2)' '$T/alerts.log'"
+check "runs the repair tools on the -5 signature" "grep -q 'ran the repair tools (attempt 1/2)' '$T/run.log'"
+check "and reports the fix once zallet is seen running clean" "grep -q 'FIXED: zallet crash-looped' '$T/alerts.log'"
+check "exactly once" "[ \"\$(grep -c 'FIXED: zallet' '$T/alerts.log')\" = 1 ]"
 check "does not give up on a heal that worked" "! grep -q 'poison persists' '$T/alerts.log'"
 check "frees the heal budget once zallet is running and clean" "grep -q 'heal budget reset' '$T/run.log'"
 
@@ -246,8 +323,9 @@ echo running > "$STUB_CONTAINERS/faucet-web"
 mk_heal_tools                 # STUB_HEAL_FIXES unset: the signature never clears
 printf '%s\n' "$SIG" > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
 wd_run 4                       # HEAL_MAX_ATTEMPTS defaults to 2
-check "heals up to the cap" "[ \"\$(grep -c 'ran the repair tools' '$T/alerts.log')\" = 2 ]"
-check "then pages that it needs a human" "grep -q 'poison persists after 2 repair attempt' '$T/alerts.log'"
+check "heals up to the cap" "[ \"\$(grep -c 'ran the repair tools' '$T/run.log')\" = 2 ]"
+check "then pages that it needs a human" "grep -q 'NEEDS YOU: zallet poison persists after 2 repairs' '$T/alerts.log'"
+check "and never claims a fix" "! grep -q 'FIXED: zallet' '$T/alerts.log'"
 check "and pages that once, not every sweep" "[ \"\$(grep -c 'poison persists' '$T/alerts.log')\" = 1 ]"
 
 echo "== watchdog: no poison signature means no repair is ever run"
@@ -258,7 +336,7 @@ echo running > "$STUB_CONTAINERS/faucet-web"
 mk_heal_tools
 : > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"   # clean logs
 wd_run 2
-check "does not run the repair tools on a clean log" "! grep -q 'ran the repair tools' '$T/alerts.log'"
+check "does not run the repair tools on a clean log" "! grep -q 'ran the repair tools' '$T/run.log'"
 check "and does not log a budget reset it never spent" "! grep -q 'heal budget reset' '$T/run.log'"
 
 # --- step 7: node sync-stall recovery --------------------------------------------
@@ -307,7 +385,8 @@ wd_node_env
 export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677   # 1443 behind, tip never moves
 wd_run 2   # sweep 1 is the baseline; sweep 2 sees no movement
 check "restarts zebra" "grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
-check "names the lag in the alert" "grep -q 'zebra was 1443 blocks behind and stuck' '$T/alerts.log'"
+check "the journal names the stall and the lag" "grep -q 'zebra stalled.*1443 behind' '$T/run.log'"
+check "and no fix is claimed before the tip has moved" "! grep -q 'FIXED: zebra' '$T/alerts.log'"
 check "first attempt is a plain restart, cache untouched" "[ -f '$STUB_VOLROOT/z3-testnet-chain/network/testnet.peers' ]"
 check "and the non-finalized state is untouched too" "[ -d '$STUB_VOLROOT/z3-testnet-chain/non_finalized_state' ]"
 
@@ -323,10 +402,20 @@ check "and the stale peer cache is actually gone" "[ ! -f '$peers' ]"
 # Six plain restarts moved the tip by nothing on 2026-09-07 because every boot restored
 # the wedged tip from this backup. The last tier has to actually remove it.
 check "the last tier drops the non-finalized state" "[ ! -d '$nonfinal' ]"
-check "and says so" "grep -q 'dropped the non-finalized state' '$T/alerts.log'"
-check "heals exactly the cap, then stops" "[ \"\$(grep -c 'zebra was 1443 blocks behind' '$T/alerts.log')\" = 3 ]"
-check "pages that it gave up" "grep -q 'zebra STILL 1443 blocks behind after 3 restart' '$T/alerts.log'"
-check "and pages that once, not every sweep" "[ \"\$(grep -c 'zebra STILL' '$T/alerts.log')\" = 1 ]"
+check "and the journal says so" "grep -q 'dropped the non-finalized state' '$T/run.log'"
+check "heals exactly the cap, then stops" "[ \"\$(grep -cE 'restarting \([0-9]+/3\)' '$T/run.log')\" = 3 ]"
+check "pages that it gave up" "grep -q 'NEEDS YOU: zebra still 1443 blocks behind after 3 tries' '$T/alerts.log'"
+check "and pages that once, not every sweep" "[ \"\$(grep -c 'NEEDS YOU: zebra' '$T/alerts.log')\" = 1 ]"
+check "and never claims a fix" "! grep -q 'FIXED: zebra' '$T/alerts.log'"
+
+echo "== watchdog: a node that starts moving again after a restart gets ONE fixed report"
+wd_node_env
+export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677 STUB_ZEBRA_ADVANCE=1 STUB_ZEBRA_STUCK_CALLS=2
+wd_run 4   # baseline, stuck (restart 1/3), advancing (the report), advancing (quiet)
+check "reports the fix once the tip is seen moving" "grep -q 'FIXED: zebra was 1443 blocks behind' '$T/alerts.log'"
+check "and says what fixed it and how many attempts" "grep -q 'Restarted it after 1 attempt' '$T/alerts.log'"
+check "exactly one report, not one per sweep" "[ \"\$(grep -c 'FIXED: zebra' '$T/alerts.log')\" = 1 ]"
+check "and never a give-up" "! grep -q 'NEEDS YOU: zebra' '$T/alerts.log'"
 
 echo "== watchdog: a node whose RPC will not answer is not judged a stall"
 wd_node_env   # STUB_ZEBRA_BLOCKS unset: docker exec fails, and no answer is not evidence

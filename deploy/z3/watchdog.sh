@@ -80,6 +80,8 @@ node_last_height=0
 node_stall_since=0
 node_heal_attempts=0
 alerted_node_giveup=0
+node_heal_what=""     # the deepest thing the current episode has tried, for the one report
+node_stall_lag=0      # how far behind it was when the episode began
 
 # 0 = loop forever (production). Tests set this to run an exact number of sweeps.
 MAX_TICKS="${WATCHDOG_MAX_TICKS:-0}"
@@ -116,6 +118,15 @@ alert() {
   curl -fsS --max-time 10 -H 'content-type: application/json' \
     -d "$body" "$ALERT_URL" >/dev/null 2>&1 || log "alert webhook POST failed"
 }
+
+# TWO KINDS OF MESSAGE, AND THE MARKER IS THE POINT. A phone shows the first few words,
+# so severity has to be readable before the sentence is. One report per RESOLVED episode,
+# sent only once the watchdog has SEEN the recovery and never on the attempt, and one
+# page when it cannot fix something. The attempts in between are journal lines. That
+# keeps the rule that a self-heal is never silent (812 unnoticed restarts, once) without
+# the per-attempt chatter that trains a reader to stop looking at the channel.
+fixed()  { alert "✅ FIXED: $1"; }
+danger() { alert "🚨 NEEDS YOU: $1"; }
 
 # First running-or-stopped container id whose name contains $1 (empty if none).
 find_container() {
@@ -214,7 +225,7 @@ recover_if_down() {
     if [ "$prior" -gt 0 ]; then
       # This is the only place a recovery claim is honest: it is up on a later
       # sweep than the one that started it.
-      alert "recovered $name: running again, verified on the sweep after $prior restart attempt(s)"
+      fixed "$name was down. Started it; running again after $prior restart attempt(s), verified on a later sweep."
       flap_set "$name" 0
     fi
     return 0
@@ -233,7 +244,7 @@ recover_if_down() {
   # Page on the threshold, then only periodically: an ongoing outage should keep
   # reminding us without becoming the 812-messages-a-night noise it replaces.
   if [ "$n" -eq "$FLAP_ESCALATE" ] || { [ "$n" -gt "$FLAP_ESCALATE" ] && [ $(( (n - FLAP_ESCALATE) % FLAP_REALERT )) -eq 0 ]; }; then
-    alert "STILL BROKEN: $name has needed $n consecutive restarts (state '$state') - this is a crash loop, not a recovery; it will not fix itself"
+    danger "$name crash loop: $n consecutive restarts (state '$state'), not recovering."
   fi
 }
 
@@ -280,7 +291,12 @@ heal_miner_if_stalled() {
   if [ -n "$tmpl_age" ] && [ "$tmpl_age" -lt "$MINER_STALL_SECS" ]; then
     # Templating normally. Clear any prior stall count so the next episode gets a full
     # budget, the same way a READY faucet resets the poison heal.
-    [ "$(flap_get "$key")" = "0" ] || { flap_set "$key" 0; log "miner templating again (last ${tmpl_age}s ago); stall count reset"; }
+    local prior; prior="$(flap_get "$key")"
+    if [ "$prior" != "0" ]; then
+      flap_set "$key" 0
+      log "miner templating again (last ${tmpl_age}s ago); stall count reset"
+      fixed "miner stalled (alive, no block template). Restarted it ($prior restart(s)). Mining again, template ${tmpl_age}s ago."
+    fi
     return 0
   fi
 
@@ -288,12 +304,12 @@ heal_miner_if_stalled() {
   if [ "$n" -le "$MINER_HEAL_MAX" ]; then
     log "miner stalled: alive (heartbeat ${written_age}s old) but no block template for ${tmpl_age:-never}s; restarting $MINER_UNIT ($n/$MINER_HEAL_MAX)"
     if systemctl restart "$MINER_UNIT" >/dev/null 2>&1; then
-      alert "miner was stalled (heartbeat fresh, no block template for ${tmpl_age:-N/A}s) - restarted $MINER_UNIT ($n/$MINER_HEAL_MAX). Usually zebra restarted and the miner did not reconnect."
+      log "restart issued for $MINER_UNIT ($n/$MINER_HEAL_MAX); report follows once it templates again"
     else
-      alert "miner stalled and 'systemctl restart $MINER_UNIT' FAILED ($n/$MINER_HEAL_MAX) - needs a human."
+      danger "miner stalled and 'systemctl restart $MINER_UNIT' FAILED ($n/$MINER_HEAL_MAX)."
     fi
   elif [ "$n" -eq "$((MINER_HEAL_MAX + 1))" ]; then
-    alert "miner STILL stalled after $MINER_HEAL_MAX restart(s) - not retrying. Likely zebra is down or the RPC endpoint moved; needs a human."
+    danger "miner still stalled after $MINER_HEAL_MAX restarts. Not retrying. Zebra down, or its RPC endpoint moved?"
   fi
 }
 
@@ -348,10 +364,14 @@ heal_node_if_stalled() {
   # Higher than last sweep: syncing, or at the tip and a block just landed. Healthy, so
   # clear every bit of stall state and the next episode gets a full budget.
   if [ "$blocks" -gt "$prev" ]; then
-    if [ "$node_stall_since" != "0" ] || [ "$node_heal_attempts" != "0" ]; then
+    if [ "$node_heal_attempts" != "0" ]; then
+      # The one report, and only now: the tip has been SEEN to move after we acted.
       log "zebra tip advancing again (height $blocks, ${lag} behind); node-stall state cleared"
+      fixed "zebra was ${node_stall_lag} blocks behind and stuck. ${node_heal_what} after $node_heal_attempts attempt(s). Syncing again, ${lag} behind now."
+    elif [ "$node_stall_since" != "0" ]; then
+      log "zebra tip advancing again (height $blocks, ${lag} behind); stall clock cleared"
     fi
-    node_stall_since=0; node_heal_attempts=0; alerted_node_giveup=0
+    node_stall_since=0; node_heal_attempts=0; alerted_node_giveup=0; node_heal_what=""; node_stall_lag=0
     return 0
   fi
 
@@ -369,12 +389,13 @@ heal_node_if_stalled() {
   local n=$(( node_heal_attempts + 1 ))
   if [ "$n" -gt "$NODE_HEAL_MAX" ]; then
     if [ "$alerted_node_giveup" = "0" ]; then
-      alert "zebra STILL ${lag} blocks behind after $NODE_HEAL_MAX restart(s) - not retrying. Restarting, clearing peers and dropping the non-finalized state did not move it, so it is likely on a fork PAST the finalized tip, which nothing here can undo: compare getblockhash against an explorer and reimport a snapshot (deploy/z3/SNAPSHOTS.md). Needs a human."
+      danger "zebra still ${lag} blocks behind after $NODE_HEAL_MAX tries (restart, clear peers, drop fork state). Likely a fork past the finalized tip: compare getblockhash with an explorer and reimport a snapshot (SNAPSHOTS.md)."
       alerted_node_giveup=1
     fi
     return 0
   fi
   node_heal_attempts="$n"
+  [ "$node_stall_lag" = "0" ] && node_stall_lag="$lag"
 
   if [ "$n" -ge "$NODE_CLEAR_CACHE_AFTER" ]; then
     # Both live on the chain volume: the peer cache at network/<net>.peers, and the
@@ -382,7 +403,7 @@ heal_node_if_stalled() {
     # on shutdown, so a delete before the stop is undone by the stop.
     local mp what
     mp="$(docker volume inspect "$ZEBRA_CHAIN_VOLUME" -f '{{.Mountpoint}}' 2>/dev/null || echo '')"
-    log "zebra stalled ${stalled_for}s at height $blocks (${lag} behind); clearing state and restarting ($n/$NODE_HEAL_MAX)"
+    log "zebra stalled ${stalled_for}s at height $blocks (${lag} behind); clearing state ($n/$NODE_HEAL_MAX)"
     docker stop "$name" >/dev/null 2>&1
     if [ -n "$mp" ]; then
       rm -f "$mp"/network/*.peers 2>/dev/null
@@ -402,17 +423,19 @@ heal_node_if_stalled() {
       what="could not find the chain volume, so only restarted"
     fi
     docker start "$name" >/dev/null 2>&1
-    alert "zebra was ${lag} blocks behind and stuck for ${stalled_for}s; $what and restarted it ($n/$NODE_HEAL_MAX)."
+    node_heal_what="${what^} and restarted it"
+    log "$what, restarting ($n/$NODE_HEAL_MAX); report follows once the tip moves"
   else
-    log "zebra stalled ${stalled_for}s at height $blocks (${lag} behind); restarting ($n/$NODE_HEAL_MAX)"
+    log "zebra stalled ${stalled_for}s at height $blocks (${lag} behind); restarting ($n/$NODE_HEAL_MAX); report follows once the tip moves"
     docker restart "$name" >/dev/null 2>&1
-    alert "zebra was ${lag} blocks behind and stuck for ${stalled_for}s; restarted it ($n/$NODE_HEAL_MAX). Usually a thin or flaky testnet peer set."
+    node_heal_what="Restarted it"
   fi
   # Give the restart room to reconnect and pull a burst before it is judged again.
   node_stall_since=0
 }
 
 faucet_misses=0
+faucet_restarts=0   # consecutive restarts with no healthy sweep in between
 unready_since=0
 alerted_unready=0
 
@@ -443,14 +466,24 @@ while true; do
   # but /api/health has stopped answering - a genuine hang, not a cold start.
   if [ -n "$faucet" ] && [ "$(docker inspect -f '{{.State.Status}}' "$faucet" 2>/dev/null)" = "running" ]; then
     if curl -fsS --max-time 5 "$FAUCET_URL/api/health" >/dev/null 2>&1; then
-      faucet_misses=0
+      # The one report, and only now: it has been SEEN answering again after a restart.
+      if [ "$faucet_restarts" -gt 0 ]; then
+        fixed "faucet app hung. Restarted it ($faucet_restarts time(s)); answering again."
+      fi
+      faucet_misses=0; faucet_restarts=0
     else
       faucet_misses=$((faucet_misses + 1))
       log "faucet liveness miss $faucet_misses/$FAUCET_FAIL_LIMIT"
       if [ "$faucet_misses" -ge "$FAUCET_FAIL_LIMIT" ]; then
-        log "restarting hung $faucet"
-        docker restart "$faucet" >/dev/null 2>&1 && alert "restarted hung faucet-web after $faucet_misses missed health checks"
+        faucet_restarts=$((faucet_restarts + 1))
+        log "restarting hung $faucet (restart $faucet_restarts this episode); report follows once it answers"
+        docker restart "$faucet" >/dev/null 2>&1 || log "docker restart failed for $faucet"
         faucet_misses=0
+        # A second restart with no healthy sweep in between is a loop, not a fix: page once
+        # there, then only periodically, the same shape as the container crash-loop page.
+        if [ "$faucet_restarts" -eq 2 ] || { [ "$faucet_restarts" -gt 2 ] && [ $(( (faucet_restarts - 2) % 20 )) -eq 0 ]; }; then
+          danger "faucet app not answering /api/health after $faucet_restarts restart(s). Not recovering."
+        fi
       fi
     fi
   fi
@@ -475,14 +508,14 @@ while true; do
   if [ "$ready_rc" -ne 0 ]; then reason="no answer from /api/ready (curl $ready_rc)"; fi
   case "$ready_code" in 2*) ready_ok=1 ;; *) ready_ok=0 ;; esac
   if [ "$ready_rc" -eq 0 ] && [ "$ready_ok" = "1" ]; then
-    if [ "$alerted_unready" = "1" ]; then alert "faucet is READY again"; fi
+    if [ "$alerted_unready" = "1" ]; then fixed "faucet is READY again."; fi
     unready_since=0
     alerted_unready=0
   else
     [ "$unready_since" = "0" ] && unready_since="$now"
     elapsed=$((now - unready_since))
     if [ "$elapsed" -ge "$READY_GRACE_SECS" ] && [ "$alerted_unready" = "0" ]; then
-      alert "faucet not ready for ${elapsed}s (reason: ${reason:-unknown})"
+      danger "faucet NOT READY for $((elapsed / 60)) min. Reason: ${reason:-unknown}."
       alerted_unready=1
     fi
   fi
@@ -514,9 +547,10 @@ while true; do
   # and stayed given-up. The -5 line in zallet's log is the direct, reachable evidence; its
   # ABSENCE while zallet runs is what proves a heal worked.
   #
-  # IT ALWAYS ALERTS, including on success. A silent self-heal is how 812 restarts went
-  # unnoticed once already; a heal that fixed something is exactly what an operator
-  # needs to know, and repeated heals are the signal that the tap upstream is leaking.
+  # IT ALWAYS REPORTS, once the heal is seen to work, and pages when it does not. A silent
+  # self-heal is how 812 restarts went unnoticed once already; a heal that fixed something
+  # is exactly what an operator needs to know, and repeated reports are the signal that
+  # the tap upstream is leaking. The attempts themselves are journal lines, not messages.
   #
   # AND IT GIVES UP. After HEAL_MAX_ATTEMPTS it stops and pages instead of rewriting
   # wallet.db on a loop: at that point the diagnosis is wrong and thrashing the database
@@ -526,7 +560,7 @@ while true; do
     if docker logs --tail 40 "$zallet" 2>&1 | grep -q "No such mempool or main chain transaction"; then
       if [ "$heal_attempts" -ge "$HEAL_MAX_ATTEMPTS" ]; then
         if [ "$alerted_heal_giveup" = "0" ]; then
-          alert "zallet poison persists after $heal_attempts repair attempt(s) - NOT retrying, needs a human. reason: ${reason:-unknown}"
+          danger "zallet poison persists after $heal_attempts repairs. Not retrying. Reason: ${reason:-unknown}."
           alerted_heal_giveup=1
         fi
       else
@@ -545,13 +579,15 @@ while true; do
           fi
         done
         docker start "$zallet" >/dev/null 2>&1
-        alert "zallet was crash-looping on dropped-transaction poison; ran the repair tools (attempt $heal_attempts/$HEAL_MAX_ATTEMPTS) and restarted it.${heal_out}"
+        log "ran the repair tools (attempt $heal_attempts/$HEAL_MAX_ATTEMPTS) and restarted zallet; report follows once it runs clean.${heal_out}"
       fi
     elif [ "$heal_attempts" -ne 0 ] || [ "$alerted_heal_giveup" != "0" ]; then
       # No -5 in the recent log. If zallet is actually up, the poison is gone (a heal
       # worked, or there was never one): reset the budget, keyed off zallet being up and
       # clean rather than the app-readiness probe the watchdog cannot reach.
       if [ "$(docker inspect -f '{{.State.Status}}' "$zallet" 2>/dev/null)" = "running" ]; then
+        # The one report, now that it is SEEN running clean after we acted.
+        [ "$heal_attempts" -ne 0 ] && fixed "zallet crash-looped on dropped-transaction poison. Ran the repair tools ($heal_attempts attempt(s)). Running clean."
         heal_attempts=0
         alerted_heal_giveup=0
         log "zallet running and clean of the poison signature; heal budget reset"

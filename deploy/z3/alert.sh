@@ -151,10 +151,10 @@ case "${1:-}" in
     # a human nor a routing rule has to already know which units are experimental.
     if is_best_effort "$unit"; then
       [ -n "$BEST_EFFORT_URL" ] && ALERT_URL="$BEST_EFFORT_URL"
-      send "best-effort unit failed (feature-net, NOT a faucet outage): $unit${tail_lines:+
+      send "⚠️ best-effort unit failed (feature-net, NOT a faucet outage): $unit${tail_lines:+
 $tail_lines}"
     else
-      send "unit FAILED: $unit${tail_lines:+
+      send "🚨 NEEDS YOU: unit FAILED: $unit${tail_lines:+
 $tail_lines}"
     fi
     ;;
