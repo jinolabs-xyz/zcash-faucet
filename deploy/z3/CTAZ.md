@@ -391,13 +391,19 @@ shipping the raw directory is a separate job. `zsnap` stays TAZ-only.
   capitals, on every start. zaino runs *in-process*, so no systemd ordering can remove it.
 - `Deferring: … not resolvable yet` in bursts during catch-up.
 - `errors: "configure an indexer_listen_addr…"` in `getinfo` when zaino is disabled.
+- `caller hung up before the reply; nothing to page` from `ctaz-rpc-broker.sh`, clustered
+  around a deploy. The app container was recreated with a status call in flight; the broker
+  answered and nobody was listening. Exit 0, no `OnFailure=`, and the one line is the whole
+  story. Before 2026-09-08 this was exit 120 and a page, 104 times in the one day anyone
+  counted, against a node that was parked on purpose.
 
 ## Not done yet
 
-- **No alert tiering.** The unit wires `OnFailure=faucet-alert@%n.service` like every other
-  service, so a cTAZ failure currently **pages exactly like a TAZ outage**. `alert.sh` has
-  no severity concept. Omitting the handler was tried and rejected: it buys silence, not
-  quiet.
+- **Alert tiering is coarse.** The unit wires `OnFailure=faucet-alert@%n.service` like every
+  other service. `alert.sh` now marks units listed in `best-effort-units` with a `⚠️` line
+  that says it is not a faucet outage, and routes them to `FAUCET_ALERT_BESTEFFORT_URL` when
+  one is set; without it they land in the same channel as a `🚨`. Omitting the handler was
+  tried and rejected: it buys silence, not quiet.
 - **Not enabled.** Installed so the box spec counts it; enabling is a separate decision.
 - **No containerized build yet.** It must be built for `x86_64` off the box and shipped as
   a binary; nothing this large should compile beside a live faucet.
