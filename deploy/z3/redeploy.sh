@@ -257,9 +257,11 @@ probe_state() { # $1 = health|ready ; sets PROBE_STATE + PROBE_REASON
 reason_is_not_the_code() {
   case "$1" in
     *"ledger unreadable"*) return 0 ;;
-    # Our node behind the network (the send gate, on /api/ready since risk register #7).
-    # The previous image runs against the same node.
-    *"behind the network"*) return 0 ;;
+    # Our node's state: behind the network (the send gate, on /api/ready since risk
+    # register #7), frozen, or still syncing. The node is a separate container the
+    # previous image would talk to just the same. The wallet's reasons are NOT here: a
+    # broken image can fail to reach the wallet, and that is exactly what a rollback fixes.
+    *"behind the network"*|*"node frozen"*|*"node syncing"*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -490,12 +492,11 @@ if reason_is_not_the_code "$final_reason"; then
   # Reverting changes nothing except which code is blamed, and exit 2 would say nobody
   # needs paging for a faucet that refuses every claim.
   case "$final_reason" in
-    *"behind the network"*)
+    *"behind the network"*|*"node frozen"*|*"node syncing"*)
       log "NOT ROLLING BACK: the faucet is not serving, but the cause is the CHAIN, not code"
       log "  reason: $final_reason"
-      log "  Our node is behind an independent view of the network, so a drip would expire before"
-      log "  it confirmed. The previous image runs against the same node. A rollback would not fix this,"
-      log "  it would only change which build is blamed."
+      log "  Our node is behind, frozen or syncing. The previous image runs against the same node,"
+      log "  so a rollback would not fix this, it would only change which build is blamed."
       log "  Wait for the node to catch up (the watchdog heals a stuck one), then re-run this script." ;;
     *)
       log "NOT ROLLING BACK: the faucet is not serving, but the cause is DATA, not code"

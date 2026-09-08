@@ -47,8 +47,18 @@ jfield() { # $1 json, $2 key
 # Pulls a nested object out by key, e.g. the "node":{...} blob, so its fields
 # can be read without confusing them with same-named top-level keys ("ready"
 # exists at both levels and means different things).
+# Returns the body from just inside the object's opening brace to the END of the input, so
+# jfield on it finds the object's OWN fields first. The previous regex, `{[^{}]*}`, could
+# not match an object containing another object, and `node` has carried nested `shield`
+# and `chain` objects since the freshness gate landed: faucet_node_ready,
+# faucet_node_sync_percent and faucet_node_height had silently vanished from the real
+# metrics file while the fixture, which had no nesting, kept the suite green. Bash
+# expansion rather than sed: `#*` strips the SHORTEST prefix, so it is the first `"node":`
+# in the body, not the last.
 jobject() { # $1 json, $2 key
-  printf '%s' "$1" | sed -n "s/.*\"$2\":[[:space:]]*{\([^{}]*\)}.*/\1/p"
+  local rest="${1#*\"$2\":}"
+  [ "$rest" != "$1" ] || return 0
+  printf '%s' "${rest#*\{}"
 }
 # Booleans become 1/0 so Prometheus can graph them; anything else drops out.
 as_gauge() {
@@ -97,7 +107,7 @@ status_body="$(curl -fsS --max-time "$CURL_TIMEOUT" "$FAUCET_URL/api/status" 2>/
       "$(as_gauge "$(jfield "$(jobject "$ready_body" node)" ready)")"
     # The send gate's verdict. A 200 with this at 0 is a faucet refusing every drip while
     # readiness stays green on purpose (a tip it cannot verify); whatever scrapes this file
-    # must not believe faucet_ready alone. The key is unique in the body, so no jobject.
+    # must not believe faucet_ready alone. The key is unique in the body.
     emit faucet_can_build_tx "1 when the send gate would let a drip be built right now." gauge \
       "$(as_gauge "$(jfield "$ready_body" canBuildTx)")"
   else

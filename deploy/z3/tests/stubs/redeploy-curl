@@ -49,7 +49,11 @@ case "$*" in
   */api/health*)
     if [ -e "${STUB_HEALTH:-/nonexistent}" ]; then answer 200 '{"ok":true}'; else answer 503 '{"ok":false}'; fi ;;
   */api/ready*)
-    reason="${STUB_READY_REASON:-node syncing}"
+    # "wallet balance unknown" and not "node syncing": node-side reasons are exempt from
+    # rollback (the node is not the image), so a stub that defaulted to one made every
+    # "a bad build rolls back" case pass for the wrong reason or not at all. A broken image
+    # that cannot reach its wallet is the shape a rollback exists for.
+    reason="${STUB_READY_REASON:-wallet balance unknown}"
     if [ ! -e "${STUB_READY:-/nonexistent}" ]; then
       answer 503 "{\"ready\":false,\"reason\":\"$reason\"}"
     fi

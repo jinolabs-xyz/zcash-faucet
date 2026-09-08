@@ -56,8 +56,12 @@ check "not-ready is recorded as faucet_ready 0" "grep -qx 'faucet_ready 0' '$MET
 check "balance comes through" "grep -qx 'faucet_balance_taz 3.5' '$METRICS_FILE'"
 check "queue depth comes through" "grep -qx 'faucet_queue_depth 2' '$METRICS_FILE'"
 check "empty=false becomes 0" "grep -qx 'faucet_empty 0' '$METRICS_FILE'"
-# The nested node object, not the top-level "ready" that means something else.
-check "nested node.ready read correctly" "grep -qx 'faucet_node_ready 1' '$METRICS_FILE'"
+# The nested node object, not the top-level "ready" that means something else. The fixture's
+# node carries nested shield/chain objects like the real one; with the old `{[^{}]*}`
+# extractor these three gauges were absent from the real file and this check passed on a
+# fixture without nesting.
+check "nested node.ready read correctly, past the objects nested inside node" "grep -qx 'faucet_node_ready 1' '$METRICS_FILE'"
+check "node.syncPercent and node.height survive the nesting too" "grep -qx 'faucet_node_sync_percent 99.98' '$METRICS_FILE' && grep -qx 'faucet_node_height 4204726' '$METRICS_FILE'"
 # The send gate's verdict, which faucet_ready cannot carry: this fixture's node is ready
 # and its gate is closed, the exact pair a scraper must be able to tell apart.
 check "the send gate's verdict is its own gauge" "grep -qx 'faucet_can_build_tx 0' '$METRICS_FILE'"

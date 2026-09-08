@@ -91,7 +91,7 @@ check "rolled back to the previous image" "[ \"\$(img zcash-faucet:latest)\" = '
 # for a reason a rollback CAN address, must still roll back. Without this, making the
 # two new cases pass by never rolling back at all would look like a fix.
 check "and the ordinary not-ready case names the app's own reason" \
-  "grep -q 'node syncing' '$T/nr.log'"
+  "grep -q 'wallet balance unknown' '$T/nr.log'"
 
 echo "== redeploy: a probe that never ANSWERS is not evidence against the build (#229)"
 # A timeout is not a negative. better-sqlite3 is synchronous, so a wedged read makes
@@ -181,6 +181,22 @@ check "a failing build on the exec path DOES roll back" \
 check "and exits 2, because service was restored" "[ $rc -eq 2 ]"
 check "and does NOT claim the probe never answered" \
   "! grep -q 'never answered' '$T/nourl.log'"
+
+echo "== redeploy: a FROZEN or SYNCING node is not the image's fault either"
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_READY_MAX=1 STUB_READY_REASON="node frozen behind network" bash "$REDEPLOY" > "$T/frozen.log" 2>&1
+check "frozen: no rollback" "[ \"\$(img zcash-faucet:latest)\" != 'sha256:old' ] && grep -q 'CHAIN, not code' '$T/frozen.log'"
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_READY_MAX=1 STUB_READY_REASON="node syncing" bash "$REDEPLOY" > "$T/syncing.log" 2>&1
+check "syncing: no rollback" "[ \"\$(img zcash-faucet:latest)\" != 'sha256:old' ] && grep -q 'CHAIN, not code' '$T/syncing.log'"
+# The mirror, so the exemption cannot quietly widen to everything: a wallet reason still
+# rolls back, because a broken image failing to reach the wallet is what a rollback fixes.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_READY_MAX=1 STUB_READY_REASON="wallet balance unknown" bash "$REDEPLOY" > "$T/wallet.log" 2>&1
+check "a wallet reason STILL rolls back" "[ \"\$(img zcash-faucet:latest)\" = 'sha256:old' ]"
 
 echo "== redeploy: ON THE EXEC PATH TOO, a node behind the network is not rolled back"
 # The URL path read the reason from the body; the exec path (the default, and production)

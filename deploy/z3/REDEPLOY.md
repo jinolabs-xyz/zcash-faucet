@@ -44,7 +44,8 @@ than assuming a failed rollback:
 |---|---|---|
 | `rollback failed` / no previous image | the revert was attempted and did not work | replaced or absent |
 | `NOT ROLLING BACK: the readiness probe never answered` | nothing answered, so there was no evidence against the build and it was left alone | **still running** |
-| `NOT ROLLING BACK: ... the cause is DATA, not code` | the app gave a reason a revert cannot fix, because volumes are never touched. The list of those reasons is `reason_is_not_the_code` in the script, and today it holds exactly one, `ledger unreadable` | **still running** |
+| `NOT ROLLING BACK: ... the cause is DATA, not code` | the app said `ledger unreadable`: a revert cannot fix a volume it never touches | **still running** |
+| `NOT ROLLING BACK: ... the cause is the CHAIN, not code` | the app said the node is behind the network, frozen, or syncing: the previous image talks to the same node. This can happen when zebra falls a few blocks behind during the build; wait, then re-run. The full list is `reason_is_not_the_code` in the script; wallet reasons are deliberately NOT on it | **still running** |
 
 The last two are the ones worth knowing about, because the instinct on seeing exit
 1 is to go looking for a rollback, and in those cases none was attempted. That is
