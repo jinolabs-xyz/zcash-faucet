@@ -8,7 +8,7 @@
 # the first lap of that, not a one-off. At 100% the exports die, backups truncate, sqlite
 # goes read-only and dockerd wedges, in that order or any other.
 #
-# WHAT IT DOES, and only this: build cache down to PRUNE_KEEP_BUILD_CACHE (5GB), and
+# WHAT IT DOES, and only this: build cache down to PRUNE_KEEP_BUILD_CACHE (20GB), and
 # dangling layers (untagged, referenced by nothing). Those two are the whole 53 GB.
 #
 # WHAT IT NEVER TOUCHES:

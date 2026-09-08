@@ -100,9 +100,11 @@ check "the dangling prune is described" "grep -q 'dangling images: would run: do
 check "and docker was never asked to change anything" "! grep -qE '^docker (builder prune -af|image prune)' '$STUB_LOG'"
 
 echo "== prune: the reserve is an operator knob"
-pr_env; export PRUNE_KEEP_BUILD_CACHE=20GB
+# A value that differs from the default, or this proves nothing (it did, when the default
+# was raised to the same number).
+pr_env; export PRUNE_KEEP_BUILD_CACHE=40GB
 bash "$PRUNE" > /dev/null 2>&1
-check "the configured reserve reaches docker" "grep -q 'builder prune -af --reserved-space 20GB' '$STUB_LOG'"
+check "the configured reserve reaches docker" "grep -q 'builder prune -af --reserved-space 40GB' '$STUB_LOG'"
 
 echo "== prune: THE UNIT BOUNDS THE DELETES AT TWO HOURS, and this is where that is pinned"
 # A Type=oneshot has NO start timeout by default (systemd exempts oneshots from
