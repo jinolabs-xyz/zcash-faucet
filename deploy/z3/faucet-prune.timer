@@ -1,0 +1,16 @@
+# Daily, in the quiet hour after the drift report (03:40 + up to 20 min) and well clear of
+# the snapshot export (00:20, 06:20) and the six-hourly backups (:45). No OnActiveSec: a
+# monotonic trigger re-arms on every daemon-reload, and install-ops reloads on every ops
+# deploy, which would have made this run after every deploy instead of once a day. A box
+# that has never pruned gets its first run at 04:10, or now with
+# `systemctl start faucet-prune.service`.
+[Unit]
+Description=Daily faucet Docker disk prune
+
+[Timer]
+OnCalendar=*-*-* 04:10:00 UTC
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

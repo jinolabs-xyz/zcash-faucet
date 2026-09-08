@@ -127,8 +127,16 @@ grace window and reports once when it recovers. It deliberately does not page
 for un-readiness during a first sync or a refill, because those are un-ready on
 purpose.
 
-**Not** anything about disk, balance or drift yet. Those come from the metrics
-file below and are alerted by whatever scrapes it.
+**Disk.** `faucet-prune.timer` runs `prune.sh` daily at 04:10 UTC (plus up to
+ten minutes of jitter) to remove
+Docker build cache and dangling layers, which nothing else does. It never
+touches volumes, containers or any tagged image; unused tags are listed in its
+journal as information. A prune that fails is a failed unit, so it pages.
+The build-cache reserve is `PRUNE_KEEP_BUILD_CACHE` (20GB, measured: one
+build leaves ~2.4 GB, a day of deploys ~7 GB) in the optional
+`/etc/faucet/prune.env`; `PRUNE_DRY_RUN=1 /opt/faucet/prune.sh` says what a
+run would do without doing it. Balance
+and drift are in the metrics file below and alerted by whatever scrapes it.
 
 ## Metrics
 

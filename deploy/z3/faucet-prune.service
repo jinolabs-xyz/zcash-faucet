@@ -1,0 +1,27 @@
+# Reclaims Docker build cache and dangling layers. See prune.sh for what it will
+# never touch (volumes, containers, any tagged image).
+[Unit]
+Description=Faucet Docker disk prune
+Documentation=file:/opt/zcash-faucet/deploy/z3/prune.sh
+After=docker.service
+Wants=docker.service
+OnFailure=faucet-alert@%n.service
+
+[Service]
+Type=oneshot
+# Optional: PRUNE_KEEP_BUILD_CACHE (default 20GB, measured), PRUNE_DRY_RUN=1.
+EnvironmentFile=-/etc/faucet/prune.env
+ExecStart=/opt/faucet/prune.sh
+# A oneshot has no start timeout at all by default (systemd exempts Type=oneshot from
+# DefaultTimeoutStartSec), so a prune against a wedged daemon would run for ever with
+# nobody paged. Two hours is generous for the first run's ~50 GB of deletes and then it
+# fails loud. zsnap-export.service bounds its long job the same way.
+TimeoutStartSec=2h
+# The deletes run inside dockerd and this does not throttle them; it throttles the client
+# that waits, lists and measures, which is small. Kept so this unit matches the other
+# maintenance units (backup, metrics, drift, zsnap), not as a mitigation.
+Nice=15
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target
