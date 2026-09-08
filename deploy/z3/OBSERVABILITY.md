@@ -113,8 +113,17 @@ watchdog or miner posts the unit name and its last 15 journal lines. Before
 this, a timer could fail every cycle in silence, which is exactly how
 `zsnap-export` sat producing nothing.
 
-**The faucet being un-servable.** The watchdog posts once per episode after the
-grace window (30 min), and once when it recovers. It deliberately does not page
+**Two kinds of message, and the first word says which.** `✅ FIXED:` is one
+report per resolved episode, sent only once the watchdog has *seen* the recovery
+(the tip moving again, the wallet running clean, the miner templating), naming
+what was wrong, what fixed it and how many attempts it took. `🚨 NEEDS YOU:` is
+the page: a heal budget exhausted, a container crash-looping, a unit failing, or
+the faucet not ready past the grace window (30 min). The attempts in between are
+journal lines, not messages, so a phone sees one line per problem rather than a
+running commentary, and a self-heal is still never silent.
+
+**The faucet being un-servable.** The watchdog pages once per episode after the
+grace window and reports once when it recovers. It deliberately does not page
 for un-readiness during a first sync or a refill, because those are un-ready on
 purpose.
 

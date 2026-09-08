@@ -125,7 +125,10 @@ case "${1:-}" in
       cf="${STUB_ZEBRA_COUNTER:?}"
       n=0; [ -f "$cf" ] && n="$(cat "$cf")"
       n=$((n + 1)); echo "$n" > "$cf"
-      b=$((b + n))
+      # STUB_ZEBRA_STUCK_CALLS=K holds the tip for the first K calls, then advances: a node
+      # that is wedged and then recovers, which is the shape a one-report heal needs.
+      stuck="${STUB_ZEBRA_STUCK_CALLS:-0}"
+      if [ "$n" -gt "$stuck" ]; then b=$((b + n - stuck)); fi
     fi
     printf '{"result":{"chain":"test","blocks":%s,"estimatedheight":%s},"error":null,"id":"watchdog"}\n' "$b" "${STUB_ZEBRA_EST:-$b}"
     ;;
