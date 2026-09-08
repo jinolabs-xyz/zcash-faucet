@@ -27,6 +27,10 @@ port,logf=int(sys.argv[1]),sys.argv[2]
 class H(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         n=int(self.headers.get('content-length',0)); body=self.rfile.read(n).decode()
+        # /slow answers after 1.2 s: a bridge is not a zero-latency receiver, and the
+        # cooldown's concurrency case needs a POST long enough for the clock to move.
+        if '/slow' in self.path:
+            import time; time.sleep(1.2)
         open(logf,'a').write(body+"\n")
         code=500 if 'FAIL' in self.path else 204
         self.send_response(code); self.end_headers()
@@ -304,10 +308,12 @@ FAUCET_ALERT_STATE_DIR="$T/empty-dir" bash "$ALERT" "disk low: / has 9% free" > 
 check "the empty directory got the marker and a record" "[ -e '$T/empty-dir/.faucet-alerts' ] && [ \"\$(ls '$T/empty-dir' | wc -l | tr -d ' ')\" = 1 ]"
 check "the default fresh path got the marker too" "[ -e '$T/alert-state/.faucet-alerts' ] || { bash '$ALERT' 'x' >/dev/null 2>&1; [ -e '$T/alert-state/.faucet-alerts' ]; }"
 
-echo "== alerts: THE LOCK COVERS THE POST, so simultaneous identical alerts deliver once"
-# Measured in review before this fix: 8 of 8 delivered, because the record is only written
-# after a POST that can take seconds and every caller read "never sent" in the meantime.
-alerts_env
+echo "== alerts: THE LOCK COVERS A SLOW POST, so simultaneous identical alerts deliver once"
+# Measured in review, twice. First the record was written outside the lock: 8 of 8. Then
+# the timestamp was read before the lock, so every waiter queued behind the winner's
+# 1.2 s POST judged the fresh record with a stale clock and the clock-skew guard let it
+# through: 8 of 8 again, invisible against an instant receiver. This receiver is slow.
+alerts_env; export FAUCET_ALERT_URL="http://127.0.0.1:$HOOK_PORT/slow"
 # `wait` with NO arguments would also wait for the suite's background receiver, for ever.
 par_pids=""
 for i in 1 2 3 4 5 6 7 8; do bash "$ALERT" "disk low: / has 9% free" > "$T/par$i.log" 2>&1 & par_pids="$par_pids $!"; done
@@ -315,6 +321,40 @@ for i in 1 2 3 4 5 6 7 8; do bash "$ALERT" "disk low: / has 9% free" > "$T/par$i
 wait $par_pids
 check "exactly one reached the webhook" "[ \"\$(grep -c 'disk low' '$HOOK_LOG')\" = 1 ]"
 check "and the other seven were held back, not lost or errored" "[ \"\$(cat '$T'/par*.log | grep -c 'HELD BACK')\" = 7 ]"
+check "and none gave up on the lock" "! grep -q 'could not take the cooldown lock' '$T'/par*.log"
+
+echo "== alerts: the weekly sweep touches ONLY forty-hex key files, never a neighbour"
+# In a directory we adopted and someone later shared, `[0-9a-f]*` matched access.log,
+# backup.tar.gz and faucet.db. Only the exact key shape may go.
+alerts_env
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1   # creates and marks the dir
+for f in access.log backup.tar.gz faucet.db 0001-patch data.json; do : > "$T/alert-state/$f"; done
+: > "$T/alert-state/0123456789abcdef0123456789abcdef01234567"      # an old key of ours
+touch -d '10 days ago' "$T"/alert-state/* 2>/dev/null || true
+bash "$ALERT" "another cause entirely" > /dev/null 2>&1
+check "the neighbours all survived" "[ -e '$T/alert-state/access.log' ] && [ -e '$T/alert-state/backup.tar.gz' ] && [ -e '$T/alert-state/faucet.db' ] && [ -e '$T/alert-state/0001-patch' ] && [ -e '$T/alert-state/data.json' ]"
+check "and the stale key of ours was swept" "[ ! -e '$T/alert-state/0123456789abcdef0123456789abcdef01234567' ]"
+
+echo "== alerts: a directory holding only OUR files is ours, so two first-callers cannot disown it"
+alerts_env
+mkdir -p "$T/ours-only"; : > "$T/ours-only/.faucet-alerts"; : > "$T/ours-only/.lock"
+: > "$T/ours-only/0123456789abcdef0123456789abcdef01234567"
+rm "$T/ours-only/.faucet-alerts"   # the marker is what a racing peer might not have written yet
+FAUCET_ALERT_STATE_DIR="$T/ours-only" bash "$ALERT" "disk low: / has 9% free" > "$T/ours.log" 2>&1
+check "adopted, not refused" "! grep -q 'dedup OFF' '$T/ours.log' && [ -e '$T/ours-only/.faucet-alerts' ]"
+
+echo "== alerts: a marked directory that is not writable is dedup OFF, not a shower of Permission denied"
+alerts_env
+mkdir -p "$T/ro-marked"; : > "$T/ro-marked/.faucet-alerts"; chmod 555 "$T/ro-marked"
+FAUCET_ALERT_STATE_DIR="$T/ro-marked" bash "$ALERT" "disk low: / has 9% free" > "$T/ro.log" 2>&1
+chmod 755 "$T/ro-marked"
+check "sent" "grep -q 'sent: disk low' '$T/ro.log'"
+check "dedup OFF, in the designed words" "grep -q 'dedup OFF' '$T/ro.log' && ! grep -q 'Permission denied' '$T/ro.log'"
+
+echo "== alerts: leading zeros are a legal spelling of a number"
+alerts_env; export FAUCET_ALERT_COOLDOWN_SECONDS=0003600
+bash "$ALERT" --self-test > "$T/lz.log" 2>&1
+check "no warning, and the cooldown is 3600" "! grep -q 'WARNING: FAUCET_ALERT_COOLDOWN' '$T/lz.log' && grep -q 'cooldown=3600s' '$T/lz.log'"
 
 echo "== alerts: the held-back count is on the FIRST line, where a phone preview shows it"
 alerts_env

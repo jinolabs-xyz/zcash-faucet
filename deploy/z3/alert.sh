@@ -59,11 +59,13 @@ case "$COOLDOWN_RAW" in
     COOLDOWN=3600
     log "WARNING: FAUCET_ALERT_COOLDOWN_SECONDS='$COOLDOWN_RAW' is not a whole number of seconds; using 3600" ;;
   *)
-    if [ "${#COOLDOWN_RAW}" -gt 5 ] || [ "$COOLDOWN_RAW" -gt 86400 ]; then
+    # Leading zeros first, or "0003600" reads as seven digits and "more than a day".
+    COOLDOWN_NUM="$(printf '%s' "$COOLDOWN_RAW" | sed 's/^0*//')"; COOLDOWN_NUM="${COOLDOWN_NUM:-0}"
+    if [ "${#COOLDOWN_NUM}" -gt 5 ] || [ "$COOLDOWN_NUM" -gt 86400 ]; then
       COOLDOWN=86400
       log "WARNING: FAUCET_ALERT_COOLDOWN_SECONDS=$COOLDOWN_RAW is more than a day; using 86400"
     else
-      COOLDOWN="$COOLDOWN_RAW"
+      COOLDOWN="$COOLDOWN_NUM"
     fi ;;
 esac
 
@@ -82,10 +84,12 @@ dedup_key() { # $1 message -> key on stdout, empty when it cannot be computed
   local first
   first="$(printf '%s\n' "${DEDUP_SUBJECT:-$1}" | head -n1 | tr '[:upper:]' '[:lower:]' \
     | sed -E 's/[0-9]/#/g; s/[[:space:]]+/ /g' 2>/dev/null)" || return 0
+  # ALWAYS 40 hex characters, whichever tool made it, so the weekly sweep can be anchored to
+  # exactly that shape and nothing else in the directory can ever match it.
   if command -v sha256sum >/dev/null 2>&1; then
     printf '%s %s' "$ALERT_FORMAT" "$first" | sha256sum | cut -c1-40
   elif command -v cksum >/dev/null 2>&1; then
-    printf '%s %s' "$ALERT_FORMAT" "$first" | cksum | cut -d' ' -f1
+    printf '%040d' "$(printf '%s %s' "$ALERT_FORMAT" "$first" | cksum | cut -d' ' -f1)"
   fi
 }
 
@@ -96,12 +100,27 @@ dedup_key() { # $1 message -> key on stdout, empty when it cannot be computed
 # directory with other people's files in it gets no marker, no records, no find, and a
 # journal line saying so. Fails toward noise, like everything else here.
 dedup_dir_ok() {
-  local real
+  local real entry
   real="$(realpath -m -- "$STATE_DIR" 2>/dev/null)" || real="$STATE_DIR"
   case "$real" in /) return 1 ;; esac
-  if [ -e "$real/.faucet-alerts" ]; then STATE_DIR="$real"; return 0; fi
+  if [ -e "$real/.faucet-alerts" ]; then
+    # Marked as ours, but still has to be writable, or the run would print raw
+    # "Permission denied" lines instead of the designed dedup OFF.
+    [ -w "$real" ] || return 1
+    STATE_DIR="$real"; return 0
+  fi
   if [ -d "$real" ]; then
-    [ -z "$(ls -A -- "$real" 2>/dev/null)" ] || return 1
+    # Empty, OR holding nothing but our own files: two callers adopting an empty directory
+    # at the same instant means the second sees the first's marker before its own
+    # `-e` check ran, and must not conclude the directory belongs to someone else.
+    for entry in "$real"/* "$real"/.[!.]*; do
+      [ -e "$entry" ] || continue
+      entry="${entry##*/}"
+      case "$entry" in
+        .faucet-alerts|.lock) ;;
+        *) [ "${#entry}" = 40 ] && [ -z "${entry//[0-9a-f]/}" ] || return 1 ;;
+      esac
+    done
   fi
   mkdir -p -- "$real" 2>/dev/null && : > "$real/.faucet-alerts" 2>/dev/null && [ -w "$real" ] || return 1
   STATE_DIR="$real"
@@ -126,12 +145,21 @@ dedup_check() { # $1 message
     log "dedup OFF: $STATE_DIR is not a directory this script owns (no .faucet-alerts marker and not empty, or not writable); repeats of this alert will all be sent"
     return 0
   fi
-  f="$STATE_DIR/$key"; now="$(date -u +%s)"
+  f="$STATE_DIR/$key"
   exec 9>"$STATE_DIR/.lock"
   DEDUP_LOCKED=1
+  # The wait outlives curl's --max-time (10 s) with room, because the holder keeps the lock
+  # across its POST: a waiter that gives up early sends unserialised, and review measured
+  # that as the second duplicate source once the first was closed.
   if command -v flock >/dev/null 2>&1; then
-    flock -w 5 9 || log "WARNING: could not take the cooldown lock in 5s; deciding unserialised"
+    flock -w 30 9 || log "WARNING: could not take the cooldown lock in 30s; deciding unserialised"
   fi
+  # `now` is read AFTER the lock, not before. Read before it, every waiter queued behind a
+  # slow POST held a timestamp older than the record the winner then wrote, the
+  # clock-stepped-back guard below zeroed that record, and all of them sent: 8 of 8 at a
+  # 2-second POST, measured in review. The lock was correct; the value judged under it
+  # was stale.
+  now="$(date -u +%s)"
   last=0; count=0
   if [ -f "$f" ]; then
     read -r last count < "$f" 2>/dev/null || { last=0; count=0; }
@@ -161,12 +189,15 @@ dedup_done() {
 
 # Called ONLY after the POST succeeded: that is when the window starts. Records for
 # causes that stopped firing are never read again; a week is long past any window. The
-# find is bounded to this directory's own key files, and only runs in a directory that
-# carries our marker (dedup_dir_ok), so it can never sweep anything but our records.
+# sweep matches EXACTLY the key shape, forty hex characters and nothing else: the first
+# version's `[0-9a-f]*` also matched access.log, backup.tar.gz and faucet.db in a directory
+# somebody later shared with us. The marker check is defence in depth behind
+# dedup_dir_ok, which is what refuses a directory that is not ours before this ever runs.
 dedup_commit() {
   [ -n "$DEDUP_FILE" ] || return 0
   printf '%s 0\n' "$(date -u +%s)" > "$DEDUP_FILE" 2>/dev/null || true
-  [ -e "$STATE_DIR/.faucet-alerts" ] && find "$STATE_DIR" -maxdepth 1 -type f -name '[0-9a-f]*' -mtime +7 -delete 2>/dev/null
+  [ -e "$STATE_DIR/.faucet-alerts" ] \
+    && find "$STATE_DIR" -maxdepth 1 -type f -regextype posix-extended -regex '.*/[0-9a-f]{40}' -mtime +7 -delete 2>/dev/null
   return 0
 }
 
