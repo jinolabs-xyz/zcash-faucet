@@ -473,7 +473,7 @@ async function checkMinerPanel(page) {
   // wired the reader up, NOT that a heartbeat is missing. Those are different facts
   // and this asserts the one that actually applies to this run.
   ok("an unconfigured heartbeat says so, and does not blame a missing file",
-    /no heartbeat path configured/.test(row), row);
+    /not watched, no heartbeat path/.test(row), row);
   ok("no heartbeat is NOT reported as running", !/\bmining\b/.test(row), row);
   // "off" is the specific wrong answer. We have not established the miner is off, only
   // that we cannot see it, and those call for different responses from an operator.
