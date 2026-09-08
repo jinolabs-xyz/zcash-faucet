@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: read
+  actions: read   # the page step reads the previous run's conclusion for the 30-minute rule
 
 jobs:
   probe:
@@ -42,3 +43,43 @@ jobs:
             exit 0
           fi
           node scripts/live-probe.mjs
+      # PAGE A HUMAN, AND ONLY ON A REAL OUTAGE. The on-box watchdog pages after 30
+      # minutes of not-ready, but it cannot page when the box itself is dead, so this is
+      # the off-box backstop. Two consecutive failed scheduled runs are 30 minutes of
+      # downtime, the threshold the owner asked for; a single red run already emails and
+      # is often a blip the probe's own retry did not quite cover. If the previous run
+      # cannot be read, page anyway: under-alerting is the failure this exists to fix.
+      #
+      # Setup: repository secret FAUCET_ALERT_URL (a Slack or Discord webhook) and,
+      # for Discord, the repository variable FAUCET_ALERT_FORMAT=discord. Without the
+      # secret this step says so and exits 0, so email stays the only channel.
+      - name: page on the second consecutive failure (30 minutes down)
+        if: failure()
+        env:
+          ALERT_URL: ${{ secrets.FAUCET_ALERT_URL }}
+          ALERT_FORMAT: ${{ vars.FAUCET_ALERT_FORMAT }}
+          GH_TOKEN: ${{ github.token }}
+          SMOKE_URL: ${{ vars.FAUCET_LIVE_URL }}
+        run: |
+          if [ -z "$ALERT_URL" ]; then
+            echo "FAUCET_ALERT_URL secret is not set, cannot page (email only)"
+            exit 0
+          fi
+          prev="$(gh run list --workflow live-smoke --event schedule --limit 2 \
+                    --json conclusion,databaseId \
+                    --jq "[.[] | select(.databaseId != $GITHUB_RUN_ID)][0].conclusion" 2>/dev/null || echo unknown)"
+          echo "previous scheduled run: ${prev:-unknown}"
+          if [ "$prev" = "success" ]; then
+            echo "first failure: not paging yet, the next run in 15 minutes decides (30-minute rule)"
+            exit 0
+          fi
+          msg="[zcash-faucet live-smoke] the faucet has failed two probes in a row, 30+ minutes down: $SMOKE_URL - $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          case "$ALERT_FORMAT" in
+            discord) body="{\"content\":\"$msg\"}" ;;
+            *)       body="{\"text\":\"$msg\"}" ;;
+          esac
+          if curl -fsS --max-time 15 -H 'content-type: application/json' -d "$body" "$ALERT_URL" >/dev/null; then
+            echo "paged"
+          else
+            echo "webhook POST failed, the email notification is the only signal this time"
+          fi
