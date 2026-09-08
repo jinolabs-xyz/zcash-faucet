@@ -64,12 +64,30 @@ TIMEOUT = float(os.environ.get("CTAZ_BROKER_TIMEOUT", "30"))
 MAX = int(os.environ.get("CTAZ_BROKER_MAX_BYTES", "65536"))
 
 
+def send(text):
+    # THE CALLER CAN BE GONE BY THE TIME THE ANSWER EXISTS. A deploy recreates the app
+    # container while its 20-second status refresher has a call in flight, the socket
+    # closes under us, and this write gets EPIPE. That is the caller's lifecycle, not a
+    # broker failure, and it must not reach OnFailure=: on 2026-09-08 every one of the
+    # day's 104 unit failures was this write, and the one that happened after the alert
+    # channel went live paged a phone about a feature-net node that was parked on purpose.
+    # One journal line, exit 0. stdout is pointed at /dev/null first because the
+    # interpreter flushes again on the way out and would die on the same pipe with status
+    # 120, which is exactly the exit code this replaces.
+    try:
+        sys.stdout.write(text)
+        sys.stdout.flush()
+    except (BrokenPipeError, ConnectionResetError):
+        sys.stderr.write("caller hung up before the reply; nothing to page\n")
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        sys.exit(0)
+
+
 def reply(obj):
     # Always a JSON-RPC shaped answer, even for our own refusals, so the caller has one
     # parse path. A broker that returns bare text on the error path makes the client
     # write a second parser, and the second one is the one nobody tests.
-    sys.stdout.write(json.dumps(obj))
-    sys.stdout.flush()
+    send(json.dumps(obj))
     sys.exit(0)
 
 
@@ -114,13 +132,11 @@ try:
     r = urllib.request.Request(URL, data=body,
                                headers={"content-type": "application/json"})
     with urllib.request.urlopen(r, timeout=TIMEOUT) as resp:
-        sys.stdout.write(resp.read().decode("utf-8", "replace"))
-        sys.stdout.flush()
+        send(resp.read().decode("utf-8", "replace"))
 except urllib.error.HTTPError as e:
     # The node answered, with a status. Its body is the useful part - a 401 says which
     # credential it wanted - so it is passed through rather than flattened to a code.
-    sys.stdout.write(e.read().decode("utf-8", "replace"))
-    sys.stdout.flush()
+    send(e.read().decode("utf-8", "replace"))
 except Exception as e:
     sys.stderr.write("node did not answer: %s\n" % e)
     reply({"jsonrpc": "2.0", "id": rid,
