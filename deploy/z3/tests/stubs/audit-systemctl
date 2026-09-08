@@ -36,6 +36,16 @@ case "${args[0]:-}" in
     # rather than as a calm zero.
     [ -n "${STUB_NRESTARTS:-}" ] && printf '%s\n' "$STUB_NRESTARTS"
     exit 0 ;;
+  is-active)
+    # Prints the WORD like the real one, because the word is what box-report reads: the
+    # exit code cannot tell inactive from failed. STUB_ACTIVE unset means systemctl said
+    # nothing (box-report records unknown); a unit listed in STUB_ACTIVE is active; one
+    # listed in STUB_FAILED is failed; anything else is inactive.
+    [ -n "${STUB_ACTIVE:-}" ] || exit 0
+    u="${args[1]:-}"
+    if grep -qxF "$u" "$STUB_ACTIVE" 2>/dev/null; then echo active; exit 0; fi
+    if grep -qxF "$u" "${STUB_FAILED:-/nonexistent}" 2>/dev/null; then echo failed; exit 3; fi
+    echo inactive; exit 3 ;;
   restart)
     # RECORDED, so a test can prove install-ops restarted the watchdog when watchdog.sh
     # changed - and, by its absence, that a no-change re-run did not. Inert (writes to

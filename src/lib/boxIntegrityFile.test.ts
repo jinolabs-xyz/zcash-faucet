@@ -47,6 +47,7 @@ const WRITER_FIELDS = {
   notEnabled: 0,
   enabledUndeclared: 4,
   minerBinary: "current",
+  minerUnit: "inactive",
   platform: "x86_64",
   watchdogRestarts: 0,
   watchdogRestartsDelta: 0,
@@ -98,16 +99,19 @@ test("platform and minerBinary arrive with their values, not merely their keys",
   const r = readBoxIntegrity();
   assert.equal(r?.platform, "x86_64");
   assert.equal(r?.minerBinary, "current");
+  assert.equal(r?.minerUnit, "inactive");
 });
 
 test("a report predating the fields is null there, never a guess", () => {
   const old: Record<string, unknown> = { ...WRITER_FIELDS };
   delete old.platform;
   delete old.minerBinary;
+  delete old.minerUnit;
   write(old);
   const r = readBoxIntegrity();
   assert.equal(r?.platform, null);
   assert.equal(r?.minerBinary, null);
+  assert.equal(r?.minerUnit, null);
   assert.equal(r?.expected, 41, "the rest of the report still parses");
 });
 

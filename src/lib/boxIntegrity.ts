@@ -66,6 +66,15 @@ export interface IntegrityReport {
    * the panel can say WHY the count is short instead of only that it is". The panel
    * could not, because this reader never parsed it. Null on an older report. */
   minerBinary: string | null;
+  /** systemd's word for the miner UNIT: active, inactive, failed, activating,
+   * deactivating, or unknown when systemctl would not say. Null on a report that
+   * predates the field.
+   *
+   * The heartbeat cannot tell a miner an operator stopped on purpose from one that
+   * died: both are a file nobody writes. On 2026-09-08 the panel shouted NO HEARTBEAT in
+   * red for hours over a unit that was parked deliberately. This is the fact that lets
+   * it say "off" instead, and it is context only, never classified on. */
+  minerUnit: string | null;
   /** When the box wrote this, epoch ms. */
   at: number | null;
   /** The writer could not determine the answer, so it said so. */
@@ -92,12 +101,15 @@ export interface IntegrityStatus {
    *  than only counted. Never classified on: the file count already carries the
    *  verdict, and counting the same fact twice would double a single fault. */
   minerBinary: string | null;
+  /** Passed through from the report; the panel uses it to tell a parked miner from a
+   *  dead one. Context, never classified on. */
+  minerUnit: string | null;
   ageSeconds: number | null;
   reason: string;
 }
 
 export function classifyIntegrity(r: IntegrityReport | null, now: number): IntegrityStatus {
-  const none = { expected: null, present: null, missing: null, notEnabled: null, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, platform: null, minerBinary: null, ageSeconds: null };
+  const none = { expected: null, present: null, missing: null, notEnabled: null, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, platform: null, minerBinary: null, minerUnit: null, ageSeconds: null };
 
   // No report at all is the state the box was ACTUALLY in all week, so it must not
   // be quiet. It is not "complete" and it is not a proven fault: it is unverified,
@@ -143,6 +155,7 @@ export function classifyIntegrity(r: IntegrityReport | null, now: number): Integ
       watchdogRestartsDelta: r.watchdogRestartsDelta,
       platform: r.platform,
       minerBinary: r.minerBinary,
+      minerUnit: r.minerUnit,
       ageSeconds: age,
       reason: parts.join(", "),
     };
@@ -159,6 +172,7 @@ export function classifyIntegrity(r: IntegrityReport | null, now: number): Integ
     watchdogRestartsDelta: r.watchdogRestartsDelta,
     platform: r.platform,
     minerBinary: r.minerBinary,
+    minerUnit: r.minerUnit,
     ageSeconds: age,
     reason: `all ${r.expected} required files installed, current and enabled`,
   };

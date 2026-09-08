@@ -11,7 +11,7 @@ import { boxRow, boxChip, boxIsBad } from "./boxLabel.ts";
 import { classifyIntegrity } from "./boxIntegrity.ts";
 
 const NOW = Date.parse("2026-07-31T12:00:00Z");
-const report = (over = {}) => ({ expected: 14, present: 14, notEnabled: 0, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, platform: null, minerBinary: null, at: NOW - 30_000, readable: true, ...over });
+const report = (over = {}) => ({ expected: 14, present: 14, notEnabled: 0, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, platform: null, minerBinary: null, minerUnit: null, at: NOW - 30_000, readable: true, ...over });
 
 test("THE STATE NOTHING RENDERED: two files gone and a unit disabled says so", () => {
   const s = classifyIntegrity(report({ present: 12, notEnabled: 1 }), NOW);
@@ -38,7 +38,7 @@ test("complete is the ONLY state with no strip chip", () => {
 
 test("no report is 'cannot tell', never 'complete' and never a proven fault", () => {
   const s = classifyIntegrity(null, NOW);
-  assert.match(boxRow(s), /cannot tell/);
+  assert.match(boxRow(s), /no box report/);
   assert.doesNotMatch(boxRow(s), /all enabled|MISSING/);
   assert.equal(boxIsBad(s), true, "unverified must fail, same as the external gate");
 });
@@ -48,8 +48,8 @@ test("never-reported and reported-too-long-ago are different sentences", () => {
   // that has stopped. Collapsing them sends an operator to the wrong place.
   const never = boxRow(classifyIntegrity(null, NOW));
   const stale = boxRow(classifyIntegrity(report({ at: NOW - 3 * 3600_000 }), NOW));
-  assert.match(never, /has not reported/);
-  assert.match(stale, /last report \d+ min old/);
+  assert.match(never, /no box report/);
+  assert.match(stale, /report \d+ min old/);
   assert.notEqual(never, stale);
 });
 
@@ -92,7 +92,7 @@ test("a clean box SAYS when units are enabled that the repo never declared", () 
   // "of ours" is asserted deliberately. box-report only walks units this repo ships, so
   // the bare phrasing claimed a scope the figure does not have: the box had ELEVEN
   // undeclared units while this said 2, and both were right.
-  assert.match(row, /2 of ours enabled but undeclared/);
+  assert.match(row, /2 of ours undeclared/);
 });
 
 test("and it is NOT a fault, so the chip and the marker stay quiet", () => {
@@ -118,7 +118,7 @@ test("an INCOMPLETE box reports drift too, without it displacing the real fault"
   const row = boxRow(classifyIntegrity(report({ expected: 34, present: 32, notEnabled: 1, enabledUndeclared: 3 }), NOW));
   assert.match(row, /2 of 34 MISSING/);
   assert.match(row, /1 NOT ENABLED/);
-  assert.match(row, /3 of ours enabled but undeclared/);
+  assert.match(row, /3 of ours undeclared/);
   assert.ok(row.indexOf("MISSING") < row.indexOf("undeclared"), "the fault must come first");
 });
 
@@ -138,7 +138,7 @@ test("A WATCHDOG IN A RESTART LOOP IS RED, even on a box with every file in plac
   // things are broken was the one thing nothing watched.
   const s = classifyIntegrity(report({ watchdogRestarts: 412, watchdogRestartsDelta: 61 }), NOW);
   assert.equal(s.state, "complete", "every file is present, so the file verdict is clean");
-  assert.match(boxRow(s), /WATCHDOG RESTARTING \(61 since last report\)/);
+  assert.match(boxRow(s), /WATCHDOG LOOPING, 61 restarts/);
   assert.equal(boxIsBad(s), true, "a looping supervisor is a fault, not a note");
   assert.equal(boxChip(s), "WATCHDOG LOOP", "and it must be visible without opening the panel");
 });
@@ -176,7 +176,7 @@ test("the loop clause does not displace a real file fault", () => {
   // Both facts, and the file verdict leads because it is the more upstream problem.
   const row = boxRow(classifyIntegrity(report({ present: 12, notEnabled: 1, watchdogRestartsDelta: 61 }), NOW));
   assert.match(row, /2 of 14 MISSING/);
-  assert.match(row, /WATCHDOG RESTARTING/);
+  assert.match(row, /WATCHDOG LOOPING/);
   assert.ok(row.indexOf("MISSING") < row.indexOf("WATCHDOG"), "the file fault comes first");
 });
 

@@ -6,7 +6,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { minerRow, minerChip, minerErrorRow, humanAge, readingFromStatus } from "./minerLabel.ts";
+import { minerRow, minerChip, minerErrorRow, minerIsBad, humanAge, readingFromStatus } from "./minerLabel.ts";
 import type { MinerReading } from "./miner/heartbeat.ts";
 
 const base: MinerReading = {
@@ -64,13 +64,13 @@ test("not-writing is distinct from stalled, because the fault is somewhere else"
   const s = minerRow({ ...base, state: "not-writing", beatAgoSeconds: 12 * 60 });
   assert.match(s, /NO HEARTBEAT/);
   assert.match(s, /12 min/);
-  assert.match(s, /unknown/, "the miner itself may be fine, we cannot see it");
+  assert.doesNotMatch(s, /\boff\b/, "with no word from systemd we have not established it is off");
   assert.notEqual(s, minerRow({ ...base, state: "stalled", templateAgoSeconds: 12 * 60 }));
 });
 
 test("cannot-verify is never 'off' and never healthy", () => {
   const s = minerRow({ ...base, state: "cannot-verify", beatAgoSeconds: null, templateAgoSeconds: null, lastTemplateHeight: null });
-  assert.match(s, /cannot tell/);
+  assert.match(s, /cannot read heartbeat/);
   assert.doesNotMatch(s, /\boff\b/, "we have not established it is off, only that we cannot see it");
   assert.doesNotMatch(s, /\bmining\b/);
 });
@@ -110,11 +110,11 @@ test("errors are reported separately and never invent a state", () => {
 
   const many = minerErrorRow({ ...base, lastErrorStage: "getblocktemplate", consecutiveErrors: 840 });
   assert.ok(many, "a stage token must produce a line");
-  assert.match(many, /840 in a row/);
+  assert.match(many, /840×/);
 
   const one = minerErrorRow({ ...base, lastErrorStage: "solve", consecutiveErrors: 1 });
   assert.ok(one);
-  assert.match(one, /last error in solve/);
+  assert.match(one, /solve failed once/);
 });
 
 test("the error line carries a stage token, so no message can leak through it", () => {
@@ -173,7 +173,7 @@ test("NOT CONFIGURED says whose problem it is, rather than sending someone to th
   // "Cannot tell" alone had a reader hunting a broken miner when the answer is an
   // unset variable on the deploy. Different job, different time of day.
   const row = minerRow({ ...base, state: "not-configured", beatAgoSeconds: null, templateAgoSeconds: null, lastTemplateHeight: null });
-  assert.match(row, /no heartbeat path configured/);
+  assert.match(row, /no heartbeat path/);
   assert.doesNotMatch(row, /\bmining\b/, "must not read as healthy");
   assert.doesNotMatch(row, /\boff\b/, "we have not established the miner is off");
 });
@@ -185,8 +185,8 @@ test("configured-but-unreadable and never-configured are different sentences", (
   const broken = minerRow({ ...base, state: "cannot-verify" });
   const never = minerRow({ ...base, state: "not-configured" });
   assert.notEqual(broken, never);
-  assert.match(broken, /configured but unreadable/);
-  assert.match(never, /no heartbeat path configured/);
+  assert.match(broken, /cannot read heartbeat/);
+  assert.match(never, /no heartbeat path/);
 });
 
 test("not-configured is still NOT active and still not silent", () => {
@@ -250,4 +250,54 @@ test("NULL IS NOT ZERO: a heartbeat predating the counter says nothing about win
 test("and an older reading renders exactly as it did before this change", () => {
   const before = minerRow(({ ...base,  state: "running", templateAgoSeconds: 8  }));
   assert.equal(before, minerRow(({ ...base,  state: "running", templateAgoSeconds: 8, solvedCount: null  })));
+});
+
+// ── A MINER SOMEONE STOPPED IS NOT A MINER THAT DIED (2026-09-08) ────────────────────
+//
+// The heartbeat alone cannot tell them apart: both are a file nobody writes. The panel
+// showed "NO HEARTBEAT for 14.5 h, miner state unknown" and "getblocktemplate failing,
+// 1975 in a row", in red, for hours, over a unit an operator had parked on purpose. The
+// box report now carries systemd's word for the unit, and these pin what it buys and,
+// just as much, what it must not.
+
+const stopped: MinerReading = { ...base, state: "not-writing", beatAgoSeconds: 14.5 * 3600, lastErrorStage: "getblocktemplate", consecutiveErrors: 1975 };
+
+test("a dead heartbeat plus an INACTIVE unit is off, calmly, in both places", () => {
+  assert.equal(minerChip(stopped, "inactive"), "off");
+  assert.match(minerRow(stopped, "inactive"), /\boff\b/);
+  assert.doesNotMatch(minerRow(stopped, "inactive"), /NO HEARTBEAT/);
+  assert.equal(minerIsBad(stopped, "inactive"), false, "parked must not be red, or red stops meaning anything");
+});
+
+test("and its frozen error count is not shown, because it is not a live fault", () => {
+  assert.equal(minerErrorRow(stopped, "inactive"), null);
+  assert.ok(minerErrorRow(stopped, "active"), "the same count under a unit systemd calls active IS a live fault");
+});
+
+test("a dead heartbeat plus a FAILED unit stays red and says so", () => {
+  assert.equal(minerChip(stopped, "failed"), "unit failed");
+  assert.match(minerRow(stopped, "failed"), /FAILED/);
+  assert.equal(minerIsBad(stopped, "failed"), true);
+});
+
+test("a dead heartbeat with the unit ACTIVE is the original wedged-writer alarm", () => {
+  assert.equal(minerChip(stopped, "active"), "no signal");
+  assert.match(minerRow(stopped, "active"), /NO HEARTBEAT/);
+  assert.equal(minerIsBad(stopped, "active"), true);
+});
+
+test("no word from systemd (an older box report) changes nothing: never off on no evidence", () => {
+  for (const unit of [null, undefined, "unknown"] as const) {
+    assert.equal(minerChip(stopped, unit), "no signal", `unit=${unit}`);
+    assert.doesNotMatch(minerRow(stopped, unit), /\boff\b/);
+    assert.equal(minerIsBad(stopped, unit), true);
+  }
+});
+
+test("the unit's word never overrides a heartbeat that IS being written", () => {
+  // A fresh heartbeat with systemd claiming inactive is a contradiction; the file is the
+  // primary evidence and the row must not go quiet on the word alone.
+  assert.equal(minerChip(base, "inactive"), "mining");
+  assert.equal(minerIsBad(base, "inactive"), false);
+  assert.doesNotMatch(minerRow({ ...base, state: "stalled", templateAgoSeconds: 900 }, "inactive"), /\boff\b/);
 });

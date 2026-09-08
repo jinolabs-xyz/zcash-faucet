@@ -391,3 +391,27 @@ bash "$BOX_REPORT" > "$T/sockthere.log" 2>&1
 present2="$(jqf "$BOX_REPORT_OUT" present)"
 check "and installing it raises present, so this is not a constant" \
   "[ \"$present2\" -gt \"$present\" ]"
+
+echo "== box-report: the miner UNIT's systemd state is reported, so a parked miner is not a dead one"
+# The heartbeat cannot tell "stopped on purpose" from "died": both are a file nobody
+# writes. On 2026-09-08 the panel showed NO HEARTBEAT in red for hours over a unit an
+# operator had parked deliberately. systemd knows the difference; this carries its word.
+box_env
+touch -d '2026-01-01 00:00:00' "$S/miner/src/main.rs"
+printf 'ELF-ish\n' > "$T/install/zcash-testnet-miner"
+export STUB_ACTIVE="$T/active"; : > "$STUB_ACTIVE"
+export STUB_FAILED="$T/failed"; : > "$STUB_FAILED"
+bash "$BOX_REPORT" > /dev/null 2>&1
+check "a unit systemd calls inactive is reported inactive" "[ \"\$(jqf '$BOX_REPORT_OUT' minerUnit)\" = 'inactive' ]"
+printf 'zcash-testnet-miner.service\n' > "$STUB_ACTIVE"
+bash "$BOX_REPORT" > /dev/null 2>&1
+check "an active unit is reported active" "[ \"\$(jqf '$BOX_REPORT_OUT' minerUnit)\" = 'active' ]"
+: > "$STUB_ACTIVE"; printf 'zcash-testnet-miner.service\n' > "$STUB_FAILED"
+bash "$BOX_REPORT" > /dev/null 2>&1
+check "a FAILED unit is reported failed, the one case that must stay red" "[ \"\$(jqf '$BOX_REPORT_OUT' minerUnit)\" = 'failed' ]"
+# The word, not the exit code: is-active exits 3 for inactive AND failed, and telling
+# those apart is the whole reason the field exists.
+unset STUB_ACTIVE STUB_FAILED
+bash "$BOX_REPORT" > /dev/null 2>&1
+check "systemctl saying nothing is unknown, never a calm inactive" "[ \"\$(jqf '$BOX_REPORT_OUT' minerUnit)\" = 'unknown' ]"
+check "and the rest of the report is untouched by it" "[ \"\$(jqf '$BOX_REPORT_OUT' readable)\" = 'True' ]"
