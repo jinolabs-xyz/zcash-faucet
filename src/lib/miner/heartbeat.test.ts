@@ -28,6 +28,7 @@ const HEALTHY: Heartbeat = {
   lastSolvedAt: null,
   nodeLag: 0,
   waitingSince: null,
+  waitingReason: null,
 };
 
 test("TODAY'S OUTAGE: beating every 5s while no template has arrived in 70 minutes", () => {
@@ -188,4 +189,17 @@ test("a waitingSince in the future is not a wait, it is an unreadable stamp", ()
   const r = readingFor({ ...HEALTHY, waitingSince: ago(-30) }, NOW);
   assert.equal(r.state, "running");
   assert.equal(r.waitingAgoSeconds, null);
+});
+
+test("a wait beside a non-zero error count is a STALL, the same verdict the watchdog reaches", () => {
+  // The writer clears the wait on any error; an older writer might not. Both readers
+  // must agree, or the panel says "waiting" while the watchdog restarts the miner.
+  const r = readingFor({ ...HEALTHY, lastTemplateAt: ago(3600), waitingSince: ago(1800), consecutiveErrors: 4000, lastErrorStage: "getblockchaininfo" }, NOW);
+  assert.equal(r.state, "stalled");
+});
+
+test("the reason rides along, and an empty or non-string reason is null", () => {
+  assert.equal(readingFor({ ...HEALTHY, lastTemplateAt: ago(3600), waitingSince: ago(60), waitingReason: "no-peers" }, NOW).waitingReason, "no-peers");
+  assert.equal(readingFor({ ...HEALTHY, waitingReason: "" }, NOW).waitingReason, null);
+  assert.equal(readingFor({ ...HEALTHY, waitingReason: 7 as never }, NOW).waitingReason, null);
 });

@@ -40,6 +40,7 @@ export function readingFromStatus(m: (Partial<MinerReading> & { active?: boolean
     solvedAgoSeconds: m?.solvedAgoSeconds ?? null,
     nodeLag: m?.nodeLag ?? null,
     waitingAgoSeconds: m?.waitingAgoSeconds ?? null,
+    waitingReason: m?.waitingReason ?? null,
   };
 }
 
@@ -168,8 +169,11 @@ export function minerRow(r: MinerReading, unit: MinerUnit = null): string {
     // is doing the one thing that keeps it off a fork. The age says how long the node has
     // been behind, which is the number an operator actually wants.
     case "waiting": {
-      const behind = r.nodeLag != null ? `node ${groupDigits(r.nodeLag)} blocks behind` : "node behind";
       const since = r.waitingAgoSeconds != null ? ` for ${humanAge(r.waitingAgoSeconds)}` : "";
+      // An isolated node sits at its OWN tip, so its lag is ~0 and "0 blocks behind" would
+      // be nonsense beside a green node row. The reason is the finding here.
+      if (r.waitingReason === "no-peers") return `waiting, node has NO PEERS${since}`;
+      const behind = r.nodeLag != null ? `node ${groupDigits(r.nodeLag)} blocks behind` : "node behind";
       return `waiting, ${behind}${since}`;
     }
 
@@ -226,8 +230,12 @@ export function minerErrorRow(r: MinerReading, unit: MinerUnit = null): string |
  * and must not be red, or red stops meaning anything; everything else is a finding.
  */
 export function minerIsBad(r: MinerReading, unit: MinerUnit = null): boolean {
-  // Waiting is the guard working. The node row is where a node that is behind reads red;
-  // marking the miner too would teach a reader that two rows go red for one fault.
-  if (r.state === "running" || r.state === "waiting") return false;
+  if (r.state === "running") return false;
+  // Waiting because the node is behind is the guard working, and the node row is where a
+  // node that is behind reads red; marking the miner too would teach a reader that two
+  // rows go red for one fault. Waiting because the node has NO PEERS is different: an
+  // isolated node sits at its own tip, the node row stays green, and this row is the
+  // only place the fault can show.
+  if (r.state === "waiting") return r.waitingReason === "no-peers";
   return !parked(r, unit);
 }

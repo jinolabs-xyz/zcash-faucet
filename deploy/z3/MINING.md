@@ -96,11 +96,16 @@ the finalized state.
 What it cannot see, plainly: `estimatedheight` extrapolates from the tip's
 timestamp, so a fork that we ourselves keep extending has a fresh tip and a
 small lag. The guard catches a node left behind (initial sync, a stall, a fork
-nobody extends) and a node with no peers; it does not catch the fork we are
-mining. That needs a view of the network the node does not have, and it is the
-watchdog's job: its node heal stops the miner outright for the episode, writes
-that down so its own restart cannot forget it, and starts the miner again once
-the tip is seen moving.
+nobody extends) and a node with no peers, which is how most forks start; it
+does not catch a fork we are extending at pace. Neither does the watchdog's
+node heal, which reads the same two fields and fires only when the tip stops
+advancing. What stopped the 2026-09-07 fork from being extended at pace was
+that a single core cannot keep a fork's tip fresh until its difficulty has
+fallen for hours: our hashrate, not a mechanism. A guard that sees such a fork
+needs the network's tip, which only the app has (`externalTip.ts`); wiring
+that into the watchdog is a separate change. The watchdog's node heal does
+stop the miner outright for the episode, writes that down so its own restart
+cannot forget it, and starts the miner again once the tip is seen moving.
 
 ## Build and install
 

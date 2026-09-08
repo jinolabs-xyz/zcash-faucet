@@ -262,9 +262,17 @@ recover_if_down() {
 # One string field out of the miner heartbeat, empty if absent or JSON null. grep, not a
 # json parser, because the watchdog carries no such dependency and the heartbeat is our
 # own flat object, one field per line.
-hb_field() { grep -o "\"$1\":\"[^\"]*\"" "$MINER_HEARTBEAT" 2>/dev/null | head -n1 | cut -d'"' -f4; }
+# THE WRITER PUTS A SPACE AFTER THE COLON. The miner renders `"writtenAt": "..."` (pinned
+# byte-for-byte by deploy/z3/miner/testdata/heartbeat.canonical.json), and these two
+# readers required `"writtenAt":"..."`. Every field read as empty, written_age was empty,
+# and heal_miner_if_stalled returned on its first check on every sweep: step 6 had been
+# dead since it shipped, including the 2026-08-18 wedge it was written for. The suite hid
+# it with compact fixtures the miner never writes; it now writes the real shape.
+hb_field() { grep -o "\"$1\":[[:space:]]*\"[^\"]*\"" "$MINER_HEARTBEAT" 2>/dev/null | head -n1 | sed -E 's/^"[^"]*":[[:space:]]*"//; s/"$//'; }
 # A numeric field, empty when absent or null. The guard writes nodeLag as a bare integer.
-hb_num() { grep -o "\"$1\":[0-9]*" "$MINER_HEARTBEAT" 2>/dev/null | head -n1 | cut -d: -f2; }
+# At least one digit: `[0-9]*` matched zero of them, so a null or unreadable count came
+# back empty and `${errs:-0}` read that as the permissive 0.
+hb_num() { grep -o "\"$1\":[[:space:]]*[0-9][0-9]*" "$MINER_HEARTBEAT" 2>/dev/null | head -n1 | sed -E 's/.*:[[:space:]]*//'; }
 
 # Age in seconds of an ISO-8601 Zulu timestamp, or empty if it is absent or will not
 # parse. Empty is deliberately different from a large number: "no timestamp" is not
@@ -306,7 +314,7 @@ heal_miner_if_stalled() {
   # The writer clears waitingSince on any RPC error, so a wedged connection cannot wear the
   # waiting label; consecutiveErrors is checked here too, so an older writer cannot either.
   local waiting_since errs; waiting_since="$(hb_field waitingSince)"; errs="$(hb_num consecutiveErrors)"
-  if [ -n "$waiting_since" ] && [ "${errs:-0}" = "0" ]; then
+  if [ -n "$waiting_since" ] && [ "${errs:-unreadable}" = "0" ]; then
     if [ "$miner_waiting_logged" = "0" ]; then
       local lagn; lagn="$(hb_num nodeLag)"
       log "miner is waiting for the node (${lagn:-?} blocks behind); not a stall, leaving it alone"

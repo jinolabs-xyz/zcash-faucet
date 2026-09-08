@@ -54,6 +54,7 @@ test("the writer's WAITING bytes read as waiting, with the lag and the wait age"
   const r = readMinerHeartbeat(WAITING_FIXTURE, WRITTEN_AT + 5_000);
   assert.equal(r.state, "waiting", `expected waiting, got ${r.state}`);
   assert.equal(r.nodeLag, 1443);
+  assert.equal(r.waitingReason, "behind");
   // waitingSince is 23:40:00, writtenAt 00:00:00, read at +5 s.
   assert.equal(r.waitingAgoSeconds, 20 * 60 + 5);
   // Its template is 20 minutes stale, which alone would read as stalled: the wait wins.
@@ -121,6 +122,7 @@ const CONSUMED = [
   // nodeLag is the number that state's row shows.
   "nodeLag",
   "waitingSince",
+  "waitingReason",
 ];
 
 const KNOWINGLY_IGNORED: Record<string, string> = {

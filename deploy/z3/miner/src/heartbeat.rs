@@ -63,6 +63,11 @@ pub struct State {
     /// again. A reader that sees this beside a stale lastTemplateAt is looking at a miner
     /// that is idle ON PURPOSE, which is neither stalled nor running.
     pub waiting_since: Option<u64>,
+    /// WHY it is waiting, as a fixed token: "behind" (the lag guard) or "no-peers". A
+    /// node with no peers sits at its own tip with lag ~0, so without this the panel read
+    /// "waiting, node 0 blocks behind", the node row stayed green, and nothing said the
+    /// one thing that mattered. Fixed tokens, never the RPC's text: this file is public.
+    pub waiting_reason: Option<&'static str>,
 }
 
 impl State {
@@ -84,6 +89,7 @@ impl State {
         // honours a wait, would never restart it: the 18-hour silence of 2026-08-18 with a
         // calmer label. Only a node that answered and was behind is waiting.
         self.waiting_since = None;
+        self.waiting_reason = None;
     }
 
     pub fn solved(&mut self) {
@@ -91,16 +97,21 @@ impl State {
         self.last_solved_at = Some(now());
     }
 
-    /// The sync guard's reading. `waiting` starts the wait clock once and leaves it running
-    /// across polls; a mineable node clears it.
-    pub fn node_lag(&mut self, lag: u64, waiting: bool) {
+    /// The sync guard's reading. `waiting` names the reason and starts the wait clock
+    /// once, leaving it running across polls; a mineable node (None) clears both.
+    pub fn node_lag(&mut self, lag: u64, waiting: Option<&'static str>) {
         self.node_lag = Some(lag);
-        if waiting {
-            if self.waiting_since.is_none() {
-                self.waiting_since = Some(now());
+        match waiting {
+            Some(reason) => {
+                if self.waiting_since.is_none() {
+                    self.waiting_since = Some(now());
+                }
+                self.waiting_reason = Some(reason);
             }
-        } else {
-            self.waiting_since = None;
+            None => {
+                self.waiting_since = None;
+                self.waiting_reason = None;
+            }
         }
     }
 
@@ -189,7 +200,8 @@ pub fn render(s: &State) -> String {
             "  \"submittedRejected\": {},\n",
             "  \"lastSubmittedAt\": {},\n",
             "  \"nodeLag\": {},\n",
-            "  \"waitingSince\": {}\n",
+            "  \"waitingSince\": {},\n",
+            "  \"waitingReason\": {}\n",
             "}}\n"
         ),
         SCHEMA,
@@ -216,6 +228,9 @@ pub fn render(s: &State) -> String {
         ts(s.last_submitted_at),
         num(s.node_lag),
         ts(s.waiting_since),
+        s.waiting_reason
+            .map(|v| format!("\"{v}\""))
+            .unwrap_or_else(|| "null".into()),
     )
 }
 
@@ -484,24 +499,30 @@ mod contract {
     #[test]
     fn an_rpc_error_ends_a_wait_so_a_wedged_miner_cannot_read_as_waiting() {
         let mut s = State::default();
-        s.node_lag(1_443, true);
+        s.node_lag(1_443, Some("behind"));
         assert!(s.waiting_since.is_some());
         for _ in 0..10_000 {
             s.error("getblockchaininfo");
         }
         assert_eq!(s.waiting_since, None, "10,000 failed calls must not leave the miner labelled as waiting on purpose");
+        assert_eq!(s.waiting_reason, None);
         assert_eq!(s.node_lag, Some(1_443), "the last measured lag is still a fact worth showing");
     }
 
     #[test]
     fn a_new_wait_starts_the_clock_once_and_a_mineable_node_clears_it() {
         let mut s = State::default();
-        s.node_lag(120, true);
+        s.node_lag(120, Some("behind"));
         let started = s.waiting_since;
-        s.node_lag(121, true);
+        s.node_lag(121, Some("behind"));
         assert_eq!(s.waiting_since, started, "the wait clock is not reset every poll");
-        s.node_lag(3, false);
+        // The reason can change without restarting the clock: behind, then isolated.
+        s.node_lag(0, Some("no-peers"));
+        assert_eq!(s.waiting_since, started);
+        assert_eq!(s.waiting_reason, Some("no-peers"));
+        s.node_lag(3, None);
         assert_eq!(s.waiting_since, None);
+        assert_eq!(s.waiting_reason, None);
     }
 
     /// THE SECOND SHARED FIXTURE, the waiting shape. The canonical one keeps
@@ -512,6 +533,7 @@ mod contract {
     fn the_writer_still_produces_the_waiting_fixture_byte_for_byte() {
         let mut st = canonical_state();
         st.node_lag = Some(1_443);
+        st.waiting_reason = Some("behind");
         st.waiting_since = Some(1_785_022_800); // 2026-07-25T23:40:00Z, 20 min before writtenAt
         st.last_template_at = Some(1_785_022_792); // the last template, just before the wait began
         let rendered = render(&st);
@@ -570,6 +592,7 @@ mod contract {
             // waitingSince makes the reader classify the fixture as WAITING, and the seam
             // test needs the canonical moment to be a miner that is running.
             waiting_since: None,
+            waiting_reason: None,
         }
     }
 

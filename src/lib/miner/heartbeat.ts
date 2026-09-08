@@ -76,6 +76,8 @@ export interface Heartbeat {
   nodeLag: number | null;
   /** Set while the sync guard holds the miner back; null the moment it mines again. */
   waitingSince: string | null;
+  /** Why: "behind" (lag over MINER_MAX_LAG) or "no-peers" (an isolated node). */
+  waitingReason: string | null;
 }
 
 export interface MinerReading {
@@ -101,6 +103,8 @@ export interface MinerReading {
   nodeLag: number | null;
   /** Seconds the sync guard has been holding the miner back; null when it is not. */
   waitingAgoSeconds: number | null;
+  /** "behind" or "no-peers" while waiting; anything else the writer says is kept as text. */
+  waitingReason: string | null;
 }
 
 const NOTHING = {
@@ -116,6 +120,7 @@ const NOTHING = {
   solvedAgoSeconds: null,
   nodeLag: null,
   waitingAgoSeconds: null,
+  waitingReason: null,
 } as const;
 
 /** No heartbeat path configured, so this app was never asked to look. */
@@ -190,6 +195,7 @@ export function readingFor(raw: unknown, nowMs: number): MinerReading {
     solvedAgoSeconds: ageSeconds(h.lastSolvedAt, nowMs),
     nodeLag: typeof h.nodeLag === "number" && Number.isFinite(h.nodeLag) && h.nodeLag >= 0 ? h.nodeLag : null,
     waitingAgoSeconds: ageSeconds(h.waitingSince, nowMs),
+    waitingReason: typeof h.waitingReason === "string" && h.waitingReason ? h.waitingReason : null,
   };
 
   if (beatAgo > staleAfter) return { ...facts, state: "not-writing" };
@@ -199,7 +205,13 @@ export function readingFor(raw: unknown, nowMs: number): MinerReading {
   // calling that stalled would send someone to fix a miner that is behaving. It is judged
   // AFTER not-writing for the same reason as everything else: a stale file testifies to
   // nothing, including this.
-  if (facts.waitingAgoSeconds != null) return { ...facts, state: "waiting" };
+  //
+  // AND ONLY BESIDE A CLEAN ERROR COUNT. The writer clears the wait on any RPC error, but
+  // an older writer might not, and the watchdog applies the same rule: a wait beside a
+  // non-zero consecutiveErrors is a wedged connection wearing a calm label, and both
+  // readers must call that the stall it is, or the panel says "waiting" while the
+  // watchdog restarts it.
+  if (facts.waitingAgoSeconds != null && (facts.consecutiveErrors ?? 0) === 0) return { ...facts, state: "waiting" };
 
   // Null means the miner has never fetched a template. That is not "running and we
   // have no data yet", it is a miner that has never done the one thing it exists to

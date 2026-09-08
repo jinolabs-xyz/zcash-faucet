@@ -205,10 +205,14 @@ _ago_z() { date -u -d "$1 seconds ago" +%Y-%m-%dT%H:%M:%SZ; }
 
 # Write a heartbeat: writtenAt/startedAt/lastTemplateAt as ages in seconds. A
 # lastTemplateAt of "none" is emitted as JSON null (the miner has never templated).
+# IN THE WRITER'S REAL SHAPE: one field per line, a space after the colon, matching
+# deploy/z3/miner/testdata/heartbeat.canonical.json. The first version of this helper wrote
+# compact JSON the miner never produces, the watchdog's parser only understood compact, and
+# so a suite that was green proved nothing about the box: step 6 was dead there for weeks.
 miner_hb() {
   local lt
   if [ "$3" = "none" ]; then lt='null'; else lt="\"$(_ago_z "$3")\""; fi
-  printf '{"schema":1,"writtenAt":"%s","startedAt":"%s","lastTemplateAt":%s,"lastTemplateHeight":4282310}\n' \
+  printf '{\n  "schema": 1,\n  "writtenAt": "%s",\n  "startedAt": "%s",\n  "lastTemplateAt": %s,\n  "lastTemplateHeight": 4282310,\n  "consecutiveErrors": 0,\n  "nodeLag": 0,\n  "waitingSince": null,\n  "waitingReason": null\n}\n' \
     "$(_ago_z "$1")" "$(_ago_z "$2")" "$lt" > "$T/heartbeat.json"
 }
 
@@ -439,7 +443,7 @@ check "does nothing when disabled, even on a real stall" "! grep -q 'docker rest
 # A heartbeat from a miner whose sync guard is holding it back: fresh beat, stale template,
 # waitingSince set, nodeLag saying by how much.
 miner_hb_waiting() { # $1 waiting for N seconds, $2 lag
-  printf '{"schema":1,"writtenAt":"%s","startedAt":"%s","lastTemplateAt":"%s","lastTemplateHeight":4282310,"nodeLag":%s,"waitingSince":"%s"}\n' \
+  printf '{\n  "schema": 1,\n  "writtenAt": "%s",\n  "startedAt": "%s",\n  "lastTemplateAt": "%s",\n  "lastTemplateHeight": 4282310,\n  "consecutiveErrors": 0,\n  "nodeLag": %s,\n  "waitingSince": "%s",\n  "waitingReason": "behind"\n}\n' \
     "$(_ago_z 5)" "$(_ago_z 7200)" "$(_ago_z 3600)" "$2" "$(_ago_z "$1")" > "$T/heartbeat.json"
 }
 
@@ -457,10 +461,29 @@ echo "== watchdog: a WAITING label beside a failing RPC is not honoured, it is t
 # The writer clears waitingSince on any error, but an older writer might not, and a wedged
 # connection with a stale "waiting" label would otherwise never be restarted again.
 wd_miner_env
-printf '{"schema":1,"writtenAt":"%s","startedAt":"%s","lastTemplateAt":"%s","lastTemplateHeight":4282310,"nodeLag":51,"waitingSince":"%s","consecutiveErrors":4000,"lastErrorStage":"getblockchaininfo"}\n' \
+printf '{\n  "schema": 1,\n  "writtenAt": "%s",\n  "startedAt": "%s",\n  "lastTemplateAt": "%s",\n  "lastTemplateHeight": 4282310,\n  "consecutiveErrors": 4000,\n  "lastErrorStage": "getblockchaininfo",\n  "nodeLag": 51,\n  "waitingSince": "%s",\n  "waitingReason": "behind"\n}\n' \
   "$(_ago_z 5)" "$(_ago_z 7200)" "$(_ago_z 3600)" "$(_ago_z 1800)" > "$T/heartbeat.json"
 wd_run 1
 check "a miner whose RPC is failing is restarted even though it claims to be waiting" "grep -q 'systemctl restart zcash-testnet-miner' '$STUB_LOG'"
+
+echo "== watchdog: a WAITING label with NO error count at all is not honoured either"
+# An older writer without consecutiveErrors, or a corrupt line. Unreadable must not be
+# read as zero, or the gate that guards the wait fails open.
+wd_miner_env
+printf '{\n  "schema": 1,\n  "writtenAt": "%s",\n  "startedAt": "%s",\n  "lastTemplateAt": "%s",\n  "lastTemplateHeight": 4282310,\n  "waitingSince": "%s"\n}\n' \
+  "$(_ago_z 5)" "$(_ago_z 7200)" "$(_ago_z 3600)" "$(_ago_z 1800)" > "$T/heartbeat.json"
+wd_run 1
+check "restarted: a wait without a readable error count is a stall" "grep -q 'systemctl restart zcash-testnet-miner' '$STUB_LOG'"
+
+echo "== watchdog: THE REAL FIXTURE. The miner's own canonical bytes are read as a live miner"
+# The seam test for the shell reader: the bytes the Rust writer is pinned to. If these read
+# as empty, every miner check above is running against a shape the box never has.
+wd_miner_env
+sed "s/\"writtenAt\": \"[^\"]*\"/\"writtenAt\": \"$(_ago_z 5)\"/; s/\"lastTemplateAt\": \"[^\"]*\"/\"lastTemplateAt\": \"$(_ago_z 3600)\"/; s/\"startedAt\": \"[^\"]*\"/\"startedAt\": \"$(_ago_z 7200)\"/" \
+  "$REPO/deploy/z3/miner/testdata/heartbeat.canonical.json" > "$T/heartbeat.json"
+wd_run 1
+check "the canonical fixture, aged into a stall, is restarted: the parser reads the writer's real format" "grep -q 'systemctl restart zcash-testnet-miner' '$STUB_LOG'"
+check "and compact JSON still reads too, for any hand-written file" "printf '{\"schema\":1,\"writtenAt\":\"%s\",\"startedAt\":\"%s\",\"lastTemplateAt\":\"%s\"}' \"\$(_ago_z 5)\" \"\$(_ago_z 7200)\" \"\$(_ago_z 3600)\" > '$T/heartbeat.json'; : > '$STUB_LOG'; wd_run 1; grep -q 'systemctl restart zcash-testnet-miner' '$STUB_LOG'"
 
 echo "== watchdog: the same heartbeat WITHOUT waitingSince is still the stall it always was"
 # The mirror: if this did not restart, the waiting check would be swallowing every stall.

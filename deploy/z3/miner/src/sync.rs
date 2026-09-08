@@ -24,11 +24,14 @@
 //! TIMESTAMP, so a fork that we ourselves keep extending at a normal pace has a fresh tip
 //! and a small lag: the guard is blind to exactly the fork it is mining. What it does
 //! catch is the node being LEFT BEHIND: initial sync, a stalled node, a fork nobody
-//! extends. Catching the fork we extend needs a view of the network our node does not
-//! have (the app's external tip), and that is the watchdog's job: it stops this miner
-//! outright for a node-heal episode. The second guard below, no peers, catches the
-//! other 2026-08 shape: a node with no peers believes it is at the tip and mines a fork
-//! of genesis within seconds.
+//! extends. The watchdog's node heal reads the SAME two fields and fires only when the
+//! tip stops advancing, so it is blind in the same way. What actually stopped the
+//! 2026-09-07 fork from being extended at pace was that a single core cannot keep a
+//! fork's tip fresh until its difficulty has fallen for hours, and that is our hashrate,
+//! not a mechanism. The second guard below, no peers, catches the isolation that starts
+//! most forks: a node with no peers believes it is at the tip and mines a fork of it
+//! within seconds. A guard that sees the fork we extend needs the network's tip, which
+//! only the app has (externalTip.ts); wiring that into the watchdog is a separate change.
 //!
 //! FAILS CLOSED. No answer, no `blocks`, no `estimatedheight`, a non-integer: the miner
 //! does not mine. A node whose sync state cannot be read is a node whose tip cannot be

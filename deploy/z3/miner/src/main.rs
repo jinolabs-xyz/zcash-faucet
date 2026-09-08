@@ -350,12 +350,26 @@ fn mine_once(rpc: &Rpc, config: &Config, hb: &Arc<Mutex<heartbeat::State>>) -> R
     // and submitted into the rewound node is exactly how a wedged tip "comes straight
     // back". A solved block is discarded rather than submitted into a node that is no
     // longer where it was.
-    if let Some(why) = sync_guard(rpc, config, hb)? {
-        log(&format!(
-            "height {}: solved block DISCARDED, the node moved under us before submit: {why}",
-            t.height
-        ));
-        return Ok(Outcome::Waiting { why });
+    match sync_guard(rpc, config, hb) {
+        Ok(None) => {}
+        Ok(Some(why)) => {
+            log(&format!(
+                "height {}: solved block DISCARDED, the node moved under us before submit: {why}",
+                t.height
+            ));
+            return Ok(Outcome::Waiting { why });
+        }
+        Err(e) => {
+            // Still fail closed, and still say so: a node that cannot be re-read a minute
+            // after it was fine is more likely a blip than a fork, and this is the one
+            // place a won block is lost, so the journal must record the loss, not just
+            // "error".
+            log(&format!(
+                "height {}: solved block DISCARDED, the node could not be re-checked before submit: {e}",
+                t.height
+            ));
+            return Err(e);
+        }
     }
 
     // null from submitblock means accepted, anything else is a rejection
@@ -397,7 +411,7 @@ fn sync_guard(rpc: &Rpc, config: &Config, hb: &Arc<Mutex<heartbeat::State>>) -> 
     match verdict {
         sync::Verdict::Wait { lag, blocks, estimated } => {
             if let Ok(mut g) = hb.lock() {
-                g.node_lag(lag, true);
+                g.node_lag(lag, Some("behind"));
             }
             Ok(Some(format!(
                 "node is {lag} blocks behind its own estimate (verified {blocks}, estimated {estimated}); mining resumes within {} (MINER_MAX_LAG)",
@@ -406,13 +420,13 @@ fn sync_guard(rpc: &Rpc, config: &Config, hb: &Arc<Mutex<heartbeat::State>>) -> 
         }
         sync::Verdict::Mine { lag } if alone => {
             if let Ok(mut g) = hb.lock() {
-                g.node_lag(lag, true);
+                g.node_lag(lag, Some("no-peers"));
             }
             Ok(Some("node has NO PEERS; a node with no peers believes it is at the tip and mines a fork of it".into()))
         }
         sync::Verdict::Mine { lag } => {
             if let Ok(mut g) = hb.lock() {
-                g.node_lag(lag, false);
+                g.node_lag(lag, None);
             }
             Ok(None)
         }
