@@ -106,5 +106,28 @@ case "${1:-}" in
     [ -f "$lf" ] && cat "$lf"
     exit 0
     ;;
+  restart)
+    shift
+    [ -f "${STUB_CONTAINERS:?}/$1" ] || { echo "no such container: $1" >&2; exit 1; }
+    echo running > "${STUB_CONTAINERS:?}/$1"
+    echo "$1"
+    ;;
+  exec)
+    # docker exec <container> ... : the only exec in the stack is the watchdog asking
+    # zebra's JSON-RPC for getblockchaininfo. Answer from STUB_ZEBRA_BLOCKS and
+    # STUB_ZEBRA_EST. STUB_ZEBRA_ADVANCE=1 raises blocks by one per call through a counter
+    # file, so a "syncing" node advances across the sweeps of one run. STUB_ZEBRA_BLOCKS
+    # unset models an RPC that will not answer, which keeps every suite that never set it
+    # exactly as it was.
+    [ -n "${STUB_ZEBRA_BLOCKS:-}" ] || exit 1
+    b="$STUB_ZEBRA_BLOCKS"
+    if [ "${STUB_ZEBRA_ADVANCE:-0}" = "1" ]; then
+      cf="${STUB_ZEBRA_COUNTER:?}"
+      n=0; [ -f "$cf" ] && n="$(cat "$cf")"
+      n=$((n + 1)); echo "$n" > "$cf"
+      b=$((b + n))
+    fi
+    printf '{"result":{"chain":"test","blocks":%s,"estimatedheight":%s},"error":null,"id":"watchdog"}\n' "$b" "${STUB_ZEBRA_EST:-$b}"
+    ;;
   *) echo "stub docker: unsupported: $*" >&2; exit 64 ;;
 esac

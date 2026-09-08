@@ -62,6 +62,25 @@ MINER_HEARTBEAT_FRESH_SECS="${WATCHDOG_MINER_HEARTBEAT_FRESH_SECS:-60}" # older 
 MINER_START_GRACE_SECS="${WATCHDOG_MINER_START_GRACE_SECS:-120}"  # just (re)started: give it time to fetch its first template
 MINER_HEAL_MAX="${WATCHDOG_MINER_HEAL_MAX:-3}"               # then page instead of restart-looping the miner
 
+# Node sync-stall recovery (step 7). Zebra can sit on one tip while the network moves on:
+# a self-mined block briefly forks it, or, far more often here, a thin and flaky testnet
+# peer set stops serving blocks and zebra's own 67s sync-restart loop never recovers. The
+# container stays "running", so steps 1-2 never fire, and step 4 only pages after the
+# grace window. 2026-09-07: the node sat 300-1400 blocks behind, frozen, and the gate
+# correctly refused every drip for over an hour until a human restarted zebra by hand.
+# Twice in one day. This is that hand.
+NODE_HEAL_ENABLED="${WATCHDOG_NODE_HEAL_ENABLED:-1}"
+NODE_LAG_LIMIT="${WATCHDOG_NODE_LAG_LIMIT:-50}"                 # blocks behind before a stuck tip counts as a stall
+NODE_STALL_SECS="${WATCHDOG_NODE_STALL_SECS:-300}"              # behind AND tip unmoved this long = wedged
+NODE_HEAL_MAX="${WATCHDOG_NODE_HEAL_MAX:-5}"                    # restarts before paging instead
+NODE_CLEAR_CACHE_AFTER="${WATCHDOG_NODE_CLEAR_CACHE_AFTER:-2}"  # from this attempt on, also drop the peer cache
+NODE_DROP_NONFINAL_AFTER="${WATCHDOG_NODE_DROP_NONFINAL_AFTER:-3}" # from this attempt on, also drop the non-finalized state
+ZEBRA_CHAIN_VOLUME="${WATCHDOG_ZEBRA_CHAIN_VOLUME:-z3-testnet-chain}"
+node_last_height=0
+node_stall_since=0
+node_heal_attempts=0
+alerted_node_giveup=0
+
 # 0 = loop forever (production). Tests set this to run an exact number of sweeps.
 MAX_TICKS="${WATCHDOG_MAX_TICKS:-0}"
 
@@ -278,6 +297,121 @@ heal_miner_if_stalled() {
   fi
 }
 
+# "<blocks> <estimatedheight>" straight from zebra's own JSON-RPC, or nothing if it will
+# not answer. Read from the node rather than the faucet app, because the watchdog often
+# cannot reach the app at all (it publishes no host port), and the app is itself gated on
+# the node, so asking it about the node is circular. No jq: two integers out of a flat
+# reply with sed. A missing estimate is not evidence we are behind, so it collapses to
+# "at the tip" and the caller does nothing.
+zebra_chain_heights() {
+  local name="$1" out blocks est
+  [ -n "$name" ] || return 0
+  out="$(docker exec "$name" sh -lc 'CK=$(cat /run/auth/.cookie 2>/dev/null || cat /var/run/auth/.cookie 2>/dev/null); curl -s --max-time 10 -u "$CK" --data-binary "{\"jsonrpc\":\"1.0\",\"id\":\"watchdog\",\"method\":\"getblockchaininfo\",\"params\":[]}" -H content-type:text/plain http://127.0.0.1:18232/' 2>/dev/null)" || return 0
+  blocks="$(printf '%s' "$out" | sed -n 's/.*"blocks":\([0-9][0-9]*\).*/\1/p' | head -n1)"
+  est="$(printf '%s' "$out" | sed -n 's/.*"estimatedheight":\([0-9][0-9]*\).*/\1/p' | head -n1)"
+  case "$blocks" in ''|*[!0-9]*) return 0 ;; esac
+  case "$est" in ''|*[!0-9]*) est="$blocks" ;; esac
+  printf '%s %s' "$blocks" "$est"
+}
+
+# STEP 7: NODE SYNC-STALL RECOVERY. Two facts together, because either alone lies. A node
+# AT the tip also stops advancing between blocks (testnet spacing is minutes), so "tip not
+# moving" on its own would bounce a healthy idle node. And a node that is behind but still
+# advancing is catching up by itself, so "behind" on its own would restart the one thing a
+# restart can only slow down. Only behind AND stuck, for NODE_STALL_SECS, is a real wedge.
+#
+# "Advancing" is judged against the PREVIOUS sweep, not against where it was before a
+# heal. A restart drops the non-finalized tip by up to ~100 blocks, and if that drop
+# counted as movement the budget would reset on every restart and this would bounce zebra
+# forever without ever escalating. Only a height higher than last sweep's is progress.
+#
+# ESCALATES, then GIVES UP. A plain restart re-rolls the peer set and usually clears it.
+# If it stalls again, the later heals also drop the stale peer cache before restarting,
+# which is the manual fix that actually worked on 2026-09-07. After NODE_HEAL_MAX it pages
+# instead of restart-looping, because by then zebra is not the thing that is wrong.
+#
+# If the RPC will not answer, that is a different failure (steps 1-2 and the pager), not
+# evidence of a stall, so this asserts nothing.
+heal_node_if_stalled() {
+  [ "$NODE_HEAL_ENABLED" = "1" ] || return 0
+  local name="$1"
+  [ -n "$name" ] || return 0
+
+  local heights blocks est prev now lag
+  heights="$(zebra_chain_heights "$name")"
+  [ -n "$heights" ] || return 0
+  blocks="${heights%% *}"; est="${heights##* }"
+  prev="$node_last_height"; node_last_height="$blocks"
+  now="$(date -u +%s)"
+  lag=$(( est - blocks )); [ "$lag" -lt 0 ] && lag=0
+
+  # Higher than last sweep: syncing, or at the tip and a block just landed. Healthy, so
+  # clear every bit of stall state and the next episode gets a full budget.
+  if [ "$blocks" -gt "$prev" ]; then
+    if [ "$node_stall_since" != "0" ] || [ "$node_heal_attempts" != "0" ]; then
+      log "zebra tip advancing again (height $blocks, ${lag} behind); node-stall state cleared"
+    fi
+    node_stall_since=0; node_heal_attempts=0; alerted_node_giveup=0
+    return 0
+  fi
+
+  # Not higher, but essentially at the tip: normal idle between blocks, not a stall.
+  if [ "$lag" -le "$NODE_LAG_LIMIT" ]; then
+    node_stall_since=0
+    return 0
+  fi
+
+  # Behind and not moving. Start the stall clock, or keep it running.
+  [ "$node_stall_since" = "0" ] && node_stall_since="$now"
+  local stalled_for=$(( now - node_stall_since ))
+  [ "$stalled_for" -ge "$NODE_STALL_SECS" ] || return 0
+
+  local n=$(( node_heal_attempts + 1 ))
+  if [ "$n" -gt "$NODE_HEAL_MAX" ]; then
+    if [ "$alerted_node_giveup" = "0" ]; then
+      alert "zebra STILL ${lag} blocks behind after $NODE_HEAL_MAX restart(s) - not retrying. Restarting, clearing peers and dropping the non-finalized state did not move it, so it is likely on a fork PAST the finalized tip, which nothing here can undo: compare getblockhash against an explorer and reimport a snapshot (deploy/z3/SNAPSHOTS.md). Needs a human."
+      alerted_node_giveup=1
+    fi
+    return 0
+  fi
+  node_heal_attempts="$n"
+
+  if [ "$n" -ge "$NODE_CLEAR_CACHE_AFTER" ]; then
+    # Both live on the chain volume: the peer cache at network/<net>.peers, and the
+    # non-finalized state backup at non_finalized_state/. Stop FIRST: zebra rewrites both
+    # on shutdown, so a delete before the stop is undone by the stop.
+    local mp what
+    mp="$(docker volume inspect "$ZEBRA_CHAIN_VOLUME" -f '{{.Mountpoint}}' 2>/dev/null || echo '')"
+    log "zebra stalled ${stalled_for}s at height $blocks (${lag} behind); clearing state and restarting ($n/$NODE_HEAL_MAX)"
+    docker stop "$name" >/dev/null 2>&1
+    if [ -n "$mp" ]; then
+      rm -f "$mp"/network/*.peers 2>/dev/null
+      what="cleared the peer cache"
+      if [ "$n" -ge "$NODE_DROP_NONFINAL_AFTER" ]; then
+        # The last resort short of a human. The non-finalized backup is the last ~100
+        # blocks and zebra restores it on every boot, so a wedged or forked tip inside it
+        # comes straight back with every restart: on 2026-09-07 six plain restarts moved
+        # the tip by nothing. Dropping it rewinds to the finalized tip, which is canonical
+        # and never more than ~100 blocks back, and re-syncs forward. No keys live here;
+        # zebra holds none. This is what finally cleared it that day.
+        rm -rf "$mp/non_finalized_state" 2>/dev/null
+        what="cleared the peer cache and dropped the non-finalized state"
+      fi
+    else
+      log "WARNING: cannot find volume $ZEBRA_CHAIN_VOLUME; restarting without clearing anything"
+      what="could not find the chain volume, so only restarted"
+    fi
+    docker start "$name" >/dev/null 2>&1
+    alert "zebra was ${lag} blocks behind and stuck for ${stalled_for}s; $what and restarted it ($n/$NODE_HEAL_MAX)."
+  else
+    log "zebra stalled ${stalled_for}s at height $blocks (${lag} behind); restarting ($n/$NODE_HEAL_MAX)"
+    docker restart "$name" >/dev/null 2>&1
+    alert "zebra was ${lag} blocks behind and stuck for ${stalled_for}s; restarted it ($n/$NODE_HEAL_MAX). Usually a thin or flaky testnet peer set."
+  fi
+  # Give the restart room to reconnect and pull a burst before it is judged again.
+  node_stall_since=0
+}
+
 faucet_misses=0
 unready_since=0
 alerted_unready=0
@@ -429,6 +563,10 @@ while true; do
   # reserve but a stalled miner does not gate drips, so this runs every sweep on its own
   # signal (the heartbeat) rather than off /api/ready.
   heal_miner_if_stalled
+
+  # 7: node sync-stall recovery. Reads zebra directly, so it is independent of whether the
+  # watchdog can reach the app, and acts only on behind-AND-stuck.
+  heal_node_if_stalled "$zebra"
 
   # Bounded only under test. Production leaves MAX_TICKS at 0 and never exits,
   # and the sleep is skipped on the final tick so a suite is not paying for it.
