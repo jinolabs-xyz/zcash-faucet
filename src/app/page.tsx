@@ -3,7 +3,7 @@
 import { CSSProperties, useCallback, useEffect, useRef, useState } from "react";
 import { BrandMark } from "./BrandMark";
 import { reserveRows } from "@/lib/reserveLabel";
-import { minerChip, minerRow, minerErrorRow, readingFromStatus } from "@/lib/minerLabel";
+import { minerChip, minerRow, minerErrorRow, minerIsBad, readingFromStatus } from "@/lib/minerLabel";
 import { boxRow, boxChip, boxIsBad } from "@/lib/boxLabel";
 import { syncLabel, syncBarWidth } from "@/lib/syncLabel";
 import { networkFacts, formatAmount, type FaucetNetwork } from "@/lib/network";
@@ -643,8 +643,12 @@ export default function Home() {
   // Derived once. A missing miner block reads as cannot-verify rather than as off,
   // which is what an older deploy answering the previous shape will produce.
   const miner = readingFromStatus(status?.miner);
-  const minerError = minerErrorRow(miner);
   const box = status?.box ?? null;
+  // systemd's word for the miner unit rides along on the box report. It is what lets a
+  // miner someone stopped on purpose read "off" instead of the NO HEARTBEAT alarm the
+  // heartbeat alone can produce (2026-09-08: red for hours over a parked unit).
+  const minerUnit = box?.minerUnit ?? null;
+  const minerError = minerErrorRow(miner, minerUnit);
   const reserve = status?.reserve;
   const donation = status?.donationAddress?.trim() ?? "";
   // A refill running while we can still serve must read as healthy, not as an
@@ -793,10 +797,10 @@ export default function Home() {
           { k: "sync", v: syncText ?? "–" },
           { k: "height", v: num(height) },
           { k: "balance", v: balance != null ? balance.toFixed(1) + " TAZ" : status == null ? "–" : "0 TAZ" },
-          // Terse here, per the user, but "off" is not available as the terse word:
-          // a stalled miner is running and failing, and that needs a different
-          // response from an operator than a miner nobody started.
-          { k: "miner", v: status == null ? "–" : minerChip(miner) },
+          // Terse here, per the user. "off" is only available when the heartbeat has
+          // stopped AND systemd says the unit is inactive, i.e. someone stopped it; a
+          // stalled miner is running and failing and must never read as off.
+          { k: "miner", v: status == null ? "–" : minerChip(miner, minerUnit) },
           // Only when it is NOT complete. A permanent "box ok" would spend a slot on
           // the terse strip telling an operator what they already assume, but a box
           // that is missing units has to be visible without opening the panel,
@@ -865,7 +869,7 @@ export default function Home() {
               { net: "taz", k: "wallet balance", v: status?.balanceTaz != null ? status.balanceTaz.toFixed(2) + " TAZ" : "–", bad: status?.empty === true },
               // The detail belongs here, per the user: he asked that the miner's real
               // state be knowable from More details.
-              { net: "taz", k: "miner", v: status == null ? "–" : minerRow(miner), bad: status != null && miner.state !== "running" },
+              { net: "taz", k: "miner", v: status == null ? "–" : minerRow(miner, minerUnit), bad: status != null && minerIsBad(miner, minerUnit) },
               ...(status != null && minerError ? [{ net: "taz", k: "miner error", v: minerError, bad: true }] : []),
               // The box's own integrity. Measured since #287 and never rendered until
               // now: the endpoint knew two files were missing and the panel said

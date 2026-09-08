@@ -55,19 +55,38 @@ export function humanAge(seconds: number): string {
 
 const groupDigits = (n: number) => n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 
+/** systemd's word for the miner unit, from the box report: "active", "inactive",
+ *  "failed", "unknown", or null/undefined when the report predates the field. */
+export type MinerUnit = string | null | undefined;
+
+/** A heartbeat nobody is writing AND a unit systemd calls inactive: stopped on purpose.
+ *  Only that pairing. The heartbeat is the primary evidence, so a fresh one is never
+ *  overruled by the word, and no word at all proves nothing. */
+function parked(r: MinerReading, unit: MinerUnit): boolean {
+  return r.state === "not-writing" && unit === "inactive";
+}
+
 /**
  * The short token for the top status strip, which stays terse per the user. Bad states
  * still have to be legible here: "off" would be a lie for a stalled miner, since it is
  * running and failing, and those need different responses from an operator.
+ *
+ * "off" IS available now, for exactly one case: the heartbeat has stopped AND systemd
+ * says the unit is inactive. That is a miner someone stopped, not one that died. The
+ * strip read "no signal" and the panel shouted NO HEARTBEAT in red for hours over a
+ * unit that was parked on purpose (2026-09-08), which teaches a reader that red means
+ * nothing. A unit systemd calls failed stays red, with its own word.
  */
-export function minerChip(r: MinerReading): string {
+export function minerChip(r: MinerReading, unit: MinerUnit = null): string {
   switch (r.state) {
     // Terse is not licence to overstate. A proposal-mode miner never submits a solved
     // block, so "mining" here would claim we are trying to win blocks while the panel
     // one click away says we are not.
     case "running": return r.mode === "proposal" ? "proposing" : "mining";
     case "stalled": return "no blocks";
-    case "not-writing": return "no signal";
+    case "not-writing":
+      if (parked(r, unit)) return "off";
+      return unit === "failed" ? "unit failed" : "no signal";
     case "cannot-verify": return "unknown";
     // Not softened to blank. We are not watching the miner, and a reader who sees
     // nothing here would conclude there was nothing to know.
@@ -120,12 +139,12 @@ function wins(r: MinerReading): string {
     : `, ${blocks}${ago}`;
 }
 
-export function minerRow(r: MinerReading): string {
+export function minerRow(r: MinerReading, unit: MinerUnit = null): string {
   const at = r.lastTemplateHeight != null ? ` at ${groupDigits(r.lastTemplateHeight)}` : "";
 
   switch (r.state) {
     case "running": {
-      const age = r.templateAgoSeconds != null ? humanAge(r.templateAgoSeconds) : "unknown";
+      const tmpl = r.templateAgoSeconds != null ? `template ${humanAge(r.templateAgoSeconds)} ago` : "template age unknown";
       // Proposal mode never submits a solved block, so calling it "mining" would claim
       // we are trying to win blocks when we are only asking for templates.
       const verb = r.mode === "proposal" ? "proposing only" : "mining";
@@ -137,7 +156,7 @@ export function minerRow(r: MinerReading): string {
       // The FAILING rows below keep the height, because there the two numbers differ
       // and that gap is the finding: a miner stuck at a height the node has left
       // behind is exactly what a stale template looks like.
-      return `${verb}, template ${age} ago${wins(r)}`;
+      return `${verb}, ${tmpl}${wins(r)}`;
     }
 
     // The today case, and the one that must not sound survivable. Naming the age is
@@ -150,19 +169,22 @@ export function minerRow(r: MinerReading): string {
     // The writer stopped. Distinct from stalled because the fault is elsewhere: the
     // unit is down, wedged, or the disk is full, and the miner itself may be fine.
     case "not-writing":
-      return r.beatAgoSeconds != null
-        ? `NO HEARTBEAT for ${humanAge(r.beatAgoSeconds)}, miner state unknown`
-        : "NO HEARTBEAT, miner state unknown";
+      // Stopped on purpose reads calm. A unit systemd calls failed reads as the fault
+      // it is. A unit systemd calls active with a dead heartbeat is a wedged writer,
+      // which is the original NO HEARTBEAT case and keeps its alarm.
+      if (parked(r, unit)) return "off, unit stopped";
+      if (unit === "failed") return "unit FAILED";
+      return r.beatAgoSeconds != null ? `NO HEARTBEAT ${humanAge(r.beatAgoSeconds)}` : "NO HEARTBEAT";
 
     // Never "off". We have not established that it is off, only that we cannot see it.
     case "cannot-verify":
-      return "cannot tell, heartbeat configured but unreadable";
+      return "cannot read heartbeat";
 
     // Says whose problem it is. "Cannot tell" alone sent a reader looking for a
     // broken miner when the answer is an unset variable on the deploy, which is a
     // different job at a different time of day.
     case "not-configured":
-      return "not watched, no heartbeat path configured";
+      return "not watched, no heartbeat path";
   }
 }
 
@@ -175,8 +197,21 @@ export function minerRow(r: MinerReading): string {
  * carry the RPC URL, which can carry credentials in its userinfo, and this endpoint is
  * public.
  */
-export function minerErrorRow(r: MinerReading): string | null {
+export function minerErrorRow(r: MinerReading, unit: MinerUnit = null): string | null {
   if (!r.lastErrorStage) return null;
+  // A parked miner's last error is the last thing it saw before someone stopped it, a
+  // count frozen in a file nobody writes. "1975 in a row" under an "off" row reads as
+  // a live fault, so it is not shown. Under a unit systemd calls active it IS live.
+  if (parked(r, unit)) return null;
   const n = r.consecutiveErrors ?? 0;
-  return n > 1 ? `${r.lastErrorStage} failing, ${n} in a row` : `last error in ${r.lastErrorStage}`;
+  return n > 1 ? `${r.lastErrorStage} failed ${n}× in a row` : `${r.lastErrorStage} failed once`;
+}
+
+/**
+ * Whether the miner row is marked. Running is fine; a miner stopped on purpose is fine
+ * and must not be red, or red stops meaning anything; everything else is a finding.
+ */
+export function minerIsBad(r: MinerReading, unit: MinerUnit = null): boolean {
+  if (r.state === "running") return false;
+  return !parked(r, unit);
 }

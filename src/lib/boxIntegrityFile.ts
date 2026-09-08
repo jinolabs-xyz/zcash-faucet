@@ -20,7 +20,7 @@ export function readBoxIntegrity(): IntegrityReport | null {
   try {
     const j = JSON.parse(readFileSync(PATH, "utf8")) as Record<string, unknown>;
     if (j.readable === false)
-      return { expected: 0, present: 0, notEnabled: 0, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, platform: null, minerBinary: null, at: null, readable: false };
+      return { expected: 0, present: 0, notEnabled: 0, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, platform: null, minerBinary: null, minerUnit: null, at: null, readable: false };
     const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
     // Strings, and empty is not a value. box-report defaults platform to the literal
     // "unknown" when uname says nothing, so an empty string here means the field was
@@ -52,7 +52,10 @@ export function readBoxIntegrity(): IntegrityReport | null {
     // fields we already read is the test that missed these two.
     const platform = s(j.platform);
     const minerBinary = s(j.minerBinary);
-    return { expected, present, notEnabled, enabledUndeclared, watchdogRestarts, watchdogRestartsDelta, platform, minerBinary, at, readable: true };
+    // systemd's word for the miner unit. Same rule as the two above: measured on the
+    // box, and dropping it here would leave the panel unable to tell parked from dead.
+    const minerUnit = s(j.minerUnit);
+    return { expected, present, notEnabled, enabledUndeclared, watchdogRestarts, watchdogRestartsDelta, platform, minerBinary, minerUnit, at, readable: true };
   } catch {
     return null;
   }

@@ -39,7 +39,7 @@ function watchdog(s: IntegrityStatus): string {
   const d = s.watchdogRestartsDelta;
   if (d == null || d < 1) return "";
   return d >= WATCHDOG_LOOP_RESTARTS
-    ? `, WATCHDOG RESTARTING (${d} since last report)`
+    ? `, WATCHDOG LOOPING, ${d} restarts`
     : `, watchdog restarted once`;
 }
 
@@ -73,7 +73,7 @@ function undeclared(s: IntegrityStatus): string {
   //
   // The count was never wrong. The label answered a narrower question than it appeared to,
   // which is the whole of rule 35's second clause, in a row I rendered myself.
-  return n > 0 ? `, ${n} of ours enabled but undeclared` : "";
+  return n > 0 ? `, ${n} of ours undeclared` : "";
 }
 
 /**
@@ -144,8 +144,8 @@ export function boxRow(s: IntegrityStatus): string {
       // for different things: one is a unit that was never installed, the other is a
       // unit that has stopped.
       return s.ageSeconds == null
-        ? "cannot tell, the box has not reported"
-        : `cannot tell, last report ${Math.round(s.ageSeconds / 60)} min old`;
+        ? "no box report"
+        : `box report ${Math.round(s.ageSeconds / 60)} min old`;
   }
 }
 

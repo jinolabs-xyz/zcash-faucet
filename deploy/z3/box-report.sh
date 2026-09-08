@@ -260,9 +260,24 @@ if n="$("$SYSTEMCTL" show -p NRestarts --value "$WATCHDOG_UNIT" 2>/dev/null)" \
   mkdir -p "$(dirname "$STATE")" 2>/dev/null && printf '%s\n' "$n" > "$STATE" 2>/dev/null || true
 fi
 
+# IS THE MINER UNIT RUNNING, STOPPED, OR FAILED. The heartbeat alone cannot tell a miner
+# an operator stopped on purpose from one that died: both are a file nobody is writing,
+# and the panel shouted "NO HEARTBEAT for 14.5 h, miner state unknown" in red for hours
+# over a unit that was parked deliberately (2026-09-08). systemd knows the difference,
+# so the report carries its word: active, inactive, failed, or unknown when systemctl
+# will not say. The WORD, not the exit code, because is-active exits 3 for both inactive
+# and failed and those are the two this exists to tell apart. Context for the panel,
+# never part of the verdict.
+MINER_UNIT="${BOX_REPORT_MINER_UNIT:-zcash-testnet-miner.service}"
+miner_unit="$("$SYSTEMCTL" is-active "$MINER_UNIT" 2>/dev/null || true)"
+case "$miner_unit" in
+  active|inactive|failed|activating|deactivating) ;;
+  *) miner_unit="unknown" ;;
+esac
+
 # JSON numbers or the literal null. `null` is what an unread figure has to be on the
 # wire: 0 would say the watchdog is calm, which is a claim we did not measure.
 wr_json="${watchdog_restarts:-null}"
 wrd_json="${watchdog_restarts_delta:-null}"
 
-write "{\"expected\":${expected},\"present\":${present},\"notEnabled\":${not_enabled},\"enabledUndeclared\":${enabled_undeclared},\"minerBinary\":\"${miner_state}\",\"platform\":\"${platform}\",\"watchdogRestarts\":${wr_json},\"watchdogRestartsDelta\":${wrd_json},\"at\":$(( $(date +%s) * 1000 )),\"readable\":true}"
+write "{\"expected\":${expected},\"present\":${present},\"notEnabled\":${not_enabled},\"enabledUndeclared\":${enabled_undeclared},\"minerBinary\":\"${miner_state}\",\"minerUnit\":\"${miner_unit}\",\"platform\":\"${platform}\",\"watchdogRestarts\":${wr_json},\"watchdogRestartsDelta\":${wrd_json},\"at\":$(( $(date +%s) * 1000 )),\"readable\":true}"
