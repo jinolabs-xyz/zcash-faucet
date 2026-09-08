@@ -252,6 +252,9 @@ probe_state() { # $1 = health|ready ; sets PROBE_STATE + PROBE_REASON
 reason_is_not_the_code() {
   case "$1" in
     *"ledger unreadable"*) return 0 ;;
+    # Our node behind the network (the send gate, on /api/ready since risk register #7).
+    # The previous image runs against the same node.
+    *"behind the network"*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -477,14 +480,25 @@ if [ "$final_state" = "cannot-tell" ]; then
 fi
 
 if reason_is_not_the_code "$final_reason"; then
-  # The ledger lives on a volume this script never touches, so the previous image
-  # would meet exactly the same ledger. Reverting changes nothing except which code is
-  # blamed, and exit 2 would say nobody needs paging for a faucet that 500s every claim.
-  log "NOT ROLLING BACK: the faucet is not serving, but the cause is DATA, not code"
-  log "  reason: $final_reason"
-  log "  Volumes are never touched by a deploy, so the previous image would meet the same"
-  log "  ledger. A rollback would not fix this, it would only change which build is blamed."
-  log "  Fix the ledger, then re-run this script."
+  # Neither cause lives in the image. The ledger is on a volume this script never touches,
+  # and the node is a separate container the previous build would talk to just the same.
+  # Reverting changes nothing except which code is blamed, and exit 2 would say nobody
+  # needs paging for a faucet that refuses every claim.
+  case "$final_reason" in
+    *"behind the network"*)
+      log "NOT ROLLING BACK: the faucet is not serving, but the cause is the CHAIN, not code"
+      log "  reason: $final_reason"
+      log "  Our node is behind an independent view of the network, so a drip would expire before"
+      log "  it confirmed. The previous image runs against the same node. A rollback would not fix this,"
+      log "  it would only change which build is blamed."
+      log "  Wait for the node to catch up (the watchdog heals a stuck one), then re-run this script." ;;
+    *)
+      log "NOT ROLLING BACK: the faucet is not serving, but the cause is DATA, not code"
+      log "  reason: $final_reason"
+      log "  Volumes are never touched by a deploy, so the previous image would meet the same"
+      log "  ledger. A rollback would not fix this, it would only change which build is blamed."
+      log "  Fix the ledger, then re-run this script." ;;
+  esac
   exit 1
 fi
 

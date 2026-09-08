@@ -497,10 +497,13 @@ try {
 
   /* ── D: a stale chain view must not pay out (#187) ────────────────────── */
 
-  // First, that readiness sees NOTHING wrong. This is the whole thesis: the lag
-  // that kills a transaction is invisible to the check we already had, so if these
-  // two assertions ever start failing, the test has stopped covering the gap it
-  // was written for and someone has widened FREEZE_BLOCKS or narrowed the lag.
+  // First, that the freeze detector sees NOTHING wrong. The lag that kills a
+  // transaction sits far below FREEZE_BLOCKS, so `ready`/`frozen` on the node stay
+  // healthy here: if these two assertions ever start failing, the test has stopped
+  // covering the gap it was written for and someone has widened FREEZE_BLOCKS or
+  // narrowed the lag. /api/ready itself DOES see it now (asserted below): a node
+  // measurably behind the network reads not-ready with the gate's reason, so a faucet
+  // refusing every drip can no longer answer 200 to the thing that pages.
   // /api/status uses the NON-BLOCKING oracle read on purpose, so the first read
   // after the cache ages past MAX_AGE_MS returns null and only then kicks a refresh.
   // This suite runs long enough for that to happen, so poll until the app has an
@@ -522,7 +525,12 @@ try {
     JSON.stringify({ ready: statusD.body.node?.ready, frozen: statusD.body.node?.frozen }),
   );
   const readyD = await get(BASE_D, "/api/ready");
-  ok("D /api/ready still answers 200, so nothing upstream would hold traffic back", readyD.status === 200, `status ${readyD.status}`);
+  ok(
+    "D /api/ready is 503 with the gate's reason: a faucet that refuses every drip must not read ready",
+    readyD.status === 503 && /behind the network, drips would expire/.test(readyD.body?.reason ?? ""),
+    `status ${readyD.status} reason ${JSON.stringify(readyD.body?.reason ?? null)}`,
+  );
+  ok("D the 503 body still carries the gate for readers that want the detail", readyD.body?.node?.canBuildTx === false, `canBuildTx ${JSON.stringify(readyD.body?.node?.canBuildTx)}`);
 
   // The gate itself, and the boolean the browser reads.
   ok(
@@ -587,6 +595,26 @@ try {
     "E readiness still fails OPEN on the same input the money gate refuses",
     statusE.body.node?.frozen === false,
     JSON.stringify({ frozen: statusE.body.node?.frozen }),
+  );
+  // The asymmetry with D, on the endpoint itself. Unsafe (D) is our node measurably
+  // behind and 503s. Unverifiable (E) is an oracle we cannot reach, and it stays 200
+  // because redeploy rolls back on this code and a public endpoint's outage must not be
+  // able to roll back a good deploy. The refusal is not hidden: canBuildTx:false rides in
+  // the body, and the watchdog and the live probe page on exactly that.
+  // E's lightwalletd is pinned to a closed port to keep the tip unknown, so readiness here
+  // is already 503 for "backend unreachable". The claim is therefore about the REASON: an
+  // unverifiable tip must never be what /api/ready blames, or an oracle outage would page
+  // as a node fault and roll back a deploy.
+  const readyE = await get(BASE_E, "/api/ready");
+  ok(
+    "E an unverifiable tip is never the readiness reason, so an oracle outage cannot roll back a deploy",
+    !/behind the network|drips would expire|unverifiable/i.test(readyE.body?.reason ?? ""),
+    `status ${readyE.status} reason ${JSON.stringify(readyE.body?.reason ?? null)}`,
+  );
+  ok(
+    "E but the body says the send gate is refusing, which is what the pagers read",
+    readyE.body?.node?.canBuildTx === false && readyE.body?.node?.shield?.state === "unverifiable",
+    JSON.stringify({ canBuildTx: readyE.body?.node?.canBuildTx, state: readyE.body?.node?.shield?.state }),
   );
 
   const addrE = (await post(BASE_E, "/api/account", { kind: "shielded" })).body.account.address;

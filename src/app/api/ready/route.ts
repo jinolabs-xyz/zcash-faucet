@@ -71,6 +71,22 @@ export const GET = withApi("ready", async () => {
   else if (!backend.reachable) reason = "backend unreachable";
   else if (node && node.frozen) reason = "node frozen behind network";
   else if (node && node.ready === false) reason = "node syncing";
+  // THE SEND GATE, finally on the readiness path (risk register #7, 2026-09-08). Every
+  // claim runs mayBuildTransaction() and refuses when our node's view of the chain is
+  // stale, because a transaction stamped from a stale tip expires before it confirms.
+  // This endpoint never asked, so a faucet refusing every drip answered 200 here, the
+  // probe read healthy, nobody was paged, and the first signal was a forum post.
+  //
+  // ONLY "unsafe" 503s: our node is measurably behind an independent tip, which is our
+  // fault and stays true until the node catches up. "unverifiable" (no independent tip
+  // to compare against) deliberately does NOT 503, for the same reason `frozen` never
+  // flips on it: redeploy rolls back on this endpoint, and a public oracle's outage
+  // must not be able to roll back a good deploy. It is still a faucet refusing drips,
+  // so `node.canBuildTx` rides in the body below and the watchdog and the off-box probe
+  // page on it. Placed above the wallet checks because a node behind the network is
+  // upstream of anything the wallet can say.
+  else if (node && node.shield.state === "unsafe")
+    reason = `node ${node.shield.lag ?? "?"} blocks behind the network, drips would expire`;
   else if (balanceZat === null) reason = "wallet balance unknown";
   // AFTER the upstream causes and BEFORE the reserve line, deliberately. If the node is
   // frozen or the backend is down, that is why sends are failing and the operator
@@ -86,7 +102,11 @@ export const GET = withApi("ready", async () => {
     {
       ready,
       reason, // null when ready; otherwise the most upstream blocker
-      node, // { ready, syncPercent, height, nodeHeight } or null
+      // { ready, syncPercent, height, nodeHeight, shield, canBuildTx, ... } or null.
+      // canBuildTx is the send gate's verdict; false with a 200 means "serving, but
+      // refusing every drip because the tip cannot be verified". Readers that page
+      // (watchdog step 4, scripts/live-probe.mjs) treat that as not ready.
+      node,
       backend: { reachable: backend.reachable },
       // Reported even when serving, and carrying its own three-state verdict, so
       // "container up but not serving" has a name in the alert. "The faucet is

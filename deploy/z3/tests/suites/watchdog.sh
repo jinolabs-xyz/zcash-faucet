@@ -31,7 +31,7 @@ wd_env() {
   # runs (and gives up, and pages) inside tests that are about something else.
   unset STUB_CRASHLOOP STUB_HEAL_FIXES STUB_ZEBRA_BLOCKS STUB_ZEBRA_EST STUB_ZEBRA_ADVANCE STUB_ZEBRA_STUCK_CALLS \
         WATCHDOG_NODE_HEAL_ENABLED WATCHDOG_NODE_STOPS_MINER WATCHDOG_MINER_HEARTBEAT WATCHDOG_MINER_UNIT STUB_START_FAIL \
-        WATCHDOG_SIGNAL_MATCH
+        WATCHDOG_SIGNAL_MATCH STUB_READY_CANBUILD STUB_READY_CANBUILD_ONCE
   # Capture what would have been paged, without a webhook.
   # Records EVERY argument, so the suite can see that the watchdog passes --now (its
   # messages are one per episode and must never be held by alert.sh's cooldown).
@@ -673,3 +673,33 @@ wd_run 2
 # must be absent is any ACTION on a container that is not there, and any alert about it.
 check "no start, no policy change, no alert about a bridge that is not there" "! grep -qE 'docker (start|update|restart) .*signal' '$STUB_LOG' && { [ ! -e '$T/alerts.log' ] || ! grep -qi 'signal' '$T/alerts.log'; }"
 check "while the lookup did happen, so the negative above is about a decision" "grep -q 'name=signal-api' '$STUB_LOG'"
+
+# ── A 200 THAT REFUSES EVERY DRIP IS NOT READY (risk register #7, 2026-09-08) ────────────
+# The send gate fails closed on a tip it cannot verify, and /api/ready keeps its 200 so an
+# oracle blip cannot roll back a deploy. Nobody was getting coins and nobody was told. The
+# watchdog now reads the gate's verdict out of the 200 body.
+
+echo "== watchdog: ready 200 with canBuildTx:false pages as NOT READY, with the gate's reason"
+wd_env
+export WATCHDOG_READY_GRACE_SECS=0 STUB_READY_CANBUILD=0
+echo running > "$STUB_CONTAINERS/faucet-web"
+wd_run 1
+check "pages" "grep -q 'NEEDS YOU: faucet NOT READY' '$T/alerts.log'"
+check "and names the gate's reason, not 'unknown'" "grep -q 'Reason: drips refused: no independent tip to compare against' '$T/alerts.log'"
+unset STUB_READY_CANBUILD
+
+echo "== watchdog: a plain ready 200 with the gate open pages nothing, even with no grace"
+wd_env
+export WATCHDOG_READY_GRACE_SECS=0
+echo running > "$STUB_CONTAINERS/faucet-web"
+wd_run 2
+check "no NOT READY page for a faucet that can build a transaction" "! grep -q 'NOT READY' '$T/alerts.log'"
+
+echo "== watchdog: the gate reopening is ONE fixed report, like every other recovery"
+wd_env
+export WATCHDOG_READY_GRACE_SECS=0 STUB_READY_CANBUILD_ONCE="$T/canbuild-once"
+echo running > "$STUB_CONTAINERS/faucet-web"
+wd_run 3   # refused (page), open (fixed), open (quiet)
+check "paged once" "[ \"\$(grep -c 'NOT READY' '$T/alerts.log')\" = 1 ]"
+check "reported the recovery once" "[ \"\$(grep -c 'FIXED: faucet is READY again' '$T/alerts.log')\" = 1 ]"
+unset STUB_READY_CANBUILD_ONCE

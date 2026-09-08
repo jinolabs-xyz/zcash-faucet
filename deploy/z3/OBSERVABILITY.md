@@ -180,6 +180,14 @@ a few seconds before the watchdog restarts, so for that window the old
 watchdog's episode reports go through the cooldown; a restart that fails is
 logged as an error by install-ops.
 
+**A faucet that refuses every drip.** Claims run the send gate: a node
+measurably behind an independent view of the network reads not-ready
+(`... behind the network, drips would expire`), and redeploy knows that reason
+is the chain, not the code, so it never rolls back on it. A tip the faucet
+cannot verify at all keeps `/api/ready` at 200, so a public oracle's outage
+cannot roll back a good deploy, but the body says `canBuildTx: false` and both
+the watchdog (`drips refused: ...`) and the off-box probe page on that.
+
 ## Metrics
 
 ```bash

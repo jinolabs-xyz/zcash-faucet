@@ -128,6 +128,20 @@ check "and says a rollback would not have fixed it" \
   "grep -q 'would not fix this' '$T/ledg.log'"
 check "and names the reason it read from the app" "grep -q 'ledger unreadable' '$T/ledg.log'"
 
+echo "== redeploy: a node BEHIND THE NETWORK is not rolled back either, the previous image has the same node"
+# /api/ready 503s with the send gate's reason since risk register #7. The node is a
+# separate container the previous build would talk to just the same, so reverting the app
+# fixes nothing and would blame a good build.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_READY_MAX=1 STUB_READY_REASON="node 60 blocks behind the network, drips would expire" bash "$REDEPLOY" > "$T/chain.log" 2>&1
+rc=$?
+check "a chain-lag failure does NOT roll back" "[ \"\$(img zcash-faucet:latest)\" != 'sha256:old' ]"
+check "and exits 1, because a human should look" "[ $rc -eq 1 ]"
+check "and says the cause is the CHAIN, not code" "grep -q 'CHAIN, not code' '$T/chain.log'"
+check "and says a rollback would not fix it" "grep -q 'would not fix this' '$T/chain.log'"
+check "and names the reason it read from the app" "grep -q 'behind the network' '$T/chain.log'"
+
 echo "== redeploy: connection REFUSED still rolls back, it is not a timeout (#229)"
 # After the deadline, refused means nothing is listening, so the build did not come up.
 # I had collapsed curl 7 into 28 as "no evidence", which stopped a crash-looping build

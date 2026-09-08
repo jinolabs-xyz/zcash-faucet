@@ -655,6 +655,15 @@ while true; do
   # that reads as though the app declined to explain itself.
   if [ "$ready_rc" -ne 0 ]; then reason="no answer from /api/ready (curl $ready_rc)"; fi
   case "$ready_code" in 2*) ready_ok=1 ;; *) ready_ok=0 ;; esac
+  # A 200 whose body says canBuildTx:false is a faucet that is serving and refusing every
+  # drip: the send gate cannot verify the chain tip, so it fails closed, and /api/ready
+  # keeps its 200 on purpose so an oracle blip cannot roll back a deploy. For PAGING it
+  # is not ready. Nobody is getting coins, and before this line nobody was told.
+  if [ "$ready_ok" = "1" ] && printf '%s' "$ready_body" | grep -q '"canBuildTx":false'; then
+    ready_ok=0
+    gate_reason="$(printf '%s' "$ready_body" | grep -o '"shield":{[^}]*}' | grep -o '"reason":"[^"]*"' | head -n1 | cut -d'"' -f4)"
+    reason="drips refused: ${gate_reason:-the chain tip cannot be verified}"
+  fi
   if [ "$ready_rc" -eq 0 ] && [ "$ready_ok" = "1" ]; then
     if [ "$alerted_unready" = "1" ]; then fixed "faucet is READY again."; fi
     unready_since=0

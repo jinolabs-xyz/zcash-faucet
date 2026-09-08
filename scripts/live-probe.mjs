@@ -293,6 +293,23 @@ async function runFaucetChecks() {
   const ready = await probe("/api/ready");
   if (ready.status === 200) {
     ok("GET /api/ready says a drip can be served", true, `${ready.ms}ms`);
+    // THE GATE THE STATUS CODE CANNOT SHOW. A tip the faucet cannot verify keeps /api/ready
+    // at 200 on purpose (redeploy rolls back on that code, and a public oracle's outage
+    // must not roll back a good deploy), while every claim is refused. That is a faucet
+    // nobody can get coins from, which is what this probe exists to catch, so the send
+    // gate's own verdict is read out of the body. Absent on an older server: cannot
+    // verify, not a failure.
+    const canBuild = ready.body?.node?.canBuildTx;
+    if (canBuild === undefined) {
+      ok("a drip could actually be built (canBuildTx)", true, "server does not send node.canBuildTx yet, cannot verify");
+    } else {
+      const why = ready.body?.node?.shield?.reason ?? "no reason given";
+      ok(
+        "a drip could actually be built, not only served in principle (canBuildTx)",
+        canBuild !== false || ALLOW_UNREADY,
+        canBuild === false ? `the send gate refuses: ${why}${ALLOW_UNREADY ? ", allowed by SMOKE_ALLOW_UNREADY" : ""}` : "",
+      );
+    }
   } else if (ready.status === 503 && ready.body) {
     const reason = ready.body.reason ?? ready.body.error ?? JSON.stringify(ready.body);
     ok("faucet is ready to drip", ALLOW_UNREADY, `app says not ready: ${reason}${ALLOW_UNREADY ? ", allowed by SMOKE_ALLOW_UNREADY" : ""}`);
