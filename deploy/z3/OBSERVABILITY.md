@@ -129,9 +129,9 @@ purpose.
 
 **Disk.** `faucet-prune.timer` runs `prune.sh` daily at 04:10 UTC to remove
 Docker build cache and dangling layers, which nothing else does. It never
-touches volumes, containers, the rollback image or anything a container or the
-stack's pin file names. Balance and drift are in the metrics file below and
-alerted by whatever scrapes it.
+touches volumes, containers or any tagged image; unused tags are listed in its
+journal for a human. A prune that fails is a failed unit, so it pages. Balance
+and drift are in the metrics file below and alerted by whatever scrapes it.
 
 ## Metrics
 
