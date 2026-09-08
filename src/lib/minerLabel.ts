@@ -236,6 +236,9 @@ export function minerIsBad(r: MinerReading, unit: MinerUnit = null): boolean {
   // rows go red for one fault. Waiting because the node has NO PEERS is different: an
   // isolated node sits at its own tip, the node row stays green, and this row is the
   // only place the fault can show.
-  if (r.state === "waiting") return r.waitingReason === "no-peers";
+  // Not in the first two minutes, though: a node that just restarted has no peers for a
+  // few seconds, and the miner polls every five, so every deploy would paint this row red
+  // for a moment. Two minutes without a peer is a node that is not finding any.
+  if (r.state === "waiting") return r.waitingReason === "no-peers" && (r.waitingAgoSeconds ?? 0) >= 120;
   return !parked(r, unit);
 }

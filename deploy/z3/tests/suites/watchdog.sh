@@ -518,9 +518,49 @@ wd_run 4   # baseline, stuck (stop + restart zebra), two more sweeps with the fl
 check "the miner was stopped for the heal" "grep -q 'systemctl stop zcash-testnet-miner.service' '$STUB_LOG'"
 # Before the stop, step 6 may well restart a miner whose node is wedged (that is its job,
 # and it is harmless then). AFTER the stop it must not: the last restart precedes the stop.
-check "and NOT restarted by the miner-stall heal after the stop" "[ \"\$(grep -n 'systemctl restart zcash-testnet-miner' '$STUB_LOG' | tail -1 | cut -d: -f1 || echo 0)\" -lt \"\$(grep -n 'systemctl stop zcash-testnet-miner' '$STUB_LOG' | head -1 | cut -d: -f1)\" ]"
+check "and NOT restarted by the miner-stall heal after the stop" "r=\$(grep -n 'systemctl restart zcash-testnet-miner' '$STUB_LOG' | tail -1 | cut -d: -f1); [ \"\${r:-0}\" -lt \"\$(grep -n 'systemctl stop zcash-testnet-miner' '$STUB_LOG' | head -1 | cut -d: -f1)\" ]"
 check "so the unit is still stopped at the end" "[ \"\$(cat '$STUB_SYSTEMD/zcash-testnet-miner.service')\" = inactive ]"
 check "and the flag still says a heal has it" "[ \"\$(cat '$T/state/miner-stopped-for-node-heal.flaps')\" = 1 ]"
+
+echo "== watchdog: a node that comes back AT ITS TIP, without the height moving, still releases the miner"
+# A snapshot reimport, or a node back at its own tip: the height never strictly advances
+# across a sweep. Review found the flag stuck here for ever, with step 6 disabled by it.
+wd_node_env
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677
+wd_run 2   # stop the miner, restart zebra
+check "stopped" "grep -q 'systemctl stop zcash-testnet-miner.service' '$STUB_LOG'"
+export STUB_ZEBRA_BLOCKS=4332677 STUB_ZEBRA_EST=4332677   # a reimport put it at the tip; it does not move
+: > "$T/alerts.log"; : > "$STUB_LOG"
+wd_run 3   # new process: baseline, at tip (release), at tip (quiet)
+check "the miner is started once the node is seen at the tip" "grep -q 'systemctl start zcash-testnet-miner.service' '$STUB_LOG'"
+check "reported once, as a node heal outcome" "[ \"\$(grep -c 'FIXED: zebra is at the tip again after a node heal' '$T/alerts.log')\" = 1 ] && grep -q 'started again' '$T/alerts.log'"
+check "and the flag is clear" "[ \"\$(cat '$T/state/miner-stopped-for-node-heal.flaps')\" = 0 ]"
+
+echo "== watchdog: a failed start keeps the flag and retries, paging once, not once-ever and not every sweep"
+wd_node_env
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677 STUB_ZEBRA_ADVANCE=1 STUB_ZEBRA_STUCK_CALLS=2 STUB_START_FAIL=1
+wd_run 5   # baseline, stuck (stop), advancing (start fails, page), advancing (retry, no page), advancing
+check "the start was retried on later sweeps" "[ \"\$(grep -c 'systemctl start zcash-testnet-miner' '$STUB_LOG')\" -ge 2 ]"
+check "paged exactly once" "[ \"\$(grep -c 'NEEDS YOU: the node has recovered but' '$T/alerts.log')\" = 1 ]"
+check "and the flag is still set, because the miner is still stopped" "[ \"\$(cat '$T/state/miner-stopped-for-node-heal.flaps')\" = 1 ]"
+unset STUB_START_FAIL
+
+echo "== watchdog: ONE report for a node heal, not a second FIXED crediting the miner-stall heal"
+# A wedged node wedges the miner's socket, so step 6 restarts the miner before step 7 acts;
+# its count must not survive the heal, or the miner templating again after OUR start reads
+# as step 6's fix.
+wd_node_env
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export WATCHDOG_MINER_HEARTBEAT="$T/heartbeat.json" WATCHDOG_MINER_UNIT="zcash-testnet-miner.service"
+miner_hb 5 7200 3600      # stalled from the start: step 6 restarts it on sweep 1
+export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677 STUB_ZEBRA_ADVANCE=1 STUB_ZEBRA_STUCK_CALLS=2
+wd_run 3   # baseline (+ step 6 restart), stuck (stop + heal), advancing (start, FIXED)
+miner_hb 5 7200 10        # the miner templates again after OUR start
+wd_run 1
+check "the node heal reported" "grep -q 'FIXED: zebra was 1443 blocks behind' '$T/alerts.log'"
+check "and step 6 did NOT claim a fix of its own for the same episode" "! grep -q 'FIXED: miner stalled' '$T/alerts.log'"
 
 echo "== watchdog: switching the node heal OFF mid-episode does not strand a miner it stopped"
 wd_node_env

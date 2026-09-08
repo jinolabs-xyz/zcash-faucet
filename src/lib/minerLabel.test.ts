@@ -341,6 +341,14 @@ test("NO PEERS: the row says so instead of '0 blocks behind', and it IS marked, 
   assert.equal(minerChip(isolated), "waiting");
 });
 
+test("no peers for a few seconds after a node restart is not red yet; two minutes is", () => {
+  const fresh: MinerReading = { ...waiting, nodeLag: 0, waitingReason: "no-peers", waitingAgoSeconds: 15 };
+  assert.equal(minerIsBad(fresh), false);
+  assert.equal(minerRow(fresh), "waiting, node has NO PEERS for 15s");
+  assert.equal(minerIsBad({ ...fresh, waitingAgoSeconds: 120 }), true);
+  assert.equal(minerIsBad({ ...fresh, waitingAgoSeconds: null }), false, "no age is not evidence of a long isolation");
+});
+
 test("a waiting reason the reader does not know falls back to the lag wording", () => {
   assert.equal(minerRow({ ...waiting, waitingReason: "something-new" }), "waiting, node 1,443 blocks behind for 40 min");
   assert.equal(minerIsBad({ ...waiting, waitingReason: "something-new" }), false);

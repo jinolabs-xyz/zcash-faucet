@@ -394,6 +394,34 @@ zebra_chain_heights() {
 #
 # If the RPC will not answer, that is a different failure (steps 1-2 and the pager), not
 # evidence of a stall, so this asserts nothing.
+# Starts a miner that a node heal stopped, once the node is fit again. Sets
+# MINER_RELEASE_NOTE (the sentence for the report) on success and empties it otherwise. A
+# variable rather than printed output: called through $(...), its journal line would land
+# inside the report and its "already paged" flag would die with the subshell. A start
+# that FAILS keeps the flag, so the next sweep tries again, and pages once per episode
+# rather than once ever: the unit was stopped, so Restart=always will not bring it back
+# and this is the only thing that will.
+alerted_miner_start_failed=0
+MINER_RELEASE_NOTE=""
+release_miner_after_heal() {
+  MINER_RELEASE_NOTE=""
+  [ "$(flap_get "$MINER_STOP_KEY")" = "1" ] || return 0
+  if systemctl start "$MINER_UNIT" >/dev/null 2>&1; then
+    flap_set "$MINER_STOP_KEY" 0
+    alerted_miner_start_failed=0
+    log "started $MINER_UNIT again after the node heal"
+    MINER_RELEASE_NOTE=" The miner was stopped for the heal and is started again."
+    return 0
+  fi
+  log "WARNING: could not start $MINER_UNIT after the node heal; will retry next sweep"
+  if [ "$alerted_miner_start_failed" = "0" ]; then
+    # Not a footnote on a ✅: a miner that will not start is its own page.
+    danger "the node has recovered but 'systemctl start $MINER_UNIT' FAILED. The miner was stopped for the heal and is still stopped; the watchdog retries every sweep, or start it by hand."
+    alerted_miner_start_failed=1
+  fi
+  return 0
+}
+
 heal_node_if_stalled() {
   if [ "$NODE_HEAL_ENABLED" != "1" ]; then
     # Switched off mid-episode (an operator about to reimport a snapshot does exactly
@@ -429,17 +457,7 @@ heal_node_if_stalled() {
     # height "advancing"): a watchdog restarted mid-episode must see the tip move once
     # before it un-stops a miner it stopped for a node that may still be stuck.
     local miner_note=""
-    if [ "$prev" -gt 0 ] && [ "$(flap_get "$MINER_STOP_KEY")" = "1" ]; then
-      if systemctl start "$MINER_UNIT" >/dev/null 2>&1; then
-        miner_note=" The miner was stopped for the heal and is started again."
-        log "started $MINER_UNIT again after the node heal"
-      else
-        # Not a footnote on a ✅: a miner that will not start is its own page.
-        danger "the node has recovered but 'systemctl start $MINER_UNIT' FAILED. The miner was stopped for the heal and is still stopped; start it by hand."
-        log "WARNING: could not start $MINER_UNIT after the node heal"
-      fi
-      flap_set "$MINER_STOP_KEY" 0
-    fi
+    if [ "$prev" -gt 0 ]; then release_miner_after_heal; miner_note="$MINER_RELEASE_NOTE"; fi
     if [ "$node_heal_attempts" != "0" ]; then
       # The one report, and only now: the tip has been SEEN to move after we acted.
       log "zebra tip advancing again (height $blocks, ${lag} behind); node-stall state cleared"
@@ -457,8 +475,16 @@ heal_node_if_stalled() {
   fi
 
   # Not higher, but essentially at the tip: normal idle between blocks, not a stall.
+  # AND the place to release a miner a heal stopped when the height never strictly
+  # advanced across a sweep: a snapshot reimport, or a node that came back already at its
+  # tip. Review found the flag stuck for ever here, with step 6 disabled by it and the
+  # panel reading a calm "off". At the tip is exactly when mining is safe.
   if [ "$lag" -le "$NODE_LAG_LIMIT" ]; then
     node_stall_since=0
+    if [ "$prev" -gt 0 ] && [ "$(flap_get "$MINER_STOP_KEY")" = "1" ]; then
+      release_miner_after_heal
+      [ -n "$MINER_RELEASE_NOTE" ] && fixed "zebra is at the tip again after a node heal (${lag} behind).${MINER_RELEASE_NOTE}"
+    fi
     return 0
   fi
 
@@ -488,6 +514,10 @@ heal_node_if_stalled() {
   elif [ "$(flap_get "$MINER_STOP_KEY")" != "1" ] && systemctl is-active --quiet "$MINER_UNIT" 2>/dev/null; then
     if systemctl stop "$MINER_UNIT" >/dev/null 2>&1; then
       flap_set "$MINER_STOP_KEY" 1
+      # Step 6 may have restarted the miner before this (a wedged node wedges the miner's
+      # socket too). Its count would survive the episode and, once the miner templates
+      # again after OUR start, credit step 6 with a FIXED for a heal it did not do.
+      flap_set "$MINER_UNIT" 0
       log "stopped $MINER_UNIT for the node heal; it is started again once the tip moves"
     else
       log "WARNING: could not stop $MINER_UNIT before healing the node; its own sync guard is the remaining protection"
