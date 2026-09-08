@@ -9,8 +9,18 @@ OnFailure=faucet-alert@%n.service
 
 [Service]
 Type=oneshot
+# Optional: PRUNE_KEEP_BUILD_CACHE (default 5GB).
 EnvironmentFile=-/etc/faucet/prune.env
 ExecStart=/opt/faucet/prune.sh
+# The first run on a box that has never pruned deletes ~50 GB of layers, and systemd's
+# default start timeout is 90 s. Killed at 90 s the unit fails, pages, logs no result,
+# and the daemon keeps deleting anyway. zsnap-export.service sets 2h for the same reason.
+TimeoutStartSec=2h
+# The deletes run inside dockerd and this does not throttle them; it throttles the client
+# that waits, lists and measures, which is small. Kept so this unit matches the other
+# maintenance units (backup, metrics, drift, zsnap), not as a mitigation.
+Nice=15
+IOSchedulingClass=idle
 
 [Install]
 WantedBy=multi-user.target

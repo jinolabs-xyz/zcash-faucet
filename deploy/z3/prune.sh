@@ -35,11 +35,16 @@ KEEP_BUILD="${PRUNE_KEEP_BUILD_CACHE:-5GB}"
 DRY="${PRUNE_DRY_RUN:-0}"
 
 log() { echo "$(date -u +%FT%TZ) prune: $*"; }
-run() { # a docker command that changes something; DRY logs it instead
-  if [ "$DRY" = 1 ]; then log "DRY RUN: docker $*"; return 0; fi
+run() { # a docker command that changes something; DRY describes it instead
+  if [ "$DRY" = 1 ]; then echo "would run: docker $*"; return 0; fi
   docker "$@"
 }
-usage() { docker system df --format '{{.Type}}: {{.Size}} ({{.Reclaimable}} reclaimable)' 2>/dev/null | tr '\n' ' '; }
+# Bounded: `docker system df` walks every layer and on a full box that is not instant. A
+# usage line is context, and context must not be what eats the unit's start timeout.
+usage() {
+  timeout 120 docker system df --format '{{.Type}}: {{.Size}} ({{.Reclaimable}} reclaimable)' 2>/dev/null | tr '\n' ' ' \
+    || echo "(docker system df did not answer in 120s)"
+}
 
 if ! docker version >/dev/null 2>&1; then
   log "ERROR: docker is not reachable, nothing pruned"
@@ -69,16 +74,20 @@ else
   rc=1
 fi
 
-# 3. Tagged images no container holds: LISTED, never removed. A human decides.
+# 3. Tagged images no container holds: LISTED as information, never removed and never
+#    recommended for removal. The rollback image is held by no container BY DESIGN, and
+#    the heal scripts' helper images are held by none between runs; a line that read
+#    "remove by hand if unwanted" nominated exactly those. Our own tags are left off the
+#    list, and the wording says why the rest are still there.
 in_use="$(docker ps -a --format '{{.Image}}' 2>/dev/null)"
 unused=""
 while IFS= read -r ref; do
   [ -n "$ref" ] || continue
-  case "$ref" in *'<none>'*) continue ;; esac
+  case "$ref" in *'<none>'*|zcash-faucet:*) continue ;; esac
   printf '%s\n' "$in_use" | grep -qxF -- "$ref" || unused="$unused $ref"
 done < <(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null)
 if [ -n "$unused" ]; then
-  log "tagged images held by no container (left alone, remove by hand if unwanted):${unused}"
+  log "for the record, tagged images no container holds right now (kept; heal helpers and pre-pulled upgrades belong here):${unused}"
 fi
 
 log "after: $(usage)"
