@@ -47,6 +47,25 @@ the webhook rejects the POST, and it says which.
 `WATCHDOG_ALERT_URL` from earlier installs still works, so an upgrade cannot
 silently mute the box.
 
+### The watchdog has to be able to see the faucet, or its clock is wrong
+
+The watchdog's 30-minute "not ready" page and its hung-app restart both probe
+`WATCHDOG_FAUCET_URL`, default `http://127.0.0.1:3000`, and look for a container
+whose name contains `WATCHDOG_FAUCET_MATCH`, default `faucet-web`. Under the compose
+overlay **neither default holds**: the app publishes no host port, so the probe
+answers nothing forever, and the container is `zcash-faucet-faucet-1`, so the match
+finds nothing. 2026-09-07 the faucet was down for over an hour, twice, and the
+readiness page never fired for the right reason. Set both in
+`/etc/faucet/watchdog.env` (the unit loads it) and restart the watchdog:
+
+```
+WATCHDOG_FAUCET_URL=https://zcashfaucet.jinolabs.xyz   # through caddy, what users hit
+WATCHDOG_FAUCET_MATCH=zcash-faucet-faucet
+```
+
+Probing the public URL from the box is deliberate: it exercises the same path a
+user does, so "ready" means ready for them, not just for localhost.
+
 **Rotate the webhook if you ran a self-test before this fix.** An earlier
 version logged the full URL, so the token may be sitting in the journal.
 Deleting the entry and creating a new webhook is the only reliable remedy.
