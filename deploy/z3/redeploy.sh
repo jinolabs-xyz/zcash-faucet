@@ -385,7 +385,14 @@ manifest_unverified=0
 VERIFY_MANIFEST="${REDEPLOY_VERIFY_MANIFEST:-$HERE/verify-image-manifest.sh}"
 if [ -x "$VERIFY_MANIFEST" ]; then
   log "verifying the built image against the commit"
-  "$VERIFY_MANIFEST" "$IMAGE" 2>&1 | sed 's/^/    /'
+  # TELL IT WHICH REPO. The verifier defaults its repo to ../.. from its own file, which
+  # is the checkout when run from deploy/z3/ and is `/` once install-ops has copied it
+  # flat into /opt/faucet. From 2026-08-17 to 2026-09-08 every tick on the box logged
+  # "cannot resolve HEAD in /", ended UNVERIFIED at exit 2, never advanced the
+  # autodeploy baseline, and so rebuilt and RECREATED the app every two minutes: three
+  # weeks of 502 blips nobody traced. This script already knows the checkout it just
+  # pulled and built from, so it says so instead of leaving the verifier to guess.
+  VERIFY_REPO_DIR="$REPO_DIR" "$VERIFY_MANIFEST" "$IMAGE" 2>&1 | sed 's/^/    /'
   case "${PIPESTATUS[0]}" in
     0) log "the image matches the commit" ;;
     1) # The image is NOT what we committed. Do not start it. Nothing has been touched
