@@ -26,7 +26,7 @@ wd_env() {
   # Exports persist across tests in one shell; clear the per-test switches so a value set
   # by an earlier case cannot leak into a later one (STUB_HEAL_FIXES=1 leaking into the
   # give-up case is exactly what made this suite lie once).
-  unset STUB_CRASHLOOP STUB_HEAL_FIXES
+  unset STUB_CRASHLOOP STUB_HEAL_FIXES STUB_ZEBRA_BLOCKS STUB_ZEBRA_EST STUB_ZEBRA_ADVANCE WATCHDOG_NODE_HEAL_ENABLED
   # Capture what would have been paged, without a webhook.
   printf '#!/bin/sh\nprintf "%%s\\n" "$1" >> "%s/alerts.log"\n' "$T" > "$T/alert.sh"
   chmod +x "$T/alert.sh"
@@ -260,3 +260,83 @@ mk_heal_tools
 wd_run 2
 check "does not run the repair tools on a clean log" "! grep -q 'ran the repair tools' '$T/alerts.log'"
 check "and does not log a budget reset it never spent" "! grep -q 'heal budget reset' '$T/run.log'"
+
+# --- step 7: node sync-stall recovery --------------------------------------------
+# Zebra can sit on one tip while the network moves on: a self-mined fork, or a thin flaky
+# testnet peer set that stops serving blocks. The container stays "running", so steps 1-2
+# never fire, and 2026-09-07 the node was 300-1400 blocks behind for over an hour, twice,
+# until a human restarted it by hand. The heal reads zebra's own RPC and restarts it only
+# when it is behind AND its tip has stopped moving: never a healthy idle node at the tip,
+# never one still catching up. Then it escalates to dropping the peer cache, then pages.
+
+wd_node_env() {
+  wd_env
+  echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+  echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+  echo running > "$STUB_CONTAINERS/faucet-web"
+  export STUB_VOLROOT="$T/volumes"
+  mkdir -p "$STUB_VOLROOT/z3-testnet-chain/network" "$STUB_VOLROOT/z3-testnet-chain/non_finalized_state"
+  : > "$STUB_VOLROOT/z3-testnet-chain/network/testnet.peers"
+  : > "$STUB_VOLROOT/z3-testnet-chain/non_finalized_state/backup.bin"
+  export STUB_ZEBRA_COUNTER="$T/zebra-counter"; rm -f "$STUB_ZEBRA_COUNTER"
+  # Sweeps are instant in here, so a stall is judged straight away rather than after five
+  # minutes; the decision logic under test is the same either way.
+  export WATCHDOG_NODE_STALL_SECS=0
+  export WATCHDOG_NODE_LAG_LIMIT=50
+  export WATCHDOG_NODE_HEAL_MAX=3
+  export WATCHDOG_NODE_CLEAR_CACHE_AFTER=2
+  export WATCHDOG_NODE_DROP_NONFINAL_AFTER=3
+}
+
+echo "== watchdog: a node at the tip that is merely between blocks is left alone"
+wd_node_env
+export STUB_ZEBRA_BLOCKS=4331737 STUB_ZEBRA_EST=4331737   # at the tip; no new block for a while
+wd_run 4
+check "does not restart a healthy idle node" "! grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
+check "and pages nothing about the node" "! grep -q 'blocks behind' '$T/alerts.log'"
+
+echo "== watchdog: a node that is behind but still catching up is not bounced"
+wd_node_env
+export STUB_ZEBRA_BLOCKS=4331200 STUB_ZEBRA_EST=4332600 STUB_ZEBRA_ADVANCE=1   # 1400 behind, +1 per sweep
+wd_run 4
+check "does not restart a node that is advancing" "! grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
+check "and leaves the peer cache alone" "[ -f '$STUB_VOLROOT/z3-testnet-chain/network/testnet.peers' ]"
+
+echo "== watchdog: a node behind AND stuck is restarted, and says why"
+wd_node_env
+export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677   # 1443 behind, tip never moves
+wd_run 2   # sweep 1 is the baseline; sweep 2 sees no movement
+check "restarts zebra" "grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
+check "names the lag in the alert" "grep -q 'zebra was 1443 blocks behind and stuck' '$T/alerts.log'"
+check "first attempt is a plain restart, cache untouched" "[ -f '$STUB_VOLROOT/z3-testnet-chain/network/testnet.peers' ]"
+check "and the non-finalized state is untouched too" "[ -d '$STUB_VOLROOT/z3-testnet-chain/non_finalized_state' ]"
+
+echo "== watchdog: a stall that will not clear escalates to a peer-cache clear, then pages once"
+wd_node_env
+export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677   # never moves, whatever we do
+peers="$STUB_VOLROOT/z3-testnet-chain/network/testnet.peers"
+nonfinal="$STUB_VOLROOT/z3-testnet-chain/non_finalized_state"
+wd_run 6   # baseline, heal 1 (restart), heal 2 (clear cache), heal 3 (+ drop non-finalized), give-up, quiet
+check "the first heal is a plain restart" "[ \"\$(grep -c 'docker restart z3-testnet-zebra-1' '$STUB_LOG')\" = 1 ]"
+check "later heals stop the node to clear the cache" "grep -q 'docker stop z3-testnet-zebra-1' '$STUB_LOG'"
+check "and the stale peer cache is actually gone" "[ ! -f '$peers' ]"
+# Six plain restarts moved the tip by nothing on 2026-09-07 because every boot restored
+# the wedged tip from this backup. The last tier has to actually remove it.
+check "the last tier drops the non-finalized state" "[ ! -d '$nonfinal' ]"
+check "and says so" "grep -q 'dropped the non-finalized state' '$T/alerts.log'"
+check "heals exactly the cap, then stops" "[ \"\$(grep -c 'zebra was 1443 blocks behind' '$T/alerts.log')\" = 3 ]"
+check "pages that it gave up" "grep -q 'zebra STILL 1443 blocks behind after 3 restart' '$T/alerts.log'"
+check "and pages that once, not every sweep" "[ \"\$(grep -c 'zebra STILL' '$T/alerts.log')\" = 1 ]"
+
+echo "== watchdog: a node whose RPC will not answer is not judged a stall"
+wd_node_env   # STUB_ZEBRA_BLOCKS unset: docker exec fails, and no answer is not evidence
+wd_run 3
+check "does not restart on a silent RPC" "! grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
+check "and pages nothing about the node" "! grep -q 'blocks behind' '$T/alerts.log'"
+
+echo "== watchdog: the node heal can be switched off"
+wd_node_env
+export WATCHDOG_NODE_HEAL_ENABLED=0
+export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677
+wd_run 3
+check "does nothing when disabled, even on a real stall" "! grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
