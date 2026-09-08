@@ -140,12 +140,17 @@ run would do without doing it. Balance
 and drift are in the metrics file below and alerted by whatever scrapes it.
 
 **Once per cause per hour.** `alert.sh` remembers the first line of every
-message it sends, with the numbers blanked, under `/var/lib/faucet-alerts`. A
-repeat inside `FAUCET_ALERT_COOLDOWN_SECONDS` (3600) is counted in the journal
-as `HELD BACK` and not sent; the next one that goes out ends with
-`(+N identical held back in the last 60 min)`. Two instances of the same
-template unit are one cause. `--self-test` is never held back. Set the variable
-to `0` in `/etc/faucet/alerts.env` to turn it off.
+message it has *delivered*, with each digit blanked, under
+`/var/lib/faucet-alerts`. A repeat inside `FAUCET_ALERT_COOLDOWN_SECONDS`
+(3600) is counted in its output as `HELD BACK` and not sent; the next one that
+goes out ends with `(+N identical held back in the last 60 min)`. A send that
+fails starts no window, so the next repeat is tried again. Two instances of the
+same template unit are one cause; `9% free` and `8% free` are one cause;
+`40 behind` and `4000 behind` are two. The watchdog's `✅ FIXED` and
+`🚨 NEEDS YOU` are already one per episode and pass `--now`, so a NEEDS YOU
+is never held behind the FIXED before it. `--self-test` is never held. A value
+that is not a whole number falls back to 3600 with a `WARNING` in the journal;
+`0` turns it off.
 
 ## Metrics
 

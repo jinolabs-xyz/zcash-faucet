@@ -208,6 +208,80 @@ check "the repeat also exits 0, because held back is a decision, not a failure" 
 check "the webhook saw exactly one" "[ \"\$(grep -c 'disk low' '$HOOK_LOG')\" = 1 ]"
 check "the journal says HELD BACK and counts it" "grep -q 'HELD BACK.*1 so far' '$T/d2.log'"
 check "a changed number is the same cause" "grep -q '9% free' '$HOOK_LOG' && ! grep -q '8% free' '$HOOK_LOG'"
+check "and the first, delivered send is logged as sent" "grep -q 'sent: disk low' '$T/d1.log'"
+
+echo "== alerts: the MAGNITUDE survives the key: 40 behind and 4000 behind are two causes"
+alerts_env
+bash "$ALERT" "zebra still 40 blocks behind" > /dev/null 2>&1
+bash "$ALERT" "zebra still 4000 blocks behind" > /dev/null 2>&1
+check "both reached the webhook" "[ \"\$(grep -c 'blocks behind' '$HOOK_LOG')\" = 2 ]"
+bash "$ALERT" "zebra still 45 blocks behind" > "$T/m3.log" 2>&1
+check "while 45 is the same cause as 40" "grep -q 'HELD BACK' '$T/m3.log'"
+
+echo "== alerts: A SEND THAT FAILS DOES NOT START THE WINDOW, so the next repeat is tried"
+# The first version recorded the cause before the POST. With the bridge restarting at the
+# moment the disk crossed the floor, the one failed send burned the hour and the channel
+# heard nothing about a disk filling to 0%.
+alerts_env; export FAUCET_ALERT_URL="http://127.0.0.1:$HOOK_PORT/FAIL"
+bash "$ALERT" "disk low: / has 9% free" > "$T/f1.log" 2>&1; rc1=$?
+export FAUCET_ALERT_URL="http://127.0.0.1:$HOOK_PORT/hook"
+bash "$ALERT" "disk low: / has 8% free" > "$T/f2.log" 2>&1; rc2=$?
+check "the failed POST is reported as a failure" "[ $rc1 -ne 0 ] && grep -q 'POST FAILED' '$T/f1.log'"
+check "the repeat after it is SENT, not held" "[ $rc2 -eq 0 ] && grep -q 'sent: disk low' '$T/f2.log'"
+check "and it reached the webhook" "grep -q 'disk low' '$HOOK_LOG'"
+check "and the failure left no record to hold anything back" "! grep -q 'HELD BACK' '$T/f2.log'"
+
+echo "== alerts: a send with no encoder does not start the window either"
+alerts_env
+mkdir -p "$T/nobin3"
+for b in bash curl date hostname sed tr cat head mkdir grep cut sha256sum cksum flock find; do
+  src="$(command -v $b 2>/dev/null)"; [ -n "$src" ] && ln -sf "$src" "$T/nobin3/$b"
+done
+PATH="$T/nobin3" FAUCET_ALERT_STATE_DIR="$T/alert-state" bash "$ALERT" "disk low: / has 9% free" > "$T/ne1.log" 2>&1; rc1=$?
+bash "$ALERT" "disk low: / has 9% free" > "$T/ne2.log" 2>&1; rc2=$?
+check "the encoder-less send exits 4" "[ $rc1 -eq 4 ]"
+check "the same message with an encoder is then SENT" "[ $rc2 -eq 0 ] && grep -q 'sent: disk low' '$T/ne2.log'"
+
+echo "== alerts: --now is never held, for callers that already send one per episode"
+# The watchdog's FIXED and NEEDS YOU have different first lines. Held under a cooldown, the
+# NEEDS YOU that follows a FIXED inside the hour would be dropped, and a green tick would
+# be the channel's last word about a faucet that is down.
+alerts_env
+bash "$ALERT" --now "🚨 NEEDS YOU: faucet NOT READY for 30 min. Reason: node syncing." > /dev/null 2>&1
+bash "$ALERT" --now "✅ FIXED: faucet is READY again." > /dev/null 2>&1
+bash "$ALERT" --now "🚨 NEEDS YOU: faucet NOT READY for 30 min. Reason: node syncing." > "$T/now3.log" 2>&1
+check "all three reached the channel" "[ \"\$(grep -c 'faucet' '$HOOK_LOG')\" = 3 ]"
+check "the second NEEDS YOU was not held" "! grep -q 'HELD BACK' '$T/now3.log' && grep -q 'sent:' '$T/now3.log'"
+check "--now without a message is a usage error, not a silent send of nothing" "bash '$ALERT' --now >/dev/null 2>&1; [ \$? -eq 64 ]"
+
+echo "== alerts: a cooldown that is not a number WARNS and uses the default, never silently off"
+alerts_env; export FAUCET_ALERT_COOLDOWN_SECONDS=1h
+bash "$ALERT" "disk low: / has 9% free" > "$T/c1.log" 2>&1
+bash "$ALERT" "disk low: / has 9% free" > "$T/c2.log" 2>&1
+check "the journal names the bad value" "grep -q \"WARNING: FAUCET_ALERT_COOLDOWN_SECONDS='1h' is not a whole number\" '$T/c1.log'"
+check "and the default cooldown is in force" "grep -q 'HELD BACK' '$T/c2.log' && [ \"\$(grep -c 'disk low' '$HOOK_LOG')\" = 1 ]"
+
+echo "== alerts: a record from the FUTURE (clock stepped back) does not hold anything"
+alerts_env
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+for f in "$T"/alert-state/*; do
+  [ -f "$f" ] || continue; [ "$(basename "$f")" = ".lock" ] && continue
+  printf '%s 0\n' "$(( $(date -u +%s) + 86400 ))" > "$f"
+done
+bash "$ALERT" "disk low: / has 9% free" > "$T/fut.log" 2>&1
+check "sent despite a record stamped tomorrow" "grep -q 'sent: disk low' '$T/fut.log'"
+
+echo "== alerts: a state dir pointed at a system directory turns dedup OFF rather than deleting under it"
+alerts_env; export FAUCET_ALERT_STATE_DIR=/var/lib
+bash "$ALERT" "disk low: / has 9% free" > "$T/sys.log" 2>&1
+check "sent" "grep -q 'sent: disk low' '$T/sys.log'"
+check "and says why records are not kept" "grep -q 'dedup OFF: FAUCET_ALERT_STATE_DIR=/var/lib is a system directory' '$T/sys.log'"
+check "and nothing was written there" "[ ! -e /var/lib/.lock ]"
+
+echo "== alerts: a first alert of a new cause leaves NO shell error in the journal"
+alerts_env
+bash "$ALERT" "a brand new cause" > "$T/new.log" 2>&1
+check "no 'No such file' from the state read" "! grep -q 'No such file' '$T/new.log'"
 
 echo "== alerts: a DIFFERENT cause inside the window still goes out"
 alerts_env
@@ -222,8 +296,9 @@ bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
 bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
 # Age the record by rewriting its timestamp: the file holds "<epoch> <held back>".
 for f in "$T"/alert-state/*; do
+  [ -f "$f" ] || continue
   [ "$(basename "$f")" = ".lock" ] && continue
-  read -r _ n < "$f"; printf '%s %s\n' "$(( $(date -u +%s) - 7200 ))" "$n" > "$f"
+  read -r _ n < "$f" || n=0; printf '%s %s\n' "$(( $(date -u +%s) - 7200 ))" "${n:-0}" > "$f"
 done
 bash "$ALERT" "disk low: / has 7% free" > "$T/d4.log" 2>&1
 check "exactly two reached the webhook: the first, and the one after the window" "[ \"\$(grep -c 'disk low' '$HOOK_LOG')\" = 2 ]"

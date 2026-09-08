@@ -35,21 +35,40 @@ BEST_EFFORT_URL="${FAUCET_ALERT_BESTEFFORT_URL:-}"
 # the next one that does go out says how many were held back. 0 turns it off. The state
 # dir is created on demand; when it cannot be written, repeats go through, because
 # under-alerting is still the worse failure.
+#
+# ONLY A DELIVERED MESSAGE STARTS THE WINDOW. The first version recorded the cause before
+# the POST, so a send that failed (bridge restarting, no encoder) burned the hour for a
+# message nobody received, and a disk filling to 0% would have paged exactly zero times.
+#
+# NOT FOR EPISODE REPORTS. The watchdog's ✅ FIXED and 🚨 NEEDS YOU are already one per
+# episode, and their first lines differ, so a cooldown could hold back the NEEDS YOU that
+# follows a FIXED and leave a green tick as the channel's last word about a faucet that is
+# down. Callers that do their own episode logic pass --now and are never held.
 STATE_DIR="${FAUCET_ALERT_STATE_DIR:-/var/lib/faucet-alerts}"
-COOLDOWN="${FAUCET_ALERT_COOLDOWN_SECONDS:-3600}"
+COOLDOWN_RAW="${FAUCET_ALERT_COOLDOWN_SECONDS:-3600}"
+COOLDOWN_WARNING=""
+case "$COOLDOWN_RAW" in
+  ''|*[!0-9]*)
+    # "1h" or "3600s" would otherwise read as "not > 0" and turn the cooldown OFF in
+    # silence, which hands the flood back to whoever made the typo.
+    COOLDOWN=3600
+    COOLDOWN_WARNING="FAUCET_ALERT_COOLDOWN_SECONDS='$COOLDOWN_RAW' is not a whole number of seconds; using 3600" ;;
+  *) COOLDOWN="$COOLDOWN_RAW" ;;
+esac
 DEDUP=1
 
 log() { echo "$(date -u +%FT%TZ) alert: $*"; }
 
-# The key is the FIRST LINE, lowercased, with every number replaced, so "disk low: / has
-# 9% free" and "... 8% free" are one cause, and ctaz-rpc@240762-413643-0.service and its
-# next instance are one unit. The journal tail is never part of it: it differs every time
-# by construction and would defeat the point. The URL is not part of it either; it is a
-# credential and this key names a file.
+# The key is the FIRST LINE, lowercased, with every digit replaced by one '#', so "disk
+# low: / has 9% free" and "... 8% free" are one cause and ctaz-rpc@240762-413643-0.service
+# and its next instance are one unit, while "40 blocks behind" and "4000 blocks behind"
+# stay two: the magnitude survives, the value does not. The journal tail is never part of
+# it: it differs every time by construction and would defeat the point. The URL is not
+# part of it either; it is a credential and this key names a file.
 dedup_key() { # $1 message -> key on stdout, empty when it cannot be computed
   local first
   first="$(printf '%s\n' "$1" | head -n1 | tr '[:upper:]' '[:lower:]' \
-    | sed -E 's/[0-9]+/#/g; s/[[:space:]]+/ /g' 2>/dev/null)" || return 0
+    | sed -E 's/[0-9]/#/g; s/[[:space:]]+/ /g' 2>/dev/null)" || return 0
   if command -v sha256sum >/dev/null 2>&1; then
     printf '%s %s' "$ALERT_FORMAT" "$first" | sha256sum | cut -c1-40
   elif command -v cksum >/dev/null 2>&1; then
@@ -57,12 +76,22 @@ dedup_key() { # $1 message -> key on stdout, empty when it cannot be computed
   fi
 }
 
-# 0 = send it (HELD_BACK_NOTE says how many repeats preceded it), 1 = hold it back.
+# DECIDES, and does not record. 0 = send it (HELD_BACK_NOTE says how many repeats were
+# held since the last delivery; DEDUP_FILE names the record for dedup_commit), 1 = hold.
 HELD_BACK_NOTE=""
+DEDUP_FILE=""
 dedup_check() { # $1 message
-  HELD_BACK_NOTE=""
+  HELD_BACK_NOTE=""; DEDUP_FILE=""
   [ "$DEDUP" = 1 ] || return 0
-  [ "$COOLDOWN" -gt 0 ] 2>/dev/null || return 0
+  [ -n "$COOLDOWN_WARNING" ] && log "WARNING: $COOLDOWN_WARNING"
+  [ "$COOLDOWN" -gt 0 ] || return 0
+  # The cleanup below deletes files, as root, under this path. A misconfiguration must
+  # not be able to point it at anything that is not a directory of alert records.
+  case "$STATE_DIR" in
+    /|/var|/var/lib|/etc|/usr|/home|/root|/opt|/run|/tmp|/srv)
+      log "dedup OFF: FAUCET_ALERT_STATE_DIR=$STATE_DIR is a system directory, refusing to keep records there"
+      return 0 ;;
+  esac
   local key f now last count
   key="$(dedup_key "$1")"; [ -n "$key" ] || return 0
   if ! mkdir -p "$STATE_DIR" 2>/dev/null || [ ! -w "$STATE_DIR" ]; then
@@ -72,22 +101,36 @@ dedup_check() { # $1 message
   f="$STATE_DIR/$key"; now="$(date -u +%s)"
   # OnFailure handlers fire concurrently, so the read-modify-write is serialised.
   exec 9>"$STATE_DIR/.lock"
-  command -v flock >/dev/null 2>&1 && flock -w 5 9
-  read -r last count < "$f" 2>/dev/null || { last=0; count=0; }
+  if command -v flock >/dev/null 2>&1; then
+    flock -w 5 9 || log "WARNING: could not take the cooldown lock in 5s; deciding unserialised"
+  fi
+  last=0; count=0
+  if [ -f "$f" ]; then
+    read -r last count < "$f" 2>/dev/null || { last=0; count=0; }
+  fi
   [ "$last" -ge 0 ] 2>/dev/null || last=0
   [ "$count" -ge 0 ] 2>/dev/null || count=0
-  if [ $((now - last)) -lt "$COOLDOWN" ]; then
+  # A clock stepped backwards would otherwise make an old record look fresh for as long as
+  # the step was; an alert must not be held for a day because NTP corrected the box.
+  [ "$now" -lt "$last" ] && last=0
+  if [ "$last" -gt 0 ] && [ $((now - last)) -lt "$COOLDOWN" ]; then
     printf '%s %s\n' "$last" "$((count + 1))" > "$f"
     exec 9>&-
     log "HELD BACK (same alert within ${COOLDOWN}s, $((count + 1)) so far): $1"
     return 1
   fi
-  printf '%s 0\n' "$now" > "$f"
   exec 9>&-
+  DEDUP_FILE="$f"
   [ "$count" -gt 0 ] && HELD_BACK_NOTE=" (+$count identical held back in the last $((COOLDOWN / 60)) min)"
-  # Keys for causes that stopped firing are never read again; a week is long past any window.
-  find "$STATE_DIR" -type f -mtime +7 -delete 2>/dev/null
   return 0
+}
+
+# Called ONLY after the POST succeeded: that is when the window starts. Records for
+# causes that stopped firing are never read again; a week is long past any window.
+dedup_commit() {
+  [ -n "$DEDUP_FILE" ] || return 0
+  printf '%s 0\n' "$(date -u +%s)" > "$DEDUP_FILE" 2>/dev/null || true
+  find "$STATE_DIR" -maxdepth 1 -type f -name '[0-9a-f]*' -mtime +7 -delete 2>/dev/null
 }
 
 # IS THIS UNIT ALLOWED TO BE QUIET? (#327)
@@ -171,7 +214,8 @@ send() { # $1 = message text
        body="{\"text\":\"$msg\"}" ;;
   esac
   if curl -fsS --max-time 10 -H 'content-type: application/json' -d "$body" "$ALERT_URL" >/dev/null 2>&1; then
-    log "sent: $1"
+    dedup_commit
+    log "sent: $1$HELD_BACK_NOTE"
     return 0
   fi
   log "POST FAILED to the configured webhook: $1"
@@ -223,8 +267,15 @@ $tail_lines}"
 $tail_lines}"
     fi
     ;;
+  --now)
+    # For callers that already send one message per episode (the watchdog). Never held.
+    shift
+    [ -n "${1:-}" ] || { echo "usage: alert.sh --now <message>" >&2; exit 64; }
+    DEDUP=0
+    send "$*"
+    ;;
   "" )
-    echo "usage: alert.sh --self-test | --unit <name> | <message>" >&2
+    echo "usage: alert.sh --self-test | --unit <name> | --now <message> | <message>" >&2
     exit 64
     ;;
   *)

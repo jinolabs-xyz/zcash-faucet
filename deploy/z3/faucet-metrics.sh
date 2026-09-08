@@ -135,7 +135,9 @@ EOF
       log "DISK LOW: $path has ${free_pct}% free, floor is ${METRICS_DISK_FLOOR_PCT}%" >&2
       # 🚨 because nothing on the box can fix a full disk; alert.sh holds repeats of this
       # line to one an hour per path, so the 30-second timer cannot flood the channel.
-      [ -x "$ALERT_SH" ] && "$ALERT_SH" "🚨 NEEDS YOU: disk low: $path has ${free_pct}% free (floor ${METRICS_DISK_FLOOR_PCT}%), snapshots and backups will start failing" >/dev/null 2>&1
+      # Its output goes to stderr, deliberately: this block's stdout IS the metrics file,
+      # and a "sent" or "HELD BACK" line in there is a line node_exporter rejects.
+      [ -x "$ALERT_SH" ] && "$ALERT_SH" "🚨 NEEDS YOU: disk low: $path has ${free_pct}% free (floor ${METRICS_DISK_FLOOR_PCT}%), snapshots and backups will start failing" >&2 2>&1
     fi
   done
 

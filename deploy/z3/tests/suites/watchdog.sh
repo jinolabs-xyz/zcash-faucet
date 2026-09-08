@@ -32,7 +32,9 @@ wd_env() {
   unset STUB_CRASHLOOP STUB_HEAL_FIXES STUB_ZEBRA_BLOCKS STUB_ZEBRA_EST STUB_ZEBRA_ADVANCE STUB_ZEBRA_STUCK_CALLS \
         WATCHDOG_NODE_HEAL_ENABLED WATCHDOG_NODE_STOPS_MINER WATCHDOG_MINER_HEARTBEAT WATCHDOG_MINER_UNIT STUB_START_FAIL
   # Capture what would have been paged, without a webhook.
-  printf '#!/bin/sh\nprintf "%%s\\n" "$1" >> "%s/alerts.log"\n' "$T" > "$T/alert.sh"
+  # Records EVERY argument, so the suite can see that the watchdog passes --now (its
+  # messages are one per episode and must never be held by alert.sh's cooldown).
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/alerts.log"\n' "$T" > "$T/alert.sh"
   chmod +x "$T/alert.sh"
   : > "$T/alerts.log"
 }
@@ -243,6 +245,7 @@ wd_run 1                  # restarted; nothing reported yet
 miner_hb 5 3600 10        # now templating; the stall count survived on disk
 wd_run 1
 check "reports the fix once the miner is seen templating" "grep -q 'FIXED: miner stalled' '$T/alerts.log'"
+check "and passes --now, so alert.sh's cooldown can never hold an episode report" "grep -q '^--now ✅ FIXED: miner' '$T/alerts.log'"
 check "and counts the restart it took" "grep -q '(1 restart' '$T/alerts.log'"
 check "exactly one report" "[ \"\$(grep -c 'FIXED: miner' '$T/alerts.log')\" = 1 ]"
 
