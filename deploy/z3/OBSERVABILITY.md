@@ -2,29 +2,60 @@
 
 Two independent paths, because they answer different questions.
 
-**Alerts** push: the watchdog already decides when the faucet is genuinely
-un-servable and posts to a webhook **when one is configured**. That is the thing
-that would wake someone up, and today it wakes nobody: `FAUCET_ALERT_URL` is
-unset on the box and #215, which wires it, is deferred. The detection is real and
-the delivery is not, so treat every alert path below as writing to a log until
-somebody pastes a URL.
+**Alerts** push: the watchdog decides when the faucet is genuinely un-servable
+and `alert.sh` delivers it to the channel in `/etc/faucet/alerts.env`. The
+reference box pages **Signal** through a bridge on the box (below). Until a
+channel is configured the detection is real and the delivery is not: every alert
+path writes to the journal and nobody hears it, which is how two outages on
+2026-09-07 each went unnoticed for over an hour.
 
 **Metrics** pull: `faucet-metrics.sh` writes the faucet's own state to a
 Prometheus textfile every 30 seconds, so you can graph balance, queue depth
 and sync progress, and answer "when did this start" instead of guessing.
 
-## Alerts: paste one URL
+## Alerts: one file, one self-test
 
-Every unit on the box alerts through one sender, so there is one thing to
-configure and one thing to test.
+Every unit on the box alerts through one sender, `alert.sh`, so there is one
+file to configure and one command to test. The reference box pages Signal;
+Slack and Discord webhooks are also supported, below.
 
-Create an incoming webhook in the channel you actually watch:
+### Signal, through a bridge on the box
 
-- **Slack**: Apps, Incoming Webhooks, Add to Workspace, pick the channel.
-- **Discord**: Server Settings, Integrations, Webhooks, New Webhook, Copy
-  Webhook URL.
+Signal has no webhooks. The way in is `signal-cli-rest-api`, one container on
+the box that exposes a local HTTP API the sender posts to. It links to your
+existing Signal account as a secondary device, the way Signal Desktop does, so
+there is no second phone number, and alerts land in **Note to Self** with a
+normal notification.
 
-Then paste it into `/etc/faucet/alerts.env`:
+```bash
+docker run -d --name signal-api --restart unless-stopped \
+  -p 127.0.0.1:8081:8080 \
+  -v /var/lib/signal-api:/home/.local/share/signal-cli \
+  -e MODE=json-rpc bbernhard/signal-cli-rest-api
+```
+
+Link it once. From your laptop, `ssh -L 8081:127.0.0.1:8081 root@<box>`, open
+`http://127.0.0.1:8081/v1/qrcodelink?device_name=faucet-box` in a browser, scan
+the QR with Signal (Settings, Linked devices, Link new device), then
+`docker restart signal-api` so the daemon picks up the account. Put this in
+`/etc/faucet/alerts.env`:
+
+```
+FAUCET_ALERT_URL=http://127.0.0.1:8081/v2/send
+FAUCET_ALERT_FORMAT=signal
+FAUCET_ALERT_SIGNAL_NUMBER=+15551234567      # the account you linked, E.164
+# FAUCET_ALERT_SIGNAL_RECIPIENT=+1555...     # optional, defaults to the number above
+```
+
+The bridge is bound to loopback on purpose: it can send as you, so it must never
+be reachable from outside the box. One limit: the bridge lives on the box, so the
+off-box live-smoke page, the check that still fires when the whole box is dead,
+cannot use it. That one emails, and can take a Slack or Discord webhook.
+
+### Slack or Discord instead
+
+Create an incoming webhook in the channel you watch (Slack: Apps, Incoming
+Webhooks; Discord: Server Settings, Integrations, Webhooks) and use it as the URL:
 
 ```
 FAUCET_ALERT_URL=https://hooks.slack.com/services/T000/B000/xxxx
@@ -73,40 +104,6 @@ Deleting the entry and creating a new webhook is the only reliable remedy.
 Alerting needs `jq` or `python3` to encode the body. Without either it
 refuses and says so, rather than posting something the webhook silently
 drops.
-
-### Signal, through a bridge on the box
-
-Signal has no webhooks. The way in is `signal-cli-rest-api`, one container on
-the box that exposes a local HTTP API the sender posts to. It links to your
-existing Signal account as a secondary device, the way Signal Desktop does, so
-there is no second phone number, and alerts land in **Note to Self** with a
-normal notification.
-
-```bash
-docker run -d --name signal-api --restart unless-stopped \
-  -p 127.0.0.1:8081:8080 \
-  -v /var/lib/signal-api:/home/.local/share/signal-cli \
-  -e MODE=json-rpc bbernhard/signal-cli-rest-api
-```
-
-Link it once. From your laptop, `ssh -L 8081:127.0.0.1:8081 root@<box>`, open
-`http://127.0.0.1:8081/v1/qrcodelink?device_name=faucet-box` in a browser, and
-scan the QR with Signal (Settings, Linked devices, Link new device). Then:
-
-```
-FAUCET_ALERT_URL=http://127.0.0.1:8081/v2/send
-FAUCET_ALERT_FORMAT=signal
-FAUCET_ALERT_SIGNAL_NUMBER=+15551234567      # the account you linked, E.164
-# FAUCET_ALERT_SIGNAL_RECIPIENT=+1555...     # optional, defaults to the number above
-```
-
-`alert.sh --self-test` then proves the whole path, bridge included. The bridge
-is bound to loopback on purpose: it can send as you, so it must never be
-reachable from outside the box.
-
-One limit. The bridge lives on the box, so the off-box live-smoke page, the
-check that still fires when the whole box is dead, cannot use it. Keep email or a
-Slack or Discord webhook for that one.
 
 ### What alerts, and what does not
 
