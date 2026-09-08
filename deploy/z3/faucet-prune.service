@@ -1,5 +1,5 @@
-# Reclaims Docker build cache and unreferenced images. See prune.sh for what it
-# will never touch (volumes, containers, the rollback image, anything in use).
+# Reclaims Docker build cache and dangling layers. See prune.sh for what it will
+# never touch (volumes, containers, any tagged image).
 [Unit]
 Description=Faucet Docker disk prune
 Documentation=file:/opt/zcash-faucet/deploy/z3/prune.sh
@@ -11,9 +11,6 @@ OnFailure=faucet-alert@%n.service
 Type=oneshot
 EnvironmentFile=-/etc/faucet/prune.env
 ExecStart=/opt/faucet/prune.sh
-# Deleting 50 GB of layers is I/O; the node's disk comes first.
-Nice=15
-IOSchedulingClass=idle
 
 [Install]
 WantedBy=multi-user.target
