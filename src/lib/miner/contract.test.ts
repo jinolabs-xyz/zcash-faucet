@@ -101,6 +101,10 @@ const CONSUMED = [
   "lastSolvedAt",
   "submittedAccepted",
   "submittedRejected",
+  // The sync guard (risk register #5, 2026-09-08). waitingSince decides a whole state;
+  // nodeLag is the number that state's row shows.
+  "nodeLag",
+  "waitingSince",
 ];
 
 const KNOWINGLY_IGNORED: Record<string, string> = {

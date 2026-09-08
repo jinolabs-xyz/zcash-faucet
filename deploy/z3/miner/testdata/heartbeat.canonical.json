@@ -16,5 +16,7 @@
   "lastSolvedAt": "2026-07-25T23:45:00Z",
   "submittedAccepted": 3,
   "submittedRejected": 1,
-  "lastSubmittedAt": "2026-07-25T23:45:01Z"
+  "lastSubmittedAt": "2026-07-25T23:45:01Z",
+  "nodeLag": 2,
+  "waitingSince": null
 }

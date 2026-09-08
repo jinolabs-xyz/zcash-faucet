@@ -131,6 +131,7 @@ export const GET = withApi("status", async () => {
       ...minerReading,
       beatAgoSeconds: round(minerReading.beatAgoSeconds),
       templateAgoSeconds: round(minerReading.templateAgoSeconds),
+      waitingAgoSeconds: round(minerReading.waitingAgoSeconds),
       active: isActive(minerReading.state),
     },
     // Refill loop state. spendableTaz uses this request's balance read (fresher

@@ -56,6 +56,13 @@ pub struct State {
     pub submitted_accepted: u64,
     pub submitted_rejected: u64,
     pub last_submitted_at: Option<u64>,
+    /// How far behind its own estimate the node was at the last check (sync.rs). None
+    /// until the first check answers.
+    pub node_lag: Option<u64>,
+    /// Set while the sync guard is holding the miner back, cleared the moment it mines
+    /// again. A reader that sees this beside a stale lastTemplateAt is looking at a miner
+    /// that is idle ON PURPOSE, which is neither stalled nor running.
+    pub waiting_since: Option<u64>,
 }
 
 impl State {
@@ -77,6 +84,19 @@ impl State {
     pub fn solved(&mut self) {
         self.solved_count = self.solved_count.saturating_add(1);
         self.last_solved_at = Some(now());
+    }
+
+    /// The sync guard's reading. `waiting` starts the wait clock once and leaves it running
+    /// across polls; a mineable node clears it.
+    pub fn node_lag(&mut self, lag: u64, waiting: bool) {
+        self.node_lag = Some(lag);
+        if waiting {
+            if self.waiting_since.is_none() {
+                self.waiting_since = Some(now());
+            }
+        } else {
+            self.waiting_since = None;
+        }
     }
 
     pub fn submitted(&mut self, accepted: bool) {
@@ -162,7 +182,9 @@ pub fn render(s: &State) -> String {
             "  \"lastSolvedAt\": {},\n",
             "  \"submittedAccepted\": {},\n",
             "  \"submittedRejected\": {},\n",
-            "  \"lastSubmittedAt\": {}\n",
+            "  \"lastSubmittedAt\": {},\n",
+            "  \"nodeLag\": {},\n",
+            "  \"waitingSince\": {}\n",
             "}}\n"
         ),
         SCHEMA,
@@ -187,6 +209,8 @@ pub fn render(s: &State) -> String {
         s.submitted_accepted,
         s.submitted_rejected,
         ts(s.last_submitted_at),
+        num(s.node_lag),
+        ts(s.waiting_since),
     )
 }
 
@@ -486,6 +510,11 @@ mod contract {
             submitted_accepted: 3,
             submitted_rejected: 1,
             last_submitted_at: Some(1_785_023_101),
+            node_lag: Some(2),
+            // None on purpose, the one exception to "every optional is Some": a set
+            // waitingSince makes the reader classify the fixture as WAITING, and the seam
+            // test needs the canonical moment to be a miner that is running.
+            waiting_since: None,
         }
     }
 

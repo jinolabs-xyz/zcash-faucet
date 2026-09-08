@@ -26,6 +26,8 @@ const HEALTHY: Heartbeat = {
   submittedAccepted: 0,
   submittedRejected: 0,
   lastSolvedAt: null,
+  nodeLag: 0,
+  waitingSince: null,
 };
 
 test("TODAY'S OUTAGE: beating every 5s while no template has arrived in 70 minutes", () => {
@@ -140,4 +142,50 @@ test("no state other than running is ever active", () => {
   for (const s of ["stalled", "not-writing", "cannot-verify"] as const) {
     assert.equal(isActive(s), false, `${s} must not read as active`);
   }
+});
+
+// ── THE SYNC GUARD: a miner idle on purpose is WAITING, not stalled ─────────────────────
+// Before 2026-09-08 the miner mined whatever its node served, and spent an afternoon
+// extending a private fork. Now it checks getblockchaininfo first and holds back when the
+// node is behind; the heartbeat says so, and the reader must not call that a stall.
+
+test("waitingSince set, file fresh: WAITING, even though no template has arrived in ages", () => {
+  const r = readingFor({ ...HEALTHY, writtenAt: ago(2), lastTemplateAt: ago(3 * 3600), waitingSince: ago(90 * 60), nodeLag: 1443 }, NOW);
+  assert.equal(r.state, "waiting");
+  assert.equal(r.nodeLag, 1443);
+  assert.equal(r.waitingAgoSeconds, 90 * 60);
+  assert.equal(isActive(r.state), false, "waiting is never active: nothing is being mined");
+});
+
+test("not-writing still outranks waiting, because a stale file cannot testify to a choice either", () => {
+  const r = readingFor({ ...HEALTHY, writtenAt: ago(600), waitingSince: ago(60), nodeLag: 80 }, NOW);
+  assert.equal(r.state, "not-writing");
+});
+
+test("a writer that predates the guard carries no lag and no wait, and classifies as before", () => {
+  const old: Record<string, unknown> = { ...HEALTHY };
+  delete old.nodeLag;
+  delete old.waitingSince;
+  const r = readingFor(old, NOW);
+  assert.equal(r.state, "running");
+  assert.equal(r.nodeLag, null);
+  assert.equal(r.waitingAgoSeconds, null);
+});
+
+test("waitingSince null with a fresh template is plain running, and the lag rides along", () => {
+  const r = readingFor({ ...HEALTHY, waitingSince: null, nodeLag: 3 }, NOW);
+  assert.equal(r.state, "running");
+  assert.equal(r.nodeLag, 3);
+});
+
+test("a nonsense nodeLag is null, not a number the row would print", () => {
+  for (const bad of [-1, "50", Number.NaN, Number.POSITIVE_INFINITY, null]) {
+    assert.equal(readingFor({ ...HEALTHY, nodeLag: bad as never }, NOW).nodeLag, null, `nodeLag ${String(bad)}`);
+  }
+});
+
+test("a waitingSince in the future is not a wait, it is an unreadable stamp", () => {
+  const r = readingFor({ ...HEALTHY, waitingSince: ago(-30) }, NOW);
+  assert.equal(r.state, "running");
+  assert.equal(r.waitingAgoSeconds, null);
 });

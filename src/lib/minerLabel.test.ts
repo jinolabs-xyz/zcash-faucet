@@ -21,6 +21,8 @@ const base: MinerReading = {
   submittedAccepted: null,
   submittedRejected: null,
   solvedAgoSeconds: null,
+  nodeLag: null,
+  waitingAgoSeconds: null,
 };
 
 test("running names the age, because 'on' was the whole problem", () => {
@@ -300,4 +302,32 @@ test("the unit's word never overrides a heartbeat that IS being written", () => 
   assert.equal(minerChip(base, "inactive"), "mining");
   assert.equal(minerIsBad(base, "inactive"), false);
   assert.doesNotMatch(minerRow({ ...base, state: "stalled", templateAgoSeconds: 900 }, "inactive"), /\boff\b/);
+});
+
+// ── WAITING: the sync guard holding the miner back (risk register #5) ───────────────────
+
+const waiting: MinerReading = { ...base, state: "waiting", templateAgoSeconds: 4000, nodeLag: 1443, waitingAgoSeconds: 40 * 60 };
+
+test("waiting says why and for how long, in the node's terms", () => {
+  assert.equal(minerRow(waiting), "waiting, node 1,443 blocks behind for 40 min");
+});
+
+test("waiting never reads as mining and never as NO TEMPLATE", () => {
+  assert.doesNotMatch(minerRow(waiting), /mining|proposing|NO TEMPLATE/);
+  assert.equal(minerChip(waiting), "waiting");
+});
+
+test("waiting is not marked bad: the node row owns that fault", () => {
+  assert.equal(minerIsBad(waiting), false);
+});
+
+test("waiting without a lag or a since still says the node is behind", () => {
+  assert.equal(minerRow({ ...waiting, nodeLag: null, waitingAgoSeconds: null }), "waiting, node behind");
+});
+
+test("a status payload that says waiting is read as waiting, not cannot-verify", () => {
+  const r = readingFromStatus({ state: "waiting", nodeLag: 60, waitingAgoSeconds: 120 });
+  assert.equal(r.state, "waiting");
+  assert.equal(r.nodeLag, 60);
+  assert.equal(r.waitingAgoSeconds, 120);
 });

@@ -66,7 +66,9 @@ nothing here.
   "lastSolvedAt": "2026-07-31T12:20:11Z",
   "submittedAccepted": 3,
   "submittedRejected": 0,
-  "lastSubmittedAt": "2026-07-31T12:20:12Z"
+  "lastSubmittedAt": "2026-07-31T12:20:12Z",
+  "nodeLag": 0,
+  "waitingSince": null
 }
 ```
 
@@ -83,7 +85,7 @@ compares an age to a number in the file and neither side picks a multiplier. App
 I had written 6×; rather than agree on a constant that then lives in two places and drifts, the
 number lives once, here, next to the thing it describes.
 
-## How to read it: four states, none of them a boolean
+## How to read it: five states, none of them a boolean
 
 Let `age(x) = now - x`.
 
@@ -91,6 +93,7 @@ Let `age(x) = now - x`.
 | --- | --- | --- |
 | file absent, unreadable, unparseable, or `schema` unrecognised | `cannot-verify` | **Not "off".** We learned nothing. |
 | `age(writtenAt) > staleAfterSeconds` | `not-writing` | The miner is not beating: unit stopped, wedged, or disk full. |
+| `waitingSince` is set (and the beat is fresh) | `waiting` | Idle **on purpose**: the sync guard found the node more than `MINER_MAX_LAG` blocks behind (`nodeLag` says how many). Judged before `stalled`, because a waiting miner's template is stale by construction. Never active. |
 | `lastTemplateAt` is null, or `age(lastTemplateAt) > templateStaleAfterSeconds` | `stalled` | **The failure that hid for 70 minutes.** Alive and beating, not getting templates. |
 | otherwise | `running` | Beating and fetching templates. |
 

@@ -25,6 +25,7 @@
 mod block;
 mod heartbeat;
 mod rpc;
+mod sync;
 mod template;
 
 use std::{
@@ -63,6 +64,10 @@ struct Config {
     /// Give up on a template after this long and fetch a fresh one, so we are
     /// never grinding a height the chain has moved past.
     template_secs: u64,
+    /// Refuse to mine while zebra is more than this many blocks behind its own estimate of
+    /// the network. See sync.rs for why 50 and not 2. There is no value that turns the
+    /// guard off, because a miner on a node that is behind extends a fork with our work.
+    max_lag: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -136,6 +141,20 @@ fn load_config() -> Result<Config, String> {
         template_secs: env_or("MINER_TEMPLATE_SECS", "60")
             .parse()
             .map_err(|e| format!("MINER_TEMPLATE_SECS: {e}"))?,
+        max_lag: {
+            let n: u64 = env_or("MINER_MAX_LAG", "50")
+                .parse()
+                .map_err(|e| format!("MINER_MAX_LAG: {e}"))?;
+            if n == 0 {
+                return Err(
+                    "MINER_MAX_LAG must be at least 1. There is no off switch: a miner that \
+                     works on a node that is behind extends a private fork with our own \
+                     blocks, which is what happened on 2026-09-07."
+                        .into(),
+                );
+            }
+            n
+        },
     })
 }
 
@@ -163,6 +182,10 @@ fn main() {
     if config.mode == Mode::Proposal {
         log("proposal mode: solved blocks are validated, never submitted");
     }
+    log(&format!(
+        "sync guard: no mining while zebra is more than {} blocks behind its estimate (MINER_MAX_LAG)",
+        config.max_lag
+    ));
 
     // MINER_HEARTBEAT_PATH has no default that points anywhere real: a missing configuration
     // must not write to a stale path and must not be mistaken for a working heartbeat. Unset
@@ -182,8 +205,22 @@ fn main() {
         config.template_secs,
     );
 
+    // A node that is behind for hours would otherwise write a line every poll. One a minute
+    // is enough for a journal to show the wait and its progress.
+    let mut last_wait_log: Option<Instant> = None;
     loop {
         match mine_once(&rpc, &config, &hb) {
+            Ok(Outcome::Waiting { lag, blocks, estimated }) => {
+                let due = last_wait_log.is_none_or(|t| t.elapsed() >= Duration::from_secs(60));
+                if due {
+                    log(&format!(
+                        "node is {lag} blocks behind (verified {blocks}, estimated {estimated}); not mining until it is within {} (MINER_MAX_LAG)",
+                        config.max_lag
+                    ));
+                    last_wait_log = Some(Instant::now());
+                }
+                thread::sleep(Duration::from_secs(config.poll_secs.max(5)));
+            }
             Ok(Outcome::Accepted { height }) => {
                 if let Ok(mut g) = hb.lock() {
                     g.submitted(true);
@@ -215,6 +252,9 @@ fn main() {
 }
 
 enum Outcome {
+    /// The node is behind its own estimate by more than MINER_MAX_LAG. No template was
+    /// fetched and nothing was submitted; see sync.rs.
+    Waiting { lag: u64, blocks: u64, estimated: u64 },
     Accepted { height: u32 },
     ProposalValid { height: u32 },
     Rejected { height: u32, reason: String },
@@ -231,6 +271,32 @@ fn mine_once(rpc: &Rpc, config: &Config, hb: &Arc<Mutex<heartbeat::State>>) -> R
     // miner never builds on us. These numbers settle it: if template age and
     // solve-to-submit are small fractions of the block interval, latency is
     // not the cause and the answer is hashrate share. See MINING.md.
+    // THE SYNC GUARD RUNS FIRST, before any template exists to be tempted by. Asking the
+    // node where it stands costs one cheap call per iteration; mining on a node that is
+    // behind cost an afternoon of blocks on a private fork (2026-09-07).
+    let info = rpc
+        .call("getblockchaininfo", json!([]))
+        .inspect_err(|_| beat_error(hb, "getblockchaininfo"))?;
+    match sync::verdict(&info, config.max_lag) {
+        Ok(sync::Verdict::Mine { lag }) => {
+            if let Ok(mut g) = hb.lock() {
+                g.node_lag(lag, false);
+            }
+        }
+        Ok(sync::Verdict::Wait { lag, blocks, estimated }) => {
+            if let Ok(mut g) = hb.lock() {
+                g.node_lag(lag, true);
+            }
+            return Ok(Outcome::Waiting { lag, blocks, estimated });
+        }
+        Err(e) => {
+            // A reply we cannot read is recorded under its own stage so the panel can tell
+            // "the node would not answer" from "the node answered something unusable".
+            beat_error(hb, "syncstate");
+            return Err(e);
+        }
+    }
+
     let fetched_at = Instant::now();
     let raw = rpc
         .call("getblocktemplate", json!([{"mode": "template"}]))
