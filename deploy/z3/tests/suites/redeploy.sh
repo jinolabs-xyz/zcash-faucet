@@ -182,6 +182,22 @@ check "and exits 2, because service was restored" "[ $rc -eq 2 ]"
 check "and does NOT claim the probe never answered" \
   "! grep -q 'never answered' '$T/nourl.log'"
 
+echo "== redeploy: ON THE EXEC PATH TOO, a node behind the network is not rolled back"
+# The URL path read the reason from the body; the exec path (the default, and production)
+# printed only the status, so reason_is_not_the_code() could never match there and a node
+# that fell behind during a build rolled a good image back with the non-paging exit 2.
+redeploy_env
+unset REDEPLOY_FAUCET_URL
+export STUB_EXEC_HEALTH="$T/exechealth" STUB_EXEC_READY="$T/execready"
+touch "$STUB_EXEC_HEALTH" "$STUB_EXEC_READY"
+STUB_EXEC_READY_MAX=1 STUB_EXEC_READY_REASON="node 60 blocks behind the network, drips would expire" bash "$REDEPLOY" > "$T/execchain.log" 2>&1
+rc=$?
+check "the new image stays: no rollback for a chain-lag reason on the exec path" \
+  "[ \"\$(img zcash-faucet:latest)\" != 'sha256:old' ]"
+check "and exits 1, a human should look" "[ $rc -eq 1 ]"
+check "and says the cause is the CHAIN, not code" "grep -q 'CHAIN, not code' '$T/execchain.log'"
+check "and the reason it read came through the in-container probe" "grep -q 'HTTP 503 node 60 blocks behind the network' '$T/execchain.log'"
+
 echo "== redeploy: on the exec path a THROW is cannot-tell, so it does NOT roll back (#244)"
 # The other half of the distinction. A fetch that throws is no answer, and reverting on
 # it lets an unreachable app undo a good deploy. Without this case, mapping everything

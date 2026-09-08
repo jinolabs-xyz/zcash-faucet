@@ -602,17 +602,12 @@ try {
   // able to roll back a good deploy. The refusal is not hidden: canBuildTx:false rides in
   // the body, and the watchdog and the live probe page on exactly that.
   // E's lightwalletd is pinned to a closed port to keep the tip unknown, so readiness here
-  // is already 503 for "backend unreachable". The claim is therefore about the REASON: an
-  // unverifiable tip must never be what /api/ready blames, or an oracle outage would page
-  // as a node fault and roll back a deploy.
+  // is 503 for "backend unreachable" whatever the gate does: this stack CANNOT show that an
+  // unverifiable tip keeps readiness at 200. That property is pinned where it can fail,
+  // in src/lib/readiness.test.ts. What this stack can show is the body the pagers read.
   const readyE = await get(BASE_E, "/api/ready");
   ok(
-    "E an unverifiable tip is never the readiness reason, so an oracle outage cannot roll back a deploy",
-    !/behind the network|drips would expire|unverifiable/i.test(readyE.body?.reason ?? ""),
-    `status ${readyE.status} reason ${JSON.stringify(readyE.body?.reason ?? null)}`,
-  );
-  ok(
-    "E but the body says the send gate is refusing, which is what the pagers read",
+    "E the body says the send gate is refusing, which is what the pagers read",
     readyE.body?.node?.canBuildTx === false && readyE.body?.node?.shield?.state === "unverifiable",
     JSON.stringify({ canBuildTx: readyE.body?.node?.canBuildTx, state: readyE.body?.node?.shield?.state }),
   );

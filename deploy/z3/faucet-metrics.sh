@@ -95,6 +95,11 @@ status_body="$(curl -fsS --max-time "$CURL_TIMEOUT" "$FAUCET_URL/api/status" 2>/
       "$(as_gauge "$(jfield "$ready_body" ready)")"
     emit faucet_node_ready "1 when the node reports itself synced." gauge \
       "$(as_gauge "$(jfield "$(jobject "$ready_body" node)" ready)")"
+    # The send gate's verdict. A 200 with this at 0 is a faucet refusing every drip while
+    # readiness stays green on purpose (a tip it cannot verify); whatever scrapes this file
+    # must not believe faucet_ready alone. The key is unique in the body, so no jobject.
+    emit faucet_can_build_tx "1 when the send gate would let a drip be built right now." gauge \
+      "$(as_gauge "$(jfield "$ready_body" canBuildTx)")"
   else
     # Distinguish "the app said no" from "the app said nothing". Only the
     # second one means the web process itself is the problem.

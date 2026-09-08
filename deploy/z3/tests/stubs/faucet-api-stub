@@ -6,7 +6,7 @@ port="${1:?port}"
 python3 - "$port" <<'PY'
 import http.server, json, os, sys
 READY = {"ready": False, "reason": "below reserve, refilling",
-         "node": {"ready": True, "syncPercent": 99.98, "height": 4204726, "nodeHeight": 4204726},
+         "node": {"ready": True, "syncPercent": 99.98, "height": 4204726, "nodeHeight": 4204726, "canBuildTx": False},
          "backend": {"reachable": True}, "balanceTaz": 3.5, "ts": 1785180000}
 STATUS = {"network": "testnet", "dripTaz": 0.1, "balanceTaz": 3.5, "empty": False,
           "queueDepth": 2, "backend": "zallet",

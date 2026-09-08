@@ -186,7 +186,11 @@ measurably behind an independent view of the network reads not-ready
 is the chain, not the code, so it never rolls back on it. A tip the faucet
 cannot verify at all keeps `/api/ready` at 200, so a public oracle's outage
 cannot roll back a good deploy, but the body says `canBuildTx: false` and both
-the watchdog (`drips refused: ...`) and the off-box probe page on that.
+the watchdog (`drips refused: ...`) and the off-box probe page on that, and the
+metrics file carries it as `faucet_can_build_tx`. That field is the gate's
+cached verdict; the claim path asks the oracle with a budget before deciding,
+so readiness is the more pessimistic of the two and a cold cache after a
+restart reads as refusing for a few seconds.
 
 ## Metrics
 

@@ -58,6 +58,9 @@ check "queue depth comes through" "grep -qx 'faucet_queue_depth 2' '$METRICS_FIL
 check "empty=false becomes 0" "grep -qx 'faucet_empty 0' '$METRICS_FILE'"
 # The nested node object, not the top-level "ready" that means something else.
 check "nested node.ready read correctly" "grep -qx 'faucet_node_ready 1' '$METRICS_FILE'"
+# The send gate's verdict, which faucet_ready cannot carry: this fixture's node is ready
+# and its gate is closed, the exact pair a scraper must be able to tell apart.
+check "the send gate's verdict is its own gauge" "grep -qx 'faucet_can_build_tx 0' '$METRICS_FILE'"
 check "nested node.syncPercent read correctly" "grep -qx 'faucet_node_sync_percent 99.98' '$METRICS_FILE'"
 check "nested node.height read correctly" "grep -qx 'faucet_node_height 4204726' '$METRICS_FILE'"
 check "running container reported up" "grep -qx 'faucet_container_up 1' '$METRICS_FILE'"

@@ -87,7 +87,9 @@ case "${1:-}" in
           fi
         fi
       fi
-      echo 503
+      # The real probe prints the body's reason after the status, so the rollback guard
+      # can read it on this path too. STUB_EXEC_READY_REASON supplies one.
+      echo "503${STUB_EXEC_READY_REASON:+ $STUB_EXEC_READY_REASON}"
       exit 1
     fi
     # `compose ps -q faucet`: the container id the post-condition inspects. Silence when

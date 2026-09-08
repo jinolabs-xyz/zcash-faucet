@@ -235,14 +235,19 @@ probe_state() { # $1 = health|ready ; sets PROBE_STATE + PROBE_REASON
   #
   # So ask in a form that separates them: 1 for an answer that was not ok, 3 for no
   # answer at all. Exit 2 is reserved by node itself for an uncaught exception.
+  #
+  # THE BODY'S REASON COMES OUT TOO, on one line after the status. reason_is_not_the_code()
+  # matches on that string, and this path is production: without the reason here, a node
+  # that fell behind the network during a build read as a failed build, the guard never
+  # fired, and a good image was rolled back with exit 2, the code that pages nobody.
   local out rc
   out="$(compose exec -T faucet node -e \
-    "fetch('http://127.0.0.1:3000/api/$1').then(r=>{if(r.ok)process.exit(0);console.log(r.status);process.exit(1)}).catch(()=>process.exit(3))" \
+    "fetch('http://127.0.0.1:3000/api/$1').then(async r=>{if(r.ok)process.exit(0);let b={};try{b=await r.json()}catch{};console.log(r.status+(b&&typeof b.reason==='string'?' '+b.reason:''));process.exit(1)}).catch(()=>process.exit(3))" \
     2>/dev/null)"
   rc=$?
   case "$rc" in
     0) PROBE_STATE="ready" ;;
-    1) PROBE_STATE="not-ready"; PROBE_REASON="HTTP ${out:-unknown} from /api/$1 (in-container probe cannot read the body)" ;;
+    1) PROBE_STATE="not-ready"; PROBE_REASON="HTTP ${out:-unknown} from /api/$1" ;;
     *) PROBE_STATE="cannot-tell"; PROBE_REASON="the in-container probe could not reach the app" ;;
   esac
 }

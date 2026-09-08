@@ -112,9 +112,13 @@ Two endpoints, two different questions. Source of truth is
 
 | Reason | Means |
 |---|---|
+| `ledger unreadable` | the claims database cannot be read; a disk problem, not a chain one, and redeploy will not roll back on it |
 | `backend unreachable` | the lightwalletd/Zaino read endpoint is not answering |
+| `node frozen behind network` | zebra stopped following the chain while the network moved on; the watchdog heals a stuck node |
 | `node syncing` | zebra is not at tip yet, normal on first sync or after a restore |
+| `node N blocks behind the network, drips would expire` | the send gate: our node is measurably behind an independent tip, so every claim is refused; redeploy will not roll back on it. A tip that merely cannot be verified keeps readiness but sets `node.canBuildTx:false`, which the watchdog and the live probe page on |
 | `wallet balance unknown` | zallet did not return a balance, usually zallet itself is down |
+| `sends failing: ...` | the last sends actually failed even though every probe above passed; the wallet is the fault |
 | `below reserve, refilling` | funds are under drip + reserve, faucet needs a refill |
 
 Un-ready is not an outage by itself. First sync and refills are un-ready on
