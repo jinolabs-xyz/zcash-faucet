@@ -12,6 +12,12 @@ set -uo pipefail
 # an existing box keeps alerting after an upgrade.
 ALERT_URL="${FAUCET_ALERT_URL:-${WATCHDOG_ALERT_URL:-}}"
 ALERT_FORMAT="${FAUCET_ALERT_FORMAT:-${WATCHDOG_ALERT_FORMAT:-slack}}"
+# signal only. Signal has no webhook; FAUCET_ALERT_URL points at a signal-cli-rest-api
+# bridge on the box (/v2/send), which needs the linked account's number and a recipient.
+# The recipient defaults to the same number, which lands in Note to Self, so one
+# variable is enough for the common case. See OBSERVABILITY.md.
+SIGNAL_NUMBER="${FAUCET_ALERT_SIGNAL_NUMBER:-}"
+SIGNAL_RECIPIENT="${FAUCET_ALERT_SIGNAL_RECIPIENT:-$SIGNAL_NUMBER}"
 PREFIX="${FAUCET_ALERT_PREFIX:-[zcash-faucet]}"
 JOURNAL_LINES="${FAUCET_ALERT_JOURNAL_LINES:-15}"
 # Read from the repo checkout, the same place install-ops reads enabled-units, so the
@@ -75,12 +81,30 @@ send() { # $1 = message text
     log "NOT SENT (no FAUCET_ALERT_URL configured): $1"
     return 3
   fi
+  # The two numbers are embedded raw below, so they are checked to be nothing but a
+  # plus and digits first. A typo here would otherwise become a malformed body the
+  # bridge rejects, which is the silent mute this script exists to prevent.
+  if [ "$ALERT_FORMAT" = "signal" ]; then
+    if [ -z "$SIGNAL_NUMBER" ]; then
+      log "NOT SENT (signal needs FAUCET_ALERT_SIGNAL_NUMBER in /etc/faucet/alerts.env, the linked account in E.164): $1"
+      return 3
+    fi
+    local n
+    for n in "$SIGNAL_NUMBER" "$SIGNAL_RECIPIENT"; do
+      if ! printf '%s' "$n" | grep -qE '^\+[0-9]{6,15}$'; then
+        log "NOT SENT: '$n' is not an E.164 number like +15551234567 (FAUCET_ALERT_SIGNAL_NUMBER / _RECIPIENT)"
+        return 3
+      fi
+    done
+  fi
   # Slack and Discord want the same shape under different keys, and each
-  # rejects the other's, so the channel type has to be explicit.
+  # rejects the other's, so the channel type has to be explicit. Signal's bridge
+  # wants the message plus who it is from and to.
   case "$ALERT_FORMAT" in
     discord) body="{\"content\":\"$msg\"}" ;;
     slack)   body="{\"text\":\"$msg\"}" ;;
-    *) log "WARNING: unknown FAUCET_ALERT_FORMAT '$ALERT_FORMAT', sending the slack shape (valid: slack, discord)"
+    signal)  body="{\"message\":\"$msg\",\"number\":\"$SIGNAL_NUMBER\",\"recipients\":[\"$SIGNAL_RECIPIENT\"]}" ;;
+    *) log "WARNING: unknown FAUCET_ALERT_FORMAT '$ALERT_FORMAT', sending the slack shape (valid: slack, discord, signal)"
        body="{\"text\":\"$msg\"}" ;;
   esac
   if curl -fsS --max-time 10 -H 'content-type: application/json' -d "$body" "$ALERT_URL" >/dev/null 2>&1; then

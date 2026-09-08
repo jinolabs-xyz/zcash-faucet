@@ -12,7 +12,8 @@ alerts_env() {
   export PATH="$T/bin:$BASE_PATH"
   export FAUCET_ALERT_URL="http://127.0.0.1:$HOOK_PORT/hook"
   export FAUCET_ALERT_FORMAT=slack
-  unset WATCHDOG_ALERT_URL WATCHDOG_ALERT_FORMAT FAUCET_ALERT_PREFIX 2>/dev/null
+  unset WATCHDOG_ALERT_URL WATCHDOG_ALERT_FORMAT FAUCET_ALERT_PREFIX \
+        FAUCET_ALERT_SIGNAL_NUMBER FAUCET_ALERT_SIGNAL_RECIPIENT 2>/dev/null
   : > "$HOOK_LOG"
 }
 
@@ -47,6 +48,38 @@ alerts_env; export FAUCET_ALERT_FORMAT=discord
 bash "$ALERT" "hello" > /dev/null 2>&1
 check "discord key used" "grep -q '\"content\"' '$HOOK_LOG'"
 check "no slack key" "! grep -q '\"text\"' '$HOOK_LOG'"
+
+# Signal has no webhook. The way in is signal-cli-rest-api, a bridge on the box that
+# links to your own account as a secondary device; its /v2/send wants message, the
+# sending number, and a recipients list. Sending to your own number lands in Note to
+# Self, which is the default here so one variable is enough.
+echo "== alerts: signal posts the signal-cli-rest-api shape, to yourself by default"
+alerts_env; export FAUCET_ALERT_FORMAT=signal FAUCET_ALERT_SIGNAL_NUMBER=+15551234567
+bash "$ALERT" "node is behind" > "$T/sig.log" 2>&1
+check "exits 0" "[ $? -eq 0 ]"
+check "message key used" "grep -q '\"message\"' '$HOOK_LOG'"
+check "sent from the linked number" "grep -q '\"number\":\"+15551234567\"' '$HOOK_LOG'"
+check "and to it, so it lands in Note to Self" "grep -q '\"recipients\":\\[\"+15551234567\"\\]' '$HOOK_LOG'"
+check "no slack or discord key" "! grep -qE '\"text\"|\"content\"' '$HOOK_LOG'"
+
+echo "== alerts: signal with a separate recipient sends there instead"
+alerts_env; export FAUCET_ALERT_FORMAT=signal FAUCET_ALERT_SIGNAL_NUMBER=+15551234567 FAUCET_ALERT_SIGNAL_RECIPIENT=+15559876543
+bash "$ALERT" "hello" > /dev/null 2>&1
+check "recipient is the other number" "grep -q '\"recipients\":\\[\"+15559876543\"\\]' '$HOOK_LOG'"
+
+echo "== alerts: signal without a number is NOT SENT, loudly, rather than a malformed post"
+alerts_env; export FAUCET_ALERT_FORMAT=signal; unset FAUCET_ALERT_SIGNAL_NUMBER FAUCET_ALERT_SIGNAL_RECIPIENT
+bash "$ALERT" "nobody will hear this" > "$T/signone.log" 2>&1
+check "exits 3, the not-configured code" "[ $? -eq 3 ]"
+check "says NOT SENT and names the variable to set" "grep -q 'NOT SENT.*FAUCET_ALERT_SIGNAL_NUMBER' '$T/signone.log'"
+check "nothing reached the bridge" "! grep -q 'nobody will hear' '$HOOK_LOG'"
+
+echo "== alerts: a signal number that is not E.164 is refused before anything is sent"
+alerts_env; export FAUCET_ALERT_FORMAT=signal FAUCET_ALERT_SIGNAL_NUMBER=5551234567
+bash "$ALERT" "bad number" > "$T/sigbad.log" 2>&1
+check "exits nonzero" "[ $? -ne 0 ]"
+check "and says what shape it wanted" "grep -q 'E.164' '$T/sigbad.log'"
+check "nothing reached the bridge" "! grep -q 'bad number' '$HOOK_LOG'"
 
 echo "== alerts: an unknown format still sends, and says so"
 alerts_env; export FAUCET_ALERT_FORMAT=telegram
