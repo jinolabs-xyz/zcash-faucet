@@ -27,8 +27,68 @@ BEST_EFFORT_FILE="${FAUCET_BEST_EFFORT_UNITS:-/opt/zcash-faucet/deploy/z3/best-e
 # place nobody is paged from. Falls back to the main URL: a quieter LABEL on a loud
 # channel still beats losing the message.
 BEST_EFFORT_URL="${FAUCET_ALERT_BESTEFFORT_URL:-}"
+# ONE MESSAGE PER CAUSE PER HOUR. The day Signal came alive, faucet-metrics.sh was ready to
+# post "disk low" every 30 seconds per filesystem, and every 2-minute unit carries
+# OnFailure=. A channel that can say the same thing 2,000 times a day is a channel that
+# gets muted, and a muted channel is the failure everything in this file exists to
+# prevent. So a repeat of the same first line inside the window is counted, not sent, and
+# the next one that does go out says how many were held back. 0 turns it off. The state
+# dir is created on demand; when it cannot be written, repeats go through, because
+# under-alerting is still the worse failure.
+STATE_DIR="${FAUCET_ALERT_STATE_DIR:-/var/lib/faucet-alerts}"
+COOLDOWN="${FAUCET_ALERT_COOLDOWN_SECONDS:-3600}"
+DEDUP=1
 
 log() { echo "$(date -u +%FT%TZ) alert: $*"; }
+
+# The key is the FIRST LINE, lowercased, with every number replaced, so "disk low: / has
+# 9% free" and "... 8% free" are one cause, and ctaz-rpc@240762-413643-0.service and its
+# next instance are one unit. The journal tail is never part of it: it differs every time
+# by construction and would defeat the point. The URL is not part of it either; it is a
+# credential and this key names a file.
+dedup_key() { # $1 message -> key on stdout, empty when it cannot be computed
+  local first
+  first="$(printf '%s\n' "$1" | head -n1 | tr '[:upper:]' '[:lower:]' \
+    | sed -E 's/[0-9]+/#/g; s/[[:space:]]+/ /g' 2>/dev/null)" || return 0
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s %s' "$ALERT_FORMAT" "$first" | sha256sum | cut -c1-40
+  elif command -v cksum >/dev/null 2>&1; then
+    printf '%s %s' "$ALERT_FORMAT" "$first" | cksum | cut -d' ' -f1
+  fi
+}
+
+# 0 = send it (HELD_BACK_NOTE says how many repeats preceded it), 1 = hold it back.
+HELD_BACK_NOTE=""
+dedup_check() { # $1 message
+  HELD_BACK_NOTE=""
+  [ "$DEDUP" = 1 ] || return 0
+  [ "$COOLDOWN" -gt 0 ] 2>/dev/null || return 0
+  local key f now last count
+  key="$(dedup_key "$1")"; [ -n "$key" ] || return 0
+  if ! mkdir -p "$STATE_DIR" 2>/dev/null || [ ! -w "$STATE_DIR" ]; then
+    log "dedup OFF: cannot write $STATE_DIR, so repeats of this alert will all be sent"
+    return 0
+  fi
+  f="$STATE_DIR/$key"; now="$(date -u +%s)"
+  # OnFailure handlers fire concurrently, so the read-modify-write is serialised.
+  exec 9>"$STATE_DIR/.lock"
+  command -v flock >/dev/null 2>&1 && flock -w 5 9
+  read -r last count < "$f" 2>/dev/null || { last=0; count=0; }
+  [ "$last" -ge 0 ] 2>/dev/null || last=0
+  [ "$count" -ge 0 ] 2>/dev/null || count=0
+  if [ $((now - last)) -lt "$COOLDOWN" ]; then
+    printf '%s %s\n' "$last" "$((count + 1))" > "$f"
+    exec 9>&-
+    log "HELD BACK (same alert within ${COOLDOWN}s, $((count + 1)) so far): $1"
+    return 1
+  fi
+  printf '%s 0\n' "$now" > "$f"
+  exec 9>&-
+  [ "$count" -gt 0 ] && HELD_BACK_NOTE=" (+$count identical held back in the last $((COOLDOWN / 60)) min)"
+  # Keys for causes that stopped firing are never read again; a week is long past any window.
+  find "$STATE_DIR" -type f -mtime +7 -delete 2>/dev/null
+  return 0
+}
 
 # IS THIS UNIT ALLOWED TO BE QUIET? (#327)
 #
@@ -75,8 +135,6 @@ json_escape() {
 
 send() { # $1 = message text
   local msg body escaped
-  escaped="$(json_escape "$PREFIX $1")" || return 4
-  msg="$escaped"
   if [ -z "$ALERT_URL" ]; then
     log "NOT SENT (no FAUCET_ALERT_URL configured): $1"
     return 3
@@ -97,6 +155,11 @@ send() { # $1 = message text
       fi
     done
   fi
+  # Held back is a decision, not a failure: the caller's alert was handled, the journal
+  # says so, and the next one through carries the count. So it exits 0.
+  dedup_check "$1" || return 0
+  escaped="$(json_escape "$PREFIX $1$HELD_BACK_NOTE")" || return 4
+  msg="$escaped"
   # Slack and Discord want the same shape under different keys, and each
   # rejects the other's, so the channel type has to be explicit. Signal's bridge
   # wants the message plus who it is from and to.
@@ -121,7 +184,9 @@ case "${1:-}" in
     # code that will page you actually works.
     # Never interpolate the URL: it is a credential and this line goes to the
     # journal on every setup run.
-    log "format=$ALERT_FORMAT url=$([ -n "$ALERT_URL" ] && echo set || echo UNSET)"
+    log "format=$ALERT_FORMAT url=$([ -n "$ALERT_URL" ] && echo set || echo UNSET) cooldown=${COOLDOWN}s"
+    # A self-test is someone at a keyboard asking "does it work". It is never held back.
+    DEDUP=0
     # Capture send's status directly: a failed `if` with no `else` returns 0,
     # which made this exit 0 while printing FAILED.
     send "self-test from $(hostname 2>/dev/null || echo this box), ignore this message"

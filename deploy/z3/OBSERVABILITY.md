@@ -127,7 +127,8 @@ grace window and reports once when it recovers. It deliberately does not page
 for un-readiness during a first sync or a refill, because those are un-ready on
 purpose.
 
-**Disk.** `faucet-prune.timer` runs `prune.sh` daily at 04:10 UTC (plus up to
+**Disk.** `faucet-metrics.sh` pages `🚨 NEEDS YOU: disk low` when a watched
+filesystem drops under `METRICS_DISK_FLOOR_PCT` (10%). `faucet-prune.timer` runs `prune.sh` daily at 04:10 UTC (plus up to
 ten minutes of jitter) to remove
 Docker build cache and dangling layers, which nothing else does. It never
 touches volumes, containers or any tagged image; unused tags are listed in its
@@ -137,6 +138,14 @@ build leaves ~2.4 GB, a day of deploys ~7 GB) in the optional
 `/etc/faucet/prune.env`; `PRUNE_DRY_RUN=1 /opt/faucet/prune.sh` says what a
 run would do without doing it. Balance
 and drift are in the metrics file below and alerted by whatever scrapes it.
+
+**Once per cause per hour.** `alert.sh` remembers the first line of every
+message it sends, with the numbers blanked, under `/var/lib/faucet-alerts`. A
+repeat inside `FAUCET_ALERT_COOLDOWN_SECONDS` (3600) is counted in the journal
+as `HELD BACK` and not sent; the next one that goes out ends with
+`(+N identical held back in the last 60 min)`. Two instances of the same
+template unit are one cause. `--self-test` is never held back. Set the variable
+to `0` in `/etc/faucet/alerts.env` to turn it off.
 
 ## Metrics
 

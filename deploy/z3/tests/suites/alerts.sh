@@ -12,8 +12,10 @@ alerts_env() {
   export PATH="$T/bin:$BASE_PATH"
   export FAUCET_ALERT_URL="http://127.0.0.1:$HOOK_PORT/hook"
   export FAUCET_ALERT_FORMAT=slack
+  # A fresh cooldown state per test, so one test's sends cannot hold back another's.
+  export FAUCET_ALERT_STATE_DIR="$T/alert-state"
   unset WATCHDOG_ALERT_URL WATCHDOG_ALERT_FORMAT FAUCET_ALERT_PREFIX \
-        FAUCET_ALERT_SIGNAL_NUMBER FAUCET_ALERT_SIGNAL_RECIPIENT 2>/dev/null
+        FAUCET_ALERT_SIGNAL_NUMBER FAUCET_ALERT_SIGNAL_RECIPIENT FAUCET_ALERT_COOLDOWN_SECONDS 2>/dev/null
   : > "$HOOK_LOG"
 }
 
@@ -191,6 +193,81 @@ FAUCET_BEST_EFFORT_UNITS="$BE" \
 check "the paging channel received NOTHING" "[ ! -s '$HOOK_LOG' ]"
 check "and the failure to reach the best-effort channel is reported" \
   "grep -q 'POST FAILED' '$T/split.log'"
+
+# ── ONCE PER CAUSE PER HOUR ──────────────────────────────────────────────────────────
+# faucet-metrics.sh runs every 30 s and alerts inside a per-filesystem loop; every 2-minute
+# unit carries OnFailure=. The day Signal came alive that was a channel one low disk away
+# from 2,880 messages. The sender holds repeats, and these prove the exact shape of that.
+
+echo "== alerts: the same alert twice inside the window is sent ONCE and counted"
+alerts_env
+bash "$ALERT" "disk low: / has 9% free" > "$T/d1.log" 2>&1; rc1=$?
+bash "$ALERT" "disk low: / has 8% free" > "$T/d2.log" 2>&1; rc2=$?
+check "first send exits 0" "[ $rc1 -eq 0 ]"
+check "the repeat also exits 0, because held back is a decision, not a failure" "[ $rc2 -eq 0 ]"
+check "the webhook saw exactly one" "[ \"\$(grep -c 'disk low' '$HOOK_LOG')\" = 1 ]"
+check "the journal says HELD BACK and counts it" "grep -q 'HELD BACK.*1 so far' '$T/d2.log'"
+check "a changed number is the same cause" "grep -q '9% free' '$HOOK_LOG' && ! grep -q '8% free' '$HOOK_LOG'"
+
+echo "== alerts: a DIFFERENT cause inside the window still goes out"
+alerts_env
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+bash "$ALERT" "node is behind by 40 blocks" > /dev/null 2>&1
+check "both causes reached the webhook" "grep -q 'disk low' '$HOOK_LOG' && grep -q 'node is behind' '$HOOK_LOG'"
+
+echo "== alerts: when the window has passed, the next one is sent WITH the held-back count"
+alerts_env
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+# Age the record by rewriting its timestamp: the file holds "<epoch> <held back>".
+for f in "$T"/alert-state/*; do
+  [ "$(basename "$f")" = ".lock" ] && continue
+  read -r _ n < "$f"; printf '%s %s\n' "$(( $(date -u +%s) - 7200 ))" "$n" > "$f"
+done
+bash "$ALERT" "disk low: / has 7% free" > "$T/d4.log" 2>&1
+check "exactly two reached the webhook: the first, and the one after the window" "[ \"\$(grep -c 'disk low' '$HOOK_LOG')\" = 2 ]"
+check "the second carries the count of what was held back" "grep -q '+2 identical held back in the last 60 min' '$HOOK_LOG'"
+check "and the count is reset for the next window" "bash '$ALERT' 'disk low: / has 7% free' >/dev/null 2>&1; [ \"\$(grep -c 'disk low' '$HOOK_LOG')\" = 2 ]"
+
+echo "== alerts: two instances of one template unit are ONE cause"
+alerts_env
+printf '#!/usr/bin/env bash\necho "node did not answer"\n' > "$T/bin/journalctl"; chmod +x "$T/bin/journalctl"
+bash "$ALERT" --unit 'ctaz-rpc@240762-413643-0.service' > /dev/null 2>&1
+bash "$ALERT" --unit 'ctaz-rpc@240763-413801-0.service' > "$T/u2.log" 2>&1
+check "one page for the two instances" "[ \"\$(grep -c 'unit FAILED' '$HOOK_LOG')\" = 1 ]"
+check "the second is held back, not lost" "grep -q 'HELD BACK' '$T/u2.log'"
+bash "$ALERT" --unit 'faucet-watchdog.service' > /dev/null 2>&1
+check "a different unit is a different cause and goes out" "grep -q 'faucet-watchdog.service' '$HOOK_LOG'"
+
+echo "== alerts: the self-test is NEVER held back, it is a person asking"
+alerts_env
+bash "$ALERT" --self-test > /dev/null 2>&1
+bash "$ALERT" --self-test > "$T/st5.log" 2>&1
+check "both self-tests reached the channel" "[ \"\$(grep -c 'self-test from' '$HOOK_LOG')\" = 2 ]"
+check "and the second passed" "grep -q 'SELF-TEST PASSED' '$T/st5.log'"
+check "the self-test log states the cooldown, so a muted-looking channel has a visible cause" "grep -q 'cooldown=3600s' '$T/st5.log'"
+
+echo "== alerts: FAUCET_ALERT_COOLDOWN_SECONDS=0 turns it off"
+alerts_env; export FAUCET_ALERT_COOLDOWN_SECONDS=0
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+check "both were sent" "[ \"\$(grep -c 'disk low' '$HOOK_LOG')\" = 2 ]"
+
+echo "== alerts: a state dir that cannot be written FAILS TOWARD NOISE, not silence"
+alerts_env; export FAUCET_ALERT_STATE_DIR="$T/not-a-dir/deeper"
+: > "$T/not-a-dir"   # a file where a directory is needed, so mkdir -p fails
+bash "$ALERT" "disk low: / has 9% free" > "$T/ro1.log" 2>&1
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+check "both were sent" "[ \"\$(grep -c 'disk low' '$HOOK_LOG')\" = 2 ]"
+check "and the journal says why repeats are not being held" "grep -q 'dedup OFF' '$T/ro1.log'"
+
+echo "== alerts: a message that is NOT sent leaves no cooldown record behind"
+# Unconfigured returns 3 before the dedup runs; otherwise the first real send after
+# configuring the channel would be held back by a failure that never reached anyone.
+alerts_env; unset FAUCET_ALERT_URL
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+check "no state was written" "[ ! -d '$T/alert-state' ] || [ -z \"\$(ls -A '$T/alert-state' 2>/dev/null | grep -v '^.lock$')\" ]"
 
 kill "$HOOK_PID" 2>/dev/null
 
