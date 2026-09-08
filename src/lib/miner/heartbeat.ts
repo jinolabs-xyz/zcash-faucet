@@ -211,7 +211,9 @@ export function readingFor(raw: unknown, nowMs: number): MinerReading {
   // non-zero consecutiveErrors is a wedged connection wearing a calm label, and both
   // readers must call that the stall it is, or the panel says "waiting" while the
   // watchdog restarts it.
-  if (facts.waitingAgoSeconds != null && (facts.consecutiveErrors ?? 0) === 0) return { ...facts, state: "waiting" };
+  // `=== 0`, not `?? 0`: a wait with NO error count at all is not honoured here, and the
+  // watchdog treats a missing count as unreadable rather than zero, so the two agree.
+  if (facts.waitingAgoSeconds != null && facts.consecutiveErrors === 0) return { ...facts, state: "waiting" };
 
   // Null means the miner has never fetched a template. That is not "running and we
   // have no data yet", it is a miner that has never done the one thing it exists to

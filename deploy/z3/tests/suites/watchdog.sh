@@ -504,6 +504,39 @@ check "the miner is started again once the tip moves" "grep -q 'systemctl start 
 check "and the ONE fixed report says the miner was stopped and is back" "grep -q 'FIXED: zebra was 1443 blocks behind.*The miner was stopped for the heal and is started again' '$T/alerts.log'"
 check "stopped exactly once for the episode" "[ \"\$(grep -c 'systemctl stop zcash-testnet-miner' '$STUB_LOG')\" = 1 ]"
 
+echo "== watchdog: STEP 6 DOES NOT RESTART A MINER STEP 7 STOPPED, mid-heal"
+# Reproduced in review: the stopped miner's last heartbeat stays fresh for two sweeps while
+# its template ages, step 6 read that as a stall and restarted it, and the miner mined
+# through the peer-cache drop and the state rewind. Lag 60 here: above the node heal's
+# limit (50) and below the miner's own (100), so only the watchdog's stop protects.
+wd_node_env
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export WATCHDOG_MINER_HEARTBEAT="$T/heartbeat.json" WATCHDOG_MINER_UNIT="zcash-testnet-miner.service"
+miner_hb 5 7200 3600   # fresh beat, template an hour old: step 6's trigger, exactly
+export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4331294   # 60 behind, stuck
+wd_run 4   # baseline, stuck (stop + restart zebra), two more sweeps with the flag set
+check "the miner was stopped for the heal" "grep -q 'systemctl stop zcash-testnet-miner.service' '$STUB_LOG'"
+# Before the stop, step 6 may well restart a miner whose node is wedged (that is its job,
+# and it is harmless then). AFTER the stop it must not: the last restart precedes the stop.
+check "and NOT restarted by the miner-stall heal after the stop" "[ \"\$(grep -n 'systemctl restart zcash-testnet-miner' '$STUB_LOG' | tail -1 | cut -d: -f1 || echo 0)\" -lt \"\$(grep -n 'systemctl stop zcash-testnet-miner' '$STUB_LOG' | head -1 | cut -d: -f1)\" ]"
+check "so the unit is still stopped at the end" "[ \"\$(cat '$STUB_SYSTEMD/zcash-testnet-miner.service')\" = inactive ]"
+check "and the flag still says a heal has it" "[ \"\$(cat '$T/state/miner-stopped-for-node-heal.flaps')\" = 1 ]"
+
+echo "== watchdog: switching the node heal OFF mid-episode does not strand a miner it stopped"
+wd_node_env
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677
+wd_run 2   # stop the miner, restart zebra
+check "the miner was stopped" "grep -q 'systemctl stop zcash-testnet-miner.service' '$STUB_LOG'"
+export WATCHDOG_NODE_HEAL_ENABLED=0
+: > "$STUB_LOG"
+wd_run 1
+check "with the heal disabled, the stopped miner is started again rather than left parked" "grep -q 'systemctl start zcash-testnet-miner.service' '$STUB_LOG'"
+check "and the journal says why" "grep -q 'node heal is disabled; started zcash-testnet-miner.service' '$T/run.log'"
+check "and the flag is cleared" "[ \"\$(cat '$T/state/miner-stopped-for-node-heal.flaps')\" = 0 ]"
+check "and the node itself was left alone" "! grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
+unset WATCHDOG_NODE_HEAL_ENABLED
+
 echo "== watchdog: a node heal that GIVES UP leaves the miner stopped and says so"
 wd_node_env
 echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"

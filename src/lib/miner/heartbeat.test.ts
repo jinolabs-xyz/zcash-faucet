@@ -203,3 +203,9 @@ test("the reason rides along, and an empty or non-string reason is null", () => 
   assert.equal(readingFor({ ...HEALTHY, waitingReason: "" }, NOW).waitingReason, null);
   assert.equal(readingFor({ ...HEALTHY, waitingReason: 7 as never }, NOW).waitingReason, null);
 });
+
+test("a wait with NO error count at all is not honoured either, matching the watchdog", () => {
+  const { consecutiveErrors: _c, ...noCount } = { ...HEALTHY, lastTemplateAt: ago(3600), waitingSince: ago(1800) };
+  void _c;
+  assert.equal(readingFor(noCount, NOW).state, "stalled");
+});

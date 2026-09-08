@@ -162,10 +162,25 @@ mod tests {
         assert!(matches!(verdict(&info(12_000, 4_333_511), MAX_LAG_CEILING), Ok(Verdict::Wait { .. })));
     }
 
+    /// One entry of the real reply, trimmed. Read off the box's zebra 6.3.0 on 2026-09-09
+    /// (`getpeerinfo` returned a list of 135 of these), so the shape the guard depends on
+    /// is one the node actually produces, not a guess: the RPC exists on this zebra and
+    /// answers with a JSON array of connected peers.
     #[test]
     fn no_peers_is_isolated_and_a_peer_list_is_not() {
         assert_eq!(isolated(&json!([])), Ok(true));
-        assert_eq!(isolated(&json!([{"addr": "1.2.3.4:18233", "inbound": false}])), Ok(false));
+        assert_eq!(
+            isolated(&json!([{
+                "addr": "35.246.253.46:49750",
+                "services": "0000000000000001",
+                "lastrecv": 1788893571u64,
+                "inbound": true,
+                "banscore": 0,
+                "subver": "/Zebra:6.3.0/",
+                "version": 170120
+            }])),
+            Ok(false)
+        );
     }
 
     #[test]

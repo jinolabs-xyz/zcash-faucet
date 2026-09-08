@@ -270,8 +270,9 @@ recover_if_down() {
 # it with compact fixtures the miner never writes; it now writes the real shape.
 hb_field() { grep -o "\"$1\":[[:space:]]*\"[^\"]*\"" "$MINER_HEARTBEAT" 2>/dev/null | head -n1 | sed -E 's/^"[^"]*":[[:space:]]*"//; s/"$//'; }
 # A numeric field, empty when absent or null. The guard writes nodeLag as a bare integer.
-# At least one digit: `[0-9]*` matched zero of them, so a null or unreadable count came
-# back empty and `${errs:-0}` read that as the permissive 0.
+# At least one digit, so a match is a number. A null or absent field comes back empty
+# either way; what turns "empty" into a refusal rather than a permissive 0 is the
+# `${errs:-unreadable}` at the one call site that gates on it.
 hb_num() { grep -o "\"$1\":[[:space:]]*[0-9][0-9]*" "$MINER_HEARTBEAT" 2>/dev/null | head -n1 | sed -E 's/.*:[[:space:]]*//'; }
 
 # Age in seconds of an ISO-8601 Zulu timestamp, or empty if it is absent or will not
@@ -292,6 +293,12 @@ ts_age() {
 # restart-looping the miner forever.
 heal_miner_if_stalled() {
   [ "$MINER_HEAL_ENABLED" = "1" ] || return 0
+  # A miner step 7 stopped for a node heal is not stalled, it is stopped. Its last
+  # heartbeat stays "fresh" for MINER_HEARTBEAT_FRESH_SECS while lastTemplateAt ages, which
+  # is exactly this function's trigger, and it runs before step 7 each sweep: review
+  # reproduced it restarting the miner two sweeps after the stop, so the miner mined
+  # through the peer-cache drop and the state rewind, which is the 2026-09-07 mechanism.
+  [ "$(flap_get "$MINER_STOP_KEY")" != "1" ] || return 0
   [ -f "$MINER_HEARTBEAT" ] || return 0
   local key="$MINER_UNIT" written_age started_age tmpl_age
 
@@ -388,7 +395,20 @@ zebra_chain_heights() {
 # If the RPC will not answer, that is a different failure (steps 1-2 and the pager), not
 # evidence of a stall, so this asserts nothing.
 heal_node_if_stalled() {
-  [ "$NODE_HEAL_ENABLED" = "1" ] || return 0
+  if [ "$NODE_HEAL_ENABLED" != "1" ]; then
+    # Switched off mid-episode (an operator about to reimport a snapshot does exactly
+    # this). The only `systemctl start` for a miner stopped by a heal lives below, so
+    # without this the miner stays stopped for ever with the panel reading a calm "off".
+    if [ "$(flap_get "$MINER_STOP_KEY")" = "1" ]; then
+      if systemctl start "$MINER_UNIT" >/dev/null 2>&1; then
+        log "node heal is disabled; started $MINER_UNIT, which a heal had stopped, so it is not left parked by accident (its own sync guard applies)"
+      else
+        danger "node heal is disabled and 'systemctl start $MINER_UNIT' FAILED; a heal had stopped it and it is still stopped."
+      fi
+      flap_set "$MINER_STOP_KEY" 0
+    fi
+    return 0
+  fi
   local name="$1"
   [ -n "$name" ] || return 0
 
