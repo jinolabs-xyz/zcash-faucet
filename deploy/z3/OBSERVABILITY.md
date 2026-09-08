@@ -149,8 +149,14 @@ same template unit are one cause; `9% free` and `8% free` are one cause;
 `40 behind` and `4000 behind` are two. The watchdog's `✅ FIXED` and
 `🚨 NEEDS YOU` are already one per episode and pass `--now`, so a NEEDS YOU
 is never held behind the FIXED before it. `--self-test` is never held. A value
-that is not a whole number falls back to 3600 with a `WARNING` in the journal;
-`0` turns it off.
+that is not a whole number falls back to 3600, and one over a day is capped at
+86400, each with a `WARNING` that the self-test prints too; `0` turns it off.
+Records are kept only in a directory the script created or found empty (it
+leaves a `.faucet-alerts` marker), so a mistyped path can never point its
+weekly cleanup at anything else. During an ops deploy the new `alert.sh` lands
+a few seconds before the watchdog restarts, so for that window the old
+watchdog's episode reports go through the cooldown; a restart that fails is
+logged as an error by install-ops.
 
 ## Metrics
 

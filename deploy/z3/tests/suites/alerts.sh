@@ -260,6 +260,16 @@ bash "$ALERT" "disk low: / has 9% free" > "$T/c1.log" 2>&1
 bash "$ALERT" "disk low: / has 9% free" > "$T/c2.log" 2>&1
 check "the journal names the bad value" "grep -q \"WARNING: FAUCET_ALERT_COOLDOWN_SECONDS='1h' is not a whole number\" '$T/c1.log'"
 check "and the default cooldown is in force" "grep -q 'HELD BACK' '$T/c2.log' && [ \"\$(grep -c 'disk low' '$HOOK_LOG')\" = 1 ]"
+bash "$ALERT" --self-test > "$T/c3.log" 2>&1
+check "and the self-test, the command an operator runs to check this, shows the warning too" "grep -q 'WARNING: FAUCET_ALERT_COOLDOWN_SECONDS' '$T/c3.log' && grep -q \"cooldown=3600s (configured: '1h')\" '$T/c3.log'"
+
+echo "== alerts: a cooldown longer than a day is capped, with a warning, not a bash error and dedup off"
+alerts_env; export FAUCET_ALERT_COOLDOWN_SECONDS=99999999999999999999
+bash "$ALERT" "disk low: / has 9% free" > "$T/big1.log" 2>&1
+bash "$ALERT" "disk low: / has 9% free" > "$T/big2.log" 2>&1
+check "no bash error about integer expressions" "! grep -q 'integer expression' '$T/big1.log'"
+check "warns and caps at a day" "grep -q 'more than a day; using 86400' '$T/big1.log'"
+check "and the cooldown is in force" "grep -q 'HELD BACK' '$T/big2.log'"
 
 echo "== alerts: a record from the FUTURE (clock stepped back) does not hold anything"
 alerts_env
@@ -271,12 +281,52 @@ done
 bash "$ALERT" "disk low: / has 9% free" > "$T/fut.log" 2>&1
 check "sent despite a record stamped tomorrow" "grep -q 'sent: disk low' '$T/fut.log'"
 
-echo "== alerts: a state dir pointed at a system directory turns dedup OFF rather than deleting under it"
-alerts_env; export FAUCET_ALERT_STATE_DIR=/var/lib
-bash "$ALERT" "disk low: / has 9% free" > "$T/sys.log" 2>&1
-check "sent" "grep -q 'sent: disk low' '$T/sys.log'"
-check "and says why records are not kept" "grep -q 'dedup OFF: FAUCET_ALERT_STATE_DIR=/var/lib is a system directory' '$T/sys.log'"
-check "and nothing was written there" "[ ! -e /var/lib/.lock ]"
+echo "== alerts: A STATE DIR THAT IS NOT OURS gets no records and no deletes, however it is spelled"
+# The first guard was a denylist of names and "/etc/" with a trailing slash walked past it;
+# that review run deleted /etc/fstab. Ownership, not names: a directory with anyone else's
+# files in it and no .faucet-alerts marker is never touched. Tested against a WRITABLE fake
+# /etc, so the assertion is about the guard and not about the harness lacking root.
+alerts_env
+mkdir -p "$T/fake-etc"; : > "$T/fake-etc/fstab"; : > "$T/fake-etc/environment"; : > "$T/fake-etc/adduser.conf"
+touch -d '30 days ago' "$T/fake-etc/fstab" "$T/fake-etc/environment" "$T/fake-etc/adduser.conf" 2>/dev/null || true
+for spelling in "$T/fake-etc/" "$T/fake-etc/." "$T//fake-etc" "$T/fake-etc/../fake-etc"; do
+  FAUCET_ALERT_STATE_DIR="$spelling" bash "$ALERT" "disk low: / has 9% free" > "$T/sys.log" 2>&1
+  check "sent, with the dir spelled '$spelling'" "grep -q 'sent: disk low' '$T/sys.log'"
+  check "and dedup is OFF with the reason" "grep -q 'dedup OFF: .* is not a directory this script owns' '$T/sys.log'"
+done
+check "every pre-existing file survived" "[ -e '$T/fake-etc/fstab' ] && [ -e '$T/fake-etc/environment' ] && [ -e '$T/fake-etc/adduser.conf' ]"
+check "and nothing of ours was written there" "[ \"\$(ls -A '$T/fake-etc' | wc -l | tr -d ' ')\" = 3 ]"
+
+echo "== alerts: an EMPTY directory is adopted and marked; a fresh path is created and marked"
+alerts_env
+mkdir -p "$T/empty-dir"
+FAUCET_ALERT_STATE_DIR="$T/empty-dir" bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+check "the empty directory got the marker and a record" "[ -e '$T/empty-dir/.faucet-alerts' ] && [ \"\$(ls '$T/empty-dir' | wc -l | tr -d ' ')\" = 1 ]"
+check "the default fresh path got the marker too" "[ -e '$T/alert-state/.faucet-alerts' ] || { bash '$ALERT' 'x' >/dev/null 2>&1; [ -e '$T/alert-state/.faucet-alerts' ]; }"
+
+echo "== alerts: THE LOCK COVERS THE POST, so simultaneous identical alerts deliver once"
+# Measured in review before this fix: 8 of 8 delivered, because the record is only written
+# after a POST that can take seconds and every caller read "never sent" in the meantime.
+alerts_env
+# `wait` with NO arguments would also wait for the suite's background receiver, for ever.
+par_pids=""
+for i in 1 2 3 4 5 6 7 8; do bash "$ALERT" "disk low: / has 9% free" > "$T/par$i.log" 2>&1 & par_pids="$par_pids $!"; done
+# shellcheck disable=SC2086
+wait $par_pids
+check "exactly one reached the webhook" "[ \"\$(grep -c 'disk low' '$HOOK_LOG')\" = 1 ]"
+check "and the other seven were held back, not lost or errored" "[ \"\$(cat '$T'/par*.log | grep -c 'HELD BACK')\" = 7 ]"
+
+echo "== alerts: the held-back count is on the FIRST line, where a phone preview shows it"
+alerts_env
+printf '#!/usr/bin/env bash\necho "line one of the tail"\necho "line two of the tail"\n' > "$T/bin/journalctl"; chmod +x "$T/bin/journalctl"
+bash "$ALERT" --unit zsnap-export.service > /dev/null 2>&1
+bash "$ALERT" --unit zsnap-export.service > /dev/null 2>&1
+for f in "$T"/alert-state/*; do
+  [ -f "$f" ] || continue; case "$(basename "$f")" in .*) continue ;; esac
+  read -r _ n < "$f" || n=0; printf '%s %s\n' "$(( $(date -u +%s) - 7200 ))" "${n:-0}" > "$f"
+done
+bash "$ALERT" --unit zsnap-export.service > /dev/null 2>&1
+check "the note follows the unit name on the first line, not the journal tail" "grep -q 'unit FAILED: zsnap-export.service (+1 identical held back in the last 60 min)' '$HOOK_LOG'"
 
 echo "== alerts: a first alert of a new cause leaves NO shell error in the journal"
 alerts_env
@@ -305,12 +355,15 @@ check "exactly two reached the webhook: the first, and the one after the window"
 check "the second carries the count of what was held back" "grep -q '+2 identical held back in the last 60 min' '$HOOK_LOG'"
 check "and the count is reset for the next window" "bash '$ALERT' 'disk low: / has 7% free' >/dev/null 2>&1; [ \"\$(grep -c 'disk low' '$HOOK_LOG')\" = 2 ]"
 
-echo "== alerts: two instances of one template unit are ONE cause"
+echo "== alerts: instances of one template unit are ONE cause, whatever their ids look like"
+# Real instance ids differ in width (@10-3385354-0, @100000-3396810-0): a key that only
+# blanked digits kept them apart and five failures of one broker paged five times.
 alerts_env
 printf '#!/usr/bin/env bash\necho "node did not answer"\n' > "$T/bin/journalctl"; chmod +x "$T/bin/journalctl"
-bash "$ALERT" --unit 'ctaz-rpc@240762-413643-0.service' > /dev/null 2>&1
-bash "$ALERT" --unit 'ctaz-rpc@240763-413801-0.service' > "$T/u2.log" 2>&1
-check "one page for the two instances" "[ \"\$(grep -c 'unit FAILED' '$HOOK_LOG')\" = 1 ]"
+bash "$ALERT" --unit 'ctaz-rpc@10-3385354-0.service' > /dev/null 2>&1
+bash "$ALERT" --unit 'ctaz-rpc@100000-3396810-0.service' > "$T/u2.log" 2>&1
+bash "$ALERT" --unit 'ctaz-rpc@101127-3691924-0.service' > /dev/null 2>&1
+check "one page for three instances of different widths" "[ \"\$(grep -c 'unit FAILED' '$HOOK_LOG')\" = 1 ]"
 check "the second is held back, not lost" "grep -q 'HELD BACK' '$T/u2.log'"
 bash "$ALERT" --unit 'faucet-watchdog.service' > /dev/null 2>&1
 check "a different unit is a different cause and goes out" "grep -q 'faucet-watchdog.service' '$HOOK_LOG'"
