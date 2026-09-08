@@ -127,8 +127,11 @@ grace window and reports once when it recovers. It deliberately does not page
 for un-readiness during a first sync or a refill, because those are un-ready on
 purpose.
 
-**Not** anything about disk, balance or drift yet. Those come from the metrics
-file below and are alerted by whatever scrapes it.
+**Disk.** `faucet-prune.timer` runs `prune.sh` daily at 04:10 UTC to remove
+Docker build cache and dangling layers, which nothing else does. It never
+touches volumes, containers, the rollback image or anything a container or the
+stack's pin file names. Balance and drift are in the metrics file below and
+alerted by whatever scrapes it.
 
 ## Metrics
 

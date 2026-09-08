@@ -52,6 +52,11 @@ faucet-metrics.timer
 # Encrypted backups. The archives are the reason a lost disk is not lost keys.
 faucet-backup.timer
 
+# Docker disk prune. Every deploy leaves a build-cache generation and a dangling layer set
+# and nothing removed them: 53.6 GB reclaimable on 2026-09-08, on the disk the chain and
+# the backups share. The full-disk outage is the one every other timer here dies in.
+faucet-prune.timer
+
 # Chain snapshots, so a rebuilt box does not sync from genesis.
 zsnap-export.timer
 

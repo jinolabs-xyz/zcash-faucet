@@ -1,0 +1,13 @@
+# Daily, in the quiet hours, and ten minutes after the timer is first enabled so a box
+# that has never pruned does not wait a day for its first 50 GB back.
+[Unit]
+Description=Daily faucet Docker disk prune
+
+[Timer]
+OnActiveSec=10min
+OnCalendar=*-*-* 04:10:00 UTC
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
