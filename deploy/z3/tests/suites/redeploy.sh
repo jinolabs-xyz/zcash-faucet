@@ -483,6 +483,21 @@ REDEPLOY_VERIFY_MANIFEST="$T/bin/not-a-real-verifier" bash "$REDEPLOY" > "$T/abs
 check "an absent verifier ends the deploy at 2" "[ $? -eq 2 ]"
 check "and says the image was not compared" "grep -qi 'not compared\|UNVERIFIED' '$T/absent.log'"
 
+echo "== redeploy: the verifier is told which repo to compare against"
+# The verifier defaults its repo to ../.. from its own file: the checkout in deploy/z3/,
+# and `/` once installed flat in /opt/faucet. For three weeks every tick on the box hit
+# "cannot resolve HEAD in /", ended UNVERIFIED, never advanced the baseline, and recreated
+# the app every two minutes. redeploy knows the checkout it pulled from, so it must say so.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+mkdir -p "$T/bin"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "${VERIFY_REPO_DIR:-unset}" > "%s/verify-repo-dir"\nexit 0\n' "$T" > "$T/bin/verify-recorder"
+chmod +x "$T/bin/verify-recorder"
+REDEPLOY_VERIFY_MANIFEST="$T/bin/verify-recorder" bash "$REDEPLOY" > "$T/repodir.log" 2>&1
+check "the verifier ran" "[ -f '$T/verify-repo-dir' ]"
+check "and was handed the checkout redeploy pulled from, not left to guess" \
+  "[ \"\$(cat '$T/verify-repo-dir')\" = '$T' ]"
+
 echo "== redeploy: and the happy path still reaches 0, so the above can fail"
 # Rule 29. Without this the three cases above would pass on a redeploy that refused
 # everything, and a check that cannot succeed proves nothing about one that fails.
