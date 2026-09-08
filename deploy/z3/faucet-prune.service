@@ -9,12 +9,13 @@ OnFailure=faucet-alert@%n.service
 
 [Service]
 Type=oneshot
-# Optional: PRUNE_KEEP_BUILD_CACHE (default 5GB).
+# Optional: PRUNE_KEEP_BUILD_CACHE (default 20GB, measured), PRUNE_DRY_RUN=1.
 EnvironmentFile=-/etc/faucet/prune.env
 ExecStart=/opt/faucet/prune.sh
-# The first run on a box that has never pruned deletes ~50 GB of layers, and systemd's
-# default start timeout is 90 s. Killed at 90 s the unit fails, pages, logs no result,
-# and the daemon keeps deleting anyway. zsnap-export.service sets 2h for the same reason.
+# A oneshot has no start timeout at all by default (systemd exempts Type=oneshot from
+# DefaultTimeoutStartSec), so a prune against a wedged daemon would run for ever with
+# nobody paged. Two hours is generous for the first run's ~50 GB of deletes and then it
+# fails loud. zsnap-export.service bounds its long job the same way.
 TimeoutStartSec=2h
 # The deletes run inside dockerd and this does not throttle them; it throttles the client
 # that waits, lists and measures, which is small. Kept so this unit matches the other

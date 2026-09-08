@@ -31,8 +31,18 @@
 # close, so it is not allowed to look like success.
 set -uo pipefail
 
-KEEP_BUILD="${PRUNE_KEEP_BUILD_CACHE:-5GB}"
+# 20GB is MEASURED, not a round number. On the box on 2026-09-09 one faucet build left
+# ~2.4 GB of cache records (1.16 GB node_modules, 0.95 GB, 0.14 GB, 0.1 GB) and a day of
+# deploys ~7 GB "used hours ago". A 5 GB reserve would have evicted the same day's warm
+# layers every night and made the first merge each morning build cold inside autodeploy's
+# timeout. 20 GB keeps about a week of warm layers and still returns ~34 of the 53 GB.
+KEEP_BUILD="${PRUNE_KEEP_BUILD_CACHE:-20GB}"
 DRY="${PRUNE_DRY_RUN:-0}"
+# Bounds on the two calls that only ask. The unit allows two hours for the deletes; a
+# wedged daemon must not be allowed to spend them on `docker version`, or the page for
+# "dockerd wedged" arrives two hours late instead of in thirty seconds.
+VERSION_TIMEOUT="${PRUNE_VERSION_TIMEOUT:-30}"
+DF_TIMEOUT="${PRUNE_DF_TIMEOUT:-120}"
 
 log() { echo "$(date -u +%FT%TZ) prune: $*"; }
 run() { # a docker command that changes something; DRY describes it instead
@@ -42,12 +52,12 @@ run() { # a docker command that changes something; DRY describes it instead
 # Bounded: `docker system df` walks every layer and on a full box that is not instant. A
 # usage line is context, and context must not be what eats the unit's start timeout.
 usage() {
-  timeout 120 docker system df --format '{{.Type}}: {{.Size}} ({{.Reclaimable}} reclaimable)' 2>/dev/null | tr '\n' ' ' \
-    || echo "(docker system df did not answer in 120s)"
+  timeout "$DF_TIMEOUT" docker system df --format '{{.Type}}: {{.Size}} ({{.Reclaimable}} reclaimable)' 2>/dev/null | tr '\n' ' ' \
+    || echo "(docker system df gave no usable answer)"
 }
 
-if ! docker version >/dev/null 2>&1; then
-  log "ERROR: docker is not reachable, nothing pruned"
+if ! timeout "$VERSION_TIMEOUT" docker version >/dev/null 2>&1; then
+  log "ERROR: docker is not reachable (no answer in ${VERSION_TIMEOUT}s), nothing pruned"
   exit 1
 fi
 log "before: $(usage)"
