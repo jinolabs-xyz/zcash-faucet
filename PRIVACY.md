@@ -24,8 +24,10 @@ nothing longer than needed.
 
 The ledger holds only what's needed to enforce fair use: `address_hash`,
 `ip_hash`, `subnet_hash`, amount, status, txid, timestamp. Rows are **purged**
-once they're older than the retention window (`max(cooldown, 24h) + 1h`), after
-which they can no longer affect a cooldown or the daily cap, so they're deleted.
+once they're older than the retention window (`max(cooldown, 24h, pending lease) + 1h`;
+the pending lease is about 109 minutes on stock settings and scales with the send
+queue and the wallet's timeouts), after which they can no longer affect a cooldown,
+the daily cap or an in-flight claim, so they're deleted.
 
 ### About `subnet_hash`, because it is not the same kind of thing as `ip_hash`
 

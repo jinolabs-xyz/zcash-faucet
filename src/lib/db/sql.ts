@@ -222,8 +222,9 @@ DELETE FROM used_challenges WHERE exp < ?
 // AND THE WAIT IN FRONT OF IT. The row is reserved before the claim joins the serial send
 // queue, and the deadline is armed when the send STARTS, not when it was queued
 // (queue.ts). A claim behind a full queue waits up to sendQueueMaxPending sends, each up
-// to the deadline (the sender's own timeouts bound the work under it), before its own
-// send begins. Review reproduced the double drip at queue depth two with a lease that
+// to the send's real residence (config.sendResidenceMs: the sender's own worst case, or
+// the deadline if that is higher; a deadline pinned below the sender must not shrink
+// this), before its own send begins. Review reproduced the double drip at queue depth two with a lease that
 // covered one send: the row outlived the lease while the send had not started. So the
 // lease covers a full queue plus the send plus a margin for the finalise write: with
 // stock settings 21 * 309 s + 60 s, about 109 minutes. A process that dies mid-send holds
@@ -232,8 +233,8 @@ DELETE FROM used_challenges WHERE exp < ?
 // correctness bound is the sum, not a constant. The db module computes the value once
 // from config; this is the rule, kept pure so it can be tested.
 export const PENDING_LEASE_MARGIN_SECONDS = 60;
-export function pendingLeaseSeconds(sendTaskDeadlineMs: number, sendQueueMaxPending: number): number {
-  return Math.ceil(((sendQueueMaxPending + 1) * sendTaskDeadlineMs) / 1000) + PENDING_LEASE_MARGIN_SECONDS;
+export function pendingLeaseSeconds(sendResidenceMs: number, sendQueueMaxPending: number): number {
+  return Math.ceil(((sendQueueMaxPending + 1) * sendResidenceMs) / 1000) + PENDING_LEASE_MARGIN_SECONDS;
 }
 
 /**
@@ -315,7 +316,7 @@ export function reserveParams(o: {
   dailyCapZat: number;
   subnetDailyMax: number;
   network: string;
-  /** How long a pending row blocks: pendingLeaseSeconds(config.sendTaskDeadlineMs). */
+  /** How long a pending row blocks: pendingLeaseSeconds(config.sendResidenceMs, config.sendQueueMaxPending). */
   pendingLeaseSeconds: number;
 }): (string | number)[] {
   const cooldownCut = o.now - o.cooldownSeconds;

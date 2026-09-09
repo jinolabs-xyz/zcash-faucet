@@ -35,7 +35,7 @@ import { probeLedger, verdictFor, PROBE_EVERY_MS, type LedgerCacheEntry, type Le
  * flight cannot be reserved over (register #8). Exported for the tests that walk time
  * past it.
  */
-export const PENDING_LEASE_SECONDS = pendingLeaseSeconds(config.sendTaskDeadlineMs, config.sendQueueMaxPending);
+export const PENDING_LEASE_SECONDS = pendingLeaseSeconds(config.sendResidenceMs, config.sendQueueMaxPending);
 
 const g = globalThis as unknown as {
   __faucetDriver?: DbDriver;
