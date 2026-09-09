@@ -410,7 +410,7 @@ release_miner_after_heal() {
     flap_set "$MINER_STOP_KEY" 0
     alerted_miner_start_failed=0
     log "started $MINER_UNIT again after the node heal"
-    MINER_RELEASE_NOTE=" The miner was stopped for the heal and is started again."
+    MINER_RELEASE_NOTE=" The miner was stopped for the heal and its unit is started again; its heartbeat confirms within a minute."
     return 0
   fi
   log "WARNING: could not start $MINER_UNIT after the node heal; will retry next sweep"
@@ -428,12 +428,11 @@ heal_node_if_stalled() {
     # this). The only `systemctl start` for a miner stopped by a heal lives below, so
     # without this the miner stays stopped for ever with the panel reading a calm "off".
     if [ "$(flap_get "$MINER_STOP_KEY")" = "1" ]; then
-      if systemctl start "$MINER_UNIT" >/dev/null 2>&1; then
-        log "node heal is disabled; started $MINER_UNIT, which a heal had stopped, so it is not left parked by accident (its own sync guard applies)"
-      else
-        danger "node heal is disabled and 'systemctl start $MINER_UNIT' FAILED; a heal had stopped it and it is still stopped."
-      fi
-      flap_set "$MINER_STOP_KEY" 0
+      # Through the same helper as every other release: the flag clears only on a start
+      # that succeeded, a failure retries next sweep and pages once, and the "already
+      # paged" flag resets on success, so a later episode's failure can page again.
+      release_miner_after_heal
+      [ -n "$MINER_RELEASE_NOTE" ] && log "node heal is disabled; started $MINER_UNIT, which a heal had stopped, so it is not left parked by accident (its own sync guard applies)"
     fi
     return 0
   fi
@@ -484,6 +483,11 @@ heal_node_if_stalled() {
     if [ "$prev" -gt 0 ] && [ "$(flap_get "$MINER_STOP_KEY")" = "1" ]; then
       release_miner_after_heal
       [ -n "$MINER_RELEASE_NOTE" ] && fixed "zebra is at the tip again after a node heal (${lag} behind).${MINER_RELEASE_NOTE}"
+      # At the tip IS the end of the episode, so the budget and the one-page-per-episode
+      # flags reset here exactly as they do when the height advances; left set, a later
+      # advancing sweep would report the same heal twice and the next stall would start
+      # with no budget and no page.
+      node_heal_attempts=0; alerted_node_giveup=0; node_heal_what=""; node_stall_lag=0
     fi
     return 0
   fi

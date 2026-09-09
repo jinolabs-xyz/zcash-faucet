@@ -501,7 +501,7 @@ check "the miner is stopped before the node is touched" "grep -q 'systemctl stop
 check "and the stop comes BEFORE the restart, not after" "[ \"\$(grep -n 'systemctl stop zcash-testnet-miner' '$STUB_LOG' | head -1 | cut -d: -f1)\" -lt \"\$(grep -n 'docker restart z3-testnet-zebra-1' '$STUB_LOG' | head -1 | cut -d: -f1)\" ]"
 check "the journal says why" "grep -q 'stopped zcash-testnet-miner.service for the node heal' '$T/run.log'"
 check "the miner is started again once the tip moves" "grep -q 'systemctl start zcash-testnet-miner.service' '$STUB_LOG'"
-check "and the ONE fixed report says the miner was stopped and is back" "grep -q 'FIXED: zebra was 1443 blocks behind.*The miner was stopped for the heal and is started again' '$T/alerts.log'"
+check "and the ONE fixed report says the miner was stopped and is back" "grep -q 'FIXED: zebra was 1443 blocks behind.*The miner was stopped for the heal and its unit is started again' '$T/alerts.log'"
 check "stopped exactly once for the episode" "[ \"\$(grep -c 'systemctl stop zcash-testnet-miner' '$STUB_LOG')\" = 1 ]"
 
 echo "== watchdog: STEP 6 DOES NOT RESTART A MINER STEP 7 STOPPED, mid-heal"
@@ -534,7 +534,7 @@ export STUB_ZEBRA_BLOCKS=4332677 STUB_ZEBRA_EST=4332677   # a reimport put it at
 : > "$T/alerts.log"; : > "$STUB_LOG"
 wd_run 3   # new process: baseline, at tip (release), at tip (quiet)
 check "the miner is started once the node is seen at the tip" "grep -q 'systemctl start zcash-testnet-miner.service' '$STUB_LOG'"
-check "reported once, as a node heal outcome" "[ \"\$(grep -c 'FIXED: zebra is at the tip again after a node heal' '$T/alerts.log')\" = 1 ] && grep -q 'started again' '$T/alerts.log'"
+check "reported once, as a node heal outcome" "[ \"\$(grep -c 'FIXED: zebra is at the tip again after a node heal' '$T/alerts.log')\" = 1 ] && grep -q 'unit is started again' '$T/alerts.log'"
 check "and the flag is clear" "[ \"\$(cat '$T/state/miner-stopped-for-node-heal.flaps')\" = 0 ]"
 
 echo "== watchdog: a failed start keeps the flag and retries, paging once, not once-ever and not every sweep"
@@ -619,7 +619,7 @@ export STUB_ZEBRA_ADVANCE=1   # the heal worked while the watchdog was down
 wd_run 3   # a NEW process: baseline (prev=0, must not act), advancing (start miner, report), quiet
 check "the new watchdog does not un-stop the miner on its very first sweep" "[ \"\$(grep -c 'systemctl start zcash-testnet-miner' '$STUB_LOG')\" = 1 ]"
 check "it starts the miner once the tip is seen moving" "grep -q 'systemctl start zcash-testnet-miner.service' '$STUB_LOG'"
-check "and reports it, naming the earlier watchdog's heal" "grep -q 'FIXED: zebra is syncing again after a node heal that a previous watchdog started.*miner was stopped for the heal and is started again' '$T/alerts.log'"
+check "and reports it, naming the earlier watchdog's heal" "grep -q 'FIXED: zebra is syncing again after a node heal that a previous watchdog started.*miner was stopped for the heal and its unit is started again' '$T/alerts.log'"
 check "and clears the flag" "[ \"\$(cat '$T/state/miner-stopped-for-node-heal.flaps' 2>/dev/null)\" = 0 ]"
 
 echo "== watchdog: a miner that will not START after the heal is a page, not a footnote on a tick"
