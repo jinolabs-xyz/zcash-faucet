@@ -34,7 +34,7 @@ with an anti-abuse gate on.
 | `ZALLET_ADDRESS` | none | Faucet unified address, the spend-from for `z_sendmany`. |
 | `ZALLET_MIN_CONF` | `10` | Confirmations before a note is spendable. |
 | `TRUSTED_PROXY_COUNT` | `0` | How many proxies **you** run. Only that many rightmost `X-Forwarded-For` hops are trusted. `0` ignores the header, which is the safe default. |
-| `LIGHTWALLETD_ENDPOINT` | `https://testnet.zec.rocks:443` | Read-side balance lookups only. Comma-separated list, tried in order. |
+| `LIGHTWALLETD_ENDPOINT` | `https://testnet.zec.rocks:443` | Read-side balance lookups, and a public TLS endpoint here is also the tip oracle's fallback (the drip gate) when hosh is dark, and the expiry-height source. Comma-separated list, tried in order; the fallback legs share a 3 s budget evenly, so per-leg headroom shrinks as you add endpoints. A plaintext, private or docker-name endpoint (`http://zaino:8137`) serves balances only: the oracle skips it, since our own indexer is not independent of our node, and with only such endpoints the gate runs on hosh alone and fails closed when hosh is dark. |
 | `DB_BACKEND` | `sqlite` | `sqlite` for a normal box, `d1` to keep the claim ledger on Cloudflare D1 when the host disk is ephemeral. |
 | `FAUCET_DONATION_ADDRESS` | none | Shown in the UI so people can top the faucet up. |
 | `FAUCET_MINING_ADDRESS` | none | Transparent address the miner pays coinbase to. Shown on /donate for anyone pointing hashrate at us. Unset hides that block. |

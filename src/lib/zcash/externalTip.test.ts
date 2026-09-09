@@ -13,12 +13,14 @@ const silentHosh = createServer(() => { /* never respond */ });
 await new Promise<void>((r) => silentHosh.listen(0, "127.0.0.1", r));
 const silentPort = (silentHosh.address() as { port: number }).port;
 process.env.HOSH_URL = `http://127.0.0.1:${silentPort}/`;
-process.env.LIGHTWALLETD_ENDPOINT = "https://127.0.0.1:59997";
+process.env.LIGHTWALLETD_ENDPOINT = "https://127.0.0.1:9"; // discard port, below the ephemeral range: refused at once
 silentHosh.unref();
 let silentHoshRequests = 0;
 silentHosh.on("request", () => { silentHoshRequests += 1; });
-const { heightFromBlockID, getExternalTipReading, getExternalTip, readingFor, MAX_AGE_MS_FOR_TESTS, fetchNetworkTipWithin } =
-  await import("./externalTip.ts");
+const {
+  heightFromBlockID, getExternalTipReading, getExternalTip, readingFor, MAX_AGE_MS_FOR_TESTS,
+  fetchNetworkTipWithin, isIndependentTipEndpoint, dialLatestBlock,
+} = await import("./externalTip.ts");
 
 // Encode a number as a protobuf varint (the wire form of BlockID.height).
 function varint(n: number): number[] {
@@ -180,14 +182,70 @@ test("a first endpoint that accepts and never answers does NOT hide the second: 
 
 test("a fallback that answers is USED, with its gRPC target as the host, after the primary fails", async () => {
   // The host is what grpc-js dialled, port included: "alive.example:443" for an https
-  // URL with no port, "zaino:8137" for the self-hosted Zaino the z3 docs describe.
-  const answering = async (endpoint: string) => (endpoint === "http://zaino:8137" ? 4_336_000 : null);
+  // URL with no port, "b.example:9067" for an explicit port.
+  const answering = async (endpoint: string) => (endpoint === "https://alive.example" ? 4_336_000 : null);
   const r = await fetchNetworkTipWithin(
     { hoshTimeoutMs: 100, fallbackTotalMs: 500 },
-    ["https://a.example", "http://zaino:8137"],
+    ["https://a.example:9067", "https://alive.example"],
     answering,
   );
   assert.equal(r.source, "direct");
-  assert.equal(r.host, "zaino:8137");
+  assert.equal(r.host, "alive.example:443");
   assert.equal(r.height, 4_336_000);
+});
+
+/* ------------------------------------------------- our own Zaino is not an oracle (#6, round 7) */
+
+test("OUR OWN ZAINO IS NEVER THE TIP ORACLE: plaintext, private and local endpoints are skipped, public TLS ones are not", () => {
+  // The sovereign path in the z3 docs points LIGHTWALLETD_ENDPOINT at http://zaino:8137,
+  // our own indexer over our own Zebra. As a fallback tip it would compare our node
+  // against itself: lag 0, safe, drips built against a frozen node.
+  for (const e of ["http://zaino:8137", "http://zaino", "https://zaino:8137", "https://127.0.0.1:443", "https://10.0.0.5",
+                   "https://172.16.4.4", "https://172.31.255.1", "https://192.168.1.10", "https://169.254.1.1", "https://100.64.0.1",
+                   "https://localhost", "https://zaino.local", "https://zaino.internal", "https://[::1]:443", "https://[fd00::1]", "not a url"]) {
+    assert.equal(isIndependentTipEndpoint(e), false, e);
+  }
+  for (const e of ["https://testnet.zec.rocks:443", "https://testnet.zec.rocks", "https://lightwalletd.testnet.electriccoin.co:9067",
+                   "https://172.32.0.1", "https://8.8.8.8", "https://[2001:db8::1]"]) {
+    assert.equal(isIndependentTipEndpoint(e), true, e);
+  }
+});
+
+test("the fallback loop dials ONLY the independent endpoints, and reports the one that answered", async () => {
+  const dialled: string[] = [];
+  const spy = async (endpoint: string) => { dialled.push(endpoint); return endpoint === "https://alive.example" ? 4_336_000 : null; };
+  const r = await fetchNetworkTipWithin(
+    { hoshTimeoutMs: 100, fallbackTotalMs: 500 },
+    ["http://zaino:8137", "https://10.0.0.5:443", "https://alive.example"],
+    spy,
+  );
+  assert.deepEqual(dialled, ["https://alive.example"], "a private or plaintext endpoint must never be asked for the tip");
+  assert.equal(r.source, "direct");
+  assert.equal(r.host, "alive.example:443");
+  // Only our own endpoints: the gate runs on hosh alone, and here hosh is silent.
+  dialled.length = 0;
+  const none = await fetchNetworkTipWithin({ hoshTimeoutMs: 100, fallbackTotalMs: 300 }, ["http://zaino:8137"], spy);
+  assert.deepEqual(dialled, []);
+  assert.equal(none.source, "none");
+});
+
+test("THE DIAL HONOURS THE SCHEME: a plaintext gRPC server answers http://, and https:// against it fails", async () => {
+  // The regression test round 7 asked for: every other test injects a fake leg, so the
+  // real dial could be reverted to always-TLS-on-the-bare-host with everything green.
+  const grpc = await import("@grpc/grpc-js");
+  const raw = { requestSerialize: (b: Buffer) => b, requestDeserialize: (b: Buffer) => b, responseSerialize: (b: Buffer) => b, responseDeserialize: (b: Buffer) => b };
+  const service = { GetLatestBlock: { path: "/cash.z.wallet.sdk.rpc.CompactTxStreamer/GetLatestBlock", requestStream: false, responseStream: false, ...raw } };
+  const server = new grpc.Server();
+  server.addService(service, {
+    GetLatestBlock: (_call: unknown, cb: (e: null, b: Buffer) => void) => cb(null, Buffer.from([0x08, ...varint(4_496_032)])),
+  });
+  const port = await new Promise<number>((resolve, reject) =>
+    server.bindAsync("127.0.0.1:0", grpc.ServerCredentials.createInsecure(), (e, p) => (e ? reject(e) : resolve(p))),
+  );
+  try {
+    assert.equal(await dialLatestBlock(`http://127.0.0.1:${port}`, 3000), 4_496_032, "plain gRPC on an explicit http port");
+    await assert.rejects(dialLatestBlock(`https://127.0.0.1:${port}`, 1500), "TLS against a plaintext server must not succeed");
+  } finally {
+    server.forceShutdown();
+  }
 });

@@ -48,7 +48,7 @@ await new Promise<void>((r) => hosh.listen(port, "127.0.0.1", r));
 // an empty list falls back to the real testnet endpoint and would quietly supply a
 // tip this test did not choose.
 process.env.HOSH_URL = `http://127.0.0.1:${port}/`;
-process.env.LIGHTWALLETD_ENDPOINT = "https://127.0.0.1:59997";
+process.env.LIGHTWALLETD_ENDPOINT = "https://127.0.0.1:9"; // discard port, below the ephemeral range: refused at once
 process.env.FAUCET_SENDER = "zallet";
 process.env.ZALLET_ACCOUNT = "11111111-2222-3333-4444-555555555555";
 process.env.ZALLET_ADDRESS = "utest1faucetunifiedaddressfixture";
@@ -150,7 +150,7 @@ test("the bypass landing MID-FETCH does not disarm the gap for whoever polls nex
   try {
     const before = hoshHits;
     const inflight = warmExternalTipNowForTests(); // dials regardless of the gap, so it IS in flight
-    await new Promise((r) => setTimeout(r, 30));
+    for (let i = 0; i < 50 && hoshHits === before; i++) await new Promise((r) => setTimeout(r, 5));
     assert.equal(hoshHits, before + 1, "precondition: the refresh we bypass into must have dialled");
     await warmExternalTipNowForTests(); // lands mid-fetch: must return at once and change nothing
     await inflight;

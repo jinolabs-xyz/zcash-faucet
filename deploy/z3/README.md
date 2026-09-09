@@ -136,6 +136,13 @@ docker compose --env-file .env.testnet --profile indexer up -d
 LIGHTWALLETD_ENDPOINT=http://zaino:8137
 ```
 
+One thing this does NOT change: the drip gate's independent view of the network. The
+tip oracle uses public TLS endpoints on that list as its fallback when hosh is dark, and
+skips your own Zaino on purpose (it indexes your own Zebra, so it cannot tell you your
+node is behind). With only `http://zaino:8137` set, the gate runs on hosh alone and
+refuses drips while hosh is unreachable; keep a public endpoint after it in the list
+if you want the fallback: `http://zaino:8137,https://testnet.zec.rocks:443`.
+
 Then `docker compose -f docker-compose.faucet.yml up -d` to pick up the change.
 
 ## Production domain and HTTPS

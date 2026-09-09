@@ -30,6 +30,7 @@
  * WHAT THIS DELIBERATELY DOES NOT DO: refuse. See the comment on `disagreement`.
  */
 import * as grpc from "@grpc/grpc-js";
+import { targetFor } from "./grpcTarget.ts";
 import { config } from "../config.ts";
 import { EXPIRY_DELTA_BLOCKS, SHIELD_MAX_LAG_BLOCKS } from "./shieldGate.ts";
 import { heightFromBlockID } from "./externalTip.ts";
@@ -56,13 +57,8 @@ export interface ExpiryTip {
 /** One GetLatestBlock, hand-parsed like externalTip does, null on any failure. */
 function askOne(endpoint: string, timeoutMs: number): Promise<number | null> {
   return new Promise((resolve) => {
-    const url = new URL(endpoint);
-    const tls = url.protocol === "https:" || url.port === "443" || url.port === "";
-    const target = `${url.hostname}:${url.port || (tls ? "443" : "9067")}`;
-    const client = new grpc.Client(
-      target,
-      tls ? grpc.credentials.createSsl() : grpc.credentials.createInsecure(),
-    );
+    const { target, creds } = targetFor(endpoint);
+    const client = new grpc.Client(target, creds);
     client.makeUnaryRequest(
       "/cash.z.wallet.sdk.rpc.CompactTxStreamer/GetLatestBlock",
       (x: Buffer) => x,

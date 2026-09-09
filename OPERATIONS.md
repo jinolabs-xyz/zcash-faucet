@@ -1033,7 +1033,8 @@ curl -s "https://$(cat /etc/faucet-domain)/api/ready" | jq
    default) is not answering. Check outbound network from the box, and if it
    points at a self-hosted `zaino` container, check that container. Sending
    goes through zallet and does not use this path, so this blocks lookups
-   and readiness, not the wallet itself.
+   and readiness, not the wallet itself. (A public endpoint on this list is
+   also the tip oracle's fallback; a self-hosted one is not, by design.)
 4. **`node status unknown`.** Zallet answered its balance but not its status
    call, so the node's height and the send gate cannot be read; every claim is
    refused in this state. `docker logs <zallet container>`; the watchdog's

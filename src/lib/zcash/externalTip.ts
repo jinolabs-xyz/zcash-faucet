@@ -35,7 +35,9 @@
  * network on our own chain. A node that has stopped is caught with no oracle at all.
  * Not wired here; a follow-up with its own tests. `LIGHTWALLETD_ENDPOINT` (comma-separated, tried in
  * order) is where a permissive second org goes the day one exists, and until then the
- * honest state is one org, fail closed.
+ * honest state is one org, fail closed. And the list is filtered here: an operator's OWN
+ * Zaino (plaintext, private, a docker name) is not independent of anything and is never
+ * a tip source, see isIndependentTipEndpoint.
  *
  * This is the antidote to the failure that killed Fauzec's faucet
  * (#170): a node that has silently stopped following the chain keeps reporting
@@ -144,7 +146,47 @@ async function fromHosh(timeoutMs: number): Promise<number | null> {
   return heights.length ? Math.max(...heights) : null;
 }
 
-/** One GetLatestBlock against a configured endpoint URL, scheme and port honoured. */
+/**
+ * ONLY A PUBLIC THIRD PARTY CAN BE THE ORACLE'S FALLBACK (review of #6, round 7). The
+ * z3 docs tell a sovereign operator to point LIGHTWALLETD_ENDPOINT at their own Zaino,
+ * `http://zaino:8137`, indexing their own Zebra. Once the tip oracle honoured plain gRPC
+ * that leg answered, and the "independent reference" for a frozen Zebra was Zebra's own
+ * height: lag 0, safe, drips built against a frozen node. expiryTip.ts had named the
+ * class already: a source compared against itself agrees with itself. So a fallback leg
+ * has to look like somebody else's server: TLS (a plaintext endpoint is a LAN or docker
+ * neighbour), a dotted public hostname (a docker service name has no dot), and not a
+ * loopback, private or link-local address or a .local/.internal name. Anything else is
+ * fine for balances and skipped here, once in the log per endpoint, and an operator with
+ * only such endpoints runs the gate on hosh alone, failing closed when hosh is dark, the
+ * way it did before plain gRPC worked.
+ */
+export function isIndependentTipEndpoint(endpoint: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    return false;
+  }
+  if (!targetFor(endpoint).tls) return false;
+  const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (host === "localhost" || host.endsWith(".local") || host.endsWith(".internal") || host.endsWith(".localhost")) return false;
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+    const [a, b] = host.split(".").map(Number);
+    if (a === 10 || a === 127 || a === 0 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127)) return false;
+    return true;
+  }
+  if (host.includes(":")) return !(host === "::1" || host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe80"));
+  return host.includes(".");
+}
+
+const skippedEndpoints = new Set<string>();
+
+/** One GetLatestBlock against a configured endpoint URL, scheme and port honoured.
+ *  Exported under a test-facing name so the dial itself has a regression test. */
+export function dialLatestBlock(endpoint: string, timeoutMs: number): Promise<number | null> {
+  return getLatestBlock(endpoint, timeoutMs);
+}
+
 function getLatestBlock(endpoint: string, timeoutMs: number): Promise<number | null> {
   return new Promise((resolve, reject) => {
     const { target, creds } = targetFor(endpoint);
@@ -194,14 +236,22 @@ export async function fetchNetworkTipWithin(
   // among the legs still to try, so a fast failure hands its share on and a hang costs
   // only its own. Two endpoints in 3 s: 1.5 s each; the second gets ~3 s if the first
   // was refused at once.
+  const legs = endpoints.filter((e) => {
+    if (isIndependentTipEndpoint(e)) return true;
+    if (!skippedEndpoints.has(e)) {
+      skippedEndpoints.add(e);
+      console.warn(`[externalTip] ${e} is not a public third party (plaintext, private, or a local name), so it serves balances but never the tip oracle; the gate runs on hosh alone when that is the only endpoint`);
+    }
+    return false;
+  });
   const endsAt = Date.now() + budget.fallbackTotalMs;
-  for (let i = 0; i < endpoints.length; i++) {
+  for (let i = 0; i < legs.length; i++) {
     const remaining = endsAt - Date.now();
     if (remaining <= 0) break;
-    const share = Math.ceil(remaining / (endpoints.length - i));
+    const share = Math.ceil(remaining / (legs.length - i));
     try {
-      const height = await getLatest(endpoints[i], share);
-      if (height != null && height > 0) return { height, source: "direct", host: targetFor(endpoints[i]).target };
+      const height = await getLatest(legs[i], share);
+      if (height != null && height > 0) return { height, source: "direct", host: targetFor(legs[i]).target };
     } catch {
       // try the next endpoint
     }
