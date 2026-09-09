@@ -54,6 +54,28 @@ test("an explicit choice still wins over the default", () => {
   assert.equal(challengeUnder({ FAUCET_CHALLENGE: "pow" }), "pow");
 });
 
+test("a value that is not one of the three REFUSES TO BOOT, naming what it got", () => {
+  // The regression class: `Pow`, `captcha`, `turnstyle` used to cast straight through,
+  // compare equal to neither branch in the claim route, and the gate was simply absent.
+  for (const bad of ["Pow", "captcha", "turnstyle", "POW", "off"]) {
+    const out = challengeUnder({ FAUCET_CHALLENGE: bad });
+    assert.match(out, /^THREW:FAUCET_CHALLENGE must be one of pow \| turnstile \| none/, bad);
+    assert.match(out, new RegExp(`got "${bad}"`), bad);
+  }
+});
+
+test("an EMPTY value is unset, not a fourth state that disables the gate", () => {
+  // `FAUCET_CHALLENGE=` in an env file used to cast "" through and turn the gate off.
+  assert.equal(challengeUnder({ FAUCET_CHALLENGE: "" }), "pow");
+  assert.equal(challengeUnder({ FAUCET_CHALLENGE: "   " }), "pow");
+  assert.equal(challengeUnder({ FAUCET_CHALLENGE: " none " }), "none");
+});
+
+test("a secret that is only whitespace is no secret: the default stays pow and turnstile refuses to serve", () => {
+  assert.equal(challengeUnder({ TURNSTILE_SECRET_KEY: "   " }), "pow");
+  assert.match(challengeUnder({ FAUCET_CHALLENGE: "turnstile", TURNSTILE_SECRET_KEY: "   " }, "serving"), /TURNSTILE_SECRET_KEY is not set/);
+});
+
 test("a configured Turnstile secret still selects turnstile", () => {
   // The old fallback's useful half, kept: someone who wired Turnstile and never
   // set FAUCET_CHALLENGE should not be silently switched to pow.
@@ -89,6 +111,25 @@ test("serving in production with a real salt is fine", () => {
     "serving",
   );
   assert.equal(out, "OK");
+});
+
+test("SERVING turnstile without its secret refuses to boot: the verifier would refuse every claim", () => {
+  // verifyTurnstile used to pass everything when the key was missing. It fails closed
+  // now, and a faucet that refuses every claim is not one to start quietly.
+  const out = challengeUnder({ FAUCET_CHALLENGE: "turnstile" }, "serving");
+  assert.match(out, /^THREW:/);
+  assert.match(out, /TURNSTILE_SECRET_KEY is not set/);
+});
+
+test("serving turnstile WITH its secret is fine, in production too", () => {
+  assert.equal(challengeUnder({ FAUCET_CHALLENGE: "turnstile", TURNSTILE_SECRET_KEY: "sk" }, "serving"), "OK");
+  assert.equal(
+    challengeUnder(
+      { NODE_ENV: "production", TURNSTILE_SECRET_KEY: "sk", RATE_LIMIT_SALT: "b1946ac92492d2347c6235b4d2611184e0f4a3a5c9e01f8a2b3c4d5e6f708192" },
+      "serving",
+    ),
+    "OK",
+  );
 });
 
 test("challenge=none needs no salt even when serving, so local work is unaffected", () => {
