@@ -16,10 +16,13 @@ zr_env() {
   # A wallet.db to find, at a path the suite owns.
   printf 'sqlite' > "$T/vol/wallet.db"
   export ZALLET_WALLET_DB="$T/vol/wallet.db" ZALLET_CONTAINER="zallet-under-test"
-  unset ZALLET_IMAGE STUB_INSPECT_IMAGE STUB_INSPECT_ID STUB_INSPECT_FAIL STUB_INSPECT_ERR STUB_RUN_RC STUB_START_RC STUB_CP_FAIL STUB_WD_ACTIVE 2>/dev/null
+  unset ZALLET_IMAGE STUB_INSPECT_IMAGE STUB_INSPECT_ID STUB_INSPECT_USER STUB_INSPECT_FAIL STUB_INSPECT_ERR STUB_RUN_RC STUB_START_RC \
+        STUB_CP_FAIL STUB_WD_STATE STUB_STOP_STICKS 2>/dev/null
   export STUB_INSPECT_ID="sha256:6cf065f7aaaa"
-  # The double: inspect answers the NAME for {{.Config.Image}} and the ID for {{.Image}}
-  # (or fails with STUB_INSPECT_ERR), run exits STUB_RUN_RC, start exits STUB_START_RC.
+  # The double: inspect answers the NAME for {{.Config.Image}}, the ID for {{.Image}}, the
+  # user for {{.Config.User}} and the running state for {{.State.Running}} (false after a
+  # stop, unless STUB_STOP_STICKS=1 models a stop that did not take), or fails with
+  # STUB_INSPECT_ERR; run exits STUB_RUN_RC, start exits STUB_START_RC.
   cat > "$T/bin/docker" <<'D'
 #!/usr/bin/env bash
 echo "docker $*" >> "${STUB_LOG:?}"
@@ -29,21 +32,25 @@ case "$1" in
     case "$3" in
       '{{.Config.Image}}') printf '%s\n' "${STUB_INSPECT_IMAGE:?}" ;;
       '{{.Image}}') printf '%s\n' "${STUB_INSPECT_ID:?}" ;;
+      '{{.Config.User}}') printf '%s\n' "${STUB_INSPECT_USER:-}" ;;
+      '{{.State.Running}}') if [ "${STUB_STOP_STICKS:-0}" = "1" ] || [ ! -e "${STUB_STOPPED_MARK:?}" ]; then echo true; else echo false; fi ;;
       *) echo "double: unsupported format $3" >&2; exit 64 ;;
     esac ;;
   run) exit "${STUB_RUN_RC:-0}" ;;
-  start) exit "${STUB_START_RC:-0}" ;;
-  stop) exit 0 ;;
+  start) rm -f "${STUB_STOPPED_MARK:?}"; exit "${STUB_START_RC:-0}" ;;
+  stop) touch "${STUB_STOPPED_MARK:?}"; exit 0 ;;
   *) echo "double: unsupported $*" >&2; exit 64 ;;
 esac
 D
   chmod +x "$T/bin/docker"
-  # A systemctl double: the watchdog is inactive unless STUB_WD_ACTIVE=1.
+  export STUB_STOPPED_MARK="$T/stopped"; rm -f "$STUB_STOPPED_MARK"
+  # A systemctl double: the watchdog reports STUB_WD_STATE (default inactive).
   cat > "$T/bin/systemctl" <<'S'
 #!/usr/bin/env bash
 echo "systemctl $*" >> "${STUB_LOG:?}"
 [ "$1" = "is-active" ] || exit 64
-if [ "${STUB_WD_ACTIVE:-0}" = "1" ]; then echo active; exit 0; else echo inactive; exit 3; fi
+state="${STUB_WD_STATE:-inactive}"
+echo "$state"; [ "$state" = "active" ] && exit 0; exit 3
 S
   chmod +x "$T/bin/systemctl"
   # cp is the real one unless STUB_CP_FAIL=1, for the no-backup case.
@@ -70,8 +77,33 @@ check "never with the tag, which can move" "! grep -q 'docker run .*zodlinc/zall
 check "the old pin appears nowhere: no default image in the script, none in the calls" "! grep -q 'beta.1' '$STUB_LOG' && ! grep -qE 'ZALLET_IMAGE:-[^}]' '$TRUNC'"
 check "the log names both, and says which one runs" "grep -q 'image: zodlinc/zallet:v0.1.0-beta.3, running as sha256:6cf065f7aaaa (from the container zallet-under-test' '$T/run.log'"
 check "the watchdog was asked before anything else" "awk '/systemctl is-active faucet-watchdog.service/{w=NR} /docker stop/{s=NR} END{exit !(w && s && w<s)}' '$STUB_LOG'"
-check "zallet was stopped before the truncate and started after" \
-  "awk '/docker stop/{s=NR} /docker run/{r=NR} /docker start/{t=NR} END{exit !(s && r && t && s<r && r<t)}' '$STUB_LOG'"
+check "zallet was stopped, CONFIRMED down, then the truncate ran, then it was started" \
+  "awk '/docker stop/{s=NR} /State.Running/{c=NR} /docker run/{r=NR} /docker start/{t=NR} END{exit !(s && c && r && t && s<c && c<r && r<t)}' '$STUB_LOG'"
+check "no --user was passed for a container with the image default user" "! grep -q 'docker run.*--user' '$STUB_LOG'"
+check "the backup line tells how to put it back" "grep -q 'to put it back: docker stop zallet-under-test; cp -f' '$T/run.log'"
+check "and the done block says to start the watchdog again" "grep -q 'Now: systemctl start faucet-watchdog.service' '$T/run.log'"
+
+echo "== zallet-truncate: the repair runs AS the container's user when it has one"
+zr_env
+STUB_INSPECT_IMAGE="zodlinc/zallet:v0.1.0-beta.3" STUB_INSPECT_USER="1000:1000" bash "$TRUNC" 4282400 > "$T/user.log" 2>&1
+check "exits 0" "[ $? -eq 0 ]"
+check "docker run carries --user 1000:1000" "grep -q 'docker run .*--user 1000:1000 .*sha256:6cf065f7aaaa ' '$STUB_LOG'"
+check "and the log says whose identity" "grep -q 'user: 1000:1000' '$T/user.log'"
+
+echo "== zallet-truncate: the backup takes the -wal and -shm sidecars with it"
+zr_env
+printf 'wal' > "$T/vol/wallet.db-wal"; printf 'shm' > "$T/vol/wallet.db-shm"
+STUB_INSPECT_IMAGE="zodlinc/zallet:v0.1.0-beta.3" bash "$TRUNC" 4282400 > "$T/sidecars.log" 2>&1
+check "exits 0" "[ $? -eq 0 ]"
+check "the -wal and -shm were copied beside the backup" "ls '$T/vol/'wallet.db.bak-pretruncate-*-wal >/dev/null 2>&1 && ls '$T/vol/'wallet.db.bak-pretruncate-*-shm >/dev/null 2>&1"
+check "and the log says so" "grep -q 'backup: .*(+ -wal, -shm)' '$T/sidecars.log'"
+
+echo "== zallet-truncate: a stop that did not take is an abort, not a truncate beside a live daemon"
+zr_env
+STUB_INSPECT_IMAGE="zodlinc/zallet:v0.1.0-beta.3" STUB_STOP_STICKS=1 bash "$TRUNC" 4282400 > "$T/stuck.log" 2>&1
+check "exits nonzero" "[ $? -ne 0 ]"
+check "says the container is still running" "grep -q 'still running (State.Running=true)' '$T/stuck.log'"
+check "and nothing was run against the database, no backup written" "! grep -q 'docker run' '$STUB_LOG' && ! ls '$T/vol/'wallet.db.bak-* >/dev/null 2>&1"
 
 echo "== zallet-truncate: NO CONTAINER IS AN ABORT, before anything is stopped, showing docker's own words"
 # --volumes-from needs the container (stopped is fine, removed is not), and the old
@@ -98,7 +130,13 @@ check "still inspected the container, which has to exist" "grep -q 'docker inspe
 check "and the log says it was an override, beside what the container runs" "grep -q 'from ZALLET_IMAGE, an override you set; the container runs zodlinc/zallet:v0.1.0-beta.3 = sha256:6cf065f7aaaa' '$T/override.log'"
 zr_env
 STUB_INSPECT_IMAGE="zodlinc/zallet:v0.1.0-beta.3" ZALLET_IMAGE="sha256:1849b4469875abcd" bash "$TRUNC" 4282400 > "$T/id.log" 2>&1
-check "a bare image ID is accepted as the most exact reference there is" "[ $? -eq 0 ] && grep -q 'docker run .*sha256:1849b4469875abcd ' '$STUB_LOG'"
+check "a sha256: image ID is accepted as the most exact reference there is" "[ $? -eq 0 ] && grep -q 'docker run .*sha256:1849b4469875abcd ' '$STUB_LOG'"
+zr_env
+STUB_INSPECT_IMAGE="zodlinc/zallet:v0.1.0-beta.3" ZALLET_IMAGE="1849b4469875" bash "$TRUNC" 4282400 > "$T/hex.log" 2>&1
+check "a bare hex ID, the form docker images -q prints, is accepted too" "[ $? -eq 0 ] && grep -q 'docker run .*1849b4469875 ' '$STUB_LOG'"
+zr_env
+STUB_INSPECT_IMAGE="sha256:1849b4469875abcd0000" ZALLET_IMAGE="zodlinc/zallet:v0.1.0-beta.3" bash "$TRUNC" 4282400 > "$T/idname.log" 2>&1
+check "a container whose own name is an ID is not refused when an override says what it is" "[ $? -eq 0 ] && grep -q 'docker run .*zodlinc/zallet:v0.1.0-beta.3 ' '$STUB_LOG'"
 zr_env
 STUB_INSPECT_IMAGE="zodlinc/zallet:v0.1.0-beta.3" ZALLET_IMAGE="zfnd/zebra:v6.3.0" bash "$TRUNC" 4282400 > "$T/badoverride.log" 2>&1
 check "an override that is neither a zallet name nor an ID is refused" "[ $? -ne 0 ] && grep -q 'neither a zallet image by name nor an image ID' '$T/badoverride.log' && ! grep -q 'docker stop' '$STUB_LOG'"
@@ -110,12 +148,25 @@ check "exits nonzero" "[ $? -ne 0 ]"
 check "names the image" "grep -q 'does not look like a zallet image' '$T/wrong.log' && grep -q 'zfnd/zebra:v6.3.0' '$T/wrong.log'"
 check "and stopped nothing" "! grep -q 'docker stop' '$STUB_LOG'"
 
-echo "== zallet-truncate: an ACTIVE watchdog is an abort: it would docker-start zallet mid-repair"
+echo "== zallet-truncate: a watchdog that is not DEFINITELY down is an abort: active, activating, or could-not-tell"
 zr_env
-STUB_INSPECT_IMAGE="zodlinc/zallet:v0.1.0-beta.3" STUB_WD_ACTIVE=1 bash "$TRUNC" 4282400 > "$T/wd.log" 2>&1
-check "exits nonzero" "[ $? -ne 0 ]"
+STUB_INSPECT_IMAGE="zodlinc/zallet:v0.1.0-beta.3" STUB_WD_STATE=active bash "$TRUNC" 4282400 > "$T/wd.log" 2>&1
+check "active: exits nonzero" "[ $? -ne 0 ]"
 check "says to stop the watchdog, and how" "grep -q 'faucet-watchdog.service is active' '$T/wd.log' && grep -q 'systemctl stop faucet-watchdog.service' '$T/wd.log'"
 check "and touched nothing: no inspect, no stop, no run" "! grep -q 'docker' '$STUB_LOG'"
+zr_env
+STUB_INSPECT_IMAGE="zodlinc/zallet:v0.1.0-beta.3" STUB_WD_STATE=activating bash "$TRUNC" 4282400 > "$T/wdact.log" 2>&1
+check "activating (Restart=always mid-loop): exits nonzero, touched nothing" "[ $? -ne 0 ] && grep -q 'is activating' '$T/wdact.log' && ! grep -q 'docker' '$STUB_LOG'"
+zr_env
+STUB_INSPECT_IMAGE="zodlinc/zallet:v0.1.0-beta.3" STUB_WD_STATE=unknown bash "$TRUNC" 4282400 > "$T/wdunk.log" 2>&1
+check "unknown (a mistyped unit name): could-not-tell is an abort" "[ $? -ne 0 ] && grep -q 'could not tell whether' '$T/wdunk.log' && ! grep -q 'docker' '$STUB_LOG'"
+zr_env
+rm -f "$T/bin/systemctl"
+STUB_INSPECT_IMAGE="zodlinc/zallet:v0.1.0-beta.3" bash "$TRUNC" 4282400 > "$T/wdnone.log" 2>&1
+check "no systemctl at all: could-not-tell is an abort too" "[ $? -ne 0 ] && grep -q 'could not tell whether' '$T/wdnone.log' && ! grep -q 'docker' '$STUB_LOG'"
+zr_env
+STUB_INSPECT_IMAGE="zodlinc/zallet:v0.1.0-beta.3" STUB_WD_STATE=failed bash "$TRUNC" 4282400 > "$T/wdfailed.log" 2>&1
+check "failed is definitely down: the repair proceeds" "[ $? -eq 0 ] && grep -q 'docker run' '$STUB_LOG'"
 
 echo "== zallet-truncate: NO BACKUP, NO TRUNCATE"
 zr_env
@@ -138,6 +189,10 @@ zr_env
 STUB_INSPECT_IMAGE="zodlinc/zallet:v0.1.0-beta.3" STUB_RUN_RC=3 STUB_START_RC=1 bash "$TRUNC" 4282400 > "$T/nostart.log" 2>&1
 check "the failure line says zallet could NOT be started, and to start it by hand" "grep -q 'could NOT be started again' '$T/nostart.log' && grep -q 'start it by hand' '$T/nostart.log'"
 check "and never claims it was restarted" "! grep -q 'zallet was started again' '$T/nostart.log'"
+check "and the failure path too says to start the watchdog again" "grep -q 'Then: systemctl start faucet-watchdog.service' '$T/nostart.log'"
+
+# Nothing this suite exports may leak into whatever SUITES lists after it.
+unset ZALLET_WALLET_DB ZALLET_CONTAINER STUB_LOG STUB_INSPECT_ID STUB_STOPPED_MARK
 
 echo "== zallet-truncate: a bad height is usage, before docker is touched"
 zr_env
