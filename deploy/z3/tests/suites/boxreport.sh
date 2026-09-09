@@ -467,6 +467,38 @@ printf 'FAUCET_ALERT_URL=http://127.0.0.1:8081/v2/send\nFAUCET_ALERT_FORMAT=sign
 STUB_BRIDGE_CODE=200 STUB_BRIDGE_BODY='["+15551234567"]' bash "$BOX_REPORT" > /dev/null 2>&1
 check "an UNQUOTED bad number aborts the sourcing after the URL line, and that reads misconfigured, not ok" "bridge_is misconfigured"
 
+echo "== box-report: a box with NEITHER jq NOR python3 cannot page, whatever else is true"
+# alert.sh encodes every body with one of the two and refuses, for every format, without.
+# The report never asked, so such a box read ok with a bridge up and linked, and the probe
+# said "the box can page someone" about a box where every page had been a journal line.
+# A PATH with every tool but those two, so the script under test sees a box without them.
+thin_path() {
+  rm -rf "$T/thin"; mkdir -p "$T/thin"
+  local d f
+  for d in "$SCRATCH/stubs" ${BASE_PATH//:/ }; do
+    [ -d "$d" ] || continue
+    for f in "$d"/*; do
+      [ -x "$f" ] || continue
+      case "$(basename "$f")" in jq|python3|python3.*|python) continue ;; esac
+      [ -e "$T/thin/$(basename "$f")" ] || ln -s "$f" "$T/thin/$(basename "$f")"
+    done
+  done
+}
+bridge_env; thin_path
+printf 'FAUCET_ALERT_URL=http://127.0.0.1:8081/v2/send\nFAUCET_ALERT_FORMAT=signal\nFAUCET_ALERT_SIGNAL_NUMBER=+15551234567\n' > "$T/alerts.env"
+PATH="$T/thin" STUB_BRIDGE_CODE=200 STUB_BRIDGE_BODY='["+15551234567"]' bash "$BOX_REPORT" > /dev/null 2>&1
+check "the thin PATH really has no encoder (else this case proves nothing)" "! PATH='$T/thin' command -v jq >/dev/null && ! PATH='$T/thin' command -v python3 >/dev/null"
+check "signal with a linked bridge and no encoder is misconfigured, not ok" "bridge_is misconfigured"
+check "and the bridge was not asked: the verdict is about the box" "[ ! -s '$T/bridge-curl.log' ]"
+bridge_env; thin_path
+printf 'FAUCET_ALERT_URL=https://hooks.example.test/T000/B000/secret\nFAUCET_ALERT_FORMAT=slack\n' > "$T/alerts.env"
+PATH="$T/thin" bash "$BOX_REPORT" > /dev/null 2>&1
+check "a webhook with no encoder is misconfigured too: alert.sh gates every format" "bridge_is misconfigured"
+bridge_env
+printf 'FAUCET_ALERT_URL=https://hooks.example.test/T000/B000/secret\nFAUCET_ALERT_FORMAT=slack\n' > "$T/alerts.env"
+bash "$BOX_REPORT" > /dev/null 2>&1
+check "with an encoder the same webhook reads webhook" "bridge_is webhook"
+
 echo "== box-report: the configuration is resolved the way alert.sh resolves it"
 bridge_env
 printf 'export FAUCET_ALERT_URL="http://127.0.0.1:8081/v2/send"  # the bridge\nexport FAUCET_ALERT_FORMAT="signal"\nFAUCET_ALERT_SIGNAL_NUMBER=+15551234567\n' > "$T/alerts.env"

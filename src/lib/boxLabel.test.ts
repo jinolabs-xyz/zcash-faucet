@@ -229,7 +229,17 @@ test("a dead, unlinked or absent alert channel is a fault the row names, because
     assert.match(boxRow(s), /pages go nowhere/);
     assert.equal(boxIsBad(s), true, v);
     assert.equal(alertBridgeDown(s), true, v);
+    // On the terse strip too, the same way a looping watchdog is: the panel is a click
+    // nobody makes when the strip looks fine, and this is the fault no page can announce.
+    assert.equal(boxChip(s), "CANNOT PAGE", v);
   }
+});
+
+test("a looping watchdog outranks the dead bridge on the strip's one slot: both are on the row", () => {
+  const s = classifyIntegrity(report({ alertBridge: "down", watchdogRestarts: 61, watchdogRestartsDelta: 61 }), NOW);
+  assert.equal(boxChip(s), "WATCHDOG LOOP");
+  assert.match(boxRow(s), /WATCHDOG LOOPING/);
+  assert.match(boxRow(s), /ALERT BRIDGE DOWN/);
 });
 
 test("ok, a webhook channel, unknown and an older report are NOT the fault here, and say nothing", () => {
@@ -239,5 +249,6 @@ test("ok, a webhook channel, unknown and an older report are NOT the fault here,
     const s = classifyIntegrity(report({ alertBridge: v }), NOW);
     assert.doesNotMatch(boxRow(s), /BRIDGE|ALERT CHANNEL/, `alertBridge ${String(v)}`);
     assert.equal(boxIsBad(s), false, `alertBridge ${String(v)}`);
+    assert.equal(boxChip(s), null, `alertBridge ${String(v)}`);
   }
 });

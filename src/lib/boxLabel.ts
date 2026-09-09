@@ -162,14 +162,17 @@ export function boxChip(s: IntegrityStatus): string | null {
   // Before the complete short-circuit: a box can have every file in place and a
   // watchdog in a restart loop, and that must not be invisible on the terse strip.
   if (watchdogLooping(s)) return "WATCHDOG LOOP";
+  // Same rule, and the stronger case: a complete box whose pages go nowhere is the one
+  // fault no alert can announce, so the strip is where it has to show.
+  if (alertBridgeDown(s)) return "CANNOT PAGE";
   if (s.state === "complete") return null;
   return s.state === "incomplete" ? "INCOMPLETE" : "unknown";
 }
 
 /** The box cannot page anyone, by its own report: the Signal bridge is down, the
- *  account is not linked on it, or no alert URL is configured at all. A fault, and one
- *  nothing else can show, because every alert about it would travel through the thing
- *  that is broken. "ok", "webhook", "unknown" and null are not faults here; "unknown"
+ *  account is not linked on it, the configuration is one alert.sh refuses to send with,
+ *  or no alert URL is configured at all. A fault, and one nothing else can show, because
+ *  every alert about it would travel through the thing that is broken. "ok", "webhook", "unknown" and null are not faults here; "unknown"
  *  is the off-box probe's to fail, since a public row cannot tell "could not ask" from
  *  "asked and it is down" without inviting a reader to ignore red. */
 export function alertBridgeDown(s: IntegrityStatus): boolean {

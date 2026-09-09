@@ -30,7 +30,8 @@ wd_env() {
   # later case at a stale, stalled heartbeat in an old scratch dir, and the miner heal
   # runs (and gives up, and pages) inside tests that are about something else.
   unset STUB_CRASHLOOP STUB_HEAL_FIXES STUB_ZEBRA_BLOCKS STUB_ZEBRA_EST STUB_ZEBRA_ADVANCE STUB_ZEBRA_STUCK_CALLS \
-        WATCHDOG_NODE_HEAL_ENABLED WATCHDOG_NODE_STOPS_MINER WATCHDOG_MINER_HEARTBEAT WATCHDOG_MINER_UNIT STUB_START_FAIL
+        WATCHDOG_NODE_HEAL_ENABLED WATCHDOG_NODE_STOPS_MINER WATCHDOG_MINER_HEARTBEAT WATCHDOG_MINER_UNIT STUB_START_FAIL \
+        WATCHDOG_SIGNAL_MATCH
   # Capture what would have been paged, without a webhook.
   printf '#!/bin/sh\nprintf "%%s\\n" "$1" >> "%s/alerts.log"\n' "$T" > "$T/alert.sh"
   chmod +x "$T/alert.sh"

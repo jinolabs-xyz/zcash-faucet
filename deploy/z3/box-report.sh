@@ -293,7 +293,9 @@ esac
 #   down          Signal: the bridge did not answer, or answered badly
 #   misconfigured Signal with no number, or a number or recipient that is not E.164:
 #                 alert.sh refuses to send in exactly these cases (its own gate), so a
-#                 bridge that is up changes nothing. Judged BEFORE the probe.
+#                 bridge that is up changes nothing. Judged BEFORE the probe. Also, for
+#                 EVERY format, a box with neither jq nor python3: alert.sh encodes each
+#                 body with one of them and refuses without, so nothing is ever sent.
 #   webhook       a Slack or Discord URL; nothing on the box to probe
 #   none          no alert URL at all: nobody can be paged
 #   unknown       an unrecognised format, a URL without a scheme, or no curl to ask with
@@ -314,6 +316,11 @@ if [ -f "$ALERTS_ENV" ] || [ -f "$WATCHDOG_ENV" ]; then
   rcpt="$(printf '%s\n' "$resolved" | sed -n '4p')"
   if [ -z "$url" ]; then
     alert_bridge="none"
+  elif ! command -v jq >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then
+    # alert.sh's first gate, before the URL is even looked at: json_escape returns 1 and
+    # send() returns 4 with neither encoder, for every format. Review found this report
+    # saying ok on such a box, where every page since install had been a journal line.
+    alert_bridge="misconfigured"
   else
     case "${fmt:-slack}" in
       slack|discord) alert_bridge="webhook" ;;
