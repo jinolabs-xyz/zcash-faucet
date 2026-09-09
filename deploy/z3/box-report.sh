@@ -282,7 +282,7 @@ esac
 # and a trap that did not run left the box with no self-healing and nothing that said
 # so. Same word as the miner's, and unlike the miner's it IS classified on: a stopped
 # watchdog is a fault, a stopped miner is a decision.
-WATCHDOG_UNIT="${BOX_REPORT_WATCHDOG_UNIT:-faucet-watchdog.service}"
+# WATCHDOG_UNIT is the same name the restart counter above reads; one assignment, above.
 watchdog_unit="$("$SYSTEMCTL" is-active "$WATCHDOG_UNIT" 2>/dev/null || true)"
 case "$watchdog_unit" in
   active|inactive|failed|activating|deactivating) ;;

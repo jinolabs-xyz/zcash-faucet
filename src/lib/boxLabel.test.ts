@@ -268,7 +268,7 @@ test("a watchdog systemd calls inactive or failed is a fault the row and the str
   // is-enabled was true of it, Restart=always never let it reach failed, and the restart
   // counter counted restarts, of which a stopped unit has none: a box with no
   // self-healing read complete and calm.
-  for (const [v, words] of [["inactive", /WATCHDOG STOPPED, nothing heals/], ["failed", /WATCHDOG FAILED, nothing heals/]] as const) {
+  for (const [v, words] of [["inactive", /WATCHDOG STOPPED, nothing heals/], ["failed", /WATCHDOG FAILED, nothing heals/], ["deactivating", /WATCHDOG STOPPING, nothing heals/]] as const) {
     const s = classifyIntegrity(report({ watchdogUnit: v }), NOW);
     assert.equal(s.state, "complete", "the files are all there; that is exactly the trap");
     assert.match(boxRow(s), words);
@@ -280,7 +280,8 @@ test("a watchdog systemd calls inactive or failed is a fault the row and the str
 
 test("active, activating, unknown and an older report are not that fault, and say nothing about it", () => {
   // activating is seconds from running; unknown is the off-box probe's to fail; null is
-  // a server that predates the field.
+  // a server that predates the field. deactivating is NOT here: its next state is
+  // stopped, and passing it would reopen the hole at the moment a stop begins.
   for (const v of ["active", "activating", "unknown", null]) {
     const s = classifyIntegrity(report({ watchdogUnit: v }), NOW);
     assert.doesNotMatch(boxRow(s), /WATCHDOG STOPPED|WATCHDOG FAILED/, `watchdogUnit ${String(v)}`);

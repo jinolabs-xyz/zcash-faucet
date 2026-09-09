@@ -87,6 +87,17 @@ else default_ready="http://127.0.0.1:8080/ready"; fi
 ZSNAP_READY_URL="${ZSNAP_READY_URL:-$default_ready}"
 
 log() { echo "$(date -u +%FT%TZ) zsnap-export: $*"; }
+
+# The box report carries the watchdog's state (register #16) and refreshes every five
+# minutes, so a report taken during a cold window would say WATCHDOG STOPPED for up to
+# five minutes after this script started it again, and the off-box probe would fail on a
+# box that is fine. Refresh it the moment the watchdog is back; a box without the report
+# script (a dev box) just skips.
+refresh_box_report() {
+  local br="${ZSNAP_BOX_REPORT:-/opt/faucet/box-report.sh}"
+  [ -x "$br" ] && "$br" >/dev/null 2>&1 || true
+}
+
 die() { log "ERROR: $*"; exit 1; }
 
 # ZSNAP_KEEP=0 makes the rotation below `tail -n +1`, which deletes every snapshot
@@ -114,6 +125,7 @@ if [ "${1:-}" = "recover" ]; then
   fi
   if [ "${marked_watchdog:-0}" = "1" ]; then
     systemctl start "$ZSNAP_WATCHDOG_UNIT" >/dev/null 2>&1 || true
+    refresh_box_report
   fi
   rm -f "$window_marker"
   exit 0
@@ -465,6 +477,7 @@ cleanup() {
   if [ "$stopped_watchdog" = "1" ]; then
     systemctl start "$ZSNAP_WATCHDOG_UNIT" >/dev/null 2>&1 \
       || log "ERROR: could not restart $ZSNAP_WATCHDOG_UNIT"
+    refresh_box_report
   fi
   rm -f "$window_marker"
   [ -n "$work" ] && rm -rf "$work"
@@ -543,6 +556,7 @@ fi
 if [ "$stopped_watchdog" = "1" ]; then
   systemctl start "$ZSNAP_WATCHDOG_UNIT"
   stopped_watchdog=0
+  refresh_box_report
 fi
 
 name="zsnap-$ZSNAP_NETWORK-$height-${manifest_hash:0:12}"

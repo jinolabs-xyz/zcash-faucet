@@ -8,7 +8,8 @@ Description=Scheduled Zebra chain-state snapshot export
 # catches up in minutes. The default hot mode has no downtime at all. Cold
 # mode (the fallback) takes a short maintenance window per run, which the
 # faucet rides out fine: sends queue against zallet and the watchdog is
-# paused by the script so it does not page.
+# paused by the script so it does not page (the box report says WATCHDOG
+# STOPPED for the window, truthfully, and is refreshed the moment it is back).
 OnCalendar=00/6:20
 # Spread the start so it never lines up exactly with other 6h jobs.
 RandomizedDelaySec=10m

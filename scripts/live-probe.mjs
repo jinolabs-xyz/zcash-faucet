@@ -238,8 +238,9 @@ async function runFaucetChecks() {
       case "active": ok("the watchdog is running", true, "faucet-watchdog.service active"); break;
       case "activating": ok("the watchdog is running", true, "faucet-watchdog.service is starting"); break;
       case "inactive": ok("the watchdog is running", false, "faucet-watchdog.service is STOPPED: nothing on the box heals until `systemctl start faucet-watchdog.service`"); break;
-      case "failed": ok("the watchdog is running", false, "faucet-watchdog.service FAILED past its start limit; `journalctl -u faucet-watchdog` and `systemctl reset-failed faucet-watchdog.service`"); break;
-      case "unknown": case "deactivating": ok("the watchdog is running", false, `the box could not say (watchdogUnit ${box.watchdogUnit}); check systemctl on the box`); break;
+      case "failed": ok("the watchdog is running", false, "faucet-watchdog.service is FAILED (its start limit is off, so systemd itself gave up or it was reset-failed): `journalctl -u faucet-watchdog`, then `systemctl start faucet-watchdog.service`"); break;
+      case "deactivating": ok("the watchdog is running", false, "faucet-watchdog.service is shutting down: its next state is stopped, and nothing heals from there"); break;
+      case "unknown": ok("the watchdog is running", false, "the box could not say whether the watchdog runs (watchdogUnit unknown); check systemctl on the box"); break;
       case undefined: case null: ok("the watchdog is running", true, "server does not send box.watchdogUnit yet, cannot verify"); break;
       default: ok("the watchdog is running", false, `unexpected watchdogUnit ${JSON.stringify(box.watchdogUnit)}`);
     }
