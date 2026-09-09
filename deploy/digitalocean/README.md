@@ -52,8 +52,9 @@ daily cap, and the send queue are already enforced server-side.
 - **Secrets.** `deploy/z3/faucet.env` on the box holds the wallet-RPC password
   and `RATE_LIMIT_SALT` (set a real salt, the script flags a placeholder).
   Never commit it.
-- **Anti-abuse.** Add Turnstile keys in `faucet.env`, or run without on quiet
-  testnets: the per-IP cooldown + daily cap still hold.
+- **Anti-abuse.** Proof of work is on by default and needs no keys
+  (`FAUCET_CHALLENGE=pow`; Turnstile is not a supported mode). Turning it off
+  (`none`) is a choice you make by name, and production says so at boot.
 - **Backups.** Enable DO **Snapshots/Backups** on the Droplet, or back up the
   `z3-testnet-zallet` volume (wallet DB + encryption identity) and `faucet_data`
   (rate-limit ledger). The chain volume never needs backup, it re-syncs.

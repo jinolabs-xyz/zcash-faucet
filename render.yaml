@@ -43,9 +43,5 @@ services:
         sync: false
       - key: FAUCET_WALLET_SEED
         sync: false
-      - key: TURNSTILE_SECRET_KEY
-        sync: false
-      - key: NEXT_PUBLIC_TURNSTILE_SITE_KEY
-        sync: false
       - key: FAUCET_DONATION_ADDRESS
         sync: false

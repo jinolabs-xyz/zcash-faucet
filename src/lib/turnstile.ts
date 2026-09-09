@@ -1,6 +1,12 @@
 /**
  * Cloudflare Turnstile server-side verification (siteverify).
  *
+ * THE SERVER HALF OF A MODE THIS FAUCET DOES NOT SERVE, AND DOES NOT PLAN TO. No page
+ * renders the widget and no claim body carries a token, so assertServingConfig() refuses
+ * FAUCET_CHALLENGE=turnstile at boot and the claim route has no branch for it. Kept
+ * because it is small, tested and fails closed, not as a promise; delete it the day it
+ * costs anything. Do not read its presence as the mode working.
+ *
  * FAILS CLOSED. The first version returned true when no secret was configured, as a
  * dev convenience, which made FAUCET_CHALLENGE=turnstile with a missing key an open
  * faucet that looked gated (risk register #10). No secret now refuses every claim,

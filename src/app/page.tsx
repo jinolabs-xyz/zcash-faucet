@@ -52,7 +52,7 @@ interface Status {
   donationAddress?: string;
   /** Mainnet, for project upkeep. Empty when unset OR rejected by config validation. */
   maintenanceAddress?: string;
-  challenge?: "pow" | "turnstile" | "none";
+  challenge?: "pow" | "none";
   /**
    * cTAZ (#326). Everything above stays TAZ, so nothing here re-points an existing
    * field. Optional because a deploy older than this one sends no block at all, and
