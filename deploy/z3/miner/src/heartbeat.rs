@@ -56,6 +56,18 @@ pub struct State {
     pub submitted_accepted: u64,
     pub submitted_rejected: u64,
     pub last_submitted_at: Option<u64>,
+    /// How far behind its own estimate the node was at the last check (sync.rs). None
+    /// until the first check answers.
+    pub node_lag: Option<u64>,
+    /// Set while the sync guard is holding the miner back, cleared the moment it mines
+    /// again. A reader that sees this beside a stale lastTemplateAt is looking at a miner
+    /// that is idle ON PURPOSE, which is neither stalled nor running.
+    pub waiting_since: Option<u64>,
+    /// WHY it is waiting, as a fixed token: "behind" (the lag guard) or "no-peers". A
+    /// node with no peers sits at its own tip with lag ~0, so without this the panel read
+    /// "waiting, node 0 blocks behind", the node row stayed green, and nothing said the
+    /// one thing that mattered. Fixed tokens, never the RPC's text: this file is public.
+    pub waiting_reason: Option<&'static str>,
 }
 
 impl State {
@@ -72,11 +84,35 @@ impl State {
         self.last_error_stage = Some(stage);
         self.last_error_at = Some(now());
         self.consecutive_errors = self.consecutive_errors.saturating_add(1);
+        // A failing RPC is not a wait. Left set, waitingSince would keep reading "idle on
+        // purpose" for a miner whose node connection has wedged, and the watchdog, which
+        // honours a wait, would never restart it: the 18-hour silence of 2026-08-18 with a
+        // calmer label. Only a node that answered and was behind is waiting.
+        self.waiting_since = None;
+        self.waiting_reason = None;
     }
 
     pub fn solved(&mut self) {
         self.solved_count = self.solved_count.saturating_add(1);
         self.last_solved_at = Some(now());
+    }
+
+    /// The sync guard's reading. `waiting` names the reason and starts the wait clock
+    /// once, leaving it running across polls; a mineable node (None) clears both.
+    pub fn node_lag(&mut self, lag: u64, waiting: Option<&'static str>) {
+        self.node_lag = Some(lag);
+        match waiting {
+            Some(reason) => {
+                if self.waiting_since.is_none() {
+                    self.waiting_since = Some(now());
+                }
+                self.waiting_reason = Some(reason);
+            }
+            None => {
+                self.waiting_since = None;
+                self.waiting_reason = None;
+            }
+        }
     }
 
     pub fn submitted(&mut self, accepted: bool) {
@@ -162,7 +198,10 @@ pub fn render(s: &State) -> String {
             "  \"lastSolvedAt\": {},\n",
             "  \"submittedAccepted\": {},\n",
             "  \"submittedRejected\": {},\n",
-            "  \"lastSubmittedAt\": {}\n",
+            "  \"lastSubmittedAt\": {},\n",
+            "  \"nodeLag\": {},\n",
+            "  \"waitingSince\": {},\n",
+            "  \"waitingReason\": {}\n",
             "}}\n"
         ),
         SCHEMA,
@@ -187,6 +226,11 @@ pub fn render(s: &State) -> String {
         s.submitted_accepted,
         s.submitted_rejected,
         ts(s.last_submitted_at),
+        num(s.node_lag),
+        ts(s.waiting_since),
+        s.waiting_reason
+            .map(|v| format!("\"{v}\""))
+            .unwrap_or_else(|| "null".into()),
     )
 }
 
@@ -452,6 +496,63 @@ mod tests {
 mod contract {
     use super::*;
 
+    #[test]
+    fn an_rpc_error_ends_a_wait_so_a_wedged_miner_cannot_read_as_waiting() {
+        let mut s = State::default();
+        s.node_lag(1_443, Some("behind"));
+        assert!(s.waiting_since.is_some());
+        for _ in 0..10_000 {
+            s.error("getblockchaininfo");
+        }
+        assert_eq!(s.waiting_since, None, "10,000 failed calls must not leave the miner labelled as waiting on purpose");
+        assert_eq!(s.waiting_reason, None);
+        assert_eq!(s.node_lag, Some(1_443), "the last measured lag is still a fact worth showing");
+    }
+
+    #[test]
+    fn a_new_wait_starts_the_clock_once_and_a_mineable_node_clears_it() {
+        let mut s = State::default();
+        s.node_lag(120, Some("behind"));
+        let started = s.waiting_since;
+        s.node_lag(121, Some("behind"));
+        assert_eq!(s.waiting_since, started, "the wait clock is not reset every poll");
+        // The reason can change without restarting the clock: behind, then isolated.
+        s.node_lag(0, Some("no-peers"));
+        assert_eq!(s.waiting_since, started);
+        assert_eq!(s.waiting_reason, Some("no-peers"));
+        s.node_lag(3, None);
+        assert_eq!(s.waiting_since, None);
+        assert_eq!(s.waiting_reason, None);
+    }
+
+    /// THE SECOND SHARED FIXTURE, the waiting shape. The canonical one keeps
+    /// waitingSince null so the reader classifies it as running; this one proves the
+    /// writer's rendering of a SET waitingSince is what the TypeScript reader turns into
+    /// "waiting". Same rules: the bytes are the producer's, writtenAt is substituted.
+    #[test]
+    fn the_writer_still_produces_the_waiting_fixture_byte_for_byte() {
+        let mut st = canonical_state();
+        st.node_lag = Some(1_443);
+        st.waiting_reason = Some("behind");
+        st.waiting_since = Some(1_785_022_800); // 2026-07-25T23:40:00Z, 20 min before writtenAt
+        st.last_template_at = Some(1_785_022_792); // the last template, just before the wait began
+        let rendered = render(&st);
+        let mut out = String::new();
+        let mut replaced = 0;
+        for line in rendered.lines() {
+            if line.trim_start().starts_with("\"writtenAt\":") {
+                out.push_str(&format!("  \"writtenAt\": \"{FIXED_WRITTEN_AT}\","));
+                replaced += 1;
+            } else {
+                out.push_str(line);
+            }
+            out.push('\n');
+        }
+        assert_eq!(replaced, 1);
+        let fixture = include_str!("../testdata/heartbeat.waiting.json");
+        assert_eq!(out, fixture, "\ndeploy/z3/miner/testdata/heartbeat.waiting.json is out of date; paste the bytes above.\n");
+    }
+
     /// The one field that cannot be pinned: it is `now()` at render time. Substituted for
     /// the fixture's constant so every OTHER field is compared exactly, rather than
     /// loosening the whole comparison to accommodate one value.
@@ -486,6 +587,12 @@ mod contract {
             submitted_accepted: 3,
             submitted_rejected: 1,
             last_submitted_at: Some(1_785_023_101),
+            node_lag: Some(2),
+            // None on purpose, the one exception to "every optional is Some": a set
+            // waitingSince makes the reader classify the fixture as WAITING, and the seam
+            // test needs the canonical moment to be a miner that is running.
+            waiting_since: None,
+            waiting_reason: None,
         }
     }
 

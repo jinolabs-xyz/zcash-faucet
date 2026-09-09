@@ -23,7 +23,7 @@ import type { MinerReading, MinerState } from "./miner/heartbeat.ts";
  */
 export function readingFromStatus(m: (Partial<MinerReading> & { active?: boolean }) | null | undefined): MinerReading {
   const state: MinerState =
-    m?.state === "running" || m?.state === "stalled" || m?.state === "not-writing" || m?.state === "not-configured"
+    m?.state === "running" || m?.state === "waiting" || m?.state === "stalled" || m?.state === "not-writing" || m?.state === "not-configured"
       ? m.state
       : "cannot-verify";
   return {
@@ -38,6 +38,9 @@ export function readingFromStatus(m: (Partial<MinerReading> & { active?: boolean
     submittedAccepted: m?.submittedAccepted ?? null,
     submittedRejected: m?.submittedRejected ?? null,
     solvedAgoSeconds: m?.solvedAgoSeconds ?? null,
+    nodeLag: m?.nodeLag ?? null,
+    waitingAgoSeconds: m?.waitingAgoSeconds ?? null,
+    waitingReason: m?.waitingReason ?? null,
   };
 }
 
@@ -83,6 +86,9 @@ export function minerChip(r: MinerReading, unit: MinerUnit = null): string {
     // block, so "mining" here would claim we are trying to win blocks while the panel
     // one click away says we are not.
     case "running": return r.mode === "proposal" ? "proposing" : "mining";
+    // Not "mining" and not "no blocks": the miner is fine and idle by its own decision,
+    // because the node is behind. The node row two cells away carries the fault.
+    case "waiting": return "waiting";
     case "stalled": return "no blocks";
     case "not-writing":
       if (parked(r, unit)) return "off";
@@ -159,6 +165,18 @@ export function minerRow(r: MinerReading, unit: MinerUnit = null): string {
       return `${verb}, ${tmpl}${wins(r)}`;
     }
 
+    // Idle on purpose. Says why, in the node's own terms, so nobody restarts a miner that
+    // is doing the one thing that keeps it off a fork. The age says how long the node has
+    // been behind, which is the number an operator actually wants.
+    case "waiting": {
+      const since = r.waitingAgoSeconds != null ? ` for ${humanAge(r.waitingAgoSeconds)}` : "";
+      // An isolated node sits at its OWN tip, so its lag is ~0 and "0 blocks behind" would
+      // be nonsense beside a green node row. The reason is the finding here.
+      if (r.waitingReason === "no-peers") return `waiting, node has NO PEERS${since}`;
+      const behind = r.nodeLag != null ? `node ${groupDigits(r.nodeLag)} blocks behind` : "node behind";
+      return `waiting, ${behind}${since}`;
+    }
+
     // The today case, and the one that must not sound survivable. Naming the age is
     // the whole point: "no template" alone reads like a quiet minute.
     case "stalled":
@@ -213,5 +231,14 @@ export function minerErrorRow(r: MinerReading, unit: MinerUnit = null): string |
  */
 export function minerIsBad(r: MinerReading, unit: MinerUnit = null): boolean {
   if (r.state === "running") return false;
+  // Waiting because the node is behind is the guard working, and the node row is where a
+  // node that is behind reads red; marking the miner too would teach a reader that two
+  // rows go red for one fault. Waiting because the node has NO PEERS is different: an
+  // isolated node sits at its own tip, the node row stays green, and this row is the
+  // only place the fault can show.
+  // Not in the first two minutes, though: a node that just restarted has no peers for a
+  // few seconds, and the miner polls every five, so every deploy would paint this row red
+  // for a moment. Two minutes without a peer is a node that is not finding any.
+  if (r.state === "waiting") return r.waitingReason === "no-peers" && (r.waitingAgoSeconds ?? 0) >= 120;
   return !parked(r, unit);
 }

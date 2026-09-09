@@ -61,6 +61,11 @@ MINER_STALL_SECS="${WATCHDOG_MINER_STALL_SECS:-300}"          # alive but no tem
 MINER_HEARTBEAT_FRESH_SECS="${WATCHDOG_MINER_HEARTBEAT_FRESH_SECS:-60}" # older writtenAt = process itself down (Restart=always' job, not ours)
 MINER_START_GRACE_SECS="${WATCHDOG_MINER_START_GRACE_SECS:-120}"  # just (re)started: give it time to fetch its first template
 MINER_HEAL_MAX="${WATCHDOG_MINER_HEAL_MAX:-3}"               # then page instead of restart-looping the miner
+# Step 7 stops the miner while it heals the node. A node being rewound ~100 blocks with a
+# miner still submitting on top of the old tip is how the 2026-09-07 fork kept growing.
+# The miner has its own sync guard (MINER_MAX_LAG); this is the layer that acts before
+# that guard's limit is reached, because a heal is already certain the node is behind.
+NODE_STOPS_MINER="${WATCHDOG_NODE_STOPS_MINER:-1}"
 
 # Node sync-stall recovery (step 7). Zebra can sit on one tip while the network moves on:
 # a self-mined block briefly forks it, or, far more often here, a thin and flaky testnet
@@ -79,6 +84,12 @@ ZEBRA_CHAIN_VOLUME="${WATCHDOG_ZEBRA_CHAIN_VOLUME:-z3-testnet-chain}"
 node_last_height=0
 node_stall_since=0
 node_heal_attempts=0
+miner_waiting_logged=0     # step 6 has already noted the miner's own wait
+# "step 7 stopped the miner for this episode" lives on DISK, through flap_get/flap_set,
+# for the reason the flap counts do: this unit is Restart=always and a deploy restarts it.
+# An in-memory flag lost mid-episode would leave the miner stopped forever, and the panel
+# would read the calm "off, unit stopped" for a miner nobody meant to park.
+MINER_STOP_KEY="miner-stopped-for-node-heal"
 alerted_node_giveup=0
 node_heal_what=""     # the deepest thing the current episode has tried, for the one report
 node_stall_lag=0      # how far behind it was when the episode began
@@ -251,7 +262,18 @@ recover_if_down() {
 # One string field out of the miner heartbeat, empty if absent or JSON null. grep, not a
 # json parser, because the watchdog carries no such dependency and the heartbeat is our
 # own flat object, one field per line.
-hb_field() { grep -o "\"$1\":\"[^\"]*\"" "$MINER_HEARTBEAT" 2>/dev/null | head -n1 | cut -d'"' -f4; }
+# THE WRITER PUTS A SPACE AFTER THE COLON. The miner renders `"writtenAt": "..."` (pinned
+# byte-for-byte by deploy/z3/miner/testdata/heartbeat.canonical.json), and these two
+# readers required `"writtenAt":"..."`. Every field read as empty, written_age was empty,
+# and heal_miner_if_stalled returned on its first check on every sweep: step 6 had been
+# dead since it shipped, including the 2026-08-18 wedge it was written for. The suite hid
+# it with compact fixtures the miner never writes; it now writes the real shape.
+hb_field() { grep -o "\"$1\":[[:space:]]*\"[^\"]*\"" "$MINER_HEARTBEAT" 2>/dev/null | head -n1 | sed -E 's/^"[^"]*":[[:space:]]*"//; s/"$//'; }
+# A numeric field, empty when absent or null. The guard writes nodeLag as a bare integer.
+# At least one digit, so a match is a number. A null or absent field comes back empty
+# either way; what turns "empty" into a refusal rather than a permissive 0 is the
+# `${errs:-unreadable}` at the one call site that gates on it.
+hb_num() { grep -o "\"$1\":[[:space:]]*[0-9][0-9]*" "$MINER_HEARTBEAT" 2>/dev/null | head -n1 | sed -E 's/.*:[[:space:]]*//'; }
 
 # Age in seconds of an ISO-8601 Zulu timestamp, or empty if it is absent or will not
 # parse. Empty is deliberately different from a large number: "no timestamp" is not
@@ -271,6 +293,12 @@ ts_age() {
 # restart-looping the miner forever.
 heal_miner_if_stalled() {
   [ "$MINER_HEAL_ENABLED" = "1" ] || return 0
+  # A miner step 7 stopped for a node heal is not stalled, it is stopped. Its last
+  # heartbeat stays "fresh" for MINER_HEARTBEAT_FRESH_SECS while lastTemplateAt ages, which
+  # is exactly this function's trigger, and it runs before step 7 each sweep: review
+  # reproduced it restarting the miner two sweeps after the stop, so the miner mined
+  # through the peer-cache drop and the state rewind, which is the 2026-09-07 mechanism.
+  [ "$(flap_get "$MINER_STOP_KEY")" != "1" ] || return 0
   [ -f "$MINER_HEARTBEAT" ] || return 0
   local key="$MINER_UNIT" written_age started_age tmpl_age
 
@@ -284,6 +312,24 @@ heal_miner_if_stalled() {
   # thrash exactly the thing a restart just fixed.
   started_age="$(ts_age "$(hb_field startedAt)")"
   [ -z "$started_age" ] || [ "$started_age" -ge "$MINER_START_GRACE_SECS" ] || return 0
+
+  # A miner that says it is WAITING is idle on purpose: its sync guard found the node
+  # behind (heartbeat waitingSince set, nodeLag says by how much). Its lastTemplateAt is
+  # stale by construction, and restarting it would bounce a process that is doing the one
+  # thing that keeps it off a fork. The node itself is step 7's business. Logged once per
+  # episode, not per sweep.
+  # The writer clears waitingSince on any RPC error, so a wedged connection cannot wear the
+  # waiting label; consecutiveErrors is checked here too, so an older writer cannot either.
+  local waiting_since errs; waiting_since="$(hb_field waitingSince)"; errs="$(hb_num consecutiveErrors)"
+  if [ -n "$waiting_since" ] && [ "${errs:-unreadable}" = "0" ]; then
+    if [ "$miner_waiting_logged" = "0" ]; then
+      local lagn; lagn="$(hb_num nodeLag)"
+      log "miner is waiting for the node (${lagn:-?} blocks behind); not a stall, leaving it alone"
+      miner_waiting_logged=1
+    fi
+    return 0
+  fi
+  miner_waiting_logged=0
 
   # lastTemplateAt absent/null counts as "never templated", which past the start grace is
   # itself a stall.
@@ -348,8 +394,48 @@ zebra_chain_heights() {
 #
 # If the RPC will not answer, that is a different failure (steps 1-2 and the pager), not
 # evidence of a stall, so this asserts nothing.
+# Starts a miner that a node heal stopped, once the node is fit again. Sets
+# MINER_RELEASE_NOTE (the sentence for the report) on success and empties it otherwise. A
+# variable rather than printed output: called through $(...), its journal line would land
+# inside the report and its "already paged" flag would die with the subshell. A start
+# that FAILS keeps the flag, so the next sweep tries again, and pages once per episode
+# rather than once ever: the unit was stopped, so Restart=always will not bring it back
+# and this is the only thing that will.
+alerted_miner_start_failed=0
+MINER_RELEASE_NOTE=""
+release_miner_after_heal() {
+  MINER_RELEASE_NOTE=""
+  [ "$(flap_get "$MINER_STOP_KEY")" = "1" ] || return 0
+  if systemctl start "$MINER_UNIT" >/dev/null 2>&1; then
+    flap_set "$MINER_STOP_KEY" 0
+    alerted_miner_start_failed=0
+    log "started $MINER_UNIT again after the node heal"
+    MINER_RELEASE_NOTE=" The miner was stopped for the heal and its unit is started again; its heartbeat confirms within a minute."
+    return 0
+  fi
+  log "WARNING: could not start $MINER_UNIT after the node heal; will retry next sweep"
+  if [ "$alerted_miner_start_failed" = "0" ]; then
+    # Not a footnote on a ✅: a miner that will not start is its own page.
+    danger "the node has recovered but 'systemctl start $MINER_UNIT' FAILED. The miner was stopped for the heal and is still stopped; the watchdog retries every sweep, or start it by hand."
+    alerted_miner_start_failed=1
+  fi
+  return 0
+}
+
 heal_node_if_stalled() {
-  [ "$NODE_HEAL_ENABLED" = "1" ] || return 0
+  if [ "$NODE_HEAL_ENABLED" != "1" ]; then
+    # Switched off mid-episode (an operator about to reimport a snapshot does exactly
+    # this). The only `systemctl start` for a miner stopped by a heal lives below, so
+    # without this the miner stays stopped for ever with the panel reading a calm "off".
+    if [ "$(flap_get "$MINER_STOP_KEY")" = "1" ]; then
+      # Through the same helper as every other release: the flag clears only on a start
+      # that succeeded, a failure retries next sweep and pages once, and the "already
+      # paged" flag resets on success, so a later episode's failure can page again.
+      release_miner_after_heal
+      [ -n "$MINER_RELEASE_NOTE" ] && log "node heal is disabled; started $MINER_UNIT, which a heal had stopped, so it is not left parked by accident (its own sync guard applies)"
+    fi
+    return 0
+  fi
   local name="$1"
   [ -n "$name" ] || return 0
 
@@ -364,10 +450,22 @@ heal_node_if_stalled() {
   # Higher than last sweep: syncing, or at the tip and a block just landed. Healthy, so
   # clear every bit of stall state and the next episode gets a full budget.
   if [ "$blocks" -gt "$prev" ]; then
+    # The miner comes back FIRST, so the report can say it did. Its own sync guard keeps
+    # it idle until the node is within MINER_MAX_LAG, so starting it here is safe even
+    # while the node is still catching up. Not on the very first sweep (prev=0 makes any
+    # height "advancing"): a watchdog restarted mid-episode must see the tip move once
+    # before it un-stops a miner it stopped for a node that may still be stuck.
+    local miner_note=""
+    if [ "$prev" -gt 0 ]; then release_miner_after_heal; miner_note="$MINER_RELEASE_NOTE"; fi
     if [ "$node_heal_attempts" != "0" ]; then
       # The one report, and only now: the tip has been SEEN to move after we acted.
       log "zebra tip advancing again (height $blocks, ${lag} behind); node-stall state cleared"
-      fixed "zebra was ${node_stall_lag} blocks behind and stuck. ${node_heal_what} after $node_heal_attempts attempt(s). Syncing again, ${lag} behind now."
+      fixed "zebra was ${node_stall_lag} blocks behind and stuck. ${node_heal_what} after $node_heal_attempts attempt(s). Syncing again, ${lag} behind now.${miner_note}"
+    elif [ -n "$miner_note" ]; then
+      # This process did not do the healing (it was restarted mid-episode) but it found the
+      # flag and the tip moving, so the miner's return is still reported, once.
+      log "zebra tip advancing again (height $blocks); a previous watchdog had stopped the miner for a heal"
+      fixed "zebra is syncing again after a node heal that a previous watchdog started (${lag} behind now).${miner_note}"
     elif [ "$node_stall_since" != "0" ]; then
       log "zebra tip advancing again (height $blocks, ${lag} behind); stall clock cleared"
     fi
@@ -376,8 +474,21 @@ heal_node_if_stalled() {
   fi
 
   # Not higher, but essentially at the tip: normal idle between blocks, not a stall.
+  # AND the place to release a miner a heal stopped when the height never strictly
+  # advanced across a sweep: a snapshot reimport, or a node that came back already at its
+  # tip. Review found the flag stuck for ever here, with step 6 disabled by it and the
+  # panel reading a calm "off". At the tip is exactly when mining is safe.
   if [ "$lag" -le "$NODE_LAG_LIMIT" ]; then
     node_stall_since=0
+    if [ "$prev" -gt 0 ] && [ "$(flap_get "$MINER_STOP_KEY")" = "1" ]; then
+      release_miner_after_heal
+      [ -n "$MINER_RELEASE_NOTE" ] && fixed "zebra is at the tip again after a node heal (${lag} behind).${MINER_RELEASE_NOTE}"
+      # At the tip IS the end of the episode, so the budget and the one-page-per-episode
+      # flags reset here exactly as they do when the height advances; left set, a later
+      # advancing sweep would report the same heal twice and the next stall would start
+      # with no budget and no page.
+      node_heal_attempts=0; alerted_node_giveup=0; node_heal_what=""; node_stall_lag=0
+    fi
     return 0
   fi
 
@@ -389,13 +500,33 @@ heal_node_if_stalled() {
   local n=$(( node_heal_attempts + 1 ))
   if [ "$n" -gt "$NODE_HEAL_MAX" ]; then
     if [ "$alerted_node_giveup" = "0" ]; then
-      danger "zebra still ${lag} blocks behind after $NODE_HEAL_MAX tries (restart, clear peers, drop fork state). Likely a fork past the finalized tip: compare getblockhash with an explorer and reimport a snapshot (SNAPSHOTS.md)."
+      local miner_note=""
+      [ "$(flap_get "$MINER_STOP_KEY")" = "1" ] && miner_note=" The miner is left STOPPED until the node is fixed: systemctl start $MINER_UNIT afterwards."
+      danger "zebra still ${lag} blocks behind after $NODE_HEAL_MAX tries (restart, clear peers, drop fork state). Likely a fork past the finalized tip: compare getblockhash with an explorer and reimport a snapshot (SNAPSHOTS.md).${miner_note}"
       alerted_node_giveup=1
     fi
     return 0
   fi
   node_heal_attempts="$n"
   [ "$node_stall_lag" = "0" ] && node_stall_lag="$lag"
+
+  # Stop the miner for the episode, once, and only if it is running. Every heal below
+  # moves the node's tip backwards (a restart drops the non-finalized tip, a state drop
+  # rewinds ~100 blocks); a miner submitting through that extends whatever it was on.
+  if [ "$NODE_STOPS_MINER" != "1" ]; then
+    log "not stopping $MINER_UNIT for this heal (WATCHDOG_NODE_STOPS_MINER=$NODE_STOPS_MINER); its own sync guard is the only protection"
+  elif [ "$(flap_get "$MINER_STOP_KEY")" != "1" ] && systemctl is-active --quiet "$MINER_UNIT" 2>/dev/null; then
+    if systemctl stop "$MINER_UNIT" >/dev/null 2>&1; then
+      flap_set "$MINER_STOP_KEY" 1
+      # Step 6 may have restarted the miner before this (a wedged node wedges the miner's
+      # socket too). Its count would survive the episode and, once the miner templates
+      # again after OUR start, credit step 6 with a FIXED for a heal it did not do.
+      flap_set "$MINER_UNIT" 0
+      log "stopped $MINER_UNIT for the node heal; it is started again once the tip moves"
+    else
+      log "WARNING: could not stop $MINER_UNIT before healing the node; its own sync guard is the remaining protection"
+    fi
+  fi
 
   if [ "$n" -ge "$NODE_CLEAR_CACHE_AFTER" ]; then
     # Both live on the chain volume: the peer cache at network/<net>.peers, and the

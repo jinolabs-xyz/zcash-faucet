@@ -7,7 +7,7 @@
   "templateStaleAfterSeconds": 48,
   "mode": "submit",
   "startedAt": "2026-07-25T23:00:00Z",
-  "lastTemplateAt": "2026-07-25T23:59:52Z",
+  "lastTemplateAt": "2026-07-25T23:39:52Z",
   "lastTemplateHeight": 4237523,
   "lastErrorStage": "template",
   "lastErrorAt": "2026-07-25T23:30:00Z",
@@ -17,7 +17,7 @@
   "submittedAccepted": 3,
   "submittedRejected": 1,
   "lastSubmittedAt": "2026-07-25T23:45:01Z",
-  "nodeLag": 2,
-  "waitingSince": null,
-  "waitingReason": null
+  "nodeLag": 1443,
+  "waitingSince": "2026-07-25T23:40:00Z",
+  "waitingReason": "behind"
 }

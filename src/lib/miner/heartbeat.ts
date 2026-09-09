@@ -41,7 +41,14 @@
  * whichever way it happened, and the split changes WHO it points at, not how loud
  * it is.
  */
-export type MinerState = "running" | "stalled" | "not-writing" | "cannot-verify" | "not-configured";
+/**
+ * "waiting" (#5 of the 2026-09-08 risk register): the miner is alive and has CHOSEN not to
+ * fetch templates because the node is behind its own estimate of the network by more than
+ * MINER_MAX_LAG. Before the guard existed this miner spent an afternoon extending a private
+ * fork with its own blocks. Waiting is neither stalled nor running: nothing is wrong with
+ * the miner, and it is not mining. It is never active.
+ */
+export type MinerState = "running" | "waiting" | "stalled" | "not-writing" | "cannot-verify" | "not-configured";
 
 export interface Heartbeat {
   schema: number;
@@ -65,6 +72,12 @@ export interface Heartbeat {
   submittedRejected: number | null;
   /** When it last solved one, so "has ever won" can be told from "is winning". */
   lastSolvedAt: string | null;
+  /** How far behind its own estimate the node was at the miner's last check. */
+  nodeLag: number | null;
+  /** Set while the sync guard holds the miner back; null the moment it mines again. */
+  waitingSince: string | null;
+  /** Why: "behind" (lag over MINER_MAX_LAG) or "no-peers" (an isolated node). */
+  waitingReason: string | null;
 }
 
 export interface MinerReading {
@@ -85,6 +98,13 @@ export interface MinerReading {
   submittedRejected: number | null;
   /** Seconds since the last solve, null when it has never solved or did not say. */
   solvedAgoSeconds: number | null;
+  /** Blocks the node was behind its own estimate at the last check; null when the
+   *  writer predates the sync guard or has not checked yet. */
+  nodeLag: number | null;
+  /** Seconds the sync guard has been holding the miner back; null when it is not. */
+  waitingAgoSeconds: number | null;
+  /** "behind" or "no-peers" while waiting; anything else the writer says is kept as text. */
+  waitingReason: string | null;
 }
 
 const NOTHING = {
@@ -98,6 +118,9 @@ const NOTHING = {
   submittedAccepted: null,
   submittedRejected: null,
   solvedAgoSeconds: null,
+  nodeLag: null,
+  waitingAgoSeconds: null,
+  waitingReason: null,
 } as const;
 
 /** No heartbeat path configured, so this app was never asked to look. */
@@ -170,9 +193,27 @@ export function readingFor(raw: unknown, nowMs: number): MinerReading {
     submittedAccepted: typeof h.submittedAccepted === "number" ? h.submittedAccepted : null,
     submittedRejected: typeof h.submittedRejected === "number" ? h.submittedRejected : null,
     solvedAgoSeconds: ageSeconds(h.lastSolvedAt, nowMs),
+    nodeLag: typeof h.nodeLag === "number" && Number.isFinite(h.nodeLag) && h.nodeLag >= 0 ? h.nodeLag : null,
+    waitingAgoSeconds: ageSeconds(h.waitingSince, nowMs),
+    waitingReason: typeof h.waitingReason === "string" && h.waitingReason ? h.waitingReason : null,
   };
 
   if (beatAgo > staleAfter) return { ...facts, state: "not-writing" };
+
+  // A fresh file that says the miner is holding back on purpose. Judged BEFORE the
+  // template age, because a waiting miner has a stale lastTemplateAt by construction and
+  // calling that stalled would send someone to fix a miner that is behaving. It is judged
+  // AFTER not-writing for the same reason as everything else: a stale file testifies to
+  // nothing, including this.
+  //
+  // AND ONLY BESIDE A CLEAN ERROR COUNT. The writer clears the wait on any RPC error, but
+  // an older writer might not, and the watchdog applies the same rule: a wait beside a
+  // non-zero consecutiveErrors is a wedged connection wearing a calm label, and both
+  // readers must call that the stall it is, or the panel says "waiting" while the
+  // watchdog restarts it.
+  // `=== 0`, not `?? 0`: a wait with NO error count at all is not honoured here, and the
+  // watchdog treats a missing count as unreadable rather than zero, so the two agree.
+  if (facts.waitingAgoSeconds != null && facts.consecutiveErrors === 0) return { ...facts, state: "waiting" };
 
   // Null means the miner has never fetched a template. That is not "running and we
   // have no data yet", it is a miner that has never done the one thing it exists to

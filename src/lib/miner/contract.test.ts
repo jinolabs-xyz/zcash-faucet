@@ -26,6 +26,12 @@ import { readMinerHeartbeat } from "./read.ts";
 const FIXTURE = fileURLToPath(
   new URL("../../../deploy/z3/miner/testdata/heartbeat.canonical.json", import.meta.url),
 );
+/** The second shared fixture: the same miner, twenty minutes into a sync-guard wait. The
+ *  Rust side asserts the writer produces these bytes; this side asserts they read as
+ *  WAITING, so the one state both sides added together is proven across the seam. */
+const WAITING_FIXTURE = fileURLToPath(
+  new URL("../../../deploy/z3/miner/testdata/heartbeat.waiting.json", import.meta.url),
+);
 
 /** The fixture's writtenAt, so ages are deterministic rather than relative to the clock.
  *  It sits 8 seconds after lastTemplateAt, which is what makes the fixture a moment that
@@ -42,6 +48,17 @@ test("the reader parses the writer's real bytes", () => {
   assert.equal(r.lastTemplateHeight, 4237523);
   assert.equal(r.consecutiveErrors, 0);
   assert.equal(r.lastErrorStage, "template");
+});
+
+test("the writer's WAITING bytes read as waiting, with the lag and the wait age", () => {
+  const r = readMinerHeartbeat(WAITING_FIXTURE, WRITTEN_AT + 5_000);
+  assert.equal(r.state, "waiting", `expected waiting, got ${r.state}`);
+  assert.equal(r.nodeLag, 1443);
+  assert.equal(r.waitingReason, "behind");
+  // waitingSince is 23:40:00, writtenAt 00:00:00, read at +5 s.
+  assert.equal(r.waitingAgoSeconds, 20 * 60 + 5);
+  // Its template is 20 minutes stale, which alone would read as stalled: the wait wins.
+  assert.ok(r.templateAgoSeconds! > 1000);
 });
 
 test("and the ages come out of the writer's own timestamps, not a guess", () => {
@@ -101,6 +118,11 @@ const CONSUMED = [
   "lastSolvedAt",
   "submittedAccepted",
   "submittedRejected",
+  // The sync guard (risk register #5, 2026-09-08). waitingSince decides a whole state;
+  // nodeLag is the number that state's row shows.
+  "nodeLag",
+  "waitingSince",
+  "waitingReason",
 ];
 
 const KNOWINGLY_IGNORED: Record<string, string> = {

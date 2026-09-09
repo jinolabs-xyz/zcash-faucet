@@ -2,6 +2,8 @@
 name = "zcash-testnet-miner"
 version = "0.1.0"
 edition = "2021"
+# Option::is_none_or (main.rs) is 1.82; the box builds with 1.96.
+rust-version = "1.82"
 description = "Solo CPU miner that funds the faucet by mining public Zcash testnet blocks"
 license = "MIT OR Apache-2.0"
 publish = false

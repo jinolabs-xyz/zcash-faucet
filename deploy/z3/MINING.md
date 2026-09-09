@@ -69,6 +69,44 @@ accepted without touching the chain.
 after a proposal-mode run reports `proposal VALID`, and coordinate the first
 live submission.
 
+## The sync guard: no mining on a node that is behind
+
+Before every template, and again before `submitblock`, the miner asks zebra
+`getblockchaininfo` and `getpeerinfo`. If the node is more than `MINER_MAX_LAG`
+blocks behind its own estimate of the network, or has no peers at all, it
+fetches no template and submits nothing (a block solved in between is
+discarded), logs one line a minute, and its heartbeat carries `waitingSince`
+and `nodeLag` so the panel reads `waiting` and the watchdog leaves it alone.
+Any RPC error ends the wait in the heartbeat, so a wedged connection cannot
+hide behind the label. There is no off switch: `MINER_MAX_LAG` must be 1..500.
+
+Why it exists: on 2026-09-07 zebra lost its peers and sat on a private fork for
+hours. The miner kept solving on that fork, so our own blocks extended it, and
+when the watchdog rewound the node the miner was still submitting on the old
+tip. The rule "only mine on a synced node" was in this file and nothing
+enforced it.
+
+Why 100 and not 2: the estimate runs ahead of the real chain whenever blocks
+are slow, and on testnet they often are, for an hour at a time. That gap is
+exactly when the difficulty floor lets a single core win, so a tight limit
+would stop mining at the moment it pays, and keep it stopped, since our own
+block is what ends the gap. 100 is past any gap in our logs and is the depth of
+the finalized state.
+
+What it cannot see, plainly: `estimatedheight` extrapolates from the tip's
+timestamp, so a fork that we ourselves keep extending has a fresh tip and a
+small lag. The guard catches a node left behind (initial sync, a stall, a fork
+nobody extends) and a node with no peers, which is how most forks start; it
+does not catch a fork we are extending at pace. Neither does the watchdog's
+node heal, which reads the same two fields and fires only when the tip stops
+advancing. What stopped the 2026-09-07 fork from being extended at pace was
+that a single core cannot keep a fork's tip fresh until its difficulty has
+fallen for hours: our hashrate, not a mechanism. A guard that sees such a fork
+needs the network's tip, which only the app has (`externalTip.ts`); wiring
+that into the watchdog is a separate change. The watchdog's node heal does
+stop the miner outright for the episode, writes that down so its own restart
+cannot forget it, and starts the miner again once the tip is seen moving.
+
 ## Build and install
 
 **You should not normally need this.** `auto-deploy.sh` rebuilds and reinstalls the miner
@@ -110,6 +148,7 @@ Config in `/etc/faucet/miner.env`:
 | `MINER_COOKIE_PATH` | `/var/run/auth/.cookie` | from the `z3-testnet-cookie` volume |
 | `MINER_THREADS` | `1` | 1..=4. `CPUQuota=150%` makes past 2 pointless, and the ceiling is what `MemoryMax=1G` affords at ~144 MB per thread |
 | `MINER_TEMPLATE_SECS` | `60` | refetch the template after this long |
+| `MINER_MAX_LAG` | `100` | no mining while zebra is more than this many blocks behind its own estimate; 1..500, no off switch |
 | `MINER_POLL_SECS` | `5` | backoff after an RPC error |
 
 Reaching the cookie from the host: the file lives in the

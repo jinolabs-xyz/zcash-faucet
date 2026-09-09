@@ -30,7 +30,7 @@ wd_env() {
   # later case at a stale, stalled heartbeat in an old scratch dir, and the miner heal
   # runs (and gives up, and pages) inside tests that are about something else.
   unset STUB_CRASHLOOP STUB_HEAL_FIXES STUB_ZEBRA_BLOCKS STUB_ZEBRA_EST STUB_ZEBRA_ADVANCE STUB_ZEBRA_STUCK_CALLS \
-        WATCHDOG_NODE_HEAL_ENABLED WATCHDOG_MINER_HEARTBEAT WATCHDOG_MINER_UNIT
+        WATCHDOG_NODE_HEAL_ENABLED WATCHDOG_NODE_STOPS_MINER WATCHDOG_MINER_HEARTBEAT WATCHDOG_MINER_UNIT STUB_START_FAIL
   # Capture what would have been paged, without a webhook.
   printf '#!/bin/sh\nprintf "%%s\\n" "$1" >> "%s/alerts.log"\n' "$T" > "$T/alert.sh"
   chmod +x "$T/alert.sh"
@@ -205,10 +205,14 @@ _ago_z() { date -u -d "$1 seconds ago" +%Y-%m-%dT%H:%M:%SZ; }
 
 # Write a heartbeat: writtenAt/startedAt/lastTemplateAt as ages in seconds. A
 # lastTemplateAt of "none" is emitted as JSON null (the miner has never templated).
+# IN THE WRITER'S REAL SHAPE: one field per line, a space after the colon, matching
+# deploy/z3/miner/testdata/heartbeat.canonical.json. The first version of this helper wrote
+# compact JSON the miner never produces, the watchdog's parser only understood compact, and
+# so a suite that was green proved nothing about the box: step 6 was dead there for weeks.
 miner_hb() {
   local lt
   if [ "$3" = "none" ]; then lt='null'; else lt="\"$(_ago_z "$3")\""; fi
-  printf '{"schema":1,"writtenAt":"%s","startedAt":"%s","lastTemplateAt":%s,"lastTemplateHeight":4282310}\n' \
+  printf '{\n  "schema": 1,\n  "writtenAt": "%s",\n  "startedAt": "%s",\n  "lastTemplateAt": %s,\n  "lastTemplateHeight": 4282310,\n  "consecutiveErrors": 0,\n  "nodeLag": 0,\n  "waitingSince": null,\n  "waitingReason": null\n}\n' \
     "$(_ago_z "$1")" "$(_ago_z "$2")" "$lt" > "$T/heartbeat.json"
 }
 
@@ -429,3 +433,201 @@ export WATCHDOG_NODE_HEAL_ENABLED=0
 export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677
 wd_run 3
 check "does nothing when disabled, even on a real stall" "! grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
+
+# ── THE SYNC GUARD AND THE NODE HEAL, TOGETHER (risk register #5, 2026-09-08) ───────────
+# On 2026-09-07 the node sat on a private fork and the miner kept submitting on top of it,
+# through six restarts and a state drop. Two layers now: the miner's own guard (it writes
+# waitingSince to its heartbeat and fetches nothing), and step 7 stopping the miner for a
+# heal episode. Step 6 must not "heal" a miner that is waiting, or the two fight.
+
+# A heartbeat from a miner whose sync guard is holding it back: fresh beat, stale template,
+# waitingSince set, nodeLag saying by how much.
+miner_hb_waiting() { # $1 waiting for N seconds, $2 lag
+  printf '{\n  "schema": 1,\n  "writtenAt": "%s",\n  "startedAt": "%s",\n  "lastTemplateAt": "%s",\n  "lastTemplateHeight": 4282310,\n  "consecutiveErrors": 0,\n  "nodeLag": %s,\n  "waitingSince": "%s",\n  "waitingReason": "behind"\n}\n' \
+    "$(_ago_z 5)" "$(_ago_z 7200)" "$(_ago_z 3600)" "$2" "$(_ago_z "$1")" > "$T/heartbeat.json"
+}
+
+echo "== watchdog: a miner WAITING for the node is not a stall and is left alone"
+wd_miner_env
+miner_hb_waiting 1800 1443   # idle on purpose for 30 min, node 1443 behind, template 1h old
+wd_run 3
+check "does not restart a miner that is holding back on purpose" "! grep -q 'systemctl restart zcash-testnet-miner' '$STUB_LOG'"
+check "says so in the journal, with the lag" "grep -q 'miner is waiting for the node (1443 blocks behind)' '$T/run.log'"
+check "and says it once, not every sweep" "[ \"\$(grep -c 'miner is waiting for the node' '$T/run.log')\" = 1 ]"
+check "and pages nothing about the miner" "[ -e '$T/alerts.log' ] || : > '$T/alerts.log'; ! grep -qi 'miner' '$T/alerts.log'"
+check "while the sweep itself ran (the negative above is about a decision)" "grep -q 'miner is waiting' '$T/run.log'"
+
+echo "== watchdog: a WAITING label beside a failing RPC is not honoured, it is the wedge of 2026-08-18"
+# The writer clears waitingSince on any error, but an older writer might not, and a wedged
+# connection with a stale "waiting" label would otherwise never be restarted again.
+wd_miner_env
+printf '{\n  "schema": 1,\n  "writtenAt": "%s",\n  "startedAt": "%s",\n  "lastTemplateAt": "%s",\n  "lastTemplateHeight": 4282310,\n  "consecutiveErrors": 4000,\n  "lastErrorStage": "getblockchaininfo",\n  "nodeLag": 51,\n  "waitingSince": "%s",\n  "waitingReason": "behind"\n}\n' \
+  "$(_ago_z 5)" "$(_ago_z 7200)" "$(_ago_z 3600)" "$(_ago_z 1800)" > "$T/heartbeat.json"
+wd_run 1
+check "a miner whose RPC is failing is restarted even though it claims to be waiting" "grep -q 'systemctl restart zcash-testnet-miner' '$STUB_LOG'"
+
+echo "== watchdog: a WAITING label with NO error count at all is not honoured either"
+# An older writer without consecutiveErrors, or a corrupt line. Unreadable must not be
+# read as zero, or the gate that guards the wait fails open.
+wd_miner_env
+printf '{\n  "schema": 1,\n  "writtenAt": "%s",\n  "startedAt": "%s",\n  "lastTemplateAt": "%s",\n  "lastTemplateHeight": 4282310,\n  "waitingSince": "%s"\n}\n' \
+  "$(_ago_z 5)" "$(_ago_z 7200)" "$(_ago_z 3600)" "$(_ago_z 1800)" > "$T/heartbeat.json"
+wd_run 1
+check "restarted: a wait without a readable error count is a stall" "grep -q 'systemctl restart zcash-testnet-miner' '$STUB_LOG'"
+
+echo "== watchdog: THE REAL FIXTURE. The miner's own canonical bytes are read as a live miner"
+# The seam test for the shell reader: the bytes the Rust writer is pinned to. If these read
+# as empty, every miner check above is running against a shape the box never has.
+wd_miner_env
+sed "s/\"writtenAt\": \"[^\"]*\"/\"writtenAt\": \"$(_ago_z 5)\"/; s/\"lastTemplateAt\": \"[^\"]*\"/\"lastTemplateAt\": \"$(_ago_z 3600)\"/; s/\"startedAt\": \"[^\"]*\"/\"startedAt\": \"$(_ago_z 7200)\"/" \
+  "$REPO/deploy/z3/miner/testdata/heartbeat.canonical.json" > "$T/heartbeat.json"
+wd_run 1
+check "the canonical fixture, aged into a stall, is restarted: the parser reads the writer's real format" "grep -q 'systemctl restart zcash-testnet-miner' '$STUB_LOG'"
+check "and compact JSON still reads too, for any hand-written file" "printf '{\"schema\":1,\"writtenAt\":\"%s\",\"startedAt\":\"%s\",\"lastTemplateAt\":\"%s\"}' \"\$(_ago_z 5)\" \"\$(_ago_z 7200)\" \"\$(_ago_z 3600)\" > '$T/heartbeat.json'; : > '$STUB_LOG'; wd_run 1; grep -q 'systemctl restart zcash-testnet-miner' '$STUB_LOG'"
+
+echo "== watchdog: the same heartbeat WITHOUT waitingSince is still the stall it always was"
+# The mirror: if this did not restart, the waiting check would be swallowing every stall.
+wd_miner_env
+miner_hb 5 7200 3600
+wd_run 1
+check "a stale template with no wait is restarted as before" "grep -q 'systemctl restart zcash-testnet-miner' '$STUB_LOG'"
+
+echo "== watchdog: a node heal STOPS a running miner first, and starts it again on recovery"
+wd_node_env
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677 STUB_ZEBRA_ADVANCE=1 STUB_ZEBRA_STUCK_CALLS=2
+wd_run 4   # baseline, stuck (stop miner + restart 1/3), advancing (start miner + report), quiet
+check "the miner is stopped before the node is touched" "grep -q 'systemctl stop zcash-testnet-miner.service' '$STUB_LOG'"
+check "and the stop comes BEFORE the restart, not after" "[ \"\$(grep -n 'systemctl stop zcash-testnet-miner' '$STUB_LOG' | head -1 | cut -d: -f1)\" -lt \"\$(grep -n 'docker restart z3-testnet-zebra-1' '$STUB_LOG' | head -1 | cut -d: -f1)\" ]"
+check "the journal says why" "grep -q 'stopped zcash-testnet-miner.service for the node heal' '$T/run.log'"
+check "the miner is started again once the tip moves" "grep -q 'systemctl start zcash-testnet-miner.service' '$STUB_LOG'"
+check "and the ONE fixed report says the miner was stopped and is back" "grep -q 'FIXED: zebra was 1443 blocks behind.*The miner was stopped for the heal and its unit is started again' '$T/alerts.log'"
+check "stopped exactly once for the episode" "[ \"\$(grep -c 'systemctl stop zcash-testnet-miner' '$STUB_LOG')\" = 1 ]"
+
+echo "== watchdog: STEP 6 DOES NOT RESTART A MINER STEP 7 STOPPED, mid-heal"
+# Reproduced in review: the stopped miner's last heartbeat stays fresh for two sweeps while
+# its template ages, step 6 read that as a stall and restarted it, and the miner mined
+# through the peer-cache drop and the state rewind. Lag 60 here: above the node heal's
+# limit (50) and below the miner's own (100), so only the watchdog's stop protects.
+wd_node_env
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export WATCHDOG_MINER_HEARTBEAT="$T/heartbeat.json" WATCHDOG_MINER_UNIT="zcash-testnet-miner.service"
+miner_hb 5 7200 3600   # fresh beat, template an hour old: step 6's trigger, exactly
+export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4331294   # 60 behind, stuck
+wd_run 4   # baseline, stuck (stop + restart zebra), two more sweeps with the flag set
+check "the miner was stopped for the heal" "grep -q 'systemctl stop zcash-testnet-miner.service' '$STUB_LOG'"
+# Before the stop, step 6 may well restart a miner whose node is wedged (that is its job,
+# and it is harmless then). AFTER the stop it must not: the last restart precedes the stop.
+check "and NOT restarted by the miner-stall heal after the stop" "r=\$(grep -n 'systemctl restart zcash-testnet-miner' '$STUB_LOG' | tail -1 | cut -d: -f1); [ \"\${r:-0}\" -lt \"\$(grep -n 'systemctl stop zcash-testnet-miner' '$STUB_LOG' | head -1 | cut -d: -f1)\" ]"
+check "so the unit is still stopped at the end" "[ \"\$(cat '$STUB_SYSTEMD/zcash-testnet-miner.service')\" = inactive ]"
+check "and the flag still says a heal has it" "[ \"\$(cat '$T/state/miner-stopped-for-node-heal.flaps')\" = 1 ]"
+
+echo "== watchdog: a node that comes back AT ITS TIP, without the height moving, still releases the miner"
+# A snapshot reimport, or a node back at its own tip: the height never strictly advances
+# across a sweep. Review found the flag stuck here for ever, with step 6 disabled by it.
+wd_node_env
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677
+wd_run 2   # stop the miner, restart zebra
+check "stopped" "grep -q 'systemctl stop zcash-testnet-miner.service' '$STUB_LOG'"
+export STUB_ZEBRA_BLOCKS=4332677 STUB_ZEBRA_EST=4332677   # a reimport put it at the tip; it does not move
+: > "$T/alerts.log"; : > "$STUB_LOG"
+wd_run 3   # new process: baseline, at tip (release), at tip (quiet)
+check "the miner is started once the node is seen at the tip" "grep -q 'systemctl start zcash-testnet-miner.service' '$STUB_LOG'"
+check "reported once, as a node heal outcome" "[ \"\$(grep -c 'FIXED: zebra is at the tip again after a node heal' '$T/alerts.log')\" = 1 ] && grep -q 'unit is started again' '$T/alerts.log'"
+check "and the flag is clear" "[ \"\$(cat '$T/state/miner-stopped-for-node-heal.flaps')\" = 0 ]"
+
+echo "== watchdog: a failed start keeps the flag and retries, paging once, not once-ever and not every sweep"
+wd_node_env
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677 STUB_ZEBRA_ADVANCE=1 STUB_ZEBRA_STUCK_CALLS=2 STUB_START_FAIL=1
+wd_run 5   # baseline, stuck (stop), advancing (start fails, page), advancing (retry, no page), advancing
+check "the start was retried on later sweeps" "[ \"\$(grep -c 'systemctl start zcash-testnet-miner' '$STUB_LOG')\" -ge 2 ]"
+check "paged exactly once" "[ \"\$(grep -c 'NEEDS YOU: the node has recovered but' '$T/alerts.log')\" = 1 ]"
+check "and the flag is still set, because the miner is still stopped" "[ \"\$(cat '$T/state/miner-stopped-for-node-heal.flaps')\" = 1 ]"
+unset STUB_START_FAIL
+
+echo "== watchdog: ONE report for a node heal, not a second FIXED crediting the miner-stall heal"
+# A wedged node wedges the miner's socket, so step 6 restarts the miner before step 7 acts;
+# its count must not survive the heal, or the miner templating again after OUR start reads
+# as step 6's fix.
+wd_node_env
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export WATCHDOG_MINER_HEARTBEAT="$T/heartbeat.json" WATCHDOG_MINER_UNIT="zcash-testnet-miner.service"
+miner_hb 5 7200 3600      # stalled from the start: step 6 restarts it on sweep 1
+export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677 STUB_ZEBRA_ADVANCE=1 STUB_ZEBRA_STUCK_CALLS=2
+wd_run 3   # baseline (+ step 6 restart), stuck (stop + heal), advancing (start, FIXED)
+miner_hb 5 7200 10        # the miner templates again after OUR start
+wd_run 1
+check "the node heal reported" "grep -q 'FIXED: zebra was 1443 blocks behind' '$T/alerts.log'"
+check "and step 6 did NOT claim a fix of its own for the same episode" "! grep -q 'FIXED: miner stalled' '$T/alerts.log'"
+
+echo "== watchdog: switching the node heal OFF mid-episode does not strand a miner it stopped"
+wd_node_env
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677
+wd_run 2   # stop the miner, restart zebra
+check "the miner was stopped" "grep -q 'systemctl stop zcash-testnet-miner.service' '$STUB_LOG'"
+export WATCHDOG_NODE_HEAL_ENABLED=0
+: > "$STUB_LOG"
+wd_run 1
+check "with the heal disabled, the stopped miner is started again rather than left parked" "grep -q 'systemctl start zcash-testnet-miner.service' '$STUB_LOG'"
+check "and the journal says why" "grep -q 'node heal is disabled; started zcash-testnet-miner.service' '$T/run.log'"
+check "and the flag is cleared" "[ \"\$(cat '$T/state/miner-stopped-for-node-heal.flaps')\" = 0 ]"
+check "and the node itself was left alone" "! grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
+unset WATCHDOG_NODE_HEAL_ENABLED
+
+echo "== watchdog: a node heal that GIVES UP leaves the miner stopped and says so"
+wd_node_env
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677
+wd_run 6
+check "the miner was stopped for the episode" "grep -q 'systemctl stop zcash-testnet-miner.service' '$STUB_LOG'"
+check "and never started again, because the node is not fixed" "! grep -q 'systemctl start zcash-testnet-miner.service' '$STUB_LOG'"
+check "the page says the miner is left stopped and how to bring it back" "grep -q 'NEEDS YOU: zebra still 1443 blocks behind.*The miner is left STOPPED.*systemctl start zcash-testnet-miner.service' '$T/alerts.log'"
+
+echo "== watchdog: a miner that is not running is not stopped, and the report does not mention it"
+wd_node_env
+echo inactive > "$STUB_SYSTEMD/zcash-testnet-miner.service"   # parked, as on 2026-09-08
+export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677 STUB_ZEBRA_ADVANCE=1 STUB_ZEBRA_STUCK_CALLS=2
+wd_run 4
+check "no stop for a miner that is already off" "! grep -q 'systemctl stop zcash-testnet-miner' '$STUB_LOG'"
+check "no start either: the watchdog does not un-park a miner someone parked" "! grep -q 'systemctl start zcash-testnet-miner' '$STUB_LOG'"
+check "the fixed report is the plain one" "grep -q 'FIXED: zebra' '$T/alerts.log' && ! grep -q 'miner' '$T/alerts.log'"
+
+echo "== watchdog: stopping the miner for a heal can be switched off"
+wd_node_env
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export WATCHDOG_NODE_STOPS_MINER=0
+export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677
+wd_run 2
+check "the node is still healed" "grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
+check "but the miner is left running" "! grep -q 'systemctl stop zcash-testnet-miner' '$STUB_LOG'"
+check "and the journal says the guard was switched off, so the negative above is a decision" "grep -q 'not stopping zcash-testnet-miner.service for this heal (WATCHDOG_NODE_STOPS_MINER=0)' '$T/run.log'"
+
+echo "== watchdog: THE FLAG SURVIVES A WATCHDOG RESTART, so a miner stopped mid-episode comes back"
+# faucet-watchdog.service is Restart=always and every ops deploy restarts it. An in-memory
+# flag would leave the miner stopped forever with the panel reading a calm "off".
+wd_node_env
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677
+wd_run 2   # baseline, stuck: stop the miner, restart zebra. Then this watchdog "dies".
+check "the first watchdog stopped the miner" "grep -q 'systemctl stop zcash-testnet-miner.service' '$STUB_LOG'"
+check "and wrote that down" "[ \"\$(cat '$T/state/miner-stopped-for-node-heal.flaps' 2>/dev/null)\" = 1 ]"
+export STUB_ZEBRA_ADVANCE=1   # the heal worked while the watchdog was down
+: > "$T/alerts.log"
+wd_run 3   # a NEW process: baseline (prev=0, must not act), advancing (start miner, report), quiet
+check "the new watchdog does not un-stop the miner on its very first sweep" "[ \"\$(grep -c 'systemctl start zcash-testnet-miner' '$STUB_LOG')\" = 1 ]"
+check "it starts the miner once the tip is seen moving" "grep -q 'systemctl start zcash-testnet-miner.service' '$STUB_LOG'"
+check "and reports it, naming the earlier watchdog's heal" "grep -q 'FIXED: zebra is syncing again after a node heal that a previous watchdog started.*miner was stopped for the heal and its unit is started again' '$T/alerts.log'"
+check "and clears the flag" "[ \"\$(cat '$T/state/miner-stopped-for-node-heal.flaps' 2>/dev/null)\" = 0 ]"
+
+echo "== watchdog: a miner that will not START after the heal is a page, not a footnote on a tick"
+wd_node_env
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677 STUB_ZEBRA_ADVANCE=1 STUB_ZEBRA_STUCK_CALLS=2 STUB_START_FAIL=1
+wd_run 4
+check "the node's own recovery is still reported" "grep -q 'FIXED: zebra was 1443 blocks behind' '$T/alerts.log'"
+check "and the failed start is a NEEDS YOU of its own" "grep -q 'NEEDS YOU: the node has recovered but .systemctl start zcash-testnet-miner.service. FAILED' '$T/alerts.log'"
+check "which the FIXED does not paper over" "! grep 'FIXED: zebra' '$T/alerts.log' | grep -q 'started again'"
+unset STUB_START_FAIL

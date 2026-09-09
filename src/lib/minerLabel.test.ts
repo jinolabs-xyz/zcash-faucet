@@ -21,6 +21,9 @@ const base: MinerReading = {
   submittedAccepted: null,
   submittedRejected: null,
   solvedAgoSeconds: null,
+  nodeLag: null,
+  waitingAgoSeconds: null,
+  waitingReason: null,
 };
 
 test("running names the age, because 'on' was the whole problem", () => {
@@ -300,4 +303,53 @@ test("the unit's word never overrides a heartbeat that IS being written", () => 
   assert.equal(minerChip(base, "inactive"), "mining");
   assert.equal(minerIsBad(base, "inactive"), false);
   assert.doesNotMatch(minerRow({ ...base, state: "stalled", templateAgoSeconds: 900 }, "inactive"), /\boff\b/);
+});
+
+// ── WAITING: the sync guard holding the miner back (risk register #5) ───────────────────
+
+const waiting: MinerReading = { ...base, state: "waiting", templateAgoSeconds: 4000, nodeLag: 1443, waitingAgoSeconds: 40 * 60, waitingReason: "behind" };
+
+test("waiting says why and for how long, in the node's terms", () => {
+  assert.equal(minerRow(waiting), "waiting, node 1,443 blocks behind for 40 min");
+});
+
+test("waiting never reads as mining and never as NO TEMPLATE", () => {
+  assert.doesNotMatch(minerRow(waiting), /mining|proposing|NO TEMPLATE/);
+  assert.equal(minerChip(waiting), "waiting");
+});
+
+test("waiting is not marked bad: the node row owns that fault", () => {
+  assert.equal(minerIsBad(waiting), false);
+});
+
+test("waiting without a lag or a since still says the node is behind", () => {
+  assert.equal(minerRow({ ...waiting, nodeLag: null, waitingAgoSeconds: null }), "waiting, node behind");
+});
+
+test("a status payload that says waiting is read as waiting, not cannot-verify", () => {
+  const r = readingFromStatus({ state: "waiting", nodeLag: 60, waitingAgoSeconds: 120 });
+  assert.equal(r.state, "waiting");
+  assert.equal(r.nodeLag, 60);
+  assert.equal(r.waitingAgoSeconds, 120);
+});
+
+test("NO PEERS: the row says so instead of '0 blocks behind', and it IS marked, because the node row cannot show it", () => {
+  const isolated: MinerReading = { ...waiting, nodeLag: 0, waitingReason: "no-peers" };
+  assert.equal(minerRow(isolated), "waiting, node has NO PEERS for 40 min");
+  assert.doesNotMatch(minerRow(isolated), /0 blocks/);
+  assert.equal(minerIsBad(isolated), true);
+  assert.equal(minerChip(isolated), "waiting");
+});
+
+test("no peers for a few seconds after a node restart is not red yet; two minutes is", () => {
+  const fresh: MinerReading = { ...waiting, nodeLag: 0, waitingReason: "no-peers", waitingAgoSeconds: 15 };
+  assert.equal(minerIsBad(fresh), false);
+  assert.equal(minerRow(fresh), "waiting, node has NO PEERS for 15s");
+  assert.equal(minerIsBad({ ...fresh, waitingAgoSeconds: 120 }), true);
+  assert.equal(minerIsBad({ ...fresh, waitingAgoSeconds: null }), false, "no age is not evidence of a long isolation");
+});
+
+test("a waiting reason the reader does not know falls back to the lag wording", () => {
+  assert.equal(minerRow({ ...waiting, waitingReason: "something-new" }), "waiting, node 1,443 blocks behind for 40 min");
+  assert.equal(minerIsBad({ ...waiting, waitingReason: "something-new" }), false);
 });
