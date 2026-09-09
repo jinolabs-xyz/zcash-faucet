@@ -317,9 +317,11 @@ if [ -f "$ALERTS_ENV" ] || [ -f "$WATCHDOG_ENV" ]; then
   if [ -z "$url" ]; then
     alert_bridge="none"
   elif ! command -v jq >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then
-    # alert.sh's first gate, before the URL is even looked at: json_escape returns 1 and
-    # send() returns 4 with neither encoder, for every format. Review found this report
-    # saying ok on such a box, where every page since install had been a journal line.
+    # In alert.sh this gate comes even before the URL check: json_escape returns 1 and
+    # send() returns 4 with neither encoder, for every format. Here it comes second, so
+    # a box with neither URL nor encoder is told about the URL first; the encoder verdict
+    # follows once one is set. Review found this report saying ok on such a box, where
+    # every page since install had been a journal line.
     alert_bridge="misconfigured"
   else
     case "${fmt:-slack}" in

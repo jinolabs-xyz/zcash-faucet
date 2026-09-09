@@ -235,6 +235,14 @@ test("a dead, unlinked or absent alert channel is a fault the row names, because
   }
 });
 
+test("CANNOT PAGE outranks INCOMPLETE on the strip: a half-installed box usually has no alerts.env, and the pager matters more", () => {
+  const s = classifyIntegrity(report({ present: 13, alertBridge: "none" }), NOW);
+  assert.equal(s.state, "incomplete");
+  assert.equal(boxChip(s), "CANNOT PAGE");
+  assert.match(boxRow(s), /NO ALERT CHANNEL/);
+  assert.equal(boxIsBad(s), true);
+});
+
 test("a looping watchdog outranks the dead bridge on the strip's one slot: both are on the row", () => {
   const s = classifyIntegrity(report({ alertBridge: "down", watchdogRestarts: 61, watchdogRestartsDelta: 61 }), NOW);
   assert.equal(boxChip(s), "WATCHDOG LOOP");
