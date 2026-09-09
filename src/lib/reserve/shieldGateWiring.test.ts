@@ -148,12 +148,15 @@ test("the bypass landing MID-FETCH does not disarm the gap for whoever polls nex
   // so the cache stays cold for the tests below.
   hoshDelayMs = 300;
   try {
-    const inflight = warmExternalTip(); // may itself be inside the gap from the test above
-    await warmExternalTipNowForTests(); // returns at once if a refresh is in flight
+    const before = hoshHits;
+    const inflight = warmExternalTipNowForTests(); // dials regardless of the gap, so it IS in flight
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(hoshHits, before + 1, "precondition: the refresh we bypass into must have dialled");
+    await warmExternalTipNowForTests(); // lands mid-fetch: must return at once and change nothing
     await inflight;
-    const dials = hoshHits;
-    await warmExternalTip(); // inside the gap of whichever attempt stamped last
-    assert.equal(hoshHits, dials, "a plain warm dialled inside the gap: the bypass disarmed it");
+    assert.equal(hoshHits, before + 1, "the mid-fetch bypass dialled on its own");
+    await warmExternalTip(); // inside the gap stamped by the in-flight attempt
+    assert.equal(hoshHits, before + 1, "a plain warm dialled inside the gap: the bypass disarmed it");
   } finally {
     hoshDelayMs = 0;
   }

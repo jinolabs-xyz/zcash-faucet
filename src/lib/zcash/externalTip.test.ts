@@ -1,6 +1,24 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { heightFromBlockID } from "./externalTip.ts";
+import { createServer } from "node:http";
+
+// EVERYTHING this file needs from the module comes through ONE dynamic import, below,
+// after the environment is set. A static import here is evaluated before any statement
+// in the file, so the first version pinned HOSH_URL to its silent server AFTER the
+// module had already read the real hosh.zec.rocks: the "hanging primary" test dialled
+// Cloudflare-fronted production and passed on the luck of its latency (round 6, N1).
+// The fallback list is pinned to a closed port for the same reason: unset, it is the
+// real testnet.zec.rocks, one hosh hang away from being dialled.
+const silentHosh = createServer(() => { /* never respond */ });
+await new Promise<void>((r) => silentHosh.listen(0, "127.0.0.1", r));
+const silentPort = (silentHosh.address() as { port: number }).port;
+process.env.HOSH_URL = `http://127.0.0.1:${silentPort}/`;
+process.env.LIGHTWALLETD_ENDPOINT = "https://127.0.0.1:59997";
+silentHosh.unref();
+let silentHoshRequests = 0;
+silentHosh.on("request", () => { silentHoshRequests += 1; });
+const { heightFromBlockID, getExternalTipReading, getExternalTip, readingFor, MAX_AGE_MS_FOR_TESTS, fetchNetworkTipWithin } =
+  await import("./externalTip.ts");
 
 // Encode a number as a protobuf varint (the wire form of BlockID.height).
 function varint(n: number): number[] {
@@ -64,14 +82,6 @@ test("a truncated length-delimited field returns null, not a misread height", ()
  * and BOTH sabotages passed. Extracting readingFor is what made the interesting
  * states reachable.
  */
-// HOSH_URL is read at import, so the primary this file's attempt-bound test hangs on is
-// started first: a server that never answers, standing in for a hosh that is up and slow.
-import { createServer } from "node:http";
-const silentHosh = createServer(() => { /* never respond */ });
-await new Promise<void>((r) => silentHosh.listen(0, "127.0.0.1", r));
-process.env.HOSH_URL = `http://127.0.0.1:${(silentHosh.address() as { port: number }).port}/`;
-silentHosh.unref();
-const { getExternalTipReading, getExternalTip, readingFor, MAX_AGE_MS_FOR_TESTS, fetchNetworkTipWithin } = await import("./externalTip.ts");
 
 const FRESH = { height: 4_224_367, at: 1_000_000, source: "hosh" as const, host: null };
 const DIRECT = { height: 4_224_365, at: 1_000_000, source: "direct" as const, host: "testnet.zec.rocks:443" };
@@ -124,8 +134,9 @@ test("an attempt with a HANGING primary and hanging fallbacks ends at hosh + the
   // 5 s gRPC leg, and a second endpoint would have added another. The legs now share one
   // deadline. hosh (the silent server above) never answers; the fallback hangs until its
   // deadline like a black-holed TCP connect does, and reports the deadline it was given.
+  const before = silentHoshRequests;
   const given: number[] = [];
-  const hanging = (_host: string, timeoutMs: number) =>
+  const hanging = (_endpoint: string, timeoutMs: number) =>
     new Promise<number | null>((resolve) => { given.push(timeoutMs); setTimeout(() => resolve(null), timeoutMs); });
   const t0 = Date.now();
   const r = await fetchNetworkTipWithin(
@@ -134,24 +145,49 @@ test("an attempt with a HANGING primary and hanging fallbacks ends at hosh + the
     hanging,
   );
   const took = Date.now() - t0;
+  // At least one: a background refresh from an earlier test may still be parked on the
+  // same server. Zero is the bug this guards against (the module read the real URL).
+  assert.ok(silentHoshRequests >= before + 1, "the primary that hung must be OUR silent server, not the real hosh");
   assert.equal(r.source, "none");
   assert.equal(r.height, null);
-  assert.ok(took < 900, `three hanging legs must share the 300 ms budget, took ${took} ms`);
-  assert.ok(given.length >= 1 && given[0] <= 300, `the first leg was given ${given[0]} ms of a 300 ms budget`);
+  assert.ok(took >= 450 && took < 900, `hosh 200 + legs sharing 300 must end near 500 ms, took ${took} ms`);
+  assert.equal(given.length, 3, `every leg gets a turn on a shared budget, yet ${given.length} were tried`);
   assert.ok(given.every((g) => g <= 300), `a leg was given more than the whole budget: ${given.join(",")}`);
-  assert.ok(given.length < 3, `a spent budget must stop the loop, yet ${given.length} legs were tried`);
+  assert.ok(given[0] <= 100 + 5, `three legs share 300 ms, the first was given ${given[0]}`);
+  const sum = given.reduce((a, b) => a + b, 0);
+  assert.ok(sum <= 300 + 15, `the legs together were given ${sum} ms of a 300 ms budget`);
 });
 
-test("a fallback that answers inside the budget is USED, with its host, after the primary fails", async () => {
-  // new URL() drops a default port, so the host handed to gRPC is "b.example", the way
-  // production hands "testnet.zec.rocks" (grpc-js dials 443 for TLS credentials).
-  const answering = async (host: string) => (host === "b.example" ? 4_336_000 : null);
+test("a first endpoint that accepts and never answers does NOT hide the second: the share rule", async () => {
+  // Before the share rule one shared deadline was consumed first-come, so a black-holed
+  // first endpoint spent all of it and the healthy second was never reached, on this
+  // attempt or any later one (round 6, N2).
+  const legs: string[] = [];
+  const blackholeThenAnswer = (endpoint: string, timeoutMs: number) => {
+    legs.push(endpoint);
+    if (endpoint.startsWith("https://dead")) return new Promise<number | null>((resolve) => setTimeout(() => resolve(null), timeoutMs));
+    return Promise.resolve(4_336_000);
+  };
+  const r = await fetchNetworkTipWithin(
+    { hoshTimeoutMs: 100, fallbackTotalMs: 300 },
+    ["https://dead.example", "https://alive.example"],
+    blackholeThenAnswer,
+  );
+  assert.deepEqual(legs, ["https://dead.example", "https://alive.example"]);
+  assert.equal(r.source, "direct");
+  assert.equal(r.height, 4_336_000);
+});
+
+test("a fallback that answers is USED, with its gRPC target as the host, after the primary fails", async () => {
+  // The host is what grpc-js dialled, port included: "alive.example:443" for an https
+  // URL with no port, "zaino:8137" for the self-hosted Zaino the z3 docs describe.
+  const answering = async (endpoint: string) => (endpoint === "http://zaino:8137" ? 4_336_000 : null);
   const r = await fetchNetworkTipWithin(
     { hoshTimeoutMs: 100, fallbackTotalMs: 500 },
-    ["https://a.example:443", "https://b.example:443"],
+    ["https://a.example", "http://zaino:8137"],
     answering,
   );
   assert.equal(r.source, "direct");
-  assert.equal(r.host, "b.example");
+  assert.equal(r.host, "zaino:8137");
   assert.equal(r.height, 4_336_000);
 });

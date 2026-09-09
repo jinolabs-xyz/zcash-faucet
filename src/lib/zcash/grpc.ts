@@ -9,6 +9,7 @@ import * as protoLoader from "@grpc/proto-loader";
 import path from "node:path";
 import { config } from "../config.ts";
 import { createFailoverBudget } from "./failover.ts";
+import { targetFor } from "./grpcTarget.ts";
 
 // Load the trimmed proto once from the repo (readable at runtime under Node).
 const pkgDef = protoLoader.loadSync(path.join(process.cwd(), "proto", "service.proto"), {
@@ -20,16 +21,6 @@ const pkgDef = protoLoader.loadSync(path.join(process.cwd(), "proto", "service.p
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const proto = grpc.loadPackageDefinition(pkgDef) as any;
 const CompactTxStreamer = proto.cash.z.wallet.sdk.rpc.CompactTxStreamer;
-
-function targetFor(endpoint: string): { target: string; creds: grpc.ChannelCredentials } {
-  const url = new URL(endpoint);
-  const tls = url.protocol === "https:" || url.port === "443" || url.port === "";
-  const port = url.port || (tls ? "443" : "9067");
-  return {
-    target: `${url.hostname}:${port}`,
-    creds: tls ? grpc.credentials.createSsl() : grpc.credentials.createInsecure(),
-  };
-}
 
 function deadline(ms: number): Date {
   return new Date(Date.now() + ms);

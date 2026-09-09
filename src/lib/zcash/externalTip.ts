@@ -58,6 +58,7 @@
  */
 import * as grpc from "@grpc/grpc-js";
 import { config } from "../config.ts";
+import { targetFor } from "./grpcTarget.ts";
 
 /**
  * Pull the height (field 1 varint) out of a serialized BlockID. Returns null on
@@ -143,9 +144,11 @@ async function fromHosh(timeoutMs: number): Promise<number | null> {
   return heights.length ? Math.max(...heights) : null;
 }
 
-function getLatestBlock(host: string, timeoutMs: number): Promise<number | null> {
+/** One GetLatestBlock against a configured endpoint URL, scheme and port honoured. */
+function getLatestBlock(endpoint: string, timeoutMs: number): Promise<number | null> {
   return new Promise((resolve, reject) => {
-    const client = new grpc.Client(host, grpc.credentials.createSsl());
+    const { target, creds } = targetFor(endpoint);
+    const client = new grpc.Client(target, creds);
     client.makeUnaryRequest(
       "/cash.z.wallet.sdk.rpc.CompactTxStreamer/GetLatestBlock",
       (x: Buffer) => x,
@@ -176,7 +179,7 @@ const PRODUCTION_BUDGET: TipFetchBudget = { hoshTimeoutMs: HOSH_TIMEOUT_MS, fall
 export async function fetchNetworkTipWithin(
   budget: TipFetchBudget,
   endpoints: readonly string[] = config.lightwalletdEndpoints,
-  getLatest: (host: string, timeoutMs: number) => Promise<number | null> = getLatestBlock,
+  getLatest: (endpoint: string, timeoutMs: number) => Promise<number | null> = getLatestBlock,
 ): Promise<{ height: number | null; source: TipSource; host: string | null }> {
   const h = await fromHosh(budget.hoshTimeoutMs).catch(() => null);
   if (h != null && h > 0) return { height: h, source: "hosh", host: null };
@@ -184,17 +187,21 @@ export async function fetchNetworkTipWithin(
   // and say so, because a silent degrade to a single source defeats the point of
   // the aggregate (App's medium on #171).
   console.warn("[externalTip] hosh gave no testnet height; falling back to direct GetLatestBlock");
-  // ONE deadline for every leg. A later endpoint gets what the earlier ones left, and
-  // nothing once it is spent: an endpoint that hangs must not hand the next one a fresh
-  // budget the caller's wait knows nothing about.
+  // ONE deadline for every leg, split FAIRLY. The total is what the caller's wait knows
+  // about, so no leg may exceed what is left of it; but a first endpoint that accepts
+  // the connection and never answers must not spend the whole budget and hide every
+  // later one for good (review, round 6). Each leg gets an even share of the remainder
+  // among the legs still to try, so a fast failure hands its share on and a hang costs
+  // only its own. Two endpoints in 3 s: 1.5 s each; the second gets ~3 s if the first
+  // was refused at once.
   const endsAt = Date.now() + budget.fallbackTotalMs;
-  for (const endpoint of endpoints) {
+  for (let i = 0; i < endpoints.length; i++) {
     const remaining = endsAt - Date.now();
     if (remaining <= 0) break;
+    const share = Math.ceil(remaining / (endpoints.length - i));
     try {
-      const host = new URL(endpoint).host;
-      const height = await getLatest(host, remaining);
-      if (height != null && height > 0) return { height, source: "direct", host };
+      const height = await getLatest(endpoints[i], share);
+      if (height != null && height > 0) return { height, source: "direct", host: targetFor(endpoints[i]).target };
     } catch {
       // try the next endpoint
     }
@@ -248,9 +255,10 @@ let refreshing = false;
 // claim, each one an HTTPS fetch plus N gRPC dials. One attempt per second is plenty:
 // nothing about a public endpoint changes faster than that.
 let lastAttemptAt = 0;
-// Exported so the money path's wait can assert that several attempts fit inside it. At
-// 10 s a cold cache could not START a fetch within the wait, and every claim would
-// read "could not verify the network" with the oracle answering: register #6 again.
+// Exported so the money path's wait can be sized to cover it: the wait is this gap plus
+// one whole attempt plus a margin, exactly one attempt, not several. Set this to the
+// wait itself and a cold cache could never START a fetch before the deadline, so every
+// claim would read "could not verify the network" with the oracle answering: #6 again.
 export const MIN_ATTEMPT_GAP_MS = 1000;
 
 async function refresh(waiveGap = false): Promise<void> {
