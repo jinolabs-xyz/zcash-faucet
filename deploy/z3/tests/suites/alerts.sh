@@ -141,7 +141,18 @@ alerts_env
 cat > "$T/secrets.env" <<'E'
 ZALLET_RPC_PASSWORD=hunter2isalongpassword
 RATE_LIMIT_SALT=9f3c1de4b7a25086f2e1
-FAUCET_ALERT_SHORT=short
+# A SELECTED name with a short value. The first fixture used a name the include list does
+# not match, so the length guard could be deleted and the check still passed - one step
+# earlier than it claimed.
+SPARE_TOKEN=short
+# Selected by the OLD broad list (*COOKIE*), not by the narrow one, and the value is
+# neither a path nor a URL: this is what makes narrowing the list load-bearing.
+ZEBRA_RPC_COOKIE_NAME=__cookie__value1
+# Selected by the NARROW list (*TOKEN*) with a value that is a plain URL: this is what
+# makes the URL skip load-bearing.
+METRICS_TOKEN_ENDPOINT=https://metrics.example.org/push
+# Selected by the narrow list (*SEED*) and excluded by *PUBLIC*.
+PUBLIC_SEED_NODES=seed1.example.org,seed2.example.org
 # PUBLIC configuration that only LOOKS secret-ish. Stage 1 blanks a value wherever it
 # appears, so selecting these by name erases the address a page is about.
 WATCHDOG_FAUCET_URL=https://faucet.example.org
@@ -154,6 +165,10 @@ E
 # lives in backup.env. Putting it in the one file alert.sh already read was a false pass.
 cat > "$T/backup.env" <<'E'
 BACKUP_PASSPHRASE=correct horse battery staple
+# BACKUPS.md tells the operator to generate this with `openssl rand -base64 30`, and
+# base64's alphabet contains `/`, so about one in 64 begins with one. A "value that looks
+# like a path" skip dropped exactly those, in silence.
+ZSNAP_RESTORE_PASSPHRASE=/kQ9zZ1YnHhw2qk3l4mN5oP6qR7sT8uV9wX0yZ1a
 E
 export FAUCET_ALERT_SECRET_FILES="$T/secrets.env
 $T/backup.env"
@@ -210,6 +225,26 @@ echo "faucet-backup: ABORT: cannot read the age identity at identity.txt"
 echo "turnstile site key 0x4AAAAAAApublicsitekey is in the page"
 echo "ABORT: could not read zebra rpc cookie file at /run/zebra"
 echo "short lived cache entry"
+echo "zebra rpc cookie name is __cookie__value1 on this box"
+echo "metrics push endpoint https://metrics.example.org/push answered 204"
+echo "peers from seed1.example.org,seed2.example.org accepted"
+echo "zsnap-import: gpg: decryption failed, tried /kQ9zZ1YnHhw2qk3l4mN5oP6qR7sT8uV9wX0yZ1a"
+# Prose that CONTAINS a keyword and is followed by a separator. The single-token rule
+# matched any word containing one, so these lost their numbers.
+echo "zebrad: DNS seeder: 12 peers returned, all good"
+echo "watchdog: tokens: 3 remaining in the bucket"
+echo "backup: credentials: none required for this step"
+echo "add ZALLET_RPC_PASSWORD= to /etc/faucet/faucet.env"
+# The four end-of-line names, spelled the way this box spells variables. The rule got a
+# prefix class and no suffix class, so one character before the separator escaped it.
+echo "AUTHORIZATION_HEADER: Bearer leakedbearertoken1"
+echo "PASSPHRASE_HINT=correct horse battery staple hint"
+echo "MNEMONIC_WORDS=abandon abandon abandon artichoke"
+echo "COOKIE_VALUE=__cookie__:9a8b7c6d5e4f3a2b1c0d"
+# JSON whose value is not a quoted string: an array, a bare literal, a python dict repr.
+echo '{"headers":{"Authorization":["Bearer arraybearer123"]}}'
+echo '{"password":null,"api_key":["leakedinarray1"]}'
+echo "{'password': 'pythonreprsecret1'}"
 J
 chmod +x "$T/bin/journalctl"
 bash "$ALERT" --unit zallet.service > /dev/null 2>&1
@@ -222,9 +257,20 @@ check "the rate-limit salt, which de-anonymises the ledger's IP hashes if it lea
   "! grep -q '9f3c1de4b7a25086f2e1' '$HOOK_LOG'"
 check "and a multi-word backup passphrase, which no single-token rule would reach" \
   "! grep -q 'correct horse battery' '$HOOK_LOG'"
+# One base64 passphrase in 64 begins with a slash, and a value-shape skip dropped those.
+check "a passphrase that happens to start with a slash is still a passphrase" \
+  "! grep -q 'kQ9zZ1YnHhw2qk3l4mN5oP6qR7sT8uV9wX0yZ1a' '$HOOK_LOG'"
 # A short value is a placeholder, and blanking it would erase the word from ordinary lines.
 check "a secret under 12 characters is NOT matched by value: it would erase log text" \
   "grep -q 'short lived cache entry' '$HOOK_LOG'"
+# Each stage-1 guard has a fixture only IT can save, or deleting one of them changes
+# nothing and the narrowing is not actually pinned.
+check "a name the old broad list took (*COOKIE*) is not a secret, and its value survives" \
+  "grep -q '__cookie__value1 on this box' '$HOOK_LOG'"
+check "a selected name whose value is a plain URL is configuration, and the URL survives" \
+  "grep -q 'https://metrics.example.org/push answered 204' '$HOOK_LOG'"
+check "and a name saying PUBLIC is not a secret however it is spelled" \
+  "grep -q 'seed1.example.org,seed2.example.org accepted' '$HOOK_LOG'"
 
 # Stage 2: key material we do not hold, so only its shape can catch it.
 check "a Zcash spending key does not leave the box" \
@@ -258,6 +304,20 @@ check "zallet's pwhash, which is the field the RPC auth incident was about" \
   "! grep -q '1a2b3c4ddeadbeefcafe' '$HOOK_LOG'"
 check "a JWT keeps its header and loses its signature" \
   "! grep -q 'dBjftJeZ4CVPmB92K27uhbUJU1p1rXwW1gFWFOEjXk' '$HOOK_LOG'"
+# The end-of-line rule had a prefix class and no suffix class, so one character between
+# the keyword and the separator escaped it - the same shape as the bug above, fixed on
+# three rules and left on the fourth, which carries the two highest-value names here.
+check "an underscored Authorization header, which is how a dump spells it" \
+  "! grep -q 'leakedbearertoken1' '$HOOK_LOG'"
+check "an underscored passphrase and mnemonic, both multi-word" \
+  "! grep -q 'correct horse battery staple hint' '$HOOK_LOG' && ! grep -q 'abandon abandon abandon artichoke' '$HOOK_LOG'"
+check "and zebra's cookie in its on-disk form, which is not hex alone" \
+  "! grep -q '9a8b7c6d5e4f3a2b1c0d' '$HOOK_LOG'"
+# A JSON value that is not a quoted string was invisible to both JSON-aware rules.
+check "a secret inside a JSON array" \
+  "! grep -q 'arraybearer123' '$HOOK_LOG' && ! grep -q 'leakedinarray1' '$HOOK_LOG'"
+check "and one in a python dict repr, which is what a traceback prints" \
+  "! grep -q 'pythonreprsecret1' '$HOOK_LOG'"
 check "one passed as a flag" "! grep -q 's3cr3t2' '$HOOK_LOG'"
 check "a bearer token, whose value is two tokens from its name" "! grep -q 'abcdefghijklmnop' '$HOOK_LOG'"
 # A credential this box does NOT hold, so only the -u rule can catch it: with the fixture
@@ -287,6 +347,16 @@ check "a DNS seeder line keeps its peer count" "grep -q 'seeder returned 12 peer
 check "and zsnap's own wording about authenticating survives" \
   "grep -q 'zsnap-import authenticates with the same key' '$HOOK_LOG'"
 check "as does the cookie path in an abort message" "grep -q 'rpc cookie file at /run/zebra' '$HOOK_LOG'"
+# THE OTHER HALF OF THE PREFIX RULE. It matches any word CONTAINING a keyword, so a
+# separator after ordinary prose put REDACTED where a number was. Five characters or
+# fewer after the separator is prose, not a credential.
+check "a seeder line keeps its peer count even with a colon after the word" \
+  "grep -q 'DNS seeder: 12 peers returned' '$HOOK_LOG'"
+check "and a token bucket keeps its number" "grep -q 'tokens: 3 remaining' '$HOOK_LOG'"
+check "and 'credentials: none required' still says none" "grep -q 'credentials: none required' '$HOOK_LOG'"
+# audit-drift.sh prints this verbatim, and faucet-drift-report reaches the webhook.
+check "and the instruction audit-drift prints keeps the file it names" \
+  "grep -q 'add ZALLET_RPC_PASSWORD= to /etc/faucet/faucet.env' '$HOOK_LOG'"
 # The -u rule needs the value to LOOK like credentials, or it eats the one actionable
 # token in the page drift-report sends and the prefix on every line in the tree.
 check "journalctl -u <unit> survives: it is the fix drift-report's own page tells you to run" \
@@ -332,7 +402,9 @@ ZALLET_RPC_PASSWORD=hunter2isalongpassword
 E
 export FAUCET_ALERT_SECRET_FILES="$T/secrets.env"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$T/bin/awk"; chmod +x "$T/bin/awk"
-bash "$ALERT" --now "🚨 NEEDS YOU: ZEBRA IS DOWN" > "$T/broken.log" 2>&1
+# NOT --now: that sets DEDUP=0, and the cooldown is the whole point here. With the held
+# path, a blank message makes every cause share one key and the second one is swallowed.
+bash "$ALERT" "🚨 NEEDS YOU: ZEBRA IS DOWN" > "$T/broken.log" 2>&1
 check "a page still goes out when the filter fails" "grep -q 'NEEDS YOU' '$HOOK_LOG'"
 check "and it carries no message text, because unfiltered text is exactly what cannot be trusted" \
   "! grep -q 'ZEBRA IS DOWN' '$HOOK_LOG' && grep -q 'the text is withheld' '$HOOK_LOG'"
@@ -340,8 +412,11 @@ check "the journal says the filter is the reason, not the alert" \
   "grep -q 'REDACTION FAILED' '$T/broken.log'"
 # Distinct causes must stay distinct, or the first failure mutes the box for an hour.
 : > "$HOOK_LOG"
-bash "$ALERT" --now "🚨 NEEDS YOU: DISK FULL on /" > /dev/null 2>&1
+bash "$ALERT" "🚨 NEEDS YOU: DISK FULL on /" > /dev/null 2>&1
 check "a DIFFERENT cause is not held back as a repeat of the first" "grep -q 'NEEDS YOU' '$HOOK_LOG'"
+: > "$HOOK_LOG"
+bash "$ALERT" "🚨 NEEDS YOU: ZALLET CRASH-LOOPING" > /dev/null 2>&1
+check "and nor is a third: one broken filter must not mute the box for an hour" "grep -q 'NEEDS YOU' '$HOOK_LOG'"
 rm -f "$T/bin/awk"
 
 echo "== alerts: stage 1 reads the files this box actually keeps secrets in"

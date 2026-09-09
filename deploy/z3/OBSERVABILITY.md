@@ -83,8 +83,10 @@ drift-report pushes audit findings. All of it lands in a third-party webhook or 
 Signal bridge and stays in that history, so `send()` filters everything it sends
 (risk register #22). Three stages, strongest first:
 
-1. **The values themselves**, read from `/etc/faucet/alerts.env`,
-   `/etc/faucet/watchdog.env` and the app's `faucet.env`. A literal occurrence of a
+1. **The values themselves**, read from every file this box keeps a secret in:
+   `alerts.env`, `watchdog.env`, `backup.env`, `zsnap.env`, `metrics.env` and
+   `miner.env` under `/etc/faucet`, plus the app's own `faucet.env`. Adding a file
+   there is how a new secret gets covered, and it is cheaper than another pattern. A literal occurrence of a
    secret this box holds is blanked however it got into the line: a URL, a JSON body,
    a stack trace, a shell echo. Values under twelve characters are skipped, because a
    short one is a placeholder and blanking it would erase ordinary log text.
