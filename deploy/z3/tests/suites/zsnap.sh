@@ -683,3 +683,15 @@ echo "== publish: hardlinked, so publishing costs no extra disk"
 # A copy would double 8.5 GB on a box with 46 GB free. Same inode proves the link.
 check "the published archive is the SAME inode as the local one" \
   "[ \"\$(stat -c %i '$ZSNAP_PUBLIC/$good')\" = \"\$(stat -c %i '$ZSNAP_DIR/snapshots/$good')\" ]"
+
+echo "== zsnap-export: every helper the RECOVER path calls is defined above it"
+# The recover path runs and exits inside the first 130 lines. A helper defined further
+# down is not reached, and the recovery dies on "command not found": refresh_box_report
+# shipped that way and the three recover cases above went red on main. bash cannot catch
+# this at parse time, so the file's own shape is the check.
+for fn in $(grep -oE '^[a-z_]+\(\) \{' "$REPO/deploy/z3/zsnap-export.sh" | sed 's/() {//'); do
+  def="$(grep -nE "^${fn}\(\) \{" "$REPO/deploy/z3/zsnap-export.sh" | head -n1 | cut -d: -f1)"
+  first="$(grep -nE "^[[:space:]]*${fn}([[:space:]]|$)" "$REPO/deploy/z3/zsnap-export.sh" | grep -v "() {" | head -n1 | cut -d: -f1)"
+  [ -n "$first" ] || continue
+  check "$fn is defined (line $def) before its first call (line $first)" "[ '$def' -lt '$first' ]"
+done
