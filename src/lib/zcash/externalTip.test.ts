@@ -9,7 +9,14 @@ import { createServer } from "node:http";
 // Cloudflare-fronted production and passed on the luck of its latency (round 6, N1).
 // The fallback list is pinned to a closed port for the same reason: unset, it is the
 // real testnet.zec.rocks, one hosh hang away from being dialled.
-const silentHosh = createServer(() => { /* never respond */ });
+// Silent by default (the hanging-primary test needs a primary that never answers).
+// A test that needs a tip sets silentHoshHeight for its duration.
+let silentHoshHeight: number | null = null;
+const silentHosh = createServer((_req, res) => {
+  if (silentHoshHeight == null) return; // never respond
+  res.writeHead(200, { "content-type": "application/json" });
+  res.end(JSON.stringify({ servers: [{ chain: "test", online: true, height: silentHoshHeight }] }));
+});
 await new Promise<void>((r) => silentHosh.listen(0, "127.0.0.1", r));
 const silentPort = (silentHosh.address() as { port: number }).port;
 process.env.HOSH_URL = `http://127.0.0.1:${silentPort}/`;
@@ -19,7 +26,8 @@ let silentHoshRequests = 0;
 silentHosh.on("request", () => { silentHoshRequests += 1; });
 const {
   heightFromBlockID, getExternalTipReading, getExternalTip, readingFor, MAX_AGE_MS_FOR_TESTS,
-  fetchNetworkTipWithin, isIndependentTipEndpoint, dialLatestBlock, warmExternalTip,
+  fetchNetworkTipWithin, isIndependentTipEndpoint, dialLatestBlock, warmExternalTip, warmExternalTipNowForTests,
+  resetExternalTipForTests,
 } = await import("./externalTip.ts");
 
 test("with no independent endpoint configured, the first warm says so ONCE, at boot, not one warning at a time mid-outage", async () => {
@@ -269,5 +277,29 @@ test("THE DIAL HONOURS THE SCHEME: a plaintext gRPC server answers http://, and 
     await assert.rejects(dialLatestBlock(`https://127.0.0.1:${port}`, 1500), "TLS against a plaintext server must not succeed");
   } finally {
     server.forceShutdown();
+  }
+});
+
+/* ------------------------------- the cache is shared across module instances (#12) */
+
+test("A TIP WARMED IN ONE MODULE INSTANCE IS VISIBLE IN ANOTHER: the cache lives on globalThis", async () => {
+  // Next hands instrumentation and route handlers different module instances (#234), so a
+  // module-level cache warmed at boot was invisible to the claim route and the first claim
+  // after a deploy paid a whole oracle attempt inside the money path's wait. A second
+  // import of this module is exactly that situation, and the only way to see it in a test.
+  silentHoshHeight = 4_400_123;
+  resetExternalTipForTests();
+  try {
+    await warmExternalTipNowForTests(); // what instrumentation does at boot
+    assert.equal(getExternalTip(), 4_400_123, "precondition: this instance warmed");
+
+    // A separate module instance, as Next gives the route handlers.
+    const route = await import(`./externalTip.ts?instance=${Date.now()}`);
+    assert.notEqual(route.getExternalTip, getExternalTip, "precondition: a distinct module instance");
+    assert.equal(route.getExternalTip(), 4_400_123, "the second instance could not see the first instance's tip");
+    assert.equal(route.getExternalTipReading().source, "hosh");
+  } finally {
+    silentHoshHeight = null;
+    resetExternalTipForTests();
   }
 });

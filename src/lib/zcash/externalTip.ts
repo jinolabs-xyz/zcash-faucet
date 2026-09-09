@@ -318,18 +318,40 @@ export interface TipReading {
   host: string | null;
 }
 
-let cache: { height: number | null; at: number; source: TipSource; host: string | null } = {
-  height: null,
-  at: 0,
-  source: "none",
-  host: null,
+interface TipCache {
+  height: number | null;
+  at: number;
+  source: TipSource;
+  host: string | null;
+}
+
+/**
+ * ON globalThis, NOT MODULE STATE (risk register #12). Next hands instrumentation and
+ * route handlers different module instances (#234, and db/index.ts, queue.ts,
+ * sendHealth.ts and crosslink/cache.ts all document the same trap). A module-level cache
+ * warmed by instrumentation at boot is invisible to the claim route, so the first claim
+ * after a deploy found it cold and paid a whole oracle attempt inside the money path's
+ * wait; every OTHER long-lived value in this app is already here for that reason, and
+ * this one was the exception.
+ *
+ * `refreshing` and `lastAttemptAt` go with it: they are the guards that stop two
+ * instances dialling the oracle at once and re-dialling a fast-failing one sixty times
+ * per claim, and a guard that is per-instance guards nothing.
+ */
+const g = globalThis as unknown as {
+  __faucetTipCache?: TipCache;
+  __faucetTipRefreshing?: boolean;
+  __faucetTipLastAttemptAt?: number;
+  __faucetTipBootChecked?: boolean;
 };
-let refreshing = false;
+
+function cacheRef(): TipCache {
+  return (g.__faucetTipCache ??= { height: null, at: 0, source: "none", host: null });
+}
 // A refresh that FAILS fast (hosh answers with no testnet row, the fallback is refused)
 // would otherwise be restarted by the money path's 100 ms poll up to sixty times per
 // claim, each one an HTTPS fetch plus N gRPC dials. One attempt per second is plenty:
 // nothing about a public endpoint changes faster than that.
-let lastAttemptAt = 0;
 // Exported so the money path's wait can be sized to cover it: the wait is this gap plus
 // one whole attempt plus a margin, exactly one attempt, not several. Set this to the
 // wait itself and a cold cache could never START a fetch before the deadline, so every
@@ -337,29 +359,27 @@ let lastAttemptAt = 0;
 export const MIN_ATTEMPT_GAP_MS = 1000;
 
 async function refresh(waiveGap = false): Promise<void> {
-  if (refreshing) return;
-  if (!waiveGap && Date.now() - lastAttemptAt < MIN_ATTEMPT_GAP_MS) return;
-  lastAttemptAt = Date.now();
-  refreshing = true;
+  if (g.__faucetTipRefreshing) return;
+  if (!waiveGap && Date.now() - (g.__faucetTipLastAttemptAt ?? 0) < MIN_ATTEMPT_GAP_MS) return;
+  g.__faucetTipLastAttemptAt = Date.now();
+  g.__faucetTipRefreshing = true;
   try {
     const r = await fetchNetworkTip();
     const h = r.height;
-    if (h != null && h > 0) cache = { height: h, at: Date.now(), source: r.source, host: r.host };
+    if (h != null && h > 0) g.__faucetTipCache = { height: h, at: Date.now(), source: r.source, host: r.host };
     // On failure we keep the last-known cache rather than clearing it; MAX_AGE_MS
     // is what eventually turns a long outage into an honest "cannot verify".
   } finally {
-    refreshing = false;
+    g.__faucetTipRefreshing = false;
   }
 }
-
-let bootChecked = false;
 
 /** Kick an initial fetch at boot so the first readiness check has a value. Also the
  *  moment to say, once, that no configured endpoint can back hosh up, rather than one
  *  warning at a time mid-outage. */
 export function warmExternalTip(): Promise<void> {
-  if (!bootChecked) {
-    bootChecked = true;
+  if (!g.__faucetTipBootChecked) {
+    g.__faucetTipBootChecked = true;
     if (!config.lightwalletdEndpoints.some(isIndependentTipEndpoint)) {
       console.warn(`[externalTip] no configured LIGHTWALLETD_ENDPOINT is a public third party (${config.lightwalletdEndpoints.join(", ")}), so the tip oracle has no fallback: once hosh has been unreachable long enough for the cached tip to age out (${MAX_AGE_MS / 60_000} min), drips are refused until it answers again`);
     }
@@ -374,6 +394,13 @@ export function warmExternalTip(): Promise<void> {
  * is what stops the money path's poll from re-dialling a failing endpoint sixty times
  * per claim.
  */
+export function resetExternalTipForTests(): void {
+  delete g.__faucetTipCache;
+  delete g.__faucetTipRefreshing;
+  delete g.__faucetTipLastAttemptAt;
+  delete g.__faucetTipBootChecked;
+}
+
 export function warmExternalTipNowForTests(): Promise<void> {
   // Waived inside refresh, after its in-flight check, so a call that lands mid-fetch
   // does not disarm the gap for whoever polls next without dialling itself.
@@ -400,6 +427,7 @@ export function getExternalTip(): number | null {
  * read a stale label beside an absent number and conclude something was checked.
  */
 export function getExternalTipReading(): TipReading {
+  const cache = cacheRef();
   const age = Date.now() - cache.at;
   if (age > STALE_MS) void refresh();
   return readingFor(cache, Date.now());
