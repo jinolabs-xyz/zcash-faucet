@@ -76,11 +76,12 @@ jobs:
           # an http:// origin is a fully green run with the certificate check silently
           # skipped - off-box TLS monitoring absent for ever behind a passing check, from
           # one mistyped variable (risk register #18).
-          # Case-folded: `new URL()` normalises HTTPS://, so refusing it would page a
-          # human - a failure here trips the paging step below - for a variable that
+          # Folded AND trimmed, and `https:` with no slashes counts: `new URL()` accepts
+          # all three, and refusing one trips the paging step below for a variable that
           # would have worked.
-          case "$(printf '%s' "$SMOKE_URL" | tr '[:upper:]' '[:lower:]')" in
-            https://*) ;;
+          smoke_scheme="$(printf '%s' "$SMOKE_URL" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+          case "$smoke_scheme" in
+            https://*|https:[!/]*) ;;
             *) echo "FAUCET_LIVE_URL is '$SMOKE_URL', which is not https, so the certificate check would be skipped on every run." >&2
                echo "Point it at the https origin. The faucet checks would still pass through the redirect, which is exactly why this refuses." >&2
                exit 1 ;;

@@ -329,6 +329,16 @@ check "an uppercase HTTPS:// is accepted, because new URL() normalises it and a 
   "[ $rc -eq 0 ] && ! grep -q 'which is not https' '$T/upper.log'"
 check "and the step really got past the scheme check, rather than exiting before it" \
   "grep -q 'stub node ran' '$T/upper.log'"
+# The two other forms new URL() accepts. Refusing either pages a human for a variable that
+# would have worked, which is the harm the fold was added for.
+( cd "$REPO" && PATH="$T/bin:$BASE_PATH" SMOKE_URL=" https://faucet.example.org " SMOKE_DISABLED="" \
+    bash "$T/probe-step.sh" > "$T/ws.log" 2>&1 )
+check "surrounding whitespace does not turn a good URL into a page" \
+  "[ $? -eq 0 ] && grep -q 'stub node ran' '$T/ws.log'"
+( cd "$REPO" && PATH="$T/bin:$BASE_PATH" SMOKE_URL="https:faucet.example.org" SMOKE_DISABLED="" \
+    bash "$T/probe-step.sh" > "$T/noslash.log" 2>&1 )
+check "and neither does https: with no slashes, which new URL() normalises" \
+  "[ $? -eq 0 ] && grep -q 'stub node ran' '$T/noslash.log'"
 
 # The probe step, run for real. `node scripts/live-probe.mjs` is never reached in these
 # two cases, which is the point: both must decide before probing anything.
