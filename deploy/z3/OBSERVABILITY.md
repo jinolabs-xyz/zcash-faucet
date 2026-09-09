@@ -110,8 +110,13 @@ mute the box.
 
 **READ THIS AS BEST-EFFORT, NOT A GUARANTEE.** A filter over arbitrary third-party log
 text cannot be one, and stage 1 is the only part that does not depend on guessing how a
-library chose to print a credential. Not covered: a secret this box does not hold that
-has no distinctive shape (a transparent WIF key, an opaque bearer token printed with no
+library chose to print a credential. Not covered, and worth knowing because it is the one gap you could act on: the
+JSON-aware rules read ONE LINE and stop at the first nested `]` or `}`, so a secret
+inside a nested array or object, or a body pretty-printed across lines the way
+`jq .` and `JSON.stringify(x, null, 2)` write it, walks through. Stage 1 still
+catches every secret this box owns in any of those shapes, because it matches the
+value itself; what escapes is a third party's. Also not covered: a secret this box
+does not hold that has no distinctive shape (a transparent WIF key, an opaque bearer token printed with no
 name beside it), and a secret whose name we did not think of. If a unit is known to log
 credentials, fix the unit; do not rely on this.
 

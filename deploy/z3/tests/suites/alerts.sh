@@ -141,6 +141,10 @@ alerts_env
 cat > "$T/secrets.env" <<'E'
 ZALLET_RPC_PASSWORD=hunter2isalongpassword
 RATE_LIMIT_SALT=9f3c1de4b7a25086f2e1
+# A value full of regex metacharacters. Stage 1 turns each value into a pattern, so an
+# unescaped one matches the wrong text or breaks the filter, and a broken filter
+# withholds every page. Nothing held this before.
+BACKUP_TOKEN=a.b*c[d]e+f(g)
 # A SELECTED name with a short value. The first fixture used a name the include list does
 # not match, so the length guard could be deleted and the check still passed - one step
 # earlier than it claimed.
@@ -254,6 +258,16 @@ echo '{"password":null,"api_key":["leakedinarray1"]}'
 echo '{"seed": ["abandon","ability","able","about","above","absent","absorb","abstract"]}'
 echo '{"authorization": ["Bearer aaa1secret","Bearer bbb2secret"]}'
 echo '{"credentials": {"user": "faucet", "password": "nestedpw123"}}'
+# AND ONE THE QUOTED RULE CANNOT SAVE: the inner key is not itself a secret name, so only
+# the object rule reaches it. Without this the object rule could be deleted outright and
+# the suite stayed green - the previous fixture was redacted by its neighbour.
+echo '{"seed": {"entropy": 8877665544332211, "words": 24}}'
+# The bare-scalar threshold, from both sides, the way its neighbour's is pinned.
+echo '{"token": abc123, "height": 3396810}'
+echo '{"token": abc12, "height": 3396810}'
+# A secret whose VALUE carries regex metacharacters: stage 1 builds a pattern out of it,
+# so an unescaped one either matches the wrong thing or breaks the filter entirely.
+echo "connecting with pw a.b*c[d]e+f(g) now"
 # The four end-of-line names with an ordinary suffix, which the suffix class now reaches.
 echo "AUTHORIZATION_HEADER: Bearer leakedbearertoken1"
 echo "PASSPHRASE_HINT=correct horse battery staple hint"
@@ -293,6 +307,8 @@ check "and a multi-word backup passphrase, which no single-token rule would reac
 check "a passphrase that happens to start with a slash is still a passphrase" \
   "! grep -q 'kQ9zZ1YnHhw2qk3l4mN5oP6qR7sT8uV9wX0yZ1a' '$HOOK_LOG'"
 # A short value is a placeholder, and blanking it would erase the word from ordinary lines.
+check "a secret whose value is regex metacharacters is escaped, not treated as a pattern" \
+  "! grep -q 'a.b\\*c\\[d\\]e' '$HOOK_LOG' && grep -q 'connecting with pw' '$HOOK_LOG'"
 check "a secret under 12 characters is NOT matched by value: it would erase log text" \
   "grep -q 'short lived cache entry' '$HOOK_LOG'"
 # SIX, not five and not seven. A five-character token after a separator is prose ("retries:
@@ -360,6 +376,13 @@ check "EVERY element of a multi-element array, not just the first" \
   "! grep -q 'ability' '$HOOK_LOG' && ! grep -q 'abstract' '$HOOK_LOG' && ! grep -q 'bbb2secret' '$HOOK_LOG'"
 check "and a nested object under a secret key, whole" \
   "! grep -q 'nestedpw123' '$HOOK_LOG'"
+check "including one whose inner keys are ordinary, which only the object rule reaches" \
+  "! grep -q '8877665544332211' '$HOOK_LOG'"
+# SIX characters is a value, five is prose - the same line its neighbour draws, and drawn
+# in the same place, or the number is a comment.
+check "a six-character bare JSON value is redacted" "! grep -q 'abc123, ' '$HOOK_LOG'"
+check "and a five-character one is prose, so the line keeps its shape" \
+  "grep -q 'abc12, ' '$HOOK_LOG' && grep -q '3396810' '$HOOK_LOG'"
 check "the bare Authorization header, whose scheme is only five characters" \
   "! grep -q 'ZmF1Y2V0Omh1bnRlcjI' '$HOOK_LOG'"
 check "and one in a python dict repr, which is what a traceback prints" \
