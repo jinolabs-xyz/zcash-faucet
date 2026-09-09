@@ -162,9 +162,13 @@ zr_env
 STUB_INSPECT_IMAGE="zodlinc/zallet:v0.1.0-beta.3" STUB_WD_STATE=unknown bash "$TRUNC" 4282400 > "$T/wdunk.log" 2>&1
 check "unknown (a mistyped unit name): could-not-tell is an abort" "[ $? -ne 0 ] && grep -q 'could not tell whether' '$T/wdunk.log' && ! grep -q 'docker' '$STUB_LOG'"
 zr_env
-rm -f "$T/bin/systemctl"
+# A systemctl that answers NOTHING, which is what "no systemctl", a wrong unit name or a
+# broken bus all look like to this script. Deleting the stub instead would expose the
+# runner's REAL systemctl (CI has one, and it answers "inactive" for a unit it has never
+# heard of), so the case would prove the opposite of what it says.
+printf '#!/usr/bin/env bash\nexit 1\n' > "$T/bin/systemctl"; chmod +x "$T/bin/systemctl"
 STUB_INSPECT_IMAGE="zodlinc/zallet:v0.1.0-beta.3" bash "$TRUNC" 4282400 > "$T/wdnone.log" 2>&1
-check "no systemctl at all: could-not-tell is an abort too" "[ $? -ne 0 ] && grep -q 'could not tell whether' '$T/wdnone.log' && ! grep -q 'docker' '$STUB_LOG'"
+check "a systemctl that says nothing: could-not-tell is an abort too" "[ $? -ne 0 ] && grep -q 'could not tell whether' '$T/wdnone.log' && ! grep -q 'docker' '$STUB_LOG'"
 zr_env
 STUB_INSPECT_IMAGE="zodlinc/zallet:v0.1.0-beta.3" STUB_WD_STATE=failed bash "$TRUNC" 4282400 > "$T/wdfailed.log" 2>&1
 check "failed is definitely down: the repair proceeds" "[ $? -eq 0 ] && grep -q 'docker run' '$STUB_LOG'"
