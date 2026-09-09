@@ -62,7 +62,23 @@ jobject() { # $1 json, $2 key
   # to the NEXT object, and with cTAZ enabled that object also carries height and
   # syncPercent, so the node gauges reported the feature-net's numbers. Review, 2026-09-09.
   rest="${rest#"${rest%%[! ]*}"}"
-  case "$rest" in \{*) printf '%s' "${rest#\{}" ;; *) return 0 ;; esac
+  case "$rest" in \{*) ;; *) return 0 ;; esac
+  # And ONLY that object: cut at the brace that closes it, counting nesting, so a key the
+  # object lacks is answered by nothing rather than by the next object's field of the
+  # same name. Strings are skipped so a brace inside a reason text does not count.
+  printf '%s' "$rest" | awk '
+    BEGIN { depth = 0; instr = 0; esc = 0; out = "" }
+    {
+      n = length($0)
+      for (i = 1; i <= n; i++) {
+        c = substr($0, i, 1)
+        if (instr) { if (esc) esc = 0; else if (c == "\\") esc = 1; else if (c == "\"") instr = 0 }
+        else if (c == "\"") instr = 1
+        else if (c == "{") depth++
+        else if (c == "}") { depth--; if (depth == 0) { printf "%s", substr($0, 2, i - 2); exit } }
+      }
+      printf "%s", substr($0, 2); exit
+    }'
 }
 # Booleans become 1/0 so Prometheus can graph them; anything else drops out.
 as_gauge() {

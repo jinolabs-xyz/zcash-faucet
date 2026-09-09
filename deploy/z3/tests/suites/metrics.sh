@@ -158,3 +158,30 @@ check "no node sync percent invented either" "! grep -q '^faucet_node_sync_perce
 check "no node ready gauge from a null node" "! grep -q '^faucet_node_ready ' '$METRICS_FILE'"
 check "while the top-level gauges are still there, so the file was written" "grep -qx 'faucet_up 1' '$METRICS_FILE' && grep -qx 'faucet_balance_taz 3.5' '$METRICS_FILE'"
 kill "$NULL_PID" 2>/dev/null
+
+echo "== metrics: a key the node object LACKS is answered by nothing, not by the next object"
+# The slice is bounded at the node object's own closing brace, nesting and strings
+# counted, so cTAZ's height cannot stand in for a node height that was never sent.
+metrics_env
+python3 - "$((API_PORT + 8))" <<'PY' >/dev/null 2>&1 &
+import http.server, json, sys
+port = int(sys.argv[1])
+READY = {"ready": True, "reason": None, "node": {"ready": True, "shield": {"state": "safe", "reason": "a } brace in text"}}, "backend": {"reachable": True}, "balanceTaz": 3.5, "ts": 1}
+STATUS = {"network": "testnet", "dripTaz": 0.1, "balanceTaz": 3.5, "empty": False, "queueDepth": 2,
+          "node": {"ready": True, "shield": {"state": "safe", "reason": "a } brace in text"}},
+          "ctaz": {"enabled": True, "height": 9999, "syncPercent": 42.5, "ready": False}}
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = json.dumps(READY if self.path == "/api/ready" else STATUS).encode()
+        self.send_response(200); self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body))); self.end_headers(); self.wfile.write(body)
+    def log_message(self, *a): pass
+http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()
+PY
+LACK_PID=$!; LACK_PORT=$((API_PORT + 8))
+for _ in $(seq 1 40); do "$REAL_CURL" -sf -o /dev/null "http://127.0.0.1:$LACK_PORT/api/status" && break; sleep 0.25; done
+METRICS_FAUCET_URL="http://127.0.0.1:$LACK_PORT" bash "$METRICS_SH" > /dev/null 2>&1
+check "node.ready is read from the node object, past a brace inside a string" "grep -qx 'faucet_node_ready 1' '$METRICS_FILE'"
+check "no node height: the node object has none and cTAZ's is not borrowed" "! grep -q '^faucet_node_height ' '$METRICS_FILE'"
+check "no node sync percent either" "! grep -q '^faucet_node_sync_percent ' '$METRICS_FILE'"
+kill "$LACK_PID" 2>/dev/null

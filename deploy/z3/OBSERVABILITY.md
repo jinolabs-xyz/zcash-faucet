@@ -212,6 +212,7 @@ What lands in the file:
 | `faucet_empty` | nothing left to send |
 | `faucet_queue_depth` | sends waiting in the serialized queue |
 | `faucet_node_ready` / `faucet_node_sync_percent` / `faucet_node_height` | node sync state |
+| `faucet_can_build_tx` | the send gate's verdict: 0 with `faucet_ready 1` is a faucet refusing every drip while readiness stays green on purpose |
 | `faucet_container_up` / `faucet_zallet_container_up` / `faucet_web_container_up` | container states |
 | `faucet_metrics_scrape_timestamp` | when this file was written |
 
