@@ -127,7 +127,8 @@ grace window and reports once when it recovers. It deliberately does not page
 for un-readiness during a first sync or a refill, because those are un-ready on
 purpose.
 
-**Disk.** `faucet-prune.timer` runs `prune.sh` daily at 04:10 UTC (plus up to
+**Disk.** `faucet-metrics.sh` pages `🚨 NEEDS YOU: disk low` when a watched
+filesystem drops under `METRICS_DISK_FLOOR_PCT` (10%). `faucet-prune.timer` runs `prune.sh` daily at 04:10 UTC (plus up to
 ten minutes of jitter) to remove
 Docker build cache and dangling layers, which nothing else does. It never
 touches volumes, containers or any tagged image; unused tags are listed in its
@@ -137,6 +138,25 @@ build leaves ~2.4 GB, a day of deploys ~7 GB) in the optional
 `/etc/faucet/prune.env`; `PRUNE_DRY_RUN=1 /opt/faucet/prune.sh` says what a
 run would do without doing it. Balance
 and drift are in the metrics file below and alerted by whatever scrapes it.
+
+**Once per cause per hour.** `alert.sh` remembers the first line of every
+message it has *delivered*, with each digit blanked, under
+`/var/lib/faucet-alerts`. A repeat inside `FAUCET_ALERT_COOLDOWN_SECONDS`
+(3600) is counted in its output as `HELD BACK` and not sent; the next one that
+goes out ends with `(+N identical held back in the last 60 min)`. A send that
+fails starts no window, so the next repeat is tried again. Two instances of the
+same template unit are one cause; `9% free` and `8% free` are one cause;
+`40 behind` and `4000 behind` are two. The watchdog's `✅ FIXED` and
+`🚨 NEEDS YOU` are already one per episode and pass `--now`, so a NEEDS YOU
+is never held behind the FIXED before it. `--self-test` is never held. A value
+that is not a whole number falls back to 3600, and one over a day is capped at
+86400, each with a `WARNING` that the self-test prints too; `0` turns it off.
+Records are kept only in a directory the script created or found empty (it
+leaves a `.faucet-alerts` marker), so a mistyped path can never point its
+weekly cleanup at anything else. During an ops deploy the new `alert.sh` lands
+a few seconds before the watchdog restarts, so for that window the old
+watchdog's episode reports go through the cooldown; a restart that fails is
+logged as an error by install-ops.
 
 ## Metrics
 

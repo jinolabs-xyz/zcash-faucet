@@ -133,7 +133,11 @@ EOF
       "$([ "$free_pct" -lt "$METRICS_DISK_FLOOR_PCT" ] && echo 1 || echo 0)"
     if [ "$free_pct" -lt "$METRICS_DISK_FLOOR_PCT" ]; then
       log "DISK LOW: $path has ${free_pct}% free, floor is ${METRICS_DISK_FLOOR_PCT}%" >&2
-      [ -x "$ALERT_SH" ] && "$ALERT_SH" "disk low: $path has ${free_pct}% free (floor ${METRICS_DISK_FLOOR_PCT}%), snapshots and backups will start failing" >/dev/null 2>&1
+      # 🚨 because nothing on the box can fix a full disk; alert.sh holds repeats of this
+      # line to one an hour per path, so the 30-second timer cannot flood the channel.
+      # Its output goes to stderr, deliberately: this block's stdout IS the metrics file,
+      # and a "sent" or "HELD BACK" line in there is a line node_exporter rejects.
+      [ -x "$ALERT_SH" ] && "$ALERT_SH" "🚨 NEEDS YOU: disk low: $path has ${free_pct}% free (floor ${METRICS_DISK_FLOOR_PCT}%), snapshots and backups will start failing" >&2
     fi
   done
 

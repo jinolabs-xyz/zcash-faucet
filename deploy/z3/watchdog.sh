@@ -116,7 +116,11 @@ ALERT_SH="${WATCHDOG_ALERT_SH:-$(dirname "$0")/alert.sh}"
 alert() {
   log "ALERT: $1"
   if [ -x "$ALERT_SH" ]; then
-    "$ALERT_SH" "$1" >/dev/null 2>&1 || log "alert send failed via $ALERT_SH"
+    # --now: these are already one per episode, so alert.sh's per-cause cooldown must not
+    # hold a NEEDS YOU behind the FIXED that preceded it. Its output is kept: "sent" and
+    # any refusal belong in this journal, not in /dev/null.
+    "$ALERT_SH" --now "$1" 2>&1 | sed 's/^/alert.sh: /'
+    [ "${PIPESTATUS[0]}" -eq 0 ] || log "alert send failed via $ALERT_SH"
     return 0
   fi
   [ -n "$ALERT_URL" ] || return 0

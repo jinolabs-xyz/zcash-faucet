@@ -104,7 +104,7 @@ chmod +x "$T/fake-alert.sh"; export METRICS_ALERT_SH="$T/fake-alert.sh"
 bash "$METRICS_SH" > "$T/disk2.log" 2>&1
 check "below-floor gauge is 1" "grep -q 'faucet_disk_below_floor{path=\"$T\"} 1' '$METRICS_FILE'"
 check "logs the shortfall with both numbers" "grep -qE 'DISK LOW: .* has [0-9]+% free, floor is 101%' '$T/disk2.log'"
-check "pages through the shared sender" "grep -q 'ALERTED: disk low' '$T/alerts.log'"
+check "pages through the shared sender, as a page rather than a note" "grep -q 'ALERTED: 🚨 NEEDS YOU: disk low' '$T/alerts.log'"
 check "the alert names the consequence" "grep -q 'snapshots and backups will start failing' '$T/alerts.log'"
 
 echo "== metrics: a nonexistent disk path is skipped, not reported as 0 free"

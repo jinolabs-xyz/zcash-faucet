@@ -12,8 +12,10 @@ alerts_env() {
   export PATH="$T/bin:$BASE_PATH"
   export FAUCET_ALERT_URL="http://127.0.0.1:$HOOK_PORT/hook"
   export FAUCET_ALERT_FORMAT=slack
+  # A fresh cooldown state per test, so one test's sends cannot hold back another's.
+  export FAUCET_ALERT_STATE_DIR="$T/alert-state"
   unset WATCHDOG_ALERT_URL WATCHDOG_ALERT_FORMAT FAUCET_ALERT_PREFIX \
-        FAUCET_ALERT_SIGNAL_NUMBER FAUCET_ALERT_SIGNAL_RECIPIENT 2>/dev/null
+        FAUCET_ALERT_SIGNAL_NUMBER FAUCET_ALERT_SIGNAL_RECIPIENT FAUCET_ALERT_COOLDOWN_SECONDS 2>/dev/null
   : > "$HOOK_LOG"
 }
 
@@ -25,11 +27,17 @@ port,logf=int(sys.argv[1]),sys.argv[2]
 class H(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         n=int(self.headers.get('content-length',0)); body=self.rfile.read(n).decode()
+        # /slow answers after 1.2 s: a bridge is not a zero-latency receiver, and the
+        # cooldown's concurrency case needs a POST long enough for the clock to move.
+        if '/slow' in self.path:
+            import time; time.sleep(1.2)
         open(logf,'a').write(body+"\n")
         code=500 if 'FAIL' in self.path else 204
         self.send_response(code); self.end_headers()
     def log_message(self,*a): pass
-http.server.HTTPServer(("127.0.0.1",port),H).serve_forever()
+# Threaded, so parallel POSTs are served in parallel: with a single-threaded receiver the
+# "distinct causes do not queue" case would measure the receiver's queue, not ours.
+http.server.ThreadingHTTPServer(("127.0.0.1",port),H).serve_forever()
 PY
 HOOK_PID=$!
 for _ in $(seq 1 40); do curl -sf -o /dev/null -X POST -d '{}' "http://127.0.0.1:$HOOK_PORT/warmup" && break; sleep 0.25; done
@@ -191,6 +199,304 @@ FAUCET_BEST_EFFORT_UNITS="$BE" \
 check "the paging channel received NOTHING" "[ ! -s '$HOOK_LOG' ]"
 check "and the failure to reach the best-effort channel is reported" \
   "grep -q 'POST FAILED' '$T/split.log'"
+
+# ── ONCE PER CAUSE PER HOUR ──────────────────────────────────────────────────────────
+# faucet-metrics.sh runs every 30 s and alerts inside a per-filesystem loop; every 2-minute
+# unit carries OnFailure=. The day Signal came alive that was a channel one low disk away
+# from 2,880 messages. The sender holds repeats, and these prove the exact shape of that.
+
+echo "== alerts: the same alert twice inside the window is sent ONCE and counted"
+alerts_env
+bash "$ALERT" "disk low: / has 9% free" > "$T/d1.log" 2>&1; rc1=$?
+bash "$ALERT" "disk low: / has 8% free" > "$T/d2.log" 2>&1; rc2=$?
+check "first send exits 0" "[ $rc1 -eq 0 ]"
+check "the repeat also exits 0, because held back is a decision, not a failure" "[ $rc2 -eq 0 ]"
+check "the webhook saw exactly one" "[ \"\$(grep -c 'disk low' '$HOOK_LOG')\" = 1 ]"
+check "the journal says HELD BACK and counts it" "grep -q 'HELD BACK.*1 so far' '$T/d2.log'"
+check "a changed number is the same cause" "grep -q '9% free' '$HOOK_LOG' && ! grep -q '8% free' '$HOOK_LOG'"
+check "and the first, delivered send is logged as sent" "grep -q 'sent: disk low' '$T/d1.log'"
+
+echo "== alerts: the MAGNITUDE survives the key: 40 behind and 4000 behind are two causes"
+alerts_env
+bash "$ALERT" "zebra still 40 blocks behind" > /dev/null 2>&1
+bash "$ALERT" "zebra still 4000 blocks behind" > /dev/null 2>&1
+check "both reached the webhook" "[ \"\$(grep -c 'blocks behind' '$HOOK_LOG')\" = 2 ]"
+bash "$ALERT" "zebra still 45 blocks behind" > "$T/m3.log" 2>&1
+check "while 45 is the same cause as 40" "grep -q 'HELD BACK' '$T/m3.log'"
+
+echo "== alerts: A SEND THAT FAILS DOES NOT START THE WINDOW, so the next repeat is tried"
+# The first version recorded the cause before the POST. With the bridge restarting at the
+# moment the disk crossed the floor, the one failed send burned the hour and the channel
+# heard nothing about a disk filling to 0%.
+alerts_env; export FAUCET_ALERT_URL="http://127.0.0.1:$HOOK_PORT/FAIL"
+bash "$ALERT" "disk low: / has 9% free" > "$T/f1.log" 2>&1; rc1=$?
+export FAUCET_ALERT_URL="http://127.0.0.1:$HOOK_PORT/hook"
+bash "$ALERT" "disk low: / has 8% free" > "$T/f2.log" 2>&1; rc2=$?
+check "the failed POST is reported as a failure" "[ $rc1 -ne 0 ] && grep -q 'POST FAILED' '$T/f1.log'"
+check "the repeat after it is SENT, not held" "[ $rc2 -eq 0 ] && grep -q 'sent: disk low' '$T/f2.log'"
+check "and it reached the webhook" "grep -q 'disk low' '$HOOK_LOG'"
+check "and the failure left no record to hold anything back" "! grep -q 'HELD BACK' '$T/f2.log'"
+
+echo "== alerts: a send with no encoder does not start the window either"
+alerts_env
+mkdir -p "$T/nobin3"
+for b in bash curl date hostname sed tr cat head mkdir grep cut sha256sum cksum flock find; do
+  src="$(command -v $b 2>/dev/null)"; [ -n "$src" ] && ln -sf "$src" "$T/nobin3/$b"
+done
+PATH="$T/nobin3" FAUCET_ALERT_STATE_DIR="$T/alert-state" bash "$ALERT" "disk low: / has 9% free" > "$T/ne1.log" 2>&1; rc1=$?
+bash "$ALERT" "disk low: / has 9% free" > "$T/ne2.log" 2>&1; rc2=$?
+check "the encoder-less send exits 4" "[ $rc1 -eq 4 ]"
+check "the same message with an encoder is then SENT" "[ $rc2 -eq 0 ] && grep -q 'sent: disk low' '$T/ne2.log'"
+
+echo "== alerts: --now is never held, for callers that already send one per episode"
+# The watchdog's FIXED and NEEDS YOU have different first lines. Held under a cooldown, the
+# NEEDS YOU that follows a FIXED inside the hour would be dropped, and a green tick would
+# be the channel's last word about a faucet that is down.
+alerts_env
+bash "$ALERT" --now "🚨 NEEDS YOU: faucet NOT READY for 30 min. Reason: node syncing." > /dev/null 2>&1
+bash "$ALERT" --now "✅ FIXED: faucet is READY again." > /dev/null 2>&1
+bash "$ALERT" --now "🚨 NEEDS YOU: faucet NOT READY for 30 min. Reason: node syncing." > "$T/now3.log" 2>&1
+check "all three reached the channel" "[ \"\$(grep -c 'faucet' '$HOOK_LOG')\" = 3 ]"
+check "the second NEEDS YOU was not held" "! grep -q 'HELD BACK' '$T/now3.log' && grep -q 'sent:' '$T/now3.log'"
+check "--now without a message is a usage error, not a silent send of nothing" "bash '$ALERT' --now >/dev/null 2>&1; [ \$? -eq 64 ]"
+
+echo "== alerts: a cooldown that is not a number WARNS and uses the default, never silently off"
+alerts_env; export FAUCET_ALERT_COOLDOWN_SECONDS=1h
+bash "$ALERT" "disk low: / has 9% free" > "$T/c1.log" 2>&1
+bash "$ALERT" "disk low: / has 9% free" > "$T/c2.log" 2>&1
+check "the journal names the bad value" "grep -q \"WARNING: FAUCET_ALERT_COOLDOWN_SECONDS='1h' is not a whole number\" '$T/c1.log'"
+check "and the default cooldown is in force" "grep -q 'HELD BACK' '$T/c2.log' && [ \"\$(grep -c 'disk low' '$HOOK_LOG')\" = 1 ]"
+bash "$ALERT" --self-test > "$T/c3.log" 2>&1
+check "and the self-test, the command an operator runs to check this, shows the warning too" "grep -q 'WARNING: FAUCET_ALERT_COOLDOWN_SECONDS' '$T/c3.log' && grep -q \"cooldown=3600s (configured: '1h')\" '$T/c3.log'"
+
+echo "== alerts: a cooldown longer than a day is capped, with a warning, not a bash error and dedup off"
+alerts_env; export FAUCET_ALERT_COOLDOWN_SECONDS=99999999999999999999
+bash "$ALERT" "disk low: / has 9% free" > "$T/big1.log" 2>&1
+bash "$ALERT" "disk low: / has 9% free" > "$T/big2.log" 2>&1
+check "no bash error about integer expressions" "! grep -q 'integer expression' '$T/big1.log'"
+check "warns and caps at a day" "grep -q 'more than a day; using 86400' '$T/big1.log'"
+check "and the cooldown is in force" "grep -q 'HELD BACK' '$T/big2.log'"
+
+echo "== alerts: a record from the FUTURE (clock stepped back) does not hold anything"
+alerts_env
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+for f in "$T"/alert-state/*; do
+  [ -f "$f" ] || continue; [ "$(basename "$f")" = ".lock" ] && continue
+  printf '%s 0\n' "$(( $(date -u +%s) + 86400 ))" > "$f"
+done
+bash "$ALERT" "disk low: / has 9% free" > "$T/fut.log" 2>&1
+check "sent despite a record stamped tomorrow" "grep -q 'sent: disk low' '$T/fut.log'"
+
+echo "== alerts: A STATE DIR THAT IS NOT OURS gets no records and no deletes, however it is spelled"
+# The first guard was a denylist of names and "/etc/" with a trailing slash walked past it;
+# that review run deleted /etc/fstab. Ownership, not names: a directory with anyone else's
+# files in it and no .faucet-alerts marker is never touched. Tested against a WRITABLE fake
+# /etc, so the assertion is about the guard and not about the harness lacking root.
+alerts_env
+mkdir -p "$T/fake-etc"; : > "$T/fake-etc/fstab"; : > "$T/fake-etc/environment"; : > "$T/fake-etc/adduser.conf"
+touch -d '30 days ago' "$T/fake-etc/fstab" "$T/fake-etc/environment" "$T/fake-etc/adduser.conf" 2>/dev/null || true
+for spelling in "$T/fake-etc/" "$T/fake-etc/." "$T//fake-etc" "$T/fake-etc/../fake-etc"; do
+  FAUCET_ALERT_STATE_DIR="$spelling" bash "$ALERT" "disk low: / has 9% free" > "$T/sys.log" 2>&1
+  check "sent, with the dir spelled '$spelling'" "grep -q 'sent: disk low' '$T/sys.log'"
+  check "and dedup is OFF with the reason" "grep -q 'dedup OFF: .* is not a directory this script owns' '$T/sys.log'"
+done
+check "every pre-existing file survived" "[ -e '$T/fake-etc/fstab' ] && [ -e '$T/fake-etc/environment' ] && [ -e '$T/fake-etc/adduser.conf' ]"
+check "and nothing of ours was written there" "[ \"\$(ls -A '$T/fake-etc' | wc -l | tr -d ' ')\" = 3 ]"
+
+echo "== alerts: an EMPTY directory is adopted and marked; a fresh path is created and marked"
+alerts_env
+mkdir -p "$T/empty-dir"
+FAUCET_ALERT_STATE_DIR="$T/empty-dir" bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+check "the empty directory got the marker and a record" "[ -e '$T/empty-dir/.faucet-alerts' ] && [ \"\$(ls '$T/empty-dir' | wc -l | tr -d ' ')\" = 1 ]"
+check "the default fresh path got the marker too" "[ -e '$T/alert-state/.faucet-alerts' ] || { bash '$ALERT' 'x' >/dev/null 2>&1; [ -e '$T/alert-state/.faucet-alerts' ]; }"
+
+echo "== alerts: THE LOCK COVERS A SLOW POST, so simultaneous identical alerts deliver once"
+# Measured in review, twice. First the record was written outside the lock: 8 of 8. Then
+# the timestamp was read before the lock, so every waiter queued behind the winner's
+# 1.2 s POST judged the fresh record with a stale clock and the clock-skew guard let it
+# through: 8 of 8 again, invisible against an instant receiver. This receiver is slow.
+alerts_env; export FAUCET_ALERT_URL="http://127.0.0.1:$HOOK_PORT/slow"
+# `wait` with NO arguments would also wait for the suite's background receiver, for ever.
+par_pids=""
+for i in 1 2 3 4 5 6 7 8; do bash "$ALERT" "disk low: / has 9% free" > "$T/par$i.log" 2>&1 & par_pids="$par_pids $!"; done
+# shellcheck disable=SC2086
+wait $par_pids
+check "exactly one reached the webhook" "[ \"\$(grep -c 'disk low' '$HOOK_LOG')\" = 1 ]"
+check "and the other seven were held back, not lost or errored" "[ \"\$(cat '$T'/par*.log | grep -c 'HELD BACK')\" = 7 ]"
+check "and none gave up on the lock" "! grep -q 'could not take the cooldown lock' '$T'/par*.log"
+
+echo "== alerts: DISTINCT causes do not queue behind each other's POST"
+# One shared lock made eight causes wait for eight sends in a row and, at curl's ceiling,
+# blow the 30 s wait and fail fully open. Per-cause locks: eight causes against the slow
+# receiver finish in about one POST's time, and every one is delivered.
+alerts_env; export FAUCET_ALERT_URL="http://127.0.0.1:$HOOK_PORT/slow"
+start=$(date +%s); par_pids=""
+# Distinct in WORDS: digits are blanked from the key, so "cause 1" and "cause 2" would be one cause.
+for w in alpha bravo charlie delta echo foxtrot golf hotel; do bash "$ALERT" "cause $w is distinct" > "$T/dist-$w.log" 2>&1 & par_pids="$par_pids $!"; done
+# shellcheck disable=SC2086
+wait $par_pids; took=$(( $(date +%s) - start ))
+check "all eight distinct causes reached the webhook" "[ \"\$(grep -c 'is distinct' '$HOOK_LOG')\" = 8 ]"
+check "in parallel, not one POST after another (under 6 s for eight 1.2 s POSTs)" "[ $took -lt 6 ]"
+check "and none was held back or gave up" "! grep -qE 'HELD BACK|could not take' '$T'/dist-*.log"
+
+echo "== alerts: a lock file this process cannot open is dedup OFF in words, not two raw errors"
+alerts_env
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1   # creates the dir and one key's lock
+lockf="$(ls "$T"/alert-state/.lock.* | head -1)"; chmod 444 "$lockf"
+# the lock is opened for writing; a read-only lock file must not be a shower of errors
+if [ "$(id -u)" != 0 ]; then
+  bash "$ALERT" "disk low: / has 9% free" > "$T/lockro.log" 2>&1
+  check "sent" "grep -q 'sent: disk low' '$T/lockro.log'"
+  check "dedup OFF, in the designed words" "grep -q 'dedup OFF: cannot open the cooldown lock' '$T/lockro.log' && ! grep -q 'Permission denied\|Bad file descriptor' '$T/lockro.log'"
+else
+  ok "lock-permission case skipped: running as root, mode bits do not apply"
+  ok "lock-permission case skipped: running as root, mode bits do not apply"
+fi
+chmod 644 "$lockf"
+
+echo "== alerts: a sub-minute cooldown says seconds, not '0 min'"
+alerts_env; export FAUCET_ALERT_COOLDOWN_SECONDS=30
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+for f in "$T"/alert-state/*; do
+  [ -f "$f" ] || continue; case "$(basename "$f")" in .*) continue ;; esac
+  read -r _ n < "$f" || n=0; printf '%s %s\n' "$(( $(date -u +%s) - 120 ))" "${n:-0}" > "$f"
+done
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+check "the note is in seconds" "grep -q 'held back in the last 30s' '$HOOK_LOG'"
+
+echo "== alerts: the weekly sweep touches ONLY forty-hex key files, never a neighbour"
+# In a directory we adopted and someone later shared, `[0-9a-f]*` matched access.log,
+# backup.tar.gz and faucet.db. Only the exact key shape may go.
+alerts_env
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1   # creates and marks the dir
+for f in access.log backup.tar.gz faucet.db 0001-patch data.json; do : > "$T/alert-state/$f"; done
+: > "$T/alert-state/0123456789abcdef0123456789abcdef01234567"      # an old key of ours
+touch -d '10 days ago' "$T"/alert-state/* 2>/dev/null || true
+bash "$ALERT" "another cause entirely" > /dev/null 2>&1
+check "the neighbours all survived" "[ -e '$T/alert-state/access.log' ] && [ -e '$T/alert-state/backup.tar.gz' ] && [ -e '$T/alert-state/faucet.db' ] && [ -e '$T/alert-state/0001-patch' ] && [ -e '$T/alert-state/data.json' ]"
+check "and the stale key of ours was swept" "[ ! -e '$T/alert-state/0123456789abcdef0123456789abcdef01234567' ]"
+
+echo "== alerts: a directory holding only our LOCK files is ours too (the marker lost, the locks kept)"
+alerts_env
+mkdir -p "$T/locks-only"; : > "$T/locks-only/.lock.0123456789abcdef0123456789abcdef01234567"
+FAUCET_ALERT_STATE_DIR="$T/locks-only" bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+FAUCET_ALERT_STATE_DIR="$T/locks-only" bash "$ALERT" "disk low: / has 9% free" > "$T/lo2.log" 2>&1
+check "adopted, and the repeat is held back" "[ -e '$T/locks-only/.faucet-alerts' ] && grep -q 'HELD BACK' '$T/lo2.log'"
+mkdir -p "$T/lock-stranger"; : > "$T/lock-stranger/.lock.not-ours-at-all"
+FAUCET_ALERT_STATE_DIR="$T/lock-stranger" bash "$ALERT" "disk low: / has 9% free" > "$T/ls.log" 2>&1
+check "while a .lock.* that is not our shape keeps the directory someone else's" "grep -q 'dedup OFF' '$T/ls.log' && [ ! -e '$T/lock-stranger/.faucet-alerts' ]"
+
+echo "== alerts: lock files expire a month after their cause stopped firing"
+alerts_env
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+: > "$T/alert-state/.lock.0123456789abcdef0123456789abcdef01234567"
+touch -d '40 days ago' "$T/alert-state/.lock.0123456789abcdef0123456789abcdef01234567" 2>/dev/null || true
+bash "$ALERT" "another cause entirely" > /dev/null 2>&1
+check "a 40-day-old lock of a dead cause is gone" "[ ! -e '$T/alert-state/.lock.0123456789abcdef0123456789abcdef01234567' ]"
+check "while the live cause's lock stays" "ls '$T'/alert-state/.lock.* >/dev/null 2>&1"
+
+echo "== alerts: a directory holding only OUR files is ours, so two first-callers cannot disown it"
+alerts_env
+mkdir -p "$T/ours-only"; : > "$T/ours-only/.faucet-alerts"; : > "$T/ours-only/.lock"
+: > "$T/ours-only/0123456789abcdef0123456789abcdef01234567"
+rm "$T/ours-only/.faucet-alerts"   # the marker is what a racing peer might not have written yet
+FAUCET_ALERT_STATE_DIR="$T/ours-only" bash "$ALERT" "disk low: / has 9% free" > "$T/ours.log" 2>&1
+check "adopted, not refused" "! grep -q 'dedup OFF' '$T/ours.log' && [ -e '$T/ours-only/.faucet-alerts' ]"
+
+echo "== alerts: a marked directory that is not writable is dedup OFF, not a shower of Permission denied"
+alerts_env
+mkdir -p "$T/ro-marked"; : > "$T/ro-marked/.faucet-alerts"; chmod 555 "$T/ro-marked"
+FAUCET_ALERT_STATE_DIR="$T/ro-marked" bash "$ALERT" "disk low: / has 9% free" > "$T/ro.log" 2>&1
+chmod 755 "$T/ro-marked"
+check "sent" "grep -q 'sent: disk low' '$T/ro.log'"
+check "dedup OFF, in the designed words" "grep -q 'dedup OFF' '$T/ro.log' && ! grep -q 'Permission denied' '$T/ro.log'"
+
+echo "== alerts: leading zeros are a legal spelling of a number"
+alerts_env; export FAUCET_ALERT_COOLDOWN_SECONDS=0003600
+bash "$ALERT" --self-test > "$T/lz.log" 2>&1
+check "no warning, and the cooldown is 3600" "! grep -q 'WARNING: FAUCET_ALERT_COOLDOWN' '$T/lz.log' && grep -q 'cooldown=3600s' '$T/lz.log'"
+
+echo "== alerts: the held-back count is on the FIRST line, where a phone preview shows it"
+alerts_env
+printf '#!/usr/bin/env bash\necho "line one of the tail"\necho "line two of the tail"\n' > "$T/bin/journalctl"; chmod +x "$T/bin/journalctl"
+bash "$ALERT" --unit zsnap-export.service > /dev/null 2>&1
+bash "$ALERT" --unit zsnap-export.service > /dev/null 2>&1
+for f in "$T"/alert-state/*; do
+  [ -f "$f" ] || continue; case "$(basename "$f")" in .*) continue ;; esac
+  read -r _ n < "$f" || n=0; printf '%s %s\n' "$(( $(date -u +%s) - 7200 ))" "${n:-0}" > "$f"
+done
+bash "$ALERT" --unit zsnap-export.service > /dev/null 2>&1
+check "the note follows the unit name on the first line, not the journal tail" "grep -q 'unit FAILED: zsnap-export.service (+1 identical held back in the last 60 min)' '$HOOK_LOG'"
+
+echo "== alerts: a first alert of a new cause leaves NO shell error in the journal"
+alerts_env
+bash "$ALERT" "a brand new cause" > "$T/new.log" 2>&1
+check "no 'No such file' from the state read" "! grep -q 'No such file' '$T/new.log'"
+
+echo "== alerts: a DIFFERENT cause inside the window still goes out"
+alerts_env
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+bash "$ALERT" "node is behind by 40 blocks" > /dev/null 2>&1
+check "both causes reached the webhook" "grep -q 'disk low' '$HOOK_LOG' && grep -q 'node is behind' '$HOOK_LOG'"
+
+echo "== alerts: when the window has passed, the next one is sent WITH the held-back count"
+alerts_env
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+# Age the record by rewriting its timestamp: the file holds "<epoch> <held back>".
+for f in "$T"/alert-state/*; do
+  [ -f "$f" ] || continue
+  [ "$(basename "$f")" = ".lock" ] && continue
+  read -r _ n < "$f" || n=0; printf '%s %s\n' "$(( $(date -u +%s) - 7200 ))" "${n:-0}" > "$f"
+done
+bash "$ALERT" "disk low: / has 7% free" > "$T/d4.log" 2>&1
+check "exactly two reached the webhook: the first, and the one after the window" "[ \"\$(grep -c 'disk low' '$HOOK_LOG')\" = 2 ]"
+check "the second carries the count of what was held back" "grep -q '+2 identical held back in the last 60 min' '$HOOK_LOG'"
+check "and the count is reset for the next window" "bash '$ALERT' 'disk low: / has 7% free' >/dev/null 2>&1; [ \"\$(grep -c 'disk low' '$HOOK_LOG')\" = 2 ]"
+
+echo "== alerts: instances of one template unit are ONE cause, whatever their ids look like"
+# Real instance ids differ in width (@10-3385354-0, @100000-3396810-0): a key that only
+# blanked digits kept them apart and five failures of one broker paged five times.
+alerts_env
+printf '#!/usr/bin/env bash\necho "node did not answer"\n' > "$T/bin/journalctl"; chmod +x "$T/bin/journalctl"
+bash "$ALERT" --unit 'ctaz-rpc@10-3385354-0.service' > /dev/null 2>&1
+bash "$ALERT" --unit 'ctaz-rpc@100000-3396810-0.service' > "$T/u2.log" 2>&1
+bash "$ALERT" --unit 'ctaz-rpc@101127-3691924-0.service' > /dev/null 2>&1
+check "one page for three instances of different widths" "[ \"\$(grep -c 'unit FAILED' '$HOOK_LOG')\" = 1 ]"
+check "the second is held back, not lost" "grep -q 'HELD BACK' '$T/u2.log'"
+bash "$ALERT" --unit 'faucet-watchdog.service' > /dev/null 2>&1
+check "a different unit is a different cause and goes out" "grep -q 'faucet-watchdog.service' '$HOOK_LOG'"
+
+echo "== alerts: the self-test is NEVER held back, it is a person asking"
+alerts_env
+bash "$ALERT" --self-test > /dev/null 2>&1
+bash "$ALERT" --self-test > "$T/st5.log" 2>&1
+check "both self-tests reached the channel" "[ \"\$(grep -c 'self-test from' '$HOOK_LOG')\" = 2 ]"
+check "and the second passed" "grep -q 'SELF-TEST PASSED' '$T/st5.log'"
+check "the self-test log states the cooldown, so a muted-looking channel has a visible cause" "grep -q 'cooldown=3600s' '$T/st5.log'"
+
+echo "== alerts: FAUCET_ALERT_COOLDOWN_SECONDS=0 turns it off"
+alerts_env; export FAUCET_ALERT_COOLDOWN_SECONDS=0
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+check "both were sent" "[ \"\$(grep -c 'disk low' '$HOOK_LOG')\" = 2 ]"
+
+echo "== alerts: a state dir that cannot be written FAILS TOWARD NOISE, not silence"
+alerts_env; export FAUCET_ALERT_STATE_DIR="$T/not-a-dir/deeper"
+: > "$T/not-a-dir"   # a file where a directory is needed, so mkdir -p fails
+bash "$ALERT" "disk low: / has 9% free" > "$T/ro1.log" 2>&1
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+check "both were sent" "[ \"\$(grep -c 'disk low' '$HOOK_LOG')\" = 2 ]"
+check "and the journal says why repeats are not being held" "grep -q 'dedup OFF' '$T/ro1.log'"
+
+echo "== alerts: a message that is NOT sent leaves no cooldown record behind"
+# Unconfigured returns 3 before the dedup runs; otherwise the first real send after
+# configuring the channel would be held back by a failure that never reached anyone.
+alerts_env; unset FAUCET_ALERT_URL
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+check "no state was written" "[ ! -d '$T/alert-state' ] || [ -z \"\$(ls -A '$T/alert-state' 2>/dev/null | grep -v '^.lock$')\" ]"
 
 kill "$HOOK_PID" 2>/dev/null
 
