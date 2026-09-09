@@ -63,11 +63,12 @@ duration.
 A bridge cannot report its own death through itself, so `box-report.sh`
 resolves the alert configuration exactly as `alert.sh` does (both files, both
 name sets), asks the bridge's `/v1/accounts` for the configured number, and
-publishes `alertBridge`: `ok` (up and linked), `unlinked`, `down`, `webhook`
-(Slack or Discord, nothing to probe), `none` (no alert URL at all), `unknown`
-(could not ask). The panel's box row names `down`, `unlinked` and `none`
-(`... pages go nowhere`), and the off-box live probe fails on those and on
-`unknown`. That probe is the one channel that does not depend on the bridge,
+publishes `alertBridge`: `ok` (up and the configured number linked), `unlinked`,
+`down`, `misconfigured` (Signal without a usable E.164 number or recipient,
+which `alert.sh` refuses to send with), `webhook` (Slack or Discord, nothing to
+probe), `none` (no alert URL at all), `unknown` (could not ask). The panel's box
+row names `down`, `unlinked`, `misconfigured` and `none` (`... pages go
+nowhere`), and the off-box live probe fails on those and on `unknown`. That probe is the one channel that does not depend on the bridge,
 and it depends on the repository variable `FAUCET_LIVE_URL` being set and on
 someone reading the red-run email; it is the last line, not a second bridge.
 

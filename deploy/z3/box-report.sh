@@ -287,27 +287,31 @@ esac
 # applicable", which is the affirmative side. Sourcing in a clean subshell gives the same
 # answer alert.sh gets, comments, quotes and `export` included.
 #
-#   ok        Signal: the bridge answers /v1/accounts and the configured number is linked
-#   unlinked  Signal: the bridge answers but the number is not among its accounts (the
-#             linked device expired or was never linked; /v2/send would fail)
-#   down      Signal: the bridge did not answer, or answered badly
-#   webhook   a Slack or Discord URL; nothing on the box to probe
-#   none      no alert URL at all: nobody can be paged
-#   unknown   an unrecognised format, a URL without a scheme, or no curl to ask with
+#   ok            Signal: the bridge answers /v1/accounts and the configured number is linked
+#   unlinked      Signal: the bridge answers but the number is not among its accounts (the
+#                 linked device expired or was never linked; /v2/send would fail)
+#   down          Signal: the bridge did not answer, or answered badly
+#   misconfigured Signal with no number, or a number or recipient that is not E.164:
+#                 alert.sh refuses to send in exactly these cases (its own gate), so a
+#                 bridge that is up changes nothing. Judged BEFORE the probe.
+#   webhook       a Slack or Discord URL; nothing on the box to probe
+#   none          no alert URL at all: nobody can be paged
+#   unknown       an unrecognised format, a URL without a scheme, or no curl to ask with
 # Only the signal format is probed: for the others the URL is a credential. It is never
 # written anywhere, and the userinfo part of a URL never reaches curl's argv.
 ALERTS_ENV="${BOX_REPORT_ALERTS_ENV:-/etc/faucet/alerts.env}"
 WATCHDOG_ENV="${BOX_REPORT_WATCHDOG_ENV:-/etc/faucet/watchdog.env}"
 CURL="${BOX_REPORT_CURL:-curl}"
 alert_bridge="none"
-if [ -r "$ALERTS_ENV" ] || [ -r "$WATCHDOG_ENV" ]; then
+if [ -f "$ALERTS_ENV" ] || [ -f "$WATCHDOG_ENV" ]; then
   resolved="$(env -i HOME=/ PATH=/usr/bin:/bin bash -c '
-    [ -r "$1" ] && . "$1" >/dev/null 2>&1
-    [ -r "$2" ] && . "$2" >/dev/null 2>&1
-    printf "%s\n%s\n%s\n" "${FAUCET_ALERT_FORMAT:-${WATCHDOG_ALERT_FORMAT:-}}" "${FAUCET_ALERT_URL:-${WATCHDOG_ALERT_URL:-}}" "${FAUCET_ALERT_SIGNAL_NUMBER:-}"' _ "$ALERTS_ENV" "$WATCHDOG_ENV" 2>/dev/null || true)"
+    [ -f "$1" ] && . "$1" >/dev/null 2>&1
+    [ -f "$2" ] && . "$2" >/dev/null 2>&1
+    printf "%s\n%s\n%s\n%s\n" "${FAUCET_ALERT_FORMAT:-${WATCHDOG_ALERT_FORMAT:-}}" "${FAUCET_ALERT_URL:-${WATCHDOG_ALERT_URL:-}}" "${FAUCET_ALERT_SIGNAL_NUMBER:-}" "${FAUCET_ALERT_SIGNAL_RECIPIENT:-${FAUCET_ALERT_SIGNAL_NUMBER:-}}"' _ "$ALERTS_ENV" "$WATCHDOG_ENV" 2>/dev/null || true)"
   fmt="$(printf '%s\n' "$resolved" | sed -n '1p')"
   url="$(printf '%s\n' "$resolved" | sed -n '2p')"
   num="$(printf '%s\n' "$resolved" | sed -n '3p')"
+  rcpt="$(printf '%s\n' "$resolved" | sed -n '4p')"
   if [ -z "$url" ]; then
     alert_bridge="none"
   else
@@ -317,7 +321,12 @@ if [ -r "$ALERTS_ENV" ] || [ -r "$WATCHDOG_ENV" ]; then
         # Origin only, with any user:password@ removed, so a credential never reaches
         # argv. A URL with no scheme cannot be probed and is not assumed fine.
         origin="$(printf '%s' "$url" | sed -nE 's#^(https?://)([^/@]*@)?([^/]+).*#\1\3#p')"
-        if [ -z "$origin" ]; then
+        # alert.sh's own gate, mirrored: no number, or a number or recipient that is not
+        # E.164, is NOT SENT there, so no bridge state can make this box able to page.
+        e164='^\+[0-9]{6,15}$'
+        if [ -z "$num" ] || ! printf '%s' "$num" | grep -qE "$e164" || ! printf '%s' "$rcpt" | grep -qE "$e164"; then
+          alert_bridge="misconfigured"
+        elif [ -z "$origin" ]; then
           alert_bridge="unknown"
         elif ! command -v "$CURL" >/dev/null 2>&1; then
           alert_bridge="unknown"
@@ -326,13 +335,7 @@ if [ -r "$ALERTS_ENV" ] || [ -r "$WATCHDOG_ENV" ]; then
           code="${body##*$'\n'}"
           case "$code" in
             2*)
-              if [ -n "$num" ]; then
-                printf '%s' "$body" | grep -qF -- "\"$num\"" && alert_bridge="ok" || alert_bridge="unlinked"
-              else
-                # No number configured: alert.sh cannot send either way; the bridge is at
-                # least up, and "unlinked" says the account side is not established.
-                printf '%s' "$body" | grep -qE '"\+[0-9]+"' && alert_bridge="ok" || alert_bridge="unlinked"
-              fi ;;
+              printf '%s' "$body" | grep -qF -- "\"$num\"" && alert_bridge="ok" || alert_bridge="unlinked" ;;
             *) alert_bridge="down" ;;
           esac
         fi ;;

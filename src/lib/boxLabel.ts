@@ -173,7 +173,7 @@ export function boxChip(s: IntegrityStatus): string | null {
  *  is the off-box probe's to fail, since a public row cannot tell "could not ask" from
  *  "asked and it is down" without inviting a reader to ignore red. */
 export function alertBridgeDown(s: IntegrityStatus): boolean {
-  return s.alertBridge === "down" || s.alertBridge === "unlinked" || s.alertBridge === "none";
+  return s.alertBridge === "down" || s.alertBridge === "unlinked" || s.alertBridge === "none" || s.alertBridge === "misconfigured";
 }
 
 /** The clause, when there is one. Only the fault gets words: "ok" is the expected
@@ -183,6 +183,7 @@ function bridge(s: IntegrityStatus): string {
     case "down": return ", ALERT BRIDGE DOWN, pages go nowhere";
     case "unlinked": return ", ALERT BRIDGE UNLINKED, pages go nowhere";
     case "none": return ", NO ALERT CHANNEL, pages go nowhere";
+    case "misconfigured": return ", ALERT CHANNEL MISCONFIGURED, pages go nowhere";
     default: return "";
   }
 }

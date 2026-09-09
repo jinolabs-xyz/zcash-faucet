@@ -223,7 +223,7 @@ test("a report with no minerBinary at all renders exactly as before", () => {
 import { alertBridgeDown } from "./boxLabel.ts";
 
 test("a dead, unlinked or absent alert channel is a fault the row names, because no alert about it can arrive", () => {
-  for (const [v, words] of [["down", /ALERT BRIDGE DOWN/], ["unlinked", /ALERT BRIDGE UNLINKED/], ["none", /NO ALERT CHANNEL/]] as const) {
+  for (const [v, words] of [["down", /ALERT BRIDGE DOWN/], ["unlinked", /ALERT BRIDGE UNLINKED/], ["none", /NO ALERT CHANNEL/], ["misconfigured", /ALERT CHANNEL MISCONFIGURED/]] as const) {
     const s = classifyIntegrity(report({ alertBridge: v }), NOW);
     assert.match(boxRow(s), words);
     assert.match(boxRow(s), /pages go nowhere/);

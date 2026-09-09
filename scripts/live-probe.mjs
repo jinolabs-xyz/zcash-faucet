@@ -242,6 +242,7 @@ async function runFaucetChecks() {
       case "down": ok("the box can page someone", false, "its Signal bridge is not answering: every watchdog alert is a journal line until `docker start signal-api` (the watchdog tries that itself)"); break;
       case "unlinked": ok("the box can page someone", false, "the Signal bridge is up but the configured number is not linked on it; re-link per OBSERVABILITY.md"); break;
       case "none": ok("the box can page someone", false, "no alert URL is configured on the box (/etc/faucet/alerts.env)"); break;
+      case "misconfigured": ok("the box can page someone", false, "Signal is configured without a usable E.164 number or recipient, and alert.sh refuses to send in that state; fix /etc/faucet/alerts.env"); break;
       case "unknown": ok("the box can page someone", false, "the box could not tell: an unrecognised alert format, a URL without a scheme, or no curl; check /etc/faucet/alerts.env"); break;
       case undefined: case null: ok("the box can page someone", true, "server does not send box.alertBridge yet, cannot verify"); break;
       default: ok("the box can page someone", false, `unexpected alertBridge ${JSON.stringify(box.alertBridge)}`);

@@ -76,7 +76,8 @@ export interface IntegrityReport {
    * it say "off" instead, and it is context only, never classified on. */
   minerUnit: string | null;
   /** Whether the box can page anyone, in the box's own word: "ok" (the bridge answers
-   *  and the configured number is linked), "unlinked", "down", "webhook" (Slack or
+   *  and the configured number is linked), "unlinked", "down", "misconfigured" (Signal
+   *  without a usable number: the sender refuses), "webhook" (Slack or
    *  Discord, nothing to probe), "none" (no alert URL at all), "unknown" (could not
    *  ask), or null from a report that predates the field. The bridge cannot report its
    *  own death through itself, so this is where a dead one shows, and the off-box probe
@@ -114,7 +115,8 @@ export interface IntegrityStatus {
    *  dead one. Context, never classified on. */
   minerUnit: string | null;
   /** Whether the box can page anyone, in the box's own word: "ok" (the bridge answers
-   *  and the configured number is linked), "unlinked", "down", "webhook" (Slack or
+   *  and the configured number is linked), "unlinked", "down", "misconfigured" (Signal
+   *  without a usable number: the sender refuses), "webhook" (Slack or
    *  Discord, nothing to probe), "none" (no alert URL at all), "unknown" (could not
    *  ask), or null from a report that predates the field. The bridge cannot report its
    *  own death through itself, so this is where a dead one shows, and the off-box probe

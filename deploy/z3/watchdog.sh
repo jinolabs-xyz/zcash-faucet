@@ -107,7 +107,10 @@ ZALLET_MATCH="${WATCHDOG_ZALLET_MATCH:-zallet}"
 # restart policy it was given, in no compose file, on no watch list. A bridge that dies
 # turns every alert into a journal line. Absent on a box without Signal, which is fine:
 # find_container returns nothing and nothing happens.
-SIGNAL_MATCH="${WATCHDOG_SIGNAL_MATCH:-signal-api}"
+# `-` not `:-`: an EMPTY value is the operator's way of saying "leave the bridge alone
+# while I re-link it", and must not fall back to the default. find_container refuses an
+# empty match rather than asking docker for every container.
+SIGNAL_MATCH="${WATCHDOG_SIGNAL_MATCH-signal-api}"
 
 log() { echo "$(date -u +%FT%TZ) watchdog: $*"; }
 
@@ -147,6 +150,8 @@ danger() { alert "🚨 NEEDS YOU: $1"; }
 
 # First running-or-stopped container id whose name contains $1 (empty if none).
 find_container() {
+  # An empty match would be `--filter name=` and match EVERY container.
+  [ -n "$1" ] || return 0
   docker ps -a --filter "name=$1" --format '{{.Names}}' | head -n1
 }
 

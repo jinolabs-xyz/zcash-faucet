@@ -643,6 +643,22 @@ check "the bridge is started" "grep -q 'docker start signal-api' '$STUB_LOG'"
 check "and given the reboot-safe restart policy" "grep -q 'docker update --restart unless-stopped signal-api' '$STUB_LOG'"
 check "and its recovery is reported once it is seen running" "grep -q 'FIXED: signal-api was down' '$T/alerts.log'"
 
+echo "== watchdog: WATCHDOG_SIGNAL_MATCH= (empty) parks the bridge for an operator re-linking it"
+# The doc tells an operator to set the variable empty for the duration. With `:-` the
+# empty value fell back to the default and the watchdog restarted the container under
+# them; and an empty match handed to docker as `--filter name=` would match everything.
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+echo exited  > "$STUB_CONTAINERS/signal-api"
+export WATCHDOG_SIGNAL_MATCH=
+wd_run 2
+check "the parked bridge is left alone" "! grep -q 'docker start signal-api' '$STUB_LOG'"
+check "and docker was never asked for every container" "! grep -q 'filter name= ' '$STUB_LOG' && ! grep -qE 'filter name=$' '$STUB_LOG'"
+check "while the other three are still watched" "grep -q 'name=faucet-web' '$STUB_LOG'"
+unset WATCHDOG_SIGNAL_MATCH
+
 echo "== watchdog: a box without a Signal bridge container does nothing about one"
 wd_env
 echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"

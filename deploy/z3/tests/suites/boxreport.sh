@@ -445,17 +445,39 @@ check "a bridge that does not answer is DOWN" "bridge_is down"
 STUB_BRIDGE_CODE=500 bash "$BOX_REPORT" > /dev/null 2>&1
 check "a bridge answering 5xx is down too" "bridge_is down"
 
+echo "== box-report: SIGNAL WITHOUT A USABLE NUMBER is misconfigured, whatever the bridge says"
+# alert.sh refuses to send with no number, or a number or recipient that is not E.164. A
+# bridge that is up and linked changes nothing in that state, so "ok" was a lie the first
+# round told; review reproduced it three ways.
+bridge_env
+printf 'FAUCET_ALERT_URL=http://127.0.0.1:8081/v2/send\nFAUCET_ALERT_FORMAT=signal\n' > "$T/alerts.env"
+STUB_BRIDGE_CODE=200 STUB_BRIDGE_BODY='["+15551234567"]' bash "$BOX_REPORT" > /dev/null 2>&1
+check "no number configured: misconfigured, not ok" "bridge_is misconfigured"
+check "and the bridge was not even asked" "[ ! -s '$T/bridge-curl.log' ]"
+bridge_env
+printf 'FAUCET_ALERT_URL=http://127.0.0.1:8081/v2/send\nFAUCET_ALERT_FORMAT=signal\nFAUCET_ALERT_SIGNAL_NUMBER="+1 (555) 123-4567"\n' > "$T/alerts.env"
+STUB_BRIDGE_CODE=200 STUB_BRIDGE_BODY='["+15551234567"]' bash "$BOX_REPORT" > /dev/null 2>&1
+check "a number that is not E.164 is misconfigured" "bridge_is misconfigured"
+bridge_env
+printf 'FAUCET_ALERT_URL=http://127.0.0.1:8081/v2/send\nFAUCET_ALERT_FORMAT=signal\nFAUCET_ALERT_SIGNAL_NUMBER=+15551234567\nFAUCET_ALERT_SIGNAL_RECIPIENT=555-9999\n' > "$T/alerts.env"
+STUB_BRIDGE_CODE=200 STUB_BRIDGE_BODY='["+15551234567"]' bash "$BOX_REPORT" > /dev/null 2>&1
+check "a recipient that is not E.164 is misconfigured too: alert.sh checks both" "bridge_is misconfigured"
+bridge_env
+printf 'FAUCET_ALERT_URL=http://127.0.0.1:8081/v2/send\nFAUCET_ALERT_FORMAT=signal\nFAUCET_ALERT_SIGNAL_NUMBER=+1 (555) 123-4567\n' > "$T/alerts.env"
+STUB_BRIDGE_CODE=200 STUB_BRIDGE_BODY='["+15551234567"]' bash "$BOX_REPORT" > /dev/null 2>&1
+check "an UNQUOTED bad number aborts the sourcing after the URL line, and that reads misconfigured, not ok" "bridge_is misconfigured"
+
 echo "== box-report: the configuration is resolved the way alert.sh resolves it"
 bridge_env
 printf 'export FAUCET_ALERT_URL="http://127.0.0.1:8081/v2/send"  # the bridge\nexport FAUCET_ALERT_FORMAT="signal"\nFAUCET_ALERT_SIGNAL_NUMBER=+15551234567\n' > "$T/alerts.env"
 STUB_BRIDGE_CODE=200 STUB_BRIDGE_BODY='["+15551234567"]' bash "$BOX_REPORT" > /dev/null 2>&1
 check "export, quotes and a trailing comment read the same" "bridge_is ok"
 bridge_env
-printf 'WATCHDOG_ALERT_URL=http://127.0.0.1:8081/v2/send\nWATCHDOG_ALERT_FORMAT=signal\n' > "$T/watchdog.env"
+printf 'WATCHDOG_ALERT_URL=http://127.0.0.1:8081/v2/send\nWATCHDOG_ALERT_FORMAT=signal\nFAUCET_ALERT_SIGNAL_NUMBER=+15551234567\n' > "$T/watchdog.env"
 STUB_BRIDGE_CODE=200 STUB_BRIDGE_BODY='["+15551234567"]' bash "$BOX_REPORT" > /dev/null 2>&1
 check "the older WATCHDOG_ALERT_* names in watchdog.env are honoured, as alert.sh honours them" "bridge_is ok"
 bridge_env
-printf 'FAUCET_ALERT_URL=http://127.0.0.1:8081/v2/send\nFAUCET_ALERT_FORMAT=signal\n' > "$T/alerts.env"
+printf 'FAUCET_ALERT_URL=http://127.0.0.1:8081/v2/send\nFAUCET_ALERT_FORMAT=signal\nFAUCET_ALERT_SIGNAL_NUMBER=+15551234567\n' > "$T/alerts.env"
 printf 'FAUCET_ALERT_URL=http://127.0.0.1:9999/v2/send\n' > "$T/watchdog.env"
 STUB_BRIDGE_CODE=200 STUB_BRIDGE_BODY='["+15551234567"]' bash "$BOX_REPORT" > /dev/null 2>&1
 check "watchdog.env is sourced AFTER alerts.env and wins, exactly as in alert.sh, so the real send target is what gets probed" "grep -q 'http://127.0.0.1:9999/v1/accounts' '$T/bridge-curl.log'"
@@ -486,7 +508,7 @@ printf 'FAUCET_ALERT_URL=http://127.0.0.1:8081/v2/send\r\nFAUCET_ALERT_FORMAT=si
 bash "$BOX_REPORT" > /dev/null 2>&1
 check "CRLF line endings make the format unrecognisable to the sender too, so: unknown" "bridge_is unknown"
 bridge_env
-printf 'FAUCET_ALERT_URL=127.0.0.1:8081/v2/send\nFAUCET_ALERT_FORMAT=signal\n' > "$T/alerts.env"
+printf 'FAUCET_ALERT_URL=127.0.0.1:8081/v2/send\nFAUCET_ALERT_FORMAT=signal\nFAUCET_ALERT_SIGNAL_NUMBER=+15551234567\n' > "$T/alerts.env"
 STUB_BRIDGE_CODE=200 bash "$BOX_REPORT" > /dev/null 2>&1
 check "a URL without a scheme cannot be probed and is unknown, not ok" "bridge_is unknown && [ ! -s '$T/bridge-curl.log' ]"
 bridge_env
@@ -494,7 +516,7 @@ printf 'FAUCET_ALERT_URL=http://user:sekret@127.0.0.1:8081/v2/send\nFAUCET_ALERT
 STUB_BRIDGE_CODE=200 STUB_BRIDGE_BODY='["+15551234567"]' bash "$BOX_REPORT" > /dev/null 2>&1
 check "userinfo in the URL never reaches curl's argv" "grep -q 'http://127.0.0.1:8081/v1/accounts' '$T/bridge-curl.log' && ! grep -q 'sekret' '$T/bridge-curl.log' && ! grep -q 'sekret' '$BOX_REPORT_OUT'"
 bridge_env
-printf 'FAUCET_ALERT_URL=http://127.0.0.1:8081/v2/send\nFAUCET_ALERT_FORMAT=signal\n' > "$T/alerts.env"
+printf 'FAUCET_ALERT_URL=http://127.0.0.1:8081/v2/send\nFAUCET_ALERT_FORMAT=signal\nFAUCET_ALERT_SIGNAL_NUMBER=+15551234567\n' > "$T/alerts.env"
 BOX_REPORT_CURL="$T/no-such-curl" bash "$BOX_REPORT" > /dev/null 2>&1
 check "no curl to ask with is unknown, never a calm ok" "bridge_is unknown"
 check "and the rest of the report is untouched by any of it" "[ \"\$(jqf '$BOX_REPORT_OUT' readable)\" = 'True' ]"
