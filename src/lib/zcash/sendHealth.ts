@@ -24,12 +24,16 @@
  *
  * BUT A WALLET WHERE NOTHING EVER RESOLVES IS NOT FINE EITHER (risk register #9). With
  * unknowns kept out of both the numerator and the denominator, a crash-looping zallet
- * whose every send hit the deadline produced no decided sends at all, so this answered
- * "too few to judge" for as long as it lasted: every claim a 504, every claimant a burnt
- * cooldown, readiness green. So a window with NO success and at least a sample's worth
- * of unresolved sends is degraded too, on its own sentence. One success in the window
- * clears it, because one success is what a slow-but-working wallet produces and a dead
- * one cannot.
+ * whose every send was lost (an opid the wallet forgot, or the deadline) produced no
+ * decided sends at all, so this answered "too few to judge" for as long as it lasted:
+ * every claim a 504, every claimant a burnt cooldown, readiness green. A crash loop
+ * usually mixes the two, connection refused (failed) and a lost opid (unknown), so the
+ * rule counts both: a window with NO success, at least one unresolved send, and a
+ * sample's worth of unresolved-plus-failed is degraded on its own sentence. One success
+ * in the window clears it, because one success is what a slow-but-working wallet
+ * produces and a dead one cannot. The cost of that invariant: a zallet that starts
+ * answering sends without a txid (recorded unknown while coins move) would read as not
+ * finishing sends; that is a wallet regression worth a page, not routine.
  *
  * Deliberately in memory and per-process. It is a health signal about the process doing
  * the sending, not a ledger, and persisting it would raise a retention question for data
@@ -45,14 +49,21 @@ export interface SendRecord {
 }
 
 /**
- * How far back we look. Ten minutes is long enough that a handful of claims accumulate
- * on a quiet faucet and short enough that a fault fixed twenty minutes ago is not still
- * being reported as current.
+ * How far back we look. Long enough that a handful of claims accumulate on a quiet
+ * faucet, short enough that a fault fixed half an hour ago is not still reported as
+ * current. AND long enough to hold MIN_SAMPLE unresolved sends spaced by the send
+ * deadline: the queue is serial and a send that blew its 309 s deadline is still
+ * running, so consecutive deadline unknowns are at least 309 s apart, and a ten-minute
+ * window could never hold three of them. Review measured it: unknowns every 300 s read
+ * degraded, every 301 s read "too few to judge". (MIN_SAMPLE - 1) * deadline must fit,
+ * with room; sendHealth.test.ts pins that against the stock deadline.
  */
-export const WINDOW_MS = 10 * 60_000;
+export const WINDOW_MS = 15 * 60_000;
 
 /**
- * How many CLASSIFIABLE sends we need before saying anything at all.
+ * How many sends we need before saying anything at all: CLASSIFIABLE ones for the
+ * failure-rate verdict, and any mix of unresolved and failed for the nothing-resolves
+ * verdict below. Lowering it loosens both.
  *
  * Below this the verdict is `unknown`, never `ok`. One failed send is not evidence of a
  * dead wallet, and on a quiet faucet it may be the only send that hour. Requiring a
@@ -116,11 +127,12 @@ export function readSendHealth(now: number = Date.now(), records: SendRecord[] =
   // is the same mistake in the opposite direction from counting them as failures.
   const decided = ok + failed;
   if (decided < MIN_SAMPLE) {
-    // Nothing succeeded and enough sends were left unresolved to be a pattern rather than
-    // one slow claim: the wallet is not finishing sends. Judged before the sample rule,
-    // which would otherwise answer "too few to judge" forever, since a wallet that never
-    // resolves never produces a decided send.
-    if (ok === 0 && unknown >= MIN_SAMPLE) {
+    // Nothing succeeded, at least one send was left unresolved, and unresolved plus
+    // failed make a sample: the wallet is not finishing sends. Judged before the sample
+    // rule, which would otherwise answer "too few to judge" forever, since a wallet that
+    // never resolves never produces enough decided sends. The failed-only case (three
+    // refusals, no unknowns) is the ratio rule's, one branch down.
+    if (ok === 0 && unknown > 0 && unknown + failed >= MIN_SAMPLE) {
       return {
         state: "degraded",
         ok,

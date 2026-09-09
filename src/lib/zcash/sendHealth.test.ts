@@ -141,15 +141,48 @@ test("but ONE success in the window clears it: that is what a slow-but-working w
   assert.equal(readSendHealth(NOW, [...many("unknown", 6), ...many("ok", MIN_SAMPLE)]).state, "ok");
 });
 
-test("fewer unresolved sends than the sample stay unknown, and unresolved plus failed with no success is degraded", () => {
+test("fewer unresolved sends than the sample stay unknown", () => {
   for (let n = 0; n < MIN_SAMPLE; n++) {
     assert.equal(readSendHealth(NOW, many("unknown", n)).state, "unknown", `${n} unresolved sends should be unjudgeable`);
   }
-  // Two failures and three unresolved: decided is below the sample, nothing succeeded,
-  // and the unresolved count carries it. The sentence counts both.
-  const h = readSendHealth(NOW, [...many("unknown", 3), ...many("failed", 2)]);
-  assert.equal(h.state, "degraded");
-  assert.match(h.reason, /3 of the last 5 sends never resolved/);
+});
+
+test("THE MIXED CRASH LOOP: unresolved PLUS failed with no success is degraded, even with too few of either alone", () => {
+  // The likelier shape. A crash-looping zallet alternates connection refused (failed)
+  // and a lost opid (unknown), so on a quiet window neither count reaches the sample by
+  // itself. Review measured ok=0 failed=2 unknown=2 reading "too few to judge": four
+  // claimants paid nothing, readiness 200.
+  for (const [u, f] of [[2, 1], [1, 2], [2, 2]] as const) {
+    const h = readSendHealth(NOW, [...many("unknown", u), ...many("failed", f)]);
+    assert.equal(h.state, "degraded", `unknown=${u} failed=${f}`);
+    assert.equal(sendHealthBlocksServing(h), true, `unknown=${u} failed=${f}`);
+    assert.match(h.reason, new RegExp(`${u} of the last ${u + f} sends never resolved`));
+  }
+  // Enough failures for the ratio rule on their own: that rule answers, with its own
+  // sentence, and the verdict is the same.
+  const ratio = readSendHealth(NOW, [...many("unknown", 1), ...many("failed", 5)]);
+  assert.equal(ratio.state, "degraded");
+  assert.match(ratio.reason, /5 of the last 5 sends failed/);
+  // Failures alone with no unknown are the ratio rule's: three refusals read degraded
+  // through it, two read too few to judge, unchanged.
+  assert.match(readSendHealth(NOW, many("failed", 3)).reason, /3 of the last 3 sends failed/);
+  assert.equal(readSendHealth(NOW, many("failed", 2)).state, "unknown");
+});
+
+test("THE WINDOW HOLDS A SAMPLE OF DEADLINE-SPACED UNKNOWNS, so the deadline class can trip the rule at all", async () => {
+  // The queue is serial and a send that blew its deadline is still running, so
+  // consecutive deadline unknowns are at least one deadline apart. Review measured a
+  // 10 min window reading degraded at 300 s spacing and "too few" at 301 s, with the
+  // stock deadline at 309 s: the exact class the rule was written for could never fit.
+  const { config } = await import("../config.ts"); // stock timings: no env is set here
+  const deadline = config.sendTaskDeadlineMs;
+  assert.equal(deadline, 309_000, "the stock deadline this window is sized against");
+  assert.ok(
+    (MIN_SAMPLE - 1) * deadline + 60_000 <= WINDOW_MS,
+    `${MIN_SAMPLE} unknowns ${deadline} ms apart need ${(MIN_SAMPLE - 1) * deadline} ms plus a minute; the window is ${WINDOW_MS}`,
+  );
+  const spaced = Array.from({ length: MIN_SAMPLE }, (_, i) => at("unknown", i * deadline));
+  assert.equal(readSendHealth(NOW, spaced).state, "degraded", "deadline-spaced unknowns must fit the window");
 });
 
 test("an unresolved send AGES OUT of the window like the others, so a fixed wallet is not reported dead", () => {

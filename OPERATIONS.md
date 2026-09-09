@@ -1069,9 +1069,10 @@ curl -s "https://$(cat /etc/faucet-domain)/api/ready" | jq
    `z3-stack/config/testnet/zallet.toml` matches `faucet.env`.
 10. **`sends failing: ...`.** The last real sends failed although the wallet
    answered and every check above passed, or (`... never resolved and none
-   succeeded`) every recent send hit its deadline with no success among them,
-   which is what a crash-looping wallet looks like from the money path: each
-   claim a 504 and a burnt cooldown. The wallet is the fault:
+   succeeded`) the recent sends were lost (an opid the wallet forgot, or the
+   deadline) or refused, with no success among them, which is what a
+   crash-looping wallet looks like from the money path: each claim a 504 and a
+   burnt cooldown. The wallet is the fault:
    `docker logs <zallet container>`, and the poison auto-heal in the watchdog
    journal. One send that lands clears the unresolved form on its own.
 11. **`below reserve, refilling`.** Not broken, broke. **Fund the faucet
