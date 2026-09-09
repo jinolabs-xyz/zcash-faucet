@@ -34,7 +34,7 @@
  */
 
 import { num } from "../config.ts";
-import { getExternalTip, warmExternalTip, HOSH_TIMEOUT_MS, MIN_ATTEMPT_GAP_MS } from "./externalTip.ts";
+import { getExternalTip, warmExternalTip, HOSH_TIMEOUT_MS, MIN_ATTEMPT_GAP_MS, REFRESH_ATTEMPT_MS } from "./externalTip.ts";
 
 /*
  * The decision itself is a PURE function of two heights (see shieldFreshness),
@@ -254,20 +254,21 @@ export function readChainFreshness(nodeHeight: number | null): ChainGate {
 /**
  * Longest we will make a caller wait for the oracle before deciding without it.
  *
- * AT LEAST ONE FULL FETCH OF THE PRIMARY. The first version waited 2 s against a hosh
- * fetch allowed 5 s, so a slow-but-answering oracle produced "unverifiable" and a
- * refusal that blamed our node, on the money path, for nothing (risk register #6).
+ * AT LEAST ONE FULL ATTEMPT, WHICH IS NOT ONE FETCH. The first version waited 2 s
+ * against a hosh fetch allowed 5 s, so a slow-but-answering oracle produced
+ * "unverifiable" and a refusal that blamed our node, on the money path, for nothing
+ * (risk register #6). The second waited for the primary alone, and review measured one
+ * attempt at 10 s: hosh hanging to its abort and THEN the direct-node leg, which is the
+ * source that would have answered, starting after the claim had given up. An attempt is
+ * the primary plus the fallback budget (REFRESH_ATTEMPT_MS, sized in externalTip.ts).
  * PLUS THE ATTEMPT GAP. The status read that precedes the gate kicks a refresh of its
- * own; if that one fails fast (hosh down, fallback refusing the connection) the gap
- * holds every poll for a second, and the claim's first real fetch starts a second late.
- * With the gap drawing on the same second of margin, an oracle answering at 4.98 s
- * (inside its own 5 s allowance) was refused as unverifiable, reproduced in review.
- * One second of margin on top of both, for the poll interval and the hand-off into the
- * fallback. Seven seconds in front of a drip that takes seconds to build is tolerable,
- * and it is paid only on a cold cache; the background refresh keeps it warm the rest
- * of the time.
+ * own; if that one fails fast the gap holds every poll for a second, and the claim's
+ * first real attempt starts a second late. One second of margin on top of all of it
+ * for the poll interval. Ten seconds in front of a drip that takes seconds to build is
+ * tolerable, and it is paid only on a cold cache with a slow oracle; the background
+ * refresh keeps the cache warm the rest of the time, and a fast failure is fast.
  */
-export const ORACLE_WAIT_MS = HOSH_TIMEOUT_MS + MIN_ATTEMPT_GAP_MS + 1000;
+export const ORACLE_WAIT_MS = MIN_ATTEMPT_GAP_MS + REFRESH_ATTEMPT_MS + 1000;
 
 /**
  * The reading for a caller that is ABOUT TO BUILD a transaction, rather than one
@@ -300,7 +301,7 @@ export async function readChainFreshnessAsking(
 ): Promise<ChainGate> {
   // NOTHING TO WAIT FOR when our own node's height is unknown: the verdict is
   // "unverifiable" whatever the oracle says, and spending the whole budget to reach a
-  // foregone conclusion put ~6 s on every queued claim while the wallet was down, which
+  // foregone conclusion put the whole wait on every queued claim while the wallet was down, which
   // is the moment claims are already failing (review of register #6).
   if (nodeHeight == null) return chainFreshness(null, readTip());
   // POLL for the value rather than awaiting one refresh. warmExternalTip() returns

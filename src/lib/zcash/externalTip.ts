@@ -121,6 +121,17 @@ const HOSH_URL = process.env.HOSH_URL ?? "https://hosh.zec.rocks/api/v0/zec.json
  * reachable, blaming our node for an oracle we never heard from (risk register #6).
  */
 export const HOSH_TIMEOUT_MS = 5000;
+/**
+ * How long the direct-node fallback legs may take IN TOTAL, shared across every
+ * configured endpoint. One attempt at the tip is hosh and then this, in series, and
+ * the wait in shieldGate.ts is sized from the sum (REFRESH_ATTEMPT_MS): review measured
+ * one attempt at 10 s (hosh hanging to its abort, then a 5 s gRPC leg) against a 7 s
+ * wait, so the leg that would have answered ran entirely after the claim gave up. Two
+ * endpoints used to mean two full legs, the #89 shape this file had not been told about.
+ */
+export const FALLBACK_TOTAL_MS = 3000;
+/** The worst case for one attempt: the primary to its abort, then the fallback budget. */
+export const REFRESH_ATTEMPT_MS = HOSH_TIMEOUT_MS + FALLBACK_TOTAL_MS;
 
 async function fromHosh(timeoutMs: number): Promise<number | null> {
   const res = await fetch(HOSH_URL, { signal: AbortSignal.timeout(timeoutMs) });
@@ -151,24 +162,48 @@ function getLatestBlock(host: string, timeoutMs: number): Promise<number | null>
   });
 }
 
-/** Do the actual network work: hosh first, then a direct node. Carries provenance. */
-async function fetchNetworkTip(): Promise<{ height: number | null; source: TipSource; host: string | null }> {
-  const h = await fromHosh(HOSH_TIMEOUT_MS).catch(() => null);
+export interface TipFetchBudget {
+  hoshTimeoutMs: number;
+  fallbackTotalMs: number;
+}
+const PRODUCTION_BUDGET: TipFetchBudget = { hoshTimeoutMs: HOSH_TIMEOUT_MS, fallbackTotalMs: FALLBACK_TOTAL_MS };
+
+/**
+ * Do the actual network work: hosh first, then a direct node. Carries provenance.
+ * The budget is injectable so the bound can be proven in a test against hanging fakes
+ * in milliseconds; production always passes PRODUCTION_BUDGET.
+ */
+export async function fetchNetworkTipWithin(
+  budget: TipFetchBudget,
+  endpoints: readonly string[] = config.lightwalletdEndpoints,
+  getLatest: (host: string, timeoutMs: number) => Promise<number | null> = getLatestBlock,
+): Promise<{ height: number | null; source: TipSource; host: string | null }> {
+  const h = await fromHosh(budget.hoshTimeoutMs).catch(() => null);
   if (h != null && h > 0) return { height: h, source: "hosh", host: null };
   // hosh down or its testnet filter yielded nothing - degrade to a direct node,
   // and say so, because a silent degrade to a single source defeats the point of
   // the aggregate (App's medium on #171).
   console.warn("[externalTip] hosh gave no testnet height; falling back to direct GetLatestBlock");
-  for (const endpoint of config.lightwalletdEndpoints) {
+  // ONE deadline for every leg. A later endpoint gets what the earlier ones left, and
+  // nothing once it is spent: an endpoint that hangs must not hand the next one a fresh
+  // budget the caller's wait knows nothing about.
+  const endsAt = Date.now() + budget.fallbackTotalMs;
+  for (const endpoint of endpoints) {
+    const remaining = endsAt - Date.now();
+    if (remaining <= 0) break;
     try {
       const host = new URL(endpoint).host;
-      const height = await getLatestBlock(host, 5000);
+      const height = await getLatest(host, remaining);
       if (height != null && height > 0) return { height, source: "direct", host };
     } catch {
       // try the next endpoint
     }
   }
   return { height: null, source: "none", host: null };
+}
+
+function fetchNetworkTip(): Promise<{ height: number | null; source: TipSource; host: string | null }> {
+  return fetchNetworkTipWithin(PRODUCTION_BUDGET);
 }
 
 const STALE_MS = 30_000; // refresh in the background once the cache is older than this

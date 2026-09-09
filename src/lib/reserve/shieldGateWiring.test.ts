@@ -22,17 +22,25 @@ import { createServer, type Server } from "node:http";
 // state gets reached without waiting out MAX_AGE_MS.
 let hoshHeight: number | null = null;
 let hoshHits = 0;
+let hoshDelayMs = 0;
 const port = 59_431;
 
 const hosh: Server = createServer((_req, res) => {
   hoshHits += 1;
+  if (hoshDelayMs > 0) {
+    setTimeout(() => answer(res), hoshDelayMs);
+    return;
+  }
+  answer(res);
+});
+function answer(res: import("node:http").ServerResponse): void {
   if (hoshHeight == null) {
     res.writeHead(503).end("{}");
     return;
   }
   res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify({ servers: [{ chain: "test", online: true, height: hoshHeight }] }));
-});
+}
 await new Promise<void>((r) => hosh.listen(port, "127.0.0.1", r));
 
 // Env before the dynamic imports: config and HOSH_URL are both read at module load.
@@ -131,6 +139,24 @@ test("two warms inside the attempt gap dial the oracle once, and the test bypass
   assert.equal(hoshHits, baseline, "a warm inside the gap re-dialled the oracle");
   await warmExternalTipNowForTests();
   assert.equal(hoshHits, baseline + 1, "the bypass did not dial");
+});
+
+test("the bypass landing MID-FETCH does not disarm the gap for whoever polls next", async () => {
+  // Round 5, nit 24. The bypass waives the gap inside refresh, after the in-flight
+  // check; the first version zeroed the stamp first, so a bypass that hit a refresh in
+  // flight dialled nothing and left the next plain warm un-throttled. Still a 503 hosh,
+  // so the cache stays cold for the tests below.
+  hoshDelayMs = 300;
+  try {
+    const inflight = warmExternalTip(); // may itself be inside the gap from the test above
+    await warmExternalTipNowForTests(); // returns at once if a refresh is in flight
+    await inflight;
+    const dials = hoshHits;
+    await warmExternalTip(); // inside the gap of whichever attempt stamped last
+    assert.equal(hoshHits, dials, "a plain warm dialled inside the gap: the bypass disarmed it");
+  } finally {
+    hoshDelayMs = 0;
+  }
 });
 
 test("no independent tip means UNVERIFIABLE, and unverifiable does not broadcast", async () => {

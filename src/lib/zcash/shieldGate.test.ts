@@ -135,7 +135,7 @@ test("a positive lag inside the budget still says within, so the split is narrow
 
 // ── THE MONEY PATH WAITS AT LEAST ONE FULL FETCH (risk register #6) ─────────────────────
 import { ORACLE_WAIT_MS, readChainFreshnessAsking, freshnessRefusalText, type ChainGate } from "./shieldGate.ts";
-import { HOSH_TIMEOUT_MS, MIN_ATTEMPT_GAP_MS } from "./externalTip.ts";
+import { HOSH_TIMEOUT_MS, MIN_ATTEMPT_GAP_MS, FALLBACK_TOTAL_MS, REFRESH_ATTEMPT_MS } from "./externalTip.ts";
 
 test("the wait in front of a drip covers the primary oracle's own timeout, and both numbers are pinned", () => {
   // 2 s against a 5 s fetch refused claims as "unverifiable" while hosh was answering at
@@ -144,21 +144,25 @@ test("the wait in front of a drip covers the primary oracle's own timeout, and b
   // has to come through here on purpose.
   assert.ok(ORACLE_WAIT_MS >= HOSH_TIMEOUT_MS, `wait ${ORACLE_WAIT_MS} < fetch ${HOSH_TIMEOUT_MS}`);
   assert.equal(HOSH_TIMEOUT_MS, 5000, "the primary fetch is 5 s; change it deliberately, with the wait");
-  assert.equal(ORACLE_WAIT_MS, 7000);
+  assert.equal(FALLBACK_TOTAL_MS, 3000, "the direct legs share 3 s; change it deliberately, with the wait");
+  assert.equal(REFRESH_ATTEMPT_MS, 8000);
+  assert.equal(ORACLE_WAIT_MS, 10_000);
 });
 
-test("a fetch that starts after a full attempt gap still FINISHES inside the wait", () => {
+test("an attempt that starts after a full gap, hangs on the primary and answers from the fallback still lands inside the wait", () => {
   // The gap stops the 100 ms poll re-dialling a fast-failing oracle, and it can hold
-  // the claim's first fetch back by its whole length when the status read just before
-  // the gate failed fast. The bound that matters is therefore gap + fetch < wait, with
-  // room to spare: at gap + fetch == wait an oracle answering at 4.98 s, inside its own
-  // allowance, was refused as unverifiable (review, round 4). "Fewer than N attempts fit"
-  // was the first version of this assertion and it passed while that happened.
+  // the claim's first attempt back by its whole length when the status read just before
+  // the gate failed fast. The bound that matters is gap + WHOLE ATTEMPT < wait, with room:
+  // at gap + primary == wait an oracle answering at 4.98 s was refused (round 4), and with
+  // the fallback leg outside the sum a hanging hosh pushed the leg that would have
+  // answered past the deadline (round 5). "Fewer than N attempts fit" was the first
+  // version of this assertion and it passed while both happened.
   assert.equal(MIN_ATTEMPT_GAP_MS, 1000, "one attempt per second; change it deliberately");
   assert.ok(
-    MIN_ATTEMPT_GAP_MS + HOSH_TIMEOUT_MS + 500 <= ORACLE_WAIT_MS,
-    `gap ${MIN_ATTEMPT_GAP_MS} + fetch ${HOSH_TIMEOUT_MS} leaves under 500 ms of the ${ORACLE_WAIT_MS} wait`,
+    MIN_ATTEMPT_GAP_MS + REFRESH_ATTEMPT_MS + 500 <= ORACLE_WAIT_MS,
+    `gap ${MIN_ATTEMPT_GAP_MS} + attempt ${REFRESH_ATTEMPT_MS} leaves under 500 ms of the ${ORACLE_WAIT_MS} wait`,
   );
+  assert.equal(REFRESH_ATTEMPT_MS, HOSH_TIMEOUT_MS + FALLBACK_TOTAL_MS, "an attempt IS the primary plus the fallback budget");
 });
 
 test("a tip that lands inside the wait is USED, and one that never lands refuses at the deadline", async () => {
