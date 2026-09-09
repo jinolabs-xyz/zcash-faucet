@@ -20,10 +20,12 @@ recency and paying through its `requestfaucetdonation` primitive. The public
 lightwalletd endpoint (`LIGHTWALLETD_ENDPOINT`) serves the read-side balance lookup, and
 a public TLS endpoint on the list is also the tip oracle's fallback when the hosh
 aggregate is dark and the source of expiry heights, so it does touch the drip gate.
-Sending itself never uses it: a drip is built and broadcast by our own Zallet. A
-self-hosted or private endpoint (plaintext, a docker name, a private address) serves
-balances only and is never a tip source, because our own indexer over our own node is
-not independent of anything.
+Sending itself never uses it: a drip is built and broadcast by our own Zallet. The
+oracle's fallback skips a self-hosted or private endpoint (plaintext, a docker name, a
+private address), because our own indexer over our own node is not independent of
+anything; the expiry-height read (transparent sender only) still asks every endpoint
+and takes the highest answer. A public TLS name you run yourself would pass the filter:
+do not build that shape.
 
 ## How a drip works
 

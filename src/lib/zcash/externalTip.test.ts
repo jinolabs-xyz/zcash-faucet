@@ -182,7 +182,7 @@ test("a first endpoint that accepts and never answers does NOT hide the second: 
 
 test("a fallback that answers is USED, with its gRPC target as the host, after the primary fails", async () => {
   // The host is what grpc-js dialled, port included: "alive.example:443" for an https
-  // URL with no port, "b.example:9067" for an explicit port.
+  // URL with no port, "a.example:9067" for an explicit port.
   const answering = async (endpoint: string) => (endpoint === "https://alive.example" ? 4_336_000 : null);
   const r = await fetchNetworkTipWithin(
     { hoshTimeoutMs: 100, fallbackTotalMs: 500 },
@@ -202,11 +202,15 @@ test("OUR OWN ZAINO IS NEVER THE TIP ORACLE: plaintext, private and local endpoi
   // against itself: lag 0, safe, drips built against a frozen node.
   for (const e of ["http://zaino:8137", "http://zaino", "https://zaino:8137", "https://127.0.0.1:443", "https://10.0.0.5",
                    "https://172.16.4.4", "https://172.31.255.1", "https://192.168.1.10", "https://169.254.1.1", "https://100.64.0.1",
-                   "https://localhost", "https://zaino.local", "https://zaino.internal", "https://[::1]:443", "https://[fd00::1]", "not a url"]) {
+                   "https://localhost", "https://zaino.local", "https://zaino.internal", "https://[::1]:443", "https://[fd00::1]", "not a url",
+                   // round 8's edges: mapped IPv4, trailing dots, more local suffixes, other reserved v6
+                   "https://[::ffff:127.0.0.1]", "https://[::ffff:10.0.0.1]", "https://[::]", "https://[fec0::1]", "https://[64:ff9b::a00:1]",
+                   "https://localhost.", "https://zaino.local.", "https://zaino.internal.", "https://zaino.lan", "https://zaino.home.arpa",
+                   "https://zaino.intranet", "https://zaino.onion", "https://LOCALHOST", "https://[::FFFF:192.168.1.1]"]) {
     assert.equal(isIndependentTipEndpoint(e), false, e);
   }
   for (const e of ["https://testnet.zec.rocks:443", "https://testnet.zec.rocks", "https://lightwalletd.testnet.electriccoin.co:9067",
-                   "https://172.32.0.1", "https://8.8.8.8", "https://[2001:db8::1]"]) {
+                   "https://172.32.0.1", "https://8.8.8.8", "https://[2607:f8b0::1]", "https://[::ffff:8.8.8.8]", "https://testnet.zec.rocks."]) {
     assert.equal(isIndependentTipEndpoint(e), true, e);
   }
 });

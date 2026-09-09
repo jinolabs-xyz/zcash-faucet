@@ -48,7 +48,7 @@ await new Promise<void>((r) => hosh.listen(port, "127.0.0.1", r));
 // an empty list falls back to the real testnet endpoint and would quietly supply a
 // tip this test did not choose.
 process.env.HOSH_URL = `http://127.0.0.1:${port}/`;
-process.env.LIGHTWALLETD_ENDPOINT = "https://127.0.0.1:9"; // discard port, below the ephemeral range: refused at once
+process.env.LIGHTWALLETD_ENDPOINT = "https://127.0.0.1:9"; // loopback: the oracle skips it, so no fallback dial at all
 process.env.FAUCET_SENDER = "zallet";
 process.env.ZALLET_ACCOUNT = "11111111-2222-3333-4444-555555555555";
 process.env.ZALLET_ADDRESS = "utest1faucetunifiedaddressfixture";

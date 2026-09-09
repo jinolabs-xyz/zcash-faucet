@@ -159,6 +159,12 @@ async function fromHosh(timeoutMs: number): Promise<number | null> {
  * fine for balances and skipped here, once in the log per endpoint, and an operator with
  * only such endpoints runs the gate on hosh alone, failing closed when hosh is dark, the
  * way it did before plain gRPC worked.
+ *
+ * WHAT THIS CANNOT SEE: independence is a fact about who runs the box, and no URL carries
+ * it. An operator's OWN Zaino behind a public TLS name (`https://zaino.myfaucet.example`)
+ * passes every rule here and is still their own node. No document recommends that shape,
+ * and CONFIGURATION.md says not to build it; this predicate closes the shape the docs do
+ * recommend and fails closed on anything it cannot classify.
  */
 export function isIndependentTipEndpoint(endpoint: string): boolean {
   let url: URL;
@@ -168,15 +174,34 @@ export function isIndependentTipEndpoint(endpoint: string): boolean {
     return false;
   }
   if (!targetFor(endpoint).tls) return false;
-  const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
-  if (host === "localhost" || host.endsWith(".local") || host.endsWith(".internal") || host.endsWith(".localhost")) return false;
-  if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
-    const [a, b] = host.split(".").map(Number);
-    if (a === 10 || a === 127 || a === 0 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127)) return false;
-    return true;
+  // Brackets off an IPv6 literal, a trailing dot off a fully qualified name (`zaino.local.`
+  // is the same place as `zaino.local`), and case folded.
+  const host = url.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
+  if (host === "localhost" || /\.(local|internal|localhost|lan|home|home\.arpa|intranet|corp|onion)$/.test(host)) return false;
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) return isPublicIpv4(host);
+  if (host.includes(":")) {
+    // An IPv4-mapped address is the IPv4 address, whatever the notation: `::ffff:10.0.0.1`
+    // arrives from the URL parser as `::ffff:a00:1`.
+    const mapped = /^::ffff:(?:(\d+\.\d+\.\d+\.\d+)|([0-9a-f]{1,4}):([0-9a-f]{1,4}))$/.exec(host);
+    if (mapped) {
+      if (mapped[1]) return isPublicIpv4(mapped[1]);
+      const hi = parseInt(mapped[2], 16), lo = parseInt(mapped[3], 16);
+      return isPublicIpv4(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`);
+    }
+    // Loopback, unspecified, unique-local (fc00::/7), link-local (fe80::/10), the old
+    // site-local (fec0::/10), NAT64 (64:ff9b::/96), documentation (2001:db8::/32).
+    return !(
+      host === "::1" || host === "::" || /^f[cd]/.test(host) || /^fe[89ab]/.test(host) || /^fe[c-f]/.test(host) ||
+      host.startsWith("64:ff9b:") || host.startsWith("2001:db8:")
+    );
   }
-  if (host.includes(":")) return !(host === "::1" || host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe80"));
   return host.includes(".");
+}
+
+function isPublicIpv4(dotted: string): boolean {
+  const [a, b] = dotted.split(".").map(Number);
+  return !(a === 10 || a === 127 || a === 0 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) ||
+    (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127));
 }
 
 const skippedEndpoints = new Set<string>();
@@ -240,7 +265,7 @@ export async function fetchNetworkTipWithin(
     if (isIndependentTipEndpoint(e)) return true;
     if (!skippedEndpoints.has(e)) {
       skippedEndpoints.add(e);
-      console.warn(`[externalTip] ${e} is not a public third party (plaintext, private, or a local name), so it serves balances but never the tip oracle; the gate runs on hosh alone when that is the only endpoint`);
+      console.warn(`[externalTip] ${e} is not a public third party (plaintext, private, or a local name), so it serves balances but never the tip oracle's fallback; the gate runs on hosh alone when that is the only endpoint`);
     }
     return false;
   });
@@ -327,8 +352,18 @@ async function refresh(waiveGap = false): Promise<void> {
   }
 }
 
-/** Kick an initial fetch at boot so the first readiness check has a value. */
+let bootChecked = false;
+
+/** Kick an initial fetch at boot so the first readiness check has a value. Also the
+ *  moment to say, once, that no configured endpoint can back hosh up, rather than one
+ *  warning at a time mid-outage. */
 export function warmExternalTip(): Promise<void> {
+  if (!bootChecked) {
+    bootChecked = true;
+    if (!config.lightwalletdEndpoints.some(isIndependentTipEndpoint)) {
+      console.warn(`[externalTip] no configured LIGHTWALLETD_ENDPOINT is a public third party (${config.lightwalletdEndpoints.join(", ")}), so the tip oracle has no fallback: drips are refused whenever hosh is unreachable`);
+    }
+  }
   return refresh();
 }
 
