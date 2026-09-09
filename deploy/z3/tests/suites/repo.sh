@@ -322,6 +322,12 @@ check "and says what it has been doing" "grep -q 'probed NOTHING' '$T/nourl.log'
 check "the named off switch exits 0 with no URL" "[ $? -eq 0 ] && grep -q 'deliberately off' '$T/off1.log'"
 ( cd "$REPO" && SMOKE_URL="https://example.invalid" SMOKE_DISABLED="1" bash "$T/probe-step.sh" > "$T/off2.log" 2>&1 )
 check "and ALSO with a URL set, which is when a maintenance window needs it" "[ $? -eq 0 ] && grep -q 'deliberately off' '$T/off2.log'"
+# Caddy 308s :80 to :443 and fetch follows redirects, so an http origin passes every
+# faucet check while the certificate check is skipped: off-box TLS monitoring absent for
+# ever behind a green run, from one mistyped variable.
+( cd "$REPO" && SMOKE_URL="http://faucet.example.org" SMOKE_DISABLED="" bash "$T/probe-step.sh" > "$T/http.log" 2>&1 )
+check "an http FAUCET_LIVE_URL FAILS the step rather than skipping the certificate check" \
+  "[ $? -ne 0 ] && grep -q 'which is not https' '$T/http.log'"
 
 # The page step, run for real against a stub gh/curl. This is the 30-minute rule.
 mkdir -p "$T/bin"

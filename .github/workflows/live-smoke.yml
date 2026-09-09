@@ -72,6 +72,16 @@ jobs:
             echo "Set the repository variable to the public origin, or set FAUCET_LIVE_SMOKE_DISABLED=1 to turn monitoring off on purpose." >&2
             exit 1
           fi
+          # AND IT HAS TO BE https. Caddy 308s :80 to :443 and fetch follows redirects, so
+          # an http:// origin is a fully green run with the certificate check silently
+          # skipped - off-box TLS monitoring absent for ever behind a passing check, from
+          # one mistyped variable (risk register #18).
+          case "$SMOKE_URL" in
+            https://*) ;;
+            *) echo "FAUCET_LIVE_URL is '$SMOKE_URL', which is not https, so the certificate check would be skipped on every run." >&2
+               echo "Point it at the https origin. The faucet checks would still pass through the redirect, which is exactly why this refuses." >&2
+               exit 1 ;;
+          esac
           node scripts/live-probe.mjs
       # PAGE A HUMAN, AND ONLY ON A REAL OUTAGE. The on-box watchdog pages after 30
       # minutes of not-ready, but it cannot page when the box itself is dead, so this is

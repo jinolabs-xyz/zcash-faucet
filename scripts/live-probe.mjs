@@ -86,9 +86,15 @@ const TIMEOUT_MS = Number(process.env.SMOKE_TIMEOUT_MS ?? 15000);
 // Actions hands an unset repository variable: Number("") is 0, so the check passed green
 // with a threshold of zero. "banana" already failed closed (NaN, always FAIL); this makes
 // "" fail closed too, the way MAX_HATCH_DAYS above does.
-const TLS_MIN_DAYS = Number.isFinite(Number(process.env.SMOKE_TLS_MIN_DAYS))
-  && String(process.env.SMOKE_TLS_MIN_DAYS ?? "").trim() !== ""
-  ? Number(process.env.SMOKE_TLS_MIN_DAYS) : 21;
+// `?? 21` does not catch the EMPTY STRING, and an empty string is exactly what GitHub
+// Actions hands an unset repository variable: Number("") is 0, so the check passed green
+// with a threshold of zero. A NEGATIVE one is the same hole with extra typing, so both
+// fall back to the default rather than being honoured.
+const TLS_MIN_DAYS_RAW = Number(process.env.SMOKE_TLS_MIN_DAYS);
+const TLS_MIN_DAYS =
+  String(process.env.SMOKE_TLS_MIN_DAYS ?? "").trim() !== "" &&
+  Number.isFinite(TLS_MIN_DAYS_RAW) && TLS_MIN_DAYS_RAW >= 0
+    ? TLS_MIN_DAYS_RAW : 21;
 const RETRY_ATTEMPTS = Math.max(1, Number(process.env.SMOKE_ATTEMPTS ?? 3));
 const RETRY_DELAY_MS = Number(process.env.SMOKE_RETRY_DELAY_MS ?? 30000);
 
@@ -228,23 +234,48 @@ async function checkTlsExpiry(faucetReachable = false) {
     // dead" read identically at 3am. CERT_HAS_EXPIRED also means caddy may have fallen
     // back to its internal issuer after ACME gave up, which is the same fix.
     const code = handshake.err?.code ?? "";
-    // A HANDSHAKE FAILURE BESIDE A WORKING FETCH IS THE PROBE, NOT THE BOX. The faucet
-    // checks go to this same https origin; if they got answers, TLS is fine and this is a
-    // runner-side blip. The explorer check downgrades unreachable to cannot-verify for
-    // exactly this reason, and a false page costs the same trust a missed one does.
-    if (code !== "CERT_HAS_EXPIRED" && faucetReachable) {
+    // A TRANSPORT failure beside a working fetch is the probe, not the box: a reset or a
+    // refused connection on one socket while another carried a whole HTTP exchange is a
+    // runner-side blip, and a false page costs the same trust a missed one does.
+    //
+    // AN ALLOWLIST, NOT A DENYLIST. The first version downgraded everything except
+    // CERT_HAS_EXPIRED, which swept up DEPTH_ZERO_SELF_SIGNED_CERT - Caddy falling back to
+    // its internal issuer after ACME gave up, named three lines down as a real failure
+    // mode - and printed `live-probe: healthy` on a site no browser can load. Measured.
+    // A certificate fault is never a blip, whatever the fetches did: undici reuses a
+    // pooled keep-alive socket and never re-handshakes, so fetch and tls.connect really
+    // do disagree, and fetch is the one that is wrong.
+    const TRANSPORT_BLIPS = ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH", "EPIPE", "EAI_AGAIN"];
+    if (faucetReachable && TRANSPORT_BLIPS.includes(code)) {
       console.log(`  --: TLS handshake failed (${code || handshake.err?.message || "no answer"}) but the faucet answered over the same origin, so this is the probe, not the certificate`);
       return count();
     }
-    const why = code === "CERT_HAS_EXPIRED"
-      ? "the certificate has ALREADY EXPIRED, so the handshake is refused. Caddy renews at about 30 days, " +
+    // NOT anchored: the code for an untrusted leaf is DEPTH_ZERO_SELF_SIGNED_CERT, so a
+    // `^SELF_SIGNED` test misses the commonest one of these.
+    const CERT_FAULTS = /(CERT|SELF_SIGNED|UNABLE_TO_VERIFY|ERR_TLS)/;
+    let why;
+    if (code === "CERT_HAS_EXPIRED") {
+      why = "the certificate has ALREADY EXPIRED, so the handshake is refused. Caddy renews at about 30 days, " +
         "so renewal stopped long ago: check `docker logs` on the caddy container, that ports 80 and 443 reach " +
-        "the box, and DNS"
-      : `${code || handshake.err?.message || "no answer"} - this is a connection failure, not necessarily the certificate`;
+        "the box, and DNS";
+    } else if (CERT_FAULTS.test(code)) {
+      // Untrusted chain, wrong name, internal issuer. Definitively the certificate, and
+      // browser-fatal; saying "not necessarily the certificate" sent the operator to
+      // check the box at 3am for something that is not the box.
+      why = `${code} - the certificate is there but not usable (a wrong name, or an issuer nobody trusts, ` +
+        "which is what Caddy falls back to when ACME has given up). Same place to look: `docker logs` on the " +
+        "caddy container, ports 80 and 443, and DNS";
+    } else {
+      why = `${code || handshake.err?.message || "no answer"} - this is a connection failure, not necessarily the certificate`;
+    }
     ok("the TLS certificate can be read", false, `${url.host}: ${why}`);
     return count();
   }
   const expiresAt = Date.parse(cert.valid_to);
+  // UNTESTED ON PURPOSE, and said so rather than left to be discovered: a real server
+  // cannot be made to present an unparseable valid_to, and the only way to reach this
+  // would be a test-only switch in the shipped script. It fails closed, which is the
+  // safe direction if a node release ever changes the shape of this field.
   if (Number.isNaN(expiresAt)) {
     ok("the TLS certificate carries an expiry", false, `unparseable valid_to ${JSON.stringify(cert.valid_to)}`);
     return count();
@@ -253,6 +284,12 @@ async function checkTlsExpiry(faucetReachable = false) {
   // FAILS at exactly 21, which is a day earlier than "fewer than 21 remain" reads - the
   // safe direction, and now said the same way in the name, the docs and here.
   const days = Math.floor((expiresAt - Date.now()) / 86_400_000);
+  if (days < 0) {
+    ok("the TLS certificate is still valid", false,
+      `it ALREADY EXPIRED ${-days} day(s) ago (${cert.valid_to}). Caddy renews at about 30 days, so renewal ` +
+      "stopped long ago: check `docker logs` on the caddy container, that ports 80 and 443 reach the box, and DNS");
+    return count();
+  }
   ok(
     `the TLS certificate has more than ${TLS_MIN_DAYS} whole days left`,
     days > TLS_MIN_DAYS,
