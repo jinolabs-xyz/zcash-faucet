@@ -34,8 +34,17 @@ deploy, and a rollback rolls back code, not data.
 | Code | Means | Rolled back? | Page someone? |
 |---|---|---|---|
 | 0 | the new build is live and healthy | no need | no |
+| 3 | the new build is live and healthy but **could not be verified** against the commit, or could not be probed | no | once |
 | 2 | **your change did not ship**, and the faucet is serving anyway | yes, or nothing was swapped | no |
 | 1 | the faucet **may be down**, and the reason decides what to do next | see below | yes |
+
+`auto-deploy.sh` reads these: 0 and 3 record the commit as processed (3 pages once and
+the next tick is a no-op); 2 and 1 leave it unprocessed and are retried, and after
+three failures in a row on the same commit the retry backs off to every 30 minutes,
+exiting non-zero each tick so the unit stays red until a fix is pushed
+(`AUTODEPLOY_BACKOFF_AFTER`, `AUTODEPLOY_BACKOFF_SECONDS`). Before 2026-09-09, 3 was a 2,
+and an unverified-but-live deploy was rebuilt every two minutes for as long as the
+manifest check was down.
 
 Exit 1 has three causes and they need different responses, so read the log rather
 than assuming a failed rollback:
@@ -78,8 +87,15 @@ Set `REDEPLOY_FAUCET_URL` only if you publish a port yourself, and point it at
 something that answers 200 without a redirect.
 
 If the probe cannot run at all (no URL, and `docker compose exec` fails), the
-script says `NOT VERIFIED`, changes nothing, and exits 2. It does not roll
-back, because being unable to ask is not evidence of a bad build.
+script asks docker two things through a different mechanism than `exec`. Is the
+faucet container running at all? Not running is the would-not-start case: it
+rolls back, and if the old build then answers the probe (the common shape, a
+crash-looping new build) that is exit 2; if the probe mechanism itself is broken
+the rollback cannot be verified either and that is exit 1, a page. Is the
+running container the build we just made? A survivor compose declined to
+recreate is the old build serving fine and shipped nothing: exit 2, no
+rollback. Only a running container that IS the new build gets `NOT VERIFIED`,
+nothing changed, exit 3: being unable to ask it is not evidence of a bad build.
 
 ## Why the health gate is two-tier
 

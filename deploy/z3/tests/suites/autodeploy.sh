@@ -375,3 +375,143 @@ ad_advance src/page.tsx
 bash "$AD" > "$T/unknown.log" 2>&1
 check "exits 0" "[ $? -eq 0 ]"
 check "says it fell back rather than doing it silently" "grep -q 'falling back to HEAD' '$T/unknown.log'"
+
+# ── THE EXIT-2 AMPLIFIER (risk register #13) ─────────────────────────────────────────────
+# redeploy's 2 means shipped and healthy but unverified against the commit. It took the
+# same early exit as 1, so the baseline never advanced and every tick rebuilt, recreated
+# and paged for as long as the manifest check was down. And a commit that genuinely
+# fails every time was retried, rebuilt and paged every two minutes, forever.
+
+echo "== auto-deploy: redeploy exit 3 (SHIPPED, unverified) pages once and ADVANCES the baseline"
+# redeploy spends 3 on a live, healthy build nobody could compare to the commit. The first
+# version of this read redeploy's 2 as that, and 2 also covers a build that does not
+# compile: it would have recorded an unshipped commit as processed (review).
+ad_env
+export AUTODEPLOY_STATE_FILE="$T/last-processed"
+ad_advance deploy/z3/watchdog.sh
+bash "$AD" > /dev/null 2>&1
+ad_advance src/page.tsx
+# Two failures first, so the record exists and the shipped tick has something to clear.
+STUB_REDEPLOY_RC=1 bash "$AD" > /dev/null 2>&1
+STUB_REDEPLOY_RC=1 bash "$AD" > /dev/null 2>&1
+check "precondition: a failure record exists" "[ -s '$T/last-processed.failures' ]"
+: > "$REDEPLOY_LOG"
+STUB_REDEPLOY_RC=3 bash "$AD" > "$T/unverified.log" 2>&1
+check "the tick exits 3, so the unit pages" "[ $? -eq 3 ]"
+check "and says it shipped, recorded the commit, and will page once" "grep -q 'shipped but UNVERIFIED: recorded' '$T/unverified.log'"
+check "the baseline ADVANCED to the shipped commit" "[ \"\$(cat '$T/last-processed')\" = \"\$(git -C '$T/repo' rev-parse origin/main)\" ]"
+check "and the failure record is cleared" "[ ! -e '$T/last-processed.failures' ]"
+: > "$REDEPLOY_LOG"
+STUB_REDEPLOY_RC=3 bash "$AD" > "$T/unverified2.log" 2>&1
+check "the next tick is a no-op: exit 0" "[ $? -eq 0 ]"
+check "that ran no redeploy" "[ ! -s '$REDEPLOY_LOG' ]"
+check "and said nothing to do" "grep -q 'nothing to do' '$T/unverified2.log'"
+
+echo "== auto-deploy: redeploy exit 2 (did NOT ship) is a failure to retry, never recorded as processed"
+ad_env
+export AUTODEPLOY_STATE_FILE="$T/last-processed"
+ad_advance deploy/z3/watchdog.sh
+bash "$AD" > /dev/null 2>&1
+before="$(cat "$T/last-processed")"
+ad_advance src/page.tsx
+STUB_REDEPLOY_RC=2 bash "$AD" > "$T/notshipped.log" 2>&1
+check "exits 2, redeploy's code" "[ $? -eq 2 ]"
+check "the baseline did NOT move" "[ \"\$(cat '$T/last-processed')\" = '$before' ]"
+check "and it counted as a failure" "grep -q ' 1 ' '$T/last-processed.failures'"
+check "and never claimed to have shipped" "! grep -q 'shipped but UNVERIFIED' '$T/notshipped.log'"
+
+echo "== auto-deploy: app shipped (3) but ops FAILED is a failure of the box, exit 1, not recorded"
+ad_env
+export AUTODEPLOY_STATE_FILE="$T/last-processed"
+ad_advance deploy/z3/watchdog.sh
+bash "$AD" > /dev/null 2>&1
+before="$(cat "$T/last-processed")"
+ad_advance src/page.tsx deploy/z3/alert.sh
+STUB_INSTALLOPS_RC=1 STUB_REDEPLOY_RC=3 bash "$AD" > "$T/mixed.log" 2>&1
+check "exits 1: the ops half's failure is not masked by the app half's softer code" "[ $? -eq 1 ]"
+check "the baseline did NOT move" "[ \"\$(cat '$T/last-processed')\" = '$before' ]"
+check "it counted as a failure, so it can back off" "grep -q ' 1 ' '$T/last-processed.failures'"
+check "and the log says which half failed" "grep -q 'ops or miner half failed' '$T/mixed.log'"
+
+echo "== auto-deploy: a failed install of install-ops.sh itself counts, so it can back off too"
+# A read-only install dir. Mode bits do not bind root, so as root the dir is replaced by
+# a FILE of the same name, which install cannot write into either.
+ad_env
+export AUTODEPLOY_STATE_FILE="$T/last-processed" AUTODEPLOY_BACKOFF_AFTER=2
+ad_advance deploy/z3/watchdog.sh
+bash "$AD" > /dev/null 2>&1
+ad_advance deploy/z3/alert.sh
+if [ "$(id -u)" = "0" ]; then rm -rf "$T/install"; : > "$T/install"; else chmod 555 "$T/install"; fi
+bash "$AD" > /dev/null 2>&1
+bash "$AD" > /dev/null 2>&1
+bash "$AD" > "$T/installfail.log" 2>&1
+rc_if=$?
+if [ "$(id -u)" = "0" ]; then rm -f "$T/install"; mkdir -p "$T/install"; else chmod 755 "$T/install"; fi
+check "the third tick backed off" "[ $rc_if -ne 0 ] && grep -q 'backing off' '$T/installfail.log'"
+unset AUTODEPLOY_BACKOFF_AFTER
+
+echo "== auto-deploy: redeploy exit 2 beside a FAILED ops half exits 1, not the can-wait-until-morning 2"
+ad_env
+export AUTODEPLOY_STATE_FILE="$T/last-processed"
+ad_advance deploy/z3/watchdog.sh
+bash "$AD" > /dev/null 2>&1
+ad_advance src/page.tsx deploy/z3/alert.sh
+STUB_INSTALLOPS_RC=1 STUB_REDEPLOY_RC=2 bash "$AD" > "$T/mixed2.log" 2>&1
+check "exits 1" "[ $? -eq 1 ]"
+check "and counted the failure" "grep -q ' 1 ' '$T/last-processed.failures'"
+
+echo "== auto-deploy: redeploy exit 1 (NOT shipped) keeps the baseline, and a commit failing every time BACKS OFF"
+ad_env
+export AUTODEPLOY_STATE_FILE="$T/last-processed" AUTODEPLOY_BACKOFF_AFTER=3 AUTODEPLOY_BACKOFF_SECONDS=1800
+ad_advance deploy/z3/watchdog.sh
+bash "$AD" > /dev/null 2>&1
+before="$(cat "$T/last-processed")"
+ad_advance src/page.tsx
+for i in 1 2 3; do
+  : > "$REDEPLOY_LOG"
+  STUB_REDEPLOY_RC=1 bash "$AD" > "$T/fail$i.log" 2>&1
+  check "failure $i exits 1 and pages" "[ $? -eq 1 ]"
+  check "failure $i ran redeploy (a real retry)" "[ -s '$REDEPLOY_LOG' ]"
+done
+check "the baseline did NOT move" "[ \"\$(cat '$T/last-processed')\" = '$before' ]"
+check "the failure record names the commit and the count" "grep -q \"^\$(git -C '$T/repo' rev-parse origin/main) 3 \" '$T/last-processed.failures'"
+: > "$REDEPLOY_LOG"
+STUB_REDEPLOY_RC=1 bash "$AD" > "$T/backoff.log" 2>&1
+check "the fourth tick BACKS OFF, exiting non-zero so the unit stays red (the page is deduped hourly)" "[ $? -eq 1 ]"
+check "no redeploy ran" "[ ! -s '$REDEPLOY_LOG' ]"
+check "and the log says so, with the count and the wait" "grep -qE 'backing off: [0-9a-f]{7} has failed 3 times in a row, next retry in [0-9]+s' '$T/backoff.log'"
+check "the wait is inside the window, never a nonsense number" "[ \"\$(grep -oE 'next retry in [0-9]+s' '$T/backoff.log' | grep -oE '[0-9]+')\" -le 1800 ]"
+# A clock stepped BACKWARDS: the record's epoch is an hour in the future. Without the
+# clamp the wait printed 5400s and the backoff outlived its window by the skew.
+sha_now="$(git -C "$T/repo" rev-parse origin/main)"
+printf '%s 3 %s\n' "$sha_now" "$(( $(date -u +%s) + 3600 ))" > "$T/last-processed.failures"
+: > "$REDEPLOY_LOG"
+STUB_REDEPLOY_RC=1 bash "$AD" > "$T/skew.log" 2>&1
+check "with the record stamped in the future the tick still backs off" "[ $? -eq 1 ] && [ ! -s '$REDEPLOY_LOG' ]"
+check "and prints a wait of exactly the window, not window plus skew" "grep -q 'next retry in 1800s' '$T/skew.log'"
+# The window passes: the retry runs again.
+: > "$REDEPLOY_LOG"
+AUTODEPLOY_BACKOFF_SECONDS=0 STUB_REDEPLOY_RC=1 bash "$AD" > "$T/retry.log" 2>&1
+check "after the window a retry runs and fails again" "[ $? -eq 1 ] && [ -s '$REDEPLOY_LOG' ]"
+check "and the count went to 4" "grep -q ' 4 ' '$T/last-processed.failures'"
+# A new commit resets the count: it is tried at once.
+ad_advance src/page.tsx
+: > "$REDEPLOY_LOG"
+STUB_REDEPLOY_RC=0 bash "$AD" > "$T/fixed.log" 2>&1
+check "a NEW commit is tried immediately, whatever the old one's count" "[ $? -eq 0 ] && [ -s '$REDEPLOY_LOG' ]"
+check "a success clears the failure record" "[ ! -e '$T/last-processed.failures' ]"
+check "and advances the baseline" "[ \"\$(cat '$T/last-processed')\" = \"\$(git -C '$T/repo' rev-parse origin/main)\" ]"
+
+echo "== auto-deploy: an ops-only failure backs off the same way"
+ad_env
+export AUTODEPLOY_STATE_FILE="$T/last-processed" AUTODEPLOY_BACKOFF_AFTER=2
+ad_advance deploy/z3/watchdog.sh
+bash "$AD" > /dev/null 2>&1
+ad_advance deploy/z3/alert.sh
+STUB_INSTALLOPS_RC=1 bash "$AD" > /dev/null 2>&1
+STUB_INSTALLOPS_RC=1 bash "$AD" > /dev/null 2>&1
+: > "$INSTALLOPS_LOG"
+STUB_INSTALLOPS_RC=1 bash "$AD" > "$T/opsbackoff.log" 2>&1
+check "third tick backs off, non-zero" "[ $? -eq 1 ] && grep -q 'backing off' '$T/opsbackoff.log'"
+check "and did not run install-ops" "[ ! -s '$INSTALLOPS_LOG' ]"
+unset AUTODEPLOY_BACKOFF_AFTER AUTODEPLOY_BACKOFF_SECONDS

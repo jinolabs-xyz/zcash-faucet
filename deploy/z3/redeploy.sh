@@ -10,6 +10,8 @@
 # Exit codes matter for anything scripting this, and the split is about
 # whether to wake someone:
 #   0  the new build is live and healthy
+#   3  the new build is live and healthy but could NOT be verified against the
+#      commit, or could not be probed at all. Shipped; one page, once.
 #   2  the change did NOT ship and the faucet is serving anyway, either
 #      because nothing was swapped (bad pull, failed build) or because the
 #      rollback put the old build back. Nobody needs to be paged for this.
@@ -54,6 +56,9 @@ HEALTH_INTERVAL="${REDEPLOY_HEALTH_INTERVAL:-3}"
 Z3_NETWORK_NAME="${Z3_NETWORK_NAME:-z3-testnet}"
 
 log() { echo "$(date -u +%FT%TZ) redeploy: $*"; }
+# Exit codes: 0 shipped and healthy; 1 the faucet may be down; 2 did NOT ship and the
+# faucet is serving (rolled back, or nothing was swapped); 3 SHIPPED but unverified (the
+# new build is live and healthy, and nobody could compare it to the commit or probe it).
 # die is for the faucet-may-be-down cases only, because exit 1 is what a
 # pager should react to.
 die() { log "ERROR: $*"; exit 1; }
@@ -440,14 +445,20 @@ if wait_healthy "$want_ready"; then
   assert_running_is "$new" "the image we just built"
   case $? in
     0) if [ "$manifest_unverified" = "1" ]; then
-         # Healthy, and running an image nobody could compare to the commit. That is
-         # exit 2's existing meaning here and it must not collapse into success: the
-         # whole failure this check was added for looked exactly like a healthy deploy.
+         # Healthy, and running an image nobody could compare to the commit. It must
+         # not collapse into success: the whole failure this check was added for looked
+         # exactly like a healthy deploy. And it is NOT a 2 either: 2 means "did not
+         # ship", and this DID ship. auto-deploy used to read every 2 as "retry next
+         # tick", so an unverified-but-live deploy was rebuilt every two minutes for as
+         # long as the manifest check was down; then it read every 2 as "shipped", which
+         # would have recorded a commit that did not compile as processed (risk register
+         # #13, both halves). The two outcomes have different codes now: 3 is shipped
+         # and unverified, and only 3 advances auto-deploy's baseline.
          log "deployed and healthy but UNVERIFIED against the commit: $new"
-         exit 2
+         exit 3
        fi
        log "deployed and healthy: $new" ; exit 0 ;;
-    2) log "the build is healthy but unverified, treat this deploy as incomplete" ; exit 2 ;;
+    2) log "the build is healthy but unverified (its image could not be read), treat this deploy as incomplete" ; exit 3 ;;
     *) log "the health gate passed on code that is not this build, so this deploy shipped nothing"
        exit 1 ;;
   esac
@@ -455,10 +466,31 @@ fi
 
 # A gate failure only means something when the probe could actually run.
 if ! probe_usable; then
-  log "NOT VERIFIED: could not probe the app at all (no $FAUCET_URL and docker compose exec failed)"
-  log "The new build is running and may be fine. Nothing was rolled back."
+  # `compose exec` failing cannot tell "the probe mechanism is broken" from "the new
+  # container is not running": a build that starts and crash-loops fails exec too, and
+  # this path used to call that shipped (review of #13, round 2: exit 3, commit recorded,
+  # unit green, site 502). Ask through a DIFFERENT mechanism than exec: is the faucet
+  # container running at all. Not running is the would-not-start case, rolled back.
+  cid="$(compose ps -q faucet 2>/dev/null | head -n1)"
+  running="$([ -n "$cid" ] && docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null || echo unknown)"
+  if [ "$running" != "true" ]; then
+    log "the new build is NOT running (container state: ${running:-none}) and the probe could not be used, rolling back"
+    do_rollback || die "rollback failed after the new build did not come up, the faucet may be down"
+    not_shipped "the new build did not come up (and the probe could not be used to ask why)"
+  fi
+  # And is the running container THE NEW BUILD, not a survivor compose declined to
+  # recreate (the #278/#279 shape assert_running_is exists for)? A running old build is
+  # serving fine and shipped nothing: did-not-ship, no rollback needed.
+  running_id="$(running_image_id)"
+  new_id="$(image_id "$IMAGE")"
+  if [ -n "$running_id" ] && [ -n "$new_id" ] && [ "$running_id" != "$new_id" ]; then
+    log "the running container is $running_id, not the build $new_id: compose did not recreate it, the old build is still serving"
+    not_shipped "the new image was built but the running container is still the old one"
+  fi
+  log "NOT VERIFIED: could not probe the app at all (no REDEPLOY_FAUCET_URL and docker compose exec failed)"
+  log "The new build is running (docker says so, and it is the image we built) and may be fine. Nothing was rolled back."
   log "Set REDEPLOY_FAUCET_URL to something reachable and re-run to get a real verdict."
-  exit 2
+  exit 3
 fi
 
 # Before rolling back, ask WHY once more and read the app's own reason. A rollback

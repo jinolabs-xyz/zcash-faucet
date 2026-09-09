@@ -200,7 +200,7 @@ check "and is UNVERIFIED rather than a claim the box is broken" \
   "grep -q 'POST-CONDITION UNVERIFIED' '$T/nominer.log'"
 
 echo "== bring-to-spec: known-bad exits 1 and cannot-verify exits 2, exactly"
-# Matching redeploy.sh rather than quietly differing from it. The script already
+# Its own two-state vocabulary (redeploy.sh has a third code of its own). The script already
 # distinguished these two states in its PROSE and collapsed them in its exit code, which
 # throws away the more useful of the two facts.
 spec_env

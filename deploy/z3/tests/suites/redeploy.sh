@@ -336,15 +336,59 @@ cat > "$T/bin/docker" <<'DOCKER'
 #!/usr/bin/env bash
 echo "docker $*" >> "$STUB_LOG"
 case "$*" in
-  *"exec -T faucet"*) exit 1 ;;
+  # STUB_EXEC_RECOVERS_AFTER_UP=1: exec fails until the SECOND `compose up -d`, the
+  # rollback's (the first starts the crash-looping new build, which fails exec; the old
+  # build the rollback brings back answers it again).
+  # $T is the SUITE's variable and is not exported into this script; the scratch dir is
+  # derived from STUB_LOG, which is. (Reading "$T/ups" here silently counted nothing.)
+  *"exec -T faucet"*) if [ "${STUB_EXEC_RECOVERS_AFTER_UP:-0}" = "1" ] && [ "$(cat "${STUB_LOG%/*}/ups" 2>/dev/null || echo 0)" -ge 2 ]; then exit 0; fi; exit 1 ;;
+  *"up -d"*) n=$(( $(cat "${STUB_LOG%/*}/ups" 2>/dev/null || echo 0) + 1 )); echo "$n" > "${STUB_LOG%/*}/ups"; exit 0 ;;
+  *"inspect -f {{.Image}}"*) echo "${STUB_RUNNING_IMAGE:-sha256:old}" ;;
   *image*inspect*) echo "sha256:old" ;;
+  *"ps -q faucet"*) echo "cid-running" ;;
+  *"State.Running"*) echo "${STUB_FAUCET_RUNNING:-true}" ;;
   *) exit 0 ;;
 esac
 DOCKER
 chmod +x "$T/bin/docker"
+rm -f "$T/ups"
 bash "$REDEPLOY" --no-pull > "$T/unprobe.log" 2>&1
 rc_unprobe=$?
-check "exits 2, not 1" "[ $rc_unprobe -eq 2 ]"
+check "exits 3: shipped but unverified, not 1 and not the did-not-ship 2" "[ $rc_unprobe -eq 3 ]"
+check "and said docker confirms the container is running, and that it is the built image" "grep -q 'is running (docker says so, and it is the image we built)' '$T/unprobe.log'"
+check "and the headline names the variable, not an empty string" "grep -q 'no REDEPLOY_FAUCET_URL and' '$T/unprobe.log'"
+
+echo "== redeploy: probe unusable, a container running, but it is NOT the new build: did not ship, no rollback"
+# compose declined to recreate (the #278/#279 shape): the old build is serving fine and
+# shipped nothing. Before this the running check alone read it as shipped, exit 3.
+STUB_RUNNING_IMAGE="sha256:survivor" bash "$REDEPLOY" --no-pull > "$T/unprobe-survivor.log" 2>&1
+rc_surv=$?
+check "exits 2, did not ship" "[ $rc_surv -eq 2 ]"
+check "names both images and says compose did not recreate" "grep -q 'is sha256:survivor, not the build sha256:old: compose did not recreate it' '$T/unprobe-survivor.log'"
+check "and did not roll back a serving old build" "! grep -q 'rolling back to' '$T/unprobe-survivor.log'"
+
+echo "== redeploy: probe unusable AND the container is not running is DID NOT SHIP, rolled back"
+# exec fails for a crash-looping container just as it fails for a broken probe, and this
+# path used to exit 3 (shipped) for both: with auto-deploy advancing its baseline on 3
+# that recorded an unshipped commit and left the unit green over a 502 (review of #13).
+STUB_FAUCET_RUNNING=false bash "$REDEPLOY" --no-pull > "$T/unprobe-dead.log" 2>&1
+rc_dead=$?
+# Here the probe mechanism itself is broken, so the rollback's own health check cannot
+# confirm the old build is serving either: that is exit 1, "the faucet may be down", a
+# page, and auto-deploy retries it. Never 3, which would record the commit as shipped.
+check "exits 1 when the probe is truly broken: rolled back, and the rollback could not be verified either" "[ $rc_dead -eq 1 ]"
+check "says the build is not running and rolled back" "grep -q 'is NOT running (container state: false)' '$T/unprobe-dead.log' && grep -q 'rolling back to' '$T/unprobe-dead.log'"
+check "and never claims the new build may be fine, and never exits 3" "! grep -q 'may be fine' '$T/unprobe-dead.log' && [ $rc_dead -ne 3 ]"
+
+echo "== redeploy: the COMMON crash-loop shape: exec failed because the new build was dead, the rolled-back old build answers it"
+# The production-dominant outcome: a crash-looping new container makes exec fail; after
+# the rollback the old image is up, exec works again, the rollback verifies, exit 2.
+rm -f "$T/ups"
+STUB_EXEC_RECOVERS_AFTER_UP=1 STUB_FAUCET_RUNNING=false bash "$REDEPLOY" --no-pull > "$T/unprobe-crashloop.log" 2>&1
+rc_cl=$?
+check "exits 2: rolled back and verified, did not ship" "[ $rc_cl -eq 2 ]"
+check "the rollback was attempted and the old build came back" "grep -q 'rolling back to' '$T/unprobe-crashloop.log' && grep -q 'did NOT ship' '$T/unprobe-crashloop.log'"
+check "and no page-worthy failure line" "! grep -q 'rollback failed' '$T/unprobe-crashloop.log' && [ $rc_cl -ne 1 ] && [ $rc_cl -ne 3 ]"
 check "says NOT VERIFIED" "grep -q 'NOT VERIFIED' '$T/unprobe.log'"
 check "does not claim the faucet may be down" "! grep -q 'may be down' '$T/unprobe.log'"
 check "did not roll back on an unprobeable app" "! grep -q 'rolling back' '$T/unprobe.log'"
@@ -390,7 +434,7 @@ echo "sha256:old" > "$STUB_IMAGES/zcash-faucet_latest"
 echo "sha256:old" > "$STUB_IMAGES/.running"
 STUB_INSPECT_FAIL=1 bash "$REDEPLOY" > "$T/unverified.log" 2>&1
 rc=$?
-check "an unreadable running image is UNVERIFIED, exit 2 not 1" "[ $rc -eq 2 ]"
+check "an unreadable running image is UNVERIFIED, exit 3: shipped, not comparable" "[ $rc -eq 3 ]"
 check "and is reported as UNVERIFIED rather than as a failed deploy" \
   "grep -q 'POST-CONDITION UNVERIFIED' '$T/unverified.log'"
 check "and does not claim deployed and healthy" \
@@ -518,7 +562,7 @@ touch "$STUB_HEALTH" "$STUB_READY"
 STUB_MANIFEST_RC=2 bash "$REDEPLOY" > "$T/cannot.log" 2>&1
 rc=$?
 check "an uncomparable image still DEPLOYS, it does not refuse" "grep -q 'up -d faucet' '$T/stub.log'"
-check "but the deploy ends at 2, not 0" "[ $rc -eq 2 ]"
+check "but the deploy ends at 3 (shipped, unverified), not 0 and not the did-not-ship 2" "[ $rc -eq 3 ]"
 check "and says UNVERIFIED rather than healthy" "grep -qi 'UNVERIFIED' '$T/cannot.log'"
 
 echo "== redeploy: an ABSENT verifier is unknown, not fine"
@@ -526,7 +570,7 @@ echo "== redeploy: an ABSENT verifier is unknown, not fine"
 redeploy_env
 touch "$STUB_HEALTH" "$STUB_READY"
 REDEPLOY_VERIFY_MANIFEST="$T/bin/not-a-real-verifier" bash "$REDEPLOY" > "$T/absent.log" 2>&1
-check "an absent verifier ends the deploy at 2" "[ $? -eq 2 ]"
+check "an absent verifier ends the deploy at 3, shipped but unverified" "[ $? -eq 3 ]"
 check "and says the image was not compared" "grep -qi 'not compared\|UNVERIFIED' '$T/absent.log'"
 
 echo "== redeploy: the verifier is told which repo to compare against"

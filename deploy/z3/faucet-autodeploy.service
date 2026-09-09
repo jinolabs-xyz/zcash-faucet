@@ -9,9 +9,10 @@ Documentation=https://github.com/jinolabs-xyz/zcash-faucet
 # these two directives and neither existed here.
 #
 # The answer is yes, and it is this line plus the absence of SuccessExitStatus below:
-# redeploy.sh spends exit 2 on "deployed but not verified", auto-deploy.sh propagates it,
-# a Type=oneshot with no SuccessExitStatus treats any nonzero as failure, so the unit
-# enters failed and OnFailure fires. Do not add SuccessExitStatus here: it would convert
+# redeploy.sh spends exit 3 on "deployed but not verified" (2 is "did not ship"),
+# auto-deploy.sh propagates it once and records the commit, a Type=oneshot with no
+# SuccessExitStatus treats any nonzero as failure, so the unit enters failed and
+# OnFailure fires. Do not add SuccessExitStatus here: it would convert
 # "I could not verify the site is up" into a green deploy, which is the exact shape of
 # every false pass this tree has chased.
 #

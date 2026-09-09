@@ -49,6 +49,43 @@ fi
 REMOTE="$(git rev-parse "origin/$BRANCH")"
 [ "$LOCAL" = "$REMOTE" ] && { log "already processed $(git rev-parse --short "$REMOTE"), nothing to do"; exit 0; }
 
+# BACK OFF ON A COMMIT THAT KEEPS FAILING (risk register #13). A failed tick leaves the
+# baseline where it was so the work is retried, which is right for a blip and an
+# amplifier for a persistently bad commit: every two minutes a full rebuild, a container
+# recreate, a rollback and a page, until someone pushes a fix. After BACKOFF_AFTER
+# consecutive failures on the SAME commit the retry waits BACKOFF_SECONDS between
+# attempts, doing nothing but logging and exiting non-zero (the unit stays red and the
+# page is the hourly-deduped one it already was; the watchdog and box report carry the
+# live state). A new commit resets the count.
+FAIL_FILE="${STATE_FILE}.failures"
+BACKOFF_AFTER="${AUTODEPLOY_BACKOFF_AFTER:-3}"
+BACKOFF_SECONDS="${AUTODEPLOY_BACKOFF_SECONDS:-1800}"
+now_epoch() { date -u +%s; }
+fail_commit=""; fail_count=0; fail_last=0
+if [ -f "$FAIL_FILE" ]; then
+  read -r fail_commit fail_count fail_last < "$FAIL_FILE" 2>/dev/null || true
+  case "$fail_count" in ''|*[!0-9]*) fail_count=0 ;; esac
+  case "$fail_last" in ''|*[!0-9]*) fail_last=0 ;; esac
+fi
+[ "$fail_commit" = "$REMOTE" ] || { fail_count=0; fail_last=0; }
+since_fail=$(( $(now_epoch) - fail_last ))
+# A clock stepped backwards reads as a negative age; treat it as "just failed" so the
+# backoff neither extends past its window nor prints a nonsense wait.
+[ "$since_fail" -ge 0 ] || since_fail=0
+if [ "$fail_count" -ge "$BACKOFF_AFTER" ] && [ "$since_fail" -lt "$BACKOFF_SECONDS" ]; then
+  # NON-ZERO, on purpose: main is still undeployable, and a oneshot that exits 0 here
+  # would read green in systemctl status for the whole outage, the shape the unit file
+  # itself warns about. The page this causes is one per hour per unit (alert.sh's
+  # cooldown, #452), the same as before; what the backoff removes is the rebuild,
+  # the container recreate and the rollback every two minutes.
+  log "backing off: $(git rev-parse --short "$REMOTE") has failed $fail_count times in a row, next retry in $(( BACKOFF_SECONDS - since_fail ))s (push a fix to reset); exiting 1 so the unit stays red"
+  exit 1
+fi
+# Called on every exit path below: a failure counts, a success or a shipped-unverified
+# deploy clears the record.
+note_failure() { printf '%s %s %s\n' "$REMOTE" "$((fail_count + 1))" "$(now_epoch)" > "$FAIL_FILE"; }
+clear_failures() { rm -f "$FAIL_FILE"; }
+
 rc=0
 changed="$(git diff --name-only "$LOCAL" "$REMOTE")"
 
@@ -152,7 +189,7 @@ if [ "$ops" = "1" ]; then
   # Install the installer first, then run the INSTALLED copy, so /opt/faucet is
   # self-consistent afterwards and audit-drift has something to compare.
   install -m 755 "$REPO_DIR/deploy/z3/install-ops.sh" "$INSTALL_DIR/install-ops.sh" \
-    || { log "ERROR: could not install install-ops.sh"; exit 1; }
+    || { log "ERROR: could not install install-ops.sh"; note_failure; exit 1; }
   # THE SOURCE IS PASSED EXPLICITLY. Running the installed copy with no argument made
   # its source directory the DESTINATION, so it globbed /opt/faucet, copied files onto
   # themselves, could not see anything missing, and exited 0. That is why 19 of 25
@@ -189,13 +226,42 @@ if [ "$app" = "1" ]; then
   # redeploy's own code wins when redeploy failed, because it spends 0/1/2 to distinguish
   # a broken deploy from an unverified one and that distinction decides who gets paged.
   # Otherwise a failed ops install still fails the run.
-  [ "$app_rc" -ne 0 ] && exit "$app_rc"
+  #
+  # EXIT 3 IS SHIPPED. redeploy's 3 means the new image is serving and healthy but could
+  # not be verified against the commit or probed. The work is DONE, so the baseline
+  # advances and this exits 3 exactly once, for the page. Before, that outcome was a 2
+  # and took the same early exit as 1: the baseline stayed put and every tick for as long
+  # as the manifest check was down rebuilt the image, recreated the container and paged,
+  # the amplifier of risk register #13, seen live on the first tick after #416. redeploy's
+  # 2 is the OTHER thing, "did not ship, the faucet is serving" (a build that does not
+  # compile, a failed pull, a rollback), and that is a failure to retry, never recorded.
+  if [ "$app_rc" -eq 3 ]; then
+    if [ "$rc" -eq 0 ] && [ "$miner_rc" -eq 0 ]; then
+      printf '%s\n' "$PROCESSED" > "$STATE_FILE"
+      clear_failures
+      log "shipped but UNVERIFIED: recorded $(git rev-parse --short "$PROCESSED") as processed, exiting 3 once so the unit pages once and the next tick is a no-op"
+      exit 3
+    fi
+    # The app shipped but the ops or miner half did not: the commit is NOT processed,
+    # and the exit is the box-not-at-spec 1, not redeploy's softer code.
+    note_failure
+    log "the app shipped (unverified) but the ops or miner half failed, so the commit stays unprocessed and this tick is a failure"
+    exit 1
+  fi
+  if [ "$app_rc" -ne 0 ]; then
+    note_failure
+    # redeploy's 2 is "did not ship, faucet serving: can wait until morning", and that
+    # is not true of a box whose ops or miner half also failed; the box-not-at-spec 1
+    # wins there.
+    [ "$rc" -eq 0 ] && [ "$miner_rc" -eq 0 ] && exit "$app_rc"
+    exit 1
+  fi
   # A failed miner rebuild leaves the box at 40 of 41 and the live probe red, which is
   # the state this whole change exists to end. It must not exit 0 just because the app
   # and ops halves went fine. shellcheck caught that this variable was set and never
   # read, which would have made the rebuild's failure path decorative.
-  [ "$rc" -eq 0 ] && [ "$miner_rc" -ne 0 ] && exit "$miner_rc"
-  [ "$rc" -eq 0 ] && printf '%s\n' "$PROCESSED" > "$STATE_FILE"
+  if [ "$rc" -eq 0 ] && [ "$miner_rc" -ne 0 ]; then note_failure; exit "$miner_rc"; fi
+  if [ "$rc" -eq 0 ]; then printf '%s\n' "$PROCESSED" > "$STATE_FILE"; clear_failures; else note_failure; fi
   exit "$rc"
 fi
 
@@ -204,6 +270,6 @@ fi
 # A failed install must not exit 0. The timer's own status is the only signal anyone
 # sees for this unit, and reporting success for a box that is not at spec is how the
 # missing 19 files stayed invisible.
-[ "$rc" -eq 0 ] && [ "$miner_rc" -ne 0 ] && exit "$miner_rc"
-[ "$rc" -eq 0 ] && printf '%s\n' "$PROCESSED" > "$STATE_FILE"
+if [ "$rc" -eq 0 ] && [ "$miner_rc" -ne 0 ]; then note_failure; exit "$miner_rc"; fi
+if [ "$rc" -eq 0 ]; then printf '%s\n' "$PROCESSED" > "$STATE_FILE"; clear_failures; else note_failure; fi
 exit "$rc"
