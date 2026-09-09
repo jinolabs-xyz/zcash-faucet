@@ -377,6 +377,25 @@ bash "$ALERT" "another cause entirely" > /dev/null 2>&1
 check "the neighbours all survived" "[ -e '$T/alert-state/access.log' ] && [ -e '$T/alert-state/backup.tar.gz' ] && [ -e '$T/alert-state/faucet.db' ] && [ -e '$T/alert-state/0001-patch' ] && [ -e '$T/alert-state/data.json' ]"
 check "and the stale key of ours was swept" "[ ! -e '$T/alert-state/0123456789abcdef0123456789abcdef01234567' ]"
 
+echo "== alerts: a directory holding only our LOCK files is ours too (the marker lost, the locks kept)"
+alerts_env
+mkdir -p "$T/locks-only"; : > "$T/locks-only/.lock.0123456789abcdef0123456789abcdef01234567"
+FAUCET_ALERT_STATE_DIR="$T/locks-only" bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+FAUCET_ALERT_STATE_DIR="$T/locks-only" bash "$ALERT" "disk low: / has 9% free" > "$T/lo2.log" 2>&1
+check "adopted, and the repeat is held back" "[ -e '$T/locks-only/.faucet-alerts' ] && grep -q 'HELD BACK' '$T/lo2.log'"
+mkdir -p "$T/lock-stranger"; : > "$T/lock-stranger/.lock.not-ours-at-all"
+FAUCET_ALERT_STATE_DIR="$T/lock-stranger" bash "$ALERT" "disk low: / has 9% free" > "$T/ls.log" 2>&1
+check "while a .lock.* that is not our shape keeps the directory someone else's" "grep -q 'dedup OFF' '$T/ls.log' && [ ! -e '$T/lock-stranger/.faucet-alerts' ]"
+
+echo "== alerts: lock files expire a month after their cause stopped firing"
+alerts_env
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+: > "$T/alert-state/.lock.0123456789abcdef0123456789abcdef01234567"
+touch -d '40 days ago' "$T/alert-state/.lock.0123456789abcdef0123456789abcdef01234567" 2>/dev/null || true
+bash "$ALERT" "another cause entirely" > /dev/null 2>&1
+check "a 40-day-old lock of a dead cause is gone" "[ ! -e '$T/alert-state/.lock.0123456789abcdef0123456789abcdef01234567' ]"
+check "while the live cause's lock stays" "ls '$T'/alert-state/.lock.* >/dev/null 2>&1"
+
 echo "== alerts: a directory holding only OUR files is ours, so two first-callers cannot disown it"
 alerts_env
 mkdir -p "$T/ours-only"; : > "$T/ours-only/.faucet-alerts"; : > "$T/ours-only/.lock"

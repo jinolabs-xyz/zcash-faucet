@@ -117,7 +117,8 @@ dedup_dir_ok() {
       [ -e "$entry" ] || continue
       entry="${entry##*/}"
       case "$entry" in
-        .faucet-alerts|.lock|.lock.*) ;;
+        .faucet-alerts|.lock) ;;
+        .lock.*) k="${entry#.lock.}"; [ "${#k}" = 40 ] && [ -z "${k//[0-9a-f]/}" ] || return 1 ;;
         *) [ "${#entry}" = 40 ] && [ -z "${entry//[0-9a-f]/}" ] || return 1 ;;
       esac
     done
@@ -153,13 +154,13 @@ dedup_check() { # $1 message
   # Per cause, the queue is only ever the identical alerts, which is the one set that
   # should wait. The file is named after the key and dot-prefixed, so the weekly sweep and
   # the ownership check both know it as ours.
-  # Tried in a subshell first, because a failed redirection on `exec` prints its own error
-  # before any 2>/dev/null on the same command can take effect.
-  if ! ( : >> "$STATE_DIR/.lock.$key" ) 2>/dev/null; then
+  # A GROUP redirect, so the open is one attempt whose error is silenced: a failed
+  # redirection on a bare `exec` prints before a 2>/dev/null on the same line applies, and
+  # a probe-then-exec left a window in which both raw errors still appeared.
+  if ! { exec 9>>"$STATE_DIR/.lock.$key"; } 2>/dev/null; then
     log "dedup OFF: cannot open the cooldown lock in $STATE_DIR; repeats of this alert will all be sent"
     return 0
   fi
-  exec 9>>"$STATE_DIR/.lock.$key"
   DEDUP_LOCKED=1
   # The wait outlives curl's --max-time (10 s) with room, because the holder keeps the lock
   # across its POST: a waiter that gives up early sends unserialised, and review measured
@@ -215,8 +216,12 @@ dedup_done() {
 dedup_commit() {
   [ -n "$DEDUP_FILE" ] || return 0
   printf '%s 0\n' "$(date -u +%s)" > "$DEDUP_FILE" 2>/dev/null || true
-  [ -e "$STATE_DIR/.faucet-alerts" ] \
-    && find "$STATE_DIR" -maxdepth 1 -type f -regextype posix-extended -regex '.*/[0-9a-f]{40}' -mtime +7 -delete 2>/dev/null
+  if [ -e "$STATE_DIR/.faucet-alerts" ]; then
+    find "$STATE_DIR" -maxdepth 1 -type f -regextype posix-extended -regex '.*/[0-9a-f]{40}' -mtime +7 -delete 2>/dev/null
+    # Lock files outlive their records by a month, so a cause that stopped firing does not
+    # leave an inode behind for ever; a live cause touches its lock on every decision.
+    find "$STATE_DIR" -maxdepth 1 -type f -regextype posix-extended -regex '.*/\.lock\.[0-9a-f]{40}' -mtime +30 -delete 2>/dev/null
+  fi
   return 0
 }
 
