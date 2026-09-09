@@ -235,3 +235,20 @@ for wf in "$REPO"/.github/workflows/*.yml; do
   check "$name grants contents no more than read" "grep -A 4 '^permissions:' '$wf' | grep -q 'contents: read'"
   check "$name grants nothing write at the top level" "! grep -A 6 '^permissions:' '$wf' | grep -qE ': *write'"
 done
+
+echo "== repo: the off-box probe cannot pass without probing (risk register #17)"
+# It is the only signal that has ever reached us unprompted. Three ways it used to go
+# green while watching nothing: no FAUCET_LIVE_URL (skipped, exit 0), an escape hatch
+# that never expired, and a schedule GitHub had quietly stopped running.
+LS="$REPO/.github/workflows/live-smoke.yml"
+check "an unset FAUCET_LIVE_URL FAILS the workflow rather than skipping green" \
+  "grep -q 'has been passing every run having probed NOTHING' '$LS' && ! grep -q 'is not set, skipping' '$LS'"
+check "and there is a named way to turn monitoring off on purpose" "grep -q 'FAUCET_LIVE_SMOKE_DISABLED' '$LS'"
+check "the probe's un-ready hatch is a DATE, not a value that never expires" \
+  "grep -q 'not a YYYY-MM-DD date, so it is IGNORED' '$REPO/scripts/live-probe.mjs' && ! grep -q 'SMOKE_ALLOW_UNREADY === \"1\"' '$REPO/scripts/live-probe.mjs'"
+check "the page rule reads the clock rather than counting runs on a cron that does not keep time" \
+  "grep -q 'gap_min' '$LS' && ! grep -q 'failed two probes in a row, 30+ minutes' '$LS'"
+check "the workflow's own explorer skip is NOT set in the workflow, so the real run still checks it" \
+  "! grep -q 'SMOKE_SKIP_EXPLORER' '$LS'"
+check "the probe has tests, and npm test runs them" \
+  "[ -f '$REPO/scripts/live-probe.test.mjs' ] && grep -q 'scripts/\*\*/\*.test.mjs' '$REPO/package.json'"

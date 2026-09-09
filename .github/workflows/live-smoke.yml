@@ -5,9 +5,23 @@
 #
 # Setup: set the repository variable FAUCET_LIVE_URL (Settings -> Secrets and
 # variables -> Actions -> Variables) to the public origin, e.g.
-# https://faucet.example.org. Until it is set, runs skip green. A red run
-# means the faucet is unreachable or says it cannot drip, and the log carries
-# the app's own reason.
+# https://faucet.example.org. WITHOUT IT THIS WORKFLOW FAILS, on purpose: it used
+# to skip green, so a repository with no URL had a monitoring workflow that passed
+# every 15 minutes having probed nothing, which is the shape of every false pass in
+# this tree (risk register #17). To turn the monitoring off deliberately, set the
+# variable FAUCET_LIVE_SMOKE_DISABLED=1 and it says so and exits 0.
+#
+# TWO MORE WAYS THIS CAN GO QUIET, both of them outside the run:
+#   - GitHub disables scheduled workflows after 60 days with no repository activity.
+#     Nothing here can detect that (nothing runs), so the page step reports the real
+#     gap since the previous scheduled run and says when the schedule is not keeping
+#     to its cron.
+#   - The cron is best-effort. Measured on this repository 2026-09-09: a "*/15"
+#     schedule actually fired about every five hours. So "two consecutive failures"
+#     is NOT 30 minutes of downtime, and the page below reads the clock instead of
+#     counting runs.
+# A red run means the faucet is unreachable or says it cannot drip, and the log
+# carries the app's own reason.
 name: live-smoke
 
 on:
@@ -37,18 +51,27 @@ jobs:
         env:
           SMOKE_URL: ${{ vars.FAUCET_LIVE_URL }}
           SMOKE_ALLOW_UNREADY: ${{ vars.FAUCET_LIVE_ALLOW_UNREADY }}
+          SMOKE_DISABLED: ${{ vars.FAUCET_LIVE_SMOKE_DISABLED }}
         run: |
           if [ -z "$SMOKE_URL" ]; then
-            echo "FAUCET_LIVE_URL repository variable is not set, skipping"
-            exit 0
+            if [ "$SMOKE_DISABLED" = "1" ]; then
+              echo "FAUCET_LIVE_SMOKE_DISABLED=1: off-box monitoring is deliberately off"
+              exit 0
+            fi
+            echo "FAUCET_LIVE_URL is not set, so this workflow has been passing every run having probed NOTHING." >&2
+            echo "Set the repository variable to the public origin, or set FAUCET_LIVE_SMOKE_DISABLED=1 to turn monitoring off on purpose." >&2
+            exit 1
           fi
           node scripts/live-probe.mjs
       # PAGE A HUMAN, AND ONLY ON A REAL OUTAGE. The on-box watchdog pages after 30
       # minutes of not-ready, but it cannot page when the box itself is dead, so this is
-      # the off-box backstop. Two consecutive failed scheduled runs are 30 minutes of
-      # downtime, the threshold the owner asked for; a single red run already emails and
-      # is often a blip the probe's own retry did not quite cover. If the previous run
-      # cannot be read, page anyway: under-alerting is the failure this exists to fix.
+      # the off-box backstop. The rule is 30 minutes of WALL CLOCK covered by consecutive
+      # failures, read from the previous scheduled run's timestamp: counting runs assumed
+      # a 15-minute cron this repository does not get (measured: about five hours between
+      # scheduled runs), which made "two failures" mean ten hours, not thirty minutes.
+      # A single red run already emails and is often a blip the probe's own retry did not
+      # quite cover. If the previous run cannot be read, page anyway: under-alerting is
+      # the failure this exists to fix.
       #
       # Setup: repository secret FAUCET_ALERT_URL (a Slack or Discord webhook) and,
       # for Discord, the repository variable FAUCET_ALERT_FORMAT=discord. Without the
@@ -65,15 +88,32 @@ jobs:
             echo "FAUCET_ALERT_URL secret is not set, cannot page (email only)"
             exit 0
           fi
-          prev="$(gh run list --workflow live-smoke --event schedule --limit 2 \
-                    --json conclusion,databaseId \
-                    --jq "[.[] | select(.databaseId != $GITHUB_RUN_ID)][0].conclusion" 2>/dev/null || echo unknown)"
-          echo "previous scheduled run: ${prev:-unknown}"
+          prev_json="$(gh run list --workflow live-smoke --event schedule --limit 2 \
+                    --json conclusion,databaseId,createdAt \
+                    --jq "[.[] | select(.databaseId != $GITHUB_RUN_ID)][0]" 2>/dev/null || echo '')"
+          prev="$(printf '%s' "$prev_json" | jq -r '.conclusion // "unknown"' 2>/dev/null || echo unknown)"
+          prev_at="$(printf '%s' "$prev_json" | jq -r '.createdAt // empty' 2>/dev/null || true)"
+          gap_min=0
+          if [ -n "$prev_at" ]; then
+            gap_min=$(( ( $(date -u +%s) - $(date -u -d "$prev_at" +%s) ) / 60 ))
+            echo "previous scheduled run: $prev, started ${gap_min} minutes ago"
+            # The cron is best-effort and GitHub disables it entirely after 60 days of
+            # repository inactivity. A gap far past the nominal 15 minutes is worth
+            # saying out loud, because nothing else can: when the schedule stops, no run
+            # exists to notice.
+            [ "$gap_min" -gt 45 ] && echo "NOTE: the schedule is running every ${gap_min} minutes, not the 15 the cron asks for"
+          else
+            echo "previous scheduled run: $prev (no timestamp; treating as a page)"
+          fi
           if [ "$prev" = "success" ]; then
-            echo "first failure: not paging yet, the next run in 15 minutes decides (30-minute rule)"
+            echo "first failure: not paging yet, the next scheduled run decides once 30 minutes are covered"
             exit 0
           fi
-          msg="[zcash-faucet live-smoke] the faucet has failed two probes in a row, 30+ minutes down: $SMOKE_URL - $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          if [ -n "$prev_at" ] && [ "$gap_min" -lt 30 ]; then
+            echo "two failures, but only ${gap_min} minutes apart: under the 30-minute rule, not paging yet"
+            exit 0
+          fi
+          msg="[zcash-faucet live-smoke] the faucet has failed consecutive probes spanning ${gap_min}+ minutes: $SMOKE_URL - $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           case "$ALERT_FORMAT" in
             discord) body="{\"content\":\"$msg\"}" ;;
             *)       body="{\"text\":\"$msg\"}" ;;

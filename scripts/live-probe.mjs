@@ -11,8 +11,17 @@
 // Exit 0 means the faucet is up and ready to drip. Ready saying no is a real
 // answer and fails the probe with the app's own reason, because a faucet that
 // cannot drip is what monitoring exists to catch. During a planned un-ready
-// window (initial sync on a fresh box), set SMOKE_ALLOW_UNREADY=1 to keep the
-// schedule green while still failing on unreachable or broken responses.
+// window (initial sync on a fresh box), SMOKE_ALLOW_UNREADY keeps the schedule
+// green while still failing on unreachable or broken responses.
+//
+// THE HATCH EXPIRES, and that is the point. It used to be SMOKE_ALLOW_UNREADY=1,
+// with nothing to make anyone take it off again: set during one incident, it
+// silences the faucet-cannot-drip check for good, and the one signal that has
+// ever reached us stops carrying the thing it exists to carry (risk register
+// #17). It is a DATE now, YYYY-MM-DD, and it stops working the day after it:
+//     SMOKE_ALLOW_UNREADY=2026-09-12
+// A value that is not a future date is ignored, loudly, and the check fails
+// normally. There is no way to say "forever".
 //
 // RETRIES BEFORE IT PAGES, because a single 15-second blip is not an outage.
 // The faucet has momentary un-ready windows that are entirely normal: the
@@ -24,7 +33,32 @@
 // between: a transient failure that clears on retry passes, and only a failure
 // that PERSISTS across the whole window (a real outage) exits non-zero.
 const BASE = (process.env.SMOKE_URL ?? "").replace(/\/$/, "");
-const ALLOW_UNREADY = process.env.SMOKE_ALLOW_UNREADY === "1";
+/**
+ * Is the un-ready escape hatch in force? This is the one knob that can turn the whole
+ * probe into a pass, so scripts/live-probe.test.mjs spawns the probe and pins it (this
+ * module cannot be imported for a unit test: importing it runs the probe).
+ *
+ * `raw` is the variable's value, `now` the clock. A YYYY-MM-DD date holds until
+ * the END of that day in UTC. Anything else (including the old "1") is not a
+ * hatch, and the caller says so on stderr.
+ */
+function unreadyHatch(raw, now = new Date()) {
+  const v = (raw ?? "").trim();
+  if (v === "") return { on: false, why: "" };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+    return { on: false, why: `SMOKE_ALLOW_UNREADY is "${v}", which is not a YYYY-MM-DD date, so it is IGNORED (it used to be "1", which never expired)` };
+  }
+  const until = Date.parse(`${v}T23:59:59.999Z`);
+  if (Number.isNaN(until)) return { on: false, why: `SMOKE_ALLOW_UNREADY is "${v}", which is not a real date, so it is IGNORED` };
+  if (until < now.getTime()) {
+    return { on: false, why: `SMOKE_ALLOW_UNREADY expired on ${v}, so it is IGNORED and this probe fails on a faucet that cannot drip, as it should` };
+  }
+  return { on: true, why: `un-ready allowed by SMOKE_ALLOW_UNREADY until the end of ${v} UTC` };
+}
+
+const hatch = unreadyHatch(process.env.SMOKE_ALLOW_UNREADY);
+const ALLOW_UNREADY = hatch.on;
+if (hatch.why) console.error(hatch.why);
 const TIMEOUT_MS = Number(process.env.SMOKE_TIMEOUT_MS ?? 15000);
 const RETRY_ATTEMPTS = Math.max(1, Number(process.env.SMOKE_ATTEMPTS ?? 3));
 const RETRY_DELAY_MS = Number(process.env.SMOKE_RETRY_DELAY_MS ?? 30000);
@@ -128,6 +162,13 @@ async function explorerHit(explorerTxUrl, txid, ua) {
 // an unreachable/5xx explorer to cannot-verify so a cipherscan outage never pages.
 async function checkExplorerProperty() {
   const { ok, count } = tally();
+  // The explorer is a third party on the public internet. A test of THIS script's own
+  // logic must not depend on it (or hammer it), so it can be switched off; nothing in
+  // the workflow sets this, and the repo suite asserts that.
+  if (process.env.SMOKE_SKIP_EXPLORER === "1") {
+    console.log("\nexplorer property (#179): skipped by SMOKE_SKIP_EXPLORER");
+    return count();
+  }
   const explorerTxUrl = await loadExplorerTxUrl();
   if (!explorerTxUrl) return count();
 
@@ -329,7 +370,7 @@ async function runFaucetChecks() {
         "GET /api/ready is 200 but the send gate refuses every drip (canBuildTx false)",
         ALLOW_UNREADY,
         `${why}. Usually the tip oracle (hosh.zec.rocks) is unreachable from the box; check /api/status node.externalHeight. ` +
-          (ALLOW_UNREADY ? "allowed by SMOKE_ALLOW_UNREADY" : "SMOKE_ALLOW_UNREADY=1 suppresses this during a known oracle outage"),
+          (ALLOW_UNREADY ? "allowed by SMOKE_ALLOW_UNREADY" : "SMOKE_ALLOW_UNREADY=<YYYY-MM-DD> suppresses this until that date during a known oracle outage"),
       );
     }
   } else if (ready.status === 503 && ready.body) {
