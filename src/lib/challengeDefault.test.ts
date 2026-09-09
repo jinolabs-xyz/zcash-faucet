@@ -13,31 +13,33 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 
 /** Boot config.ts in a child with `env` and return its resolved challenge, or THREW:<msg>. */
-function challengeUnder(env: Record<string, string>, mode: "challenge" | "serving" = "challenge"): string {
+function challengeUnder(env: Record<string, string>, mode: "challenge" | "serving" | "serving-stderr" = "challenge"): string {
   // "challenge" reports the resolved gate. "serving" reports what the BOOT guard
   // does, which is a different question and the one that decides whether an
   // artifact can be built without a production secret.
   const call =
-    mode === "serving"
+    mode === "serving" || mode === "serving-stderr"
       ? '(m) => { m.assertServingConfig(); console.log("OK"); }'
       : '(m) => console.log(m.config.challenge)';
   const script =
     'import("./src/lib/config.ts")' +
     `.then(${call})` +
     '.catch((e) => console.log("THREW:" + e.message));';
-  return execFileSync(process.execPath, ["--input-type=module", "-e", script], {
-    // A clean slate: inheriting the parent's env would let an ambient
-    // FAUCET_CHALLENGE decide the result and the test would pass by accident.
-    //
-    // Cast because this project's ProcessEnv declares NODE_ENV as required, and
-    // the whole point here is to hand over an env that has only what we chose.
+  // A clean slate: inheriting the parent's env would let an ambient
+  // FAUCET_CHALLENGE decide the result and the test would pass by accident.
+  //
+  // Cast because this project's ProcessEnv declares NODE_ENV as required, and
+  // the whole point here is to hand over an env that has only what we chose.
+  const child = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
     env: { PATH: process.env.PATH ?? "", FAUCET_SENDER: "zallet", ...env } as unknown as NodeJS.ProcessEnv,
     encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  }).trim();
+  });
+  // "serving-stderr" returns what the boot WARNED instead: the warnings are the only
+  // notice an operator gets, and a test of them has to read where they go.
+  return (mode === "serving-stderr" ? child.stderr : child.stdout).trim();
 }
 
 test("an operator who sets NOTHING gets the gate, not an open faucet", () => {
@@ -59,7 +61,7 @@ test("a value that is not one of the three REFUSES TO BOOT, naming what it got",
   // compare equal to neither branch in the claim route, and the gate was simply absent.
   for (const bad of ["Pow", "captcha", "turnstyle", "POW", "off"]) {
     const out = challengeUnder({ FAUCET_CHALLENGE: bad });
-    assert.match(out, /^THREW:FAUCET_CHALLENGE must be one of pow \| turnstile \| none/, bad);
+    assert.match(out, /^THREW:FAUCET_CHALLENGE must be pow or none, got/, bad);
     assert.match(out, new RegExp(`got "${bad}"`), bad);
   }
 });
@@ -71,15 +73,13 @@ test("an EMPTY value is unset, not a fourth state that disables the gate", () =>
   assert.equal(challengeUnder({ FAUCET_CHALLENGE: " none " }), "none");
 });
 
-test("a secret that is only whitespace is no secret: the default stays pow and turnstile refuses to serve", () => {
+test("A TURNSTILE SECRET ALONE CHANGES NOTHING: the default is pow, full stop", () => {
+  // The Render trap: DEPLOY.md told an operator to set both Turnstile keys, render.yaml
+  // set no FAUCET_CHALLENGE, and the secret alone flipped the gate to a mode the page
+  // cannot serve, so every claim was a 403. The key is inert now.
+  assert.equal(challengeUnder({ TURNSTILE_SECRET_KEY: "a-real-secret" }), "pow");
   assert.equal(challengeUnder({ TURNSTILE_SECRET_KEY: "   " }), "pow");
-  assert.match(challengeUnder({ FAUCET_CHALLENGE: "turnstile", TURNSTILE_SECRET_KEY: "   " }, "serving"), /TURNSTILE_SECRET_KEY is not set/);
-});
-
-test("a configured Turnstile secret still selects turnstile", () => {
-  // The old fallback's useful half, kept: someone who wired Turnstile and never
-  // set FAUCET_CHALLENGE should not be silently switched to pow.
-  assert.equal(challengeUnder({ TURNSTILE_SECRET_KEY: "a-real-secret" }), "turnstile");
+  assert.equal(challengeUnder({ TURNSTILE_SECRET_KEY: "a-real-secret", NEXT_PUBLIC_TURNSTILE_SITE_KEY: "site" }), "pow");
 });
 
 test("IMPORTING config in production does NOT throw, which is what lets a build work", () => {
@@ -113,22 +113,43 @@ test("serving in production with a real salt is fine", () => {
   assert.equal(out, "OK");
 });
 
-test("SERVING turnstile without its secret refuses to boot: the verifier would refuse every claim", () => {
-  // verifyTurnstile used to pass everything when the key was missing. It fails closed
-  // now, and a faucet that refuses every claim is not one to start quietly.
-  const out = challengeUnder({ FAUCET_CHALLENGE: "turnstile" }, "serving");
-  assert.match(out, /^THREW:/);
-  assert.match(out, /TURNSTILE_SECRET_KEY is not set/);
+test("SERVING turnstile REFUSES TO BOOT, with or without a secret: the page cannot serve the mode", () => {
+  // Verified live before this: turnstile plus a secret, the exact body page.tsx builds,
+  // HTTP 403 on every claim. A faucet that refuses everyone must not start quietly.
+  const envs: Record<string, string>[] = [
+    { FAUCET_CHALLENGE: "turnstile" },
+    { FAUCET_CHALLENGE: "turnstile", TURNSTILE_SECRET_KEY: "sk" },
+    { NODE_ENV: "production", FAUCET_CHALLENGE: "turnstile", TURNSTILE_SECRET_KEY: "sk", RATE_LIMIT_SALT: "b1946ac92492d2347c6235b4d2611184e0f4a3a5c9e01f8a2b3c4d5e6f708192" },
+  ];
+  for (const env of envs) {
+    const out = challengeUnder(env, "serving");
+    assert.match(out, /^THREW:/, JSON.stringify(env));
+    assert.match(out, /not a mode this faucet can serve/, JSON.stringify(env));
+    assert.match(out, /renders no Turnstile widget/, JSON.stringify(env));
+    assert.doesNotMatch(out, /for the day a client half exists/, "no promise of a client half");
+  }
 });
 
-test("serving turnstile WITH its secret is fine, in production too", () => {
-  assert.equal(challengeUnder({ FAUCET_CHALLENGE: "turnstile", TURNSTILE_SECRET_KEY: "sk" }, "serving"), "OK");
-  assert.equal(
-    challengeUnder(
-      { NODE_ENV: "production", TURNSTILE_SECRET_KEY: "sk", RATE_LIMIT_SALT: "b1946ac92492d2347c6235b4d2611184e0f4a3a5c9e01f8a2b3c4d5e6f708192" },
-      "serving",
-    ),
-    "OK",
+test("but the word still PARSES, so `next build` cannot be broken by it: the refusal is at serving, where traffic starts", () => {
+  assert.equal(challengeUnder({ FAUCET_CHALLENGE: "turnstile" }), "turnstile");
+  assert.equal(challengeUnder({ NODE_ENV: "production", FAUCET_CHALLENGE: "turnstile" }), "turnstile");
+});
+
+test("a Turnstile key beside pow serves, and is called out as ignored", () => {
+  // The warning is the operator's only notice that the key stopped meaning anything.
+  assert.equal(challengeUnder({ TURNSTILE_SECRET_KEY: "sk" }, "serving"), "OK");
+  assert.match(challengeUnder({ TURNSTILE_SECRET_KEY: "sk" }, "serving-stderr"), /TURNSTILE_SECRET_KEY is set and IGNORED: the gate is pow/);
+  assert.doesNotMatch(challengeUnder({}, "serving-stderr"), /IGNORED/, "no key, no warning");
+});
+
+test("THE GATE BEING OFF IN PRODUCTION IS SAID AT BOOT, and is silent for local work", () => {
+  // A .env.local copied from a dev template sets FAUCET_CHALLENGE=none; next start reads
+  // .env.local in production too; before this the box served ungated and said nothing.
+  assert.match(challengeUnder({ NODE_ENV: "production", FAUCET_CHALLENGE: "none" }, "serving-stderr"), /ANTI-ABUSE GATE IS OFF/);
+  assert.doesNotMatch(challengeUnder({ FAUCET_CHALLENGE: "none" }, "serving-stderr"), /GATE IS OFF/, "not in development");
+  assert.doesNotMatch(
+    challengeUnder({ NODE_ENV: "production", RATE_LIMIT_SALT: "b1946ac92492d2347c6235b4d2611184e0f4a3a5c9e01f8a2b3c4d5e6f708192" }, "serving-stderr"),
+    /GATE IS OFF/, "not with the gate on",
   );
 });
 

@@ -49,8 +49,9 @@ a FIFO queue, so two claims never spend the same notes.
   reserve loop shields matured coinbase into the wallet, sharing the send queue with
   drips and yielding the moment a real claim arrives.
 - **Proof-of-work anti-abuse.** Browser-side PoW with adaptive, subnet-aware difficulty
-  and single-use signed challenges. No captcha vendor. (`FAUCET_CHALLENGE` also allows
-  `turnstile` or `none`.)
+  and single-use signed challenges. No captcha vendor: `FAUCET_CHALLENGE` is `pow` or
+  `none`, and `turnstile` refuses to boot (a server-side verifier exists, no page renders
+  the widget, and the project does not intend to add one).
 - **Privacy in the rate limiter.** Per-address cooldown and daily cap keyed on a salted
   hash of the IP. The raw address never reaches a log line.
 - **Honest status.** Node, height, balance, miner, box integrity, refill and queue, all

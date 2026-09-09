@@ -92,8 +92,7 @@ export const GET = withApi("status", async () => {
     dripTaz: config.dripTaz,
     cooldownSeconds: config.cooldownSeconds,
     sender: config.sender,
-    turnstileEnabled: config.turnstile.enabled,
-    challenge: config.challenge, // "pow" | "turnstile" | "none"
+    challenge: config.challenge, // "pow" | "none" in any process that serves; turnstile refuses to boot
     balanceTaz, // null = unknown (backend not ready / still syncing)
     empty,
     donationAddress: config.donationAddress,

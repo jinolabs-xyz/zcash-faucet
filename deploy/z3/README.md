@@ -88,7 +88,7 @@ From this directory (`deploy/z3/`):
 cp faucet.env.example faucet.env
 #   fill in ZALLET_RPC_USER/PASSWORD (from step 2),
 #          ZALLET_ACCOUNT/ADDRESS (from step 3),
-#          RATE_LIMIT_SALT, Turnstile keys, FAUCET_DOMAIN…
+#          RATE_LIMIT_SALT, FAUCET_DOMAIN… (no Turnstile keys: not a supported mode)
 
 export FAUCET_DOMAIN=faucet.example.org        # your hostname → auto-HTTPS
 #   (or leave unset for a plain-HTTP :80 smoke test)

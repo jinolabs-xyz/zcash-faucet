@@ -2,7 +2,7 @@
  * POST /api/faucet - the drip endpoint.
  * Order matters: cheap rejects first, expensive send last.
  *   1. parse + validate address
- *   2. anti-abuse gate (proof-of-work or Turnstile, per config)
+ *   2. anti-abuse gate (proof-of-work, or none by explicit choice)
  *   3. low-balance guard
  *   3.5 chain-freshness guard (a stale node builds transactions that cannot confirm)
  *   4. atomically reserve the claim (cooldown + daily cap, concurrency-safe)
@@ -12,7 +12,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { config } from "@/lib/config";
 import { validateTestnetAddress } from "@/lib/zcash/address";
-import { verifyTurnstile } from "@/lib/turnstile";
 import { verifySolution } from "@/lib/pow";
 import { getSenderFor, safeBalance, SendOutcomeUnknownError, type SendResult } from "@/lib/zcash/send";
 import { getNodeStatus } from "@/lib/zcash/nodeStatus";
@@ -47,7 +46,6 @@ const BodySchema = z.object({
    * was actually wrong.
    */
   network: z.string().max(16).optional(),
-  turnstileToken: z.string().optional(),
   pow: z
     .object({
       seed: z.string(),
@@ -61,7 +59,8 @@ const BodySchema = z.object({
 
 export const POST = withApi("faucet", async (req: NextRequest, api) => {
   const now = Math.floor(Date.now() / 1000);
-  // Raw IP stays local (only handed to Turnstile, which Cloudflare sees anyway).
+  // Raw IP stays local: nothing external is handed it. It is fingerprinted for the
+  // rate limiter and never logged or stored raw.
   // Everything we persist uses the salted fingerprint instead. null = we can't
   // trust an IP for this request, so the IP-based limit is skipped.
   const rawIp = clientIp(req);
@@ -108,9 +107,11 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
       ? { amountZat: config.crosslink.expectedZat, dailyCapZat: config.crosslink.dailyCapZatoshi }
       : { amountZat: config.dripZatoshi, dailyCapZat: config.dailyCapZatoshi };
 
-  // 2. Anti-abuse gate - proof-of-work, Turnstile, or nothing, per config.
+  // 2. Anti-abuse gate - proof-of-work, or nothing by explicit choice (FAUCET_CHALLENGE=none).
   //    PoW is verified against the same salted IP fingerprint the challenge was
-  //    issued to, so a solution can't be reused from a different client.
+  //    issued to, so a solution can't be reused from a different client. There is no
+  //    Turnstile branch: no page renders the widget, so assertServingConfig() refuses that
+  //    mode at boot and this handler never runs under it.
   if (config.challenge === "pow") {
     if (!body.pow) {
       return apiError(403, "Proof of work required.", api);
@@ -118,11 +119,6 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     const verdict = await verifySolution(body.pow, ipHash ?? "anon", subnetHash);
     if (!verdict.ok) {
       return apiError(403, verdict.reason ?? "Proof of work failed.", api);
-    }
-  } else if (config.challenge === "turnstile") {
-    const human = await verifyTurnstile(body.turnstileToken, rawIp ?? undefined);
-    if (!human) {
-      return apiError(403, "Captcha verification failed.", api);
     }
   }
 

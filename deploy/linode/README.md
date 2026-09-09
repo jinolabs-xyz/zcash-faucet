@@ -53,6 +53,6 @@ and shielded recipients are paid fully privately.
 ## Production checklist
 
 Same as DigitalOcean: see [the checklist there](../digitalocean/README.md#production-checklist)
-(secrets, Turnstile, backups via Linode's Backup service or the two named
+(secrets, the proof-of-work gate, backups via Linode's Backup service or the two named
 volumes, UptimeRobot on `/api/health`, `--profile monitoring` for Grafana,
 updates via `git pull && faucet-up`).

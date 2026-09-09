@@ -16,7 +16,7 @@ with an anti-abuse gate on.
 | `FAUCET_DAILY_CAP_TAZ` | `100` | Ceiling across all claims in 24h. |
 | `FAUCET_SUBNET_DAILY_MAX` | `20` | Claims allowed from one **subnet** per rolling 24h (/24 for IPv4, /64 for IPv6). The per-IP cooldown already limits one address to one claim a day, so a /24 otherwise permits 256. This is the lever that makes a block of cloud IPs cost what a block of cloud IPs should, and a residential claimer never meets it. **The number is a judgement, not a measurement**, and deliberately generous: too low turns away real people sharing an ISP block, too high does nothing. Tighten once the farming counts say what normal looks like (#196). |
 | `FAUCET_MIN_RESERVE_TAZ` | `0` | Floor the faucet refuses to spend below. |
-| `FAUCET_CHALLENGE` | `turnstile` if its secret is set, else `pow` | Anti-abuse gate: `pow`, `turnstile`, `none`, exactly. Defaults ON: turning it off is something you ask for by name. Any other value refuses to boot (it used to switch the gate off silently). `pow` needs a real `RATE_LIMIT_SALT` or the app refuses to boot; `turnstile` needs `TURNSTILE_SECRET_KEY` or it refuses to boot. **The page does not render a Turnstile widget or send a token today**, so `turnstile` refuses every claim even with both keys set; it is the server half of a mode whose client half is not wired. Run `pow`. |
+| `FAUCET_CHALLENGE` | `pow` | Anti-abuse gate: `pow` or `none`, exactly. Defaults ON: turning it off is something you ask for by name. Any other value refuses to boot (it used to switch the gate off silently). `pow` needs a real `RATE_LIMIT_SALT` or the app refuses to boot. **`turnstile` is not a mode this faucet can serve**: the page renders no widget and sends no token, so the word parses but refuses to boot with the reason; the server half is kept in `src/lib/turnstile.ts` for the day a client half is wired. |
 | `RATE_LIMIT_SALT` | none | **Required in production** with a gate on. Signs PoW challenges and salts IP hashes. Boot fails on an empty or placeholder value. |
 | `FAUCET_POW_BITS` | `20` | Base difficulty in leading zero bits. |
 | `FAUCET_POW_ESCALATE_BITS` | `2` | Extra bits per recent claim from the same client. |
@@ -52,8 +52,8 @@ with an anti-abuse gate on.
 | `ZALLET_POLL_MS` | `1500` | Gap between operation-status polls. Floor of 250. |
 | `ZALLET_PASSPHRASE` | none | Set only if the wallet is encrypted at rest. Unlocks it per send. |
 | `ZALLET_UNLOCK_SECONDS` | `60` | How long that unlock lasts. Floor of 1. |
-| `NEXT_PUBLIC_TURNSTILE_SITE_KEY` | none | Turnstile widget key. Public by design, it ships to the browser. |
-| `TURNSTILE_SECRET_KEY` | none | Turnstile server key. Setting it flips the default gate to `turnstile`, which today refuses every claim (see `FAUCET_CHALLENGE`), so do not set it unless you are wiring the widget. Without it, `turnstile` refuses to boot, and the verifier refuses every token: it no longer skips verification. The siteverify call is bounded at 5 s; a slow answer, a Cloudflare error, or a malformed body is a refusal and is logged as ours, not the user's. |
+| `NEXT_PUBLIC_TURNSTILE_SITE_KEY` | none | Unused: no page renders a Turnstile widget. Leave unset. |
+| `TURNSTILE_SECRET_KEY` | none | Unused and inert. It used to flip the default gate to `turnstile` on its own, which turned the claim path into a 403 outage for an operator who set it; it changes nothing now and the app warns once at boot that it is ignored. Leave unset. (If a client half is ever wired: the verifier fails closed, times out at 5 s, and logs its own failures as ours.) |
 | `D1_PROXY_URL` | none | Required with `DB_BACKEND=d1`. The Worker in `worker/` that fronts the D1 ledger. |
 | `D1_PROXY_SECRET` | none | Bearer token for that Worker. Required with `DB_BACKEND=d1`. |
 

@@ -149,9 +149,9 @@ Render can't be driven headless, so do this in the dashboard (one-time):
    and creates a free web service (build/start/health all preconfigured).
 3. Set the secret env vars (marked `sync: false`) in the dashboard:
    - `RATE_LIMIT_SALT`: a long random string
-   - `NEXT_PUBLIC_TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY`: leave unset. The page
-     does not render a Turnstile widget today, and setting the secret alone switches the
-     gate to `turnstile`, which then refuses every claim. Proof of work needs no keys.
+   - Turnstile keys: none. Proof of work is the anti-abuse gate and needs no keys.
+     (`FAUCET_CHALLENGE=turnstile` is not a mode this faucet can serve and refuses to
+     boot; a stray `TURNSTILE_SECRET_KEY` is ignored with a warning.)
    - `FAUCET_DONATION_ADDRESS`: the faucet's receive address (optional)
    - `FAUCET_WALLET_SEED`: only once you flip `FAUCET_SENDER=real`
 4. Deploy. You get `https://zcash-faucet.onrender.com` (or your custom domain).

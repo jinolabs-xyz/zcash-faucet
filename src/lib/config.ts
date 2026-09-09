@@ -40,13 +40,21 @@ export type ChallengeKind = (typeof CHALLENGES)[number];
  * equal to neither branch in the claim route and the gate was simply not there,
  * with nothing in the log to say so (risk register #10). An empty value is unset,
  * the same rule num() applies.
+ *
+ * THE DEFAULT IS POW, FULL STOP. A set TURNSTILE_SECRET_KEY used to flip it to turnstile
+ * on its own, and turnstile is not a mode this project can serve: the page renders no
+ * widget and sends no token, so every claim is a 403. An operator who followed the Render
+ * deploy page (set both Turnstile keys) got a faucet that refused everyone. The key alone
+ * changes nothing now, and asking for turnstile by name refuses to boot in
+ * assertServingConfig(). It still parses, so `next build` (which imports every route with
+ * whatever env it has) cannot be broken by the word; it is refused where traffic starts.
  */
 function challengeFromEnv(): ChallengeKind {
   const raw = (process.env.FAUCET_CHALLENGE ?? "").trim();
-  if (raw === "") return (process.env.TURNSTILE_SECRET_KEY ?? "").trim() ? "turnstile" : "pow";
+  if (raw === "") return "pow";
   if ((CHALLENGES as readonly string[]).includes(raw)) return raw as ChallengeKind;
   throw new Error(
-    `FAUCET_CHALLENGE must be one of ${CHALLENGES.join(" | ")}, got "${raw}". ` +
+    `FAUCET_CHALLENGE must be pow or none, got "${raw}" (turnstile is a word this parses and refuses to serve). ` +
       "An unreadable value used to switch the anti-abuse gate off without a word; refusing to start instead.",
   );
 }
@@ -361,7 +369,7 @@ export const config = {
   },
 
   // Anti-abuse gate before a claim: "pow" (browser proof-of-work / hashcash),
-  // "turnstile" (Cloudflare captcha), or "none".
+  // or "none". ("turnstile" parses and refuses to serve: see assertServingConfig.)
   //
   // The fallback is POW, not none, and that is the whole point. This is the only
   // switch that makes a claim COST anything, and its default used to be off: a
@@ -445,15 +453,31 @@ export function assertServingConfig(): void {
     challenge: config.challenge,
   });
   if (saltProblem) throw new Error(saltProblem);
-  // Turnstile with no secret verifies nothing. verifyTurnstile refuses every claim in
-  // that state (it used to pass every claim, "dev convenience"), so a box configured
-  // this way would serve nobody and say so only one 403 at a time. Refuse at boot,
-  // where the operator is reading, in every environment: there is no environment in
-  // which a captcha with no key is what anyone meant.
-  if (config.challenge === "turnstile" && !config.turnstile.enabled) {
+  // TURNSTILE IS NOT A MODE THIS FAUCET CAN SERVE. A server-side verifier exists
+  // (src/lib/turnstile.ts, fails closed, with a timeout) and no client half does: the page
+  // renders no Turnstile widget and the claim body carries no token, so with or without a
+  // secret every claim was a 403. The project's position is no captcha vendor
+  // (docs/ARCHITECTURE.md, PRIVACY.md) and no client half is planned; asking for the mode
+  // by name refuses to boot, where the operator is reading, instead of serving nobody one
+  // 403 at a time.
+  if (config.challenge === "turnstile") {
     throw new Error(
-      "FAUCET_CHALLENGE=turnstile but TURNSTILE_SECRET_KEY is not set. Turnstile cannot verify " +
-        "a token without it and every claim would be refused. Set the key, or choose FAUCET_CHALLENGE=pow.",
+      "FAUCET_CHALLENGE=turnstile is not a mode this faucet can serve: the page renders no Turnstile widget " +
+        "and sends no token, so every claim would be refused (with or without TURNSTILE_SECRET_KEY). " +
+        "Run pow (the default, no keys needed) or none.",
     );
+  }
+  // A Turnstile key on a pow or none box is ignored, and says so once: it used to flip the
+  // mode on its own, and an operator who set it for that reason should learn here that it
+  // no longer does anything.
+  if (config.turnstile.enabled) {
+    console.warn(`[config] TURNSTILE_SECRET_KEY is set and IGNORED: the gate is ${config.challenge}, and turnstile is not a mode this faucet can serve`);
+  }
+  // A gate that is OFF says so where the operator is reading. FAUCET_CHALLENGE=none is a
+  // legitimate choice for local work and the integration stacks; on a production box it
+  // is an ungated faucet holding real testnet funds, and a .env.local copied from a dev
+  // template is exactly how one arrives there without anyone deciding it.
+  if (config.challenge === "none" && process.env.NODE_ENV === "production") {
+    console.warn("[config] THE ANTI-ABUSE GATE IS OFF (FAUCET_CHALLENGE=none) in production: every claim is accepted without proof of work. If this is not a decision you made, set FAUCET_CHALLENGE=pow.");
   }
 }

@@ -9,7 +9,7 @@
  *     send would generate a zk-proof - CPU + hundreds of MB - which you never
  *     want several of at once on a small instance.)
  *
- * So the front door stays concurrent (validate, Turnstile, atomic reserve), but
+ * So the front door stays concurrent (validate, proof of work, atomic reserve), but
  * the send itself is funnelled through here: strictly one at a time, in the
  * order requests arrived. Callers await their turn and get their own result.
  *

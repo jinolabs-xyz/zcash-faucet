@@ -87,18 +87,12 @@ Two limits, since the point of this page is not to flatter us:
 
 ## Honest trade-offs (and how to remove them)
 
-- **Cloudflare Turnstile** (optional anti-bot) sends the request to a third party.
-  It's off unless keys are set, and **this deployment runs the proof-of-work path
-  instead**, so no request reaches Cloudflare. Worth knowing if you run your own:
-  the choice follows from whether `TURNSTILE_SECRET_KEY` exists rather than from a
-  separate decision, so setting that key alone moves your users' requests to a
-  third party. That applies to a box provisioned before `FAUCET_CHALLENGE` was
-  added to the deploy template. A box set up from the current template has the mode
-  written down explicitly, so the fallback never runs and the key alone changes
-  nothing. The two gates are two modules behind one switch in the claim route
-  ([`pow.ts`](src/lib/pow.ts) and [`turnstile.ts`](src/lib/turnstile.ts)), which is
-  what makes either one a clean swap; today only the proof-of-work half has a client,
-  so `turnstile` refuses every claim until a widget is wired.
+- **Cloudflare Turnstile is not used, and cannot be switched on by accident.** A
+  server-side verifier ([`turnstile.ts`](src/lib/turnstile.ts)) exists, but no page
+  renders the widget, so `FAUCET_CHALLENGE=turnstile` refuses to boot and a set
+  `TURNSTILE_SECRET_KEY` is ignored with a warning (it used to flip the gate on its
+  own). No request from this faucet reaches Cloudflare. If a client half is ever
+  wired, this section is where the third-party trade gets written down first.
 - **Explorer links** (transparent sends only) point at a third-party explorer,
   and clicking one discloses the txid to them. Shielded sends show no external link.
   **The faucet itself never tells an explorer about a payout.** It has the code to ask
