@@ -166,20 +166,28 @@ export function boxChip(s: IntegrityStatus): string | null {
   return s.state === "incomplete" ? "INCOMPLETE" : "unknown";
 }
 
-/** Anything other than a clean report. Matches isIntegrityFailing: unknown counts. */
-/** The box cannot page anyone: Signal is configured and its bridge is not answering.
- *  A fault, and one nothing else can show, because every alert about it would travel
- *  through the thing that is down. "n/a", "unknown" and null are not "down". */
+/** The box cannot page anyone, by its own report: the Signal bridge is down, the
+ *  account is not linked on it, or no alert URL is configured at all. A fault, and one
+ *  nothing else can show, because every alert about it would travel through the thing
+ *  that is broken. "ok", "webhook", "unknown" and null are not faults here; "unknown"
+ *  is the off-box probe's to fail, since a public row cannot tell "could not ask" from
+ *  "asked and it is down" without inviting a reader to ignore red. */
 export function alertBridgeDown(s: IntegrityStatus): boolean {
-  return s.alertBridge === "down";
+  return s.alertBridge === "down" || s.alertBridge === "unlinked" || s.alertBridge === "none";
 }
 
 /** The clause, when there is one. Only the fault gets words: "ok" is the expected
  *  state and a row saying so on every render is noise. */
 function bridge(s: IntegrityStatus): string {
-  return alertBridgeDown(s) ? ", ALERT BRIDGE DOWN, pages go nowhere" : "";
+  switch (s.alertBridge) {
+    case "down": return ", ALERT BRIDGE DOWN, pages go nowhere";
+    case "unlinked": return ", ALERT BRIDGE UNLINKED, pages go nowhere";
+    case "none": return ", NO ALERT CHANNEL, pages go nowhere";
+    default: return "";
+  }
 }
 
+/** Anything other than a clean report. Matches isIntegrityFailing, plus the two faults only the report can carry: a looping watchdog and a box that cannot page: unknown counts. */
 export function boxIsBad(s: IntegrityStatus): boolean {
   return s.state !== "complete" || watchdogLooping(s) || alertBridgeDown(s);
 }

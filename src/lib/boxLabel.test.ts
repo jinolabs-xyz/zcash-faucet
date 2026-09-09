@@ -222,17 +222,22 @@ test("a report with no minerBinary at all renders exactly as before", () => {
 // ── THE BOX CANNOT PAGE ANYONE (risk register #15) ──────────────────────────────────────
 import { alertBridgeDown } from "./boxLabel.ts";
 
-test("a dead Signal bridge is a fault the row names, because no alert about it can arrive", () => {
-  const s = classifyIntegrity(report({ alertBridge: "down" }), NOW);
-  assert.match(boxRow(s), /ALERT BRIDGE DOWN, pages go nowhere/);
-  assert.equal(boxIsBad(s), true);
-  assert.equal(alertBridgeDown(s), true);
+test("a dead, unlinked or absent alert channel is a fault the row names, because no alert about it can arrive", () => {
+  for (const [v, words] of [["down", /ALERT BRIDGE DOWN/], ["unlinked", /ALERT BRIDGE UNLINKED/], ["none", /NO ALERT CHANNEL/]] as const) {
+    const s = classifyIntegrity(report({ alertBridge: v }), NOW);
+    assert.match(boxRow(s), words);
+    assert.match(boxRow(s), /pages go nowhere/);
+    assert.equal(boxIsBad(s), true, v);
+    assert.equal(alertBridgeDown(s), true, v);
+  }
 });
 
-test("ok, not applicable, unknown and an older report are NOT the fault, and say nothing", () => {
-  for (const v of ["ok", "n/a", "unknown", null]) {
+test("ok, a webhook channel, unknown and an older report are NOT the fault here, and say nothing", () => {
+  // "unknown" is the off-box probe's to fail: a public row cannot separate "could not ask"
+  // from "asked and it is down" without teaching readers to ignore red.
+  for (const v of ["ok", "webhook", "unknown", null]) {
     const s = classifyIntegrity(report({ alertBridge: v }), NOW);
-    assert.doesNotMatch(boxRow(s), /BRIDGE/, `alertBridge ${String(v)}`);
+    assert.doesNotMatch(boxRow(s), /BRIDGE|ALERT CHANNEL/, `alertBridge ${String(v)}`);
     assert.equal(boxIsBad(s), false, `alertBridge ${String(v)}`);
   }
 });

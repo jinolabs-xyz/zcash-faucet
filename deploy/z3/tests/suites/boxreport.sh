@@ -416,34 +416,85 @@ bash "$BOX_REPORT" > /dev/null 2>&1
 check "systemctl saying nothing is unknown, never a calm inactive" "[ \"\$(jqf '$BOX_REPORT_OUT' minerUnit)\" = 'unknown' ]"
 check "and the rest of the report is untouched by it" "[ \"\$(jqf '$BOX_REPORT_OUT' readable)\" = 'True' ]"
 
-echo "== box-report: CAN THE BOX PAGE ANYONE. The Signal bridge's health is reported, so a dead one is visible off-box"
+echo "== box-report: CAN THE BOX PAGE ANYONE. The bridge's state is reported, so a dead one is visible off-box"
 # The bridge cannot report its own death through itself. The report carries the probe and
-# the live probe reads it. A curl double answers whatever STUB_BRIDGE_CODE says.
-box_env
-printf '#!/usr/bin/env bash\necho "curl $*" >> "%s/bridge-curl.log"\n[ -n "${STUB_BRIDGE_CODE:-}" ] || exit 7\nprintf "%%s" "$STUB_BRIDGE_CODE"\n' "$T" > "$T/bridge-curl"
-chmod +x "$T/bridge-curl"; export BOX_REPORT_CURL="$T/bridge-curl"
-export BOX_REPORT_ALERTS_ENV="$T/alerts.env"
+# the live probe reads it. A curl double answers whatever STUB_BRIDGE_CODE/STUB_BRIDGE_BODY
+# say; the configuration is resolved by SOURCING the same two files alert.sh sources.
+bridge_env() {
+  box_env
+  printf '#!/usr/bin/env bash\necho "curl $*" >> "%s/bridge-curl.log"\n[ -n "${STUB_BRIDGE_CODE:-}" ] || exit 7\nprintf "%%s\\n%%s" "${STUB_BRIDGE_BODY:-}" "$STUB_BRIDGE_CODE"\n' "$T" > "$T/bridge-curl"
+  chmod +x "$T/bridge-curl"; export BOX_REPORT_CURL="$T/bridge-curl"
+  export BOX_REPORT_ALERTS_ENV="$T/alerts.env" BOX_REPORT_WATCHDOG_ENV="$T/watchdog.env"
+  rm -f "$T/alerts.env" "$T/watchdog.env"; : > "$T/bridge-curl.log"
+  unset STUB_BRIDGE_CODE STUB_BRIDGE_BODY
+}
+bridge_is() { [ "$(jqf "$BOX_REPORT_OUT" alertBridge)" = "$1" ]; }
+
+bridge_env
 printf 'FAUCET_ALERT_URL=http://127.0.0.1:8081/v2/send\nFAUCET_ALERT_FORMAT=signal\nFAUCET_ALERT_SIGNAL_NUMBER=+15551234567\n' > "$T/alerts.env"
-STUB_BRIDGE_CODE=204 bash "$BOX_REPORT" > /dev/null 2>&1
-check "a bridge answering 2xx is ok" "[ \"\$(jqf '$BOX_REPORT_OUT' alertBridge)\" = 'ok' ]"
-check "and it was asked at the health endpoint derived from the send URL's origin" "grep -q 'http://127.0.0.1:8081/v1/health' '$T/bridge-curl.log'"
+STUB_BRIDGE_CODE=200 STUB_BRIDGE_BODY='["+15551234567"]' bash "$BOX_REPORT" > /dev/null 2>&1
+check "the bridge answering with the configured number linked is ok" "bridge_is ok"
+check "and it was asked at the accounts endpoint derived from the send URL's origin" "grep -q 'http://127.0.0.1:8081/v1/accounts' '$T/bridge-curl.log'"
 check "and the send URL itself was never written to the report" "! grep -q 'v2/send' '$BOX_REPORT_OUT'"
+STUB_BRIDGE_CODE=200 STUB_BRIDGE_BODY='[]' bash "$BOX_REPORT" > /dev/null 2>&1
+check "a bridge that is up but has no linked account is UNLINKED, which /v1/health would have called healthy" "bridge_is unlinked"
+STUB_BRIDGE_CODE=200 STUB_BRIDGE_BODY='["+15559999999"]' bash "$BOX_REPORT" > /dev/null 2>&1
+check "a different number linked is unlinked too: the sender would fail" "bridge_is unlinked"
 STUB_BRIDGE_CODE=000 bash "$BOX_REPORT" > /dev/null 2>&1
-check "a bridge that does not answer is DOWN" "[ \"\$(jqf '$BOX_REPORT_OUT' alertBridge)\" = 'down' ]"
+check "a bridge that does not answer is DOWN" "bridge_is down"
 STUB_BRIDGE_CODE=500 bash "$BOX_REPORT" > /dev/null 2>&1
-check "a bridge answering 5xx is down too" "[ \"\$(jqf '$BOX_REPORT_OUT' alertBridge)\" = 'down' ]"
-printf 'export FAUCET_ALERT_URL="http://127.0.0.1:8081/v2/send"\nexport FAUCET_ALERT_FORMAT="signal"\n' > "$T/alerts.env"
-STUB_BRIDGE_CODE=204 bash "$BOX_REPORT" > /dev/null 2>&1
-check "the export/quoted spelling of the env file reads the same" "[ \"\$(jqf '$BOX_REPORT_OUT' alertBridge)\" = 'ok' ]"
+check "a bridge answering 5xx is down too" "bridge_is down"
+
+echo "== box-report: the configuration is resolved the way alert.sh resolves it"
+bridge_env
+printf 'export FAUCET_ALERT_URL="http://127.0.0.1:8081/v2/send"  # the bridge\nexport FAUCET_ALERT_FORMAT="signal"\nFAUCET_ALERT_SIGNAL_NUMBER=+15551234567\n' > "$T/alerts.env"
+STUB_BRIDGE_CODE=200 STUB_BRIDGE_BODY='["+15551234567"]' bash "$BOX_REPORT" > /dev/null 2>&1
+check "export, quotes and a trailing comment read the same" "bridge_is ok"
+bridge_env
+printf 'WATCHDOG_ALERT_URL=http://127.0.0.1:8081/v2/send\nWATCHDOG_ALERT_FORMAT=signal\n' > "$T/watchdog.env"
+STUB_BRIDGE_CODE=200 STUB_BRIDGE_BODY='["+15551234567"]' bash "$BOX_REPORT" > /dev/null 2>&1
+check "the older WATCHDOG_ALERT_* names in watchdog.env are honoured, as alert.sh honours them" "bridge_is ok"
+bridge_env
+printf 'FAUCET_ALERT_URL=http://127.0.0.1:8081/v2/send\nFAUCET_ALERT_FORMAT=signal\n' > "$T/alerts.env"
+printf 'FAUCET_ALERT_URL=http://127.0.0.1:9999/v2/send\n' > "$T/watchdog.env"
+STUB_BRIDGE_CODE=200 STUB_BRIDGE_BODY='["+15551234567"]' bash "$BOX_REPORT" > /dev/null 2>&1
+check "watchdog.env is sourced AFTER alerts.env and wins, exactly as in alert.sh, so the real send target is what gets probed" "grep -q 'http://127.0.0.1:9999/v1/accounts' '$T/bridge-curl.log'"
+
+echo "== box-report: every state that is not a working channel lands on the honest side"
+bridge_env
 printf 'FAUCET_ALERT_URL=https://hooks.slack.com/services/SECRET\nFAUCET_ALERT_FORMAT=slack\n' > "$T/alerts.env"
-: > "$T/bridge-curl.log"
-STUB_BRIDGE_CODE=204 bash "$BOX_REPORT" > /dev/null 2>&1
-check "a webhook format is n/a: nothing to probe" "[ \"\$(jqf '$BOX_REPORT_OUT' alertBridge)\" = 'n/a' ]"
+STUB_BRIDGE_CODE=200 bash "$BOX_REPORT" > /dev/null 2>&1
+check "a Slack URL is a webhook: nothing to probe" "bridge_is webhook"
 check "and the webhook URL was neither probed nor written anywhere" "[ ! -s '$T/bridge-curl.log' ] && ! grep -q 'SECRET' '$BOX_REPORT_OUT'"
-rm -f "$T/alerts.env"
+bridge_env
+printf 'FAUCET_ALERT_URL=https://discord.com/api/webhooks/SECRET\n' > "$T/alerts.env"
 bash "$BOX_REPORT" > /dev/null 2>&1
-check "no alerts file at all is n/a" "[ \"\$(jqf '$BOX_REPORT_OUT' alertBridge)\" = 'n/a' ]"
+check "no format at all defaults to slack in alert.sh, so it is a webhook here too" "bridge_is webhook"
+bridge_env
+bash "$BOX_REPORT" > /dev/null 2>&1
+check "no alerts file and no watchdog file is NONE: nobody can be paged" "bridge_is none"
+bridge_env
+printf 'FAUCET_ALERT_FORMAT=signal\n' > "$T/alerts.env"
+bash "$BOX_REPORT" > /dev/null 2>&1
+check "a format with no URL is none too" "bridge_is none"
+bridge_env
+printf 'FAUCET_ALERT_URL=http://127.0.0.1:8081/v2/send\nFAUCET_ALERT_FORMAT=telegram\n' > "$T/alerts.env"
+bash "$BOX_REPORT" > /dev/null 2>&1
+check "an unrecognised format is UNKNOWN, never a calm state" "bridge_is unknown"
+bridge_env
+printf 'FAUCET_ALERT_URL=http://127.0.0.1:8081/v2/send\r\nFAUCET_ALERT_FORMAT=signal\r\n' > "$T/alerts.env"
+bash "$BOX_REPORT" > /dev/null 2>&1
+check "CRLF line endings make the format unrecognisable to the sender too, so: unknown" "bridge_is unknown"
+bridge_env
+printf 'FAUCET_ALERT_URL=127.0.0.1:8081/v2/send\nFAUCET_ALERT_FORMAT=signal\n' > "$T/alerts.env"
+STUB_BRIDGE_CODE=200 bash "$BOX_REPORT" > /dev/null 2>&1
+check "a URL without a scheme cannot be probed and is unknown, not ok" "bridge_is unknown && [ ! -s '$T/bridge-curl.log' ]"
+bridge_env
+printf 'FAUCET_ALERT_URL=http://user:sekret@127.0.0.1:8081/v2/send\nFAUCET_ALERT_FORMAT=signal\nFAUCET_ALERT_SIGNAL_NUMBER=+15551234567\n' > "$T/alerts.env"
+STUB_BRIDGE_CODE=200 STUB_BRIDGE_BODY='["+15551234567"]' bash "$BOX_REPORT" > /dev/null 2>&1
+check "userinfo in the URL never reaches curl's argv" "grep -q 'http://127.0.0.1:8081/v1/accounts' '$T/bridge-curl.log' && ! grep -q 'sekret' '$T/bridge-curl.log' && ! grep -q 'sekret' '$BOX_REPORT_OUT'"
+bridge_env
 printf 'FAUCET_ALERT_URL=http://127.0.0.1:8081/v2/send\nFAUCET_ALERT_FORMAT=signal\n' > "$T/alerts.env"
 BOX_REPORT_CURL="$T/no-such-curl" bash "$BOX_REPORT" > /dev/null 2>&1
-check "no curl to ask with is unknown, never a calm ok" "[ \"\$(jqf '$BOX_REPORT_OUT' alertBridge)\" = 'unknown' ]"
+check "no curl to ask with is unknown, never a calm ok" "bridge_is unknown"
 check "and the rest of the report is untouched by any of it" "[ \"\$(jqf '$BOX_REPORT_OUT' readable)\" = 'True' ]"

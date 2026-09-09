@@ -75,10 +75,14 @@ export interface IntegrityReport {
    * red for hours over a unit that was parked deliberately. This is the fact that lets
    * it say "off" instead, and it is context only, never classified on. */
   minerUnit: string | null;
-  /** Whether the box can page anyone: "ok", "down", "n/a" (Signal not configured),
-   *  "unknown" (could not ask), or null from a report that predates the field. The
-   *  bridge cannot report its own death through itself, so this is where a dead one
-   *  shows, and the off-box probe reads it. */
+  /** Whether the box can page anyone, in the box's own word: "ok" (the bridge answers
+   *  and the configured number is linked), "unlinked", "down", "webhook" (Slack or
+   *  Discord, nothing to probe), "none" (no alert URL at all), "unknown" (could not
+   *  ask), or null from a report that predates the field. The bridge cannot report its
+   *  own death through itself, so this is where a dead one shows, and the off-box probe
+   *  reads it. A STATE WORD, and the one exception to "no names, only counts" below: it
+   *  tells a reader whether pages are arriving, and the off-box probe needs exactly
+   *  that, unauthenticated. */
   alertBridge: string | null;
   /** When the box wrote this, epoch ms. */
   at: number | null;
@@ -109,10 +113,14 @@ export interface IntegrityStatus {
   /** Passed through from the report; the panel uses it to tell a parked miner from a
    *  dead one. Context, never classified on. */
   minerUnit: string | null;
-  /** Whether the box can page anyone: "ok", "down", "n/a" (Signal not configured),
-   *  "unknown" (could not ask), or null from a report that predates the field. The
-   *  bridge cannot report its own death through itself, so this is where a dead one
-   *  shows, and the off-box probe reads it. */
+  /** Whether the box can page anyone, in the box's own word: "ok" (the bridge answers
+   *  and the configured number is linked), "unlinked", "down", "webhook" (Slack or
+   *  Discord, nothing to probe), "none" (no alert URL at all), "unknown" (could not
+   *  ask), or null from a report that predates the field. The bridge cannot report its
+   *  own death through itself, so this is where a dead one shows, and the off-box probe
+   *  reads it. A STATE WORD, and the one exception to "no names, only counts" below: it
+   *  tells a reader whether pages are arriving, and the off-box probe needs exactly
+   *  that, unauthenticated. */
   alertBridge: string | null;
   ageSeconds: number | null;
   reason: string;

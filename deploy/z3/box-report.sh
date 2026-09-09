@@ -278,28 +278,66 @@ esac
 # CAN THIS BOX PAGE ANYONE. The Signal bridge is one container on loopback, and if it is
 # down every alert the watchdog and the units send becomes a journal line nobody reads,
 # which is the exact silence the register calls out (#15). The bridge cannot report its
-# own death through itself, so the report carries it and the OFF-box probe reads it:
-#   ok       the bridge's health endpoint answered 2xx
-#   down     Signal is configured and the endpoint did not answer or answered badly
-#   n/a      alerts are not configured for Signal on this box, nothing to probe
-#   unknown  curl is not available to ask
-# The health URL is derived from FAUCET_ALERT_URL's origin and never written anywhere:
-# for other formats that URL is a webhook credential, which is why only the signal
-# format is probed.
+# own death through itself, so the report carries it and the OFF-box probe reads it.
+#
+# THE CONFIGURATION IS RESOLVED THE WAY THE SENDER RESOLVES IT: alert.sh sources
+# /etc/faucet/alerts.env and then /etc/faucet/watchdog.env and falls back from the
+# FAUCET_ALERT_* names to the older WATCHDOG_ALERT_* ones. The first version of this
+# block parsed one file for one name set and read a box configured the old way as "not
+# applicable", which is the affirmative side. Sourcing in a clean subshell gives the same
+# answer alert.sh gets, comments, quotes and `export` included.
+#
+#   ok        Signal: the bridge answers /v1/accounts and the configured number is linked
+#   unlinked  Signal: the bridge answers but the number is not among its accounts (the
+#             linked device expired or was never linked; /v2/send would fail)
+#   down      Signal: the bridge did not answer, or answered badly
+#   webhook   a Slack or Discord URL; nothing on the box to probe
+#   none      no alert URL at all: nobody can be paged
+#   unknown   an unrecognised format, a URL without a scheme, or no curl to ask with
+# Only the signal format is probed: for the others the URL is a credential. It is never
+# written anywhere, and the userinfo part of a URL never reaches curl's argv.
 ALERTS_ENV="${BOX_REPORT_ALERTS_ENV:-/etc/faucet/alerts.env}"
+WATCHDOG_ENV="${BOX_REPORT_WATCHDOG_ENV:-/etc/faucet/watchdog.env}"
 CURL="${BOX_REPORT_CURL:-curl}"
-alert_bridge="n/a"
-if [ -r "$ALERTS_ENV" ]; then
-  fmt="$(sed -nE 's/^(export[[:space:]]+)?FAUCET_ALERT_FORMAT=//p' "$ALERTS_ENV" | tail -n1 | tr -d "\"'")"
-  url="$(sed -nE 's/^(export[[:space:]]+)?FAUCET_ALERT_URL=//p' "$ALERTS_ENV" | tail -n1 | tr -d "\"'")"
-  if [ "$fmt" = "signal" ] && [ -n "$url" ]; then
-    if command -v "$CURL" >/dev/null 2>&1; then
-      origin="$(printf '%s' "$url" | sed -E 's#^(https?://[^/]+).*#\1#')"
-      code="$("$CURL" -s -o /dev/null -w '%{http_code}' --max-time 5 "$origin/v1/health" 2>/dev/null || true)"
-      case "$code" in 2*) alert_bridge="ok" ;; *) alert_bridge="down" ;; esac
-    else
-      alert_bridge="unknown"
-    fi
+alert_bridge="none"
+if [ -r "$ALERTS_ENV" ] || [ -r "$WATCHDOG_ENV" ]; then
+  resolved="$(env -i HOME=/ PATH=/usr/bin:/bin bash -c '
+    [ -r "$1" ] && . "$1" >/dev/null 2>&1
+    [ -r "$2" ] && . "$2" >/dev/null 2>&1
+    printf "%s\n%s\n%s\n" "${FAUCET_ALERT_FORMAT:-${WATCHDOG_ALERT_FORMAT:-}}" "${FAUCET_ALERT_URL:-${WATCHDOG_ALERT_URL:-}}" "${FAUCET_ALERT_SIGNAL_NUMBER:-}"' _ "$ALERTS_ENV" "$WATCHDOG_ENV" 2>/dev/null || true)"
+  fmt="$(printf '%s\n' "$resolved" | sed -n '1p')"
+  url="$(printf '%s\n' "$resolved" | sed -n '2p')"
+  num="$(printf '%s\n' "$resolved" | sed -n '3p')"
+  if [ -z "$url" ]; then
+    alert_bridge="none"
+  else
+    case "${fmt:-slack}" in
+      slack|discord) alert_bridge="webhook" ;;
+      signal)
+        # Origin only, with any user:password@ removed, so a credential never reaches
+        # argv. A URL with no scheme cannot be probed and is not assumed fine.
+        origin="$(printf '%s' "$url" | sed -nE 's#^(https?://)([^/@]*@)?([^/]+).*#\1\3#p')"
+        if [ -z "$origin" ]; then
+          alert_bridge="unknown"
+        elif ! command -v "$CURL" >/dev/null 2>&1; then
+          alert_bridge="unknown"
+        else
+          body="$("$CURL" -s --max-time 5 -w '\n%{http_code}' "$origin/v1/accounts" 2>/dev/null || true)"
+          code="${body##*$'\n'}"
+          case "$code" in
+            2*)
+              if [ -n "$num" ]; then
+                printf '%s' "$body" | grep -qF -- "\"$num\"" && alert_bridge="ok" || alert_bridge="unlinked"
+              else
+                # No number configured: alert.sh cannot send either way; the bridge is at
+                # least up, and "unlinked" says the account side is not established.
+                printf '%s' "$body" | grep -qE '"\+[0-9]+"' && alert_bridge="ok" || alert_bridge="unlinked"
+              fi ;;
+            *) alert_bridge="down" ;;
+          esac
+        fi ;;
+      *) alert_bridge="unknown" ;;
+    esac
   fi
 fi
 

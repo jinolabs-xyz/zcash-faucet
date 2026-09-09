@@ -231,13 +231,20 @@ async function runFaucetChecks() {
       box.reason ?? `state ${box.state}`,
     );
     // THE ONE FAULT NO ON-BOX ALERT CAN CARRY. Every page travels through the Signal
-    // bridge, so a dead bridge is reported by the box and read from outside, here. "n/a"
-    // (no Signal on this box), "unknown" and an older server that sends nothing are not
-    // "down": only the box's own word that a configured bridge is not answering fails.
-    if (box.alertBridge === "down") {
-      ok("the box can page someone", false, "its Signal bridge is not answering: every watchdog alert is a journal line until `docker start signal-api` (the watchdog tries that itself)");
-    } else if (box.alertBridge != null) {
-      ok("the box can page someone", true, `alert bridge ${box.alertBridge}`);
+    // bridge, so its state is reported by the box and read from outside, here. Only "ok"
+    // and "webhook" are affirmative. "unknown" FAILS, the same rule the box state above
+    // follows: a box that cannot say whether it can page is the box we had all week, and
+    // counting that silence as success is the bug itself. An older server that sends
+    // nothing is cannot-verify, not a pass.
+    switch (box.alertBridge) {
+      case "ok": ok("the box can page someone", true, "Signal bridge up, account linked"); break;
+      case "webhook": ok("the box can page someone", true, "a Slack/Discord webhook, not probed from the box"); break;
+      case "down": ok("the box can page someone", false, "its Signal bridge is not answering: every watchdog alert is a journal line until `docker start signal-api` (the watchdog tries that itself)"); break;
+      case "unlinked": ok("the box can page someone", false, "the Signal bridge is up but the configured number is not linked on it; re-link per OBSERVABILITY.md"); break;
+      case "none": ok("the box can page someone", false, "no alert URL is configured on the box (/etc/faucet/alerts.env)"); break;
+      case "unknown": ok("the box can page someone", false, "the box could not tell: an unrecognised alert format, a URL without a scheme, or no curl; check /etc/faucet/alerts.env"); break;
+      case undefined: case null: ok("the box can page someone", true, "server does not send box.alertBridge yet, cannot verify"); break;
+      default: ok("the box can page someone", false, `unexpected alertBridge ${JSON.stringify(box.alertBridge)}`);
     }
   }
   // THE COMPOSITION CHECK cTAZ NEVER HAD, and the reason this file grew it. Every

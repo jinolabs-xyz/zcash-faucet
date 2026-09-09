@@ -55,12 +55,21 @@ cannot use it. That one emails, and can take a Slack or Discord webhook.
 **The bridge is watched.** The watchdog treats the container named `signal-api`
 (`WATCHDOG_SIGNAL_MATCH` if yours is named differently) like zebra, zallet and
 the app: restart policy kept, started again if it falls over, one FIXED once it
-is seen running. A bridge cannot report its own death through itself, so
-`box-report.sh` probes its `/v1/health` endpoint every run and publishes
-`alertBridge` (`ok`, `down`, `n/a` without Signal, `unknown` without curl); the
-panel's box row reads `ALERT BRIDGE DOWN, pages go nowhere`, and the off-box
-live probe fails on it, which is the one channel that does not depend on the
-bridge.
+is seen running. To work on the bridge without the watchdog restarting it under
+you (re-linking needs the container stopped), set `WATCHDOG_SIGNAL_MATCH=` in
+`/etc/faucet/watchdog.env` and `systemctl restart faucet-watchdog` for the
+duration.
+
+A bridge cannot report its own death through itself, so `box-report.sh`
+resolves the alert configuration exactly as `alert.sh` does (both files, both
+name sets), asks the bridge's `/v1/accounts` for the configured number, and
+publishes `alertBridge`: `ok` (up and linked), `unlinked`, `down`, `webhook`
+(Slack or Discord, nothing to probe), `none` (no alert URL at all), `unknown`
+(could not ask). The panel's box row names `down`, `unlinked` and `none`
+(`... pages go nowhere`), and the off-box live probe fails on those and on
+`unknown`. That probe is the one channel that does not depend on the bridge,
+and it depends on the repository variable `FAUCET_LIVE_URL` being set and on
+someone reading the red-run email; it is the last line, not a second bridge.
 
 ### Slack or Discord instead
 
