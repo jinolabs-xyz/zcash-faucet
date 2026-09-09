@@ -21,9 +21,11 @@ import { createServer, type Server } from "node:http";
 // is mutable: null makes the endpoint fail, which is how the "no independent tip"
 // state gets reached without waiting out MAX_AGE_MS.
 let hoshHeight: number | null = null;
+let hoshHits = 0;
 const port = 59_431;
 
 const hosh: Server = createServer((_req, res) => {
+  hoshHits += 1;
   if (hoshHeight == null) {
     res.writeHead(503).end("{}");
     return;
@@ -47,7 +49,7 @@ process.env.ZALLET_POLL_MS = "250";
 
 const { ZalletRefiller } = await import("./zalletRefiller.ts");
 const { SHIELD_MAX_LAG_BLOCKS } = await import("../zcash/shieldGate.ts");
-const { getExternalTip, warmExternalTip } = await import("../zcash/externalTip.ts");
+const { getExternalTip, warmExternalTip, warmExternalTipNowForTests } = await import("../zcash/externalTip.ts");
 const { classifySweep } = await import("./decide.ts");
 
 const NETWORK_TIP = 4_220_000;
@@ -61,7 +63,10 @@ const NETWORK_TIP = 4_220_000;
 async function primeTip(height: number | null): Promise<void> {
   hoshHeight = height;
   for (let i = 0; i < 40; i++) {
-    await warmExternalTip();
+    // The gap-waiving variant: the production warm makes one attempt per second, and
+    // this loop's whole budget is about one second, so re-priming to a new height
+    // landed on iteration 37 or 38 of 40 and a slow box failed it as a harness flake.
+    await warmExternalTipNowForTests();
     if (getExternalTip() === height) return;
     await new Promise((r) => setTimeout(r, 25));
   }
@@ -113,6 +118,20 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 after(() => hosh.close());
+
+test("two warms inside the attempt gap dial the oracle once, and the test bypass dials it again", async () => {
+  // Pins the throttle's existence. Without it the money path's 100 ms poll restarts a
+  // fast-failing refresh up to sixty times per claim, an HTTPS fetch plus gRPC dials each.
+  // hosh is still answering 503 here (a dial is a dial), so the cache stays cold for the
+  // "no independent tip" tests below, which can only run before anything primes it.
+  await warmExternalTipNowForTests();
+  const after = hoshHits;
+  await warmExternalTip();
+  await warmExternalTip();
+  assert.equal(hoshHits, after, "a warm inside the gap re-dialled the oracle");
+  await warmExternalTipNowForTests();
+  assert.equal(hoshHits, after + 1, "the bypass did not dial");
+});
 
 test("no independent tip means UNVERIFIABLE, and unverifiable does not broadcast", async () => {
   assert.equal(getExternalTip(), null, "precondition: the tip oracle has nothing to say");

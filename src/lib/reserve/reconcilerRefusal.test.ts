@@ -47,7 +47,7 @@ process.env.FAUCET_RESERVE_LOW_TAZ = "5";
 process.env.FAUCET_RESERVE_TARGET_TAZ = "15";
 
 const { getReserveReconciler } = await import("./reconciler.ts");
-const { getExternalTip, warmExternalTip } = await import("../zcash/externalTip.ts");
+const { getExternalTip, warmExternalTipNowForTests } = await import("../zcash/externalTip.ts");
 
 const NETWORK_TIP = 4_220_000;
 const BROKE = "1" + "0".repeat(8); // 1 TAZ in zatoshi, under the 5 TAZ low mark
@@ -55,7 +55,7 @@ const BROKE = "1" + "0".repeat(8); // 1 TAZ in zatoshi, under the 5 TAZ low mark
 async function primeTip(height: number | null): Promise<void> {
   hoshHeight = height;
   for (let i = 0; i < 40; i++) {
-    await warmExternalTip();
+    await warmExternalTipNowForTests(); // the production warm is throttled to one attempt per second
     if (getExternalTip() === height) return;
     await new Promise((r) => setTimeout(r, 25));
   }

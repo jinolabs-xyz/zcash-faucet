@@ -223,11 +223,16 @@ export function mayBuildTransaction(gate: ChainGate): boolean {
  */
 export function freshnessRefusalText(gate: ChainGate): string {
   const tail = " Nothing was claimed, your cooldown is untouched. Try again shortly.";
-  if (gate.state !== "unverifiable") {
+  if (gate.state === "unsafe") {
     return (
       "Our node is catching up with the network, so a drip sent right now would expire " +
       "before it could confirm." + tail
     );
+  }
+  if (gate.state !== "unverifiable") {
+    // The route only reaches this behind !mayBuildTransaction, so a safe gate here is a
+    // caller bug, and a refusal sentence blaming our node for it would be a lie.
+    throw new Error(`freshnessRefusalText called on a ${gate.state} gate`);
   }
   if (gate.nodeHeight == null) {
     return (

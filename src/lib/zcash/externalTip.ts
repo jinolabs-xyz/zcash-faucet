@@ -28,10 +28,12 @@
  * exceeds ours by more than the lag budget we are behind, however stale it is, provided
  * it is on our chain (a source on another fork can read above us without our being
  * behind, the caveat the AHEAD branch already makes for the primary). Where that floor
- * would bite is NOT the money gate, which already refuses everything while zec.rocks is
- * dark; it is /api/ready, which deliberately fails open on an unverifiable tip and so
- * would keep saying ready about a node the floor could prove behind. Not wired here; a
- * follow-up with its own tests. `LIGHTWALLETD_ENDPOINT` (comma-separated, tried in
+ * would bite is NOT the money gate, which refuses on its own once the cached tip ages
+ * out (MAX_AGE_MS) with zec.rocks dark and the fallback not answering; it is /api/ready,
+ * which deliberately fails open on an unverifiable tip. The node it would catch is the
+ * narrow one: still advancing, so the motion check in nodeStatus passes, yet behind the
+ * network on our own chain. A node that has stopped is caught with no oracle at all.
+ * Not wired here; a follow-up with its own tests. `LIGHTWALLETD_ENDPOINT` (comma-separated, tried in
  * order) is where a permissive second org goes the day one exists, and until then the
  * honest state is one org, fail closed.
  *
@@ -211,7 +213,10 @@ let refreshing = false;
 // claim, each one an HTTPS fetch plus N gRPC dials. One attempt per second is plenty:
 // nothing about a public endpoint changes faster than that.
 let lastAttemptAt = 0;
-const MIN_ATTEMPT_GAP_MS = 1000;
+// Exported so the money path's wait can assert that several attempts fit inside it. At
+// 10 s a cold cache could not START a fetch within the 6 s wait, and every claim would
+// read "could not verify the network" with the oracle answering: register #6 again.
+export const MIN_ATTEMPT_GAP_MS = 1000;
 
 async function refresh(): Promise<void> {
   if (refreshing) return;
@@ -231,6 +236,18 @@ async function refresh(): Promise<void> {
 
 /** Kick an initial fetch at boot so the first readiness check has a value. */
 export function warmExternalTip(): Promise<void> {
+  return refresh();
+}
+
+/**
+ * The same fetch with the attempt gap waived. Tests that re-point their fake oracle
+ * and wait for the new height otherwise spend their whole budget inside the gap and
+ * fail with a message that blames the harness. Not for production callers: the gap
+ * is what stops the money path's poll from re-dialling a failing endpoint sixty times
+ * per claim.
+ */
+export function warmExternalTipNowForTests(): Promise<void> {
+  lastAttemptAt = 0;
   return refresh();
 }
 

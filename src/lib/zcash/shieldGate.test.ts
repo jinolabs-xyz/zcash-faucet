@@ -135,7 +135,7 @@ test("a positive lag inside the budget still says within, so the split is narrow
 
 // ── THE MONEY PATH WAITS AT LEAST ONE FULL FETCH (risk register #6) ─────────────────────
 import { ORACLE_WAIT_MS, readChainFreshnessAsking, freshnessRefusalText, type ChainGate } from "./shieldGate.ts";
-import { HOSH_TIMEOUT_MS } from "./externalTip.ts";
+import { HOSH_TIMEOUT_MS, MIN_ATTEMPT_GAP_MS } from "./externalTip.ts";
 
 test("the wait in front of a drip covers the primary oracle's own timeout, and both numbers are pinned", () => {
   // 2 s against a 5 s fetch refused claims as "unverifiable" while hosh was answering at
@@ -145,6 +145,14 @@ test("the wait in front of a drip covers the primary oracle's own timeout, and b
   assert.ok(ORACLE_WAIT_MS >= HOSH_TIMEOUT_MS, `wait ${ORACLE_WAIT_MS} < fetch ${HOSH_TIMEOUT_MS}`);
   assert.equal(HOSH_TIMEOUT_MS, 5000, "the primary fetch is 5 s; change it deliberately, with the wait");
   assert.equal(ORACLE_WAIT_MS, 6000);
+});
+
+test("the attempt gap is a small fraction of the wait, so a cold cache can start a fetch inside it", () => {
+  // The gap stops the 100 ms poll re-dialling a fast-failing oracle. Set to the wait or
+  // above, a cold cache could never START a fetch before the deadline and every claim
+  // would read "could not verify" with hosh answering: the register #6 failure, back.
+  assert.equal(MIN_ATTEMPT_GAP_MS, 1000, "one attempt per second; change it deliberately");
+  assert.ok(MIN_ATTEMPT_GAP_MS * 3 <= ORACLE_WAIT_MS, `gap ${MIN_ATTEMPT_GAP_MS} leaves fewer than three attempts in ${ORACLE_WAIT_MS}`);
 });
 
 test("a tip that lands inside the wait is USED, and one that never lands refuses at the deadline", async () => {
@@ -200,6 +208,10 @@ test("unverifiable with a known node height blames the unverified tip", () => {
   const t = freshnessRefusalText(gate({ state: "unverifiable", nodeHeight: 100, externalHeight: null }));
   assert.match(t, /could not verify the network's current height/);
   assert.doesNotMatch(t, /did not report|catching up/);
+});
+
+test("a SAFE gate has no refusal sentence: asking for one is a caller bug, not a lie about our node", () => {
+  assert.throws(() => freshnessRefusalText(gate({ state: "safe" })), /called on a safe gate/);
 });
 
 test("every sentence says nothing was claimed and the cooldown is untouched", () => {
