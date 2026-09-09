@@ -109,9 +109,19 @@ if [ "$miner" = "1" ]; then
     built="$REPO_DIR/deploy/z3/miner/target/release/zcash-testnet-miner"
     if install -m 755 "$built" "$INSTALL_DIR/.zcash-testnet-miner.new" \
        && mv -f "$INSTALL_DIR/.zcash-testnet-miner.new" "$INSTALL_DIR/zcash-testnet-miner"; then
-      systemctl restart zcash-testnet-miner 2>/dev/null \
-        || log "ERROR: new miner installed but the restart failed, it is still on the old one"
-      log "miner rebuilt and restarted ($(sha256sum "$INSTALL_DIR/zcash-testnet-miner" | cut -c1-12))"
+      # Only a RUNNING miner is restarted. A stopped one was stopped by someone: the
+      # owner parked it 2026-09-08 and the next miner commit's deploy started it again,
+      # so it mined for hours against a decision nobody had reversed. A stopped unit
+      # picks the new binary up whenever it is next started, and a unit systemd is
+      # itself about to restart (activating) does the same, so neither is touched.
+      sha="$(sha256sum "$INSTALL_DIR/zcash-testnet-miner" | cut -c1-12)"
+      if systemctl is-active --quiet zcash-testnet-miner 2>/dev/null; then
+        systemctl restart zcash-testnet-miner 2>/dev/null \
+          || log "ERROR: new miner installed but the restart failed, it is still on the old one"
+        log "miner rebuilt and restarted ($sha)"
+      else
+        log "miner rebuilt, and left stopped as it was found: the new binary runs when someone starts it ($sha)"
+      fi
       miner_rc=0
     else
       log "ERROR: could not install the rebuilt miner"
