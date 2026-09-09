@@ -225,3 +225,13 @@ check "no StartLimit* key sits outside [Unit], where systemd would ignore it" \
 # nothing, which is the exact false pass this suite exists to prevent.
 check "and the scan actually iterated the units, so a clean result means something" \
   "[ '$UNITS_SCANNED' -ge 8 ] || { echo '   only scanned $UNITS_SCANNED unit(s)'; false; }"
+
+echo "== repo: the CI token is read-only, and a new workflow cannot quietly widen it"
+# Nothing in ci.yml calls the GitHub API, but without a permissions block every job ran
+# with the repository default, handed to code from a pull-request branch (register #27).
+for wf in "$REPO"/.github/workflows/*.yml; do
+  name="$(basename "$wf")"
+  check "$name declares a permissions block" "grep -q '^permissions:' '$wf'"
+  check "$name grants contents no more than read" "grep -A 4 '^permissions:' '$wf' | grep -q 'contents: read'"
+  check "$name grants nothing write at the top level" "! grep -A 6 '^permissions:' '$wf' | grep -qE ': *write'"
+done

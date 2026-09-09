@@ -7,6 +7,16 @@ on:
   push:
     branches: [main]
 
+# LEAST PRIVILEGE FOR THE JOB TOKEN (risk register #27). Nothing in this workflow
+# calls the GitHub API: no gh, no GITHUB_TOKEN, no actions/github-script. Without a
+# permissions block every job here ran with whatever the repository default grants,
+# which on an older default is write to contents, issues, packages and more, handed
+# to code from a pull request branch. Declared read-only at the top so a job that
+# later needs something has to ask for it in its own block and say why, the way
+# live-smoke.yml's actions:read does.
+permissions:
+  contents: read
+
 # Cancel superseded runs on PR branches, never on main: GitHub renders a
 # cancelled run as failing, so rapid merges were flipping the README badge
 # to FAILING while main was healthy. Main runs are few and cheap, let each
