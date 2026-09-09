@@ -211,7 +211,18 @@ DELETE FROM used_challenges WHERE exp < ?
 
 // A 'pending' row that never finalises (e.g. process died mid-send) shouldn't
 // lock a user out for the whole cooldown - it only blocks for this lease.
-export const PENDING_LEASE_SECONDS = 120;
+//
+// DERIVED FROM THE SEND BUDGET, NOT A CONSTANT (risk register #8). It was 120 s while a
+// legal shielded send may take config.sendTaskDeadlineMs, 309 s on stock settings: a slow
+// send unblocked its own address at two minutes, still pending, and a retry reserved and
+// paid a second drip while the first was being built. The route's unknown-outcome
+// handling (finalise as sent) only begins once the deadline has passed, so the lease has
+// to outlast the deadline, with a margin for the finalise write itself. The db module
+// computes the value once from config; this is the rule, kept pure so it can be tested.
+export const PENDING_LEASE_MARGIN_SECONDS = 60;
+export function pendingLeaseSeconds(sendTaskDeadlineMs: number): number {
+  return Math.ceil(sendTaskDeadlineMs / 1000) + PENDING_LEASE_MARGIN_SECONDS;
+}
 
 /**
  * Atomic reserve: insert a 'pending' claim ONLY IF no live claim exists for this
@@ -292,9 +303,11 @@ export function reserveParams(o: {
   dailyCapZat: number;
   subnetDailyMax: number;
   network: string;
+  /** How long a pending row blocks: pendingLeaseSeconds(config.sendTaskDeadlineMs). */
+  pendingLeaseSeconds: number;
 }): (string | number)[] {
   const cooldownCut = o.now - o.cooldownSeconds;
-  const leaseCut = o.now - PENDING_LEASE_SECONDS;
+  const leaseCut = o.now - o.pendingLeaseSeconds;
   const since = o.now - 86_400;
   return [
     o.addressHash, o.ipHash, o.subnetHash, o.amountZat, o.now, o.network, // INSERT ... SELECT

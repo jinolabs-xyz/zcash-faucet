@@ -10,8 +10,39 @@ import { join } from "node:path";
 process.chdir(mkdtempSync(join(tmpdir(), "faucet-inflight-")));
 process.env.DB_BACKEND = "sqlite";
 
-const { reserveClaim, finalizeClaim } = await import("./index.ts");
-const { PENDING_LEASE_SECONDS } = await import("./sql.ts");
+const { reserveClaim, finalizeClaim, PENDING_LEASE_SECONDS } = await import("./index.ts");
+const { config } = await import("../config.ts");
+const { pendingLeaseSeconds, PENDING_LEASE_MARGIN_SECONDS } = await import("./sql.ts");
+
+test("THE LEASE OUTLASTS A LEGAL SEND (risk register #8)", () => {
+  // 120 s against a 309 s send budget: a slow shielded send unblocked its own address at
+  // two minutes, still pending, and a retry paid a second drip while the first was being
+  // built. The lease is derived from the same budget, with a margin for the finalise.
+  assert.ok(
+    PENDING_LEASE_SECONDS * 1000 > config.sendTaskDeadlineMs,
+    `lease ${PENDING_LEASE_SECONDS}s does not outlast the ${config.sendTaskDeadlineMs} ms send deadline`,
+  );
+  assert.equal(PENDING_LEASE_SECONDS, pendingLeaseSeconds(config.sendTaskDeadlineMs));
+  assert.equal(pendingLeaseSeconds(309_000), 309 + PENDING_LEASE_MARGIN_SECONDS);
+  assert.equal(pendingLeaseSeconds(120_001), 121 + PENDING_LEASE_MARGIN_SECONDS, "rounds the deadline UP to whole seconds");
+  assert.ok(PENDING_LEASE_MARGIN_SECONDS >= 30, "the margin covers the finalise write after the deadline");
+});
+
+test("a second claim for the same address INSIDE the send budget is refused, even past two minutes", async () => {
+  // The #8 window itself: the first claim is still pending (the send is in flight,
+  // legally, at 121 s), and the old lease had already released it.
+  // More than a day BEFORE every other case's clock: the daily-cap SUM has no upper
+  // bound on created_at, so a row stamped in another case's future would count against
+  // its cap.
+  const now = 1_799_000_000;
+  const address = "utest1slow-send";
+  const first = await reserve(address, now);
+  assert.equal(first.ok, true);
+  const atTwoMinutes = await reserve(address, now + 121);
+  assert.equal(atTwoMinutes.ok, false, "121 s into a legal send the address must still be held");
+  const atDeadline = await reserve(address, now + Math.ceil(config.sendTaskDeadlineMs / 1000));
+  assert.equal(atDeadline.ok, false, "and at the deadline itself, before the route has finalised");
+});
 
 const COOLDOWN = 86_400;
 const CAP = 100_000_000_000n;

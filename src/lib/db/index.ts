@@ -23,11 +23,18 @@ import {
   DRIP_TOTALS_SQL,
   DRIP_ANY_SQL,
   DRIP_SEED_SQL,
-  PENDING_LEASE_SECONDS,
+  pendingLeaseSeconds,
   SPEND_CHALLENGE_SQL,
   PURGE_CHALLENGES_SQL,
 } from "./sql.ts";
 import { probeLedger, verdictFor, PROBE_EVERY_MS, type LedgerCacheEntry, type LedgerHealth } from "./probe.ts";
+
+/**
+ * How long a pending claim blocks its address, client and cap. Outlasts the send
+ * deadline by a margin, so a send that is still legally in flight cannot be reserved
+ * over (register #8). Exported for the tests that walk time past it.
+ */
+export const PENDING_LEASE_SECONDS = pendingLeaseSeconds(config.sendTaskDeadlineMs);
 
 const g = globalThis as unknown as {
   __faucetDriver?: DbDriver;
@@ -149,6 +156,7 @@ export async function reserveClaim(opts: {
   const res = await driver().run(
     RESERVE_SQL,
     reserveParams({
+      pendingLeaseSeconds: PENDING_LEASE_SECONDS,
       addressHash,
       ipHash,
       subnetHash,

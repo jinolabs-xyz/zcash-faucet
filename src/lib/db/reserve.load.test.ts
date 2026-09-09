@@ -26,6 +26,7 @@ function freshDb() {
 function reserve(db: InstanceType<typeof Database>, addr: string, ip: string, now: number) {
   return db.prepare(RESERVE_SQL).run(
     ...reserveParams({
+      pendingLeaseSeconds: 120,
       addressHash: addr,
       ipHash: ip,
       // "" is the skip sentinel for the subnet rule, so this file keeps testing the
