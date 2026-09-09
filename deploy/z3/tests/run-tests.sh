@@ -62,7 +62,7 @@ BASE_PATH="$PATH"
 # shellcheck source=lib.sh
 . "$SCRATCH/lib.sh"
 
-SELECTED="${SUITES:-zsnap backup deploy metrics redeploy drift alerts access watchdog repo installops boxreport bringtospec ctazports ctazconfig ctazbroker prune imagemanifest autodeploy}"
+SELECTED="${SUITES:-zsnap backup deploy metrics redeploy drift alerts access watchdog repo installops boxreport bringtospec ctazports ctazconfig ctazbroker prune imagemanifest autodeploy zalletrepair}"
 
 # A missing dependency used to look exactly like broken code. With no sshd on
 # PATH the access suite reports 3 plain FAILs, and an `apt-get install` that
@@ -117,6 +117,8 @@ suite_deps() { # $1 suite name -> commands it needs beyond the base set
     bringtospec) echo "" ;;
     # ctazbroker runs the real broker (python3) against a python3 node double.
     ctazbroker) echo "python3" ;;
+    # zalletrepair drives a docker double it writes itself; nothing beyond the base set.
+    zalletrepair) echo "" ;;
     # prune drives a docker double; GNU date is in the base set.
     prune) echo "" ;;
     *)        echo "" ;;
