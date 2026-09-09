@@ -115,8 +115,14 @@ docker stop "$ZALLET_CONTAINER" >/dev/null 2>&1 || true
 # sweep that started it back, is two writers on wallet.db; the sibling repair
 # (zallet-reset-ironwood-tree.sh) refuses on the same check.
 running="$(docker inspect --format '{{.State.Running}}' "$ZALLET_CONTAINER" 2>/dev/null || echo unknown)"
+if [ "$running" = "unknown" ]; then
+  echo "ABORT: could not read whether $ZALLET_CONTAINER is running after docker stop, so the truncate would open wallet.db without knowing what else has it. Nothing was changed; zallet may be stopped, check with docker ps." >&2
+  echo "Then: systemctl start $WATCHDOG_UNIT   (you stopped it for this)" >&2
+  exit 1
+fi
 if [ "$running" != "false" ]; then
   echo "ABORT: $ZALLET_CONTAINER is still running (State.Running=$running) after docker stop, so the truncate would open wallet.db beside a live daemon. Nothing was changed." >&2
+  echo "Then: systemctl start $WATCHDOG_UNIT   (you stopped it for this)" >&2
   exit 1
 fi
 
@@ -133,11 +139,28 @@ for side in wal shm; do
 done
 if [ "$backup_ok" = "1" ]; then
   echo "backup: $BAK$( [ -f "${BAK}-wal" ] && printf ' (+ -wal%s)' "$( [ -f "${BAK}-shm" ] && printf ', -shm')" )"
-  echo "  to put it back: docker stop $ZALLET_CONTAINER; cp -f $BAK $DB; rm -f ${DB}-wal ${DB}-shm; [ -f ${BAK}-wal ] && cp -f ${BAK}-wal ${DB}-wal; [ -f ${BAK}-shm ] && cp -f ${BAK}-shm ${DB}-shm; docker start $ZALLET_CONTAINER"
+  # THE RESTORE RECIPE, in the order restore-backup.sh proved is the only safe one (#216):
+  # the sidecars come OFF first, because a new main file wearing the old file's WAL is
+  # corruption rather than a rollback. The watchdog has to be down for it, or its sweep
+  # docker-starts zallet mid-copy: two writers on the funds db, the hazard this whole
+  # script guards. And the sidecars are copied as NEW files, so they land owned by
+  # whoever runs the recipe (root) while wallet.db keeps the wallet's uid: zallet then
+  # cannot write its own WAL. chown them to the main file's owner.
+  cat <<RESTORE
+  to put it back (all of it, in this order):
+    systemctl stop $WATCHDOG_UNIT
+    docker stop $ZALLET_CONTAINER
+    rm -f "${DB}-wal" "${DB}-shm"
+    cp -f "$BAK" "$DB"
+    for s in wal shm; do [ -f "${BAK}-\$s" ] && cp -f "${BAK}-\$s" "${DB}-\$s" && chown --reference="$DB" "${DB}-\$s"; done
+    docker start $ZALLET_CONTAINER
+    systemctl start $WATCHDOG_UNIT
+RESTORE
 else
   echo "ABORT: could not back up $DB (and sidecars) to $BAK (disk full?). No truncate without a backup." >&2
   rm -f "$BAK" "${BAK}-wal" "${BAK}-shm"
-  docker start "$ZALLET_CONTAINER" >/dev/null 2>&1 && echo "zallet started again on the untouched state"
+  docker start "$ZALLET_CONTAINER" >/dev/null 2>&1 && echo "zallet started again on the untouched state" >&2
+  echo "Then: systemctl start $WATCHDOG_UNIT   (you stopped it for this)" >&2
   exit 1
 fi
 

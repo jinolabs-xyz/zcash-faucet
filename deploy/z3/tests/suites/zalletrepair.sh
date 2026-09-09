@@ -80,7 +80,8 @@ check "the watchdog was asked before anything else" "awk '/systemctl is-active f
 check "zallet was stopped, CONFIRMED down, then the truncate ran, then it was started" \
   "awk '/docker stop/{s=NR} /State.Running/{c=NR} /docker run/{r=NR} /docker start/{t=NR} END{exit !(s && c && r && t && s<c && c<r && r<t)}' '$STUB_LOG'"
 check "no --user was passed for a container with the image default user" "! grep -q 'docker run.*--user' '$STUB_LOG'"
-check "the backup line tells how to put it back" "grep -q 'to put it back: docker stop zallet-under-test; cp -f' '$T/run.log'"
+check "the backup line tells how to put it back, watchdog first, sidecars off before the main file, and chowned" \
+  "awk '/to put it back/{r=1} r&&/systemctl stop faucet-watchdog.service/{w=NR} r&&/rm -f .*-wal/{x=NR} r&&/cp -f/&&!/for s in/{c=NR} r&&/chown --reference/{o=NR} r&&/systemctl start faucet-watchdog.service/{s=NR} END{exit !(w && x && c && o && s && w<x && x<c && c<=o && o<s)}' '$T/run.log'"
 check "and the done block says to start the watchdog again" "grep -q 'Now: systemctl start faucet-watchdog.service' '$T/run.log'"
 
 echo "== zallet-truncate: the repair runs AS the container's user when it has one"
@@ -102,7 +103,7 @@ echo "== zallet-truncate: a stop that did not take is an abort, not a truncate b
 zr_env
 STUB_INSPECT_IMAGE="zodlinc/zallet:v0.1.0-beta.3" STUB_STOP_STICKS=1 bash "$TRUNC" 4282400 > "$T/stuck.log" 2>&1
 check "exits nonzero" "[ $? -ne 0 ]"
-check "says the container is still running" "grep -q 'still running (State.Running=true)' '$T/stuck.log'"
+check "says the container is still running, and to start the watchdog again" "grep -q 'still running (State.Running=true)' '$T/stuck.log' && grep -q 'systemctl start faucet-watchdog.service' '$T/stuck.log'"
 check "and nothing was run against the database, no backup written" "! grep -q 'docker run' '$STUB_LOG' && ! ls '$T/vol/'wallet.db.bak-* >/dev/null 2>&1"
 
 echo "== zallet-truncate: NO CONTAINER IS AN ABORT, before anything is stopped, showing docker's own words"
@@ -173,6 +174,7 @@ zr_env
 STUB_INSPECT_IMAGE="zodlinc/zallet:v0.1.0-beta.3" STUB_CP_FAIL=1 bash "$TRUNC" 4282400 > "$T/nobak.log" 2>&1
 check "exits nonzero" "[ $? -ne 0 ]"
 check "says the backup failed and refuses" "grep -q 'No truncate without a backup' '$T/nobak.log'"
+check "and tells the operator to start the watchdog again" "grep -q 'systemctl start faucet-watchdog.service' '$T/nobak.log'"
 check "nothing was run against the database" "! grep -q 'docker run' '$STUB_LOG'"
 check "and zallet was started again on the untouched state" "grep -q 'docker start zallet-under-test' '$STUB_LOG' && grep -q 'started again on the untouched state' '$T/nobak.log'"
 
@@ -191,11 +193,33 @@ check "the failure line says zallet could NOT be started, and to start it by han
 check "and never claims it was restarted" "! grep -q 'zallet was started again' '$T/nostart.log'"
 check "and the failure path too says to start the watchdog again" "grep -q 'Then: systemctl start faucet-watchdog.service' '$T/nostart.log'"
 
-# Nothing this suite exports may leak into whatever SUITES lists after it.
-unset ZALLET_WALLET_DB ZALLET_CONTAINER STUB_LOG STUB_INSPECT_ID STUB_STOPPED_MARK
-
 echo "== zallet-truncate: a bad height is usage, before docker is touched"
 zr_env
 bash "$TRUNC" notanumber > "$T/usage.log" 2>&1
 check "exits 2" "[ $? -eq 2 ]"
 check "no docker call at all" "[ ! -s '$STUB_LOG' ]"
+
+echo "== zallet-truncate: a stop whose state cannot be READ is an abort too, not a truncate on a guess"
+zr_env
+cat > "$T/bin/docker" <<'D'
+#!/usr/bin/env bash
+echo "docker $*" >> "${STUB_LOG:?}"
+case "$1" in
+  inspect) case "$3" in
+      '{{.Config.Image}}') echo "zodlinc/zallet:v0.1.0-beta.3" ;;
+      '{{.Image}}') echo "sha256:6cf065f7aaaa" ;;
+      '{{.Config.User}}') echo "" ;;
+      '{{.State.Running}}') echo "Error: No such object" >&2; exit 1 ;;
+    esac ;;
+  stop|start) exit 0 ;;
+  *) echo "double: unsupported $*" >&2; exit 64 ;;
+esac
+D
+chmod +x "$T/bin/docker"
+bash "$TRUNC" 4282400 > "$T/unknownstate.log" 2>&1
+check "exits nonzero" "[ $? -ne 0 ]"
+check "says it could not read the state" "grep -q 'could not read whether zallet-under-test is running' '$T/unknownstate.log'"
+check "nothing was run against the database and no backup was written" "! grep -q 'docker run' '$STUB_LOG' && ! ls '$T/vol/'wallet.db.bak-* >/dev/null 2>&1"
+
+# Nothing this suite exports may leak into whatever SUITES lists after it.
+unset ZALLET_WALLET_DB ZALLET_CONTAINER STUB_LOG STUB_INSPECT_ID STUB_INSPECT_USER STUB_STOPPED_MARK ZALLET_IMAGE
