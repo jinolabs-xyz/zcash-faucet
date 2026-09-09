@@ -434,19 +434,31 @@ check "it counted as a failure, so it can back off" "grep -q ' 1 ' '$T/last-proc
 check "and the log says which half failed" "grep -q 'ops or miner half failed' '$T/mixed.log'"
 
 echo "== auto-deploy: a failed install of install-ops.sh itself counts, so it can back off too"
+# A read-only install dir. Mode bits do not bind root, so as root the dir is replaced by
+# a FILE of the same name, which install cannot write into either.
 ad_env
 export AUTODEPLOY_STATE_FILE="$T/last-processed" AUTODEPLOY_BACKOFF_AFTER=2
 ad_advance deploy/z3/watchdog.sh
 bash "$AD" > /dev/null 2>&1
 ad_advance deploy/z3/alert.sh
-chmod 555 "$T/install"
+if [ "$(id -u)" = "0" ]; then rm -rf "$T/install"; : > "$T/install"; else chmod 555 "$T/install"; fi
 bash "$AD" > /dev/null 2>&1
 bash "$AD" > /dev/null 2>&1
 bash "$AD" > "$T/installfail.log" 2>&1
 rc_if=$?
-chmod 755 "$T/install"
+if [ "$(id -u)" = "0" ]; then rm -f "$T/install"; mkdir -p "$T/install"; else chmod 755 "$T/install"; fi
 check "the third tick backed off" "[ $rc_if -ne 0 ] && grep -q 'backing off' '$T/installfail.log'"
 unset AUTODEPLOY_BACKOFF_AFTER
+
+echo "== auto-deploy: redeploy exit 2 beside a FAILED ops half exits 1, not the can-wait-until-morning 2"
+ad_env
+export AUTODEPLOY_STATE_FILE="$T/last-processed"
+ad_advance deploy/z3/watchdog.sh
+bash "$AD" > /dev/null 2>&1
+ad_advance src/page.tsx deploy/z3/alert.sh
+STUB_INSTALLOPS_RC=1 STUB_REDEPLOY_RC=2 bash "$AD" > "$T/mixed2.log" 2>&1
+check "exits 1" "[ $? -eq 1 ]"
+check "and counted the failure" "grep -q ' 1 ' '$T/last-processed.failures'"
 
 echo "== auto-deploy: redeploy exit 1 (NOT shipped) keeps the baseline, and a commit failing every time BACKS OFF"
 ad_env
@@ -469,6 +481,14 @@ check "the fourth tick BACKS OFF, exiting non-zero so the unit stays red (the pa
 check "no redeploy ran" "[ ! -s '$REDEPLOY_LOG' ]"
 check "and the log says so, with the count and the wait" "grep -qE 'backing off: [0-9a-f]{7} has failed 3 times in a row, next retry in [0-9]+s' '$T/backoff.log'"
 check "the wait is inside the window, never a nonsense number" "[ \"\$(grep -oE 'next retry in [0-9]+s' '$T/backoff.log' | grep -oE '[0-9]+')\" -le 1800 ]"
+# A clock stepped BACKWARDS: the record's epoch is an hour in the future. Without the
+# clamp the wait printed 5400s and the backoff outlived its window by the skew.
+sha_now="$(git -C "$T/repo" rev-parse origin/main)"
+printf '%s 3 %s\n' "$sha_now" "$(( $(date -u +%s) + 3600 ))" > "$T/last-processed.failures"
+: > "$REDEPLOY_LOG"
+STUB_REDEPLOY_RC=1 bash "$AD" > "$T/skew.log" 2>&1
+check "with the record stamped in the future the tick still backs off" "[ $? -eq 1 ] && [ ! -s '$REDEPLOY_LOG' ]"
+check "and prints a wait of exactly the window, not window plus skew" "grep -q 'next retry in 1800s' '$T/skew.log'"
 # The window passes: the retry runs again.
 : > "$REDEPLOY_LOG"
 AUTODEPLOY_BACKOFF_SECONDS=0 STUB_REDEPLOY_RC=1 bash "$AD" > "$T/retry.log" 2>&1

@@ -338,6 +338,8 @@ echo "docker $*" >> "$STUB_LOG"
 case "$*" in
   *"exec -T faucet"*) exit 1 ;;
   *image*inspect*) echo "sha256:old" ;;
+  *"ps -q faucet"*) echo "cid-running" ;;
+  *"State.Running"*) echo "${STUB_FAUCET_RUNNING:-true}" ;;
   *) exit 0 ;;
 esac
 DOCKER
@@ -345,6 +347,20 @@ chmod +x "$T/bin/docker"
 bash "$REDEPLOY" --no-pull > "$T/unprobe.log" 2>&1
 rc_unprobe=$?
 check "exits 3: shipped but unverified, not 1 and not the did-not-ship 2" "[ $rc_unprobe -eq 3 ]"
+check "and said docker confirms the container is running" "grep -q 'is running (docker says so)' '$T/unprobe.log'"
+
+echo "== redeploy: probe unusable AND the container is not running is DID NOT SHIP, rolled back"
+# exec fails for a crash-looping container just as it fails for a broken probe, and this
+# path used to exit 3 (shipped) for both: with auto-deploy advancing its baseline on 3
+# that recorded an unshipped commit and left the unit green over a 502 (review of #13).
+STUB_FAUCET_RUNNING=false bash "$REDEPLOY" --no-pull > "$T/unprobe-dead.log" 2>&1
+rc_dead=$?
+# The rollback's own health check runs through the same unusable probe, so it cannot
+# confirm the old build is serving either: that is exit 1, "the faucet may be down", a
+# page, and auto-deploy retries it. Never 3, which would record the commit as shipped.
+check "exits 1: rolled back, and the rollback could not be verified through the dead probe either" "[ $rc_dead -eq 1 ]"
+check "says the build is not running and rolled back" "grep -q 'is NOT running (container state: false)' '$T/unprobe-dead.log' && grep -q 'rolling back to' '$T/unprobe-dead.log'"
+check "and never claims the new build may be fine, and never exits 3" "! grep -q 'may be fine' '$T/unprobe-dead.log' && [ $rc_dead -ne 3 ]"
 check "says NOT VERIFIED" "grep -q 'NOT VERIFIED' '$T/unprobe.log'"
 check "does not claim the faucet may be down" "! grep -q 'may be down' '$T/unprobe.log'"
 check "did not roll back on an unprobeable app" "! grep -q 'rolling back' '$T/unprobe.log'"

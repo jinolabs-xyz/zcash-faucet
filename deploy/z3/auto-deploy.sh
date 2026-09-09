@@ -247,7 +247,13 @@ if [ "$app" = "1" ]; then
     log "the app shipped (unverified) but the ops or miner half failed, so the commit stays unprocessed and this tick is a failure"
     exit 1
   fi
-  if [ "$app_rc" -ne 0 ]; then note_failure; exit "$app_rc"; fi
+  if [ "$app_rc" -ne 0 ]; then
+    note_failure
+    # redeploy's 2 is "did not ship, faucet serving: can wait until morning", and that
+    # is not true of a box whose ops half also failed; the box-not-at-spec 1 wins there.
+    [ "$rc" -eq 0 ] && exit "$app_rc"
+    exit 1
+  fi
   # A failed miner rebuild leaves the box at 40 of 41 and the live probe red, which is
   # the state this whole change exists to end. It must not exit 0 just because the app
   # and ops halves went fine. shellcheck caught that this variable was set and never

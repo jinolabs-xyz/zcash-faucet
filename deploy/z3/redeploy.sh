@@ -10,6 +10,8 @@
 # Exit codes matter for anything scripting this, and the split is about
 # whether to wake someone:
 #   0  the new build is live and healthy
+#   3  the new build is live and healthy but could NOT be verified against the
+#      commit, or could not be probed at all. Shipped; one page, once.
 #   2  the change did NOT ship and the faucet is serving anyway, either
 #      because nothing was swapped (bad pull, failed build) or because the
 #      rollback put the old build back. Nobody needs to be paged for this.
@@ -464,8 +466,20 @@ fi
 
 # A gate failure only means something when the probe could actually run.
 if ! probe_usable; then
+  # `compose exec` failing cannot tell "the probe mechanism is broken" from "the new
+  # container is not running": a build that starts and crash-loops fails exec too, and
+  # this path used to call that shipped (review of #13, round 2: exit 3, commit recorded,
+  # unit green, site 502). Ask through a DIFFERENT mechanism than exec: is the faucet
+  # container running at all. Not running is the would-not-start case, rolled back.
+  cid="$(compose ps -q faucet 2>/dev/null | head -n1)"
+  running="$([ -n "$cid" ] && docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null || echo unknown)"
+  if [ "$running" != "true" ]; then
+    log "the new build is NOT running (container state: ${running:-none}) and the probe could not be used, rolling back"
+    do_rollback || die "rollback failed after the new build did not come up, the faucet may be down"
+    not_shipped "the new build did not come up (and the probe could not be used to ask why)"
+  fi
   log "NOT VERIFIED: could not probe the app at all (no $FAUCET_URL and docker compose exec failed)"
-  log "The new build is running and may be fine. Nothing was rolled back."
+  log "The new build is running (docker says so) and may be fine. Nothing was rolled back."
   log "Set REDEPLOY_FAUCET_URL to something reachable and re-run to get a real verdict."
   exit 3
 fi

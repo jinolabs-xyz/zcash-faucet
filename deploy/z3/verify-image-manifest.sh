@@ -23,8 +23,8 @@
 #            commit does not (node_modules, .next, the runtime). Secret-pattern scanning
 #            is a separate, weaker check; this one is the equality half.
 #
-# EXIT CODES, the same 0/1/2 vocabulary as redeploy.sh and bring-to-spec.sh, because the
-# caller should not have to translate:
+# EXIT CODES, the same 0/1/2 vocabulary as bring-to-spec.sh (redeploy.sh adds a 3 of its
+# own for shipped-but-unverified, and turns this script's 2 into that):
 #   0  MATCHES            every compared path is byte-identical to the commit
 #   1  DIFFERS            at least one is stale or missing, and they are NAMED
 #   2  COULD-NOT-COMPARE  we could not read the image, resolve the commit, or find docker

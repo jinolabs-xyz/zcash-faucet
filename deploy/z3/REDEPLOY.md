@@ -87,8 +87,11 @@ Set `REDEPLOY_FAUCET_URL` only if you publish a port yourself, and point it at
 something that answers 200 without a redirect.
 
 If the probe cannot run at all (no URL, and `docker compose exec` fails), the
-script says `NOT VERIFIED`, changes nothing, and exits 2. It does not roll
-back, because being unable to ask is not evidence of a bad build.
+script first asks docker whether the faucet container is running at all: not
+running is the would-not-start case, rolled back, exit 2. Running, it says
+`NOT VERIFIED`, changes nothing, and exits 3: being unable to ask a running
+container is not evidence of a bad build. (`exec` failing cannot tell a broken
+probe from a crash-looping container, and both used to read as "may be fine".)
 
 ## Why the health gate is two-tier
 

@@ -19,7 +19,7 @@
 # config, and audit-access.sh would not flag it, because 18233 is on its allowed-public
 # list already. Nobody was going to catch that by eye.
 #
-# EXIT CODES, matching redeploy.sh and bring-to-spec.sh:
+# EXIT CODES, matching bring-to-spec.sh:
 #   0  all four slots are free
 #   1  KNOWN-BAD, at least one slot collides, and the script says which and with what
 #   2  CANNOT-VERIFY, the check could not read what it needed to compare against

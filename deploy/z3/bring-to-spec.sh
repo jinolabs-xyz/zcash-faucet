@@ -23,7 +23,8 @@
 # Safe to re-run by construction: every step underneath is idempotent, and a second run
 # with nothing to do says so rather than reinstalling.
 #
-# EXIT CODES, matching redeploy.sh rather than quietly differing from it:
+# EXIT CODES (redeploy.sh has its own vocabulary, with a 3 for shipped-but-unverified;
+# the 0/1/2 below are this script's and ctaz-port-check.sh's):
 #   0  the box is at spec, and that was checked rather than assumed
 #   1  KNOWN-BAD. The box is definitely not at spec, and what is wrong is named.
 #   2  CANNOT-VERIFY. The box may well be at spec; this run is not able to say so.
