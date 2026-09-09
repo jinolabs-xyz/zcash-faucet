@@ -19,8 +19,26 @@ let silentHoshRequests = 0;
 silentHosh.on("request", () => { silentHoshRequests += 1; });
 const {
   heightFromBlockID, getExternalTipReading, getExternalTip, readingFor, MAX_AGE_MS_FOR_TESTS,
-  fetchNetworkTipWithin, isIndependentTipEndpoint, dialLatestBlock,
+  fetchNetworkTipWithin, isIndependentTipEndpoint, dialLatestBlock, warmExternalTip,
 } = await import("./externalTip.ts");
+
+test("with no independent endpoint configured, the first warm says so ONCE, at boot, not one warning at a time mid-outage", async () => {
+  // This file's LIGHTWALLETD_ENDPOINT is loopback, which the oracle skips, so the boot
+  // check has something to say. Round 8 asked for the warning; round 9 found it untested.
+  const warned: string[] = [];
+  const realWarn = console.warn;
+  console.warn = (...a: unknown[]) => { warned.push(a.map(String).join(" ")); };
+  try {
+    await warmExternalTip();
+    await warmExternalTip();
+  } finally {
+    console.warn = realWarn;
+  }
+  const boot = warned.filter((w) => w.includes("no configured LIGHTWALLETD_ENDPOINT is a public third party"));
+  assert.equal(boot.length, 1, `expected exactly one boot warning, got ${boot.length}: ${warned.join(" | ")}`);
+  assert.match(boot[0], /https:\/\/127\.0\.0\.1:9/);
+  assert.match(boot[0], /cached tip to age out \(5 min\)/);
+});
 
 // Encode a number as a protobuf varint (the wire form of BlockID.height).
 function varint(n: number): number[] {
@@ -206,7 +224,7 @@ test("OUR OWN ZAINO IS NEVER THE TIP ORACLE: plaintext, private and local endpoi
                    // round 8's edges: mapped IPv4, trailing dots, more local suffixes, other reserved v6
                    "https://[::ffff:127.0.0.1]", "https://[::ffff:10.0.0.1]", "https://[::]", "https://[fec0::1]", "https://[64:ff9b::a00:1]",
                    "https://localhost.", "https://zaino.local.", "https://zaino.internal.", "https://zaino.lan", "https://zaino.home.arpa",
-                   "https://zaino.intranet", "https://zaino.onion", "https://LOCALHOST", "https://[::FFFF:192.168.1.1]"]) {
+                   "https://zaino.intranet", "https://zaino.onion", "https://LOCALHOST", "https://[::FFFF:192.168.1.1]", "https://zaino.local.."]) {
     assert.equal(isIndependentTipEndpoint(e), false, e);
   }
   for (const e of ["https://testnet.zec.rocks:443", "https://testnet.zec.rocks", "https://lightwalletd.testnet.electriccoin.co:9067",

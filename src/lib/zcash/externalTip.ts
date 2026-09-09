@@ -176,7 +176,7 @@ export function isIndependentTipEndpoint(endpoint: string): boolean {
   if (!targetFor(endpoint).tls) return false;
   // Brackets off an IPv6 literal, a trailing dot off a fully qualified name (`zaino.local.`
   // is the same place as `zaino.local`), and case folded.
-  const host = url.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
+  const host = url.hostname.replace(/^\[|\]$/g, "").replace(/\.+$/, "").toLowerCase();
   if (host === "localhost" || /\.(local|internal|localhost|lan|home|home\.arpa|intranet|corp|onion)$/.test(host)) return false;
   if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) return isPublicIpv4(host);
   if (host.includes(":")) {
@@ -361,7 +361,7 @@ export function warmExternalTip(): Promise<void> {
   if (!bootChecked) {
     bootChecked = true;
     if (!config.lightwalletdEndpoints.some(isIndependentTipEndpoint)) {
-      console.warn(`[externalTip] no configured LIGHTWALLETD_ENDPOINT is a public third party (${config.lightwalletdEndpoints.join(", ")}), so the tip oracle has no fallback: drips are refused whenever hosh is unreachable`);
+      console.warn(`[externalTip] no configured LIGHTWALLETD_ENDPOINT is a public third party (${config.lightwalletdEndpoints.join(", ")}), so the tip oracle has no fallback: once hosh has been unreachable long enough for the cached tip to age out (${MAX_AGE_MS / 60_000} min), drips are refused until it answers again`);
     }
   }
   return refresh();
