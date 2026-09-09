@@ -37,6 +37,12 @@ function fakeFaucet(ready) {
   return server;
 }
 
+const STATUS_BODY = {
+  network: "testnet", dripTaz: 0.1, balanceTaz: 100, empty: false, queueDepth: 0, challenge: "pow",
+  backend: { reachable: true },
+  node: { ready: true, syncPercent: 100, height: 10, frozen: false },
+  box: { state: "complete", expected: 1, present: 1, notEnabled: 0, watchdogUnit: "active", alertBridge: "ok", minerBinary: "current", ageSeconds: 5 },
+};
 const READY = { ready: true, reason: null, node: { ready: true, canBuildTx: true, shield: { state: "safe", lag: 0 } }, backend: { reachable: true }, balanceTaz: 100 };
 const NOT_READY = { ready: false, reason: "below reserve, refilling", node: { ready: true, canBuildTx: false, shield: { state: "safe", lag: 0, reason: "below reserve" } } };
 
@@ -173,7 +179,12 @@ test("garbage is ignored rather than trusted", async () => {
 
 /* --------------------------------------- the certificate, which only an outside probe sees (#18) */
 
-/** A self-signed cert valid for `days`, or null when this machine has no openssl. */
+/** A self-signed cert valid for `days`, or null when this machine has no openssl.
+ *  A NULL HERE USED TO SKIP THREE TESTS GREEN, and with it every behavioural assertion
+ *  about the certificate: with a broken openssl on PATH, deleting the certificate check
+ *  from the probe's exit code left `npm test` at 0 failures. CI has openssl, so the
+ *  coverage is real there and the tests say so rather than quietly standing down. Set
+ *  SMOKE_TEST_ALLOW_NO_OPENSSL=1 to skip on a machine that genuinely has none. */
 function selfSigned(days) {
   const dir = mkdtempSync(join(tmpdir(), "probe-tls-"));
   const key = join(dir, "k.pem"), crt = join(dir, "c.pem");
@@ -185,18 +196,38 @@ function selfSigned(days) {
   return { key: readFileSync(key), cert: readFileSync(crt) };
 }
 
+/** A certificate whose validity has already ended, or null when this openssl cannot
+ *  backdate one. tls.connect verifies by default, so an expired certificate fails the
+ *  HANDSHAKE - it never reaches the days-left branch, which is where the runbook lives. */
+function expiredCert() {
+  const dir = mkdtempSync(join(tmpdir(), "probe-tls-old-"));
+  const key = join(dir, "k.pem"), crt = join(dir, "c.pem");
+  // openssl wants YYYYMMDDHHMMSSZ: no dashes, no colons, and no `T`.
+  const stamp = (d) => new Date(d).toISOString().replace(/[-:T]/g, "").replace(/\.\d+Z$/, "Z");
+  const r = spawnSync("openssl", [
+    "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", crt,
+    "-subj", "/CN=localhost",
+    "-not_before", stamp(Date.now() - 40 * 86_400_000),
+    "-not_after", stamp(Date.now() - 3 * 86_400_000),
+  ], { encoding: "utf8" });
+  if (r.status !== 0) return null;
+  return { key: readFileSync(key), cert: readFileSync(crt) };
+}
+
 async function runTlsProbe(days, env = {}) {
   const pair = selfSigned(days);
-  if (!pair) return null; // no openssl here
+  if (!pair) {
+    if (process.env.SMOKE_TEST_ALLOW_NO_OPENSSL === "1") return null;
+    assert.fail(
+      "openssl did not produce a test certificate, so every behavioural check on the " +
+      "certificate would have been skipped and npm test would still be green. Install " +
+      "openssl, or set SMOKE_TEST_ALLOW_NO_OPENSSL=1 to accept the loss of coverage.",
+    );
+  }
   const server = createTlsServer(pair, (req, res) => {
     const isReady = req.url.startsWith("/api/ready");
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify(isReady ? READY : {
-      network: "testnet", dripTaz: 0.1, balanceTaz: 100, empty: false, queueDepth: 0, challenge: "pow",
-      backend: { reachable: true },
-      node: { ready: true, syncPercent: 100, height: 10, frozen: false },
-      box: { state: "complete", expected: 1, present: 1, notEnabled: 0, watchdogUnit: "active", alertBridge: "ok", minerBinary: "current", ageSeconds: 5 },
-    }));
+    res.end(JSON.stringify(isReady ? READY : STATUS_BODY));
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   try {
@@ -216,24 +247,98 @@ test("A CERTIFICATE ABOUT TO EXPIRE FAILS THE PROBE: nothing on the box can see 
   // renewal has already stopped working. The box cannot notice: the watchdog asks the
   // app over loopback and Let's Encrypt has no contact address for this account.
   const r = await runTlsProbe(10);
-  if (!r) return t.skip("no openssl on this machine");
+  if (!r) return t.skip("SMOKE_TEST_ALLOW_NO_OPENSSL=1 and no openssl here");
   assert.notEqual(r.code, 0, r.out);
-  assert.match(r.out, /the TLS certificate has more than 21 days left/);
+  assert.match(r.out, /the TLS certificate has more than 21 whole days left/);
   assert.match(r.out, /renewal has ALREADY not worked/);
 });
 
 test("a certificate with room left passes, and says how much", async (t) => {
   const r = await runTlsProbe(60);
-  if (!r) return t.skip("no openssl on this machine");
+  if (!r) return t.skip("SMOKE_TEST_ALLOW_NO_OPENSSL=1 and no openssl here");
   assert.equal(r.code, 0, r.out);
-  assert.match(r.out, /ok: the TLS certificate has more than 21 days left \(5\d days/);
+  assert.match(r.out, /ok: the TLS certificate has more than 21 whole days left \(5\d days/);
 });
 
 test("the floor is settable, so a shorter-lived certificate can still be watched", async (t) => {
   const r = await runTlsProbe(10, { SMOKE_TLS_MIN_DAYS: "5" });
-  if (!r) return t.skip("no openssl on this machine");
+  if (!r) return t.skip("SMOKE_TEST_ALLOW_NO_OPENSSL=1 and no openssl here");
   assert.equal(r.code, 0, r.out);
-  assert.match(r.out, /ok: the TLS certificate has more than 5 days left/);
+  assert.match(r.out, /ok: the TLS certificate has more than 5 whole days left/);
+});
+
+test("an ALREADY EXPIRED certificate says so, and does not read like a dead box", async (t) => {
+  // rejectUnauthorized is on by default, so an expired certificate fails the HANDSHAKE
+  // and never reaches the days-left branch - which is where the runbook sentence lives.
+  // Without the error code, "expired three days ago" and "nothing is listening" printed
+  // the same line, at the one moment the difference matters most.
+  const pair = expiredCert();
+  if (!pair) return t.skip("this openssl cannot backdate a certificate (-not_after)");
+  const server = createTlsServer(pair, (req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(req.url.startsWith("/api/ready") ? READY : STATUS_BODY));
+  });
+  await new Promise((res) => server.listen(0, "127.0.0.1", res));
+  // NO NODE_TLS_REJECT_UNAUTHORIZED HERE, on purpose: production verifies, and that is
+  // the whole point - verification is what turns an expired certificate into a handshake
+  // failure rather than a days-left number.
+  const r = await run(process.execPath, [PROBE], {
+    SMOKE_URL: `https://127.0.0.1:${server.address().port}`,
+    SMOKE_ATTEMPTS: "1", SMOKE_RETRY_DELAY_MS: "0", SMOKE_SKIP_EXPLORER: "1",
+  });
+  server.close();
+  assert.notEqual(r.code, 0, r.out);
+  assert.match(r.out, /ALREADY EXPIRED/);
+  assert.match(r.out, /renewal stopped long ago/);
+});
+
+test("a handshake that fails while the faucet answers is the probe, not the certificate", async (t) => {
+  // The check runs once, outside the retry loop, so one runner-side blip would red the
+  // whole run on its own. The faucet checks reach the SAME https origin: if they got
+  // answers, TLS demonstrably works. The explorer check downgrades for the same reason.
+  //
+  // Modelled honestly: the server stops ACCEPTING after it has answered both fetches, so
+  // the later raw handshake is refused while the faucet checks have already passed. No
+  // test-only switch in the probe; this is a real sequence a flaky runner produces.
+  const pair = selfSigned(60);
+  if (!pair) {
+    if (process.env.SMOKE_TEST_ALLOW_NO_OPENSSL === "1") return t.skip("no openssl here");
+    assert.fail("openssl produced no certificate");
+  }
+  let answered = 0;
+  const server = createTlsServer(pair, (req, res) => {
+    const isReady = req.url.startsWith("/api/ready");
+    res.writeHead(200, { "content-type": "application/json" });
+    answered += 1;
+    // Stop accepting as the SECOND response goes out, so the raw handshake that follows
+    // is refused while both fetches have already succeeded.
+    res.end(JSON.stringify(isReady ? READY : STATUS_BODY), () => {
+      if (answered >= 2) server.close();
+    });
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const r = await run(process.execPath, [PROBE], {
+    SMOKE_URL: `https://127.0.0.1:${server.address().port}`,
+    SMOKE_ATTEMPTS: "1", SMOKE_RETRY_DELAY_MS: "0", SMOKE_SKIP_EXPLORER: "1",
+    NODE_TLS_REJECT_UNAUTHORIZED: "0",
+  });
+  server.close();
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /the faucet answered over the same origin, so this is the probe/);
+});
+
+test("an empty SMOKE_TLS_MIN_DAYS does not silently mean zero", async (t) => {
+  // "" is exactly what GitHub Actions hands an unset repository variable, and Number("")
+  // is 0: the check passed green with the floor turned off.
+  const r = await runTlsProbe(10, { SMOKE_TLS_MIN_DAYS: "" });
+  if (!r) return t.skip("SMOKE_TEST_ALLOW_NO_OPENSSL=1 and no openssl here");
+  assert.notEqual(r.code, 0, r.out);
+  assert.match(r.out, /more than 21 whole days left/);
+});
+
+test("a SMOKE_URL that is not a URL says the check was skipped, rather than nothing", async () => {
+  const r = await runProbe({ SMOKE_URL: "faucet.example.org" });
+  assert.match(r.out, /certificate: skipped, "faucet.example.org" is not a URL/);
 });
 
 test("an http origin skips the certificate check rather than failing it", async () => {

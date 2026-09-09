@@ -82,7 +82,13 @@ const TIMEOUT_MS = Number(process.env.SMOKE_TIMEOUT_MS ?? 15000);
 // Days of certificate life below which this fails. Caddy renews a 90-day Let's Encrypt
 // certificate at about 30 days left, so 21 means "two renewal attempts have already not
 // worked", not "renewal is due" (risk register #18).
-const TLS_MIN_DAYS = Number(process.env.SMOKE_TLS_MIN_DAYS ?? 21);
+// `?? 21` does not catch the EMPTY STRING, and an empty string is exactly what GitHub
+// Actions hands an unset repository variable: Number("") is 0, so the check passed green
+// with a threshold of zero. "banana" already failed closed (NaN, always FAIL); this makes
+// "" fail closed too, the way MAX_HATCH_DAYS above does.
+const TLS_MIN_DAYS = Number.isFinite(Number(process.env.SMOKE_TLS_MIN_DAYS))
+  && String(process.env.SMOKE_TLS_MIN_DAYS ?? "").trim() !== ""
+  ? Number(process.env.SMOKE_TLS_MIN_DAYS) : 21;
 const RETRY_ATTEMPTS = Math.max(1, Number(process.env.SMOKE_ATTEMPTS ?? 3));
 const RETRY_DELAY_MS = Number(process.env.SMOKE_RETRY_DELAY_MS ?? 30000);
 
@@ -104,10 +110,16 @@ function tally() {
   return { ok, count: () => failures };
 }
 
+// True once ANY request to BASE has come back with an HTTP status. Over https that means
+// the handshake succeeded, which is what lets the certificate check tell a runner-side
+// blip from a real TLS failure.
+let originAnswered = false;
+
 async function probe(path) {
   const started = Date.now();
   try {
     const res = await fetch(BASE + path, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+    originAnswered = true;
     const body = await res.json().catch(() => null);
     return { status: res.status, body, ms: Date.now() - started };
   } catch (err) {
@@ -175,12 +187,15 @@ async function loadExplorerTxUrl() {
  * Not fatal to the rest: an http:// origin (the :80 smoke shape) skips this, and a
  * connection that fails is reported by the faucet checks above rather than twice.
  */
-async function checkTlsExpiry() {
+async function checkTlsExpiry(faucetReachable = false) {
   const { ok, count } = tally();
   let url;
   try {
     url = new URL(BASE);
   } catch {
+    // Silence reading as success is the shape this whole file argues against. The faucet
+    // checks will fail on the same URL, but this line says which check did not run.
+    console.log(`\ncertificate: skipped, ${JSON.stringify(BASE)} is not a URL`);
     return count();
   }
   if (url.protocol !== "https:") {
@@ -189,16 +204,44 @@ async function checkTlsExpiry() {
   }
   console.log(`\ncertificate (#18): ${url.host}`);
   const tls = await import("node:tls");
-  const cert = await new Promise((resolve) => {
+  // servername only when the host is a NAME. RFC 6066 forbids an IP literal there, and
+  // node warns (DEP0123) on every one of this file's own tests, which use 127.0.0.1.
+  const isIpLiteral = /^\d{1,3}(\.\d{1,3}){3}$/.test(url.hostname) || url.hostname.startsWith("[");
+  const handshake = await new Promise((resolve) => {
     const socket = tls.connect(
-      { host: url.hostname, port: Number(url.port || 443), servername: url.hostname, timeout: TIMEOUT_MS },
-      () => { const c = socket.getPeerCertificate(); socket.end(); resolve(c && c.valid_to ? c : null); },
+      {
+        host: url.hostname.replace(/^\[|\]$/g, ""),
+        port: Number(url.port || 443),
+        ...(isIpLiteral ? {} : { servername: url.hostname }),
+        timeout: TIMEOUT_MS,
+      },
+      () => { const c = socket.getPeerCertificate(); socket.end(); resolve({ cert: c && c.valid_to ? c : null }); },
     );
-    socket.on("error", () => resolve(null));
-    socket.on("timeout", () => { socket.destroy(); resolve(null); });
+    socket.on("error", (e) => resolve({ cert: null, err: e }));
+    socket.on("timeout", () => { socket.destroy(); resolve({ cert: null, err: new Error("handshake timed out") }); });
   });
+  const cert = handshake.cert;
   if (!cert) {
-    ok("the TLS certificate can be read", false, `could not complete a TLS handshake with ${url.host}`);
+    // WHY IT FAILED, not just that it did. rejectUnauthorized is on by default, so an
+    // ALREADY-EXPIRED certificate fails the handshake and never reaches the days-left
+    // branch below - and without the code, "expired three days ago" and "the box is
+    // dead" read identically at 3am. CERT_HAS_EXPIRED also means caddy may have fallen
+    // back to its internal issuer after ACME gave up, which is the same fix.
+    const code = handshake.err?.code ?? "";
+    // A HANDSHAKE FAILURE BESIDE A WORKING FETCH IS THE PROBE, NOT THE BOX. The faucet
+    // checks go to this same https origin; if they got answers, TLS is fine and this is a
+    // runner-side blip. The explorer check downgrades unreachable to cannot-verify for
+    // exactly this reason, and a false page costs the same trust a missed one does.
+    if (code !== "CERT_HAS_EXPIRED" && faucetReachable) {
+      console.log(`  --: TLS handshake failed (${code || handshake.err?.message || "no answer"}) but the faucet answered over the same origin, so this is the probe, not the certificate`);
+      return count();
+    }
+    const why = code === "CERT_HAS_EXPIRED"
+      ? "the certificate has ALREADY EXPIRED, so the handshake is refused. Caddy renews at about 30 days, " +
+        "so renewal stopped long ago: check `docker logs` on the caddy container, that ports 80 and 443 reach " +
+        "the box, and DNS"
+      : `${code || handshake.err?.message || "no answer"} - this is a connection failure, not necessarily the certificate`;
+    ok("the TLS certificate can be read", false, `${url.host}: ${why}`);
     return count();
   }
   const expiresAt = Date.parse(cert.valid_to);
@@ -206,9 +249,12 @@ async function checkTlsExpiry() {
     ok("the TLS certificate carries an expiry", false, `unparseable valid_to ${JSON.stringify(cert.valid_to)}`);
     return count();
   }
+  // Whole days remaining, floored: 21 days and 23 hours is "21 days left". The check
+  // FAILS at exactly 21, which is a day earlier than "fewer than 21 remain" reads - the
+  // safe direction, and now said the same way in the name, the docs and here.
   const days = Math.floor((expiresAt - Date.now()) / 86_400_000);
   ok(
-    `the TLS certificate has more than ${TLS_MIN_DAYS} days left`,
+    `the TLS certificate has more than ${TLS_MIN_DAYS} whole days left`,
     days > TLS_MIN_DAYS,
     days > TLS_MIN_DAYS
       ? `${days} days, expires ${cert.valid_to}`
@@ -480,7 +526,7 @@ for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt += 1) {
   }
 }
 
-const tlsFailures = await checkTlsExpiry();
+const tlsFailures = await checkTlsExpiry(originAnswered);
 const explorerFailures = await checkExplorerProperty();
 
 const total = faucetFailures + tlsFailures + explorerFailures;

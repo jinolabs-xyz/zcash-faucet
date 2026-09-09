@@ -64,13 +64,22 @@ duration.
 The watchdog and the metrics timer both reach the app over loopback, where TLS is
 not in play, and Caddy renews silently or fails silently; a renewal that has stopped
 working is invisible until every browser refuses the site. `scripts/live-probe.mjs`
-completes a TLS handshake with the public origin and fails when fewer than
-`SMOKE_TLS_MIN_DAYS` (21) days remain. On a 90-day Let's Encrypt certificate that
+completes a TLS handshake with the public origin and fails at `SMOKE_TLS_MIN_DAYS`
+(21) whole days remaining or fewer. On a 90-day Let's Encrypt certificate that
 Caddy renews at about 30 days left, 21 days means renewal has already not worked
 twice, so it is a page rather than a reminder: check the caddy container's logs, that
 ports 80 and 443 reach the box, and DNS. The ACME account still has no contact
 address, so Let's Encrypt's own expiry mail goes nowhere; adding `email` to the
 Caddyfile's global block is one line and is the operator's to make.
+
+An ALREADY expired certificate does not reach that check: the handshake itself is
+refused, so the probe prints `ALREADY EXPIRED` and the same fix. A handshake that
+fails for any other reason while the faucet answered over the same origin is reported
+as the probe's own blip, not a page, because the fetches prove TLS works. And
+`SMOKE_TLS_MIN_DAYS` is deliberately NOT plumbed into `live-smoke.yml`: a certificate
+should never legitimately sit under three weeks, so widening the floor from a
+repository variable would be a way to silence this rather than fix it. Change it in
+the workflow, in a pull request, if it ever needs changing.
 
 **The off-box probe cannot pass without probing.** `live-smoke.yml` runs
 `scripts/live-probe.mjs` from a GitHub runner: it is the only signal that has ever
