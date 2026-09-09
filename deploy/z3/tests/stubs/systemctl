@@ -11,7 +11,12 @@ state_file="${STUB_SYSTEMD:?}/$unit"
 
 case "$cmd" in
   is-active)
-    [ -f "$state_file" ] && [ "$(cat "$state_file")" = "active" ] && exit 0
+    # Prints the WORD like the real one (unless --quiet), and exits 0 only for active:
+    # auto-deploy reads the word, since inactive, failed and activating all exit 3.
+    word="$([ -f "$state_file" ] && cat "$state_file" || echo inactive)"
+    quiet=0; for a in "$@"; do [ "$a" = "--quiet" ] && quiet=1; done
+    [ "$quiet" = "1" ] || echo "$word"
+    [ "$word" = "active" ] && exit 0
     exit 3
     ;;
   stop)
@@ -24,6 +29,8 @@ case "$cmd" in
     echo active > "$state_file"
     ;;
   restart)
+    # STUB_RESTART_FAIL=1: the restart is refused, for the "installed but not running" case.
+    if [ "${STUB_RESTART_FAIL:-0}" = "1" ]; then echo "Job for $unit failed." >&2; exit 1; fi
     echo active > "$state_file"
     ;;
   *) echo "stub systemctl: unsupported: $*" >&2; exit 64 ;;

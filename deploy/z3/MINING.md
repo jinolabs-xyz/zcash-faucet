@@ -115,6 +115,15 @@ Before that it did not, and the consequence was not subtle: the binary is compil
 `install-ops` could not refresh it, `box-report` correctly reported `minerBinary: stale`,
 the box sat at 40 of 41, and the external probe was red for two days after #402 landed.
 
+**Stopping the miner is durable.** `systemctl stop zcash-testnet-miner.service` holds
+across deploys: when a commit rebuilds the binary, `auto-deploy.sh` restarts the unit
+only if it finds it `active`, leaves a stopped unit stopped (the new binary runs on
+the next start), and leaves a unit systemd is itself restarting alone. Before
+2026-09-09 the deploy ran a plain `restart`, which starts a stopped unit, and a parked
+miner came back on the next miner commit and mined for hours. The one thing that
+starts a stopped miner without a person is the watchdog's node heal releasing a miner
+IT stopped (the on-disk flag, above); a miner you stopped yourself stays stopped.
+
 For a first install, or to recover by hand:
 
 ```bash

@@ -32,7 +32,7 @@ ad_env() {
   # fixture), and the whole stubs dir on PATH would quietly swap them.
   export STUB_SYSTEMD="$T/systemd" STUB_LOG="$T/systemctl.calls"
   mkdir -p "$STUB_SYSTEMD" "$T/bin"; : > "$STUB_LOG"
-  ln -sf "$SCRATCH/stubs/systemctl" "$T/bin/systemctl"
+  rm -f "$T/bin/systemctl"; ln -s "$SCRATCH/stubs/systemctl" "$T/bin/systemctl"
   export PATH="$T/bin:$BASE_PATH"
 
   # -b main on BOTH, and the remote added by hand rather than cloned. Cloning an EMPTY
@@ -220,7 +220,7 @@ mkdir -p "$out"; printf 'built %s\n' "$RANDOM" > "$out/zcash-testnet-miner"
 STUB
 chmod +x "$CARGO_STUB"
 export CARGO_LOG="$T/cargo.calls"; : > "$CARGO_LOG"
-echo active > "$STUB_SYSTEMD/zcash-testnet-miner"
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
 ad_advance deploy/z3/miner/src/main.rs
 MINER_CARGO="$CARGO_STUB" bash "$AD" > "$T/miner.log" 2>&1
 check "a miner-source commit exits 0" "[ $? -eq 0 ]"
@@ -233,6 +233,47 @@ check "and the run says so, with the hash, so the log is evidence" \
 check "no temp file was left behind" "[ ! -e '$T/install/.zcash-testnet-miner.new' ]"
 check "a RUNNING miner was restarted onto the new binary" "grep -q 'systemctl restart zcash-testnet-miner' '$STUB_LOG'"
 
+echo "== auto-deploy: a restart that FAILS is a failed run, not a success line over an old process"
+# Review: the success line was unconditional and the exit code stayed 0, so the journal
+# read ERROR then "rebuilt and restarted", nobody was paged (Type=oneshot, OnFailure only on
+# a non-zero exit), and box-report's mtime check called the binary fresh while the running
+# process was the old build.
+ad_env
+export CARGO_LOG="$T/cargo.calls"; : > "$CARGO_LOG"
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+ad_advance deploy/z3/miner/src/main.rs
+MINER_CARGO="$CARGO_STUB" STUB_RESTART_FAIL=1 bash "$AD" > "$T/restartfail.log" 2>&1
+check "a failed restart exits NONZERO, so OnFailure pages" "[ $? -ne 0 ]"
+check "and says the running process is the old build" "grep -q 'restart failed, so the running process is still the old build' '$T/restartfail.log'"
+check "and does NOT also claim a restart" "! grep -q 'rebuilt and restarted' '$T/restartfail.log'"
+
+echo "== auto-deploy: a CRASH-LOOPING miner (activating) is left to systemd and not called stopped"
+# The unit has Restart=always, so a miner that dies on start alternates activating and a
+# brief run; the 2-minute timer samples that window. Its next exec is the new binary.
+ad_env
+export CARGO_LOG="$T/cargo.calls"; : > "$CARGO_LOG"
+echo activating > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+ad_advance deploy/z3/miner/src/main.rs
+MINER_CARGO="$CARGO_STUB" bash "$AD" > "$T/activating.log" 2>&1
+check "exits 0" "[ $? -eq 0 ]"
+check "no restart" "! grep -q 'systemctl restart' '$STUB_LOG'"
+check "and the log names the state it saw, not a park nobody made" "grep -q 'the unit is activating and is left to systemd' '$T/activating.log' && ! grep -q 'left stopped' '$T/activating.log'"
+
+echo "== auto-deploy: a systemctl that cannot answer is an ERROR, not a quiet 'left stopped'"
+# Mutating the stub to error on is-active made the running case take the stopped branch
+# and exit 0 (review). The word is read; no word is unknown, and unknown is a failed run.
+ad_env
+export CARGO_LOG="$T/cargo.calls"; : > "$CARGO_LOG"
+# rm FIRST: $T/bin/systemctl is a symlink into the shared stubs dir, and writing through
+# it replaced the real stub for every later case and suite (46 failures, once).
+rm -f "$T/bin/systemctl"
+printf '#!/usr/bin/env bash\necho "Failed to connect to bus" >&2; exit 1\n' > "$T/bin/systemctl"; chmod +x "$T/bin/systemctl"
+ad_advance deploy/z3/miner/src/main.rs
+MINER_CARGO="$CARGO_STUB" bash "$AD" > "$T/nobus.log" 2>&1
+check "exits NONZERO" "[ $? -ne 0 ]"
+check "and says systemctl could not say" "grep -q 'systemctl could not say what state' '$T/nobus.log'"
+check "and the binary was still installed, so the next start runs it" "[ -f '$T/install/zcash-testnet-miner' ]"
+
 echo "== auto-deploy: a rebuild does NOT start a miner someone STOPPED"
 # 2026-09-08 the owner parked the miner. 2026-09-09 00:58 the deploy of the next miner
 # commit rebuilt it and ran `systemctl restart`, which starts a stopped unit, and it mined
@@ -240,13 +281,13 @@ echo "== auto-deploy: a rebuild does NOT start a miner someone STOPPED"
 # installed, so the next start runs it; the deploy simply does not decide who mines.
 ad_env
 export CARGO_LOG="$T/cargo.calls"; : > "$CARGO_LOG"
-echo inactive > "$STUB_SYSTEMD/zcash-testnet-miner"
+echo inactive > "$STUB_SYSTEMD/zcash-testnet-miner.service"
 ad_advance deploy/z3/miner/src/main.rs
 MINER_CARGO="$CARGO_STUB" bash "$AD" > "$T/parked.log" 2>&1
 check "a miner-source commit against a stopped miner still exits 0" "[ $? -eq 0 ]"
 check "the binary was rebuilt and installed" "grep -q 'cargo build' '$CARGO_LOG' && [ -f '$T/install/zcash-testnet-miner' ]"
 check "but the stopped unit was NOT restarted" "! grep -q 'systemctl restart' '$STUB_LOG'"
-check "and it is still stopped afterwards" "[ \"\$(cat '$STUB_SYSTEMD/zcash-testnet-miner')\" = inactive ]"
+check "and it is still stopped afterwards" "[ \"\$(cat '$STUB_SYSTEMD/zcash-testnet-miner.service')\" = inactive ]"
 check "and the log says so, with the hash, rather than claiming a restart" \
   "grep -qE 'left stopped as it was found.*\(' '$T/parked.log' && ! grep -q 'rebuilt and restarted' '$T/parked.log'"
 
