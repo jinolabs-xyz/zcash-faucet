@@ -43,7 +43,7 @@ export type ChallengeKind = (typeof CHALLENGES)[number];
  */
 function challengeFromEnv(): ChallengeKind {
   const raw = (process.env.FAUCET_CHALLENGE ?? "").trim();
-  if (raw === "") return process.env.TURNSTILE_SECRET_KEY ? "turnstile" : "pow";
+  if (raw === "") return (process.env.TURNSTILE_SECRET_KEY ?? "").trim() ? "turnstile" : "pow";
   if ((CHALLENGES as readonly string[]).includes(raw)) return raw as ChallengeKind;
   throw new Error(
     `FAUCET_CHALLENGE must be one of ${CHALLENGES.join(" | ")}, got "${raw}". ` +
@@ -344,7 +344,7 @@ export const config = {
 
   turnstile: {
     siteKey: process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? "",
-    secretKey: process.env.TURNSTILE_SECRET_KEY ?? "",
+    secretKey: (process.env.TURNSTILE_SECRET_KEY ?? "").trim(),
     get enabled() {
       return this.secretKey.length > 0;
     },

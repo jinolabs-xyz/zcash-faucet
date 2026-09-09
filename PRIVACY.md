@@ -93,9 +93,10 @@ Two limits, since the point of this page is not to flatter us:
   third party. That applies to a box provisioned before `FAUCET_CHALLENGE` was
   added to the deploy template. A box set up from the current template has the mode
   written down explicitly, so the fallback never runs and the key alone changes
-  nothing. Proof of work lives behind the same single function
-  ([`turnstile.ts`](src/lib/turnstile.ts)), which is what makes either one a clean
-  swap.
+  nothing. The two gates are two modules behind one switch in the claim route
+  ([`pow.ts`](src/lib/pow.ts) and [`turnstile.ts`](src/lib/turnstile.ts)), which is
+  what makes either one a clean swap; today only the proof-of-work half has a client,
+  so `turnstile` refuses every claim until a widget is wired.
 - **Explorer links** (transparent sends only) point at a third-party explorer,
   and clicking one discloses the txid to them. Shielded sends show no external link.
   **The faucet itself never tells an explorer about a payout.** It has the code to ask

@@ -21,6 +21,9 @@ export interface TurnstileCheck {
   token: string | undefined;
   ip?: string;
   timeoutMs?: number;
+  /** Called for a failure that is OURS (transport, timeout, non-2xx, a body of the wrong
+   *  shape), never for a token Cloudflare simply refused. */
+  onFailure?: (why: string) => void;
 }
 
 /**
@@ -41,10 +44,21 @@ export async function verifyTurnstileWith(fetchImpl: SiteverifyFetch, c: Turnsti
       body,
       signal: AbortSignal.timeout(c.timeoutMs ?? SITEVERIFY_TIMEOUT_MS),
     });
-    if (!res.ok) return false;
+    if (!res.ok) {
+      c.onFailure?.(`siteverify answered HTTP ${res.status}`);
+      return false;
+    }
     const data: unknown = await res.json();
-    return typeof data === "object" && data !== null && (data as { success?: unknown }).success === true;
-  } catch {
+    if (typeof data === "object" && data !== null && (data as { success?: unknown }).success === true) return true;
+    // A refused token is the user's problem and expected traffic; only the shape of the
+    // answer is ours to notice.
+    if (typeof data !== "object" || data === null || !("success" in data)) c.onFailure?.("siteverify body had no success field");
+    return false;
+  } catch (e) {
+    // "We could not look" must not print the same as "nobody claimed": the user sees a 403
+    // either way, and this is the only place an operator can see that Cloudflare, DNS or
+    // the 5 s bound was the cause and not the token.
+    c.onFailure?.(`siteverify unreachable: ${e instanceof Error ? e.name + (e.message ? `: ${e.message}` : "") : String(e)}`);
     return false;
   }
 }
@@ -55,5 +69,6 @@ export function verifyTurnstile(token: string | undefined, ip?: string): Promise
     secretKey: config.turnstile.secretKey,
     token,
     ip,
+    onFailure: (why) => console.error(`[turnstile] refusing the claim because ${why}; the user sees a captcha failure`),
   });
 }

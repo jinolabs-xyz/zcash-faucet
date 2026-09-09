@@ -62,6 +62,27 @@ test("a siteverify that hangs is refused at the timeout, not held until Cloudfla
   assert.ok(took >= 150 && took < 1000, `expected the refusal at about 200 ms, took ${took} ms`);
 });
 
-test("the production timeout is pinned, and is shorter than a claim's patience", () => {
+test("the production timeout is pinned at 5 s", () => {
   assert.equal(SITEVERIFY_TIMEOUT_MS, 5000);
+});
+
+test("a failure that is OURS is reported to the operator hook; a token Cloudflare refused is not", async () => {
+  // The user sees the same 403 either way. Without this an outage at Cloudflare, or the
+  // 5 s bound biting, reads as "everyone is a bot" from the journal.
+  const why: string[] = [];
+  const onFailure = (w: string) => why.push(w);
+  assert.equal(await verifyTurnstileWith(answering(200, '{"success":false}'), { ...ON, onFailure }), false);
+  assert.deepEqual(why, [], "a refused token is expected traffic, not an operator event");
+  assert.equal(await verifyTurnstileWith(answering(503, ""), { ...ON, onFailure }), false);
+  assert.match(why.at(-1)!, /HTTP 503/);
+  assert.equal(await verifyTurnstileWith(answering(200, "not json"), { ...ON, onFailure }), false);
+  assert.match(why.at(-1)!, /unreachable|success field/);
+  const hanging: SiteverifyFetch = (_url, init) =>
+    new Promise((_resolve, reject) => { init.signal!.addEventListener("abort", () => reject(init.signal!.reason)); });
+  const keepAlive = setTimeout(() => {}, 5000);
+  assert.equal(await verifyTurnstileWith(hanging, { ...ON, timeoutMs: 100, onFailure }), false);
+  clearTimeout(keepAlive);
+  assert.match(why.at(-1)!, /TimeoutError/);
+  assert.equal(await verifyTurnstileWith(neverCalled, { ...ON, enabled: false, secretKey: "", onFailure }), false);
+  assert.equal(why.length, 3, "a disabled verifier is the boot guard's to report, not this hook's, once per claim");
 });

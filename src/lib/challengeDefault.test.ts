@@ -71,6 +71,11 @@ test("an EMPTY value is unset, not a fourth state that disables the gate", () =>
   assert.equal(challengeUnder({ FAUCET_CHALLENGE: " none " }), "none");
 });
 
+test("a secret that is only whitespace is no secret: the default stays pow and turnstile refuses to serve", () => {
+  assert.equal(challengeUnder({ TURNSTILE_SECRET_KEY: "   " }), "pow");
+  assert.match(challengeUnder({ FAUCET_CHALLENGE: "turnstile", TURNSTILE_SECRET_KEY: "   " }, "serving"), /TURNSTILE_SECRET_KEY is not set/);
+});
+
 test("a configured Turnstile secret still selects turnstile", () => {
   // The old fallback's useful half, kept: someone who wired Turnstile and never
   // set FAUCET_CHALLENGE should not be silently switched to pow.
