@@ -257,34 +257,99 @@ check "and the metrics script says it depends on both, so the coupling is not a 
 echo "== repo: every image this box runs is watched by something (risk register #26)"
 # npm, cargo and the actions were covered. The IMAGES the faucet runs as - node:22-slim
 # under the app, caddy:2 terminating TLS - were not, so a CVE in either arrived only if
-# somebody happened to read a release note. Adding the entries is easy; keeping them in
-# step with a tree that grows Dockerfiles is what this checks.
+# somebody happened to read a release note. Adding entries is easy; the hard parts are
+# that the ENTRY IS OF THE RIGHT KIND (`docker` reads Dockerfiles, Compose needs
+# `docker-compose`, and the wrong one parses nothing and says nothing) and that the list
+# keeps up with a tree that grows image references.
 DB="$REPO/.github/dependabot.yml"
-check "the docker ecosystem is watched at all" "grep -q 'package-ecosystem: docker' '$DB'"
-# EVERY directory holding an image reference has an entry. dependabot's docker ecosystem
-# reads the directory it is pointed at and does not recurse, so a new Dockerfile in a new
-# directory is silently unwatched - the same shape as a suite nobody listed.
-missing_dirs=""
-while IFS= read -r f; do
-  d="$(dirname "${f#"$REPO"}")"
-  [ "$d" = "." ] && d="/"
-  case "$d" in /*) ;; *) d="/$d" ;; esac
-  # `directory: <d>` must appear under a docker entry. Compare on the exact value.
-  grep -qE "^ +directory: ${d}\$" "$DB" || missing_dirs="$missing_dirs $d"
-done <<EOF
-$(find "$REPO" -name 'Dockerfile*' -not -path '*/node_modules/*' -not -path '*/.git/*' | sort)
-$(grep -rlE '^[[:space:]]+image:' "$REPO/deploy/z3"/*.yml 2>/dev/null | sort)
-EOF
-check "every directory holding a Dockerfile or a compose image has a dependabot entry" \
-  "[ -z '$missing_dirs' ]"
-# The ctaz build image comes from an ARG default. dependabot resolves that shape; an
-# unresolvable one would leave the entry silently doing nothing.
-check "the ctaz build image's tag is a literal dependabot can read, not a bare variable" \
-  "grep -qE '^ARG RUST_IMAGE=[a-z0-9./-]+:[A-Za-z0-9._-]+' '$REPO/deploy/z3/ctaz-build/Dockerfile'"
-# A floating major is what dependabot is FOR: it moves the pin and CI decides. A digest
-# with no tag would leave nothing for it to bump.
-check "the app's base image carries a version tag, so there is something to bump" \
-  "grep -qE '^FROM node:[0-9]+' '$REPO/Dockerfile'"
+mk_scratch "${TMPDIR:-/tmp}/repo-dependabot.XXXXXX"
+
+# Pair every entry with its ecosystem by walking the updates list, rather than grepping
+# `directory:` anywhere in the file: npm and github-actions both carry `directory: /`, so a
+# bare grep was satisfied by them and passed with the docker entry deleted outright.
+python3 - "$DB" "$REPO" "$T/report.txt" <<'PY'
+import os, re, sys
+db, repo, out = sys.argv[1], sys.argv[2], sys.argv[3]
+
+# Plain-text parse: the harness image has no PyYAML, and this file's shape is fixed.
+entries, eco, directory = [], None, None
+for line in open(db):
+    if re.match(r"^\s*-\s*package-ecosystem:", line):
+        if eco:
+            entries.append((eco, directory))
+        eco = line.split(":", 1)[1].strip().strip('"\'')
+        directory = None
+    elif eco and re.match(r"^\s+directory:", line):
+        directory = line.split(":", 1)[1].strip().strip('"\'')
+if eco:
+    entries.append((eco, directory))
+
+# What dependabot's own fetchers match: docker/lib/dependabot/docker/file_fetcher.rb uses
+# /dockerfile|containerfile/i, and the compose fetcher uses the filename regex below.
+dockerish = re.compile(r"dockerfile|containerfile", re.I)
+composeish = re.compile(r"^(docker-)?compose(-[\w]+)?(\.[\w-]+)?\.ya?ml$", re.I)
+
+want = {}   # directory -> set of required ecosystems
+scanned = 0
+for root, dirs, files in os.walk(repo):
+    dirs[:] = [d for d in dirs if d not in (".git", "node_modules", ".next", ".claude", "coverage")]
+    for f in files:
+        rel = os.path.relpath(root, repo)
+        d = "/" if rel == "." else "/" + rel
+        if dockerish.search(f):
+            scanned += 1
+            want.setdefault(d, set()).add("docker")
+        elif composeish.match(f):
+            # Only if it actually names an image; a compose file with none is nothing to watch.
+            try:
+                body = open(os.path.join(root, f), encoding="utf-8", errors="replace").read()
+            except OSError:
+                continue
+            if re.search(r"^\s+image:", body, re.M):
+                scanned += 1
+                want.setdefault(d, set()).add("docker-compose")
+
+have = {}
+for e, d in entries:
+    have.setdefault(d, set()).add(e)
+
+# DELIBERATELY UNWATCHED, and it has to be said in the config or it is not deliberate.
+# dependabot's Dockerfile parser has no ARG handling, so `FROM ${RUST_IMAGE}` yields no
+# dependencies and an entry there would sit silent; the file's own note says the Rust
+# version is not pinned by that line anyway, and nothing from that image ships.
+EXEMPT = {"/deploy/z3/ctaz-build"}
+config_text = open(db, encoding="utf-8").read()
+
+missing = []
+for d in sorted(EXEMPT):
+    if d.lstrip("/") not in config_text:
+        missing.append(f"{d} is exempt in the test but unexplained in dependabot.yml")
+for d, ecos in sorted(want.items()):
+    if d in EXEMPT:
+        continue
+    for e in sorted(ecos):
+        if e not in have.get(d, set()):
+            missing.append(f"{d} needs a {e} entry")
+
+with open(out, "w") as fh:
+    fh.write(f"SCANNED={scanned}\n")
+    fh.write("MISSING=" + ("; ".join(missing) if missing else "") + "\n")
+    fh.write("ENTRIES=" + ",".join(f"{e}:{d}" for e, d in entries) + "\n")
+PY
+SCANNED="$(sed -n 's/^SCANNED=//p' "$T/report.txt")"
+MISSING="$(sed -n 's/^MISSING=//p' "$T/report.txt")"
+# ITERATION CONTROL, the rule this file states 30 lines up: a scan that found nothing
+# would report healthy. Three image-bearing files exist today; fewer means the walk broke.
+check "the scan actually found image files, rather than reporting healthy on nothing" \
+  "[ \"$SCANNED\" -ge 3 ]"
+check "every directory holding an image has an entry OF THE RIGHT KIND" \
+  "[ -z \"$MISSING\" ] || { echo \"missing: $MISSING\"; false; }"
+# The two that matter, by name, so deleting either is a named failure rather than an
+# arithmetic one.
+check "the app's own base image is watched by a docker entry at the root" \
+  "grep -q '^ENTRIES=.*docker:/,' '$T/report.txt' || grep -q '^ENTRIES=.*docker:/$' '$T/report.txt'"
+check "and caddy by a docker-compose entry, because docker does not read compose files" \
+  "grep -q 'docker-compose:/deploy/z3' '$T/report.txt'"
 
 echo "== repo: the off-box probe cannot pass without probing (risk register #17)"
 # It is the only signal that has ever reached us unprompted. Three ways it used to go

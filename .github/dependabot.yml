@@ -2,8 +2,9 @@
 # it fails on any high npm advisory and any RustSec advisory, so a bump that
 # matters shows up as a red gate rather than as a quiet risk.
 #
-# Weekly, not daily: three ecosystems on a small team is a review load, and the
-# audit gate already catches the urgent case between runs.
+# Weekly, not daily: five ecosystems on a small team is a review load, and for npm and
+# cargo the audit gate catches the urgent case between runs. The two image ecosystems
+# have no such net - CI runs no image scanner - which is said again beside them.
 version: 2
 updates:
   - package-ecosystem: npm
@@ -43,31 +44,50 @@ updates:
   # happened to read a release note. That is the same "no signal, only luck" shape #85 was
   # about (risk register #26).
   #
-  # One entry per directory, because that is how dependabot's docker ecosystem scopes:
-  # it reads the Dockerfile and compose files in the directory it is pointed at, and does
-  # not recurse. The repo suite asserts every directory holding one is listed here, so a
-  # new image cannot arrive unwatched.
+  # AND THERE IS NO SAFETY NET HERE. The audit gate covers npm and cargo advisories; CI
+  # runs no image scanner at all, so unlike the other three ecosystems there is nothing
+  # catching the urgent case between weekly runs. That makes it matter more, not less,
+  # that these entries actually work.
+  #
+  # TWO ECOSYSTEMS, NOT ONE. `docker` reads Dockerfiles (and Kubernetes manifests); Compose
+  # files need `docker-compose`, which is a separate ecosystem name. Pointing `docker` at a
+  # directory whose only image lives in a compose file parses nothing and opens no pull
+  # request, ever, with no error anywhere - which is how the first version of this entry
+  # left caddy exactly as unwatched as before. Neither recurses, so it is one entry per
+  # directory, and the repo suite asserts every directory holding an image has an entry
+  # OF THE RIGHT KIND.
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
       day: monday
     open-pull-requests-limit: 3
+    groups:
+      docker-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
 
   # caddy:2 lives in the compose file, not a Dockerfile.
-  - package-ecosystem: docker
+  - package-ecosystem: docker-compose
     directory: /deploy/z3
     schedule:
       interval: weekly
       day: monday
     open-pull-requests-limit: 3
+    groups:
+      compose-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      # Built on the box by deploy.sh, not pulled: under this ecosystem the bare name
+      # resolves to library/zcash-faucet, which does not exist, and the job would say so
+      # every week for ever.
+      - dependency-name: "zcash-faucet"
 
-  # The Crosslink build image. Its FROM is `${RUST_IMAGE}` with a default in an ARG, which
-  # dependabot resolves; if a future edit makes the tag unresolvable this entry goes quiet
-  # rather than erroring, so the repo suite pins the ARG default's shape too.
-  - package-ecosystem: docker
-    directory: /deploy/z3/ctaz-build
-    schedule:
-      interval: weekly
-      day: monday
-    open-pull-requests-limit: 2
+  # DELIBERATELY NOT WATCHED: deploy/z3/ctaz-build. dependabot does not resolve
+  # `FROM ${RUST_IMAGE}` - its parser has no ARG handling, so that Dockerfile yields no
+  # dependencies and an entry there would sit silent. Inlining the tag to fix that would
+  # cost the caller override AND contradict the file's own note that the Rust version is
+  # not pinned by that line at all (rust-toolchain.toml says `channel = "stable"` and
+  # rustup honours it). Nothing from that image ships either: the artifact stage is FROM
+  # scratch and copies one binary, so a CVE in the build image never reaches production.
