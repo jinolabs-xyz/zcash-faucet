@@ -147,3 +147,26 @@ test("an explicitly failed send releases immediately", async () => {
   const retry = await reserve(address, now + 1);
   assert.equal(retry.ok, true, "a definite failure must let the user retry at once");
 });
+
+test("THE MAX BITES: with the deadline pinned below the sender, residence is the sender's worst case", async () => {
+  // Round 3: under the default env the deadline (309 s) exceeds the sender's worst case
+  // (279 s), so the max never bit and reverting it left every test green. A child process
+  // boots config.ts in the API harness's own shape (deadline 2.5 s, op timeout 600 s),
+  // the pattern challengeDefault.test.ts uses for the same module-level-env reason.
+  const { execFileSync } = await import("node:child_process");
+  // This file chdir'd into a scratch dir at the top, so the module is named by URL.
+  const configUrl = new URL("../config.ts", import.meta.url).href;
+  const script =
+    `import(${JSON.stringify(configUrl)}).then((m) => console.log(JSON.stringify({ d: m.config.sendTaskDeadlineMs, r: m.config.sendResidenceMs })))` +
+    '.catch((e) => console.log("THREW:" + e.message));';
+  const out = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+    env: { PATH: process.env.PATH ?? "", FAUCET_SENDER: "zallet", SEND_TASK_DEADLINE_MS: "2500", ZALLET_OP_TIMEOUT_MS: "600000" } as unknown as NodeJS.ProcessEnv,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  }).trim();
+  assert.doesNotMatch(out, /^THREW:/, out);
+  const { d, r } = JSON.parse(out) as { d: number; r: number };
+  assert.equal(d, 2500, "the deadline is what was pinned");
+  assert.ok(r > 600_000, `residence ${r} must cover a 600 s op timeout plus the sender's rpc and poll budget, not the 2.5 s deadline`);
+  assert.ok(pendingLeaseSeconds(r, 20) > (21 * 600_000) / 1000, "and a lease fed that residence covers a full queue of such sends");
+});
