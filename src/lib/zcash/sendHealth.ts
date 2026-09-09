@@ -40,6 +40,8 @@
  * that stops being true the moment the wallet is restarted.
  */
 
+import { config } from "../config.ts";
+
 /** Outcomes we can honestly classify. `unknown` is counted and never held against us. */
 export type SendOutcome = "ok" | "failed" | "unknown";
 
@@ -52,13 +54,16 @@ export interface SendRecord {
  * How far back we look. Long enough that a handful of claims accumulate on a quiet
  * faucet, short enough that a fault fixed half an hour ago is not still reported as
  * current. AND long enough to hold MIN_SAMPLE unresolved sends spaced by the send
- * deadline: the queue is serial and a send that blew its 309 s deadline is still
- * running, so consecutive deadline unknowns are at least 309 s apart, and a ten-minute
- * window could never hold three of them. Review measured it: unknowns every 300 s read
- * degraded, every 301 s read "too few to judge". (MIN_SAMPLE - 1) * deadline must fit,
- * with room; sendHealth.test.ts pins that against the stock deadline.
+ * deadline: the queue is serial and a send that blew its deadline is still running, so
+ * consecutive deadline unknowns are at least one deadline apart, and a ten-minute
+ * window could never hold three of them at the stock 309 s. Review measured it:
+ * unknowns every 300 s read degraded, every 301 s read "too few to judge".
+ *
+ * DERIVED FROM THE DEADLINE, because the deadline is derived from operator-settable
+ * timings (ZALLET_OP_TIMEOUT_MS) and a constant would silently stop fitting the moment
+ * an operator raised them past 321 s (review, round 2, measured). Fifteen minutes is
+ * the floor; above it the window is (MIN_SAMPLE - 1) deadlines plus a minute.
  */
-export const WINDOW_MS = 15 * 60_000;
 
 /**
  * How many sends we need before saying anything at all: CLASSIFIABLE ones for the
@@ -72,6 +77,11 @@ export const WINDOW_MS = 15 * 60_000;
  * nobody has exercised.
  */
 export const MIN_SAMPLE = 3;
+
+export function windowFor(sendTaskDeadlineMs: number): number {
+  return Math.max(15 * 60_000, (MIN_SAMPLE - 1) * sendTaskDeadlineMs + 60_000);
+}
+export const WINDOW_MS = windowFor(config.sendTaskDeadlineMs);
 
 /**
  * The share of recent sends that may fail before the money path is called broken.
@@ -127,12 +137,13 @@ export function readSendHealth(now: number = Date.now(), records: SendRecord[] =
   // is the same mistake in the opposite direction from counting them as failures.
   const decided = ok + failed;
   if (decided < MIN_SAMPLE) {
-    // Nothing succeeded, at least one send was left unresolved, and unresolved plus
-    // failed make a sample: the wallet is not finishing sends. Judged before the sample
-    // rule, which would otherwise answer "too few to judge" forever, since a wallet that
-    // never resolves never produces enough decided sends. The failed-only case (three
-    // refusals, no unknowns) is the ratio rule's, one branch down.
-    if (ok === 0 && unknown > 0 && unknown + failed >= MIN_SAMPLE) {
+    // Nothing succeeded and unresolved plus failed make a sample: the wallet is not
+    // finishing sends. Judged before the sample rule, which would otherwise answer "too
+    // few to judge" forever, since a wallet that never resolves never produces enough
+    // decided sends. Inside this branch decided < MIN_SAMPLE, so the sum reaching it
+    // means at least one unresolved send; the failed-only case (three refusals, no
+    // unknowns) never gets here and is the ratio rule's, one branch down.
+    if (ok === 0 && unknown + failed >= MIN_SAMPLE) {
       return {
         state: "degraded",
         ok,

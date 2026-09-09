@@ -14,6 +14,7 @@ import {
   recordSend,
   resetSendHealth,
   WINDOW_MS,
+  windowFor,
   MIN_SAMPLE,
   FAIL_RATIO,
   type SendRecord,
@@ -174,13 +175,18 @@ test("THE WINDOW HOLDS A SAMPLE OF DEADLINE-SPACED UNKNOWNS, so the deadline cla
   // consecutive deadline unknowns are at least one deadline apart. Review measured a
   // 10 min window reading degraded at 300 s spacing and "too few" at 301 s, with the
   // stock deadline at 309 s: the exact class the rule was written for could never fit.
-  const { config } = await import("../config.ts"); // stock timings: no env is set here
-  const deadline = config.sendTaskDeadlineMs;
-  assert.equal(deadline, 309_000, "the stock deadline this window is sized against");
+  const { config } = await import("../config.ts");
+  const deadline = config.sendTaskDeadlineMs; // whatever this environment's timings make it
   assert.ok(
     (MIN_SAMPLE - 1) * deadline + 60_000 <= WINDOW_MS,
     `${MIN_SAMPLE} unknowns ${deadline} ms apart need ${(MIN_SAMPLE - 1) * deadline} ms plus a minute; the window is ${WINDOW_MS}`,
   );
+  assert.equal(WINDOW_MS, windowFor(deadline), "the window in force IS the derived one");
+  // The derivation itself: the floor at stock timings, and growth past the break-even
+  // review measured (an op timeout above 321 s made a 15 min constant stop fitting).
+  assert.equal(windowFor(309_000), 15 * 60_000);
+  assert.equal(windowFor(451_000), 2 * 451_000 + 60_000);
+  assert.ok(windowFor(1_929_000) >= 2 * 1_929_000 + 60_000, "ZALLET_OP_TIMEOUT_MS at 30 min still fits three deadline-spaced unknowns");
   const spaced = Array.from({ length: MIN_SAMPLE }, (_, i) => at("unknown", i * deadline));
   assert.equal(readSendHealth(NOW, spaced).state, "degraded", "deadline-spaced unknowns must fit the window");
 });

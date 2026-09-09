@@ -1074,7 +1074,8 @@ curl -s "https://$(cat /etc/faucet-domain)/api/ready" | jq
    crash-looping wallet looks like from the money path: each claim a 504 and a
    burnt cooldown. The wallet is the fault:
    `docker logs <zallet container>`, and the poison auto-heal in the watchdog
-   journal. One send that lands clears the unresolved form on its own.
+   journal. One send that lands clears the unresolved sentence on its own; the
+   failure-rate rule still applies to whatever failed outright.
 11. **`below reserve, refilling`.** Not broken, broke. **Fund the faucet
    address.** That is the fix, not a fallback. Mining lands a block rarely
    enough that it is not the answer at 3am, and even a block won right now
