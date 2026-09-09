@@ -48,6 +48,7 @@ const WRITER_FIELDS = {
   enabledUndeclared: 4,
   minerBinary: "current",
   minerUnit: "inactive",
+  watchdogUnit: "active",
   alertBridge: "ok",
   platform: "x86_64",
   watchdogRestarts: 0,

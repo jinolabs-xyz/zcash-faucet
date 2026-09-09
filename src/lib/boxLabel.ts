@@ -33,6 +33,26 @@ export function watchdogLooping(s: IntegrityStatus): boolean {
   return (s.watchdogRestartsDelta ?? 0) >= WATCHDOG_LOOP_RESTARTS;
 }
 
+/** The watchdog is not running, by systemd's word: stopped by someone, failed, or on
+ *  its way down. Nothing heals a container, a poisoned wallet or a stalled node while it
+ *  is down, and nothing else on the box would say so (register #16); the unit's own
+ *  OnFailure page still fires through systemd, but the watchdog's sweeps and their FIXED
+ *  and NEEDS YOU reports do not. "unknown", "activating" and null are not this fault:
+ *  could-not-tell is the off-box probe's to fail, and a unit mid-restart is seconds from
+ *  running. */
+export function watchdogStopped(s: IntegrityStatus): boolean {
+  return s.watchdogUnit === "inactive" || s.watchdogUnit === "failed" || s.watchdogUnit === "deactivating";
+}
+
+function watchdogUnitClause(s: IntegrityStatus): string {
+  switch (s.watchdogUnit) {
+    case "inactive": return ", WATCHDOG STOPPED, nothing heals";
+    case "failed": return ", WATCHDOG FAILED, nothing heals";
+    case "deactivating": return ", WATCHDOG STOPPING, nothing heals";
+    default: return "";
+  }
+}
+
 /** The clause, when there is one. Null and 0 render nothing: an unread counter must not
  *  arrive as a calm one, and a calm one does not need a word. */
 function watchdog(s: IntegrityStatus): string {
@@ -124,7 +144,7 @@ export function boxRow(s: IntegrityStatus): string {
       // name at all. I was reading the world after the fix and calling it never-broken,
       // which is rule 35 running backwards, so the same counter applies. `git show
       // <commit>^:<file>` is what settles a question about the past, not a live probe.
-      return `${s.expected} of ${s.expected} files, all enabled${miner(s)}${undeclared(s)}${watchdog(s)}${bridge(s)}`;
+      return `${s.expected} of ${s.expected} files, all enabled${miner(s)}${undeclared(s)}${watchdog(s)}${watchdogUnitClause(s)}${bridge(s)}`;
 
     case "incomplete": {
       const parts: string[] = [];
@@ -136,7 +156,7 @@ export function boxRow(s: IntegrityStatus): string {
       // Defensive, and it should be unreachable: classifyIntegrity only returns
       // incomplete when one of the two is non-zero. Saying "incomplete" with no
       // figures still beats rendering an empty string as though nothing were wrong.
-      return (parts.length ? parts.join(", ") : "incomplete, figures not reported") + miner(s) + undeclared(s) + watchdog(s) + bridge(s);
+      return (parts.length ? parts.join(", ") : "incomplete, figures not reported") + miner(s) + undeclared(s) + watchdog(s) + watchdogUnitClause(s) + bridge(s);
     }
 
     case "unknown":
@@ -162,6 +182,9 @@ export function boxChip(s: IntegrityStatus): string | null {
   // Before the complete short-circuit: a box can have every file in place and a
   // watchdog in a restart loop, and that must not be invisible on the terse strip.
   if (watchdogLooping(s)) return "WATCHDOG LOOP";
+  // A watchdog that is not running heals nothing and sends none of its own reports: the
+  // strip is the one place this can show. (Its OnFailure page still fires via systemd.)
+  if (watchdogStopped(s)) return "WATCHDOG STOPPED";
   // Same rule, and the stronger case: a complete box whose pages go nowhere is the one
   // fault no alert can announce, so the strip is where it has to show.
   if (alertBridgeDown(s)) return "CANNOT PAGE";
@@ -191,7 +214,7 @@ function bridge(s: IntegrityStatus): string {
   }
 }
 
-/** Anything other than a clean report. Matches isIntegrityFailing, plus the two faults only the report can carry: a looping watchdog and a box that cannot page: unknown counts. */
+/** Anything other than a clean report. Matches isIntegrityFailing, plus the three faults only the report can carry: a looping watchdog, a stopped one, and a box that cannot page; unknown counts. */
 export function boxIsBad(s: IntegrityStatus): boolean {
-  return s.state !== "complete" || watchdogLooping(s) || alertBridgeDown(s);
+  return s.state !== "complete" || watchdogLooping(s) || watchdogStopped(s) || alertBridgeDown(s);
 }

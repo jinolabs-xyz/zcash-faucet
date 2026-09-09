@@ -416,6 +416,30 @@ bash "$BOX_REPORT" > /dev/null 2>&1
 check "systemctl saying nothing is unknown, never a calm inactive" "[ \"\$(jqf '$BOX_REPORT_OUT' minerUnit)\" = 'unknown' ]"
 check "and the rest of the report is untouched by it" "[ \"\$(jqf '$BOX_REPORT_OUT' readable)\" = 'True' ]"
 
+echo "== box-report: IS THE WATCHDOG RUNNING. A stopped one was invisible: enabled, never failed, zero restarts"
+# is-enabled is true of a stopped unit, Restart=always means it never reaches failed, and
+# the restart counter counts restarts, of which a unit somebody stopped has none. zsnap's
+# cold export stops it and relies on a trap to start it again (risk register #16).
+box_env
+export STUB_ACTIVE="$T/active"; : > "$STUB_ACTIVE"
+export STUB_FAILED="$T/failed"; : > "$STUB_FAILED"
+bash "$BOX_REPORT" > /dev/null 2>&1
+check "a watchdog systemd calls inactive is reported inactive, whatever the file count says" "[ \"\$(jqf '$BOX_REPORT_OUT' watchdogUnit)\" = 'inactive' ]"
+printf 'faucet-watchdog.service\n' > "$STUB_ACTIVE"
+bash "$BOX_REPORT" > /dev/null 2>&1
+check "an active watchdog is reported active" "[ \"\$(jqf '$BOX_REPORT_OUT' watchdogUnit)\" = 'active' ]"
+: > "$STUB_ACTIVE"; printf 'faucet-watchdog.service\n' > "$STUB_FAILED"
+bash "$BOX_REPORT" > /dev/null 2>&1
+check "a failed watchdog is reported failed" "[ \"\$(jqf '$BOX_REPORT_OUT' watchdogUnit)\" = 'failed' ]"
+unset STUB_ACTIVE STUB_FAILED
+bash "$BOX_REPORT" > /dev/null 2>&1
+check "systemctl saying nothing is unknown, never a calm inactive" "[ \"\$(jqf '$BOX_REPORT_OUT' watchdogUnit)\" = 'unknown' ]"
+box_env
+export STUB_ACTIVE="$T/active"; printf 'my-dog.service\n' > "$STUB_ACTIVE"; export STUB_FAILED="$T/failed"; : > "$STUB_FAILED"
+BOX_REPORT_WATCHDOG_UNIT=my-dog.service bash "$BOX_REPORT" > /dev/null 2>&1
+check "the unit name is overridable, for a box that names it differently" "[ \"\$(jqf '$BOX_REPORT_OUT' watchdogUnit)\" = 'active' ]"
+unset STUB_ACTIVE STUB_FAILED
+
 echo "== box-report: CAN THE BOX PAGE ANYONE. The bridge's state is reported, so a dead one is visible off-box"
 # The bridge cannot report its own death through itself. The report carries the probe and
 # the live probe reads it. A curl double answers whatever STUB_BRIDGE_CODE/STUB_BRIDGE_BODY

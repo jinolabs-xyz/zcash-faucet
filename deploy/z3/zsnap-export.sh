@@ -114,6 +114,7 @@ if [ "${1:-}" = "recover" ]; then
   fi
   if [ "${marked_watchdog:-0}" = "1" ]; then
     systemctl start "$ZSNAP_WATCHDOG_UNIT" >/dev/null 2>&1 || true
+    refresh_box_report
   fi
   rm -f "$window_marker"
   exit 0
@@ -454,6 +455,16 @@ fi
 work=""
 stopped_zebra=""
 stopped_watchdog=0
+# The box report carries the watchdog's state (register #16) and refreshes every five
+# minutes, so a report taken during a cold window would say WATCHDOG STOPPED for up to
+# five minutes after this script started it again, and the off-box probe would fail on a
+# box that is fine. Refresh it the moment the watchdog is back; a box without the report
+# script (a dev box) just skips.
+refresh_box_report() {
+  local br="${ZSNAP_BOX_REPORT:-/opt/faucet/box-report.sh}"
+  [ -x "$br" ] && "$br" >/dev/null 2>&1 || true
+}
+
 cleanup() {
   # Restart order matters: zebra first (the thing users feel), watchdog after
   # (so it never observes the window as a fault to page about).
@@ -465,6 +476,7 @@ cleanup() {
   if [ "$stopped_watchdog" = "1" ]; then
     systemctl start "$ZSNAP_WATCHDOG_UNIT" >/dev/null 2>&1 \
       || log "ERROR: could not restart $ZSNAP_WATCHDOG_UNIT"
+    refresh_box_report
   fi
   rm -f "$window_marker"
   [ -n "$work" ] && rm -rf "$work"
@@ -543,6 +555,7 @@ fi
 if [ "$stopped_watchdog" = "1" ]; then
   systemctl start "$ZSNAP_WATCHDOG_UNIT"
   stopped_watchdog=0
+  refresh_box_report
 fi
 
 name="zsnap-$ZSNAP_NETWORK-$height-${manifest_hash:0:12}"

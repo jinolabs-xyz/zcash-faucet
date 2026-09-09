@@ -54,6 +54,8 @@
 #     docker stop z3-testnet-zallet-1
 #     bash deploy/z3/zallet-abandon-expired-txs.sh --dry-run
 #     bash deploy/z3/zallet-abandon-expired-txs.sh
+#     systemctl start faucet-watchdog.service && /opt/faucet/box-report.sh
+#         # the report says WATCHDOG STOPPED until refreshed; do not leave it red for 5 min
 #     docker start z3-testnet-zallet-1
 #     systemctl start faucet-watchdog.service
 set -euo pipefail

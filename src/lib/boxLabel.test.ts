@@ -11,7 +11,7 @@ import { boxRow, boxChip, boxIsBad } from "./boxLabel.ts";
 import { classifyIntegrity } from "./boxIntegrity.ts";
 
 const NOW = Date.parse("2026-07-31T12:00:00Z");
-const report = (over = {}) => ({ expected: 14, present: 14, notEnabled: 0, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, platform: null, minerBinary: null, minerUnit: null, alertBridge: null, at: NOW - 30_000, readable: true, ...over });
+const report = (over = {}) => ({ expected: 14, present: 14, notEnabled: 0, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, platform: null, minerBinary: null, minerUnit: null, watchdogUnit: null, alertBridge: null, at: NOW - 30_000, readable: true, ...over });
 
 test("THE STATE NOTHING RENDERED: two files gone and a unit disabled says so", () => {
   const s = classifyIntegrity(report({ present: 12, notEnabled: 1 }), NOW);
@@ -259,4 +259,42 @@ test("ok, a webhook channel, unknown and an older report are NOT the fault here,
     assert.equal(boxIsBad(s), false, `alertBridge ${String(v)}`);
     assert.equal(boxChip(s), null, `alertBridge ${String(v)}`);
   }
+});
+
+// ── A STOPPED WATCHDOG IS A FAULT, AND A VISIBLE ONE (risk register #16) ─────────────────
+import { watchdogStopped } from "./boxLabel.ts";
+
+test("a watchdog systemd calls inactive or failed is a fault the row and the strip both name", () => {
+  // is-enabled was true of it, Restart=always never let it reach failed, and the restart
+  // counter counted restarts, of which a stopped unit has none: a box with no
+  // self-healing read complete and calm.
+  for (const [v, words] of [["inactive", /WATCHDOG STOPPED, nothing heals/], ["failed", /WATCHDOG FAILED, nothing heals/], ["deactivating", /WATCHDOG STOPPING, nothing heals/]] as const) {
+    const s = classifyIntegrity(report({ watchdogUnit: v }), NOW);
+    assert.equal(s.state, "complete", "the files are all there; that is exactly the trap");
+    assert.match(boxRow(s), words);
+    assert.equal(boxIsBad(s), true, v);
+    assert.equal(watchdogStopped(s), true, v);
+    assert.equal(boxChip(s), "WATCHDOG STOPPED", v);
+  }
+});
+
+test("active, activating, unknown and an older report are not that fault, and say nothing about it", () => {
+  // activating is seconds from running; unknown is the off-box probe's to fail; null is
+  // a server that predates the field. deactivating is NOT here: its next state is
+  // stopped, and passing it would reopen the hole at the moment a stop begins.
+  for (const v of ["active", "activating", "unknown", null]) {
+    const s = classifyIntegrity(report({ watchdogUnit: v }), NOW);
+    assert.doesNotMatch(boxRow(s), /WATCHDOG STOPPED|WATCHDOG FAILED/, `watchdogUnit ${String(v)}`);
+    assert.equal(watchdogStopped(s), false, `watchdogUnit ${String(v)}`);
+    assert.equal(boxIsBad(s), false, `watchdogUnit ${String(v)}`);
+    assert.equal(boxChip(s), null, `watchdogUnit ${String(v)}`);
+  }
+});
+
+test("a looping watchdog outranks a stopped one on the strip, and a stopped one outranks a dead bridge", () => {
+  assert.equal(boxChip(classifyIntegrity(report({ watchdogUnit: "inactive", watchdogRestarts: 61, watchdogRestartsDelta: 61 }), NOW)), "WATCHDOG LOOP");
+  const s = classifyIntegrity(report({ watchdogUnit: "inactive", alertBridge: "down" }), NOW);
+  assert.equal(boxChip(s), "WATCHDOG STOPPED");
+  assert.match(boxRow(s), /WATCHDOG STOPPED/);
+  assert.match(boxRow(s), /ALERT BRIDGE DOWN/);
 });
