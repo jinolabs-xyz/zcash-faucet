@@ -73,9 +73,15 @@ address, so Let's Encrypt's own expiry mail goes nowhere; adding `email` to the
 Caddyfile's global block is one line and is the operator's to make.
 
 An ALREADY expired certificate does not reach that check: the handshake itself is
-refused, so the probe prints `ALREADY EXPIRED` and the same fix. A handshake that
-fails for any other reason while the faucet answered over the same origin is reported
-as the probe's own blip, not a page, because the fetches prove TLS works. And
+refused, so the probe prints `ALREADY EXPIRED` and the same fix. So does an untrusted
+chain — which is what Caddy serves once ACME has given up and it falls back to its
+internal issuer — and a name mismatch: both are browser-fatal and both page.
+
+Only a TRANSPORT failure beside a working fetch is treated as the probe's own blip
+(a reset, a refused connection, a DNS hiccup). A certificate fault is never a blip,
+whatever the fetches did: undici reuses a pooled keep-alive socket and never
+re-handshakes, so `fetch` and the raw handshake genuinely disagree, and `fetch` is the
+one that is wrong. And
 `SMOKE_TLS_MIN_DAYS` is deliberately NOT plumbed into `live-smoke.yml`: a certificate
 should never legitimately sit under three weeks, so widening the floor from a
 repository variable would be a way to silence this rather than fix it. Change it in

@@ -309,6 +309,15 @@ check "and it only runs when the probe failed, on the PAGE step and not the prob
   "grep -q 'if: failure()' '$T/page-step.yml' && ! grep -q 'if: failure()' '$T/probe-step.yml'"
 check "the cap knob is NOT settable from the workflow, so a variable cannot widen it" \
   "! grep -q 'SMOKE_ALLOW_UNREADY_MAX_DAYS' '$LS'"
+# Same shape, same reason: OBSERVABILITY.md says the certificate floor is deliberately not
+# plumbed into a repository variable, because widening it is a way to silence the check
+# rather than fix it. A documented invariant with no guard is a comment.
+check "and neither is the certificate floor" \
+  "! grep -q 'SMOKE_TLS_MIN_DAYS' '$LS'"
+# The https guard, both ways round: an uppercase scheme is legal and must not page.
+( cd "$REPO" && SMOKE_URL="HTTPS://faucet.example.org" SMOKE_DISABLED="1" bash "$T/probe-step.sh" > "$T/upper.log" 2>&1 )
+check "an uppercase HTTPS:// is accepted, because new URL() normalises it and a refusal pages" \
+  "[ $? -eq 0 ]"
 
 # The probe step, run for real. `node scripts/live-probe.mjs` is never reached in these
 # two cases, which is the point: both must decide before probing anything.

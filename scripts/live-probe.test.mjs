@@ -384,6 +384,31 @@ test("an expired certificate reads as expired even on the lenient path", async (
   assert.doesNotMatch(r.out, /days left/);
 });
 
+test("a handshake failure with NO working fetch is never downgraded", async () => {
+  // The downgrade rests on the fetches having succeeded. Without that precondition it
+  // would swallow a total outage, so the precondition is pinned rather than assumed:
+  // nothing is listening here, so `faucetReachable` is false and the certificate line
+  // must FAIL rather than print the blip wording.
+  const r = await runProbe({ SMOKE_URL: "https://127.0.0.1:1" });
+  assert.notEqual(r.code, 0, r.out);
+  assert.match(r.out, /FAIL: the TLS certificate can be read/);
+  assert.doesNotMatch(r.out, /so this is the probe, not the certificate/);
+});
+
+test("the floor FAILS at exactly the threshold, which is what the runbook says", async (t) => {
+  // `days > TLS_MIN_DAYS`, not `>=`. A certificate with exactly the floor's worth of days
+  // left is already past the point Caddy should have renewed, and the docs, the check's
+  // name and the code have to agree on which side of the line that falls.
+  // `-days 10` is ten days minus the seconds since it was issued, so it floors to 9.
+  const r = await runTlsProbe(10, { SMOKE_TLS_MIN_DAYS: "9" });
+  if (!r) return t.skip("SMOKE_TEST_ALLOW_NO_OPENSSL=1 and no openssl here");
+  assert.notEqual(r.code, 0, r.out);
+  assert.match(r.out, /FAIL: the TLS certificate has more than 9 whole days left/);
+  // And one day above it passes, so the boundary is pinned from both sides.
+  const ok8 = await runTlsProbe(10, { SMOKE_TLS_MIN_DAYS: "8" });
+  assert.equal(ok8.code, 0, ok8.out);
+});
+
 test("an https origin is required for the certificate to be watched at all", async () => {
   // Caddy 308s :80 to :443 and fetch follows redirects, so an http SMOKE_URL is a fully
   // green run with ZERO certificate coverage. The skip line is the only thing that says

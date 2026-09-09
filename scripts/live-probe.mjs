@@ -84,10 +84,6 @@ const TIMEOUT_MS = Number(process.env.SMOKE_TIMEOUT_MS ?? 15000);
 // worked", not "renewal is due" (risk register #18).
 // `?? 21` does not catch the EMPTY STRING, and an empty string is exactly what GitHub
 // Actions hands an unset repository variable: Number("") is 0, so the check passed green
-// with a threshold of zero. "banana" already failed closed (NaN, always FAIL); this makes
-// "" fail closed too, the way MAX_HATCH_DAYS above does.
-// `?? 21` does not catch the EMPTY STRING, and an empty string is exactly what GitHub
-// Actions hands an unset repository variable: Number("") is 0, so the check passed green
 // with a threshold of zero. A NEGATIVE one is the same hole with extra typing, so both
 // fall back to the default rather than being honoured.
 const TLS_MIN_DAYS_RAW = Number(process.env.SMOKE_TLS_MIN_DAYS);
@@ -190,8 +186,11 @@ async function loadExplorerTxUrl() {
  * inside the box (risk register #18). Let's Encrypt would email about it, except the
  * ACME account here has no contact address, which is its own line in HTTPS.md.
  *
- * Not fatal to the rest: an http:// origin (the :80 smoke shape) skips this, and a
- * connection that fails is reported by the faucet checks above rather than twice.
+ * Not fatal to the rest: an http:// origin (the :80 smoke shape) skips this. A box that
+ * is simply down DOES count here as well as in the faucet checks, so the summary reads
+ * `2 FAILED (faucet 1 ... certificate 1)` - the certificate line names the connection
+ * error rather than claiming the certificate is bad, which is what the code carried into
+ * the message for.
  */
 async function checkTlsExpiry(faucetReachable = false) {
   const { ok, count } = tally();
@@ -245,6 +244,15 @@ async function checkTlsExpiry(faucetReachable = false) {
     // A certificate fault is never a blip, whatever the fetches did: undici reuses a
     // pooled keep-alive socket and never re-handshakes, so fetch and tls.connect really
     // do disagree, and fetch is the one that is wrong.
+    // ECONNRESET is the awkward one: node reports it both for a runner-side reset AND for
+    // a TLS terminator that aborts the handshake by closing. It stays because a terminator
+    // that does that persistently also kills the fetches on a fresh connection, so
+    // faucetReachable is false and this never fires - the residual is a sub-second
+    // transition inside one run, against a real cost in false pages if it came out. Every
+    // other realistic TLS fault lands outside this list and pages: a plaintext port gives
+    // ERR_SSL_WRONG_VERSION_NUMBER, a version mismatch ERR_SSL_TLSV1_ALERT_PROTOCOL_VERSION,
+    // a name mismatch ERR_TLS_CERT_ALTNAME_INVALID, and a stalled handshake has no code at
+    // all, which fails closed.
     const TRANSPORT_BLIPS = ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH", "EPIPE", "EAI_AGAIN"];
     if (faucetReachable && TRANSPORT_BLIPS.includes(code)) {
       console.log(`  --: TLS handshake failed (${code || handshake.err?.message || "no answer"}) but the faucet answered over the same origin, so this is the probe, not the certificate`);
