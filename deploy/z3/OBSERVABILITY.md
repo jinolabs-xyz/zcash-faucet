@@ -123,6 +123,27 @@ credentials, fix the unit; do not rely on this.
 Long hex inside a line is deliberately kept: here that is a txid, a block hash or an
 image digest, all public and the first thing an operator needs from a page.
 
+**The metrics timer asks the same faucet the watchdog does.** `faucet-metrics.sh`
+read only `METRICS_*` names, out of `/etc/faucet/metrics.env`, a file nobody creates,
+so on the real box it probed `127.0.0.1:3000` (the app is behind caddy and publishes
+no port) and looked for a container called `faucet-web` (it is
+`zcash-faucet-faucet-1`). Measured on production 2026-09-09, months after install:
+`faucet_up 0` and `faucet_web_container_up 0` while the faucet was serving, with every
+app gauge absent. It falls back to the watchdog's `WATCHDOG_FAUCET_URL`,
+`WATCHDOG_*_MATCH` from `/etc/faucet/watchdog.env`, which have been right all along;
+`METRICS_*` still wins when set. A container match that finds nothing now says so in
+the journal (throttled to one an hour: this runs every 30 seconds), a docker that will
+not answer says that instead of blaming the names, and every run logs the URL it
+probed and where that came from, because a wrong URL has no container to warn about
+and just reads as a faucet that is down.
+
+**`faucet_up` therefore means more than it did.** The watchdog's URL is the public
+origin, so the gauge now covers DNS, TLS and the proxy as well as the app, and the
+timer makes two HTTPS requests a minute through Caddy. An alert on
+`faucet_up == 0` is no longer only "the web app is not answering": a failed
+certificate renewal reads the same. The certificate has its own check in the off-box
+probe, which is the one that can tell them apart.
+
 **A stopped watchdog is visible.** `box-report.sh` publishes `watchdogUnit`, the
 unit's systemd word (`active`, `activating`, `deactivating`, `inactive`, `failed`,
 or `unknown` when systemctl would not say). It used to be invisible: the file count
@@ -282,7 +303,7 @@ What lands in the file:
 
 | Metric | Means |
 |---|---|
-| `faucet_up` | the web app answered its readiness probe at all |
+| `faucet_up` | the APP answered (HTTP 200 or 503) at the probe URL. That URL is the watchdog's, usually the PUBLIC origin, so 0 covers DNS, TLS and the proxy as well as the app; a 502 from the proxy is 0, and so is a body that never finished arriving |
 | `faucet_ready` | it can serve a drip right now |
 | `faucet_balance_taz` | spendable balance |
 | `faucet_empty` | nothing left to send |
@@ -290,10 +311,12 @@ What lands in the file:
 | `faucet_node_ready` / `faucet_node_sync_percent` / `faucet_node_height` | node sync state |
 | `faucet_can_build_tx` | the send gate's verdict: 0 with `faucet_ready 1` is a faucet refusing every drip while readiness stays green on purpose |
 | `faucet_container_up` / `faucet_zallet_container_up` / `faucet_web_container_up` | container states |
+| `faucet_disk_free_bytes{path=...}` | free bytes on the filesystem holding that path |
+| `faucet_disk_free_percent{path=...}` | free percent on the same |
+| `faucet_disk_below_floor{path=...}` | 1 when free percent is under `METRICS_DISK_FLOOR_PCT` |
 | `faucet_metrics_scrape_timestamp` | when this file was written |
 
-`faucet_up 0` and a missing `faucet_ready` mean the app said *nothing*, which
-is a different problem from `faucet_up 1, faucet_ready 0`, where it answered
+`faucet_up 0` and a missing `faucet_ready` mean nothing usable came back: no answer, an answer from the proxy rather than the app, a 200 whose body is not `/api/ready`'s, or one that stopped mid-body. The journal line says which. That is a different problem from `faucet_up 1, faucet_ready 0`, where it answered
 and told you why it cannot serve. The script never invents a readiness value
 it did not get.
 
@@ -319,9 +342,13 @@ not appear on a public endpoint that does not already carry it.
 
 ### Alerts worth having, once the numbers are flowing
 
-- `faucet_up == 0` for 5 minutes: the web app is not answering, and the
-  watchdog should already have restarted it. If both are true, look at the
-  box.
+- `faucet_up == 0` for 5 minutes: the probe URL is not answering. That is the
+  watchdog's URL, usually the public origin, so it covers DNS, TLS and the proxy
+  as well as the app; the off-box probe's certificate check is what separates a
+  dead app from an expired certificate. Look at the web app first; the watchdog
+  should already have restarted it. If it is up and the watchdog did restart
+  it, the fault is outside the app - the box, DNS, the certificate or the
+  proxy - and the journal line naming the HTTP code says which.
 - `faucet_ready == 0` for 30 minutes: matches what the watchdog pages on. A
   first sync or a refill trips this legitimately, hence the window.
 - `faucet_empty == 1`: the faucet is out of funds. Not urgent at 3am, but it

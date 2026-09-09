@@ -236,6 +236,24 @@ for wf in "$REPO"/.github/workflows/*.yml; do
   check "$name grants nothing write at the top level" "! grep -A 6 '^permissions:' '$wf' | grep -qE ': *write'"
 done
 
+echo "== repo: /api/ready's key ORDER is load-bearing, in two readers (risk register #19)"
+# faucet-metrics.sh reads `ready` as the body's FIRST key (a presence test is satisfied by
+# a foreign body's nested node.ready) and `ts` as its LAST (a truncation loses the tail).
+# Both are properties of one object literal in the route, and a reorder there would break
+# a monitor silently - the shape this repo has a name for.
+RR="$REPO/src/app/api/ready/route.ts"
+# Both spellings: `ready,` is a shorthand property and `ts: ...` is not, and the first
+# version of this only matched the colon form - which found `backend` first and `ts` last
+# and would have passed a reorder of the two keys that matter.
+ready_keys="$(sed -n '/NextResponse.json(/,/status: ready ? 200 : 503/p' "$RR" \
+  | grep -oE '^      [a-zA-Z_][a-zA-Z0-9_]*[,:]' | sed 's/[ ,:]//g')"
+check "the readiness body's first key is ready" \
+  "[ \"\$(printf '%s\n' \"$ready_keys\" | head -n1)\" = ready ]"
+check "and its last is ts, which is what tells a truncated body from a whole one" \
+  "[ \"\$(printf '%s\n' \"$ready_keys\" | tail -n1)\" = ts ]"
+check "and the metrics script says it depends on both, so the coupling is not a surprise" \
+  "grep -q 'has to be the body.s FIRST key' '$REPO/deploy/z3/faucet-metrics.sh'"
+
 echo "== repo: the off-box probe cannot pass without probing (risk register #17)"
 # It is the only signal that has ever reached us unprompted. Three ways it used to go
 # green while watching nothing: no FAUCET_LIVE_URL (skipped, exit 0), an escape hatch
