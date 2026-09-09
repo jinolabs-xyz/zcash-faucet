@@ -109,10 +109,36 @@ if [ "$miner" = "1" ]; then
     built="$REPO_DIR/deploy/z3/miner/target/release/zcash-testnet-miner"
     if install -m 755 "$built" "$INSTALL_DIR/.zcash-testnet-miner.new" \
        && mv -f "$INSTALL_DIR/.zcash-testnet-miner.new" "$INSTALL_DIR/zcash-testnet-miner"; then
-      systemctl restart zcash-testnet-miner 2>/dev/null \
-        || log "ERROR: new miner installed but the restart failed, it is still on the old one"
-      log "miner rebuilt and restarted ($(sha256sum "$INSTALL_DIR/zcash-testnet-miner" | cut -c1-12))"
-      miner_rc=0
+      # Only a RUNNING miner is restarted. A stopped one was stopped by someone: the
+      # owner parked it 2026-09-08 and the next miner commit's deploy started it again,
+      # so it mined for hours against a decision nobody had reversed. A stopped unit
+      # picks the new binary up whenever it is next started, and a unit systemd is
+      # itself about to restart (activating, after a crash) does the same on its own,
+      # so neither is touched. THE WORD, not the exit code: is-active exits 3 for
+      # inactive, failed and activating alike, and the log must not call a crash loop
+      # "stopped by someone". A systemctl that cannot be asked reads as "unknown" and
+      # is an error, since the old restart's failure vanished behind 2>/dev/null.
+      sha="$(sha256sum "$INSTALL_DIR/zcash-testnet-miner" | cut -c1-12)"
+      state="$(systemctl is-active zcash-testnet-miner.service 2>/dev/null || true)"
+      case "${state:-unknown}" in
+        active)
+          if systemctl restart zcash-testnet-miner.service 2>/dev/null; then
+            log "miner rebuilt and restarted ($sha)"
+            miner_rc=0
+          else
+            log "ERROR: new miner installed but the restart failed, so the running process is still the old build ($sha on disk)"
+            miner_rc=1
+          fi ;;
+        inactive)
+          log "miner rebuilt, and left stopped as it was found: the new binary runs when someone starts it ($sha)"
+          miner_rc=0 ;;
+        activating|deactivating|reloading|failed)
+          log "miner rebuilt; the unit is $state and is left to systemd, which runs the new binary on its next start ($sha)"
+          miner_rc=0 ;;
+        *)
+          log "ERROR: miner rebuilt but systemctl could not say what state the unit is in (got \"$state\"), so nothing was restarted ($sha)"
+          miner_rc=1 ;;
+      esac
     else
       log "ERROR: could not install the rebuilt miner"
       miner_rc=1
