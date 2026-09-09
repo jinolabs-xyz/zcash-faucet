@@ -1061,9 +1061,13 @@ curl -s "https://$(cat /etc/faucet-domain)/api/ready" | jq
    outage must not roll back a deploy). The cause is the tip oracle, not the
    node: check `curl -s .../api/status | jq .node.externalHeight` (null means
    unverified) and whether `hosh.zec.rocks` answers from the box. The live
-   probe fails on the same condition; the GitHub Actions repository variable
-   `FAUCET_LIVE_ALLOW_UNREADY=1` (not a box environment variable) silences it
-   during a known oracle outage.
+   probe fails on the same condition. To silence that during a known oracle
+   outage, set the GitHub Actions repository variable (not a box environment
+   variable) `FAUCET_LIVE_ALLOW_UNREADY` to **the date it should stop
+   silencing**, `YYYY-MM-DD`, at most 14 days out: it is honoured to the end of
+   that day **in UTC**, which is earlier than the end of your day if you are
+   west of it. The cap is 14 whole days, so today+14 is accepted. `=1` used to mean forever and is now ignored, because a hatch
+   set during one incident silenced the drip check for good.
 9. **`wallet balance unknown`.** Zallet did not answer. It is known to exit
    when zebra closes the mempool stream, the watchdog docker-starts it
    again within a sweep. If it is crash-looping instead, read

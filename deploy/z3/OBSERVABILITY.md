@@ -60,6 +60,22 @@ you (re-linking needs the container stopped), set `WATCHDOG_SIGNAL_MATCH=` in
 `/etc/faucet/watchdog.env` and `systemctl restart faucet-watchdog` for the
 duration.
 
+**The off-box probe cannot pass without probing.** `live-smoke.yml` runs
+`scripts/live-probe.mjs` from a GitHub runner: it is the only signal that has ever
+reached us unprompted, and it had three ways to go green while watching nothing. An
+unset `FAUCET_LIVE_URL` now FAILS the workflow instead of skipping (turn monitoring
+off deliberately with `FAUCET_LIVE_SMOKE_DISABLED=1`). The un-ready escape hatch is a
+date, `FAUCET_LIVE_ALLOW_UNREADY=2026-09-12`, honoured to the end of that day in UTC
+and ignored loudly after it; the old `=1` never expired and silenced the
+faucet-cannot-drip check for good. And the paging rule reads the clock rather than
+counting runs: **the cron does not keep its own time.** Measured 2026-09-09, a
+`*/15` schedule fired about every five hours on this repository, so "two consecutive
+failures" meant ten hours, not thirty minutes. GitHub also disables scheduled
+workflows after 60 days with no repository activity, which nothing inside a run can
+detect; the page step prints the real gap since the previous scheduled run, so a
+schedule that has stopped keeping time is at least visible in the log of the next one
+that does fire.
+
 **A stopped watchdog is visible.** `box-report.sh` publishes `watchdogUnit`, the
 unit's systemd word (`active`, `activating`, `deactivating`, `inactive`, `failed`,
 or `unknown` when systemctl would not say). It used to be invisible: the file count
