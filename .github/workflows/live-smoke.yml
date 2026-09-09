@@ -1,5 +1,6 @@
 # External monitoring of the live faucet: probes the public /api/status and
-# /api/ready from a runner every 15 minutes. The on-box watchdog cannot report
+# /api/ready from a runner on a schedule (the cron asks for every 15 minutes and
+# GitHub delivers rather less; see the measurement below). The on-box watchdog cannot report
 # a dead box or broken DNS/TLS, an outside probe can. Read-only, never claims,
 # so it drains nothing and burns no cooldown slots.
 #
@@ -7,9 +8,10 @@
 # variables -> Actions -> Variables) to the public origin, e.g.
 # https://faucet.example.org. WITHOUT IT THIS WORKFLOW FAILS, on purpose: it used
 # to skip green, so a repository with no URL had a monitoring workflow that passed
-# every 15 minutes having probed nothing, which is the shape of every false pass in
+# on every run having probed nothing, which is the shape of every false pass in
 # this tree (risk register #17). To turn the monitoring off deliberately, set the
-# variable FAUCET_LIVE_SMOKE_DISABLED=1 and it says so and exits 0.
+# variable FAUCET_LIVE_SMOKE_DISABLED=1 and it says so and exits 0, whether or not
+# the URL is set.
 #
 # TWO MORE WAYS THIS CAN GO QUIET, both of them outside the run:
 #   - GitHub disables scheduled workflows after 60 days with no repository activity.
@@ -53,12 +55,15 @@ jobs:
           SMOKE_ALLOW_UNREADY: ${{ vars.FAUCET_LIVE_ALLOW_UNREADY }}
           SMOKE_DISABLED: ${{ vars.FAUCET_LIVE_SMOKE_DISABLED }}
         run: |
+          # The off switch is checked FIRST, so it works during a maintenance window with
+          # the URL still set. Inside the URL test it only answered when the URL was
+          # already missing, which is the one case that needs no switch.
+          if [ "$SMOKE_DISABLED" = "1" ]; then
+            echo "FAUCET_LIVE_SMOKE_DISABLED=1: off-box monitoring is deliberately off"
+            exit 0
+          fi
           if [ -z "$SMOKE_URL" ]; then
-            if [ "$SMOKE_DISABLED" = "1" ]; then
-              echo "FAUCET_LIVE_SMOKE_DISABLED=1: off-box monitoring is deliberately off"
-              exit 0
-            fi
-            echo "FAUCET_LIVE_URL is not set, so this workflow has been passing every run having probed NOTHING." >&2
+            echo "FAUCET_LIVE_URL is not set, so this workflow has been passing on every run having probed NOTHING." >&2
             echo "Set the repository variable to the public origin, or set FAUCET_LIVE_SMOKE_DISABLED=1 to turn monitoring off on purpose." >&2
             exit 1
           fi
@@ -88,14 +93,20 @@ jobs:
             echo "FAUCET_ALERT_URL secret is not set, cannot page (email only)"
             exit 0
           fi
-          prev_json="$(gh run list --workflow live-smoke --event schedule --limit 2 \
+          # COMPLETED runs only. A sibling scheduled run queued a minute ago has a null
+          # conclusion and a fresh timestamp, and taking it as "the previous run" made the
+          # gap look like one minute and suppressed the page: an outage hidden by an
+          # overlapping run, which is worse than the rule it replaced.
+          prev_json="$(gh run list --workflow live-smoke --event schedule --status completed --limit 3 \
                     --json conclusion,databaseId,createdAt \
                     --jq "[.[] | select(.databaseId != $GITHUB_RUN_ID)][0]" 2>/dev/null || echo '')"
           prev="$(printf '%s' "$prev_json" | jq -r '.conclusion // "unknown"' 2>/dev/null || echo unknown)"
           prev_at="$(printf '%s' "$prev_json" | jq -r '.createdAt // empty' 2>/dev/null || true)"
           gap_min=0
-          if [ -n "$prev_at" ]; then
-            gap_min=$(( ( $(date -u +%s) - $(date -u -d "$prev_at" +%s) ) / 60 ))
+          prev_epoch=""
+          [ -n "$prev_at" ] && prev_epoch="$(date -u -d "$prev_at" +%s 2>/dev/null || true)"
+          if [ -n "$prev_epoch" ]; then
+            gap_min=$(( ( $(date -u +%s) - prev_epoch ) / 60 ))
             echo "previous scheduled run: $prev, started ${gap_min} minutes ago"
             # The cron is best-effort and GitHub disables it entirely after 60 days of
             # repository inactivity. A gap far past the nominal 15 minutes is worth
@@ -103,13 +114,13 @@ jobs:
             # exists to notice.
             [ "$gap_min" -gt 45 ] && echo "NOTE: the schedule is running every ${gap_min} minutes, not the 15 the cron asks for"
           else
-            echo "previous scheduled run: $prev (no timestamp; treating as a page)"
+            echo "previous scheduled run: $prev (no readable timestamp: ${prev_at:-none}; treating as a page)"
           fi
           if [ "$prev" = "success" ]; then
             echo "first failure: not paging yet, the next scheduled run decides once 30 minutes are covered"
             exit 0
           fi
-          if [ -n "$prev_at" ] && [ "$gap_min" -lt 30 ]; then
+          if [ -n "$prev_epoch" ] && [ "$gap_min" -lt 30 ]; then
             echo "two failures, but only ${gap_min} minutes apart: under the 30-minute rule, not paging yet"
             exit 0
           fi

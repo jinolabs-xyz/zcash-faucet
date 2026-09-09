@@ -240,14 +240,93 @@ echo "== repo: the off-box probe cannot pass without probing (risk register #17)
 # It is the only signal that has ever reached us unprompted. Three ways it used to go
 # green while watching nothing: no FAUCET_LIVE_URL (skipped, exit 0), an escape hatch
 # that never expired, and a schedule GitHub had quietly stopped running.
+#
+# THESE RUN THE WORKFLOW'S OWN SHELL, they do not grep its prose. The first version of
+# this block matched the log messages, so changing `exit 1` to `exit 0` in the step it
+# guards left every check green: the fix was not gated by the thing asserting it.
 LS="$REPO/.github/workflows/live-smoke.yml"
-check "an unset FAUCET_LIVE_URL FAILS the workflow rather than skipping green" \
-  "grep -q 'has been passing every run having probed NOTHING' '$LS' && ! grep -q 'is not set, skipping' '$LS'"
-check "and there is a named way to turn monitoring off on purpose" "grep -q 'FAUCET_LIVE_SMOKE_DISABLED' '$LS'"
+mk_scratch "${TMPDIR:-/tmp}/repo-livesmoke.XXXXXX"
+# Plain text, not PyYAML: the harness image has python3 but no yaml module, and this
+# only has to find a `run: |` block under a named step.
+python3 - "$LS" "$T" <<'PY'
+import sys, pathlib, textwrap
+lines = open(sys.argv[1]).read().splitlines()
+out = pathlib.Path(sys.argv[2])
+
+def script(name):
+    i = next(k for k, l in enumerate(lines) if l.strip().startswith("- name:") and name in l)
+    j = next(k for k in range(i, len(lines)) if lines[k].strip() in ("run: |", "run: |-"))
+    body, indent = [], None
+    for l in lines[j + 1:]:
+        if l.strip() == "":
+            body.append("")
+            continue
+        lead = len(l) - len(l.lstrip())
+        if indent is None:
+            indent = lead
+        if lead < indent:
+            break
+        body.append(l[indent:])
+    return "\n".join(body).rstrip() + "\n"
+
+(out / "probe-step.sh").write_text(script("probe the live faucet"))
+(out / "page-step.sh").write_text(script("page on"))
+PY
+check "the workflow's two steps could be extracted, so what follows is the shipped script" \
+  "[ -s '$T/probe-step.sh' ] && [ -s '$T/page-step.sh' ]"
+
+# The probe step, run for real. `node scripts/live-probe.mjs` is never reached in these
+# two cases, which is the point: both must decide before probing anything.
+( cd "$REPO" && SMOKE_URL="" SMOKE_DISABLED="" bash "$T/probe-step.sh" > "$T/nourl.log" 2>&1 )
+check "an unset FAUCET_LIVE_URL FAILS the step, rather than skipping green" "[ $? -ne 0 ]"
+check "and says what it has been doing" "grep -q 'probed NOTHING' '$T/nourl.log'"
+( cd "$REPO" && SMOKE_URL="" SMOKE_DISABLED="1" bash "$T/probe-step.sh" > "$T/off1.log" 2>&1 )
+check "the named off switch exits 0 with no URL" "[ $? -eq 0 ] && grep -q 'deliberately off' '$T/off1.log'"
+( cd "$REPO" && SMOKE_URL="https://example.invalid" SMOKE_DISABLED="1" bash "$T/probe-step.sh" > "$T/off2.log" 2>&1 )
+check "and ALSO with a URL set, which is when a maintenance window needs it" "[ $? -eq 0 ] && grep -q 'deliberately off' '$T/off2.log'"
+
+# The page step, run for real against a stub gh/curl. This is the 30-minute rule.
+mkdir -p "$T/bin"
+cat > "$T/bin/gh" <<'GH'
+#!/usr/bin/env bash
+# Ignores the --jq filter and prints the fixture the case chose, which is what the
+# filter would have selected.
+cat "${STUB_PREV_JSON:?}"
+GH
+cat > "$T/bin/curl" <<'CURL'
+#!/usr/bin/env bash
+echo "curl $*" >> "${STUB_CURL_LOG:?}"
+exit 0
+CURL
+chmod +x "$T/bin/gh" "$T/bin/curl"
+export STUB_CURL_LOG="$T/curl.log"
+page_run() { # $1 = fixture json, sets $T/page.log
+  : > "$STUB_CURL_LOG"
+  printf '%s' "$1" > "$T/prev.json"
+  ( cd "$REPO" && PATH="$T/bin:$BASE_PATH" STUB_PREV_JSON="$T/prev.json" \
+      ALERT_URL="https://hook.example/x" ALERT_FORMAT="" GH_TOKEN=x SMOKE_URL="https://f.example" \
+      GITHUB_RUN_ID=999 GITHUB_SERVER_URL=https://github.com GITHUB_REPOSITORY=o/r \
+      bash "$T/page-step.sh" > "$T/page.log" 2>&1 )
+}
+old="$(date -u -d '-300 minutes' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-300M +%Y-%m-%dT%H:%M:%SZ)"
+recent="$(date -u -d '-10 minutes' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-10M +%Y-%m-%dT%H:%M:%SZ)"
+page_run "{\"conclusion\":\"success\",\"databaseId\":1,\"createdAt\":\"$old\"}"
+check "a previous SUCCESS does not page: one red run is a blip" "! grep -q 'curl ' '$STUB_CURL_LOG'"
+page_run "{\"conclusion\":\"failure\",\"databaseId\":1,\"createdAt\":\"$recent\"}"
+check "two failures only 10 minutes apart do not page: the rule is 30 MINUTES, not two runs" "! grep -q 'curl ' '$STUB_CURL_LOG'"
+page_run "{\"conclusion\":\"failure\",\"databaseId\":1,\"createdAt\":\"$old\"}"
+check "two failures spanning 300 minutes DO page" "grep -q 'curl ' '$STUB_CURL_LOG'"
+check "and the message carries the real span, not an assumed 30" "grep -qE 'spanning 3[0-9][0-9]\+ minutes' '$T/page.log' '$STUB_CURL_LOG'"
+check "and it says the schedule is not keeping its cron" "grep -q 'not the 15 the cron asks for' '$T/page.log'"
+page_run "{}"
+check "an unreadable previous run PAGES rather than exiting quietly" "grep -q 'curl ' '$STUB_CURL_LOG'"
+check "the query asks only for COMPLETED runs, so an overlapping queued one cannot hide an outage" \
+  "grep -q -- '--status completed' '$T/page-step.sh'"
+
 check "the probe's un-ready hatch is a DATE, not a value that never expires" \
   "grep -q 'not a YYYY-MM-DD date, so it is IGNORED' '$REPO/scripts/live-probe.mjs' && ! grep -q 'SMOKE_ALLOW_UNREADY === \"1\"' '$REPO/scripts/live-probe.mjs'"
-check "the page rule reads the clock rather than counting runs on a cron that does not keep time" \
-  "grep -q 'gap_min' '$LS' && ! grep -q 'failed two probes in a row, 30+ minutes' '$LS'"
+check "and the runbook an operator opens mid-incident names the date form, not the dead =1" \
+  "grep -q 'FAUCET_LIVE_ALLOW_UNREADY' '$REPO/OPERATIONS.md' && ! grep -q 'FAUCET_LIVE_ALLOW_UNREADY=1' '$REPO/OPERATIONS.md'"
 check "the workflow's own explorer skip is NOT set in the workflow, so the real run still checks it" \
   "! grep -q 'SMOKE_SKIP_EXPLORER' '$LS'"
 check "the probe has tests, and npm test runs them" \

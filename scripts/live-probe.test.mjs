@@ -42,12 +42,16 @@ const NOT_READY = { ready: false, reason: "below reserve, refilling", node: { re
  * is what the first version of this file did.
  */
 function run(cmd, args, env) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { env: { ...process.env, ...env } });
     let out = "", err = "";
     child.stdout.on("data", (d) => { out += d; });
     child.stderr.on("data", (d) => { err += d; });
-    child.on("close", (code) => resolve({ code, out, err }));
+    // node:test has no default timeout, so a spawn that never finishes would hang the
+    // whole suite in CI instead of failing it.
+    const bomb = setTimeout(() => { child.kill("SIGKILL"); reject(new Error(`probe did not finish in 60s\n${out}\n${err}`)); }, 60_000);
+    child.on("error", (e) => { clearTimeout(bomb); reject(e); });
+    child.on("close", (code) => { clearTimeout(bomb); resolve({ code, out, err }); });
   });
 }
 
@@ -87,6 +91,9 @@ test("THE OLD FOREVER-HATCH IS DEAD: SMOKE_ALLOW_UNREADY=1 is ignored, loudly", 
   const r = await runProbe({ SMOKE_ALLOW_UNREADY: "1" }, NOT_READY);
   assert.notEqual(r.code, 0, "the hatch still suppressed the failure");
   assert.match(r.err, /not a YYYY-MM-DD date, so it is IGNORED/);
+  // And the failure is the READY check, not an unreachable fake: without this the case
+  // passes just as well against a faucet that never answered.
+  assert.match(r.out, /FAIL: faucet is ready to drip.*below reserve, refilling/);
 });
 
 test("a hatch with a FUTURE date holds, and says until when", async () => {
@@ -100,18 +107,33 @@ test("a hatch with a PAST date is ignored, and says it expired", async () => {
   const r = await runProbe({ SMOKE_ALLOW_UNREADY: "2020-01-01" }, NOT_READY);
   assert.notEqual(r.code, 0, "an expired hatch still suppressed the failure");
   assert.match(r.err, /expired on 2020-01-01/);
+  assert.match(r.out, /FAIL: faucet is ready to drip.*below reserve, refilling/);
 });
 
 test("today's date still holds: the hatch runs to the END of the day it names", async () => {
-  const today = new Date().toISOString().slice(0, 10);
-  const r = await runProbe({ SMOKE_ALLOW_UNREADY: today }, NOT_READY);
+  // Tomorrow, not today: deriving "today" here and re-reading the clock in the child
+  // flakes across UTC midnight, and the property under test is the end-of-day boundary,
+  // which tomorrow exercises just as well without the race.
+  const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+  const r = await runProbe({ SMOKE_ALLOW_UNREADY: tomorrow }, NOT_READY);
   assert.equal(r.code, 0, r.out);
+  assert.match(r.err, new RegExp(`until the end of ${tomorrow} UTC`));
+});
+
+test("the hatch is CAPPED: a far-future date is the old forever-hatch with extra typing", async () => {
+  const far = new Date(Date.now() + 60 * 86_400_000).toISOString().slice(0, 10);
+  const r = await runProbe({ SMOKE_ALLOW_UNREADY: far }, NOT_READY);
+  assert.notEqual(r.code, 0, "a 60-day hatch was honoured");
+  assert.match(r.err, /past the 14-day cap/);
+  const inside = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
+  assert.equal((await runProbe({ SMOKE_ALLOW_UNREADY: inside }, NOT_READY)).code, 0, "a week out is inside the cap");
 });
 
 test("garbage is ignored rather than trusted", async () => {
-  for (const v of ["yes", "true", "forever", "2026-13-45"]) {
+  for (const v of ["yes", "true", "forever", "2026-13-45", "2026-02-30", "2099-01-01"]) {
     const r = await runProbe({ SMOKE_ALLOW_UNREADY: v }, NOT_READY);
     assert.notEqual(r.code, 0, `"${v}" was treated as a hatch`);
     assert.match(r.err, /IGNORED/);
+    assert.match(r.out, /FAIL: faucet is ready to drip/, `"${v}": the probe did not reach the readiness check`);
   }
 });

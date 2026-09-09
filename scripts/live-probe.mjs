@@ -21,7 +21,8 @@
 // #17). It is a DATE now, YYYY-MM-DD, and it stops working the day after it:
 //     SMOKE_ALLOW_UNREADY=2026-09-12
 // A value that is not a future date is ignored, loudly, and the check fails
-// normally. There is no way to say "forever".
+// normally. It is also capped: a date more than SMOKE_ALLOW_UNREADY_MAX_DAYS (14)
+// out is refused, because "2099-01-01" is the old forever-hatch with extra typing.
 //
 // RETRIES BEFORE IT PAGES, because a single 15-second blip is not an outage.
 // The faucet has momentary un-ready windows that are entirely normal: the
@@ -39,21 +40,32 @@ const BASE = (process.env.SMOKE_URL ?? "").replace(/\/$/, "");
  * module cannot be imported for a unit test: importing it runs the probe).
  *
  * `raw` is the variable's value, `now` the clock. A YYYY-MM-DD date holds until
- * the END of that day in UTC. Anything else (including the old "1") is not a
- * hatch, and the caller says so on stderr.
+ * the END of that day in UTC (say so to an operator west of UTC: their local
+ * "today" runs out before ours does). Anything else, including the old "1", is
+ * not a hatch, and the caller says so on stderr.
  */
-function unreadyHatch(raw, now = new Date()) {
+const MAX_HATCH_DAYS = Number(process.env.SMOKE_ALLOW_UNREADY_MAX_DAYS ?? 14);
+
+function unreadyHatch(raw, now = new Date(), maxDays = MAX_HATCH_DAYS) {
   const v = (raw ?? "").trim();
   if (v === "") return { on: false, why: "" };
   if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) {
     return { on: false, why: `SMOKE_ALLOW_UNREADY is "${v}", which is not a YYYY-MM-DD date, so it is IGNORED (it used to be "1", which never expired)` };
   }
   const until = Date.parse(`${v}T23:59:59.999Z`);
-  if (Number.isNaN(until)) return { on: false, why: `SMOKE_ALLOW_UNREADY is "${v}", which is not a real date, so it is IGNORED` };
+  // V8 ROLLS OVER rather than rejecting: "2026-02-30" parses as March 2nd, so a hatch
+  // would outlive the date printed beside it. Round-trip it and refuse the difference.
+  if (Number.isNaN(until) || new Date(until).toISOString().slice(0, 10) !== v) {
+    return { on: false, why: `SMOKE_ALLOW_UNREADY is "${v}", which is not a real calendar date, so it is IGNORED` };
+  }
   if (until < now.getTime()) {
     return { on: false, why: `SMOKE_ALLOW_UNREADY expired on ${v}, so it is IGNORED and this probe fails on a faucet that cannot drip, as it should` };
   }
-  return { on: true, why: `un-ready allowed by SMOKE_ALLOW_UNREADY until the end of ${v} UTC` };
+  const daysOut = Math.ceil((until - now.getTime()) / 86_400_000);
+  if (daysOut > maxDays) {
+    return { on: false, why: `SMOKE_ALLOW_UNREADY is "${v}", ${daysOut} days out, past the ${maxDays}-day cap, so it is IGNORED: a far-future date is the old never-expiring hatch with extra typing` };
+  }
+  return { on: true, why: `un-ready allowed by SMOKE_ALLOW_UNREADY until the end of ${v} UTC (end of day UTC, which may be before the end of yours)` };
 }
 
 const hatch = unreadyHatch(process.env.SMOKE_ALLOW_UNREADY);
@@ -256,7 +268,8 @@ async function runFaucetChecks() {
   //
   // It hangs here because live-smoke is the ONLY signal that has ever reached us
   // unprompted: it caught the disk outage and the HTTPS outage while every on-box
-  // check read healthy. A missing script now turns this red every 15 minutes.
+  // check read healthy. A missing script now turns this red on every scheduled run
+  // (the cron asks for 15 minutes; live-smoke.yml records what GitHub delivers).
   //
   // `unknown` FAILS, deliberately. A box that cannot say what it has is exactly the
   // box we had all week, and counting silence as success is the bug itself.
