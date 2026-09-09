@@ -66,7 +66,43 @@ BASE_PATH="$PATH"
 # shellcheck source=lib.sh
 . "$SCRATCH/lib.sh"
 
-SELECTED="${SUITES:-zsnap backup deploy metrics redeploy drift alerts access watchdog repo installops boxreport bringtospec ctazports ctazconfig ctazbroker prune imagemanifest autodeploy zalletrepair}"
+# THE ORDER IS DELIBERATE and stays written out: every suite is sourced into ONE shell, so
+# what one leaves behind the next inherits, and this order is the one CI runs. Discovering
+# the list from the directory would lose that, and a re-ordering has twice cost a review
+# round on its own (a STUB_READY that meant a path in one suite and a flag in another).
+#
+# WHAT IS NOT WRITTEN OUT IS WHETHER IT IS COMPLETE. A suite file added and not named here
+# never runs, on a green tally, which is the same silent-pass shape the suites themselves
+# exist to catch. So the two are compared below and a mismatch refuses the run.
+SUITE_ORDER="zsnap backup deploy metrics redeploy drift alerts access watchdog repo installops boxreport bringtospec ctazports ctazconfig ctazbroker prune imagemanifest autodeploy zalletrepair"
+SELECTED="${SUITES:-$SUITE_ORDER}"
+
+# Only when running the default set: a deliberately narrowed SUITES= is not a mismatch.
+if [ -z "${SUITES:-}" ]; then
+  on_disk=""
+  for f in "$SCRATCH"/suites/*.sh; do
+    [ -e "$f" ] || continue
+    n="${f##*/}"; on_disk="$on_disk ${n%.sh}"
+  done
+  unlisted=""; missing_file=""
+  for n in $on_disk; do
+    case " $SUITE_ORDER " in *" $n "*) ;; *) unlisted="$unlisted $n" ;; esac
+  done
+  for n in $SUITE_ORDER; do
+    case " $on_disk " in *" $n "*) ;; *) missing_file="$missing_file $n" ;; esac
+  done
+  if [ -n "$unlisted" ] || [ -n "$missing_file" ]; then
+    echo "REFUSING TO RUN: the default suite order and deploy/z3/tests/suites/ disagree." >&2
+    [ -n "$unlisted" ] && echo "  on disk but never run:$unlisted" >&2
+    [ -n "$missing_file" ] && echo "  named in the order but no file:$missing_file" >&2
+    echo >&2
+    echo "A suite that is not named here does not run, and the tally is green anyway -" >&2
+    echo "the exact silent pass these suites exist to catch. Add it to SUITE_ORDER, in the" >&2
+    echo "position you want it sourced: the order is load-bearing, because every suite" >&2
+    echo "shares one shell and inherits what the previous one left behind." >&2
+    exit 2
+  fi
+fi
 
 # A missing dependency used to look exactly like broken code. With no sshd on
 # PATH the access suite reports 3 plain FAILs, and an `apt-get install` that
@@ -214,6 +250,55 @@ cap_reason() { # $1 key -> what is missing, in the operator's terms
   esac
 }
 
+# THE PACKAGES THAT SATISFY suite_deps, in one place. The install line below is generated
+# from this, so a command named in suite_deps and forgotten here is impossible rather than
+# discovered by an operator who copy-pasted our own remedy and was refused again. That has
+# happened twice: `git`, then `jq`.
+# `-` means "deliberately not a package": a GNU behaviour or a property of who we are,
+# which the capability refusal explains on its own. An EMPTY answer means nobody has said,
+# and that is treated as a defect below rather than quietly dropped - dropping is exactly
+# how `git` and then `jq` shipped missing from the remedy.
+dep_package() { # $1 command or capability -> the apt package that provides it
+  case "$1" in
+    zstd)        echo zstd ;;
+    curl)        echo curl ;;
+    gpg)         echo gnupg ;;
+    python3)     echo python3 ;;
+    jq)          echo jq ;;
+    sshd)        echo openssh-server ;;
+    git)         echo git ;;
+    # GNU behaviours (coreutils/findutils) and non-rootness: the capability refusal tells
+    # you to use the Linux container as a normal user, which no package can do for you.
+    stat_c|find_printf|sha256sum|nonroot) echo "-" ;;
+    *)           echo "" ;;
+  esac
+}
+
+# Every package any suite could ask for, in a stable order, whatever this run selected:
+# the printed remedy has to work for the NEXT run too, not only for the narrowed one that
+# refused. An empty answer from dep_package is itself a defect and is named, because a
+# recipe that silently omits a command is how both earlier misses shipped.
+ALL_PACKAGES=""
+UNMAPPED=""
+for _s in $SUITE_ORDER; do
+  for _c in $(suite_deps "$_s") $(suite_caps "$_s"); do
+    [ "$(dep_package "$_c")" = "-" ] && continue
+    _p="$(dep_package "$_c")"
+    if [ -z "$_p" ]; then
+      case " $UNMAPPED " in *" $_c "*) ;; *) UNMAPPED="$UNMAPPED $_c" ;; esac
+      continue
+    fi
+    case " $ALL_PACKAGES " in *" $_p "*) ;; *) ALL_PACKAGES="$ALL_PACKAGES $_p" ;; esac
+  done
+done
+ALL_PACKAGES="${ALL_PACKAGES# }"
+if [ -n "$UNMAPPED" ]; then
+  echo "REFUSING TO RUN: suite_deps names commands with no package in dep_package:$UNMAPPED" >&2
+  echo "The install line this script prints is generated from dep_package, so without an" >&2
+  echo "entry the remedy would leave them out and refuse again. Add them." >&2
+  exit 2
+fi
+
 missing=""
 missing_caps=""
 for suite in $SELECTED; do
@@ -243,7 +328,7 @@ if [ -n "$missing_caps" ]; then
   echo >&2
   echo "  docker run --rm -v \"\$PWD:/repo:ro\" ubuntu:24.04 bash -c '" >&2
   echo "    set -e; apt-get update -qq" >&2
-  echo "    apt-get install -y -qq zstd curl gnupg python3 jq openssh-server git" >&2
+  echo "    apt-get install -y -qq $ALL_PACKAGES" >&2
   echo "    useradd -m runner; cp -r /repo /home/runner/repo" >&2
   echo "    chown -R runner /home/runner/repo" >&2
   echo "    su runner -c \"bash /home/runner/repo/deploy/z3/tests/run-tests.sh\"'" >&2
@@ -256,7 +341,7 @@ if [ -n "$missing" ]; then
   echo >&2
   echo "Running anyway would report them as test failures, which reads as broken" >&2
   echo "code rather than a missing package. On Ubuntu:" >&2
-  echo "  apt-get update && apt-get install -y zstd curl gnupg python3 jq openssh-server git" >&2
+  echo "  apt-get update && apt-get install -y $ALL_PACKAGES" >&2
   echo >&2
   echo "Use 'set -e' on that install. A silently failed one is how 25 phantom" >&2
   echo "failures happen. Narrow the run instead with SUITES=\"drift alerts\"." >&2

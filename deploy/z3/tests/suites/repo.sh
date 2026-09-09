@@ -401,6 +401,75 @@ check "the app's own base image is watched by a docker entry at the root" \
 check "and caddy by a docker-compose entry, because docker does not read compose files" \
   "grep -q 'docker-compose:/deploy/z3' '$T/report.txt'"
 
+echo "== repo: the harness cannot keep a list that disagrees with the tree (risk register #29)"
+# Two lists in run-tests.sh have to match something outside themselves, and both have
+# failed at it: the default suite order against the files on disk, and the printed
+# `apt-get install` against suite_deps (it missed `git`, then `jq` - each time an operator
+# copy-pasted our own remedy and was refused again). The order is still written out
+# because it is load-bearing; the install line is generated. These check the seams.
+RT="$REPO/deploy/z3/tests/run-tests.sh"
+mk_scratch "${TMPDIR:-/tmp}/repo-runtests.XXXXXX"
+
+# THE REFUSAL, RUN FOR REAL: a suite file the default order does not name.
+cp -r "$REPO/deploy/z3/tests" "$T/tests"
+printf '# shellcheck shell=bash\ncheck "never runs" "true"\n' > "$T/tests/suites/zzznew.sh"
+# `env -u SUITES`: this suite runs with SUITES set, and the guard only applies to the
+# DEFAULT set - inherited, the inner run would skip the guard and recurse into itself.
+( cd "$REPO" && env -u SUITES TEST_SCRATCH="$T/tests" bash "$T/tests/run-tests.sh" > "$T/unlisted.log" 2>&1 )
+rc=$?
+check "a suite file the default order does not name REFUSES the run" "[ $rc -eq 2 ]"
+check "and says which file would never have run" "grep -q 'on disk but never run: zzznew' '$T/unlisted.log'"
+check "rather than a green tally that silently skipped it" "! grep -q 'passed,' '$T/unlisted.log'"
+rm -f "$T/tests/suites/zzznew.sh"
+# And the other direction: a name in the order with no file behind it.
+sed -i.bak 's/^SUITE_ORDER="zsnap/SUITE_ORDER="ghostsuite zsnap/' "$T/tests/run-tests.sh"
+( cd "$REPO" && env -u SUITES TEST_SCRATCH="$T/tests" bash "$T/tests/run-tests.sh" > "$T/ghost.log" 2>&1 )
+rc=$?
+check "a name in the order with no file REFUSES too" "[ $rc -eq 2 ] && grep -q 'no file: ghostsuite' '$T/ghost.log'"
+
+# THE INSTALL LINE IS GENERATED, so it cannot omit a command the guard demands. The three
+# functions are sourced out of the shipped script rather than re-implemented here.
+sed -n '/^suite_deps() {/,/^}/p; /^suite_caps() {/,/^}/p; /^dep_package() {/,/^}/p' "$RT" > "$T/fns.sh"
+ORDER="$(grep -oE '^SUITE_ORDER="[^"]*"' "$RT" | sed 's/^SUITE_ORDER="//; s/"$//')"
+GEN="$(
+  # shellcheck disable=SC1090
+  . "$T/fns.sh"
+  P=""
+  for s in $ORDER; do
+    for c in $(suite_deps "$s") $(suite_caps "$s"); do
+      p="$(dep_package "$c")"
+      [ "$p" = "-" ] && continue
+      [ -n "$p" ] || { echo "UNMAPPED:$c"; continue; }
+      case " $P " in *" $p "*) ;; *) P="$P $p" ;; esac
+    done
+  done
+  printf '%s' "${P# }"
+)"
+check "every command any suite declares has a package behind it" \
+  "case '$GEN' in *UNMAPPED*) false ;; *) true ;; esac"
+# The header comment is prose an operator copy-pastes and cannot be generated, so it is
+# compared. Sorted: the order in a comment is not the thing under test.
+HDR="$(grep -oE 'apt-get install -y -qq .*' "$RT" | head -n1 | sed 's/apt-get install -y -qq //')"
+hdr_sorted="$(printf '%s\n' $HDR | sort | tr '\n' ' ')"
+gen_sorted="$(printf '%s\n' $GEN | sort | tr '\n' ' ')"
+check "the recipe in the header comment names exactly the generated package set" \
+  "[ '$hdr_sorted' = '$gen_sorted' ]"
+
+# AND THE LINE IT ACTUALLY PRINTS, by making it refuse. Comparing only the header comment
+# left the printed remedy free to be hardcoded again, which is the whole defect.
+mkdir -p "$T/nojq"
+for b in bash sh env dirname basename sed grep awk tr cut head tail sort uniq cat ls mkdir rm cp mv chmod printf date find stat sha256sum seq id whoami tee wc dd du df sleep touch readlink realpath xargs zstd curl gpg python3 git; do
+  src="$(command -v "$b" 2>/dev/null)"; [ -n "$src" ] && ln -sf "$src" "$T/nojq/$b"
+done
+( cd "$REPO" && env -u SUITES PATH="$T/nojq" bash "$RT" > "$T/norecipe.log" 2>&1 )
+rc=$?
+check "a missing command still refuses, so the printed remedy is reachable" "[ $rc -eq 2 ]"
+printed="$(grep -oE 'apt-get install -y [a-z0-9 -]+' "$T/norecipe.log" | head -n1 | sed 's/apt-get install -y //')"
+printed_sorted="$(printf '%s\n' $printed | sort | tr '\n' ' ')"
+check "the remedy it PRINTS is the generated set, not a hand-kept copy of it" \
+  "[ '$printed_sorted' = '$gen_sorted' ]"
+
+
 echo "== repo: the off-box probe cannot pass without probing (risk register #17)"
 # It is the only signal that has ever reached us unprompted. Three ways it used to go
 # green while watching nothing: no FAUCET_LIVE_URL (skipped, exit 0), an escape hatch
