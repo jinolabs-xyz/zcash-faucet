@@ -261,6 +261,9 @@ reason_is_not_the_code() {
     # register #7), frozen, or still syncing. The node is a separate container the
     # previous image would talk to just the same. The wallet's reasons are NOT here: a
     # broken image can fail to reach the wallet, and that is exactly what a rollback fixes.
+    # Known edge: the "behind the network" verdict's threshold and tip parser ship IN the
+    # image, so a release that tightens the budget or breaks the parse reads as chain lag
+    # and is not rolled back. It still exits 1 and pages, which is the mitigation.
     *"behind the network"*|*"node frozen"*|*"node syncing"*) return 0 ;;
     *) return 1 ;;
   esac

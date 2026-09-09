@@ -10,6 +10,7 @@ const healthy: ReadinessInputs = {
   sendsBlock: false,
   sendsReason: null,
   floorZat: 50_000_000n,
+  nodeExpected: true,
 };
 
 test("a healthy faucet has no reason", () => {
@@ -46,6 +47,15 @@ test("the order of the rest is unchanged: ledger, backend, node, wallet, sends, 
   assert.equal(readinessReason({ ...healthy, balanceZat: 50_000_000n }), null, "at the floor is not below it");
 });
 
-test("no node verdict at all (sender is not zallet, or the node did not answer) skips every node check", () => {
-  assert.equal(readinessReason({ ...healthy, node: null }), null);
+test("no node to ask (sender is not zallet) skips every node check", () => {
+  assert.equal(readinessReason({ ...healthy, node: null, nodeExpected: false }), null);
+});
+
+test("a node that IS expected and did not answer is NOT ready: the gate cannot be verified and the pagers would see nothing", () => {
+  // The claim path refuses in this state (chainFreshness(null, ...) is unverifiable). A 200
+  // with no node block hid that from every reader of node.canBuildTx.
+  assert.equal(readinessReason({ ...healthy, node: null, nodeExpected: true }), "node status unknown");
+  // Upstream of the wallet checks, downstream of the ledger and the backend.
+  assert.equal(readinessReason({ ...healthy, node: null, nodeExpected: true, balanceZat: null }), "node status unknown");
+  assert.equal(readinessReason({ ...healthy, node: null, nodeExpected: true, backendReachable: false }), "backend unreachable");
 });

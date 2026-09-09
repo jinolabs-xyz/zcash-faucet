@@ -19,8 +19,15 @@ export interface ReadinessInputs {
   /** ledgerBlocksServing(): a DEFINITE ledger failure. Unknown is false. */
   ledgerBlocks: boolean;
   backendReachable: boolean;
-  /** null when the node was not asked or did not answer; both mean "no node verdict". */
+  /** null when the node was not asked or did not answer. Which of the two it is matters:
+   *  see nodeExpected. */
   node: { ready: boolean; frozen: boolean; shield: { state: ChainFreshness; lag: number | null } } | null;
+  /** True when this deployment HAS a node to ask (sender is zallet). A null node beside
+   *  true is a node that did not answer, and the claim path refuses in that state (the
+   *  gate is unverifiable without a node height), so readiness must too. Before this,
+   *  a wallet that answered its balance but not its status gave a 200 with no node block,
+   *  and every pager that reads canBuildTx out of that block saw nothing to read. */
+  nodeExpected: boolean;
   balanceZat: bigint | null;
   /** sendHealthBlocksServing(): a DEFINITE send-health failure, with its reason. */
   sendsBlock: boolean;
@@ -33,6 +40,7 @@ export interface ReadinessInputs {
 export function readinessReason(i: ReadinessInputs): string | null {
   if (i.ledgerBlocks) return "ledger unreadable";
   if (!i.backendReachable) return "backend unreachable";
+  if (i.nodeExpected && i.node == null) return "node status unknown";
   if (i.node && i.node.frozen) return "node frozen behind network";
   if (i.node && i.node.ready === false) return "node syncing";
   // Only "unsafe". See the module comment: "unverifiable" stays ready on purpose. lag is

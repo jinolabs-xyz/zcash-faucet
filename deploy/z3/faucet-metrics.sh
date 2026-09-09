@@ -58,7 +58,11 @@ jfield() { # $1 json, $2 key
 jobject() { # $1 json, $2 key
   local rest="${1#*\"$2\":}"
   [ "$rest" != "$1" ] || return 0
-  printf '%s' "${rest#*\{}"
+  # The value must BE an object: for `"node":null` the first brace after the key belongs
+  # to the NEXT object, and with cTAZ enabled that object also carries height and
+  # syncPercent, so the node gauges reported the feature-net's numbers. Review, 2026-09-09.
+  rest="${rest#"${rest%%[! ]*}"}"
+  case "$rest" in \{*) printf '%s' "${rest#\{}" ;; *) return 0 ;; esac
 }
 # Booleans become 1/0 so Prometheus can graph them; anything else drops out.
 as_gauge() {

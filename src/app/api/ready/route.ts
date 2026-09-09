@@ -92,6 +92,9 @@ export const GET = withApi("ready", async () => {
     sendsBlock: sendHealthBlocksServing(sends),
     sendsReason: sends.reason ?? null,
     floorZat: config.dripZatoshi + config.minReserveZatoshi,
+    // getNodeStatus() returns null both when there is no node to ask and when the node
+    // did not answer; only the first is fine, and this is how the verdict tells them apart.
+    nodeExpected: config.sender === "zallet",
   });
 
   const ready = reason === null;

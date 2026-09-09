@@ -114,6 +114,7 @@ Two endpoints, two different questions. Source of truth is
 |---|---|
 | `ledger unreadable` | the claims database cannot be read; a disk problem, not a chain one, and redeploy will not roll back on it |
 | `backend unreachable` | the lightwalletd/Zaino read endpoint is not answering |
+| `node status unknown` | zallet answered its balance but not its status, so the node's height and the send gate cannot be read; every claim is refused |
 | `node frozen behind network` | zebra stopped following the chain while the network moved on; the watchdog heals a stuck node |
 | `node syncing` | zebra is not at tip yet, normal on first sync or after a restore |
 | `node N blocks behind the network, drips would expire` | the send gate: our node is measurably behind an independent tip, so every claim is refused; redeploy will not roll back on it. A tip that merely cannot be verified keeps readiness but sets `node.canBuildTx:false`, which the watchdog and the live probe page on |
@@ -1023,48 +1024,54 @@ curl -s "https://$(cat /etc/faucet-domain)/api/ready" | jq
    `docker ps`. If caddy is up but the app is not, `docker logs` the faucet
    container. If nothing docker is running, start both stacks per the
    start/stop section.
-2. **`backend unreachable`.** The read-side light client endpoint
+2. **`ledger unreadable`.** The claims database on the faucet volume cannot be
+   read. Disk first (`df -h`, the `faucet_data` volume), then the app's
+   logs. Redeploy will not roll back on this, because the previous image
+   would meet the same volume.
+3. **`backend unreachable`.** The read-side light client endpoint
    (`LIGHTWALLETD_ENDPOINT` in `deploy/z3/faucet.env`, a public Zaino by
    default) is not answering. Check outbound network from the box, and if it
    points at a self-hosted `zaino` container, check that container. Sending
    goes through zallet and does not use this path, so this blocks lookups
    and readiness, not the wallet itself.
-3. **`ledger unreadable`.** The claims database on the faucet volume cannot be
-   read. Disk first (`df -h`, the `faucet_data` volume), then the app's
-   logs. Redeploy will not roll back on this, because the previous image
-   would meet the same volume.
-4. **`node frozen behind network`.** Zebra stopped following the chain while
+4. **`node status unknown`.** Zallet answered its balance but not its status
+   call, so the node's height and the send gate cannot be read; every claim is
+   refused in this state. `docker logs <zallet container>`; the watchdog's
+   poison auto-heal covers the usual cause.
+5. **`node frozen behind network`.** Zebra stopped following the chain while
    the network moved on, by hundreds of blocks or by not moving at all. The
    watchdog's node heal (restart, clear peers, drop the non-finalized state)
    runs on its own and reports; if it has given up, follow
    [deploy/z3/SNAPSHOTS.md](deploy/z3/SNAPSHOTS.md) to reimport a snapshot.
-5. **`node syncing`.** Zebra is catching up. Normal after a fresh box,
+6. **`node syncing`.** Zebra is catching up. Normal after a fresh box,
    restore or long downtime, and the watchdog deliberately does not page
    during it. Watch progress in the metrics file or
    `docker logs -f <zebra container>`. Nothing to fix, only to wait, unless
    it is stuck, then look at zebra's logs and disk space.
-6. **`node N blocks behind the network, drips would expire`.** The send gate:
+7. **`node N blocks behind the network, drips would expire`.** The send gate:
    our node is more than a few blocks behind an independent tip, so every
    claim is refused because a transaction built now would expire. Usually it
    clears in minutes as zebra catches up; if not, it is the frozen case above.
    Redeploy will not roll back on this.
-7. **The watchdog pages `drips refused: no independently-verified network
+8. **The watchdog pages `drips refused: no independently-verified network
    tip ...` while `/api/ready` is 200.** The gate cannot VERIFY the tip at all,
    so it refuses every claim, and readiness stays 200 on purpose (an oracle
    outage must not roll back a deploy). The cause is the tip oracle, not the
    node: check `curl -s .../api/status | jq .node.externalHeight` (null means
    unverified) and whether `hosh.zec.rocks` answers from the box. The live
-   probe fails on the same condition; `FAUCET_LIVE_ALLOW_UNREADY=1` silences
-   it during a known oracle outage.
-8. **`sends failing: ...`.** The last real sends failed although every probe
-   above passed. The wallet is the fault: `docker logs <zallet container>`,
-   and the poison auto-heal in the watchdog journal.
+   probe fails on the same condition; the GitHub Actions repository variable
+   `FAUCET_LIVE_ALLOW_UNREADY=1` (not a box environment variable) silences it
+   during a known oracle outage.
 9. **`wallet balance unknown`.** Zallet did not answer. It is known to exit
    when zebra closes the mempool stream, the watchdog docker-starts it
    again within a sweep. If it is crash-looping instead, read
    `docker logs <zallet container>` and check the RPC auth in
    `z3-stack/config/testnet/zallet.toml` matches `faucet.env`.
-10. **`below reserve, refilling`.** Not broken, broke. **Fund the faucet
+10. **`sends failing: ...`.** The last real sends failed although the wallet
+   answered and every check above passed. The wallet is the fault:
+   `docker logs <zallet container>`, and the poison auto-heal in the watchdog
+   journal.
+11. **`below reserve, refilling`.** Not broken, broke. **Fund the faucet
    address.** That is the fix, not a fallback. Mining lands a block rarely
    enough that it is not the answer at 3am, and even a block won right now
    needs 100 confirmations plus a shielding step before the balance moves, so
