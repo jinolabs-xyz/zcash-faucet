@@ -60,6 +60,18 @@ you (re-linking needs the container stopped), set `WATCHDOG_SIGNAL_MATCH=` in
 `/etc/faucet/watchdog.env` and `systemctl restart faucet-watchdog` for the
 duration.
 
+**The certificate is watched from outside, because nothing inside can see it.**
+The watchdog and the metrics timer both reach the app over loopback, where TLS is
+not in play, and Caddy renews silently or fails silently; a renewal that has stopped
+working is invisible until every browser refuses the site. `scripts/live-probe.mjs`
+completes a TLS handshake with the public origin and fails when fewer than
+`SMOKE_TLS_MIN_DAYS` (21) days remain. On a 90-day Let's Encrypt certificate that
+Caddy renews at about 30 days left, 21 days means renewal has already not worked
+twice, so it is a page rather than a reminder: check the caddy container's logs, that
+ports 80 and 443 reach the box, and DNS. The ACME account still has no contact
+address, so Let's Encrypt's own expiry mail goes nowhere; adding `email` to the
+Caddyfile's global block is one line and is the operator's to make.
+
 **The off-box probe cannot pass without probing.** `live-smoke.yml` runs
 `scripts/live-probe.mjs` from a GitHub runner: it is the only signal that has ever
 reached us unprompted, and it had three ways to go green while watching nothing. An

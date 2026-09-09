@@ -329,5 +329,9 @@ check "and the runbook an operator opens mid-incident names the date form, not t
   "grep -q 'FAUCET_LIVE_ALLOW_UNREADY' '$REPO/OPERATIONS.md' && ! grep -q 'FAUCET_LIVE_ALLOW_UNREADY=1' '$REPO/OPERATIONS.md'"
 check "the workflow's own explorer skip is NOT set in the workflow, so the real run still checks it" \
   "! grep -q 'SMOKE_SKIP_EXPLORER' '$LS'"
+check "the probe watches the certificate, which nothing on the box can see" \
+  "grep -q 'the TLS certificate has more than' '$REPO/scripts/live-probe.mjs' && grep -q 'SMOKE_TLS_MIN_DAYS' '$REPO/scripts/live-probe.mjs'"
+check "and the Caddyfile says where certificate expiry is watched from" \
+  "grep -q 'SMOKE_TLS_MIN_DAYS' '$REPO/deploy/z3/Caddyfile'"
 check "the probe has tests, and npm test runs them" \
   "[ -f '$REPO/scripts/live-probe.test.mjs' ] && grep -q 'scripts/\*\*/\*.test.mjs' '$REPO/package.json'"
