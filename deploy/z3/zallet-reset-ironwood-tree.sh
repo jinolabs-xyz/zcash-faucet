@@ -29,6 +29,8 @@
 #     docker stop z3-testnet-zallet-1
 #     bash deploy/z3/zallet-reset-ironwood-tree.sh
 #     docker start z3-testnet-zallet-1
+#     systemctl start faucet-watchdog.service && /opt/faucet/box-report.sh
+#         # the report says WATCHDOG STOPPED until refreshed; do not leave it red for 5 min
 #     systemctl start faucet-watchdog.service
 set -uo pipefail
 

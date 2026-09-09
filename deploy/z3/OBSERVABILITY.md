@@ -61,14 +61,17 @@ you (re-linking needs the container stopped), set `WATCHDOG_SIGNAL_MATCH=` in
 duration.
 
 **A stopped watchdog is visible.** `box-report.sh` publishes `watchdogUnit`, the
-unit's systemd word (`active`, `inactive`, `failed`, `activating`, `unknown`). It used
-to be invisible: the file count asks `is-enabled`, which a stopped unit still is;
-`Restart=always` means it never reaches `failed`; and the restart counter counts
+unit's systemd word (`active`, `activating`, `deactivating`, `inactive`, `failed`,
+or `unknown` when systemctl would not say). It used to be invisible: the file count
+asks `is-enabled`, which a stopped unit still is; `Restart=always` with the start
+limit off means it never reaches `failed` on its own; and the restart counter counts
 restarts, of which a unit somebody stopped has none. The panel row reads `WATCHDOG
-STOPPED, nothing heals` (or `FAILED`), the strip shows `WATCHDOG STOPPED`, and the
-off-box live probe fails on `inactive`, `failed` and `unknown`. A zsnap cold export
-stops the watchdog for its duration, so a report taken in that window reads stopped
-until the trap starts it again; that is the honest state, not a false alarm.
+STOPPED, nothing heals` (or `FAILED`, or `STOPPING`), the strip shows `WATCHDOG
+STOPPED`, and the off-box live probe fails on everything but `active` and `activating`
+(an older server that sends no field is cannot-verify). The report refreshes every
+five minutes, so a repair that stops the watchdog should run `/opt/faucet/box-report.sh`
+after starting it again (the runbook headers say so, and zsnap's cold export does it
+itself); otherwise the panel and the probe carry the stop for up to five minutes.
 
 A bridge cannot report its own death through itself, so `box-report.sh`
 resolves the alert configuration exactly as `alert.sh` does (both files, both

@@ -33,19 +33,22 @@ export function watchdogLooping(s: IntegrityStatus): boolean {
   return (s.watchdogRestartsDelta ?? 0) >= WATCHDOG_LOOP_RESTARTS;
 }
 
-/** The watchdog is not running, by systemd's word: stopped by someone, or failed past
- *  its start limit. Nothing heals a container, a poisoned wallet or a stalled node while
- *  it is down, and nothing else on the box would say so (register #16). "unknown",
- *  "activating" and null are not this fault: could-not-tell is the off-box probe's to
- *  fail, and a unit mid-restart is seconds from running. */
+/** The watchdog is not running, by systemd's word: stopped by someone, failed, or on
+ *  its way down. Nothing heals a container, a poisoned wallet or a stalled node while it
+ *  is down, and nothing else on the box would say so (register #16); the unit's own
+ *  OnFailure page still fires through systemd, but the watchdog's sweeps and their FIXED
+ *  and NEEDS YOU reports do not. "unknown", "activating" and null are not this fault:
+ *  could-not-tell is the off-box probe's to fail, and a unit mid-restart is seconds from
+ *  running. */
 export function watchdogStopped(s: IntegrityStatus): boolean {
-  return s.watchdogUnit === "inactive" || s.watchdogUnit === "failed";
+  return s.watchdogUnit === "inactive" || s.watchdogUnit === "failed" || s.watchdogUnit === "deactivating";
 }
 
 function watchdogUnitClause(s: IntegrityStatus): string {
   switch (s.watchdogUnit) {
     case "inactive": return ", WATCHDOG STOPPED, nothing heals";
     case "failed": return ", WATCHDOG FAILED, nothing heals";
+    case "deactivating": return ", WATCHDOG STOPPING, nothing heals";
     default: return "";
   }
 }
@@ -179,8 +182,8 @@ export function boxChip(s: IntegrityStatus): string | null {
   // Before the complete short-circuit: a box can have every file in place and a
   // watchdog in a restart loop, and that must not be invisible on the terse strip.
   if (watchdogLooping(s)) return "WATCHDOG LOOP";
-  // A watchdog that is not running heals nothing, and its own alerts never fire: the
-  // strip is the one place this can show.
+  // A watchdog that is not running heals nothing and sends none of its own reports: the
+  // strip is the one place this can show. (Its OnFailure page still fires via systemd.)
   if (watchdogStopped(s)) return "WATCHDOG STOPPED";
   // Same rule, and the stronger case: a complete box whose pages go nowhere is the one
   // fault no alert can announce, so the strip is where it has to show.
@@ -211,7 +214,7 @@ function bridge(s: IntegrityStatus): string {
   }
 }
 
-/** Anything other than a clean report. Matches isIntegrityFailing, plus the two faults only the report can carry: a looping watchdog and a box that cannot page: unknown counts. */
+/** Anything other than a clean report. Matches isIntegrityFailing, plus the three faults only the report can carry: a looping watchdog, a stopped one, and a box that cannot page; unknown counts. */
 export function boxIsBad(s: IntegrityStatus): boolean {
   return s.state !== "complete" || watchdogLooping(s) || watchdogStopped(s) || alertBridgeDown(s);
 }
