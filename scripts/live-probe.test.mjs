@@ -129,7 +129,17 @@ test("the hatch is CAPPED: a far-future date is the old forever-hatch with extra
   // count refused exactly that value: the operator types the documented number and is
   // told it is 15 days out.
   assert.equal((await runProbe({ SMOKE_ALLOW_UNREADY: day(14) }, NOT_READY)).code, 0, "14 days out, the documented maximum, was refused");
-  assert.notEqual((await runProbe({ SMOKE_ALLOW_UNREADY: day(15) }, NOT_READY)).code, 0, "15 days out was honoured");
+  // day(15) is computed HERE and the child re-reads the clock: across UTC midnight the
+  // date it was handed is 14 days out and is rightly accepted. Rare, but a test that
+  // fails once a month at 00:00 gets muted, so retry on the rollover instead. day(14)
+  // has no mirror hazard: a rollover makes it 13, still inside the cap.
+  for (let attempt = 0; ; attempt++) {
+    const before = day(0);
+    const r = await runProbe({ SMOKE_ALLOW_UNREADY: day(15) }, NOT_READY);
+    if (day(0) !== before && attempt < 3) continue;
+    assert.notEqual(r.code, 0, "15 days out was honoured");
+    break;
+  }
   // And a malformed cap must not DISABLE the cap: `daysOut > NaN` is false, fail-open.
   const r = await runProbe({ SMOKE_ALLOW_UNREADY: day(60), SMOKE_ALLOW_UNREADY_MAX_DAYS: "abc" }, NOT_READY);
   assert.notEqual(r.code, 0, "a malformed cap disabled the cap");

@@ -12,19 +12,23 @@
 # backup, tests/deploy-stubs for deploy, which needs a different docker
 # model). sqlite, tar, gpg and every hash check run for real.
 #
-# Needs Linux (flock, GNU find) plus zstd, gnupg, python3, curl, and openssh-server
-# for the access suite. Missing ones are named and refused rather than reported as
+# Needs Linux (flock, GNU find) plus zstd, gnupg, python3, jq, curl, and
+# openssh-server for the access suite. Missing ones are named and refused rather than reported as
 # failures, so trust the refusal over guessing.
 #
 # `git` is in the install list because box-report dates the miner sources by COMMIT time,
 # and the guard demands it. It was missing from this recipe while the guard already
 # required it, so copy-pasting our own advice produced a refusal. Keep the two in step:
 # anything suite_deps names has to be installable by the command printed here.
+# `jq` joined for the same reason and made the same mistake once: the repo suite runs the
+# live-smoke workflow's own --jq query, the guard started demanding jq, and the remedy
+# below did not install it. The guard scans EVERY selected suite, so one missing name
+# refuses the whole run, not one suite.
 #
 # From a Mac or a clean room:
 #   docker run --rm -v "$(git rev-parse --show-toplevel)":/repo:ro ubuntu:24.04 \
 #     bash -c 'set -e; apt-get update -qq
-#              apt-get install -y -qq zstd curl gnupg python3 openssh-server git
+#              apt-get install -y -qq zstd curl gnupg python3 jq openssh-server git
 #              useradd -m runner; cp -r /repo /home/runner/repo
 #              chown -R runner /home/runner/repo
 #              su runner -c "bash /home/runner/repo/deploy/z3/tests/run-tests.sh"'
@@ -239,7 +243,7 @@ if [ -n "$missing_caps" ]; then
   echo >&2
   echo "  docker run --rm -v \"\$PWD:/repo:ro\" ubuntu:24.04 bash -c '" >&2
   echo "    set -e; apt-get update -qq" >&2
-  echo "    apt-get install -y -qq zstd curl gnupg python3 openssh-server git" >&2
+  echo "    apt-get install -y -qq zstd curl gnupg python3 jq openssh-server git" >&2
   echo "    useradd -m runner; cp -r /repo /home/runner/repo" >&2
   echo "    chown -R runner /home/runner/repo" >&2
   echo "    su runner -c \"bash /home/runner/repo/deploy/z3/tests/run-tests.sh\"'" >&2
@@ -252,7 +256,7 @@ if [ -n "$missing" ]; then
   echo >&2
   echo "Running anyway would report them as test failures, which reads as broken" >&2
   echo "code rather than a missing package. On Ubuntu:" >&2
-  echo "  apt-get update && apt-get install -y zstd curl gnupg python3 openssh-server git" >&2
+  echo "  apt-get update && apt-get install -y zstd curl gnupg python3 jq openssh-server git" >&2
   echo >&2
   echo "Use 'set -e' on that install. A silently failed one is how 25 phantom" >&2
   echo "failures happen. Narrow the run instead with SUITES=\"drift alerts\"." >&2

@@ -109,8 +109,9 @@ export const GET = withApi("status", async () => {
     backend,
     // Does the box have what the repo says it must? COUNTS ONLY, never file names:
     // this endpoint is public, and naming what is missing from a production box is
-    // reconnaissance. live-smoke asserts this from outside every 15 minutes, which
-    // is the only signal that has ever reached us unprompted.
+    // reconnaissance. live-smoke asserts this from outside on a schedule (the cron
+    // asks for 15 minutes; GitHub delivered about five hours when it was measured),
+    // and it is the only signal that has ever reached us unprompted.
     box: classifyIntegrity(readBoxIntegrity(), Date.now()),
     node, // { ready, syncPercent, height, nodeHeight } or null while the wallet is down
     // OBSERVED, not configured. `active` used to be config.miner.active straight from

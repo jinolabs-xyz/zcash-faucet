@@ -9,7 +9,9 @@
  * installs and nobody runs is a comment.
  *
  * So the box publishes what it has, the app reports a verdict, and live-smoke
- * asserts it from outside every 15 minutes. live-smoke is the only signal that has
+ * asserts it from outside on a schedule (best-effort: the cron asks for 15 minutes,
+ * GitHub delivered about five hours when it was measured, which is why the page rule
+ * reads the clock instead of counting runs). live-smoke is the only signal that has
  * ever reached us unprompted: it caught the disk outage and the HTTPS outage when
  * every internal check read healthy. Hanging this on it means a missing script
  * turns CI red rather than sitting in a log nobody opens.
