@@ -119,7 +119,7 @@ Two endpoints, two different questions. Source of truth is
 | `node syncing` | zebra is not at tip yet, normal on first sync or after a restore |
 | `node N blocks behind the network, drips would expire` | the send gate: our node is measurably behind an independent tip, so every claim is refused; redeploy will not roll back on it. A tip that merely cannot be verified keeps readiness but sets `node.canBuildTx:false`, which the watchdog and the live probe page on |
 | `wallet balance unknown` | zallet did not return a balance, usually zallet itself is down |
-| `sends failing: ...` | the last sends actually failed even though every probe above passed; the wallet is the fault |
+| `sends failing: ...` | the last sends actually failed, or none resolved and none succeeded, even though every probe above passed; the wallet is the fault |
 | `below reserve, refilling` | funds are under drip + reserve, faucet needs a refill |
 
 Un-ready is not an outage by itself. First sync and refills are un-ready on
@@ -1068,9 +1068,12 @@ curl -s "https://$(cat /etc/faucet-domain)/api/ready" | jq
    `docker logs <zallet container>` and check the RPC auth in
    `z3-stack/config/testnet/zallet.toml` matches `faucet.env`.
 10. **`sends failing: ...`.** The last real sends failed although the wallet
-   answered and every check above passed. The wallet is the fault:
+   answered and every check above passed, or (`... never resolved and none
+   succeeded`) every recent send hit its deadline with no success among them,
+   which is what a crash-looping wallet looks like from the money path: each
+   claim a 504 and a burnt cooldown. The wallet is the fault:
    `docker logs <zallet container>`, and the poison auto-heal in the watchdog
-   journal.
+   journal. One send that lands clears the unresolved form on its own.
 11. **`below reserve, refilling`.** Not broken, broke. **Fund the faucet
    address.** That is the fix, not a fallback. Mining lands a block rarely
    enough that it is not the answer at 3am, and even a block won right now

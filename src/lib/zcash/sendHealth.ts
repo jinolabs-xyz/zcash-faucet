@@ -22,6 +22,15 @@
  * that was fine. That outage-amplifier is a bug this repo has paid for once already and
  * the readiness route carries a comment about it.
  *
+ * BUT A WALLET WHERE NOTHING EVER RESOLVES IS NOT FINE EITHER (risk register #9). With
+ * unknowns kept out of both the numerator and the denominator, a crash-looping zallet
+ * whose every send hit the deadline produced no decided sends at all, so this answered
+ * "too few to judge" for as long as it lasted: every claim a 504, every claimant a burnt
+ * cooldown, readiness green. So a window with NO success and at least a sample's worth
+ * of unresolved sends is degraded too, on its own sentence. One success in the window
+ * clears it, because one success is what a slow-but-working wallet produces and a dead
+ * one cannot.
+ *
  * Deliberately in memory and per-process. It is a health signal about the process doing
  * the sending, not a ledger, and persisting it would raise a retention question for data
  * that stops being true the moment the wallet is restarted.
@@ -107,6 +116,19 @@ export function readSendHealth(now: number = Date.now(), records: SendRecord[] =
   // is the same mistake in the opposite direction from counting them as failures.
   const decided = ok + failed;
   if (decided < MIN_SAMPLE) {
+    // Nothing succeeded and enough sends were left unresolved to be a pattern rather than
+    // one slow claim: the wallet is not finishing sends. Judged before the sample rule,
+    // which would otherwise answer "too few to judge" forever, since a wallet that never
+    // resolves never produces a decided send.
+    if (ok === 0 && unknown >= MIN_SAMPLE) {
+      return {
+        state: "degraded",
+        ok,
+        failed,
+        unknown,
+        reason: `${unknown} of the last ${unknown + failed} sends never resolved and none succeeded, the wallet is not finishing sends`,
+      };
+    }
     return {
       state: "unknown",
       ok,
