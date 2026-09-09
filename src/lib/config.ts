@@ -31,6 +31,26 @@ function senderFromEnv(): SenderKind {
   );
 }
 
+const CHALLENGES = ["pow", "turnstile", "none"] as const;
+export type ChallengeKind = (typeof CHALLENGES)[number];
+
+/**
+ * The anti-abuse gate, parsed the way the sender is: a value this file cannot read
+ * REFUSES TO BOOT. It used to be a cast, so `Pow`, `captcha` or `turnstyle` compared
+ * equal to neither branch in the claim route and the gate was simply not there,
+ * with nothing in the log to say so (risk register #10). An empty value is unset,
+ * the same rule num() applies.
+ */
+function challengeFromEnv(): ChallengeKind {
+  const raw = (process.env.FAUCET_CHALLENGE ?? "").trim();
+  if (raw === "") return process.env.TURNSTILE_SECRET_KEY ? "turnstile" : "pow";
+  if ((CHALLENGES as readonly string[]).includes(raw)) return raw as ChallengeKind;
+  throw new Error(
+    `FAUCET_CHALLENGE must be one of ${CHALLENGES.join(" | ")}, got "${raw}". ` +
+      "An unreadable value used to switch the anti-abuse gate off without a word; refusing to start instead.",
+  );
+}
+
 /**
  * Parse an env var as a number, or REFUSE TO BOOT. Exported because the same rule
  * has to hold outside this file: a threshold that silently becomes NaN disables
@@ -348,8 +368,7 @@ export const config = {
   // challenge forgeable. So a fresh box now stops with a message naming what to
   // set, instead of coming up unprotected. That is the trade, and it is the right
   // way round: loud and safe over quiet and open.
-  challenge: (process.env.FAUCET_CHALLENGE ??
-    (process.env.TURNSTILE_SECRET_KEY ? "turnstile" : "pow")) as "pow" | "turnstile" | "none",
+  challenge: challengeFromEnv(),
 
   pow: {
     // Base difficulty in leading zero bits of sha256(challenge:nonce). ~20 bits
@@ -416,4 +435,15 @@ export function assertServingConfig(): void {
     challenge: config.challenge,
   });
   if (saltProblem) throw new Error(saltProblem);
+  // Turnstile with no secret verifies nothing. verifyTurnstile refuses every claim in
+  // that state (it used to pass every claim, "dev convenience"), so a box configured
+  // this way would serve nobody and say so only one 403 at a time. Refuse at boot,
+  // where the operator is reading, in every environment: there is no environment in
+  // which a captcha with no key is what anyone meant.
+  if (config.challenge === "turnstile" && !config.turnstile.enabled) {
+    throw new Error(
+      "FAUCET_CHALLENGE=turnstile but TURNSTILE_SECRET_KEY is not set. Turnstile cannot verify " +
+        "a token without it and every claim would be refused. Set the key, or choose FAUCET_CHALLENGE=pow.",
+    );
+  }
 }
