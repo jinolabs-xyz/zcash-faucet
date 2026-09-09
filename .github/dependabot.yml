@@ -36,3 +36,38 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 3
+
+  # THE BASE IMAGES, which were the one supply chain nobody watched. npm, cargo and the
+  # actions were covered; the images the faucet actually RUNS as - node:22-slim under the
+  # app, caddy:2 terminating TLS - were not, so a CVE in either arrived only if someone
+  # happened to read a release note. That is the same "no signal, only luck" shape #85 was
+  # about (risk register #26).
+  #
+  # One entry per directory, because that is how dependabot's docker ecosystem scopes:
+  # it reads the Dockerfile and compose files in the directory it is pointed at, and does
+  # not recurse. The repo suite asserts every directory holding one is listed here, so a
+  # new image cannot arrive unwatched.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+
+  # caddy:2 lives in the compose file, not a Dockerfile.
+  - package-ecosystem: docker
+    directory: /deploy/z3
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+
+  # The Crosslink build image. Its FROM is `${RUST_IMAGE}` with a default in an ARG, which
+  # dependabot resolves; if a future edit makes the tag unresolvable this entry goes quiet
+  # rather than erroring, so the repo suite pins the ARG default's shape too.
+  - package-ecosystem: docker
+    directory: /deploy/z3/ctaz-build
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 2

@@ -254,6 +254,38 @@ check "and its last is ts, which is what tells a truncated body from a whole one
 check "and the metrics script says it depends on both, so the coupling is not a surprise" \
   "grep -q 'has to be the body.s FIRST key' '$REPO/deploy/z3/faucet-metrics.sh'"
 
+echo "== repo: every image this box runs is watched by something (risk register #26)"
+# npm, cargo and the actions were covered. The IMAGES the faucet runs as - node:22-slim
+# under the app, caddy:2 terminating TLS - were not, so a CVE in either arrived only if
+# somebody happened to read a release note. Adding the entries is easy; keeping them in
+# step with a tree that grows Dockerfiles is what this checks.
+DB="$REPO/.github/dependabot.yml"
+check "the docker ecosystem is watched at all" "grep -q 'package-ecosystem: docker' '$DB'"
+# EVERY directory holding an image reference has an entry. dependabot's docker ecosystem
+# reads the directory it is pointed at and does not recurse, so a new Dockerfile in a new
+# directory is silently unwatched - the same shape as a suite nobody listed.
+missing_dirs=""
+while IFS= read -r f; do
+  d="$(dirname "${f#"$REPO"}")"
+  [ "$d" = "." ] && d="/"
+  case "$d" in /*) ;; *) d="/$d" ;; esac
+  # `directory: <d>` must appear under a docker entry. Compare on the exact value.
+  grep -qE "^ +directory: ${d}\$" "$DB" || missing_dirs="$missing_dirs $d"
+done <<EOF
+$(find "$REPO" -name 'Dockerfile*' -not -path '*/node_modules/*' -not -path '*/.git/*' | sort)
+$(grep -rlE '^[[:space:]]+image:' "$REPO/deploy/z3"/*.yml 2>/dev/null | sort)
+EOF
+check "every directory holding a Dockerfile or a compose image has a dependabot entry" \
+  "[ -z '$missing_dirs' ]"
+# The ctaz build image comes from an ARG default. dependabot resolves that shape; an
+# unresolvable one would leave the entry silently doing nothing.
+check "the ctaz build image's tag is a literal dependabot can read, not a bare variable" \
+  "grep -qE '^ARG RUST_IMAGE=[a-z0-9./-]+:[A-Za-z0-9._-]+' '$REPO/deploy/z3/ctaz-build/Dockerfile'"
+# A floating major is what dependabot is FOR: it moves the pin and CI decides. A digest
+# with no tag would leave nothing for it to bump.
+check "the app's base image carries a version tag, so there is something to bump" \
+  "grep -qE '^FROM node:[0-9]+' '$REPO/Dockerfile'"
+
 echo "== repo: the off-box probe cannot pass without probing (risk register #17)"
 # It is the only signal that has ever reached us unprompted. Three ways it used to go
 # green while watching nothing: no FAUCET_LIVE_URL (skipped, exit 0), an escape hatch
