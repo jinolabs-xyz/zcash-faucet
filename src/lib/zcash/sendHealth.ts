@@ -22,10 +22,25 @@
  * that was fine. That outage-amplifier is a bug this repo has paid for once already and
  * the readiness route carries a comment about it.
  *
+ * BUT A WALLET WHERE NOTHING EVER RESOLVES IS NOT FINE EITHER (risk register #9). With
+ * unknowns kept out of both the numerator and the denominator, a crash-looping zallet
+ * whose every send was lost (an opid the wallet forgot, or the deadline) produced no
+ * decided sends at all, so this answered "too few to judge" for as long as it lasted:
+ * every claim a 504, every claimant a burnt cooldown, readiness green. A crash loop
+ * usually mixes the two, connection refused (failed) and a lost opid (unknown), so the
+ * rule counts both: a window with NO success, at least one unresolved send, and a
+ * sample's worth of unresolved-plus-failed is degraded on its own sentence. One success
+ * in the window clears it, because one success is what a slow-but-working wallet
+ * produces and a dead one cannot. The cost of that invariant: a zallet that starts
+ * answering sends without a txid (recorded unknown while coins move) would read as not
+ * finishing sends; that is a wallet regression worth a page, not routine.
+ *
  * Deliberately in memory and per-process. It is a health signal about the process doing
  * the sending, not a ledger, and persisting it would raise a retention question for data
  * that stops being true the moment the wallet is restarted.
  */
+
+import { config } from "../config.ts";
 
 /** Outcomes we can honestly classify. `unknown` is counted and never held against us. */
 export type SendOutcome = "ok" | "failed" | "unknown";
@@ -35,23 +50,50 @@ export interface SendRecord {
   at: number;
 }
 
-/**
- * How far back we look. Ten minutes is long enough that a handful of claims accumulate
- * on a quiet faucet and short enough that a fault fixed twenty minutes ago is not still
- * being reported as current.
- */
-export const WINDOW_MS = 10 * 60_000;
 
 /**
- * How many CLASSIFIABLE sends we need before saying anything at all.
+ * How many sends we need before saying anything at all: CLASSIFIABLE ones for the
+ * failure-rate verdict, and any mix of unresolved and failed for the nothing-resolves
+ * verdict below. Lowering it loosens both.
  *
- * Below this the verdict is `unknown`, never `ok`. One failed send is not evidence of a
+ * Below this the verdict is `unknown` or, with nothing resolving, `degraded`, never `ok`. One failed send is not evidence of a
  * dead wallet, and on a quiet faucet it may be the only send that hour. Requiring a
  * sample is what stops this from paging on a single unlucky claim, and answering
  * `unknown` rather than `ok` is what stops a quiet faucet from vouching for a wallet
  * nobody has exercised.
  */
 export const MIN_SAMPLE = 3;
+
+/**
+ * How far back we look. Long enough that a handful of claims accumulate on a quiet
+ * faucet; long enough to hold MIN_SAMPLE unresolved sends spaced by the send deadline
+ * (the queue is serial and a send that blew its deadline is still running, so
+ * consecutive deadline unknowns are at least one deadline apart, and a ten-minute
+ * window could never hold three of them at the stock 309 s: review measured unknowns
+ * every 300 s reading degraded and every 301 s "too few to judge"); and as short as
+ * those two allow, because the memory is how long a fault that is already fixed stays
+ * reported when no send follows it.
+ *
+ * DERIVED FROM THE DEADLINE, because the deadline is derived from operator-settable
+ * timings (ZALLET_OP_TIMEOUT_MS) and a constant would silently stop fitting the moment
+ * an operator raised them past 321 s (review, round 2, measured). Fifteen minutes is
+ * the floor; above it the window is (MIN_SAMPLE - 1) deadlines plus a minute. The
+ * memory therefore SCALES with the deadline: past an op timeout of about 741 s the
+ * window exceeds the watchdog's 30 min readiness grace, and on a quiet faucet a fault
+ * fixed half an hour ago with no send since can still be reported and paged. That is
+ * the trade for the rule being able to fire at all at that setting; a send that lands
+ * clears it.
+ */
+export function windowFor(sendTaskDeadlineMs: number): number {
+  return Math.max(15 * 60_000, (MIN_SAMPLE - 1) * sendTaskDeadlineMs + 60_000);
+}
+
+/** The window in force for this process: derived from the configured deadline, above. */
+export const WINDOW_MS = windowFor(config.sendTaskDeadlineMs);
+/** Whole minutes for the operator-facing sentence: a derived window is not a round number. */
+export function windowMinutes(windowMs: number): number {
+  return Math.round(windowMs / 60_000);
+}
 
 /**
  * The share of recent sends that may fail before the money path is called broken.
@@ -107,12 +149,27 @@ export function readSendHealth(now: number = Date.now(), records: SendRecord[] =
   // is the same mistake in the opposite direction from counting them as failures.
   const decided = ok + failed;
   if (decided < MIN_SAMPLE) {
+    // Nothing succeeded and unresolved plus failed make a sample: the wallet is not
+    // finishing sends. Judged before the sample rule, which would otherwise answer "too
+    // few to judge" forever, since a wallet that never resolves never produces enough
+    // decided sends. Inside this branch decided < MIN_SAMPLE, so the sum reaching it
+    // means at least one unresolved send; the failed-only case (three refusals, no
+    // unknowns) never gets here and is the ratio rule's, one branch down.
+    if (ok === 0 && unknown + failed >= MIN_SAMPLE) {
+      return {
+        state: "degraded",
+        ok,
+        failed,
+        unknown,
+        reason: `${unknown} of the last ${unknown + failed} sends never resolved and none succeeded, the wallet is not finishing sends`,
+      };
+    }
     return {
       state: "unknown",
       ok,
       failed,
       unknown,
-      reason: `only ${decided} decided send(s) in the last ${WINDOW_MS / 60_000} min, too few to judge`,
+      reason: `only ${decided} decided send(s) in the last ${windowMinutes(WINDOW_MS)} min, too few to judge`,
     };
   }
 
