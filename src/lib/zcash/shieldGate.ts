@@ -34,7 +34,7 @@
  */
 
 import { num } from "../config.ts";
-import { getExternalTip, warmExternalTip } from "./externalTip.ts";
+import { getExternalTip, warmExternalTip, HOSH_TIMEOUT_MS, MIN_ATTEMPT_GAP_MS, REFRESH_ATTEMPT_MS } from "./externalTip.ts";
 
 /*
  * The decision itself is a PURE function of two heights (see shieldFreshness),
@@ -208,6 +208,44 @@ export function mayBuildTransaction(gate: ChainGate): boolean {
   return gate.state === "safe";
 }
 
+/**
+ * The sentence a refused claim shows, from the gate that refused it. Pure and exported so
+ * the three arms can be pinned without booting a stack: review of register #6 found the
+ * middle arm could be rewritten back to the wording it replaced and nothing in the repo
+ * would notice, because the integration stacks reach only the first and third.
+ *
+ *   unsafe                      our node is measurably behind: say so
+ *   unverifiable, no node height  our own node did not report a height (the wallet or its
+ *                                 RPC is down): ours, and not the oracle's
+ *   unverifiable, node known      the network's tip could not be verified: the oracle's
+ *
+ * The same text is what an operator reads, and it sends them to a fix.
+ */
+export function freshnessRefusalText(gate: ChainGate): string {
+  const tail = " Nothing was claimed, your cooldown is untouched. Try again shortly.";
+  if (gate.state === "unsafe") {
+    return (
+      "Our node is catching up with the network, so a drip sent right now would expire " +
+      "before it could confirm." + tail
+    );
+  }
+  if (gate.state !== "unverifiable") {
+    // The route only reaches this behind !mayBuildTransaction, so a safe gate here is a
+    // caller bug, and a refusal sentence blaming our node for it would be a lie.
+    throw new Error(`freshnessRefusalText called on a ${gate.state} gate`);
+  }
+  if (gate.nodeHeight == null) {
+    return (
+      "Our node did not report its height just now, so we are not sending: we cannot tell whether " +
+      "a drip built now would confirm." + tail
+    );
+  }
+  return (
+    "We could not verify the network's current height just now, so we are not sending: a drip " +
+    "built against an unverified tip could expire before it confirms." + tail
+  );
+}
+
 /** Live reading: the pure decision above, fed the current cached oracle value. */
 export function readChainFreshness(nodeHeight: number | null): ChainGate {
   return chainFreshness(nodeHeight, getExternalTip());
@@ -215,10 +253,22 @@ export function readChainFreshness(nodeHeight: number | null): ChainGate {
 
 /**
  * Longest we will make a caller wait for the oracle before deciding without it.
- * The request path is the constraint: two seconds is tolerable in front of a drip
- * that takes seconds to build anyway, and it is well under any sane client timeout.
+ *
+ * AT LEAST ONE FULL ATTEMPT, WHICH IS NOT ONE FETCH. The first version waited 2 s
+ * against a hosh fetch allowed 5 s, so a slow-but-answering oracle produced
+ * "unverifiable" and a refusal that blamed our node, on the money path, for nothing
+ * (risk register #6). The second waited for the primary alone, and review measured one
+ * attempt at 10 s: hosh hanging to its abort and THEN the direct-node leg, which is the
+ * source that would have answered, starting after the claim had given up. An attempt is
+ * the primary plus the fallback budget (REFRESH_ATTEMPT_MS, sized in externalTip.ts).
+ * PLUS THE ATTEMPT GAP. The status read that precedes the gate kicks a refresh of its
+ * own; if that one fails fast the gap holds every poll for a second, and the claim's
+ * first real attempt starts a second late. One second of margin on top of all of it
+ * for the poll interval. Ten seconds in front of a drip that takes seconds to build is
+ * tolerable, and it is paid only on a cold cache with a slow oracle; the background
+ * refresh keeps the cache warm the rest of the time, and a fast failure is fast.
  */
-const ORACLE_WAIT_MS = 2000;
+export const ORACLE_WAIT_MS = MIN_ATTEMPT_GAP_MS + REFRESH_ATTEMPT_MS + 1000;
 
 /**
  * The reading for a caller that is ABOUT TO BUILD a transaction, rather than one
@@ -244,19 +294,30 @@ const ORACLE_WAIT_MS = 2000;
 export async function readChainFreshnessAsking(
   nodeHeight: number | null,
   waitMs = ORACLE_WAIT_MS,
+  // Injectable so the WAITING can be tested without a network: the module-level cache
+  // is otherwise the only thing a test can reach, and only cold.
+  readTip: () => number | null = getExternalTip,
+  warm: () => unknown = warmExternalTip,
 ): Promise<ChainGate> {
+  // NOTHING TO WAIT FOR when our own node's height is unknown: the verdict is
+  // "unverifiable" whatever the oracle says, and spending the whole budget to reach a
+  // foregone conclusion put the whole wait on every queued claim while the wallet was down, which
+  // is the moment claims are already failing (review of register #6).
+  if (nodeHeight == null) return chainFreshness(null, readTip());
   // POLL for the value rather than awaiting one refresh. warmExternalTip() returns
   // IMMEDIATELY when a refresh is already in flight (externalTip.ts guards on a
   // `refreshing` flag), so awaiting it once can be a silent no-op: the read that
   // returned null a moment ago is exactly what kicked the refresh we would then be
   // waiting on. That bug shipped in the first version of this function and the
-  // integration suite caught it, refusing a claim against a healthy wallet.
+  // integration suite caught it, refusing a claim against a healthy wallet. It also
+  // returns immediately inside MIN_ATTEMPT_GAP_MS of the last attempt, so up to one
+  // second of this budget can pass with no fetch in flight; the wait is sized for that.
   const deadline = Date.now() + waitMs;
-  while (getExternalTip() == null && Date.now() < deadline) {
-    void warmExternalTip();
+  while (readTip() == null && Date.now() < deadline) {
+    void warm();
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  return chainFreshness(nodeHeight, getExternalTip());
+  return chainFreshness(nodeHeight, readTip());
 }
 
 /*

@@ -12,7 +12,34 @@
  * genuinely did not get its tip from us, so this catches the failure it was built
  * for: our node silently stopping while the network moves on. What it cannot do is
  * survive zec.rocks being wrong or dark, because there is no second opinion to fall
- * back to. Do not read "independent" here as "corroborated by more than one org". This is the antidote to the failure that killed Fauzec's faucet
+ * back to. Do not read "independent" here as "corroborated by more than one org".
+ *
+ * A SECOND ORGANISATION WAS LOOKED FOR, 2026-09-09, and there is not one to add yet:
+ *   lightwalletd.testnet.electriccoin.co:9067   GetLatestBlock: deadline exceeded (8 s),
+ *                                               the endpoint hosh dropped is gone
+ *   testnet.zcashexplorer.app /api/v1/blockchain-info   answers, `blocks` 4,308,590 while
+ *                                               the network was at 4,335,553: 26,963
+ *                                               behind. A source that far behind would
+ *                                               tell a frozen node it is AHEAD, and lag
+ *                                               below zero reads as safe. Rejected.
+ *   testnet.cipherscan.app                      no JSON API
+ * So no second organisation can serve as a PERMISSIVE tip today, the kind that could
+ * say "safe". A stale one could still serve as a one-directional FLOOR: if its height
+ * exceeds ours by more than the lag budget we are behind, however stale it is, provided
+ * it is on our chain (a source on another fork can read above us without our being
+ * behind, the caveat the AHEAD branch already makes for the primary). Where that floor
+ * would bite is NOT the money gate, which refuses on its own once the cached tip ages
+ * out (MAX_AGE_MS) with zec.rocks dark and the fallback not answering; it is /api/ready,
+ * which deliberately fails open on an unverifiable tip. The node it would catch is the
+ * narrow one: still advancing, so the motion check in nodeStatus passes, yet behind the
+ * network on our own chain. A node that has stopped is caught with no oracle at all.
+ * Not wired here; a follow-up with its own tests. `LIGHTWALLETD_ENDPOINT` (comma-separated, tried in
+ * order) is where a permissive second org goes the day one exists, and until then the
+ * honest state is one org, fail closed. And the list is filtered here: an operator's OWN
+ * Zaino (plaintext, private, a docker name) is not independent of anything and is never
+ * a tip source, see isIndependentTipEndpoint.
+ *
+ * This is the antidote to the failure that killed Fauzec's faucet
  * (#170): a node that has silently stopped following the chain keeps reporting
  * its own frozen tip as the tip, so any readiness check that trusts our own node
  * is fooled. Comparing our node's tip against a DIFFERENT view is the only way to
@@ -33,6 +60,7 @@
  */
 import * as grpc from "@grpc/grpc-js";
 import { config } from "../config.ts";
+import { targetFor } from "./grpcTarget.ts";
 
 /**
  * Pull the height (field 1 varint) out of a serialized BlockID. Returns null on
@@ -89,6 +117,24 @@ export function heightFromBlockID(buf: Buffer): number | null {
  * dashboard exists precisely to answer "where is the network right now".
  */
 const HOSH_URL = process.env.HOSH_URL ?? "https://hosh.zec.rocks/api/v0/zec.json";
+/**
+ * How long one fetch of the primary may take. EXPORTED because the money path's wait in
+ * shieldGate.ts has to be at least this long: a claim that stopped waiting at 2 s while
+ * hosh answered at 3 s was refused "unverifiable" on a network that was perfectly
+ * reachable, blaming our node for an oracle we never heard from (risk register #6).
+ */
+export const HOSH_TIMEOUT_MS = 5000;
+/**
+ * How long the direct-node fallback legs may take IN TOTAL, shared across every
+ * configured endpoint. One attempt at the tip is hosh and then this, in series, and
+ * the wait in shieldGate.ts is sized from the sum (REFRESH_ATTEMPT_MS): review measured
+ * one attempt at 10 s (hosh hanging to its abort, then a 5 s gRPC leg) against a 7 s
+ * wait, so the leg that would have answered ran entirely after the claim gave up. Two
+ * endpoints used to mean two full legs, the #89 shape this file had not been told about.
+ */
+export const FALLBACK_TOTAL_MS = 3000;
+/** The worst case for one attempt: the primary to its abort, then the fallback budget. */
+export const REFRESH_ATTEMPT_MS = HOSH_TIMEOUT_MS + FALLBACK_TOTAL_MS;
 
 async function fromHosh(timeoutMs: number): Promise<number | null> {
   const res = await fetch(HOSH_URL, { signal: AbortSignal.timeout(timeoutMs) });
@@ -100,9 +146,76 @@ async function fromHosh(timeoutMs: number): Promise<number | null> {
   return heights.length ? Math.max(...heights) : null;
 }
 
-function getLatestBlock(host: string, timeoutMs: number): Promise<number | null> {
+/**
+ * ONLY A PUBLIC THIRD PARTY CAN BE THE ORACLE'S FALLBACK (review of #6, round 7). The
+ * z3 docs tell a sovereign operator to point LIGHTWALLETD_ENDPOINT at their own Zaino,
+ * `http://zaino:8137`, indexing their own Zebra. Once the tip oracle honoured plain gRPC
+ * that leg answered, and the "independent reference" for a frozen Zebra was Zebra's own
+ * height: lag 0, safe, drips built against a frozen node. expiryTip.ts had named the
+ * class already: a source compared against itself agrees with itself. So a fallback leg
+ * has to look like somebody else's server: TLS (a plaintext endpoint is a LAN or docker
+ * neighbour), a dotted public hostname (a docker service name has no dot), and not a
+ * loopback, private or link-local address or a .local/.internal name. Anything else is
+ * fine for balances and skipped here, once in the log per endpoint, and an operator with
+ * only such endpoints runs the gate on hosh alone, failing closed when hosh is dark, the
+ * way it did before plain gRPC worked.
+ *
+ * WHAT THIS CANNOT SEE: independence is a fact about who runs the box, and no URL carries
+ * it. An operator's OWN Zaino behind a public TLS name (`https://zaino.myfaucet.example`)
+ * passes every rule here and is still their own node. No document recommends that shape,
+ * and CONFIGURATION.md says not to build it; this predicate closes the shape the docs do
+ * recommend and fails closed on anything it cannot classify.
+ */
+export function isIndependentTipEndpoint(endpoint: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    return false;
+  }
+  if (!targetFor(endpoint).tls) return false;
+  // Brackets off an IPv6 literal, a trailing dot off a fully qualified name (`zaino.local.`
+  // is the same place as `zaino.local`), and case folded.
+  const host = url.hostname.replace(/^\[|\]$/g, "").replace(/\.+$/, "").toLowerCase();
+  if (host === "localhost" || /\.(local|internal|localhost|lan|home|home\.arpa|intranet|corp|onion)$/.test(host)) return false;
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) return isPublicIpv4(host);
+  if (host.includes(":")) {
+    // An IPv4-mapped address is the IPv4 address, whatever the notation: `::ffff:10.0.0.1`
+    // arrives from the URL parser as `::ffff:a00:1`.
+    const mapped = /^::ffff:(?:(\d+\.\d+\.\d+\.\d+)|([0-9a-f]{1,4}):([0-9a-f]{1,4}))$/.exec(host);
+    if (mapped) {
+      if (mapped[1]) return isPublicIpv4(mapped[1]);
+      const hi = parseInt(mapped[2], 16), lo = parseInt(mapped[3], 16);
+      return isPublicIpv4(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`);
+    }
+    // Loopback, unspecified, unique-local (fc00::/7), link-local (fe80::/10), the old
+    // site-local (fec0::/10), NAT64 (64:ff9b::/96), documentation (2001:db8::/32).
+    return !(
+      host === "::1" || host === "::" || /^f[cd]/.test(host) || /^fe[89ab]/.test(host) || /^fe[c-f]/.test(host) ||
+      host.startsWith("64:ff9b:") || host.startsWith("2001:db8:")
+    );
+  }
+  return host.includes(".");
+}
+
+function isPublicIpv4(dotted: string): boolean {
+  const [a, b] = dotted.split(".").map(Number);
+  return !(a === 10 || a === 127 || a === 0 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) ||
+    (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127));
+}
+
+const skippedEndpoints = new Set<string>();
+
+/** One GetLatestBlock against a configured endpoint URL, scheme and port honoured.
+ *  Exported under a test-facing name so the dial itself has a regression test. */
+export function dialLatestBlock(endpoint: string, timeoutMs: number): Promise<number | null> {
+  return getLatestBlock(endpoint, timeoutMs);
+}
+
+function getLatestBlock(endpoint: string, timeoutMs: number): Promise<number | null> {
   return new Promise((resolve, reject) => {
-    const client = new grpc.Client(host, grpc.credentials.createSsl());
+    const { target, creds } = targetFor(endpoint);
+    const client = new grpc.Client(target, creds);
     client.makeUnaryRequest(
       "/cash.z.wallet.sdk.rpc.CompactTxStreamer/GetLatestBlock",
       (x: Buffer) => x,
@@ -119,24 +232,60 @@ function getLatestBlock(host: string, timeoutMs: number): Promise<number | null>
   });
 }
 
-/** Do the actual network work: hosh first, then a direct node. Carries provenance. */
-async function fetchNetworkTip(): Promise<{ height: number | null; source: TipSource; host: string | null }> {
-  const h = await fromHosh(5000).catch(() => null);
+export interface TipFetchBudget {
+  hoshTimeoutMs: number;
+  fallbackTotalMs: number;
+}
+const PRODUCTION_BUDGET: TipFetchBudget = { hoshTimeoutMs: HOSH_TIMEOUT_MS, fallbackTotalMs: FALLBACK_TOTAL_MS };
+
+/**
+ * Do the actual network work: hosh first, then a direct node. Carries provenance.
+ * The budget is injectable so the bound can be proven in a test against hanging fakes
+ * in milliseconds; production always passes PRODUCTION_BUDGET.
+ */
+export async function fetchNetworkTipWithin(
+  budget: TipFetchBudget,
+  endpoints: readonly string[] = config.lightwalletdEndpoints,
+  getLatest: (endpoint: string, timeoutMs: number) => Promise<number | null> = getLatestBlock,
+): Promise<{ height: number | null; source: TipSource; host: string | null }> {
+  const h = await fromHosh(budget.hoshTimeoutMs).catch(() => null);
   if (h != null && h > 0) return { height: h, source: "hosh", host: null };
   // hosh down or its testnet filter yielded nothing - degrade to a direct node,
   // and say so, because a silent degrade to a single source defeats the point of
   // the aggregate (App's medium on #171).
   console.warn("[externalTip] hosh gave no testnet height; falling back to direct GetLatestBlock");
-  for (const endpoint of config.lightwalletdEndpoints) {
+  // ONE deadline for every leg, split FAIRLY. The total is what the caller's wait knows
+  // about, so no leg may exceed what is left of it; but a first endpoint that accepts
+  // the connection and never answers must not spend the whole budget and hide every
+  // later one for good (review, round 6). Each leg gets an even share of the remainder
+  // among the legs still to try, so a fast failure hands its share on and a hang costs
+  // only its own. Two endpoints in 3 s: 1.5 s each; the second gets ~3 s if the first
+  // was refused at once.
+  const legs = endpoints.filter((e) => {
+    if (isIndependentTipEndpoint(e)) return true;
+    if (!skippedEndpoints.has(e)) {
+      skippedEndpoints.add(e);
+      console.warn(`[externalTip] ${e} is not a public third party (plaintext, private, or a local name), so it serves balances but never the tip oracle's fallback; the gate runs on hosh alone when that is the only endpoint`);
+    }
+    return false;
+  });
+  const endsAt = Date.now() + budget.fallbackTotalMs;
+  for (let i = 0; i < legs.length; i++) {
+    const remaining = endsAt - Date.now();
+    if (remaining <= 0) break;
+    const share = Math.ceil(remaining / (legs.length - i));
     try {
-      const host = new URL(endpoint).host;
-      const height = await getLatestBlock(host, 5000);
-      if (height != null && height > 0) return { height, source: "direct", host };
+      const height = await getLatest(legs[i], share);
+      if (height != null && height > 0) return { height, source: "direct", host: targetFor(legs[i]).target };
     } catch {
       // try the next endpoint
     }
   }
   return { height: null, source: "none", host: null };
+}
+
+function fetchNetworkTip(): Promise<{ height: number | null; source: TipSource; host: string | null }> {
+  return fetchNetworkTipWithin(PRODUCTION_BUDGET);
 }
 
 const STALE_MS = 30_000; // refresh in the background once the cache is older than this
@@ -176,9 +325,21 @@ let cache: { height: number | null; at: number; source: TipSource; host: string 
   host: null,
 };
 let refreshing = false;
+// A refresh that FAILS fast (hosh answers with no testnet row, the fallback is refused)
+// would otherwise be restarted by the money path's 100 ms poll up to sixty times per
+// claim, each one an HTTPS fetch plus N gRPC dials. One attempt per second is plenty:
+// nothing about a public endpoint changes faster than that.
+let lastAttemptAt = 0;
+// Exported so the money path's wait can be sized to cover it: the wait is this gap plus
+// one whole attempt plus a margin, exactly one attempt, not several. Set this to the
+// wait itself and a cold cache could never START a fetch before the deadline, so every
+// claim would read "could not verify the network" with the oracle answering: #6 again.
+export const MIN_ATTEMPT_GAP_MS = 1000;
 
-async function refresh(): Promise<void> {
+async function refresh(waiveGap = false): Promise<void> {
   if (refreshing) return;
+  if (!waiveGap && Date.now() - lastAttemptAt < MIN_ATTEMPT_GAP_MS) return;
+  lastAttemptAt = Date.now();
   refreshing = true;
   try {
     const r = await fetchNetworkTip();
@@ -191,9 +352,32 @@ async function refresh(): Promise<void> {
   }
 }
 
-/** Kick an initial fetch at boot so the first readiness check has a value. */
+let bootChecked = false;
+
+/** Kick an initial fetch at boot so the first readiness check has a value. Also the
+ *  moment to say, once, that no configured endpoint can back hosh up, rather than one
+ *  warning at a time mid-outage. */
 export function warmExternalTip(): Promise<void> {
+  if (!bootChecked) {
+    bootChecked = true;
+    if (!config.lightwalletdEndpoints.some(isIndependentTipEndpoint)) {
+      console.warn(`[externalTip] no configured LIGHTWALLETD_ENDPOINT is a public third party (${config.lightwalletdEndpoints.join(", ")}), so the tip oracle has no fallback: once hosh has been unreachable long enough for the cached tip to age out (${MAX_AGE_MS / 60_000} min), drips are refused until it answers again`);
+    }
+  }
   return refresh();
+}
+
+/**
+ * The same fetch with the attempt gap waived. Tests that re-point their fake oracle
+ * and wait for the new height otherwise spend their whole budget inside the gap and
+ * fail with a message that blames the harness. Not for production callers: the gap
+ * is what stops the money path's poll from re-dialling a failing endpoint sixty times
+ * per claim.
+ */
+export function warmExternalTipNowForTests(): Promise<void> {
+  // Waived inside refresh, after its in-flight check, so a call that lands mid-fetch
+  // does not disarm the gap for whoever polls next without dialling itself.
+  return refresh(true);
 }
 
 /**

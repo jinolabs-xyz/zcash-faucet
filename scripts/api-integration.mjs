@@ -554,6 +554,7 @@ try {
     `status ${dripD.status} ${JSON.stringify(dripD.body.txid ?? dripD.body.error ?? "")}`,
   );
   ok("D the refusal says it will expire rather than blaming the user", /expire/i.test(dripD.body.error ?? ""), dripD.body.error ?? "");
+  ok("D and it blames OUR node, which IS behind here, not the oracle", /catching up/i.test(dripD.body.error ?? "") && !/could not verify/i.test(dripD.body.error ?? ""), dripD.body.error ?? "");
   ok("D the refusal carries a retry hint", typeof dripD.body.retryAfterSeconds === "number", JSON.stringify(dripD.body.retryAfterSeconds));
 
   // THE ONE THAT PINS THE ORDERING. The gate sits above reserveClaim, so a refusal
@@ -618,6 +619,11 @@ try {
     "E a claim is REFUSED when freshness cannot be established, with a healthy wallet behind it",
     dripE.status === 503 && !dripE.body.txid,
     `status ${dripE.status} ${JSON.stringify(dripE.body.txid ?? dripE.body.error ?? "")}`,
+  );
+  ok(
+    "E and the refusal blames the unverified tip, not our node (D's wording is for a node that IS behind)",
+    /could not verify the network/i.test(dripE.body.error ?? "") && !/catching up/i.test(dripE.body.error ?? ""),
+    dripE.body.error ?? "",
   );
   const secondE = await claim(BASE_E, addrE, null);
   ok("E the cannot-verify refusal also leaves the cooldown alone", secondE.status === 503, `status ${secondE.status}`);

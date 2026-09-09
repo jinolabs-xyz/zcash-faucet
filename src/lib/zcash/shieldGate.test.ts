@@ -132,3 +132,100 @@ test("a positive lag inside the budget still says within, so the split is narrow
   assert.equal(gate.lag, 2);
   assert.match(gate.reason, /within/);
 });
+
+// ── THE MONEY PATH WAITS AT LEAST ONE FULL FETCH (risk register #6) ─────────────────────
+import { ORACLE_WAIT_MS, readChainFreshnessAsking, freshnessRefusalText, type ChainGate } from "./shieldGate.ts";
+import { HOSH_TIMEOUT_MS, MIN_ATTEMPT_GAP_MS, FALLBACK_TOTAL_MS, REFRESH_ATTEMPT_MS } from "./externalTip.ts";
+
+test("the wait in front of a drip covers the primary oracle's own timeout, and both numbers are pinned", () => {
+  // 2 s against a 5 s fetch refused claims as "unverifiable" while hosh was answering at
+  // 3 s. The wait is DEFINED from the fetch, so the inequality alone is tautological;
+  // the fetch itself is pinned, so walking the money-path wait up by retuning the fetch
+  // has to come through here on purpose.
+  assert.ok(ORACLE_WAIT_MS >= HOSH_TIMEOUT_MS, `wait ${ORACLE_WAIT_MS} < fetch ${HOSH_TIMEOUT_MS}`);
+  assert.equal(HOSH_TIMEOUT_MS, 5000, "the primary fetch is 5 s; change it deliberately, with the wait");
+  assert.equal(FALLBACK_TOTAL_MS, 3000, "the direct legs share 3 s; change it deliberately, with the wait");
+  assert.equal(REFRESH_ATTEMPT_MS, 8000);
+  assert.equal(ORACLE_WAIT_MS, 10_000);
+});
+
+test("an attempt that starts after a full gap, hangs on the primary and answers from the fallback still lands inside the wait", () => {
+  // The gap stops the 100 ms poll re-dialling a fast-failing oracle, and it can hold
+  // the claim's first attempt back by its whole length when the status read just before
+  // the gate failed fast. The bound that matters is gap + WHOLE ATTEMPT < wait, with room:
+  // at gap + primary == wait an oracle answering at 4.98 s was refused (round 4), and with
+  // the fallback leg outside the sum a hanging hosh pushed the leg that would have
+  // answered past the deadline (round 5). "Fewer than N attempts fit" was the first
+  // version of this assertion and it passed while both happened.
+  assert.equal(MIN_ATTEMPT_GAP_MS, 1000, "one attempt per second; change it deliberately");
+  assert.ok(
+    MIN_ATTEMPT_GAP_MS + REFRESH_ATTEMPT_MS + 500 <= ORACLE_WAIT_MS,
+    `gap ${MIN_ATTEMPT_GAP_MS} + attempt ${REFRESH_ATTEMPT_MS} leaves under 500 ms of the ${ORACLE_WAIT_MS} wait`,
+  );
+  assert.equal(REFRESH_ATTEMPT_MS, HOSH_TIMEOUT_MS + FALLBACK_TOTAL_MS, "an attempt IS the primary plus the fallback budget");
+});
+
+test("a tip that lands inside the wait is USED, and one that never lands refuses at the deadline", async () => {
+  // The behaviour, not the constant. A fake oracle that answers after 250 ms against a
+  // 1 s wait must produce a verdict from that answer; one that never answers must return
+  // unverifiable at about the deadline, not before and not long after.
+  let tip: number | null = null;
+  let warms = 0;
+  const warm = () => { warms += 1; setTimeout(() => { tip = 4_335_600; }, 250); };
+  const t0 = Date.now();
+  const late = await readChainFreshnessAsking(4_335_598, 1000, () => tip, warm);
+  assert.equal(late.state, "safe", `expected the late tip to be used, got ${late.state}: ${late.reason}`);
+  assert.ok(Date.now() - t0 < 600, "and it returned as soon as the tip landed, not at the deadline");
+  assert.ok(warms >= 1, "the wait kicked a refresh");
+
+  const t1 = Date.now();
+  const never = await readChainFreshnessAsking(4_335_598, 400, () => null, () => {});
+  const took = Date.now() - t1;
+  assert.equal(never.state, "unverifiable");
+  assert.ok(took >= 350 && took < 900, `waited ${took} ms for a 400 ms budget`);
+});
+
+test("an unknown node height does not wait for the oracle at all: the verdict cannot change", async () => {
+  let warms = 0;
+  const t0 = Date.now();
+  const r = await readChainFreshnessAsking(null, 2000, () => null, () => { warms += 1; });
+  assert.equal(r.state, "unverifiable");
+  assert.match(r.reason, /our node's height is unknown/);
+  assert.ok(Date.now() - t0 < 100, "returned immediately");
+  // The injected warm is not called; in production the reader itself may still kick a
+  // background refresh on a stale cache, which is fine: what this pins is that the
+  // asking path spends none of its own wait on a foregone conclusion.
+  assert.equal(warms, 0, "the asking path kicked no refresh of its own");
+});
+
+// ── THE THREE SENTENCES, pinned where the integration stacks cannot reach ───────────────
+const gate = (over: Partial<ChainGate>): ChainGate => ({ state: "safe", nodeHeight: 100, externalHeight: 100, lag: 0, reason: "", ...over });
+
+test("unsafe blames our node, which IS behind", () => {
+  const t = freshnessRefusalText(gate({ state: "unsafe", lag: 40 }));
+  assert.match(t, /Our node is catching up/);
+  assert.doesNotMatch(t, /could not verify|did not report/);
+});
+
+test("unverifiable with NO node height blames our node's silence, not the oracle", () => {
+  // The arm the first version folded into the oracle's sentence: zallet down, hosh fine.
+  const t = freshnessRefusalText(gate({ state: "unverifiable", nodeHeight: null, externalHeight: 100 }));
+  assert.match(t, /Our node did not report its height/);
+  assert.doesNotMatch(t, /could not verify the network|catching up/);
+});
+
+test("unverifiable with a known node height blames the unverified tip", () => {
+  const t = freshnessRefusalText(gate({ state: "unverifiable", nodeHeight: 100, externalHeight: null }));
+  assert.match(t, /could not verify the network's current height/);
+  assert.doesNotMatch(t, /did not report|catching up/);
+});
+
+test("a SAFE gate has no refusal sentence: asking for one is a caller bug, not a lie about our node", () => {
+  assert.throws(() => freshnessRefusalText(gate({ state: "safe" })), /called on a safe gate/);
+});
+
+test("every sentence says nothing was claimed and the cooldown is untouched", () => {
+  for (const g of [gate({ state: "unsafe" }), gate({ state: "unverifiable", nodeHeight: null }), gate({ state: "unverifiable", externalHeight: null })]) {
+    assert.match(freshnessRefusalText(g), /Nothing was claimed, your cooldown is untouched/);
+  }
+});

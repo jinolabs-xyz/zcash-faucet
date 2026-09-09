@@ -21,16 +21,26 @@ import { createServer, type Server } from "node:http";
 // is mutable: null makes the endpoint fail, which is how the "no independent tip"
 // state gets reached without waiting out MAX_AGE_MS.
 let hoshHeight: number | null = null;
+let hoshHits = 0;
+let hoshDelayMs = 0;
 const port = 59_431;
 
 const hosh: Server = createServer((_req, res) => {
+  hoshHits += 1;
+  if (hoshDelayMs > 0) {
+    setTimeout(() => answer(res), hoshDelayMs);
+    return;
+  }
+  answer(res);
+});
+function answer(res: import("node:http").ServerResponse): void {
   if (hoshHeight == null) {
     res.writeHead(503).end("{}");
     return;
   }
   res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify({ servers: [{ chain: "test", online: true, height: hoshHeight }] }));
-});
+}
 await new Promise<void>((r) => hosh.listen(port, "127.0.0.1", r));
 
 // Env before the dynamic imports: config and HOSH_URL are both read at module load.
@@ -38,7 +48,7 @@ await new Promise<void>((r) => hosh.listen(port, "127.0.0.1", r));
 // an empty list falls back to the real testnet endpoint and would quietly supply a
 // tip this test did not choose.
 process.env.HOSH_URL = `http://127.0.0.1:${port}/`;
-process.env.LIGHTWALLETD_ENDPOINT = "https://127.0.0.1:59997";
+process.env.LIGHTWALLETD_ENDPOINT = "https://127.0.0.1:9"; // loopback: the oracle skips it, so no fallback dial at all
 process.env.FAUCET_SENDER = "zallet";
 process.env.ZALLET_ACCOUNT = "11111111-2222-3333-4444-555555555555";
 process.env.ZALLET_ADDRESS = "utest1faucetunifiedaddressfixture";
@@ -47,7 +57,7 @@ process.env.ZALLET_POLL_MS = "250";
 
 const { ZalletRefiller } = await import("./zalletRefiller.ts");
 const { SHIELD_MAX_LAG_BLOCKS } = await import("../zcash/shieldGate.ts");
-const { getExternalTip, warmExternalTip } = await import("../zcash/externalTip.ts");
+const { getExternalTip, warmExternalTip, warmExternalTipNowForTests } = await import("../zcash/externalTip.ts");
 const { classifySweep } = await import("./decide.ts");
 
 const NETWORK_TIP = 4_220_000;
@@ -61,7 +71,10 @@ const NETWORK_TIP = 4_220_000;
 async function primeTip(height: number | null): Promise<void> {
   hoshHeight = height;
   for (let i = 0; i < 40; i++) {
-    await warmExternalTip();
+    // The gap-waiving variant: the production warm makes one attempt per second, and
+    // this loop's whole budget is about one second, so re-priming to a new height
+    // landed on iteration 37 or 38 of 40 and a slow box failed it as a harness flake.
+    await warmExternalTipNowForTests();
     if (getExternalTip() === height) return;
     await new Promise((r) => setTimeout(r, 25));
   }
@@ -113,6 +126,41 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 after(() => hosh.close());
+
+test("two warms inside the attempt gap dial the oracle once, and the test bypass dials it again", async () => {
+  // Pins the throttle's existence. Without it the money path's 100 ms poll restarts a
+  // fast-failing refresh up to sixty times per claim, an HTTPS fetch plus gRPC dials each.
+  // hosh is still answering 503 here (a dial is a dial), so the cache stays cold for the
+  // "no independent tip" tests below, which can only run before anything primes it.
+  await warmExternalTipNowForTests();
+  const baseline = hoshHits;
+  await warmExternalTip();
+  await warmExternalTip();
+  assert.equal(hoshHits, baseline, "a warm inside the gap re-dialled the oracle");
+  await warmExternalTipNowForTests();
+  assert.equal(hoshHits, baseline + 1, "the bypass did not dial");
+});
+
+test("the bypass landing MID-FETCH does not disarm the gap for whoever polls next", async () => {
+  // Round 5, nit 24. The bypass waives the gap inside refresh, after the in-flight
+  // check; the first version zeroed the stamp first, so a bypass that hit a refresh in
+  // flight dialled nothing and left the next plain warm un-throttled. Still a 503 hosh,
+  // so the cache stays cold for the tests below.
+  hoshDelayMs = 300;
+  try {
+    const before = hoshHits;
+    const inflight = warmExternalTipNowForTests(); // dials regardless of the gap, so it IS in flight
+    for (let i = 0; i < 50 && hoshHits === before; i++) await new Promise((r) => setTimeout(r, 5));
+    assert.equal(hoshHits, before + 1, "precondition: the refresh we bypass into must have dialled");
+    await warmExternalTipNowForTests(); // lands mid-fetch: must return at once and change nothing
+    await inflight;
+    assert.equal(hoshHits, before + 1, "the mid-fetch bypass dialled on its own");
+    await warmExternalTip(); // inside the gap stamped by the in-flight attempt
+    assert.equal(hoshHits, before + 1, "a plain warm dialled inside the gap: the bypass disarmed it");
+  } finally {
+    hoshDelayMs = 0;
+  }
+});
 
 test("no independent tip means UNVERIFIABLE, and unverifiable does not broadcast", async () => {
   assert.equal(getExternalTip(), null, "precondition: the tip oracle has nothing to say");

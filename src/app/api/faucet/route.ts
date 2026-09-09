@@ -16,7 +16,7 @@ import { verifyTurnstile } from "@/lib/turnstile";
 import { verifySolution } from "@/lib/pow";
 import { getSenderFor, safeBalance, SendOutcomeUnknownError, type SendResult } from "@/lib/zcash/send";
 import { getNodeStatus } from "@/lib/zcash/nodeStatus";
-import { mayBuildTransaction, readChainFreshnessAsking } from "@/lib/zcash/shieldGate";
+import { mayBuildTransaction, readChainFreshnessAsking, freshnessRefusalText } from "@/lib/zcash/shieldGate";
 import { mayBuildFromWallet, walletLagFreshness } from "@/lib/zcash/walletLagGate";
 import { getSendQueue, getCtazSendQueue, QueueFullError, TaskDeadlineError } from "@/lib/zcash/queue";
 import { recordSend } from "@/lib/zcash/sendHealth";
@@ -193,13 +193,10 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
       `drip refused, chain view ${freshness.state} (lag ${freshness.lag ?? "unknown"}): ${freshness.reason}`,
       "chain freshness gate",
     );
-    return apiError(
-      503,
-      "Our node is catching up with the network, so a drip sent right now would expire " +
-        "before it could confirm. Nothing was claimed, your cooldown is untouched. Try again shortly.",
-      api,
-      { retryAfterSeconds: FRESHNESS_RETRY_SECONDS },
-    );
+    // Three refusals, three sentences, chosen by the gate itself (freshnessRefusalText)
+    // and pinned there, because the same text is what an operator reads and it sends
+    // them to a fix: the first version blamed the oracle for our own wallet being down.
+    return apiError(503, freshnessRefusalText(freshness), api, { retryAfterSeconds: FRESHNESS_RETRY_SECONDS });
   }
 
   // 3.55. Our WALLET's lag behind our OWN node, which is a different question to 3.5 and
