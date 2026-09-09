@@ -30,7 +30,8 @@ wd_env() {
   # later case at a stale, stalled heartbeat in an old scratch dir, and the miner heal
   # runs (and gives up, and pages) inside tests that are about something else.
   unset STUB_CRASHLOOP STUB_HEAL_FIXES STUB_ZEBRA_BLOCKS STUB_ZEBRA_EST STUB_ZEBRA_ADVANCE STUB_ZEBRA_STUCK_CALLS \
-        WATCHDOG_NODE_HEAL_ENABLED WATCHDOG_NODE_STOPS_MINER WATCHDOG_MINER_HEARTBEAT WATCHDOG_MINER_UNIT STUB_START_FAIL
+        WATCHDOG_NODE_HEAL_ENABLED WATCHDOG_NODE_STOPS_MINER WATCHDOG_MINER_HEARTBEAT WATCHDOG_MINER_UNIT STUB_START_FAIL \
+        WATCHDOG_SIGNAL_MATCH
   # Capture what would have been paged, without a webhook.
   # Records EVERY argument, so the suite can see that the watchdog passes --now (its
   # messages are one per episode and must never be held by alert.sh's cooldown).
@@ -634,3 +635,41 @@ check "the node's own recovery is still reported" "grep -q 'FIXED: zebra was 144
 check "and the failed start is a NEEDS YOU of its own" "grep -q 'NEEDS YOU: the node has recovered but .systemctl start zcash-testnet-miner.service. FAILED' '$T/alerts.log'"
 check "which the FIXED does not paper over" "! grep 'FIXED: zebra' '$T/alerts.log' | grep -q 'started again'"
 unset STUB_START_FAIL
+# ── THE SIGNAL BRIDGE IS WATCHED (risk register #15) ────────────────────────────────────
+echo "== watchdog: a Signal bridge container that fell over is started like any other"
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+echo exited  > "$STUB_CONTAINERS/signal-api"
+wd_run 2
+check "the bridge is started" "grep -q 'docker start signal-api' '$STUB_LOG'"
+check "and given the reboot-safe restart policy" "grep -q 'docker update --restart unless-stopped signal-api' '$STUB_LOG'"
+check "and its recovery is reported once it is seen running" "grep -q 'FIXED: signal-api was down' '$T/alerts.log'"
+
+echo "== watchdog: WATCHDOG_SIGNAL_MATCH= (empty) parks the bridge for an operator re-linking it"
+# The doc tells an operator to set the variable empty for the duration. With `:-` the
+# empty value fell back to the default and the watchdog restarted the container under
+# them; and an empty match handed to docker as `--filter name=` would match everything.
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+echo exited  > "$STUB_CONTAINERS/signal-api"
+export WATCHDOG_SIGNAL_MATCH=
+wd_run 2
+check "the parked bridge is left alone" "! grep -q 'docker start signal-api' '$STUB_LOG'"
+check "and docker was never asked for every container" "! grep -q 'filter name= ' '$STUB_LOG' && ! grep -qE 'filter name=$' '$STUB_LOG'"
+check "while the other three are still watched" "grep -q 'name=faucet-web' '$STUB_LOG'"
+unset WATCHDOG_SIGNAL_MATCH
+
+echo "== watchdog: a box without a Signal bridge container does nothing about one"
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+wd_run 2
+# The lookup itself (docker ps --filter name=signal-api) is in the stub log by design; what
+# must be absent is any ACTION on a container that is not there, and any alert about it.
+check "no start, no policy change, no alert about a bridge that is not there" "! grep -qE 'docker (start|update|restart) .*signal' '$STUB_LOG' && { [ ! -e '$T/alerts.log' ] || ! grep -qi 'signal' '$T/alerts.log'; }"
+check "while the lookup did happen, so the negative above is about a decision" "grep -q 'name=signal-api' '$STUB_LOG'"

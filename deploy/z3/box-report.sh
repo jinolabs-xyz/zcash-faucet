@@ -275,9 +275,87 @@ case "$miner_unit" in
   *) miner_unit="unknown" ;;
 esac
 
+# CAN THIS BOX PAGE ANYONE. The Signal bridge is one container on loopback, and if it is
+# down every alert the watchdog and the units send becomes a journal line nobody reads,
+# which is the exact silence the register calls out (#15). The bridge cannot report its
+# own death through itself, so the report carries it and the OFF-box probe reads it.
+#
+# THE CONFIGURATION IS RESOLVED THE WAY THE SENDER RESOLVES IT: alert.sh sources
+# /etc/faucet/alerts.env and then /etc/faucet/watchdog.env and falls back from the
+# FAUCET_ALERT_* names to the older WATCHDOG_ALERT_* ones. The first version of this
+# block parsed one file for one name set and read a box configured the old way as "not
+# applicable", which is the affirmative side. Sourcing in a clean subshell gives the same
+# answer alert.sh gets, comments, quotes and `export` included.
+#
+#   ok            Signal: the bridge answers /v1/accounts and the configured number is linked
+#   unlinked      Signal: the bridge answers but the number is not among its accounts (the
+#                 linked device expired or was never linked; /v2/send would fail)
+#   down          Signal: the bridge did not answer, or answered badly
+#   misconfigured Signal with no number, or a number or recipient that is not E.164:
+#                 alert.sh refuses to send in exactly these cases (its own gate), so a
+#                 bridge that is up changes nothing. Judged BEFORE the probe. Also, for
+#                 EVERY format, a box with neither jq nor python3: alert.sh encodes each
+#                 body with one of them and refuses without, so nothing is ever sent.
+#   webhook       a Slack or Discord URL; nothing on the box to probe
+#   none          no alert URL at all: nobody can be paged
+#   unknown       an unrecognised format, a URL without a scheme, or no curl to ask with
+# Only the signal format is probed: for the others the URL is a credential. It is never
+# written anywhere, and the userinfo part of a URL never reaches curl's argv.
+ALERTS_ENV="${BOX_REPORT_ALERTS_ENV:-/etc/faucet/alerts.env}"
+WATCHDOG_ENV="${BOX_REPORT_WATCHDOG_ENV:-/etc/faucet/watchdog.env}"
+CURL="${BOX_REPORT_CURL:-curl}"
+alert_bridge="none"
+if [ -f "$ALERTS_ENV" ] || [ -f "$WATCHDOG_ENV" ]; then
+  resolved="$(env -i HOME=/ PATH=/usr/bin:/bin bash -c '
+    [ -f "$1" ] && . "$1" >/dev/null 2>&1
+    [ -f "$2" ] && . "$2" >/dev/null 2>&1
+    printf "%s\n%s\n%s\n%s\n" "${FAUCET_ALERT_FORMAT:-${WATCHDOG_ALERT_FORMAT:-}}" "${FAUCET_ALERT_URL:-${WATCHDOG_ALERT_URL:-}}" "${FAUCET_ALERT_SIGNAL_NUMBER:-}" "${FAUCET_ALERT_SIGNAL_RECIPIENT:-${FAUCET_ALERT_SIGNAL_NUMBER:-}}"' _ "$ALERTS_ENV" "$WATCHDOG_ENV" 2>/dev/null || true)"
+  fmt="$(printf '%s\n' "$resolved" | sed -n '1p')"
+  url="$(printf '%s\n' "$resolved" | sed -n '2p')"
+  num="$(printf '%s\n' "$resolved" | sed -n '3p')"
+  rcpt="$(printf '%s\n' "$resolved" | sed -n '4p')"
+  if [ -z "$url" ]; then
+    alert_bridge="none"
+  elif ! command -v jq >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then
+    # In alert.sh this gate comes even before the URL check: json_escape returns 1 and
+    # send() returns 4 with neither encoder, for every format. Here it comes second, so
+    # a box with neither URL nor encoder is told about the URL first; the encoder verdict
+    # follows once one is set. Review found this report saying ok on such a box, where
+    # every page since install had been a journal line.
+    alert_bridge="misconfigured"
+  else
+    case "${fmt:-slack}" in
+      slack|discord) alert_bridge="webhook" ;;
+      signal)
+        # Origin only, with any user:password@ removed, so a credential never reaches
+        # argv. A URL with no scheme cannot be probed and is not assumed fine.
+        origin="$(printf '%s' "$url" | sed -nE 's#^(https?://)([^/@]*@)?([^/]+).*#\1\3#p')"
+        # alert.sh's own gate, mirrored: no number, or a number or recipient that is not
+        # E.164, is NOT SENT there, so no bridge state can make this box able to page.
+        e164='^\+[0-9]{6,15}$'
+        if [ -z "$num" ] || ! printf '%s' "$num" | grep -qE "$e164" || ! printf '%s' "$rcpt" | grep -qE "$e164"; then
+          alert_bridge="misconfigured"
+        elif [ -z "$origin" ]; then
+          alert_bridge="unknown"
+        elif ! command -v "$CURL" >/dev/null 2>&1; then
+          alert_bridge="unknown"
+        else
+          body="$("$CURL" -s --max-time 5 -w '\n%{http_code}' "$origin/v1/accounts" 2>/dev/null || true)"
+          code="${body##*$'\n'}"
+          case "$code" in
+            2*)
+              printf '%s' "$body" | grep -qF -- "\"$num\"" && alert_bridge="ok" || alert_bridge="unlinked" ;;
+            *) alert_bridge="down" ;;
+          esac
+        fi ;;
+      *) alert_bridge="unknown" ;;
+    esac
+  fi
+fi
+
 # JSON numbers or the literal null. `null` is what an unread figure has to be on the
 # wire: 0 would say the watchdog is calm, which is a claim we did not measure.
 wr_json="${watchdog_restarts:-null}"
 wrd_json="${watchdog_restarts_delta:-null}"
 
-write "{\"expected\":${expected},\"present\":${present},\"notEnabled\":${not_enabled},\"enabledUndeclared\":${enabled_undeclared},\"minerBinary\":\"${miner_state}\",\"minerUnit\":\"${miner_unit}\",\"platform\":\"${platform}\",\"watchdogRestarts\":${wr_json},\"watchdogRestartsDelta\":${wrd_json},\"at\":$(( $(date +%s) * 1000 )),\"readable\":true}"
+write "{\"expected\":${expected},\"present\":${present},\"notEnabled\":${not_enabled},\"enabledUndeclared\":${enabled_undeclared},\"minerBinary\":\"${miner_state}\",\"minerUnit\":\"${miner_unit}\",\"alertBridge\":\"${alert_bridge}\",\"platform\":\"${platform}\",\"watchdogRestarts\":${wr_json},\"watchdogRestartsDelta\":${wrd_json},\"at\":$(( $(date +%s) * 1000 )),\"readable\":true}"

@@ -11,7 +11,7 @@ import { boxRow, boxChip, boxIsBad } from "./boxLabel.ts";
 import { classifyIntegrity } from "./boxIntegrity.ts";
 
 const NOW = Date.parse("2026-07-31T12:00:00Z");
-const report = (over = {}) => ({ expected: 14, present: 14, notEnabled: 0, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, platform: null, minerBinary: null, minerUnit: null, at: NOW - 30_000, readable: true, ...over });
+const report = (over = {}) => ({ expected: 14, present: 14, notEnabled: 0, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, platform: null, minerBinary: null, minerUnit: null, alertBridge: null, at: NOW - 30_000, readable: true, ...over });
 
 test("THE STATE NOTHING RENDERED: two files gone and a unit disabled says so", () => {
   const s = classifyIntegrity(report({ present: 12, notEnabled: 1 }), NOW);
@@ -217,4 +217,46 @@ test("a report with no minerBinary at all renders exactly as before", () => {
   const withField = boxRow(classifyIntegrity(report({ minerBinary: "current" }), NOW));
   const without = boxRow(classifyIntegrity(report({ minerBinary: null }), NOW));
   assert.equal(without, withField, "an older report must not change the row's shape");
+});
+
+// ── THE BOX CANNOT PAGE ANYONE (risk register #15) ──────────────────────────────────────
+import { alertBridgeDown } from "./boxLabel.ts";
+
+test("a dead, unlinked or absent alert channel is a fault the row names, because no alert about it can arrive", () => {
+  for (const [v, words] of [["down", /ALERT BRIDGE DOWN/], ["unlinked", /ALERT BRIDGE UNLINKED/], ["none", /NO ALERT CHANNEL/], ["misconfigured", /ALERT CHANNEL MISCONFIGURED/]] as const) {
+    const s = classifyIntegrity(report({ alertBridge: v }), NOW);
+    assert.match(boxRow(s), words);
+    assert.match(boxRow(s), /pages go nowhere/);
+    assert.equal(boxIsBad(s), true, v);
+    assert.equal(alertBridgeDown(s), true, v);
+    // On the terse strip too, the same way a looping watchdog is: the panel is a click
+    // nobody makes when the strip looks fine, and this is the fault no page can announce.
+    assert.equal(boxChip(s), "CANNOT PAGE", v);
+  }
+});
+
+test("CANNOT PAGE outranks INCOMPLETE on the strip: a half-installed box usually has no alerts.env, and the pager matters more", () => {
+  const s = classifyIntegrity(report({ present: 13, alertBridge: "none" }), NOW);
+  assert.equal(s.state, "incomplete");
+  assert.equal(boxChip(s), "CANNOT PAGE");
+  assert.match(boxRow(s), /NO ALERT CHANNEL/);
+  assert.equal(boxIsBad(s), true);
+});
+
+test("a looping watchdog outranks the dead bridge on the strip's one slot: both are on the row", () => {
+  const s = classifyIntegrity(report({ alertBridge: "down", watchdogRestarts: 61, watchdogRestartsDelta: 61 }), NOW);
+  assert.equal(boxChip(s), "WATCHDOG LOOP");
+  assert.match(boxRow(s), /WATCHDOG LOOPING/);
+  assert.match(boxRow(s), /ALERT BRIDGE DOWN/);
+});
+
+test("ok, a webhook channel, unknown and an older report are NOT the fault here, and say nothing", () => {
+  // "unknown" is the off-box probe's to fail: a public row cannot separate "could not ask"
+  // from "asked and it is down" without teaching readers to ignore red.
+  for (const v of ["ok", "webhook", "unknown", null]) {
+    const s = classifyIntegrity(report({ alertBridge: v }), NOW);
+    assert.doesNotMatch(boxRow(s), /BRIDGE|ALERT CHANNEL/, `alertBridge ${String(v)}`);
+    assert.equal(boxIsBad(s), false, `alertBridge ${String(v)}`);
+    assert.equal(boxChip(s), null, `alertBridge ${String(v)}`);
+  }
 });

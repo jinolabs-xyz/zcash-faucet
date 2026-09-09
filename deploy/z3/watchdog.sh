@@ -102,6 +102,15 @@ MAX_TICKS="${WATCHDOG_MAX_TICKS:-0}"
 FAUCET_MATCH="${WATCHDOG_FAUCET_MATCH:-faucet-web}"
 ZEBRA_MATCH="${WATCHDOG_ZEBRA_MATCH:-zebra}"
 ZALLET_MATCH="${WATCHDOG_ZALLET_MATCH:-zallet}"
+# The Signal bridge (risk register #15). It is how every page in this file reaches a
+# phone, and until now nothing kept it running: a hand-run `docker run` with whatever
+# restart policy it was given, in no compose file, on no watch list. A bridge that dies
+# turns every alert into a journal line. Absent on a box without Signal, which is fine:
+# find_container returns nothing and nothing happens.
+# `-` not `:-`: an EMPTY value is the operator's way of saying "leave the bridge alone
+# while I re-link it", and must not fall back to the default. find_container refuses an
+# empty match rather than asking docker for every container.
+SIGNAL_MATCH="${WATCHDOG_SIGNAL_MATCH-signal-api}"
 
 log() { echo "$(date -u +%FT%TZ) watchdog: $*"; }
 
@@ -145,6 +154,8 @@ danger() { alert "🚨 NEEDS YOU: $1"; }
 
 # First running-or-stopped container id whose name contains $1 (empty if none).
 find_container() {
+  # An empty match would be `--filter name=` and match EVERY container.
+  [ -n "$1" ] || return 0
   docker ps -a --filter "name=$1" --format '{{.Names}}' | head -n1
 }
 
@@ -590,9 +601,11 @@ while true; do
   zebra="$(find_container "$ZEBRA_MATCH")"
   zallet="$(find_container "$ZALLET_MATCH")"
   faucet="$(find_container "$FAUCET_MATCH")"
+  signal="$(find_container "$SIGNAL_MATCH")"
 
-  # 1 + 2: keep restart policy set and bring back anything that fell over.
-  for c in "$zebra" "$zallet" "$faucet"; do
+  # 1 + 2: keep restart policy set and bring back anything that fell over. The bridge is
+  # in this list because it is the thing the FIXED for its own recovery travels through.
+  for c in "$zebra" "$zallet" "$faucet" "$signal"; do
     ensure_restart_policy "$c"
     recover_if_down "$c"
   done
