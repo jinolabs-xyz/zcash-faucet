@@ -25,11 +25,15 @@
  *   testnet.cipherscan.app                      no JSON API
  * So no second organisation can serve as a PERMISSIVE tip today, the kind that could
  * say "safe". A stale one could still serve as a one-directional FLOOR: if its height
- * exceeds ours by more than the lag budget we are provably behind however stale it is,
- * and wired to produce only "unsafe" it would bite while zec.rocks is dark. That is not
- * wired here; it is a follow-up with its own tests. `LIGHTWALLETD_ENDPOINT`
- * (comma-separated, tried in order) is where a permissive second org goes the day one
- * exists, and until then the honest state is one org, fail closed.
+ * exceeds ours by more than the lag budget we are behind, however stale it is, provided
+ * it is on our chain (a source on another fork can read above us without our being
+ * behind, the caveat the AHEAD branch already makes for the primary). Where that floor
+ * would bite is NOT the money gate, which already refuses everything while zec.rocks is
+ * dark; it is /api/ready, which deliberately fails open on an unverifiable tip and so
+ * would keep saying ready about a node the floor could prove behind. Not wired here; a
+ * follow-up with its own tests. `LIGHTWALLETD_ENDPOINT` (comma-separated, tried in
+ * order) is where a permissive second org goes the day one exists, and until then the
+ * honest state is one org, fail closed.
  *
  * This is the antidote to the failure that killed Fauzec's faucet
  * (#170): a node that has silently stopped following the chain keeps reporting
@@ -202,9 +206,17 @@ let cache: { height: number | null; at: number; source: TipSource; host: string 
   host: null,
 };
 let refreshing = false;
+// A refresh that FAILS fast (hosh answers with no testnet row, the fallback is refused)
+// would otherwise be restarted by the money path's 100 ms poll up to sixty times per
+// claim, each one an HTTPS fetch plus N gRPC dials. One attempt per second is plenty:
+// nothing about a public endpoint changes faster than that.
+let lastAttemptAt = 0;
+const MIN_ATTEMPT_GAP_MS = 1000;
 
 async function refresh(): Promise<void> {
   if (refreshing) return;
+  if (Date.now() - lastAttemptAt < MIN_ATTEMPT_GAP_MS) return;
+  lastAttemptAt = Date.now();
   refreshing = true;
   try {
     const r = await fetchNetworkTip();

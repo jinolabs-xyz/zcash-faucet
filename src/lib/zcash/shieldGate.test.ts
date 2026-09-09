@@ -134,7 +134,7 @@ test("a positive lag inside the budget still says within, so the split is narrow
 });
 
 // ── THE MONEY PATH WAITS AT LEAST ONE FULL FETCH (risk register #6) ─────────────────────
-import { ORACLE_WAIT_MS, readChainFreshnessAsking } from "./shieldGate.ts";
+import { ORACLE_WAIT_MS, readChainFreshnessAsking, freshnessRefusalText, type ChainGate } from "./shieldGate.ts";
 import { HOSH_TIMEOUT_MS } from "./externalTip.ts";
 
 test("the wait in front of a drip covers the primary oracle's own timeout, and both numbers are pinned", () => {
@@ -157,7 +157,7 @@ test("a tip that lands inside the wait is USED, and one that never lands refuses
   const t0 = Date.now();
   const late = await readChainFreshnessAsking(4_335_598, 1000, () => tip, warm);
   assert.equal(late.state, "safe", `expected the late tip to be used, got ${late.state}: ${late.reason}`);
-  assert.ok(Date.now() - t0 < 900, "and it returned as soon as the tip landed, not at the deadline");
+  assert.ok(Date.now() - t0 < 600, "and it returned as soon as the tip landed, not at the deadline");
   assert.ok(warms >= 1, "the wait kicked a refresh");
 
   const t1 = Date.now();
@@ -174,5 +174,36 @@ test("an unknown node height does not wait for the oracle at all: the verdict ca
   assert.equal(r.state, "unverifiable");
   assert.match(r.reason, /our node's height is unknown/);
   assert.ok(Date.now() - t0 < 100, "returned immediately");
-  assert.equal(warms, 0, "and did not spend a refresh on a foregone conclusion");
+  // The injected warm is not called; in production the reader itself may still kick a
+  // background refresh on a stale cache, which is fine: what this pins is that the
+  // asking path spends none of its own wait on a foregone conclusion.
+  assert.equal(warms, 0, "the asking path kicked no refresh of its own");
+});
+
+// ── THE THREE SENTENCES, pinned where the integration stacks cannot reach ───────────────
+const gate = (over: Partial<ChainGate>): ChainGate => ({ state: "safe", nodeHeight: 100, externalHeight: 100, lag: 0, reason: "", ...over });
+
+test("unsafe blames our node, which IS behind", () => {
+  const t = freshnessRefusalText(gate({ state: "unsafe", lag: 40 }));
+  assert.match(t, /Our node is catching up/);
+  assert.doesNotMatch(t, /could not verify|did not report/);
+});
+
+test("unverifiable with NO node height blames our node's silence, not the oracle", () => {
+  // The arm the first version folded into the oracle's sentence: zallet down, hosh fine.
+  const t = freshnessRefusalText(gate({ state: "unverifiable", nodeHeight: null, externalHeight: 100 }));
+  assert.match(t, /Our node did not report its height/);
+  assert.doesNotMatch(t, /could not verify the network|catching up/);
+});
+
+test("unverifiable with a known node height blames the unverified tip", () => {
+  const t = freshnessRefusalText(gate({ state: "unverifiable", nodeHeight: 100, externalHeight: null }));
+  assert.match(t, /could not verify the network's current height/);
+  assert.doesNotMatch(t, /did not report|catching up/);
+});
+
+test("every sentence says nothing was claimed and the cooldown is untouched", () => {
+  for (const g of [gate({ state: "unsafe" }), gate({ state: "unverifiable", nodeHeight: null }), gate({ state: "unverifiable", externalHeight: null })]) {
+    assert.match(freshnessRefusalText(g), /Nothing was claimed, your cooldown is untouched/);
+  }
 });

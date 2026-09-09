@@ -16,7 +16,7 @@ import { verifyTurnstile } from "@/lib/turnstile";
 import { verifySolution } from "@/lib/pow";
 import { getSenderFor, safeBalance, SendOutcomeUnknownError, type SendResult } from "@/lib/zcash/send";
 import { getNodeStatus } from "@/lib/zcash/nodeStatus";
-import { mayBuildTransaction, readChainFreshnessAsking } from "@/lib/zcash/shieldGate";
+import { mayBuildTransaction, readChainFreshnessAsking, freshnessRefusalText } from "@/lib/zcash/shieldGate";
 import { mayBuildFromWallet, walletLagFreshness } from "@/lib/zcash/walletLagGate";
 import { getSendQueue, getCtazSendQueue, QueueFullError, TaskDeadlineError } from "@/lib/zcash/queue";
 import { recordSend } from "@/lib/zcash/sendHealth";
@@ -193,24 +193,10 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
       `drip refused, chain view ${freshness.state} (lag ${freshness.lag ?? "unknown"}): ${freshness.reason}`,
       "chain freshness gate",
     );
-    // THREE REFUSALS, THREE SENTENCES, because the same text is what the operator reads
-    // and it sends them to a fix. "unsafe" is our node measurably behind: say so.
-    // "unverifiable" has two causes and they are different people's problems: our own
-    // node did not report a height (the wallet or its RPC is down: ours), or the
-    // network's tip could not be verified (the oracle: not ours). The first version
-    // folded both into the oracle sentence and would have sent someone to check
-    // hosh.zec.rocks while zallet crash-looped (register #6 review).
-    const text =
-      freshness.state !== "unverifiable"
-        ? "Our node is catching up with the network, so a drip sent right now would expire " +
-          "before it could confirm. Nothing was claimed, your cooldown is untouched. Try again shortly."
-        : freshness.nodeHeight == null
-          ? "Our node did not report its height just now, so we are not sending: we cannot tell whether " +
-            "a drip built now would confirm. Nothing was claimed, your cooldown is untouched. Try again shortly."
-          : "We could not verify the network's current height just now, so we are not sending: a drip " +
-            "built against an unverified tip could expire before it confirms. Nothing was claimed, your " +
-            "cooldown is untouched. Try again shortly.";
-    return apiError(503, text, api, { retryAfterSeconds: FRESHNESS_RETRY_SECONDS });
+    // Three refusals, three sentences, chosen by the gate itself (freshnessRefusalText)
+    // and pinned there, because the same text is what an operator reads and it sends
+    // them to a fix: the first version blamed the oracle for our own wallet being down.
+    return apiError(503, freshnessRefusalText(freshness), api, { retryAfterSeconds: FRESHNESS_RETRY_SECONDS });
   }
 
   // 3.55. Our WALLET's lag behind our OWN node, which is a different question to 3.5 and

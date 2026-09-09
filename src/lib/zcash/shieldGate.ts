@@ -208,6 +208,39 @@ export function mayBuildTransaction(gate: ChainGate): boolean {
   return gate.state === "safe";
 }
 
+/**
+ * The sentence a refused claim shows, from the gate that refused it. Pure and exported so
+ * the three arms can be pinned without booting a stack: review of register #6 found the
+ * middle arm could be rewritten back to the wording it replaced and nothing in the repo
+ * would notice, because the integration stacks reach only the first and third.
+ *
+ *   unsafe                      our node is measurably behind: say so
+ *   unverifiable, no node height  our own node did not report a height (the wallet or its
+ *                                 RPC is down): ours, and not the oracle's
+ *   unverifiable, node known      the network's tip could not be verified: the oracle's
+ *
+ * The same text is what an operator reads, and it sends them to a fix.
+ */
+export function freshnessRefusalText(gate: ChainGate): string {
+  const tail = " Nothing was claimed, your cooldown is untouched. Try again shortly.";
+  if (gate.state !== "unverifiable") {
+    return (
+      "Our node is catching up with the network, so a drip sent right now would expire " +
+      "before it could confirm." + tail
+    );
+  }
+  if (gate.nodeHeight == null) {
+    return (
+      "Our node did not report its height just now, so we are not sending: we cannot tell whether " +
+      "a drip built now would confirm." + tail
+    );
+  }
+  return (
+    "We could not verify the network's current height just now, so we are not sending: a drip " +
+    "built against an unverified tip could expire before it confirms." + tail
+  );
+}
+
 /** Live reading: the pure decision above, fed the current cached oracle value. */
 export function readChainFreshness(nodeHeight: number | null): ChainGate {
   return chainFreshness(nodeHeight, getExternalTip());
