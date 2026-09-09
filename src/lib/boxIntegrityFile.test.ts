@@ -48,6 +48,7 @@ const WRITER_FIELDS = {
   enabledUndeclared: 4,
   minerBinary: "current",
   minerUnit: "inactive",
+  alertBridge: "ok",
   platform: "x86_64",
   watchdogRestarts: 0,
   watchdogRestartsDelta: 0,
@@ -146,3 +147,12 @@ test("unparseable is null, not a partial report", () => {
 });
 
 test.after(() => rmSync(dir, { recursive: true, force: true }));
+
+test("alertBridge arrives as the box's word, and an older report reads null, never a calm ok", () => {
+  write({ ...WRITER_FIELDS, alertBridge: "down" });
+  assert.equal(readBoxIntegrity()?.alertBridge, "down");
+  const { alertBridge: _a, ...older } = WRITER_FIELDS;
+  void _a;
+  write(older);
+  assert.equal(readBoxIntegrity()?.alertBridge, null);
+});

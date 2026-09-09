@@ -275,9 +275,37 @@ case "$miner_unit" in
   *) miner_unit="unknown" ;;
 esac
 
+# CAN THIS BOX PAGE ANYONE. The Signal bridge is one container on loopback, and if it is
+# down every alert the watchdog and the units send becomes a journal line nobody reads,
+# which is the exact silence the register calls out (#15). The bridge cannot report its
+# own death through itself, so the report carries it and the OFF-box probe reads it:
+#   ok       the bridge's health endpoint answered 2xx
+#   down     Signal is configured and the endpoint did not answer or answered badly
+#   n/a      alerts are not configured for Signal on this box, nothing to probe
+#   unknown  curl is not available to ask
+# The health URL is derived from FAUCET_ALERT_URL's origin and never written anywhere:
+# for other formats that URL is a webhook credential, which is why only the signal
+# format is probed.
+ALERTS_ENV="${BOX_REPORT_ALERTS_ENV:-/etc/faucet/alerts.env}"
+CURL="${BOX_REPORT_CURL:-curl}"
+alert_bridge="n/a"
+if [ -r "$ALERTS_ENV" ]; then
+  fmt="$(sed -nE 's/^(export[[:space:]]+)?FAUCET_ALERT_FORMAT=//p' "$ALERTS_ENV" | tail -n1 | tr -d "\"'")"
+  url="$(sed -nE 's/^(export[[:space:]]+)?FAUCET_ALERT_URL=//p' "$ALERTS_ENV" | tail -n1 | tr -d "\"'")"
+  if [ "$fmt" = "signal" ] && [ -n "$url" ]; then
+    if command -v "$CURL" >/dev/null 2>&1; then
+      origin="$(printf '%s' "$url" | sed -E 's#^(https?://[^/]+).*#\1#')"
+      code="$("$CURL" -s -o /dev/null -w '%{http_code}' --max-time 5 "$origin/v1/health" 2>/dev/null || true)"
+      case "$code" in 2*) alert_bridge="ok" ;; *) alert_bridge="down" ;; esac
+    else
+      alert_bridge="unknown"
+    fi
+  fi
+fi
+
 # JSON numbers or the literal null. `null` is what an unread figure has to be on the
 # wire: 0 would say the watchdog is calm, which is a claim we did not measure.
 wr_json="${watchdog_restarts:-null}"
 wrd_json="${watchdog_restarts_delta:-null}"
 
-write "{\"expected\":${expected},\"present\":${present},\"notEnabled\":${not_enabled},\"enabledUndeclared\":${enabled_undeclared},\"minerBinary\":\"${miner_state}\",\"minerUnit\":\"${miner_unit}\",\"platform\":\"${platform}\",\"watchdogRestarts\":${wr_json},\"watchdogRestartsDelta\":${wrd_json},\"at\":$(( $(date +%s) * 1000 )),\"readable\":true}"
+write "{\"expected\":${expected},\"present\":${present},\"notEnabled\":${not_enabled},\"enabledUndeclared\":${enabled_undeclared},\"minerBinary\":\"${miner_state}\",\"minerUnit\":\"${miner_unit}\",\"alertBridge\":\"${alert_bridge}\",\"platform\":\"${platform}\",\"watchdogRestarts\":${wr_json},\"watchdogRestartsDelta\":${wrd_json},\"at\":$(( $(date +%s) * 1000 )),\"readable\":true}"

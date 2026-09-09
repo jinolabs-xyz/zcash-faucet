@@ -75,6 +75,11 @@ export interface IntegrityReport {
    * red for hours over a unit that was parked deliberately. This is the fact that lets
    * it say "off" instead, and it is context only, never classified on. */
   minerUnit: string | null;
+  /** Whether the box can page anyone: "ok", "down", "n/a" (Signal not configured),
+   *  "unknown" (could not ask), or null from a report that predates the field. The
+   *  bridge cannot report its own death through itself, so this is where a dead one
+   *  shows, and the off-box probe reads it. */
+  alertBridge: string | null;
   /** When the box wrote this, epoch ms. */
   at: number | null;
   /** The writer could not determine the answer, so it said so. */
@@ -104,12 +109,17 @@ export interface IntegrityStatus {
   /** Passed through from the report; the panel uses it to tell a parked miner from a
    *  dead one. Context, never classified on. */
   minerUnit: string | null;
+  /** Whether the box can page anyone: "ok", "down", "n/a" (Signal not configured),
+   *  "unknown" (could not ask), or null from a report that predates the field. The
+   *  bridge cannot report its own death through itself, so this is where a dead one
+   *  shows, and the off-box probe reads it. */
+  alertBridge: string | null;
   ageSeconds: number | null;
   reason: string;
 }
 
 export function classifyIntegrity(r: IntegrityReport | null, now: number): IntegrityStatus {
-  const none = { expected: null, present: null, missing: null, notEnabled: null, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, platform: null, minerBinary: null, minerUnit: null, ageSeconds: null };
+  const none = { expected: null, present: null, missing: null, notEnabled: null, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, platform: null, minerBinary: null, minerUnit: null, alertBridge: null, ageSeconds: null };
 
   // No report at all is the state the box was ACTUALLY in all week, so it must not
   // be quiet. It is not "complete" and it is not a proven fault: it is unverified,
@@ -156,6 +166,7 @@ export function classifyIntegrity(r: IntegrityReport | null, now: number): Integ
       platform: r.platform,
       minerBinary: r.minerBinary,
       minerUnit: r.minerUnit,
+      alertBridge: r.alertBridge,
       ageSeconds: age,
       reason: parts.join(", "),
     };
@@ -173,6 +184,7 @@ export function classifyIntegrity(r: IntegrityReport | null, now: number): Integ
     platform: r.platform,
     minerBinary: r.minerBinary,
     minerUnit: r.minerUnit,
+    alertBridge: r.alertBridge,
     ageSeconds: age,
     reason: `all ${r.expected} required files installed, current and enabled`,
   };

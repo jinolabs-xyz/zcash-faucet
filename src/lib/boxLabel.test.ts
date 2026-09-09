@@ -11,7 +11,7 @@ import { boxRow, boxChip, boxIsBad } from "./boxLabel.ts";
 import { classifyIntegrity } from "./boxIntegrity.ts";
 
 const NOW = Date.parse("2026-07-31T12:00:00Z");
-const report = (over = {}) => ({ expected: 14, present: 14, notEnabled: 0, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, platform: null, minerBinary: null, minerUnit: null, at: NOW - 30_000, readable: true, ...over });
+const report = (over = {}) => ({ expected: 14, present: 14, notEnabled: 0, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, platform: null, minerBinary: null, minerUnit: null, alertBridge: null, at: NOW - 30_000, readable: true, ...over });
 
 test("THE STATE NOTHING RENDERED: two files gone and a unit disabled says so", () => {
   const s = classifyIntegrity(report({ present: 12, notEnabled: 1 }), NOW);
@@ -217,4 +217,22 @@ test("a report with no minerBinary at all renders exactly as before", () => {
   const withField = boxRow(classifyIntegrity(report({ minerBinary: "current" }), NOW));
   const without = boxRow(classifyIntegrity(report({ minerBinary: null }), NOW));
   assert.equal(without, withField, "an older report must not change the row's shape");
+});
+
+// ── THE BOX CANNOT PAGE ANYONE (risk register #15) ──────────────────────────────────────
+import { alertBridgeDown } from "./boxLabel.ts";
+
+test("a dead Signal bridge is a fault the row names, because no alert about it can arrive", () => {
+  const s = classifyIntegrity(report({ alertBridge: "down" }), NOW);
+  assert.match(boxRow(s), /ALERT BRIDGE DOWN, pages go nowhere/);
+  assert.equal(boxIsBad(s), true);
+  assert.equal(alertBridgeDown(s), true);
+});
+
+test("ok, not applicable, unknown and an older report are NOT the fault, and say nothing", () => {
+  for (const v of ["ok", "n/a", "unknown", null]) {
+    const s = classifyIntegrity(report({ alertBridge: v }), NOW);
+    assert.doesNotMatch(boxRow(s), /BRIDGE/, `alertBridge ${String(v)}`);
+    assert.equal(boxIsBad(s), false, `alertBridge ${String(v)}`);
+  }
 });

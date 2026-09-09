@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { classifyIntegrity, isIntegrityFailing, STALE_AFTER_MS } from "./boxIntegrity.ts";
 
 const NOW = 1_700_000_000_000;
-const rep = (o: Partial<{ expected: number; present: number; notEnabled: number; enabledUndeclared: number | null; watchdogRestarts: number | null; watchdogRestartsDelta: number | null; platform: string | null; minerBinary: string | null; minerUnit: string | null; agoMs: number; readable: boolean }> = {}) => ({
+const rep = (o: Partial<{ expected: number; present: number; notEnabled: number; enabledUndeclared: number | null; watchdogRestarts: number | null; watchdogRestartsDelta: number | null; platform: string | null; minerBinary: string | null; minerUnit: string | null; alertBridge: string | null; agoMs: number; readable: boolean }> = {}) => ({
   expected: o.expected ?? 25,
   present: o.present ?? 25,
   notEnabled: o.notEnabled ?? 0,
@@ -18,6 +18,7 @@ const rep = (o: Partial<{ expected: number; present: number; notEnabled: number;
   platform: o.platform ?? null,
   minerBinary: o.minerBinary ?? null,
   minerUnit: o.minerUnit ?? null,
+  alertBridge: o.alertBridge ?? null,
   at: NOW - (o.agoMs ?? 60_000),
   readable: o.readable ?? true,
 });
@@ -96,4 +97,10 @@ test("enabledUndeclared passes through untouched, and never shapes the verdict",
   const failing = classifyIntegrity(rep({ notEnabled: 1, enabledUndeclared: 2 }), NOW);
   assert.equal(failing.state, "incomplete");
   assert.equal(failing.enabledUndeclared, 2);
+});
+
+test("alertBridge rides through classification untouched, complete or not", () => {
+  assert.equal(classifyIntegrity(rep({ alertBridge: "down" }), NOW).alertBridge, "down");
+  assert.equal(classifyIntegrity(rep({ present: 1, alertBridge: "ok" }), NOW).alertBridge, "ok");
+  assert.equal(classifyIntegrity(null, NOW).alertBridge, null);
 });

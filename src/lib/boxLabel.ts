@@ -124,7 +124,7 @@ export function boxRow(s: IntegrityStatus): string {
       // name at all. I was reading the world after the fix and calling it never-broken,
       // which is rule 35 running backwards, so the same counter applies. `git show
       // <commit>^:<file>` is what settles a question about the past, not a live probe.
-      return `${s.expected} of ${s.expected} files, all enabled${miner(s)}${undeclared(s)}${watchdog(s)}`;
+      return `${s.expected} of ${s.expected} files, all enabled${miner(s)}${undeclared(s)}${watchdog(s)}${bridge(s)}`;
 
     case "incomplete": {
       const parts: string[] = [];
@@ -136,7 +136,7 @@ export function boxRow(s: IntegrityStatus): string {
       // Defensive, and it should be unreachable: classifyIntegrity only returns
       // incomplete when one of the two is non-zero. Saying "incomplete" with no
       // figures still beats rendering an empty string as though nothing were wrong.
-      return (parts.length ? parts.join(", ") : "incomplete, figures not reported") + miner(s) + undeclared(s) + watchdog(s);
+      return (parts.length ? parts.join(", ") : "incomplete, figures not reported") + miner(s) + undeclared(s) + watchdog(s) + bridge(s);
     }
 
     case "unknown":
@@ -167,6 +167,19 @@ export function boxChip(s: IntegrityStatus): string | null {
 }
 
 /** Anything other than a clean report. Matches isIntegrityFailing: unknown counts. */
+/** The box cannot page anyone: Signal is configured and its bridge is not answering.
+ *  A fault, and one nothing else can show, because every alert about it would travel
+ *  through the thing that is down. "n/a", "unknown" and null are not "down". */
+export function alertBridgeDown(s: IntegrityStatus): boolean {
+  return s.alertBridge === "down";
+}
+
+/** The clause, when there is one. Only the fault gets words: "ok" is the expected
+ *  state and a row saying so on every render is noise. */
+function bridge(s: IntegrityStatus): string {
+  return alertBridgeDown(s) ? ", ALERT BRIDGE DOWN, pages go nowhere" : "";
+}
+
 export function boxIsBad(s: IntegrityStatus): boolean {
-  return s.state !== "complete" || watchdogLooping(s);
+  return s.state !== "complete" || watchdogLooping(s) || alertBridgeDown(s);
 }

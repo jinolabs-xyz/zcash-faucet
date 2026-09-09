@@ -230,6 +230,15 @@ async function runFaucetChecks() {
       box.state === "complete",
       box.reason ?? `state ${box.state}`,
     );
+    // THE ONE FAULT NO ON-BOX ALERT CAN CARRY. Every page travels through the Signal
+    // bridge, so a dead bridge is reported by the box and read from outside, here. "n/a"
+    // (no Signal on this box), "unknown" and an older server that sends nothing are not
+    // "down": only the box's own word that a configured bridge is not answering fails.
+    if (box.alertBridge === "down") {
+      ok("the box can page someone", false, "its Signal bridge is not answering: every watchdog alert is a journal line until `docker start signal-api` (the watchdog tries that itself)");
+    } else if (box.alertBridge != null) {
+      ok("the box can page someone", true, `alert bridge ${box.alertBridge}`);
+    }
   }
   // THE COMPOSITION CHECK cTAZ NEVER HAD, and the reason this file grew it. Every
   // pre-merge layer was green while prod could not serve cTAZ, twice in one day: the

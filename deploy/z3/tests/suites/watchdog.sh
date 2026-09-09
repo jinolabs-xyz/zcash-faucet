@@ -631,3 +631,25 @@ check "the node's own recovery is still reported" "grep -q 'FIXED: zebra was 144
 check "and the failed start is a NEEDS YOU of its own" "grep -q 'NEEDS YOU: the node has recovered but .systemctl start zcash-testnet-miner.service. FAILED' '$T/alerts.log'"
 check "which the FIXED does not paper over" "! grep 'FIXED: zebra' '$T/alerts.log' | grep -q 'started again'"
 unset STUB_START_FAIL
+# ── THE SIGNAL BRIDGE IS WATCHED (risk register #15) ────────────────────────────────────
+echo "== watchdog: a Signal bridge container that fell over is started like any other"
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+echo exited  > "$STUB_CONTAINERS/signal-api"
+wd_run 2
+check "the bridge is started" "grep -q 'docker start signal-api' '$STUB_LOG'"
+check "and given the reboot-safe restart policy" "grep -q 'docker update --restart unless-stopped signal-api' '$STUB_LOG'"
+check "and its recovery is reported once it is seen running" "grep -q 'FIXED: signal-api was down' '$T/alerts.log'"
+
+echo "== watchdog: a box without a Signal bridge container does nothing about one"
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+wd_run 2
+# The lookup itself (docker ps --filter name=signal-api) is in the stub log by design; what
+# must be absent is any ACTION on a container that is not there, and any alert about it.
+check "no start, no policy change, no alert about a bridge that is not there" "! grep -qE 'docker (start|update|restart) .*signal' '$STUB_LOG' && { [ ! -e '$T/alerts.log' ] || ! grep -qi 'signal' '$T/alerts.log'; }"
+check "while the lookup did happen, so the negative above is about a decision" "grep -q 'name=signal-api' '$STUB_LOG'"

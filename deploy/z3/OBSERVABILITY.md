@@ -52,6 +52,16 @@ be reachable from outside the box. One limit: the bridge lives on the box, so th
 off-box live-smoke page, the check that still fires when the whole box is dead,
 cannot use it. That one emails, and can take a Slack or Discord webhook.
 
+**The bridge is watched.** The watchdog treats the container named `signal-api`
+(`WATCHDOG_SIGNAL_MATCH` if yours is named differently) like zebra, zallet and
+the app: restart policy kept, started again if it falls over, one FIXED once it
+is seen running. A bridge cannot report its own death through itself, so
+`box-report.sh` probes its `/v1/health` endpoint every run and publishes
+`alertBridge` (`ok`, `down`, `n/a` without Signal, `unknown` without curl); the
+panel's box row reads `ALERT BRIDGE DOWN, pages go nowhere`, and the off-box
+live probe fails on it, which is the one channel that does not depend on the
+bridge.
+
 ### Slack or Discord instead
 
 Create an incoming webhook in the channel you watch (Slack: Apps, Incoming
