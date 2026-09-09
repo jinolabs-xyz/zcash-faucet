@@ -256,6 +256,186 @@ is_best_effort() { # $1 unit name
 # JSON forbids raw control characters and journal output is full of tabs, so a
 # sed approximation produces bodies the webhook rejects with no trace. Refuse
 # instead: a muted channel is the failure this script exists to prevent.
+# REDACT BEFORE IT LEAVES THE BOX. Every alert carries text this box did not write: the
+# --unit hook quotes the failing unit's last journal lines, the watchdog interpolates the
+# reason it parsed out of a live /api/ready body, drift-report pushes audit findings. All
+# of it travels to a third-party webhook or a Signal bridge and sits in a chat history,
+# and a library's error path is one bad line away from putting the wallet RPC password in
+# it (risk register #22).
+#
+# THE FIRST VERSION WAS A DENYLIST OF NAMES, AND REVIEW BROKE IT THREE WAYS. It missed
+# `curl -u faucet:hunter2` and {"password":"hunter2"} because it demanded `=` or a space
+# straight after the key name; it missed every Zcash spending key, which is the highest
+# value secret on the box; and it blanked to END OF LINE on the words auth, seed and
+# token, which turned this repo's own log lines into "zallet: authentication REDACTED"
+# and "zebrad: DNS seeder REDACTED". Losing the difference between an auth failure and an
+# auth success in the page is a certain regression traded against a hypothetical leak.
+#
+# So it is three stages now, strongest first.
+#
+#   1. THE VALUES THEMSELVES, read from the files this box keeps its secrets in. A name
+#      rule is a guess about how a library will print a credential; the credential is not
+#      a guess, and a literal match catches it in a URL, in JSON, in a stack trace, or in
+#      a shell echo alike. This is the same allowlist stance audit-drift.sh already takes
+#      with unit files, and it is the only stage that cannot over-redact English.
+#   2. KEY MATERIAL BY SHAPE, for the secrets we do NOT hold and so cannot match by
+#      value: a spending key the wallet printed, an age identity, a PEM block. These have
+#      unmistakable prefixes, so shape is safe here in a way it is not for base64.
+#   3. NAMES, narrowly. One token, not the line, and only where a `=`/`:` or a `--` flag
+#      says the next thing IS the value. Header-shaped names whose value is several
+#      tokens (authorization, cookie, a mnemonic) still blank to end of line, because
+#      "Authorization: Bearer x" puts the secret two tokens from its name.
+#
+#      THE NAME MAY CARRY A PREFIX. The first version required the keyword to stand alone,
+#      so it matched `password=` and nothing this box actually uses: ZALLET_RPC_PASSWORD,
+#      PGPASSWORD, BACKUP_PASSPHRASE, FAUCET_ADMIN_TOKEN, ?access_token=, X-Api-Key and
+#      {"db_password":...} all walked through, and the suite passed because its fixture
+#      used the bare spelling. `-u`/`--user` needs the value to LOOK like credentials
+#      (a colon with a letter before it), because `journalctl -u faucet-drift-report`
+#      and `date -u +%FT%TZ` are in this repo's own alerts and were being destroyed.
+#
+# What is deliberately NOT redacted: long hex and base64 runs inside a line. A 64-hex
+# string here is a txid, a block hash or an image digest, all public and all the first
+# thing an operator needs from a page; the first version blanked them and mangled a txid
+# into "4f9c1REDACTED-LONG-TOKEN5c6d7e8".
+#
+# NOT A GUARANTEE, and OBSERVABILITY.md says so where an operator reads it. A denylist
+# over arbitrary third-party log text cannot be one. Stage 1 is the part that holds.
+
+# EVERY file this box keeps a secret in, which is the list audit-drift.sh already walks,
+# plus the app's own env (ZALLET_RPC_PASSWORD, RATE_LIMIT_SALT). Three of these were
+# missing at first and BACKUP_PASSPHRASE, which lives in backup.env, was then covered by
+# nothing at all: not by value, because the file was not read, and not by name, because
+# the name rule could not see an underscore. Adding a file here is how a new secret gets
+# covered; that is cheaper than another pattern.
+#
+# One path per line, or whitespace-separated on one line. A path containing a space has to
+# be on its own line, and it is used verbatim when it exists.
+SECRET_FILES="${FAUCET_ALERT_SECRET_FILES:-/etc/faucet/alerts.env
+/etc/faucet/watchdog.env
+/etc/faucet/backup.env
+/etc/faucet/zsnap.env
+/etc/faucet/metrics.env
+/etc/faucet/miner.env
+/opt/zcash-faucet/deploy/z3/faucet.env}"
+_SECRET_RE=""
+_SECRETS_LOADED=0
+load_secret_values() {
+  [ "$_SECRETS_LOADED" = 1 ] && return 0
+  _SECRETS_LOADED=1
+  local entry f line name val esc
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    # A path that exists is taken whole, so a space in it survives; anything else is
+    # split, which keeps a one-line whitespace-separated value working.
+    if [ -e "$entry" ]; then set -- "$entry"; else set -- $entry; fi
+    for f in "$@"; do
+      # A file that EXISTS but cannot be read is the interesting case: alert.sh runs as root
+      # from systemd, so this means someone ran it by hand, and the strongest redaction
+      # stage is then silently off. Say so once rather than sending a weaker message that
+      # looks identical to a strong one.
+      if [ -e "$f" ] && [ ! -r "$f" ]; then
+        log "WARNING: cannot read $f, so its secrets will not be redacted out of alerts (run as root)"
+        continue
+      fi
+      [ -r "$f" ] || continue
+      while IFS= read -r line; do
+        # A file written on Windows or fetched over a bad pipe keeps the CR on the value,
+        # so nothing matched and nothing said why.
+        line="${line%$'\r'}"
+        name="${line%%=*}"; name="${name##*[[:space:]]}"
+        val="${line#*=}"
+        # Strip one layer of quoting, the way the shell would when the file is sourced.
+        case "$val" in
+          \"*\") val="${val#\"}"; val="${val%\"}" ;;
+          \'*\') val="${val#\'}"; val="${val%\'}" ;;
+        esac
+        # SHORT VALUES ARE SKIPPED. Under twelve characters it is a placeholder, a port or
+        # a mode name, and blanking a short string blanks ordinary log text with it: a
+        # RATE_LIMIT_SALT of "changeme" would erase the word from every line it appears in.
+        [ "${#val}" -ge 12 ] || continue
+        # NAMES THAT ARE THE SECRET, not names that merely sound like one. The first version
+        # took *KEY*, *_URL, *COOKIE* and *IDENTITY*, which selects this box's PUBLIC
+        # configuration: WATCHDOG_FAUCET_URL, HOSH_URL, NEXT_PUBLIC_TURNSTILE_SITE_KEY, the
+        # cookie path, the identity path. Because stage 1 then blanks the value ANYWHERE it
+        # appears, "liveness probe to https://faucet.example/api/ready timed out" became
+        # "liveness probe to REDACTED timed out", and two alerts about two different URLs
+        # collapsed to one dedup cause.
+        case "$name" in
+          *PASSWORD*|*PASSWD*|*PASSPHRASE*|*PWHASH*|*SECRET*|*TOKEN*|*SALT*|*SEED*|*MNEMONIC*|*CREDENTIAL*|*PRIVATE_KEY*|*PRIVKEY*|*API_KEY*|*APIKEY*|*IDENTITY*) ;;
+          # The path of a Slack or Discord webhook IS the credential for that format, and it
+          # would otherwise travel to that very webhook.
+          *ALERT*URL*|*WEBHOOK*) ;;
+          *) continue ;;
+        esac
+        # A name that points AT a secret rather than being one, and anything marked public.
+        case "$name" in
+          *PUBLIC*|*_FILE|*_PATH|*_DIR) continue ;;
+        esac
+        # A value that is a plain URL is configuration wherever it appears, and blanking it
+        # costs a page the address it is about. The webhook is the exception.
+        #
+        # NOT PATHS. `/*` was here too, and BACKUPS.md tells the operator to generate
+        # BACKUP_PASSPHRASE with `openssl rand -base64 30`: base64's alphabet contains `/`,
+        # so about one passphrase in 64 begins with one and was dropped, in silence, for the
+        # one secret this file list was widened to cover. Paths are excluded by NAME above
+        # (*_FILE, *_PATH, *_DIR), which is the reliable half of that idea.
+        case "$name" in
+          *ALERT*URL*|*WEBHOOK*) ;;
+          *) case "$val" in
+               http://*|https://*)
+                 # Named, because a skip nobody can see is how the last one lasted.
+                 log "note: $name looks like a plain URL, so it is treated as configuration rather than a secret"
+                 continue ;;
+             esac ;;
+        esac
+        esc="$(printf '%s' "$val" | sed -e 's/[][\\.^$*+?(){}|#]/\\&/g')"
+        _SECRET_RE="${_SECRET_RE:+$_SECRET_RE|}$esc"
+      done <<< "$(grep -hE '^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=' "$f" 2>/dev/null)"
+    done
+  done <<< "$SECRET_FILES"
+}
+
+redact() {
+  load_secret_values
+  # Stage 1 is its own process because there may be nothing to do: an empty alternation
+  # in the ERE below would match every position and blank the whole message.
+  if [ -n "$_SECRET_RE" ]; then sed -E "s#($_SECRET_RE)#REDACTED#g"; else cat; fi \
+    | redact_key_blocks | redact_patterns
+}
+
+# A PEM block needs state, which sed cannot carry portably, and the block BODY is the part
+# that matters: the old rule rewrote the BEGIN line and passed every base64 line after it
+# through untouched. awk keeps the marker and drops the material.
+redact_key_blocks() {
+  awk '
+    /-----BEGIN [A-Z ]*PRIVATE KEY-----/ { print "-----BEGIN PRIVATE KEY----- REDACTED (key material removed)"; k=1; next }
+    /-----END [A-Z ]*PRIVATE KEY-----/   { k=0; next }
+    k { next }
+    { print }
+  '
+}
+
+redact_patterns() {
+  sed -E \
+    -e 's#([a-zA-Z][a-zA-Z0-9+.-]*://)[^/@[:space:]]+:[^/@[:space:]]+@#\1REDACTED:REDACTED@#g' \
+    -e 's#(hooks\.slack\.com/services/)[^[:space:]]+#\1REDACTED#g' \
+    -e 's#((discord|discordapp)\.com/api/webhooks/)[^[:space:]]+#\1REDACTED#g' \
+    -e 's/((^|[^A-Za-z0-9])(secret-extended-key-[a-z]+|zxsk[a-z]*|zxviews[a-z]*|uview[a-z]*|usk[a-z]*)1)[0-9a-z]{20,}/\1REDACTED/Ig' \
+    -e 's/(AGE-SECRET-KEY-1)[0-9A-Z]{20,}/\1REDACTED/g' \
+    -e 's/((^|[^A-Za-z0-9])xprv)[0-9A-Za-z]{20,}/\1REDACTED/g' \
+    -e 's/(eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})\.[A-Za-z0-9_-]+/\1.REDACTED/g' \
+    -e 's/("[A-Za-z0-9_-]*(password|passwd|passphrase|pwhash|secret|api[-_]?key|apikey|token|privkey|private[-_]?key|seed|mnemonic|salt|cookie|authorization|credentials?)[A-Za-z0-9_-]*"[[:space:]]*:[[:space:]]*")[^"]*/\1REDACTED/Ig' \
+    -e 's/(([{,][[:space:]]*['"'"'"][A-Za-z0-9_-]*(password|passwd|passphrase|pwhash|secret|api[-_]?key|apikey|token|authorization|privkey|private[-_]?key|seed|mnemonic|salt|cookie|credentials?)[A-Za-z0-9_-]*['"'"'"][[:space:]]*:[[:space:]]*))\[[^]]*\]/\1REDACTED/Ig' \
+    -e 's/(([{,][[:space:]]*['"'"'"][A-Za-z0-9_-]*(password|passwd|passphrase|pwhash|secret|api[-_]?key|apikey|token|authorization|privkey|private[-_]?key|seed|mnemonic|salt|cookie|credentials?)[A-Za-z0-9_-]*['"'"'"][[:space:]]*:[[:space:]]*))\{[^}]*\}/\1REDACTED/Ig' \
+    -e 's/(([{,][[:space:]]*['"'"'"][A-Za-z0-9_-]*(password|passwd|passphrase|pwhash|secret|api[-_]?key|apikey|token|authorization|privkey|private[-_]?key|seed|mnemonic|salt|cookie|credentials?)[A-Za-z0-9_-]*['"'"'"][[:space:]]*:[[:space:]]*))[^"[:space:],}{[][^,}]{5,}/\1REDACTED/Ig' \
+    -e 's/((^|[^A-Za-z0-9_"-])[A-Za-z0-9_-]*(authorization|cookie|mnemonic|passphrase)[[:space:]]*[:=][[:space:]]*).*/\1REDACTED/I' \
+    -e 's/((^|[^A-Za-z0-9_"-])[A-Za-z0-9_-]*(authorization|cookie|mnemonic|passphrase)[A-Za-z0-9_-]+[[:space:]]*[:=][[:space:]]*)[^[:space:],\/0-9][^[:space:],]{5,}.*/\1REDACTED/I' \
+    -e 's/((^|[^A-Za-z0-9_"-])[A-Za-z0-9_-]*(password|passwd|pwhash|secret|api[-_]?key|apikey|token|privkey|private[-_]?key|seed|salt|credentials?)[A-Za-z0-9_-]*[[:space:]]*[:=][[:space:]]*"?)[^[:space:]",;}]{6,}/\1REDACTED/Ig' \
+    -e 's/((^|[[:space:]])(-u|--user)[[:space:]]+)[^[:space:]:]*[A-Za-z][^[:space:]:]*:[^[:space:]]+/\1REDACTED/g' \
+    -e 's/((^|[[:space:]])--[A-Za-z0-9_-]*(password|passwd|passphrase|pwhash|secret|api[-_]?key|apikey|token|privkey|private[-_]?key|seed|mnemonic|salt|cookie|authorization|credentials?)[A-Za-z0-9_-]*[[:space:]]+)[^[:space:]]+/\1REDACTED/Ig'
+}
+
 json_escape() {
   if command -v jq >/dev/null 2>&1; then
     printf '%s' "$1" | jq -Rs '.' | sed 's/^"//; s/"$//'
@@ -269,9 +449,31 @@ json_escape() {
 }
 
 send() { # $1 = message text
-  local msg body escaped
+  local msg body escaped text
+  # EVERY PATH, not just the journal tail. The watchdog interpolates a reason parsed out
+  # of a live /api/ready body (watchdog.sh), drift-report pushes audit findings, and
+  # --now callers pass whatever they built; all of them arrive here. Redacting at the one
+  # chokepoint also means the cooldown key is computed on redacted text, and the journal
+  # lines this function logs carry the same treatment as the message it sends.
+  # Loaded HERE, not inside the substitution below: redact() runs in a subshell, so a
+  # warning it printed would be captured into the message rather than logged.
+  load_secret_values
+  text="$(printf '%s' "$1" | redact)"
+  # A FAILING FILTER MUST NOT MUTE THE BOX. redact is a three-process pipeline and there is
+  # no `set -e` here, so a missing awk or a sed that refuses the pattern used to leave
+  # `text` empty and send it: a blank page, and then, because this PR moved the cooldown
+  # key onto the redacted text, every other cause hashing to the same empty key and being
+  # held back for an hour. Three different outages, one blank message, then silence.
+  #
+  # So: page anyway, without the text. The raw message is NOT logged either, because the
+  # reason it did not get filtered is the reason it cannot be trusted.
+  if [ -n "$1" ] && [ -z "$text" ]; then
+    DEDUP_SUBJECT="${DEDUP_SUBJECT:-${1%%$'\n'*}}"
+    log "REDACTION FAILED (no answer from the filter pipeline: check awk and sed). Paging with the text withheld."
+    text="🚨 NEEDS YOU: something alerted on $(hostname 2>/dev/null || echo this box) and the redaction filter did not answer, so the text is withheld. Read the journal on the box."
+  fi
   if [ -z "$ALERT_URL" ]; then
-    log "NOT SENT (no FAUCET_ALERT_URL configured): $1"
+    log "NOT SENT (no FAUCET_ALERT_URL configured): $text"
     return 3
   fi
   # The two numbers are embedded raw below, so they are checked to be nothing but a
@@ -279,7 +481,7 @@ send() { # $1 = message text
   # bridge rejects, which is the silent mute this script exists to prevent.
   if [ "$ALERT_FORMAT" = "signal" ]; then
     if [ -z "$SIGNAL_NUMBER" ]; then
-      log "NOT SENT (signal needs FAUCET_ALERT_SIGNAL_NUMBER in /etc/faucet/alerts.env, the linked account in E.164): $1"
+      log "NOT SENT (signal needs FAUCET_ALERT_SIGNAL_NUMBER in /etc/faucet/alerts.env, the linked account in E.164): $text"
       return 3
     fi
     local n
@@ -292,11 +494,11 @@ send() { # $1 = message text
   fi
   # Held back is a decision, not a failure: the caller's alert was handled, the journal
   # says so, and the next one through carries the count. So it exits 0.
-  dedup_check "$1" || return 0
+  dedup_check "$text" || return 0
   # The held-back count goes on the FIRST line, where a phone preview shows it, not after
   # a 15-line journal tail where the unit alerts would have buried it.
   local first rest
-  first="${1%%$'\n'*}"; rest="${1#"$first"}"
+  first="${text%%$'\n'*}"; rest="${text#"$first"}"
   escaped="$(json_escape "$PREFIX $first$HELD_BACK_NOTE$rest")" || { dedup_done; return 4; }
   msg="$escaped"
   # Slack and Discord want the same shape under different keys, and each
@@ -316,7 +518,7 @@ send() { # $1 = message text
     return 0
   fi
   dedup_done
-  log "POST FAILED to the configured webhook: $1"
+  log "POST FAILED to the configured webhook: $text"
   return 1
 }
 

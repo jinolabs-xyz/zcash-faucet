@@ -130,6 +130,446 @@ bash "$ALERT" --unit zsnap-export.service > /dev/null 2>&1
 check "names the failing unit" "grep -q 'unit FAILED: zsnap-export.service' '$HOOK_LOG'"
 check "includes the journal tail, so no SSH needed to triage" "grep -q 'something exploded' '$HOOK_LOG'"
 
+echo "== alerts: everything an alert carries is REDACTED before it leaves the box (risk register #22)"
+# The tail is whatever the failing unit chose to print, and it travels to a third-party
+# webhook or a Signal bridge and stays in that chat history. Review of the first version
+# found three classes of leak (curl -u, JSON bodies, Zcash spending keys) and one class of
+# over-redaction that destroyed this repo's own log lines. Both directions are pinned.
+alerts_env
+# Stage 1 matches the box's own secrets BY VALUE. The fixture stands in for
+# /etc/faucet/alerts.env and the app's faucet.env.
+cat > "$T/secrets.env" <<'E'
+ZALLET_RPC_PASSWORD=hunter2isalongpassword
+RATE_LIMIT_SALT=9f3c1de4b7a25086f2e1
+# A value full of regex metacharacters. Stage 1 turns each value into a pattern, so an
+# unescaped one matches the wrong text or breaks the filter, and a broken filter
+# withholds every page. Nothing held this before.
+BACKUP_TOKEN=a.b*c[d]e+f(g)
+# A SELECTED name with a short value. The first fixture used a name the include list does
+# not match, so the length guard could be deleted and the check still passed - one step
+# earlier than it claimed.
+SPARE_TOKEN=short
+# Selected by the OLD broad list (*COOKIE*), not by the narrow one, and the value is
+# neither a path nor a URL: this is what makes narrowing the list load-bearing.
+ZEBRA_RPC_COOKIE_NAME=__cookie__value1
+# Selected by the NARROW list (*TOKEN*) with a value that is a plain URL: this is what
+# makes the URL skip load-bearing.
+METRICS_TOKEN_ENDPOINT=https://metrics.example.org/push
+# Selected by the narrow list (*SEED*) and excluded by *PUBLIC*.
+PUBLIC_SEED_NODES=seed1.example.org,seed2.example.org
+# PUBLIC configuration that only LOOKS secret-ish. Stage 1 blanks a value wherever it
+# appears, so selecting these by name erases the address a page is about.
+WATCHDOG_FAUCET_URL=https://faucet.example.org
+HOSH_URL=https://hosh.zec.rocks
+NEXT_PUBLIC_TURNSTILE_SITE_KEY=0x4AAAAAAApublicsitekey
+BACKUP_IDENTITY_FILE=identity.txt
+ZEBRA_COOKIE_FILE=/run/zebra/.cookie
+E
+# A SECOND FILE, because the box keeps its secrets in six of them and BACKUP_PASSPHRASE
+# lives in backup.env. Putting it in the one file alert.sh already read was a false pass.
+cat > "$T/backup.env" <<'E'
+BACKUP_PASSPHRASE=correct horse battery staple
+# BACKUPS.md tells the operator to generate this with `openssl rand -base64 30`, and
+# base64's alphabet contains `/`, so about one in 64 begins with one. A "value that looks
+# like a path" skip dropped exactly those, in silence.
+ZSNAP_RESTORE_PASSPHRASE=/kQ9zZ1YnHhw2qk3l4mN5oP6qR7sT8uV9wX0yZ1a
+E
+export FAUCET_ALERT_SECRET_FILES="$T/secrets.env
+$T/backup.env"
+cat > "$T/bin/journalctl" <<'J'
+#!/usr/bin/env bash
+echo "zallet: connecting to http://rpcuser:hunter2@127.0.0.1:8232"
+echo "rpcpassword=s3cr3tvalue"
+# THE SPELLINGS THIS BOX USES. Every one of these walked through the first name rule,
+# which required the keyword to stand alone and so only ever matched the bare form the
+# fixture happened to use.
+echo "PGPASSWORD=pgsecretvalue123"
+echo "ZALLET_RPC_PASSWORD=notinanyfile2"
+echo "WALLET_PASSPHRASE=walletphrase99 FAUCET_ADMIN_TOKEN=admtok123456"
+echo '{"db_password":"dbpw12345","wallet_passphrase":"wpp12345"}'
+echo "GET /api/x?access_token=qtok1234567 HTTP/1.1"
+echo "X-Api-Key: apikeyvalue123"
+echo "+ export ZALLET_RPC_PASSWORD=tracevalue1"
+echo "docker run -e ZALLET_RPC_PASSWORD=envvalue123 zallet"
+echo 'zallet.toml: pwhash = "1a2b3c4ddeadbeefcafe"'
+echo "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1rXwW1gFWFOEjXk"
+echo "authorization: Bearer abcdefghijklmnop"
+echo "starting with --rpcpassword s3cr3t2 --datadir /var/lib/zallet"
+echo "posted to https://hooks.slack.com/services/T00/B00/XXXXsecret"
+echo "also posted to http://hooks.slack.com/services/T11/B11/PLAINsecret"
+echo "and to https://discord.com/api/webhooks/123/dscrdSECRET"
+echo "curl -u faucet:hunter2isalongpassword http://127.0.0.1:8232/"
+echo "curl --user faucet:hunter2isalongpassword -X POST http://127.0.0.1:8232/"
+echo "retrying: curl -u admin:notinanyenvfile1 https://upstream.example/rpc"
+echo "restored account from xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi"
+echo '{"method":"z_sendmany","password":"pw0rdinjson","seed":"abandon abandon artichoke"}'
+echo "imported spending key secret-extended-key-test1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"
+echo "uview1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx0qq viewing key installed"
+echo "extended fvk zxviews1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsxqqqqqqqqqqqqqq"
+echo "RATE_LIMIT_SALT=9f3c1de4b7a25086f2e1"
+echo "BACKUP_PASSPHRASE=correct horse battery staple"
+echo "ZSNAP_AGE_IDENTITY=AGE-SECRET-KEY-1QQZZPLPGYQQZQZQZQZQZQZQZQZQZQ"
+echo "-----BEGIN RSA PRIVATE KEY-----"
+echo "MIIEpAIBAAKCAQEAv0kQ9zZ1YnHhw2qk3l4mN5oP6qR7sT8uV9wX0yZ1aB2cD3eF4g"
+echo "-----END RSA PRIVATE KEY-----"
+echo "txid 4f9c1b2a3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8 confirmed"
+echo "miner: height 4336381: no solution in this window"
+echo "zallet: authentication failed for user faucet from 10.0.0.7"
+echo "zebrad: DNS seeder returned 12 peers, seed nodes ok"
+echo "zsnap-export: zsnap-import authenticates with the same key"
+# LINES THIS REPO SENDS TODAY. drift-report.sh puts the first one in a page, and every
+# log prefix in the tree is built with `date -u`; a rule that blanks the token after any
+# -u destroyed both.
+echo "config findings on z3box. Findings and their fixes: journalctl -u faucet-drift-report -n 200"
+echo "prefix built with date -u +%FT%TZ"
+echo "docker run -u 1000:1000 zallet"
+echo "watchdog: liveness probe to https://faucet.example.org/api/ready timed out after 5s"
+echo "watchdog: tip oracle unreachable: GET https://hosh.zec.rocks returned 502"
+echo "faucet-backup: ABORT: cannot read the age identity at identity.txt"
+echo "turnstile site key 0x4AAAAAAApublicsitekey is in the page"
+echo "ABORT: could not read zebra rpc cookie file at /run/zebra"
+echo "short lived cache entry"
+# THE THRESHOLD, from both sides. Five characters after the separator is prose and six is
+# a credential; without a fixture at each side the number is invisible to the suite.
+echo "watchdog: token: fifth attempt, backing off"
+echo "zallet: token=abc123 accepted"
+echo "zebra rpc cookie name is __cookie__value1 on this box"
+echo "metrics push endpoint https://metrics.example.org/push answered 204"
+echo "peers from seed1.example.org,seed2.example.org accepted"
+echo "zsnap-import: gpg: decryption failed, tried /kQ9zZ1YnHhw2qk3l4mN5oP6qR7sT8uV9wX0yZ1a"
+# Prose that CONTAINS a keyword and is followed by a separator. The single-token rule
+# matched any word containing one, so these lost their numbers.
+echo "zebrad: DNS seeder: 12 peers returned, all good"
+echo "watchdog: tokens: 3 remaining in the bucket"
+echo "backup: credentials: none required for this step"
+echo "add ZALLET_RPC_PASSWORD= to /etc/faucet/faucet.env"
+# The four end-of-line names, spelled the way this box spells variables. The rule got a
+# prefix class and no suffix class, so one character before the separator escaped it.
+echo "AUTHORIZATION_HEADER: Bearer leakedbearertoken1"
+echo "PASSPHRASE_HINT=correct horse battery staple hint"
+echo "MNEMONIC_WORDS=abandon abandon abandon artichoke"
+echo "COOKIE_VALUE=__cookie__:9a8b7c6d5e4f3a2b1c0d"
+# JSON whose value is not a quoted string: an array, a bare literal, a python dict repr.
+echo '{"headers":{"Authorization":["Bearer arraybearer123"]}}'
+echo '{"password":null,"api_key":["leakedinarray1"]}'
+# MORE THAN ONE ELEMENT. The rule stopped at the first comma, so a recovery phrase
+# printed as a JSON array put 23 of its 24 words on the webhook - and the one-element
+# fixture above could not see it.
+echo '{"seed": ["abandon","ability","able","about","above","absent","absorb","abstract"]}'
+echo '{"authorization": ["Bearer aaa1secret","Bearer bbb2secret"]}'
+echo '{"credentials": {"user": "faucet", "password": "nestedpw123"}}'
+# AND ONE THE QUOTED RULE CANNOT SAVE: the inner key is not itself a secret name, so only
+# the object rule reaches it. Without this the object rule could be deleted outright and
+# the suite stayed green - the previous fixture was redacted by its neighbour.
+echo '{"seed": {"entropy": 8877665544332211, "words": 24}}'
+# The bare-scalar threshold, from both sides, the way its neighbour's is pinned.
+echo '{"token": abc123, "height": 3396810}'
+echo '{"token": abc12, "height": 3396810}'
+# A secret whose VALUE carries regex metacharacters: stage 1 builds a pattern out of it,
+# so an unescaped one either matches the wrong thing or breaks the filter entirely.
+echo "connecting with pw a.b*c[d]e+f(g) now"
+# The four end-of-line names with an ordinary suffix, which the suffix class now reaches.
+echo "AUTHORIZATION_HEADER: Bearer leakedbearertoken1"
+echo "PASSPHRASE_HINT=correct horse battery staple hint"
+# And the bare header form, whose value is two tokens and five characters of scheme.
+echo "Authorization: Basic ZmF1Y2V0Omh1bnRlcjI="
+# Lines a Rust service prints when a config key is wrong. A quoted key in PROSE is not a
+# JSON member, and blanking after it takes the fix instruction with it.
+echo 'zallet: unknown field "seed": expected one of height, network, account'
+echo 'serde: invalid type at "api_key": expected string, found integer'
+echo "zaino: field 'cookie': not present in the response envelope"
+echo 'error: missing key "token": add it to /etc/faucet/faucet.env and restart'
+echo '{"reserveTaz": 950, "tokens": 4, "height": 3396810}'
+# Config whose NAME contains one of the four end-of-line keywords. MINING.md names the
+# first as the setting that decides whether the miner needs auth, and the miner unit has
+# OnFailure=faucet-alert@.
+echo "enable_cookie_auth = false"
+echo "ZEBRA_RPC__ENABLE_COOKIE_AUTH=false and the miner needs no auth"
+echo "cookie_path: /var/run/auth/.cookie, threads: 4"
+echo "cookies: 3 accepted, 0 rejected"
+echo "authorization_mode: basic, retries: 2"
+echo "mnemonic_length: 24 words expected"
+echo "add ZALLET_COOKIE_PATH= to /etc/faucet/faucet.env"
+echo "{'password': 'pythonreprsecret1'}"
+J
+chmod +x "$T/bin/journalctl"
+bash "$ALERT" --unit zallet.service > /dev/null 2>&1
+
+# Stage 1: the box's own secrets, matched by value wherever they appear.
+check "a password in a URL does not leave the box" "! grep -q 'hunter2' '$HOOK_LOG'"
+check "and neither does the same password behind curl -u, which no name rule sees" \
+  "! grep -q 'faucet:hunter2isalongpassword' '$HOOK_LOG'"
+check "the rate-limit salt, which de-anonymises the ledger's IP hashes if it leaks" \
+  "! grep -q '9f3c1de4b7a25086f2e1' '$HOOK_LOG'"
+check "and a multi-word backup passphrase, which no single-token rule would reach" \
+  "! grep -q 'correct horse battery' '$HOOK_LOG'"
+# One base64 passphrase in 64 begins with a slash, and a value-shape skip dropped those.
+check "a passphrase that happens to start with a slash is still a passphrase" \
+  "! grep -q 'kQ9zZ1YnHhw2qk3l4mN5oP6qR7sT8uV9wX0yZ1a' '$HOOK_LOG'"
+# A short value is a placeholder, and blanking it would erase the word from ordinary lines.
+check "a secret whose value is regex metacharacters is escaped, not treated as a pattern" \
+  "! grep -q 'a.b\\*c\\[d\\]e' '$HOOK_LOG' && grep -q 'connecting with pw' '$HOOK_LOG'"
+check "a secret under 12 characters is NOT matched by value: it would erase log text" \
+  "grep -q 'short lived cache entry' '$HOOK_LOG'"
+# SIX, not five and not seven. A five-character token after a separator is prose ("retries:
+# fifth"); a six-character one is short but it is a value. Both sides are pinned or the
+# number is a comment.
+check "five characters after a separator is prose and survives" \
+  "grep -q 'token: fifth attempt, backing off' '$HOOK_LOG'"
+check "and six is a value and does not" "! grep -q 'abc123 accepted' '$HOOK_LOG'"
+# Each stage-1 guard has a fixture only IT can save, or deleting one of them changes
+# nothing and the narrowing is not actually pinned.
+check "a name the old broad list took (*COOKIE*) is not a secret, and its value survives" \
+  "grep -q '__cookie__value1 on this box' '$HOOK_LOG'"
+check "a selected name whose value is a plain URL is configuration, and the URL survives" \
+  "grep -q 'https://metrics.example.org/push answered 204' '$HOOK_LOG'"
+check "and a name saying PUBLIC is not a secret however it is spelled" \
+  "grep -q 'seed1.example.org,seed2.example.org accepted' '$HOOK_LOG'"
+
+# Stage 2: key material we do not hold, so only its shape can catch it.
+check "a Zcash spending key does not leave the box" \
+  "! grep -q 'qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx' '$HOOK_LOG'"
+check "and neither does a unified viewing key" "! grep -q 'uview1qw508d6' '$HOOK_LOG'"
+check "nor a sapling extended full viewing key" "! grep -q 'zxviews1qw508d6' '$HOOK_LOG'"
+check "nor an age identity, which is what the snapshot backups are encrypted to" \
+  "! grep -q 'AGE-SECRET-KEY-1QQZZ' '$HOOK_LOG'"
+# The old rule rewrote the BEGIN line and passed every base64 line after it through.
+check "a PEM block loses its BODY, not just its header" \
+  "! grep -q 'MIIEpAIBAAKCAQEA' '$HOOK_LOG'"
+check "and says so, rather than the block vanishing without a trace" \
+  "grep -q 'key material removed' '$HOOK_LOG'"
+
+# Stage 3: names, narrowly.
+check "a named password" "! grep -q 's3cr3tvalue' '$HOOK_LOG'"
+# THE SPELLINGS PRODUCTION USES. The name rule could not see an underscore or a hyphen,
+# so it matched `password=` and nothing this box writes.
+check "an underscored variable name, which is how every secret here is spelled" \
+  "! grep -q 'pgsecretvalue123' '$HOOK_LOG' && ! grep -q 'notinanyfile2' '$HOOK_LOG'"
+check "two secrets on one line, both of them" \
+  "! grep -q 'walletphrase99' '$HOOK_LOG' && ! grep -q 'admtok123456' '$HOOK_LOG'"
+check "an underscored key inside a JSON body" \
+  "! grep -q 'dbpw12345' '$HOOK_LOG' && ! grep -q 'wpp12345' '$HOOK_LOG'"
+check "a token in a URL query string" "! grep -q 'qtok1234567' '$HOOK_LOG'"
+check "an HTTP header spelled with hyphens" "! grep -q 'apikeyvalue123' '$HOOK_LOG'"
+check "a set -x trace line and a docker -e argument" \
+  "! grep -q 'tracevalue1' '$HOOK_LOG' && ! grep -q 'envvalue123' '$HOOK_LOG'"
+# The field zallet-rpc-auth documents, and the one #176 printed into tooling output.
+check "zallet's pwhash, which is the field the RPC auth incident was about" \
+  "! grep -q '1a2b3c4ddeadbeefcafe' '$HOOK_LOG'"
+check "a JWT keeps its header and loses its signature" \
+  "! grep -q 'dBjftJeZ4CVPmB92K27uhbUJU1p1rXwW1gFWFOEjXk' '$HOOK_LOG'"
+# The end-of-line rule had a prefix class and no suffix class, so one character between
+# the keyword and the separator escaped it - the same shape as the bug above, fixed on
+# three rules and left on the fourth, which carries the two highest-value names here.
+check "an underscored Authorization header, which is how a dump spells it" \
+  "! grep -q 'leakedbearertoken1' '$HOOK_LOG'"
+check "an underscored passphrase and mnemonic, both multi-word" \
+  "! grep -q 'correct horse battery staple hint' '$HOOK_LOG' && ! grep -q 'abandon abandon abandon artichoke' '$HOOK_LOG'"
+check "and zebra's cookie in its on-disk form, which is not hex alone" \
+  "! grep -q '9a8b7c6d5e4f3a2b1c0d' '$HOOK_LOG'"
+# A JSON value that is not a quoted string was invisible to both JSON-aware rules.
+check "a secret inside a JSON array" \
+  "! grep -q 'arraybearer123' '$HOOK_LOG' && ! grep -q 'leakedinarray1' '$HOOK_LOG'"
+# The rule stopped at the first comma, so element 2 onward went out. One element could
+# not show that; a 24-word recovery phrase is the case that matters.
+check "EVERY element of a multi-element array, not just the first" \
+  "! grep -q 'ability' '$HOOK_LOG' && ! grep -q 'abstract' '$HOOK_LOG' && ! grep -q 'bbb2secret' '$HOOK_LOG'"
+check "and a nested object under a secret key, whole" \
+  "! grep -q 'nestedpw123' '$HOOK_LOG'"
+check "including one whose inner keys are ordinary, which only the object rule reaches" \
+  "! grep -q '8877665544332211' '$HOOK_LOG'"
+# SIX characters is a value, five is prose - the same line its neighbour draws, and drawn
+# in the same place, or the number is a comment.
+check "a six-character bare JSON value is redacted" "! grep -q 'abc123, ' '$HOOK_LOG'"
+check "and a five-character one is prose, so the line keeps its shape" \
+  "grep -q 'abc12, ' '$HOOK_LOG' && grep -q '3396810' '$HOOK_LOG'"
+check "the bare Authorization header, whose scheme is only five characters" \
+  "! grep -q 'ZmF1Y2V0Omh1bnRlcjI' '$HOOK_LOG'"
+check "and one in a python dict repr, which is what a traceback prints" \
+  "! grep -q 'pythonreprsecret1' '$HOOK_LOG'"
+check "one passed as a flag" "! grep -q 's3cr3t2' '$HOOK_LOG'"
+check "a bearer token, whose value is two tokens from its name" "! grep -q 'abcdefghijklmnop' '$HOOK_LOG'"
+# A credential this box does NOT hold, so only the -u rule can catch it: with the fixture
+# using a password from secrets.env, deleting that rule changed nothing.
+check "a curl -u credential we do not hold, which no value or name rule reaches" \
+  "! grep -q 'notinanyenvfile1' '$HOOK_LOG'"
+check "and an extended private key, which is a wallet restored from a seed" \
+  "! grep -q '9s21ZrQH143K3QTDL' '$HOOK_LOG'"
+check "a password inside a JSON body" "! grep -q 'pw0rdinjson' '$HOOK_LOG'"
+check "and a multi-word seed phrase inside one" "! grep -q 'abandon abandon artichoke' '$HOOK_LOG'"
+check "the webhook's own path, which IS the credential for that format" "! grep -q 'XXXXsecret' '$HOOK_LOG'"
+check "on http as well as https, since the rule used to be anchored on the scheme" \
+  "! grep -q 'PLAINsecret' '$HOOK_LOG'"
+check "and a Discord webhook path, which had no fixture and so no coverage" \
+  "! grep -q 'dscrdSECRET' '$HOOK_LOG'"
+check "the message says something was redacted rather than dropping the line" "grep -q 'REDACTED' '$HOOK_LOG'"
+
+# THE OTHER DIRECTION. Over-redaction is not a safe default: these are lines this repo's
+# own scripts print, and blanking to end of line on the words auth, seed and cookie turned
+# "authentication failed" into "authentication REDACTED", which loses the fault.
+check "the TXID survives: it is public and it is the first thing an operator needs" \
+  "grep -q '4f9c1b2a3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8' '$HOOK_LOG'"
+check "and an ordinary line is untouched" "grep -q 'no solution in this window' '$HOOK_LOG'"
+check "an auth FAILURE still says who failed and from where" \
+  "grep -q 'authentication failed for user faucet from 10.0.0.7' '$HOOK_LOG'"
+check "a DNS seeder line keeps its peer count" "grep -q 'seeder returned 12 peers, seed nodes ok' '$HOOK_LOG'"
+check "and zsnap's own wording about authenticating survives" \
+  "grep -q 'zsnap-import authenticates with the same key' '$HOOK_LOG'"
+check "as does the cookie path in an abort message" "grep -q 'rpc cookie file at /run/zebra' '$HOOK_LOG'"
+# THE OTHER HALF OF THE PREFIX RULE. It matches any word CONTAINING a keyword, so a
+# separator after ordinary prose put REDACTED where a number was. Five characters or
+# fewer after the separator is prose, not a credential.
+check "a seeder line keeps its peer count even with a colon after the word" \
+  "grep -q 'DNS seeder: 12 peers returned' '$HOOK_LOG'"
+check "and a token bucket keeps its number" "grep -q 'tokens: 3 remaining' '$HOOK_LOG'"
+check "and 'credentials: none required' still says none" "grep -q 'credentials: none required' '$HOOK_LOG'"
+# audit-drift.sh prints this verbatim, and faucet-drift-report reaches the webhook.
+check "and the instruction audit-drift prints keeps the file it names" \
+  "grep -q 'add ZALLET_RPC_PASSWORD= to /etc/faucet/faucet.env' '$HOOK_LOG'"
+# A QUOTED KEY IN PROSE IS NOT A JSON MEMBER. zallet, zaino and the miner are Rust, and
+# serde prints "unknown field X: expected one of ..." on a config typo; blanking after it
+# takes the list of valid names, or the fix instruction, with it.
+check "a serde field error keeps the names it is telling you to use" \
+  "grep -q 'expected one of height, network, account' '$HOOK_LOG'"
+check "and an invalid-type error keeps what it expected and what it found" \
+  "grep -q 'expected string, found integer' '$HOOK_LOG'"
+check "and a missing-key error keeps the file it tells you to edit" \
+  "grep -q 'add it to /etc/faucet/faucet.env and restart' '$HOOK_LOG'"
+check "a JSON member that is an ordinary counter keeps its number" \
+  "grep -q 'tokens.*: 4, .*height.*: 3396810' '$HOOK_LOG'"
+# NAMES CONTAINING ONE OF THE FOUR END-OF-LINE KEYWORDS. All ordinary config; blanking to
+# end of line took the path, the counts and the retry budget.
+check "the setting that decides whether the miner needs auth keeps its value" \
+  "grep -q 'enable_cookie_auth = false' '$HOOK_LOG' && grep -q 'ENABLE_COOKIE_AUTH=false and the miner' '$HOOK_LOG'"
+check "a cookie PATH is a path, and the thread count beside it survives" \
+  "grep -q 'cookie_path: /var/run/auth/.cookie, threads: 4' '$HOOK_LOG'"
+check "counts, modes and lengths are not credentials" \
+  "grep -q 'cookies: 3 accepted, 0 rejected' '$HOOK_LOG' && grep -q 'authorization_mode: basic, retries: 2' '$HOOK_LOG' && grep -q 'mnemonic_length: 24 words expected' '$HOOK_LOG'"
+check "and the same fix instruction with a cookie-shaped name" \
+  "grep -q 'add ZALLET_COOKIE_PATH= to /etc/faucet/faucet.env' '$HOOK_LOG'"
+# The -u rule needs the value to LOOK like credentials, or it eats the one actionable
+# token in the page drift-report sends and the prefix on every line in the tree.
+check "journalctl -u <unit> survives: it is the fix drift-report's own page tells you to run" \
+  "grep -q 'journalctl -u faucet-drift-report -n 200' '$HOOK_LOG'"
+check "and date -u, which builds every log prefix here" "grep -q 'date -u +%FT%TZ' '$HOOK_LOG'"
+check "and a uid:gid, which is a colon but not a credential" "grep -q -- '-u 1000:1000' '$HOOK_LOG'"
+# Stage 1 blanks a value ANYWHERE, so selecting public configuration by name erases the
+# address the page is about and collapses two causes into one dedup key.
+check "the faucet's own URL survives: a page about it that cannot name it is no page" \
+  "grep -q 'https://faucet.example.org/api/ready timed out' '$HOOK_LOG'"
+check "and the tip oracle's, which is a different cause and must stay one" \
+  "grep -q 'GET https://hosh.zec.rocks returned 502' '$HOOK_LOG'"
+check "a variable whose name says PUBLIC is not treated as a secret" \
+  "grep -q '0x4AAAAAAApublicsitekey' '$HOOK_LOG'"
+check "and a name ending _FILE points AT a secret rather than being one" \
+  "grep -q 'age identity at identity.txt' '$HOOK_LOG'"
+check "the unit is still named" "grep -q 'unit FAILED: zallet.service' '$HOOK_LOG'"
+
+echo "== alerts: redaction is on the SEND path, so every caller gets it"
+# The tail was the only thing filtered at first. The watchdog interpolates a reason it
+# parsed out of a live /api/ready body and drift-report pushes audit findings; both go
+# through send() as a plain message and neither is a journal tail.
+# alerts_env makes a fresh scratch dir, so the fixture is written again rather than
+# reached for across $T values.
+alerts_env
+cat > "$T/secrets.env" <<'E'
+ZALLET_RPC_PASSWORD=hunter2isalongpassword
+E
+export FAUCET_ALERT_SECRET_FILES="$T/secrets.env"
+bash "$ALERT" --now "faucet NOT READY for 31 min. Reason: wallet said rpcpassword=leakedviareason" > /dev/null 2>&1
+check "a plain --now message is redacted too, not just a --unit tail" \
+  "! grep -q 'leakedviareason' '$HOOK_LOG' && grep -q 'faucet NOT READY for 31 min' '$HOOK_LOG'"
+unset FAUCET_ALERT_SECRET_FILES
+
+echo "== alerts: a filter that does not answer pages anyway, with the text withheld"
+# redact is a three-process pipeline and there is no set -e. An empty result used to be
+# sent as an empty message, and because the cooldown key is computed on redacted text,
+# every other cause then hashed to the same empty key and was held back for an hour:
+# three different outages, one blank page, then silence.
+alerts_env
+cat > "$T/secrets.env" <<'E'
+ZALLET_RPC_PASSWORD=hunter2isalongpassword
+E
+export FAUCET_ALERT_SECRET_FILES="$T/secrets.env"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$T/bin/awk"; chmod +x "$T/bin/awk"
+# NOT --now: that sets DEDUP=0, and the cooldown is the whole point here. With the held
+# path, a blank message makes every cause share one key and the second one is swallowed.
+bash "$ALERT" "🚨 NEEDS YOU: ZEBRA IS DOWN" > "$T/broken.log" 2>&1
+check "a page still goes out when the filter fails" "grep -q 'NEEDS YOU' '$HOOK_LOG'"
+check "and it carries no message text, because unfiltered text is exactly what cannot be trusted" \
+  "! grep -q 'ZEBRA IS DOWN' '$HOOK_LOG' && grep -q 'the text is withheld' '$HOOK_LOG'"
+check "the journal says the filter is the reason, not the alert" \
+  "grep -q 'REDACTION FAILED' '$T/broken.log'"
+# Distinct causes must stay distinct, or the first failure mutes the box for an hour.
+: > "$HOOK_LOG"
+bash "$ALERT" "🚨 NEEDS YOU: DISK FULL on /" > /dev/null 2>&1
+check "a DIFFERENT cause is not held back as a repeat of the first" "grep -q 'NEEDS YOU' '$HOOK_LOG'"
+: > "$HOOK_LOG"
+bash "$ALERT" "🚨 NEEDS YOU: ZALLET CRASH-LOOPING" > /dev/null 2>&1
+check "and nor is a third: one broken filter must not mute the box for an hour" "grep -q 'NEEDS YOU' '$HOOK_LOG'"
+rm -f "$T/bin/awk"
+
+echo "== alerts: the secrets file is parsed the way the shell would read it"
+alerts_env
+# A quoted value: the file is written for `source`, so the quotes are the shell's, not
+# part of the secret. Loading them into the literal makes stage 1 match nothing.
+printf 'ZALLET_RPC_PASSWORD="quotedsecretvalue1"\n' > "$T/quoted.env"
+printf '#!/usr/bin/env bash\necho "boom: quotedsecretvalue1 in a log line"\n' > "$T/bin/journalctl"
+chmod +x "$T/bin/journalctl"
+FAUCET_ALERT_SECRET_FILES="$T/quoted.env" bash "$ALERT" --unit zallet.service > /dev/null 2>&1
+check "the send arrived, so the negative below means something" \
+  "grep -q 'unit FAILED: zallet.service' '$HOOK_LOG'"
+check "a quoted value is unquoted before it becomes a pattern" \
+  "! grep -q 'quotedsecretvalue1' '$HOOK_LOG'"
+# alert.sh runs as root from systemd, so an unreadable file means someone ran it by hand
+# and the strongest stage is off. That has to be said, not silently skipped.
+alerts_env
+printf 'ZALLET_RPC_PASSWORD=unreadablesecret1\n' > "$T/locked.env"; chmod 000 "$T/locked.env"
+if [ -r "$T/locked.env" ]; then
+  echo "  skip: running as root, an unreadable file cannot be modelled"
+else
+  FAUCET_ALERT_SECRET_FILES="$T/locked.env" bash "$ALERT" "hello" > "$T/locked.log" 2>&1
+  check "an unreadable secrets file is named in the journal, not skipped in silence" \
+    "grep -q 'cannot read .*locked.env' '$T/locked.log'"
+fi
+chmod 644 "$T/locked.env"
+
+echo "== alerts: stage 1 reads the files this box actually keeps secrets in"
+alerts_env
+# Six files, not three. The default list is the contract, so it is asserted rather than
+# left to whoever remembers: backup.env was missing and BACKUP_PASSPHRASE was then covered
+# by nothing at all.
+for f in alerts backup zsnap metrics miner watchdog; do
+  check "the default secret-file list names $f.env" \
+    "grep -q '/etc/faucet/$f.env' '$REPO/deploy/z3/alert.sh'"
+done
+check "and the app's own env, where the wallet RPC password and the rate-limit salt live" \
+  "grep -q 'deploy/z3/faucet.env' '$REPO/deploy/z3/alert.sh'"
+# A file written on Windows keeps the CR on the value, so nothing matched and nothing said so.
+printf 'ZALLET_RPC_PASSWORD=crlfsecretvalue123\r\n' > "$T/crlf.env"
+printf '#!/usr/bin/env bash\necho "boom: crlfsecretvalue123 in a log line"\n' > "$T/bin/journalctl"
+chmod +x "$T/bin/journalctl"
+FAUCET_ALERT_SECRET_FILES="$T/crlf.env" bash "$ALERT" --unit zallet.service > /dev/null 2>&1
+check "the send arrived, so the negative below is not asserted against an empty file" \
+  "grep -q 'unit FAILED: zallet.service' '$HOOK_LOG'"
+check "a CRLF secrets file still redacts, rather than silently doing nothing" \
+  "! grep -q 'crlfsecretvalue123' '$HOOK_LOG'"
+# The variable is documented as operator-settable, and a path with a space in it silently
+# disabled the strongest stage.
+mkdir -p "$T/dir with space"
+printf 'ZALLET_RPC_PASSWORD=spacedsecretvalue1\n' > "$T/dir with space/s.env"
+printf '#!/usr/bin/env bash\necho "boom: spacedsecretvalue1 in a log line"\n' > "$T/bin/journalctl"
+chmod +x "$T/bin/journalctl"
+: > "$HOOK_LOG"
+# A DIFFERENT UNIT, because the cooldown keys on the unit and a held-back send leaves an
+# empty log that every `! grep` assertion passes on. The first version of this check
+# reused zallet.service and proved nothing.
+FAUCET_ALERT_SECRET_FILES="$T/dir with space/s.env" bash "$ALERT" --unit zebra.service > /dev/null 2>&1
+check "the send actually arrived, so what follows is not asserted against an empty file" \
+  "grep -q 'unit FAILED: zebra.service' '$HOOK_LOG'"
+check "a secrets path containing a space is read, not split into fragments that do not exist" \
+  "! grep -q 'spacedsecretvalue1' '$HOOK_LOG'"
+
 echo "== alerts: the older WATCHDOG_ALERT_URL still works after upgrade"
 alerts_env; unset FAUCET_ALERT_URL
 export WATCHDOG_ALERT_URL="http://127.0.0.1:$HOOK_PORT/hook"
@@ -498,6 +938,38 @@ alerts_env; unset FAUCET_ALERT_URL
 bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
 check "no state was written" "[ ! -d '$T/alert-state' ] || [ -z \"\$(ls -A '$T/alert-state' 2>/dev/null | grep -v '^.lock$')\" ]"
 
+echo "== alerts: with no JSON encoder it refuses loudly instead of sending junk"
+alerts_env
+mkdir -p "$T/nobin"
+# A PATH with neither jq nor python3, but with the tools alert.sh still needs.
+# bash itself must be reachable, plus what alert.sh actually calls.
+for b in bash curl date hostname sed tr cat; do
+  src="$(command -v $b 2>/dev/null)"; [ -n "$src" ] && ln -sf "$src" "$T/nobin/$b"
+done
+PATH="$T/nobin" bash "$ALERT" "would be malformed" > "$T/noenc.log" 2>&1
+check "exits nonzero" "[ $? -ne 0 ]"
+check "says it cannot encode" "grep -q 'CANNOT SEND' '$T/noenc.log'"
+check "explains the refusal is deliberate" "grep -q 'Refusing rather than sending a malformed body' '$T/noenc.log'"
+# A control send FIRST, or "nothing reached the webhook" is true of a receiver that is
+# simply not listening - which is how this passed for a whole round below the teardown.
+bash "$ALERT" "the receiver is alive" > /dev/null 2>&1
+check "the receiver is alive, so the negative below means something" \
+  "grep -q 'the receiver is alive' '$HOOK_LOG'"
+check "nothing reached the webhook" "! grep -q 'would be malformed' '$HOOK_LOG'"
+
+echo "== alerts: a quote in the operator prefix cannot break the body"
+alerts_env
+FAUCET_ALERT_PREFIX='[fau"cet]' bash "$ALERT" "hello" > /dev/null 2>&1
+# Parsing an EMPTY file is not parsing JSON. Count the lines first, or a prefix that broke
+# the body would pass this by producing nothing at all.
+check "the send arrived, so there is a body to validate" "[ -s '$HOOK_LOG' ]"
+check "body is still valid JSON" "python3 -c \"import json,sys;ls=[l for l in open('$HOOK_LOG') if l.strip()];sys.exit(1) if not ls else [json.loads(l) for l in ls]\""
+check "and the quoted prefix is in it, escaped rather than dropped" "grep -q 'fau' '$HOOK_LOG'"
+
+# EVERY case that asserts on $HOOK_LOG must sit ABOVE this line. Two of them did not:
+# "nothing reached the webhook" passed against an empty file, and the JSON-validity check
+# parsed ZERO lines, so a prefix that DID break the body would have passed. Both now run
+# above, and both assert something arrived first.
 kill "$HOOK_PID" 2>/dev/null
 
 echo "== alerts: the webhook URL never reaches the log (it is a credential)"
@@ -534,25 +1006,6 @@ bash "$ALERT" "$(printf 'unit failed\ncolumn1\tcolumn2')" > "$T/tab.log" 2>&1
 check "the send succeeded" "[ $? -eq 0 ]"
 check "the tab and newline survive as real characters after decoding" "python3 -c \"import json;b=[json.loads(l) for l in open('$TAB_LOG') if l.strip()][-1];t=b.get('text','');assert chr(9) in t and chr(10) in t, repr(t)\""
 kill "$TAB_PID" 2>/dev/null
-
-echo "== alerts: with no JSON encoder it refuses loudly instead of sending junk"
-alerts_env
-mkdir -p "$T/nobin"
-# A PATH with neither jq nor python3, but with the tools alert.sh still needs.
-# bash itself must be reachable, plus what alert.sh actually calls.
-for b in bash curl date hostname sed tr cat; do
-  src="$(command -v $b 2>/dev/null)"; [ -n "$src" ] && ln -sf "$src" "$T/nobin/$b"
-done
-PATH="$T/nobin" bash "$ALERT" "would be malformed" > "$T/noenc.log" 2>&1
-check "exits nonzero" "[ $? -ne 0 ]"
-check "says it cannot encode" "grep -q 'CANNOT SEND' '$T/noenc.log'"
-check "explains the refusal is deliberate" "grep -q 'Refusing rather than sending a malformed body' '$T/noenc.log'"
-check "nothing reached the webhook" "! grep -q 'would be malformed' '$HOOK_LOG'"
-
-echo "== alerts: a quote in the operator prefix cannot break the body"
-alerts_env
-FAUCET_ALERT_PREFIX='[fau"cet]' bash "$ALERT" "hello" > /dev/null 2>&1
-check "body is still valid JSON" "python3 -c \"import json;[json.loads(l) for l in open('$HOOK_LOG') if l.strip()]\""
 
 echo "== alerts: self-test names the real cause, not a plausible one"
 # rc=4 (no encoder) used to print "the webhook rejected the POST", sending an
