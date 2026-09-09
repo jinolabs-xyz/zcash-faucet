@@ -130,6 +130,256 @@ bash "$ALERT" --unit zsnap-export.service > /dev/null 2>&1
 check "names the failing unit" "grep -q 'unit FAILED: zsnap-export.service' '$HOOK_LOG'"
 check "includes the journal tail, so no SSH needed to triage" "grep -q 'something exploded' '$HOOK_LOG'"
 
+echo "== alerts: everything an alert carries is REDACTED before it leaves the box (risk register #22)"
+# The tail is whatever the failing unit chose to print, and it travels to a third-party
+# webhook or a Signal bridge and stays in that chat history. Review of the first version
+# found three classes of leak (curl -u, JSON bodies, Zcash spending keys) and one class of
+# over-redaction that destroyed this repo's own log lines. Both directions are pinned.
+alerts_env
+# Stage 1 matches the box's own secrets BY VALUE. The fixture stands in for
+# /etc/faucet/alerts.env and the app's faucet.env.
+cat > "$T/secrets.env" <<'E'
+ZALLET_RPC_PASSWORD=hunter2isalongpassword
+RATE_LIMIT_SALT=9f3c1de4b7a25086f2e1
+FAUCET_ALERT_SHORT=short
+# PUBLIC configuration that only LOOKS secret-ish. Stage 1 blanks a value wherever it
+# appears, so selecting these by name erases the address a page is about.
+WATCHDOG_FAUCET_URL=https://faucet.example.org
+HOSH_URL=https://hosh.zec.rocks
+NEXT_PUBLIC_TURNSTILE_SITE_KEY=0x4AAAAAAApublicsitekey
+BACKUP_IDENTITY_FILE=identity.txt
+ZEBRA_COOKIE_FILE=/run/zebra/.cookie
+E
+# A SECOND FILE, because the box keeps its secrets in six of them and BACKUP_PASSPHRASE
+# lives in backup.env. Putting it in the one file alert.sh already read was a false pass.
+cat > "$T/backup.env" <<'E'
+BACKUP_PASSPHRASE=correct horse battery staple
+E
+export FAUCET_ALERT_SECRET_FILES="$T/secrets.env
+$T/backup.env"
+cat > "$T/bin/journalctl" <<'J'
+#!/usr/bin/env bash
+echo "zallet: connecting to http://rpcuser:hunter2@127.0.0.1:8232"
+echo "rpcpassword=s3cr3tvalue"
+# THE SPELLINGS THIS BOX USES. Every one of these walked through the first name rule,
+# which required the keyword to stand alone and so only ever matched the bare form the
+# fixture happened to use.
+echo "PGPASSWORD=pgsecretvalue123"
+echo "ZALLET_RPC_PASSWORD=notinanyfile2"
+echo "WALLET_PASSPHRASE=walletphrase99 FAUCET_ADMIN_TOKEN=admtok123456"
+echo '{"db_password":"dbpw12345","wallet_passphrase":"wpp12345"}'
+echo "GET /api/x?access_token=qtok1234567 HTTP/1.1"
+echo "X-Api-Key: apikeyvalue123"
+echo "+ export ZALLET_RPC_PASSWORD=tracevalue1"
+echo "docker run -e ZALLET_RPC_PASSWORD=envvalue123 zallet"
+echo 'zallet.toml: pwhash = "1a2b3c4ddeadbeefcafe"'
+echo "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1rXwW1gFWFOEjXk"
+echo "authorization: Bearer abcdefghijklmnop"
+echo "starting with --rpcpassword s3cr3t2 --datadir /var/lib/zallet"
+echo "posted to https://hooks.slack.com/services/T00/B00/XXXXsecret"
+echo "also posted to http://hooks.slack.com/services/T11/B11/PLAINsecret"
+echo "and to https://discord.com/api/webhooks/123/dscrdSECRET"
+echo "curl -u faucet:hunter2isalongpassword http://127.0.0.1:8232/"
+echo "curl --user faucet:hunter2isalongpassword -X POST http://127.0.0.1:8232/"
+echo "retrying: curl -u admin:notinanyenvfile1 https://upstream.example/rpc"
+echo "restored account from xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi"
+echo '{"method":"z_sendmany","password":"pw0rdinjson","seed":"abandon abandon artichoke"}'
+echo "imported spending key secret-extended-key-test1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"
+echo "uview1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx0qq viewing key installed"
+echo "extended fvk zxviews1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsxqqqqqqqqqqqqqq"
+echo "RATE_LIMIT_SALT=9f3c1de4b7a25086f2e1"
+echo "BACKUP_PASSPHRASE=correct horse battery staple"
+echo "ZSNAP_AGE_IDENTITY=AGE-SECRET-KEY-1QQZZPLPGYQQZQZQZQZQZQZQZQZQZQ"
+echo "-----BEGIN RSA PRIVATE KEY-----"
+echo "MIIEpAIBAAKCAQEAv0kQ9zZ1YnHhw2qk3l4mN5oP6qR7sT8uV9wX0yZ1aB2cD3eF4g"
+echo "-----END RSA PRIVATE KEY-----"
+echo "txid 4f9c1b2a3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8 confirmed"
+echo "miner: height 4336381: no solution in this window"
+echo "zallet: authentication failed for user faucet from 10.0.0.7"
+echo "zebrad: DNS seeder returned 12 peers, seed nodes ok"
+echo "zsnap-export: zsnap-import authenticates with the same key"
+# LINES THIS REPO SENDS TODAY. drift-report.sh puts the first one in a page, and every
+# log prefix in the tree is built with `date -u`; a rule that blanks the token after any
+# -u destroyed both.
+echo "config findings on z3box. Findings and their fixes: journalctl -u faucet-drift-report -n 200"
+echo "prefix built with date -u +%FT%TZ"
+echo "docker run -u 1000:1000 zallet"
+echo "watchdog: liveness probe to https://faucet.example.org/api/ready timed out after 5s"
+echo "watchdog: tip oracle unreachable: GET https://hosh.zec.rocks returned 502"
+echo "faucet-backup: ABORT: cannot read the age identity at identity.txt"
+echo "turnstile site key 0x4AAAAAAApublicsitekey is in the page"
+echo "ABORT: could not read zebra rpc cookie file at /run/zebra"
+echo "short lived cache entry"
+J
+chmod +x "$T/bin/journalctl"
+bash "$ALERT" --unit zallet.service > /dev/null 2>&1
+
+# Stage 1: the box's own secrets, matched by value wherever they appear.
+check "a password in a URL does not leave the box" "! grep -q 'hunter2' '$HOOK_LOG'"
+check "and neither does the same password behind curl -u, which no name rule sees" \
+  "! grep -q 'faucet:hunter2isalongpassword' '$HOOK_LOG'"
+check "the rate-limit salt, which de-anonymises the ledger's IP hashes if it leaks" \
+  "! grep -q '9f3c1de4b7a25086f2e1' '$HOOK_LOG'"
+check "and a multi-word backup passphrase, which no single-token rule would reach" \
+  "! grep -q 'correct horse battery' '$HOOK_LOG'"
+# A short value is a placeholder, and blanking it would erase the word from ordinary lines.
+check "a secret under 12 characters is NOT matched by value: it would erase log text" \
+  "grep -q 'short lived cache entry' '$HOOK_LOG'"
+
+# Stage 2: key material we do not hold, so only its shape can catch it.
+check "a Zcash spending key does not leave the box" \
+  "! grep -q 'qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx' '$HOOK_LOG'"
+check "and neither does a unified viewing key" "! grep -q 'uview1qw508d6' '$HOOK_LOG'"
+check "nor a sapling extended full viewing key" "! grep -q 'zxviews1qw508d6' '$HOOK_LOG'"
+check "nor an age identity, which is what the snapshot backups are encrypted to" \
+  "! grep -q 'AGE-SECRET-KEY-1QQZZ' '$HOOK_LOG'"
+# The old rule rewrote the BEGIN line and passed every base64 line after it through.
+check "a PEM block loses its BODY, not just its header" \
+  "! grep -q 'MIIEpAIBAAKCAQEA' '$HOOK_LOG'"
+check "and says so, rather than the block vanishing without a trace" \
+  "grep -q 'key material removed' '$HOOK_LOG'"
+
+# Stage 3: names, narrowly.
+check "a named password" "! grep -q 's3cr3tvalue' '$HOOK_LOG'"
+# THE SPELLINGS PRODUCTION USES. The name rule could not see an underscore or a hyphen,
+# so it matched `password=` and nothing this box writes.
+check "an underscored variable name, which is how every secret here is spelled" \
+  "! grep -q 'pgsecretvalue123' '$HOOK_LOG' && ! grep -q 'notinanyfile2' '$HOOK_LOG'"
+check "two secrets on one line, both of them" \
+  "! grep -q 'walletphrase99' '$HOOK_LOG' && ! grep -q 'admtok123456' '$HOOK_LOG'"
+check "an underscored key inside a JSON body" \
+  "! grep -q 'dbpw12345' '$HOOK_LOG' && ! grep -q 'wpp12345' '$HOOK_LOG'"
+check "a token in a URL query string" "! grep -q 'qtok1234567' '$HOOK_LOG'"
+check "an HTTP header spelled with hyphens" "! grep -q 'apikeyvalue123' '$HOOK_LOG'"
+check "a set -x trace line and a docker -e argument" \
+  "! grep -q 'tracevalue1' '$HOOK_LOG' && ! grep -q 'envvalue123' '$HOOK_LOG'"
+# The field zallet-rpc-auth documents, and the one #176 printed into tooling output.
+check "zallet's pwhash, which is the field the RPC auth incident was about" \
+  "! grep -q '1a2b3c4ddeadbeefcafe' '$HOOK_LOG'"
+check "a JWT keeps its header and loses its signature" \
+  "! grep -q 'dBjftJeZ4CVPmB92K27uhbUJU1p1rXwW1gFWFOEjXk' '$HOOK_LOG'"
+check "one passed as a flag" "! grep -q 's3cr3t2' '$HOOK_LOG'"
+check "a bearer token, whose value is two tokens from its name" "! grep -q 'abcdefghijklmnop' '$HOOK_LOG'"
+# A credential this box does NOT hold, so only the -u rule can catch it: with the fixture
+# using a password from secrets.env, deleting that rule changed nothing.
+check "a curl -u credential we do not hold, which no value or name rule reaches" \
+  "! grep -q 'notinanyenvfile1' '$HOOK_LOG'"
+check "and an extended private key, which is a wallet restored from a seed" \
+  "! grep -q '9s21ZrQH143K3QTDL' '$HOOK_LOG'"
+check "a password inside a JSON body" "! grep -q 'pw0rdinjson' '$HOOK_LOG'"
+check "and a multi-word seed phrase inside one" "! grep -q 'abandon abandon artichoke' '$HOOK_LOG'"
+check "the webhook's own path, which IS the credential for that format" "! grep -q 'XXXXsecret' '$HOOK_LOG'"
+check "on http as well as https, since the rule used to be anchored on the scheme" \
+  "! grep -q 'PLAINsecret' '$HOOK_LOG'"
+check "and a Discord webhook path, which had no fixture and so no coverage" \
+  "! grep -q 'dscrdSECRET' '$HOOK_LOG'"
+check "the message says something was redacted rather than dropping the line" "grep -q 'REDACTED' '$HOOK_LOG'"
+
+# THE OTHER DIRECTION. Over-redaction is not a safe default: these are lines this repo's
+# own scripts print, and blanking to end of line on the words auth, seed and cookie turned
+# "authentication failed" into "authentication REDACTED", which loses the fault.
+check "the TXID survives: it is public and it is the first thing an operator needs" \
+  "grep -q '4f9c1b2a3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8' '$HOOK_LOG'"
+check "and an ordinary line is untouched" "grep -q 'no solution in this window' '$HOOK_LOG'"
+check "an auth FAILURE still says who failed and from where" \
+  "grep -q 'authentication failed for user faucet from 10.0.0.7' '$HOOK_LOG'"
+check "a DNS seeder line keeps its peer count" "grep -q 'seeder returned 12 peers, seed nodes ok' '$HOOK_LOG'"
+check "and zsnap's own wording about authenticating survives" \
+  "grep -q 'zsnap-import authenticates with the same key' '$HOOK_LOG'"
+check "as does the cookie path in an abort message" "grep -q 'rpc cookie file at /run/zebra' '$HOOK_LOG'"
+# The -u rule needs the value to LOOK like credentials, or it eats the one actionable
+# token in the page drift-report sends and the prefix on every line in the tree.
+check "journalctl -u <unit> survives: it is the fix drift-report's own page tells you to run" \
+  "grep -q 'journalctl -u faucet-drift-report -n 200' '$HOOK_LOG'"
+check "and date -u, which builds every log prefix here" "grep -q 'date -u +%FT%TZ' '$HOOK_LOG'"
+check "and a uid:gid, which is a colon but not a credential" "grep -q -- '-u 1000:1000' '$HOOK_LOG'"
+# Stage 1 blanks a value ANYWHERE, so selecting public configuration by name erases the
+# address the page is about and collapses two causes into one dedup key.
+check "the faucet's own URL survives: a page about it that cannot name it is no page" \
+  "grep -q 'https://faucet.example.org/api/ready timed out' '$HOOK_LOG'"
+check "and the tip oracle's, which is a different cause and must stay one" \
+  "grep -q 'GET https://hosh.zec.rocks returned 502' '$HOOK_LOG'"
+check "a variable whose name says PUBLIC is not treated as a secret" \
+  "grep -q '0x4AAAAAAApublicsitekey' '$HOOK_LOG'"
+check "and a name ending _FILE points AT a secret rather than being one" \
+  "grep -q 'age identity at identity.txt' '$HOOK_LOG'"
+check "the unit is still named" "grep -q 'unit FAILED: zallet.service' '$HOOK_LOG'"
+
+echo "== alerts: redaction is on the SEND path, so every caller gets it"
+# The tail was the only thing filtered at first. The watchdog interpolates a reason it
+# parsed out of a live /api/ready body and drift-report pushes audit findings; both go
+# through send() as a plain message and neither is a journal tail.
+# alerts_env makes a fresh scratch dir, so the fixture is written again rather than
+# reached for across $T values.
+alerts_env
+cat > "$T/secrets.env" <<'E'
+ZALLET_RPC_PASSWORD=hunter2isalongpassword
+E
+export FAUCET_ALERT_SECRET_FILES="$T/secrets.env"
+bash "$ALERT" --now "faucet NOT READY for 31 min. Reason: wallet said rpcpassword=leakedviareason" > /dev/null 2>&1
+check "a plain --now message is redacted too, not just a --unit tail" \
+  "! grep -q 'leakedviareason' '$HOOK_LOG' && grep -q 'faucet NOT READY for 31 min' '$HOOK_LOG'"
+unset FAUCET_ALERT_SECRET_FILES
+
+echo "== alerts: a filter that does not answer pages anyway, with the text withheld"
+# redact is a three-process pipeline and there is no set -e. An empty result used to be
+# sent as an empty message, and because the cooldown key is computed on redacted text,
+# every other cause then hashed to the same empty key and was held back for an hour:
+# three different outages, one blank page, then silence.
+alerts_env
+cat > "$T/secrets.env" <<'E'
+ZALLET_RPC_PASSWORD=hunter2isalongpassword
+E
+export FAUCET_ALERT_SECRET_FILES="$T/secrets.env"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$T/bin/awk"; chmod +x "$T/bin/awk"
+bash "$ALERT" --now "🚨 NEEDS YOU: ZEBRA IS DOWN" > "$T/broken.log" 2>&1
+check "a page still goes out when the filter fails" "grep -q 'NEEDS YOU' '$HOOK_LOG'"
+check "and it carries no message text, because unfiltered text is exactly what cannot be trusted" \
+  "! grep -q 'ZEBRA IS DOWN' '$HOOK_LOG' && grep -q 'the text is withheld' '$HOOK_LOG'"
+check "the journal says the filter is the reason, not the alert" \
+  "grep -q 'REDACTION FAILED' '$T/broken.log'"
+# Distinct causes must stay distinct, or the first failure mutes the box for an hour.
+: > "$HOOK_LOG"
+bash "$ALERT" --now "🚨 NEEDS YOU: DISK FULL on /" > /dev/null 2>&1
+check "a DIFFERENT cause is not held back as a repeat of the first" "grep -q 'NEEDS YOU' '$HOOK_LOG'"
+rm -f "$T/bin/awk"
+
+echo "== alerts: stage 1 reads the files this box actually keeps secrets in"
+alerts_env
+# Six files, not three. The default list is the contract, so it is asserted rather than
+# left to whoever remembers: backup.env was missing and BACKUP_PASSPHRASE was then covered
+# by nothing at all.
+for f in alerts backup zsnap metrics miner watchdog; do
+  check "the default secret-file list names $f.env" \
+    "grep -q '/etc/faucet/$f.env' '$REPO/deploy/z3/alert.sh'"
+done
+check "and the app's own env, where the wallet RPC password and the rate-limit salt live" \
+  "grep -q 'deploy/z3/faucet.env' '$REPO/deploy/z3/alert.sh'"
+# A file written on Windows keeps the CR on the value, so nothing matched and nothing said so.
+printf 'ZALLET_RPC_PASSWORD=crlfsecretvalue123\r\n' > "$T/crlf.env"
+printf '#!/usr/bin/env bash\necho "boom: crlfsecretvalue123 in a log line"\n' > "$T/bin/journalctl"
+chmod +x "$T/bin/journalctl"
+FAUCET_ALERT_SECRET_FILES="$T/crlf.env" bash "$ALERT" --unit zallet.service > /dev/null 2>&1
+check "the send arrived, so the negative below is not asserted against an empty file" \
+  "grep -q 'unit FAILED: zallet.service' '$HOOK_LOG'"
+check "a CRLF secrets file still redacts, rather than silently doing nothing" \
+  "! grep -q 'crlfsecretvalue123' '$HOOK_LOG'"
+# The variable is documented as operator-settable, and a path with a space in it silently
+# disabled the strongest stage.
+mkdir -p "$T/dir with space"
+printf 'ZALLET_RPC_PASSWORD=spacedsecretvalue1\n' > "$T/dir with space/s.env"
+printf '#!/usr/bin/env bash\necho "boom: spacedsecretvalue1 in a log line"\n' > "$T/bin/journalctl"
+chmod +x "$T/bin/journalctl"
+: > "$HOOK_LOG"
+# A DIFFERENT UNIT, because the cooldown keys on the unit and a held-back send leaves an
+# empty log that every `! grep` assertion passes on. The first version of this check
+# reused zallet.service and proved nothing.
+FAUCET_ALERT_SECRET_FILES="$T/dir with space/s.env" bash "$ALERT" --unit zebra.service > /dev/null 2>&1
+check "the send actually arrived, so what follows is not asserted against an empty file" \
+  "grep -q 'unit FAILED: zebra.service' '$HOOK_LOG'"
+check "a secrets path containing a space is read, not split into fragments that do not exist" \
+  "! grep -q 'spacedsecretvalue1' '$HOOK_LOG'"
+
 echo "== alerts: the older WATCHDOG_ALERT_URL still works after upgrade"
 alerts_env; unset FAUCET_ALERT_URL
 export WATCHDOG_ALERT_URL="http://127.0.0.1:$HOOK_PORT/hook"

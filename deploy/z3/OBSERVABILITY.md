@@ -76,6 +76,46 @@ detect; the page step prints the real gap since the previous scheduled run, so a
 schedule that has stopped keeping time is at least visible in the log of the next one
 that does fire.
 
+**An alert is redacted on the way out, best-effort.** Every alert carries text this
+box did not write: `alert.sh --unit` quotes the failing unit's last journal lines,
+the watchdog interpolates a reason parsed out of a live `/api/ready` body, and
+drift-report pushes audit findings. All of it lands in a third-party webhook or the
+Signal bridge and stays in that history, so `send()` filters everything it sends
+(risk register #22). Three stages, strongest first:
+
+1. **The values themselves**, read from `/etc/faucet/alerts.env`,
+   `/etc/faucet/watchdog.env` and the app's `faucet.env`. A literal occurrence of a
+   secret this box holds is blanked however it got into the line: a URL, a JSON body,
+   a stack trace, a shell echo. Values under twelve characters are skipped, because a
+   short one is a placeholder and blanking it would erase ordinary log text.
+   Point `FAUCET_ALERT_SECRET_FILES` elsewhere if your secrets live elsewhere.
+2. **Key material by shape**, for secrets the box does not hold and so cannot match by
+   value: a Zcash spending or viewing key, an age identity, an `xprv`, a JWT signature,
+   a PEM block (the whole block, not only its header).
+3. **Names, narrowly.** One token, not the rest of the line, and only where a `=`, a
+   `:` or a `--` flag says the next thing is the value. The name may carry a prefix, so
+   `ZALLET_RPC_PASSWORD=`, `PGPASSWORD=`, `?access_token=`, `X-Api-Key:` and
+   `{"db_password":…}` all match, not only the bare word. `authorization`, `cookie`,
+   `mnemonic` and `passphrase` blank to end of line, because `authorization: Bearer x`
+   puts the secret two tokens from its name. `-u`/`--user` needs a value that looks like
+   credentials, or it eats `journalctl -u <unit>` and `date -u`, which are in the pages
+   this box sends today.
+
+If the filter itself does not answer (a missing `awk`, a `sed` that refuses the
+pattern), the alert is still sent, with the text withheld and a line in the journal
+saying so. Sending unfiltered text would defeat the point and sending nothing would
+mute the box.
+
+**READ THIS AS BEST-EFFORT, NOT A GUARANTEE.** A filter over arbitrary third-party log
+text cannot be one, and stage 1 is the only part that does not depend on guessing how a
+library chose to print a credential. Not covered: a secret this box does not hold that
+has no distinctive shape (a transparent WIF key, an opaque bearer token printed with no
+name beside it), and a secret whose name we did not think of. If a unit is known to log
+credentials, fix the unit; do not rely on this.
+
+Long hex inside a line is deliberately kept: here that is a txid, a block hash or an
+image digest, all public and the first thing an operator needs from a page.
+
 **A stopped watchdog is visible.** `box-report.sh` publishes `watchdogUnit`, the
 unit's systemd word (`active`, `activating`, `deactivating`, `inactive`, `failed`,
 or `unknown` when systemctl would not say). It used to be invisible: the file count
