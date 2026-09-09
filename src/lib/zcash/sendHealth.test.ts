@@ -186,7 +186,10 @@ test("THE WINDOW HOLDS A SAMPLE OF DEADLINE-SPACED UNKNOWNS, so the deadline cla
   // review measured (an op timeout above 321 s made a 15 min constant stop fitting).
   assert.equal(windowFor(309_000), 15 * 60_000);
   assert.equal(windowFor(451_000), 2 * 451_000 + 60_000);
-  assert.ok(windowFor(1_929_000) >= 2 * 1_929_000 + 60_000, "ZALLET_OP_TIMEOUT_MS at 30 min still fits three deadline-spaced unknowns");
+  assert.equal(windowFor(1_929_000), 2 * 1_929_000 + 60_000, "ZALLET_OP_TIMEOUT_MS at 30 min still fits three deadline-spaced unknowns");
+  // The sentence a derived window prints is a whole number of minutes, not 18.633333.
+  const quiet = readSendHealth(NOW, []);
+  assert.match(quiet.reason, /in the last \d+ min, too few to judge/);
   const spaced = Array.from({ length: MIN_SAMPLE }, (_, i) => at("unknown", i * deadline));
   assert.equal(readSendHealth(NOW, spaced).state, "degraded", "deadline-spaced unknowns must fit the window");
 });

@@ -50,20 +50,6 @@ export interface SendRecord {
   at: number;
 }
 
-/**
- * How far back we look. Long enough that a handful of claims accumulate on a quiet
- * faucet, short enough that a fault fixed half an hour ago is not still reported as
- * current. AND long enough to hold MIN_SAMPLE unresolved sends spaced by the send
- * deadline: the queue is serial and a send that blew its deadline is still running, so
- * consecutive deadline unknowns are at least one deadline apart, and a ten-minute
- * window could never hold three of them at the stock 309 s. Review measured it:
- * unknowns every 300 s read degraded, every 301 s read "too few to judge".
- *
- * DERIVED FROM THE DEADLINE, because the deadline is derived from operator-settable
- * timings (ZALLET_OP_TIMEOUT_MS) and a constant would silently stop fitting the moment
- * an operator raised them past 321 s (review, round 2, measured). Fifteen minutes is
- * the floor; above it the window is (MIN_SAMPLE - 1) deadlines plus a minute.
- */
 
 /**
  * How many sends we need before saying anything at all: CLASSIFIABLE ones for the
@@ -78,9 +64,30 @@ export interface SendRecord {
  */
 export const MIN_SAMPLE = 3;
 
+/**
+ * How far back we look. Long enough that a handful of claims accumulate on a quiet
+ * faucet; long enough to hold MIN_SAMPLE unresolved sends spaced by the send deadline
+ * (the queue is serial and a send that blew its deadline is still running, so
+ * consecutive deadline unknowns are at least one deadline apart, and a ten-minute
+ * window could never hold three of them at the stock 309 s: review measured unknowns
+ * every 300 s reading degraded and every 301 s "too few to judge"); and as short as
+ * those two allow, because the memory is how long a fault that is already fixed stays
+ * reported when no send follows it.
+ *
+ * DERIVED FROM THE DEADLINE, because the deadline is derived from operator-settable
+ * timings (ZALLET_OP_TIMEOUT_MS) and a constant would silently stop fitting the moment
+ * an operator raised them past 321 s (review, round 2, measured). Fifteen minutes is
+ * the floor; above it the window is (MIN_SAMPLE - 1) deadlines plus a minute. The
+ * memory therefore SCALES with the deadline: past an op timeout of about 741 s the
+ * window exceeds the watchdog's 30 min readiness grace, and on a quiet faucet a fault
+ * fixed half an hour ago with no send since can still be reported and paged. That is
+ * the trade for the rule being able to fire at all at that setting; a send that lands
+ * clears it.
+ */
 export function windowFor(sendTaskDeadlineMs: number): number {
   return Math.max(15 * 60_000, (MIN_SAMPLE - 1) * sendTaskDeadlineMs + 60_000);
 }
+/** The window in force for this process: derived from the configured deadline, above. */
 export const WINDOW_MS = windowFor(config.sendTaskDeadlineMs);
 
 /**
@@ -157,7 +164,7 @@ export function readSendHealth(now: number = Date.now(), records: SendRecord[] =
       ok,
       failed,
       unknown,
-      reason: `only ${decided} decided send(s) in the last ${WINDOW_MS / 60_000} min, too few to judge`,
+      reason: `only ${decided} decided send(s) in the last ${Math.round(WINDOW_MS / 60_000)} min, too few to judge`,
     };
   }
 
