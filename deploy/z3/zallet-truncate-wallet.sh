@@ -23,7 +23,9 @@
 #     systemctl stop faucet-watchdog.service      # or it restarts zallet mid-repair
 #     bash deploy/z3/zallet-truncate-wallet.sh <MAX_HEIGHT>
 #     systemctl start faucet-watchdog.service
-# It stops zallet, backs up wallet.db, truncates, and starts zallet again.
+# It stops zallet, backs up wallet.db, truncates, and starts zallet again, using the
+# image the zallet container is running (ZALLET_IMAGE overrides, for a container that
+# is gone; ZALLET_WALLET_DB overrides the db path, for the suite).
 set -uo pipefail
 
 MAX_HEIGHT="${1:-}"
@@ -35,12 +37,35 @@ esac
 
 ZALLET_CONTAINER="${ZALLET_CONTAINER:-z3-testnet-zallet-1}"
 VOLUME="${ZALLET_VOLUME:-z3-testnet-zallet}"
-IMAGE="${ZALLET_IMAGE:-zodlinc/zallet:v0.1.0-beta.1}"
 DATADIR="${ZALLET_DATADIR:-/var/lib/zallet}"
 CONFIG="${ZALLET_CONFIG:-/etc/zallet/zallet.toml}"
-DB="/var/lib/docker/volumes/${VOLUME}/_data/wallet.db"
+DB="${ZALLET_WALLET_DB:-/var/lib/docker/volumes/${VOLUME}/_data/wallet.db}"
 
 [ -f "$DB" ] || { echo "ABORT: no wallet.db at $DB" >&2; exit 1; }
+
+# THE IMAGE IS THE ONE THE WALLET RUNS, read off the container, never a pin in this file.
+# The pin here was v0.1.0-beta.1 while the wallet had moved to beta.3, so the mid-incident
+# repair would have opened the funds database with an older schema handler (risk register
+# #14). A repair tool that cannot tell which zallet owns the file has no business touching
+# it: no readable image, no truncate. ZALLET_IMAGE still overrides, for a wallet whose
+# container is gone, and says so in the log so the choice is on record.
+if [ -n "${ZALLET_IMAGE:-}" ]; then
+  IMAGE="$ZALLET_IMAGE"; image_from="ZALLET_IMAGE (an override you set, not the running container)"
+else
+  IMAGE="$(docker inspect --format '{{.Config.Image}}' "$ZALLET_CONTAINER" 2>/dev/null)" || IMAGE=""
+  image_from="the running container $ZALLET_CONTAINER"
+  if [ -z "$IMAGE" ]; then
+    echo "ABORT: could not read the image of container $ZALLET_CONTAINER (docker inspect gave nothing)." >&2
+    echo "  The repair must run the SAME zallet that owns wallet.db. Fix the container name (ZALLET_CONTAINER)," >&2
+    echo "  or, if the container is gone, set ZALLET_IMAGE to the exact image it ran. Nothing was stopped." >&2
+    exit 1
+  fi
+fi
+case "$IMAGE" in
+  *zallet*) ;;
+  *) echo "ABORT: image \"$IMAGE\" from $image_from does not look like a zallet image. Nothing was stopped." >&2; exit 1 ;;
+esac
+echo "image: $IMAGE (from $image_from)"
 
 echo "=== stop zallet (the daemon must not hold wallet.db during a truncate) ==="
 docker stop "$ZALLET_CONTAINER" >/dev/null 2>&1 || true
