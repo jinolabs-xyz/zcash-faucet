@@ -315,9 +315,20 @@ check "the cap knob is NOT settable from the workflow, so a variable cannot wide
 check "and neither is the certificate floor" \
   "! grep -q 'SMOKE_TLS_MIN_DAYS' '$LS'"
 # The https guard, both ways round: an uppercase scheme is legal and must not page.
-( cd "$REPO" && SMOKE_URL="HTTPS://faucet.example.org" SMOKE_DISABLED="1" bash "$T/probe-step.sh" > "$T/upper.log" 2>&1 )
+# NOT SMOKE_DISABLED=1: that hits the off switch at the top of the step and exits 0 before
+# the scheme is ever looked at, so the check passed on a byte-exact mutant of the guard it
+# was written for. The step has to reach the case, which means it also reaches `node`, so
+# node is stubbed the way the page step's tools are.
+mkdir -p "$T/bin"
+printf '#!/usr/bin/env bash\necho "stub node ran: $*"\n' > "$T/bin/node"
+chmod +x "$T/bin/node"
+( cd "$REPO" && PATH="$T/bin:$BASE_PATH" SMOKE_URL="HTTPS://faucet.example.org" SMOKE_DISABLED="" \
+    bash "$T/probe-step.sh" > "$T/upper.log" 2>&1 )
+rc=$?
 check "an uppercase HTTPS:// is accepted, because new URL() normalises it and a refusal pages" \
-  "[ $? -eq 0 ]"
+  "[ $rc -eq 0 ] && ! grep -q 'which is not https' '$T/upper.log'"
+check "and the step really got past the scheme check, rather than exiting before it" \
+  "grep -q 'stub node ran' '$T/upper.log'"
 
 # The probe step, run for real. `node scripts/live-probe.mjs` is never reached in these
 # two cases, which is the point: both must decide before probing anything.

@@ -85,7 +85,8 @@ one that is wrong. And
 `SMOKE_TLS_MIN_DAYS` is deliberately NOT plumbed into `live-smoke.yml`: a certificate
 should never legitimately sit under three weeks, so widening the floor from a
 repository variable would be a way to silence this rather than fix it. Change it in
-the workflow, in a pull request, if it ever needs changing.
+`scripts/live-probe.mjs`, in a pull request, if it ever needs changing: the repo
+suite fails if the name appears in the workflow at all.
 
 **The off-box probe cannot pass without probing.** `live-smoke.yml` runs
 `scripts/live-probe.mjs` from a GitHub runner: it is the only signal that has ever

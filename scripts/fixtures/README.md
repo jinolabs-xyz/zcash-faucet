@@ -17,3 +17,10 @@ with `npm test` still green. A file needs no openssl at all.
 
 The key is a throwaway for `localhost`, generated for this purpose, expired
 before it was committed, and used only by the test suite. It secures nothing.
+
+One consequence worth knowing: GitHub's push protection has a generic private-key
+pattern. This repository does not have it enabled today, but if it is ever turned
+on, pushes will be blocked until someone allowlists this path. That is the cost of
+the fixture being a real key, and it is the same cost as any other way of holding
+one — the alternative was a test that skipped green on every machine that runs the
+gate.
