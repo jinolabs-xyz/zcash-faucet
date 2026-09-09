@@ -54,6 +54,9 @@ HEALTH_INTERVAL="${REDEPLOY_HEALTH_INTERVAL:-3}"
 Z3_NETWORK_NAME="${Z3_NETWORK_NAME:-z3-testnet}"
 
 log() { echo "$(date -u +%FT%TZ) redeploy: $*"; }
+# Exit codes: 0 shipped and healthy; 1 the faucet may be down; 2 did NOT ship and the
+# faucet is serving (rolled back, or nothing was swapped); 3 SHIPPED but unverified (the
+# new build is live and healthy, and nobody could compare it to the commit or probe it).
 # die is for the faucet-may-be-down cases only, because exit 1 is what a
 # pager should react to.
 die() { log "ERROR: $*"; exit 1; }
@@ -440,14 +443,20 @@ if wait_healthy "$want_ready"; then
   assert_running_is "$new" "the image we just built"
   case $? in
     0) if [ "$manifest_unverified" = "1" ]; then
-         # Healthy, and running an image nobody could compare to the commit. That is
-         # exit 2's existing meaning here and it must not collapse into success: the
-         # whole failure this check was added for looked exactly like a healthy deploy.
+         # Healthy, and running an image nobody could compare to the commit. It must
+         # not collapse into success: the whole failure this check was added for looked
+         # exactly like a healthy deploy. And it is NOT a 2 either: 2 means "did not
+         # ship", and this DID ship. auto-deploy used to read every 2 as "retry next
+         # tick", so an unverified-but-live deploy was rebuilt every two minutes for as
+         # long as the manifest check was down; then it read every 2 as "shipped", which
+         # would have recorded a commit that did not compile as processed (risk register
+         # #13, both halves). The two outcomes have different codes now: 3 is shipped
+         # and unverified, and only 3 advances auto-deploy's baseline.
          log "deployed and healthy but UNVERIFIED against the commit: $new"
-         exit 2
+         exit 3
        fi
        log "deployed and healthy: $new" ; exit 0 ;;
-    2) log "the build is healthy but unverified, treat this deploy as incomplete" ; exit 2 ;;
+    2) log "the build is healthy but unverified (its image could not be read), treat this deploy as incomplete" ; exit 3 ;;
     *) log "the health gate passed on code that is not this build, so this deploy shipped nothing"
        exit 1 ;;
   esac
@@ -458,7 +467,7 @@ if ! probe_usable; then
   log "NOT VERIFIED: could not probe the app at all (no $FAUCET_URL and docker compose exec failed)"
   log "The new build is running and may be fine. Nothing was rolled back."
   log "Set REDEPLOY_FAUCET_URL to something reachable and re-run to get a real verdict."
-  exit 2
+  exit 3
 fi
 
 # Before rolling back, ask WHY once more and read the app's own reason. A rollback

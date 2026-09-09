@@ -67,9 +67,18 @@ if [ -f "$FAIL_FILE" ]; then
   case "$fail_last" in ''|*[!0-9]*) fail_last=0 ;; esac
 fi
 [ "$fail_commit" = "$REMOTE" ] || { fail_count=0; fail_last=0; }
-if [ "$fail_count" -ge "$BACKOFF_AFTER" ] && [ $(( $(now_epoch) - fail_last )) -lt "$BACKOFF_SECONDS" ]; then
-  log "backing off: $(git rev-parse --short "$REMOTE") has failed $fail_count times in a row, next retry in $(( BACKOFF_SECONDS - ($(now_epoch) - fail_last) ))s (push a fix to reset)"
-  exit 0
+since_fail=$(( $(now_epoch) - fail_last ))
+# A clock stepped backwards reads as a negative age; treat it as "just failed" so the
+# backoff neither extends past its window nor prints a nonsense wait.
+[ "$since_fail" -ge 0 ] || since_fail=0
+if [ "$fail_count" -ge "$BACKOFF_AFTER" ] && [ "$since_fail" -lt "$BACKOFF_SECONDS" ]; then
+  # NON-ZERO, on purpose: main is still undeployable, and a oneshot that exits 0 here
+  # would read green in systemctl status for the whole outage, the shape the unit file
+  # itself warns about. The page this causes is one per hour per unit (alert.sh's
+  # cooldown, #452), the same as before; what the backoff removes is the rebuild,
+  # the container recreate and the rollback every two minutes.
+  log "backing off: $(git rev-parse --short "$REMOTE") has failed $fail_count times in a row, next retry in $(( BACKOFF_SECONDS - since_fail ))s (push a fix to reset); exiting 1 so the unit stays red"
+  exit 1
 fi
 # Called on every exit path below: a failure counts, a success or a shipped-unverified
 # deploy clears the record.
@@ -179,7 +188,7 @@ if [ "$ops" = "1" ]; then
   # Install the installer first, then run the INSTALLED copy, so /opt/faucet is
   # self-consistent afterwards and audit-drift has something to compare.
   install -m 755 "$REPO_DIR/deploy/z3/install-ops.sh" "$INSTALL_DIR/install-ops.sh" \
-    || { log "ERROR: could not install install-ops.sh"; exit 1; }
+    || { log "ERROR: could not install install-ops.sh"; note_failure; exit 1; }
   # THE SOURCE IS PASSED EXPLICITLY. Running the installed copy with no argument made
   # its source directory the DESTINATION, so it globbed /opt/faucet, copied files onto
   # themselves, could not see anything missing, and exited 0. That is why 19 of 25
@@ -217,19 +226,26 @@ if [ "$app" = "1" ]; then
   # a broken deploy from an unverified one and that distinction decides who gets paged.
   # Otherwise a failed ops install still fails the run.
   #
-  # EXIT 2 IS SHIPPED. redeploy's 2 means the new image is serving and healthy but could
-  # not be verified against the commit (the manifest check was unavailable). The work is
-  # DONE, so the baseline advances and this exits 2 exactly once, for the page. Before,
-  # 2 took the same early exit as 1, the baseline stayed put, and every tick for as long
-  # as the manifest check was down rebuilt the image, recreated the container and paged:
-  # the amplifier of risk register #13, seen live on the first tick after #416.
-  if [ "$app_rc" -eq 2 ]; then
+  # EXIT 3 IS SHIPPED. redeploy's 3 means the new image is serving and healthy but could
+  # not be verified against the commit or probed. The work is DONE, so the baseline
+  # advances and this exits 3 exactly once, for the page. Before, that outcome was a 2
+  # and took the same early exit as 1: the baseline stayed put and every tick for as long
+  # as the manifest check was down rebuilt the image, recreated the container and paged,
+  # the amplifier of risk register #13, seen live on the first tick after #416. redeploy's
+  # 2 is the OTHER thing, "did not ship, the faucet is serving" (a build that does not
+  # compile, a failed pull, a rollback), and that is a failure to retry, never recorded.
+  if [ "$app_rc" -eq 3 ]; then
     if [ "$rc" -eq 0 ] && [ "$miner_rc" -eq 0 ]; then
       printf '%s\n' "$PROCESSED" > "$STATE_FILE"
       clear_failures
-      log "shipped but UNVERIFIED: recorded $(git rev-parse --short "$PROCESSED") as processed, exiting 2 once so the unit pages once and the next tick is a no-op"
+      log "shipped but UNVERIFIED: recorded $(git rev-parse --short "$PROCESSED") as processed, exiting 3 once so the unit pages once and the next tick is a no-op"
+      exit 3
     fi
-    exit 2
+    # The app shipped but the ops or miner half did not: the commit is NOT processed,
+    # and the exit is the box-not-at-spec 1, not redeploy's softer code.
+    note_failure
+    log "the app shipped (unverified) but the ops or miner half failed, so the commit stays unprocessed and this tick is a failure"
+    exit 1
   fi
   if [ "$app_rc" -ne 0 ]; then note_failure; exit "$app_rc"; fi
   # A failed miner rebuild leaves the box at 40 of 41 and the live probe red, which is

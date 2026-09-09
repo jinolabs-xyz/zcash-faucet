@@ -34,8 +34,17 @@ deploy, and a rollback rolls back code, not data.
 | Code | Means | Rolled back? | Page someone? |
 |---|---|---|---|
 | 0 | the new build is live and healthy | no need | no |
+| 3 | the new build is live and healthy but **could not be verified** against the commit, or could not be probed | no | once |
 | 2 | **your change did not ship**, and the faucet is serving anyway | yes, or nothing was swapped | no |
 | 1 | the faucet **may be down**, and the reason decides what to do next | see below | yes |
+
+`auto-deploy.sh` reads these: 0 and 3 record the commit as processed (3 pages once and
+the next tick is a no-op); 2 and 1 leave it unprocessed and are retried, and after
+three failures in a row on the same commit the retry backs off to every 30 minutes,
+exiting non-zero each tick so the unit stays red until a fix is pushed
+(`AUTODEPLOY_BACKOFF_AFTER`, `AUTODEPLOY_BACKOFF_SECONDS`). Before 2026-09-09, 3 was a 2,
+and an unverified-but-live deploy was rebuilt every two minutes for as long as the
+manifest check was down.
 
 Exit 1 has three causes and they need different responses, so read the log rather
 than assuming a failed rollback:

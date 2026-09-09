@@ -682,7 +682,8 @@ running and what is available to go back to:
 
 See [REDEPLOY.md](deploy/z3/REDEPLOY.md) for the exit codes. The short version
 while you are half awake: **2 means the faucet is serving and the change did
-not ship, so it can wait until morning. 1 means the faucet may be down.**
+not ship, so it can wait until morning. 3 means it shipped and is serving but
+could not be verified against the commit. 1 means the faucet may be down.**
 
 If that image is gone, which happens on a freshly rebuilt box or if the tag
 was pruned, build from the last good commit instead:

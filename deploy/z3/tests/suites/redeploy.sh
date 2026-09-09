@@ -344,7 +344,7 @@ DOCKER
 chmod +x "$T/bin/docker"
 bash "$REDEPLOY" --no-pull > "$T/unprobe.log" 2>&1
 rc_unprobe=$?
-check "exits 2, not 1" "[ $rc_unprobe -eq 2 ]"
+check "exits 3: shipped but unverified, not 1 and not the did-not-ship 2" "[ $rc_unprobe -eq 3 ]"
 check "says NOT VERIFIED" "grep -q 'NOT VERIFIED' '$T/unprobe.log'"
 check "does not claim the faucet may be down" "! grep -q 'may be down' '$T/unprobe.log'"
 check "did not roll back on an unprobeable app" "! grep -q 'rolling back' '$T/unprobe.log'"
@@ -390,7 +390,7 @@ echo "sha256:old" > "$STUB_IMAGES/zcash-faucet_latest"
 echo "sha256:old" > "$STUB_IMAGES/.running"
 STUB_INSPECT_FAIL=1 bash "$REDEPLOY" > "$T/unverified.log" 2>&1
 rc=$?
-check "an unreadable running image is UNVERIFIED, exit 2 not 1" "[ $rc -eq 2 ]"
+check "an unreadable running image is UNVERIFIED, exit 3: shipped, not comparable" "[ $rc -eq 3 ]"
 check "and is reported as UNVERIFIED rather than as a failed deploy" \
   "grep -q 'POST-CONDITION UNVERIFIED' '$T/unverified.log'"
 check "and does not claim deployed and healthy" \
@@ -518,7 +518,7 @@ touch "$STUB_HEALTH" "$STUB_READY"
 STUB_MANIFEST_RC=2 bash "$REDEPLOY" > "$T/cannot.log" 2>&1
 rc=$?
 check "an uncomparable image still DEPLOYS, it does not refuse" "grep -q 'up -d faucet' '$T/stub.log'"
-check "but the deploy ends at 2, not 0" "[ $rc -eq 2 ]"
+check "but the deploy ends at 3 (shipped, unverified), not 0 and not the did-not-ship 2" "[ $rc -eq 3 ]"
 check "and says UNVERIFIED rather than healthy" "grep -qi 'UNVERIFIED' '$T/cannot.log'"
 
 echo "== redeploy: an ABSENT verifier is unknown, not fine"
@@ -526,7 +526,7 @@ echo "== redeploy: an ABSENT verifier is unknown, not fine"
 redeploy_env
 touch "$STUB_HEALTH" "$STUB_READY"
 REDEPLOY_VERIFY_MANIFEST="$T/bin/not-a-real-verifier" bash "$REDEPLOY" > "$T/absent.log" 2>&1
-check "an absent verifier ends the deploy at 2" "[ $? -eq 2 ]"
+check "an absent verifier ends the deploy at 3, shipped but unverified" "[ $? -eq 3 ]"
 check "and says the image was not compared" "grep -qi 'not compared\|UNVERIFIED' '$T/absent.log'"
 
 echo "== redeploy: the verifier is told which repo to compare against"
