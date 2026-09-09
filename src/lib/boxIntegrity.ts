@@ -75,6 +75,13 @@ export interface IntegrityReport {
    * red for hours over a unit that was parked deliberately. This is the fact that lets
    * it say "off" instead, and it is context only, never classified on. */
   minerUnit: string | null;
+  /** The watchdog unit's systemd word, the same way. A STOPPED watchdog used to be
+   *  invisible: is-enabled is true of a stopped unit, Restart=always means it never
+   *  reaches failed, and the restart counter counts restarts, of which a unit somebody
+   *  stopped has none (risk register #16). Unlike the miner's word this one IS a fault
+   *  when it reads inactive or failed: nothing heals while the watchdog is down. Null
+   *  on a report that predates the field. */
+  watchdogUnit: string | null;
   /** Whether the box can page anyone, in the box's own word: "ok" (the bridge answers
    *  and the configured number is linked), "unlinked", "down", "misconfigured" (a state
    *  the sender refuses to send in: Signal without a usable number or recipient, or, for
@@ -115,6 +122,13 @@ export interface IntegrityStatus {
   /** Passed through from the report; the panel uses it to tell a parked miner from a
    *  dead one. Context, never classified on. */
   minerUnit: string | null;
+  /** The watchdog unit's systemd word, the same way. A STOPPED watchdog used to be
+   *  invisible: is-enabled is true of a stopped unit, Restart=always means it never
+   *  reaches failed, and the restart counter counts restarts, of which a unit somebody
+   *  stopped has none (risk register #16). Unlike the miner's word this one IS a fault
+   *  when it reads inactive or failed: nothing heals while the watchdog is down. Null
+   *  on a report that predates the field. */
+  watchdogUnit: string | null;
   /** Whether the box can page anyone, in the box's own word: "ok" (the bridge answers
    *  and the configured number is linked), "unlinked", "down", "misconfigured" (a state
    *  the sender refuses to send in: Signal without a usable number or recipient, or, for
@@ -131,7 +145,7 @@ export interface IntegrityStatus {
 }
 
 export function classifyIntegrity(r: IntegrityReport | null, now: number): IntegrityStatus {
-  const none = { expected: null, present: null, missing: null, notEnabled: null, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, platform: null, minerBinary: null, minerUnit: null, alertBridge: null, ageSeconds: null };
+  const none = { expected: null, present: null, missing: null, notEnabled: null, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, platform: null, minerBinary: null, minerUnit: null, watchdogUnit: null, alertBridge: null, ageSeconds: null };
 
   // No report at all is the state the box was ACTUALLY in all week, so it must not
   // be quiet. It is not "complete" and it is not a proven fault: it is unverified,
@@ -178,6 +192,7 @@ export function classifyIntegrity(r: IntegrityReport | null, now: number): Integ
       platform: r.platform,
       minerBinary: r.minerBinary,
       minerUnit: r.minerUnit,
+      watchdogUnit: r.watchdogUnit,
       alertBridge: r.alertBridge,
       ageSeconds: age,
       reason: parts.join(", "),
@@ -196,6 +211,7 @@ export function classifyIntegrity(r: IntegrityReport | null, now: number): Integ
     platform: r.platform,
     minerBinary: r.minerBinary,
     minerUnit: r.minerUnit,
+    watchdogUnit: r.watchdogUnit,
     alertBridge: r.alertBridge,
     ageSeconds: age,
     reason: `all ${r.expected} required files installed, current and enabled`,

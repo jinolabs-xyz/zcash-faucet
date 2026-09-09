@@ -60,6 +60,16 @@ you (re-linking needs the container stopped), set `WATCHDOG_SIGNAL_MATCH=` in
 `/etc/faucet/watchdog.env` and `systemctl restart faucet-watchdog` for the
 duration.
 
+**A stopped watchdog is visible.** `box-report.sh` publishes `watchdogUnit`, the
+unit's systemd word (`active`, `inactive`, `failed`, `activating`, `unknown`). It used
+to be invisible: the file count asks `is-enabled`, which a stopped unit still is;
+`Restart=always` means it never reaches `failed`; and the restart counter counts
+restarts, of which a unit somebody stopped has none. The panel row reads `WATCHDOG
+STOPPED, nothing heals` (or `FAILED`), the strip shows `WATCHDOG STOPPED`, and the
+off-box live probe fails on `inactive`, `failed` and `unknown`. A zsnap cold export
+stops the watchdog for its duration, so a report taken in that window reads stopped
+until the trap starts it again; that is the honest state, not a false alarm.
+
 A bridge cannot report its own death through itself, so `box-report.sh`
 resolves the alert configuration exactly as `alert.sh` does (both files, both
 name sets), asks the bridge's `/v1/accounts` for the configured number, and

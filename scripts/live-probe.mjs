@@ -230,6 +230,19 @@ async function runFaucetChecks() {
       box.state === "complete",
       box.reason ?? `state ${box.state}`,
     );
+    // THE WATCHDOG ITSELF. A stopped watchdog heals nothing and pages nothing, and the
+    // box read complete with it down (register #16). "inactive" and "failed" fail;
+    // "unknown" fails like the box state above; "activating" is seconds from running and
+    // passes with a note; an older server that sends nothing is cannot-verify.
+    switch (box.watchdogUnit) {
+      case "active": ok("the watchdog is running", true, "faucet-watchdog.service active"); break;
+      case "activating": ok("the watchdog is running", true, "faucet-watchdog.service is starting"); break;
+      case "inactive": ok("the watchdog is running", false, "faucet-watchdog.service is STOPPED: nothing on the box heals until `systemctl start faucet-watchdog.service`"); break;
+      case "failed": ok("the watchdog is running", false, "faucet-watchdog.service FAILED past its start limit; `journalctl -u faucet-watchdog` and `systemctl reset-failed faucet-watchdog.service`"); break;
+      case "unknown": case "deactivating": ok("the watchdog is running", false, `the box could not say (watchdogUnit ${box.watchdogUnit}); check systemctl on the box`); break;
+      case undefined: case null: ok("the watchdog is running", true, "server does not send box.watchdogUnit yet, cannot verify"); break;
+      default: ok("the watchdog is running", false, `unexpected watchdogUnit ${JSON.stringify(box.watchdogUnit)}`);
+    }
     // THE ONE FAULT NO ON-BOX ALERT CAN CARRY. Every page travels through the Signal
     // bridge, so its state is reported by the box and read from outside, here. Only "ok"
     // and "webhook" are affirmative. "unknown" FAILS, the same rule the box state above

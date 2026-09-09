@@ -275,6 +275,20 @@ case "$miner_unit" in
   *) miner_unit="unknown" ;;
 esac
 
+# IS THE WATCHDOG RUNNING. A STOPPED watchdog was invisible (risk register #16): the loop
+# above asks is-enabled, which is true of a stopped unit; Restart=always means it never
+# reaches failed; the restart counter above only counts restarts, and a unit somebody
+# stopped has none. zsnap's cold export stops it and relies on a trap to start it again,
+# and a trap that did not run left the box with no self-healing and nothing that said
+# so. Same word as the miner's, and unlike the miner's it IS classified on: a stopped
+# watchdog is a fault, a stopped miner is a decision.
+WATCHDOG_UNIT="${BOX_REPORT_WATCHDOG_UNIT:-faucet-watchdog.service}"
+watchdog_unit="$("$SYSTEMCTL" is-active "$WATCHDOG_UNIT" 2>/dev/null || true)"
+case "$watchdog_unit" in
+  active|inactive|failed|activating|deactivating) ;;
+  *) watchdog_unit="unknown" ;;
+esac
+
 # CAN THIS BOX PAGE ANYONE. The Signal bridge is one container on loopback, and if it is
 # down every alert the watchdog and the units send becomes a journal line nobody reads,
 # which is the exact silence the register calls out (#15). The bridge cannot report its
@@ -358,4 +372,4 @@ fi
 wr_json="${watchdog_restarts:-null}"
 wrd_json="${watchdog_restarts_delta:-null}"
 
-write "{\"expected\":${expected},\"present\":${present},\"notEnabled\":${not_enabled},\"enabledUndeclared\":${enabled_undeclared},\"minerBinary\":\"${miner_state}\",\"minerUnit\":\"${miner_unit}\",\"alertBridge\":\"${alert_bridge}\",\"platform\":\"${platform}\",\"watchdogRestarts\":${wr_json},\"watchdogRestartsDelta\":${wrd_json},\"at\":$(( $(date +%s) * 1000 )),\"readable\":true}"
+write "{\"expected\":${expected},\"present\":${present},\"notEnabled\":${not_enabled},\"enabledUndeclared\":${enabled_undeclared},\"minerBinary\":\"${miner_state}\",\"minerUnit\":\"${miner_unit}\",\"watchdogUnit\":\"${watchdog_unit}\",\"alertBridge\":\"${alert_bridge}\",\"platform\":\"${platform}\",\"watchdogRestarts\":${wr_json},\"watchdogRestartsDelta\":${wrd_json},\"at\":$(( $(date +%s) * 1000 )),\"readable\":true}"
