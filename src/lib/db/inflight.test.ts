@@ -14,18 +14,36 @@ const { reserveClaim, finalizeClaim, PENDING_LEASE_SECONDS } = await import("./i
 const { config } = await import("../config.ts");
 const { pendingLeaseSeconds, PENDING_LEASE_MARGIN_SECONDS } = await import("./sql.ts");
 
-test("THE LEASE OUTLASTS A LEGAL SEND (risk register #8)", () => {
+test("THE LEASE OUTLASTS A FULL QUEUE PLUS A LEGAL SEND (risk register #8)", () => {
   // 120 s against a 309 s send budget: a slow shielded send unblocked its own address at
   // two minutes, still pending, and a retry paid a second drip while the first was being
-  // built. The lease is derived from the same budget, with a margin for the finalise.
+  // built. And the row is reserved BEFORE the claim waits its turn in the serial queue,
+  // with the deadline armed at send start, so a lease covering one send still lost at
+  // queue depth two (review reproduced it). The lease covers the whole wait.
+  const worstWaitMs = (config.sendQueueMaxPending + 1) * config.sendTaskDeadlineMs;
   assert.ok(
-    PENDING_LEASE_SECONDS * 1000 > config.sendTaskDeadlineMs,
-    `lease ${PENDING_LEASE_SECONDS}s does not outlast the ${config.sendTaskDeadlineMs} ms send deadline`,
+    PENDING_LEASE_SECONDS * 1000 > worstWaitMs,
+    `lease ${PENDING_LEASE_SECONDS}s does not outlast ${config.sendQueueMaxPending} queued sends plus one, ${worstWaitMs} ms`,
   );
-  assert.equal(PENDING_LEASE_SECONDS, pendingLeaseSeconds(config.sendTaskDeadlineMs));
-  assert.equal(pendingLeaseSeconds(309_000), 309 + PENDING_LEASE_MARGIN_SECONDS);
-  assert.equal(pendingLeaseSeconds(120_001), 121 + PENDING_LEASE_MARGIN_SECONDS, "rounds the deadline UP to whole seconds");
+  assert.equal(PENDING_LEASE_SECONDS, pendingLeaseSeconds(config.sendTaskDeadlineMs, config.sendQueueMaxPending));
+  assert.equal(pendingLeaseSeconds(309_000, 20), 21 * 309 + PENDING_LEASE_MARGIN_SECONDS);
+  assert.equal(pendingLeaseSeconds(309_000, 0), 309 + PENDING_LEASE_MARGIN_SECONDS, "no backlog allowed: one send plus the margin");
+  assert.equal(pendingLeaseSeconds(120_001, 0), 121 + PENDING_LEASE_MARGIN_SECONDS, "rounds UP to whole seconds");
   assert.ok(PENDING_LEASE_MARGIN_SECONDS >= 30, "the margin covers the finalise write after the deadline");
+});
+
+test("a second claim for the same address while the first is QUEUED behind a full queue is refused", async () => {
+  // The round-1 blocker's shape: the first claim's send has not even started at the
+  // moment a lease covering one send would have released it.
+  const now = 1_798_000_000; // more than a day before every other case's clock (see below)
+  const address = "utest1queued-behind";
+  const first = await reserve(address, now);
+  assert.equal(first.ok, true);
+  const oneSendLater = now + Math.ceil(config.sendTaskDeadlineMs / 1000) + PENDING_LEASE_MARGIN_SECONDS + 1;
+  assert.equal((await reserve(address, oneSendLater)).ok, false, "one send's worth of waiting must not release a row still queued");
+  const fullQueueLater = now + Math.ceil((config.sendQueueMaxPending * config.sendTaskDeadlineMs) / 1000);
+  assert.equal((await reserve(address, fullQueueLater)).ok, false, "nor a full queue's worth, before the send has even begun");
+  assert.equal((await reserve(address, now + PENDING_LEASE_SECONDS + 1)).ok, true, "and the lease still releases a dead process eventually");
 });
 
 test("a second claim for the same address INSIDE the send budget is refused, even past two minutes", async () => {

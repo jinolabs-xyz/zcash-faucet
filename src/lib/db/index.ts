@@ -30,11 +30,12 @@ import {
 import { probeLedger, verdictFor, PROBE_EVERY_MS, type LedgerCacheEntry, type LedgerHealth } from "./probe.ts";
 
 /**
- * How long a pending claim blocks its address, client and cap. Outlasts the send
- * deadline by a margin, so a send that is still legally in flight cannot be reserved
- * over (register #8). Exported for the tests that walk time past it.
+ * How long a pending claim blocks its address, client and cap. Outlasts a full send
+ * queue plus one send plus a margin, so a claim that is still legally waiting or in
+ * flight cannot be reserved over (register #8). Exported for the tests that walk time
+ * past it.
  */
-export const PENDING_LEASE_SECONDS = pendingLeaseSeconds(config.sendTaskDeadlineMs);
+export const PENDING_LEASE_SECONDS = pendingLeaseSeconds(config.sendTaskDeadlineMs, config.sendQueueMaxPending);
 
 const g = globalThis as unknown as {
   __faucetDriver?: DbDriver;
@@ -116,9 +117,11 @@ async function whyBlocked(
   return { ok: false, kind: "cap", reason: "Faucet daily cap reached. Please come back tomorrow." };
 }
 
-/** Rows older than this can't affect a cooldown or the 24h cap - safe to delete. */
+/** Rows older than this can't affect a cooldown, the 24h cap OR a pending lease - safe
+ *  to delete. The lease term is what keeps this structural: the lease is derived and has
+ *  no ceiling, and a purge inside it would release a claim the reserve still counts. */
 function retentionCutoff(now: number, cooldownSeconds: number): number {
-  return now - Math.max(cooldownSeconds, 86_400) - 3_600; // +1h grace
+  return now - Math.max(cooldownSeconds, 86_400, PENDING_LEASE_SECONDS) - 3_600; // +1h grace
 }
 
 /** Atomically enforce cooldown + daily cap and reserve a pending claim. */
