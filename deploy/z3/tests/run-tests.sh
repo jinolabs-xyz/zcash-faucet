@@ -12,7 +12,7 @@
 # backup, tests/deploy-stubs for deploy, which needs a different docker
 # model). sqlite, tar, gpg and every hash check run for real.
 #
-# Needs Linux (flock, GNU find) plus zstd, gnupg, python3, jq, curl, and
+# Needs Linux (flock, GNU find) plus zstd, gnupg, python3, jq, curl, git and
 # openssh-server for the access suite. Missing ones are named and refused rather than reported as
 # failures, so trust the refusal over guessing.
 #
@@ -91,10 +91,31 @@ if [ -z "${SUITES:-}" ]; then
   for n in $SUITE_ORDER; do
     case " $on_disk " in *" $n "*) ;; *) missing_file="$missing_file $n" ;; esac
   done
-  if [ -n "$unlisted" ] || [ -n "$missing_file" ]; then
+  # And NOT TWICE. Set membership says nothing about multiplicity, and a duplicate on that
+  # one 20-name line is what a careless merge produces: the suite is sourced again, the
+  # tally is inflated, and the second sourcing inherits the first one's leftovers.
+  dupes=""
+  for n in $SUITE_ORDER; do
+    seen=0
+    for m in $SUITE_ORDER; do [ "$m" = "$n" ] && seen=$((seen + 1)); done
+    if [ "$seen" -gt 1 ]; then
+      case " $dupes " in *" $n "*) ;; *) dupes="$dupes $n" ;; esac
+    fi
+  done
+  if [ -z "$on_disk" ]; then
+    # Not a disagreement, a wrong path: SCRATCH has no readlink, so invoking this through
+    # a symlink resolves it to the link's directory and every name looks missing.
+    echo "REFUSING TO RUN: no suites found under $SCRATCH/suites." >&2
+    echo "That is a path problem, not a list problem - this script has no readlink, so" >&2
+    echo "running it through a symlink resolves SCRATCH to the link's directory. Run it" >&2
+    echo "by its real path, or set TEST_SCRATCH." >&2
+    exit 2
+  fi
+  if [ -n "$unlisted" ] || [ -n "$missing_file" ] || [ -n "$dupes" ]; then
     echo "REFUSING TO RUN: the default suite order and deploy/z3/tests/suites/ disagree." >&2
     [ -n "$unlisted" ] && echo "  on disk but never run:$unlisted" >&2
     [ -n "$missing_file" ] && echo "  named in the order but no file:$missing_file" >&2
+    [ -n "$dupes" ] && echo "  named more than once, so it would be sourced twice:$dupes" >&2
     echo >&2
     echo "A suite that is not named here does not run, and the tally is green anyway -" >&2
     echo "the exact silent pass these suites exist to catch. Add it to SUITE_ORDER, in the" >&2
@@ -345,6 +366,19 @@ if [ -n "$missing" ]; then
   echo >&2
   echo "Use 'set -e' on that install. A silently failed one is how 25 phantom" >&2
   echo "failures happen. Narrow the run instead with SUITES=\"drift alerts\"." >&2
+  exit 2
+fi
+
+# A SELECTION THAT NAMES NOTHING IS NOT A PASS. `SUITES=" "` is not -z, so it skipped the
+# order guard, selected zero suites, and exited 0 having sourced none of them - a green
+# pipeline that ran nothing, which is the shape this file exists to refuse. Counted rather
+# than string-tested, so it covers every way of arriving at an empty set.
+_selected_count=0
+for suite in $SELECTED; do _selected_count=$((_selected_count + 1)); done
+if [ "$_selected_count" -eq 0 ]; then
+  echo "REFUSING TO RUN: SUITES is set but names no suite (it was '${SUITES:-}')." >&2
+  echo "Nothing would be sourced and the run would exit 0, which reads as a pass." >&2
+  echo "Unset SUITES for the default order, or name one: SUITES=\"drift alerts\"." >&2
   exit 2
 fi
 

@@ -426,6 +426,18 @@ sed -i.bak 's/^SUITE_ORDER="zsnap/SUITE_ORDER="ghostsuite zsnap/' "$T/tests/run-
 ( cd "$REPO" && env -u SUITES TEST_SCRATCH="$T/tests" bash "$T/tests/run-tests.sh" > "$T/ghost.log" 2>&1 )
 rc=$?
 check "a name in the order with no file REFUSES too" "[ $rc -eq 2 ] && grep -q 'no file: ghostsuite' '$T/ghost.log'"
+# A DUPLICATE is neither of those: set membership passes, the suite is sourced twice, the
+# tally is inflated, and the second sourcing inherits the first one's leftovers.
+sed -i.bak 's/^SUITE_ORDER="ghostsuite zsnap/SUITE_ORDER="zsnap zsnap/' "$T/tests/run-tests.sh"
+( cd "$REPO" && env -u SUITES TEST_SCRATCH="$T/tests" bash "$T/tests/run-tests.sh" > "$T/dupe.log" 2>&1 )
+rc=$?
+check "a suite named twice REFUSES rather than running twice and counting twice" \
+  "[ $rc -eq 2 ] && grep -q 'named more than once' '$T/dupe.log'"
+# A selection that names nothing sourced no suite and exited 0 - a green run of nothing.
+( cd "$REPO" && SUITES=" " bash "$RT" > "$T/blank.log" 2>&1 )
+rc=$?
+check "SUITES that names no suite REFUSES rather than passing having run nothing" \
+  "[ $rc -eq 2 ] && grep -q 'names no suite' '$T/blank.log'"
 
 # THE INSTALL LINE IS GENERATED, so it cannot omit a command the guard demands. The three
 # functions are sourced out of the shipped script rather than re-implemented here.
@@ -445,8 +457,26 @@ GEN="$(
   done
   printf '%s' "${P# }"
 )"
+check "the package list was actually generated, not empty" "[ -n '$GEN' ]"
 check "every command any suite declares has a package behind it" \
   "case '$GEN' in *UNMAPPED*) false ;; *) true ;; esac"
+# THE CAPS REFUSAL PRINTS ITS OWN RECIPE, and nothing read it: the grep below resolves to
+# the header COMMENT, and the check further down reads only the DEPS refusal. That is the
+# recipe a macOS operator pastes - the population that hit both earlier misses - and it
+# could be hardcoded with every check green. Force it by shimming a GNU-only behaviour.
+mkdir -p "$T/nostat"
+for b in bash sh env dirname basename sed grep awk tr cut head tail sort uniq cat ls mkdir rm cp mv chmod printf date find sha256sum seq id tee wc readlink xargs zstd curl gpg python3 git jq; do
+  src="$(command -v "$b" 2>/dev/null)"; [ -n "$src" ] && ln -sf "$src" "$T/nostat/$b"
+done
+printf '#!/usr/bin/env bash\ncase " $* " in *" -c "*) exit 1 ;; esac\nexec /usr/bin/stat "$@"\n' > "$T/nostat/stat"
+chmod +x "$T/nostat/stat"
+( cd "$REPO" && env -u SUITES PATH="$T/nostat" bash "$RT" > "$T/caps.log" 2>&1 )
+rc=$?
+check "a missing GNU behaviour refuses, so the caps recipe is reachable" \
+  "[ $rc -eq 2 ] && grep -q 'stat -c' '$T/caps.log'"
+caps_printed="$(grep -oE 'apt-get install -y -qq [a-zA-Z0-9 ._+-]+' "$T/caps.log" | head -n1 | sed 's/apt-get install -y -qq //')"
+caps_sorted="$(printf '%s\n' $caps_printed | sort | tr '\n' ' ')"
+
 # The header comment is prose an operator copy-pastes and cannot be generated, so it is
 # compared. Sorted: the order in a comment is not the thing under test.
 HDR="$(grep -oE 'apt-get install -y -qq .*' "$RT" | head -n1 | sed 's/apt-get install -y -qq //')"
@@ -464,10 +494,14 @@ done
 ( cd "$REPO" && env -u SUITES PATH="$T/nojq" bash "$RT" > "$T/norecipe.log" 2>&1 )
 rc=$?
 check "a missing command still refuses, so the printed remedy is reachable" "[ $rc -eq 2 ]"
-printed="$(grep -oE 'apt-get install -y [a-z0-9 -]+' "$T/norecipe.log" | head -n1 | sed 's/apt-get install -y //')"
+# The charset takes a package with a dot, a plus or a capital (python3.12, g++): a
+# narrower one truncates silently and the comparison fails for the wrong reason.
+printed="$(grep -oE 'apt-get install -y [a-zA-Z0-9 ._+-]+' "$T/norecipe.log" | head -n1 | sed 's/apt-get install -y //')"
 printed_sorted="$(printf '%s\n' $printed | sort | tr '\n' ' ')"
 check "the remedy it PRINTS is the generated set, not a hand-kept copy of it" \
   "[ '$printed_sorted' = '$gen_sorted' ]"
+check "and so is the one the capability refusal prints, which nothing read before" \
+  "[ '$caps_sorted' = '$gen_sorted' ]"
 
 
 echo "== repo: the off-box probe cannot pass without probing (risk register #17)"
