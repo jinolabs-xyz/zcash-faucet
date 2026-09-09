@@ -16,6 +16,13 @@
 	# Certificate expiry notices go nowhere by default: Let's Encrypt accepts
 	# an account with no contact, and a fake address is worse than none. To
 	# get them, add a real one here:  email you@example.org
+	#
+	# Until someone does, the OFF-BOX probe is what watches the certificate:
+	# scripts/live-probe.mjs fails when fewer than SMOKE_TLS_MIN_DAYS (21) days
+	# are left, which on a 90-day certificate Caddy renews at 30 means renewal
+	# has already stopped working. Nothing on the box can see this: the watchdog
+	# and the metrics timer both ask the app over loopback, where TLS is not in
+	# play (risk register #18).
 }
 
 {$FAUCET_DOMAIN} {

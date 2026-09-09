@@ -12,6 +12,11 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { createServer as createTlsServer } from "node:https";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 
 const PROBE = fileURLToPath(new URL("./live-probe.mjs", import.meta.url));
 
@@ -164,4 +169,75 @@ test("garbage is ignored rather than trusted", async () => {
     assert.match(r.err, expected, `"${v}" was refused for the wrong reason`);
     assert.match(r.out, /FAIL: faucet is ready to drip/, `"${v}": the probe did not reach the readiness check`);
   }
+});
+
+/* --------------------------------------- the certificate, which only an outside probe sees (#18) */
+
+/** A self-signed cert valid for `days`, or null when this machine has no openssl. */
+function selfSigned(days) {
+  const dir = mkdtempSync(join(tmpdir(), "probe-tls-"));
+  const key = join(dir, "k.pem"), crt = join(dir, "c.pem");
+  const r = spawnSync("openssl", [
+    "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", crt,
+    "-days", String(days), "-subj", "/CN=localhost",
+  ], { encoding: "utf8" });
+  if (r.status !== 0) return null;
+  return { key: readFileSync(key), cert: readFileSync(crt) };
+}
+
+async function runTlsProbe(days, env = {}) {
+  const pair = selfSigned(days);
+  if (!pair) return null; // no openssl here
+  const server = createTlsServer(pair, (req, res) => {
+    const isReady = req.url.startsWith("/api/ready");
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(isReady ? READY : {
+      network: "testnet", dripTaz: 0.1, balanceTaz: 100, empty: false, queueDepth: 0, challenge: "pow",
+      backend: { reachable: true },
+      node: { ready: true, syncPercent: 100, height: 10, frozen: false },
+      box: { state: "complete", expected: 1, present: 1, notEnabled: 0, watchdogUnit: "active", alertBridge: "ok", minerBinary: "current", ageSeconds: 5 },
+    }));
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    return await run(process.execPath, [PROBE], {
+      SMOKE_URL: `https://127.0.0.1:${server.address().port}`,
+      SMOKE_ATTEMPTS: "1", SMOKE_RETRY_DELAY_MS: "0", SMOKE_SKIP_EXPLORER: "1",
+      NODE_TLS_REJECT_UNAUTHORIZED: "0", // a self-signed fixture; the expiry is what is under test
+      ...env,
+    });
+  } finally {
+    server.close();
+  }
+}
+
+test("A CERTIFICATE ABOUT TO EXPIRE FAILS THE PROBE: nothing on the box can see this", async (t) => {
+  // Caddy renews a 90-day certificate at about 30 days left, so few days left means
+  // renewal has already stopped working. The box cannot notice: the watchdog asks the
+  // app over loopback and Let's Encrypt has no contact address for this account.
+  const r = await runTlsProbe(10);
+  if (!r) return t.skip("no openssl on this machine");
+  assert.notEqual(r.code, 0, r.out);
+  assert.match(r.out, /the TLS certificate has more than 21 days left/);
+  assert.match(r.out, /renewal has ALREADY not worked/);
+});
+
+test("a certificate with room left passes, and says how much", async (t) => {
+  const r = await runTlsProbe(60);
+  if (!r) return t.skip("no openssl on this machine");
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /ok: the TLS certificate has more than 21 days left \(5\d days/);
+});
+
+test("the floor is settable, so a shorter-lived certificate can still be watched", async (t) => {
+  const r = await runTlsProbe(10, { SMOKE_TLS_MIN_DAYS: "5" });
+  if (!r) return t.skip("no openssl on this machine");
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /ok: the TLS certificate has more than 5 days left/);
+});
+
+test("an http origin skips the certificate check rather than failing it", async () => {
+  const r = await runProbe({});
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /certificate: skipped, http:\/\/127\.0\.0\.1:\d+ is not https/);
 });

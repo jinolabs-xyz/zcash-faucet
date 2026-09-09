@@ -79,6 +79,10 @@ const hatch = unreadyHatch(process.env.SMOKE_ALLOW_UNREADY);
 const ALLOW_UNREADY = hatch.on;
 if (hatch.why) console.error(hatch.why);
 const TIMEOUT_MS = Number(process.env.SMOKE_TIMEOUT_MS ?? 15000);
+// Days of certificate life below which this fails. Caddy renews a 90-day Let's Encrypt
+// certificate at about 30 days left, so 21 means "two renewal attempts have already not
+// worked", not "renewal is due" (risk register #18).
+const TLS_MIN_DAYS = Number(process.env.SMOKE_TLS_MIN_DAYS ?? 21);
 const RETRY_ATTEMPTS = Math.max(1, Number(process.env.SMOKE_ATTEMPTS ?? 3));
 const RETRY_DELAY_MS = Number(process.env.SMOKE_RETRY_DELAY_MS ?? 30000);
 
@@ -158,6 +162,60 @@ async function loadExplorerTxUrl() {
     console.log(`cannot-verify: could not load the shipped explorer URL builder (${err.message})`);
     return null;
   }
+}
+
+/**
+ * THE CERTIFICATE, WHICH ONLY AN OUTSIDE PROBE CAN SEE. Nothing on the box watches it:
+ * the watchdog asks the app over loopback, the metrics timer likewise, and Caddy renews
+ * silently or fails silently. A renewal that stops working is invisible for a month and
+ * then the site is hard-down for every browser while /api/health still answers 200
+ * inside the box (risk register #18). Let's Encrypt would email about it, except the
+ * ACME account here has no contact address, which is its own line in HTTPS.md.
+ *
+ * Not fatal to the rest: an http:// origin (the :80 smoke shape) skips this, and a
+ * connection that fails is reported by the faucet checks above rather than twice.
+ */
+async function checkTlsExpiry() {
+  const { ok, count } = tally();
+  let url;
+  try {
+    url = new URL(BASE);
+  } catch {
+    return count();
+  }
+  if (url.protocol !== "https:") {
+    console.log(`\ncertificate: skipped, ${BASE} is not https`);
+    return count();
+  }
+  console.log(`\ncertificate (#18): ${url.host}`);
+  const tls = await import("node:tls");
+  const cert = await new Promise((resolve) => {
+    const socket = tls.connect(
+      { host: url.hostname, port: Number(url.port || 443), servername: url.hostname, timeout: TIMEOUT_MS },
+      () => { const c = socket.getPeerCertificate(); socket.end(); resolve(c && c.valid_to ? c : null); },
+    );
+    socket.on("error", () => resolve(null));
+    socket.on("timeout", () => { socket.destroy(); resolve(null); });
+  });
+  if (!cert) {
+    ok("the TLS certificate can be read", false, `could not complete a TLS handshake with ${url.host}`);
+    return count();
+  }
+  const expiresAt = Date.parse(cert.valid_to);
+  if (Number.isNaN(expiresAt)) {
+    ok("the TLS certificate carries an expiry", false, `unparseable valid_to ${JSON.stringify(cert.valid_to)}`);
+    return count();
+  }
+  const days = Math.floor((expiresAt - Date.now()) / 86_400_000);
+  ok(
+    `the TLS certificate has more than ${TLS_MIN_DAYS} days left`,
+    days > TLS_MIN_DAYS,
+    days > TLS_MIN_DAYS
+      ? `${days} days, expires ${cert.valid_to}`
+      : `${days} days left (expires ${cert.valid_to}). Caddy renews at about 30 days, so this means renewal has ALREADY not worked: ` +
+        `check \`docker logs\` on the caddy container, that ports 80 and 443 reach the box, and DNS`,
+  );
+  return count();
 }
 
 /** Fetch an explorer tx page. Returns {status, text}; status 0 = unreachable. */
@@ -422,15 +480,16 @@ for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt += 1) {
   }
 }
 
+const tlsFailures = await checkTlsExpiry();
 const explorerFailures = await checkExplorerProperty();
 
-const total = faucetFailures + explorerFailures;
+const total = faucetFailures + tlsFailures + explorerFailures;
 if (total === 0) {
   console.log(`\nlive-probe: healthy`);
 } else {
   console.log(
     `\nlive-probe: ${total} FAILED` +
-      ` (faucet ${faucetFailures} after ${RETRY_ATTEMPTS} attempt(s), explorer ${explorerFailures})`,
+      ` (faucet ${faucetFailures} after ${RETRY_ATTEMPTS} attempt(s), certificate ${tlsFailures}, explorer ${explorerFailures})`,
   );
 }
 process.exit(total === 0 ? 0 : 1);
