@@ -193,10 +193,18 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
       `drip refused, chain view ${freshness.state} (lag ${freshness.lag ?? "unknown"}): ${freshness.reason}`,
       "chain freshness gate",
     );
+    // TWO REFUSALS, TWO SENTENCES. "unsafe" is our node measurably behind: say so.
+    // "unverifiable" is the network's tip being unknowable to us right now, and telling
+    // the user our node is behind in that case blames the wrong thing and sends the
+    // operator who reads the same text to the wrong fix (register #6).
     return apiError(
       503,
-      "Our node is catching up with the network, so a drip sent right now would expire " +
-        "before it could confirm. Nothing was claimed, your cooldown is untouched. Try again shortly.",
+      freshness.state === "unverifiable"
+        ? "We could not verify the network's current height just now, so we are not sending: a drip " +
+          "built against an unverified tip could expire before it confirms. Nothing was claimed, your " +
+          "cooldown is untouched. Try again shortly."
+        : "Our node is catching up with the network, so a drip sent right now would expire " +
+          "before it could confirm. Nothing was claimed, your cooldown is untouched. Try again shortly.",
       api,
       { retryAfterSeconds: FRESHNESS_RETRY_SECONDS },
     );

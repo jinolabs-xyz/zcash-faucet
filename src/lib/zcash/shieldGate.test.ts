@@ -132,3 +132,14 @@ test("a positive lag inside the budget still says within, so the split is narrow
   assert.equal(gate.lag, 2);
   assert.match(gate.reason, /within/);
 });
+
+// ── THE MONEY PATH WAITS AT LEAST ONE FULL FETCH (risk register #6) ─────────────────────
+import { ORACLE_WAIT_MS } from "./shieldGate.ts";
+import { HOSH_TIMEOUT_MS } from "./externalTip.ts";
+
+test("the wait in front of a drip covers the primary oracle's own timeout", () => {
+  // 2 s against a 5 s fetch refused claims as "unverifiable" while hosh was answering at
+  // 3 s. Pinned as an inequality, so retuning either number alone cannot reopen it.
+  assert.ok(ORACLE_WAIT_MS >= HOSH_TIMEOUT_MS, `wait ${ORACLE_WAIT_MS} < fetch ${HOSH_TIMEOUT_MS}`);
+  assert.ok(ORACLE_WAIT_MS <= 10_000, "and it is still a request-path number, not a batch one");
+});

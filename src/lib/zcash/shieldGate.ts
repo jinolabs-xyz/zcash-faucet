@@ -34,7 +34,7 @@
  */
 
 import { num } from "../config.ts";
-import { getExternalTip, warmExternalTip } from "./externalTip.ts";
+import { getExternalTip, warmExternalTip, HOSH_TIMEOUT_MS } from "./externalTip.ts";
 
 /*
  * The decision itself is a PURE function of two heights (see shieldFreshness),
@@ -215,10 +215,16 @@ export function readChainFreshness(nodeHeight: number | null): ChainGate {
 
 /**
  * Longest we will make a caller wait for the oracle before deciding without it.
- * The request path is the constraint: two seconds is tolerable in front of a drip
- * that takes seconds to build anyway, and it is well under any sane client timeout.
+ *
+ * AT LEAST ONE FULL FETCH OF THE PRIMARY. The first version waited 2 s against a hosh
+ * fetch allowed 5 s, so a slow-but-answering oracle produced "unverifiable" and a
+ * refusal that blamed our node, on the money path, for nothing (risk register #6).
+ * One second of margin on top, for the poll interval and the hand-off into the
+ * fallback. Six seconds in front of a drip that takes seconds to build is tolerable,
+ * and it is paid only on a cold cache; the background refresh keeps it warm the rest
+ * of the time.
  */
-const ORACLE_WAIT_MS = 2000;
+export const ORACLE_WAIT_MS = HOSH_TIMEOUT_MS + 1000;
 
 /**
  * The reading for a caller that is ABOUT TO BUILD a transaction, rather than one

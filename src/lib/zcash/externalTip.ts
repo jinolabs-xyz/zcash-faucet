@@ -12,7 +12,21 @@
  * genuinely did not get its tip from us, so this catches the failure it was built
  * for: our node silently stopping while the network moves on. What it cannot do is
  * survive zec.rocks being wrong or dark, because there is no second opinion to fall
- * back to. Do not read "independent" here as "corroborated by more than one org". This is the antidote to the failure that killed Fauzec's faucet
+ * back to. Do not read "independent" here as "corroborated by more than one org".
+ *
+ * A SECOND ORGANISATION WAS LOOKED FOR, 2026-09-09, and there is not one to add yet:
+ *   lightwalletd.testnet.electriccoin.co:9067   GetLatestBlock: deadline exceeded (8 s),
+ *                                               the endpoint hosh dropped is gone
+ *   testnet.zcashexplorer.app /api/v1/blockchain-info   answers, `blocks` 4,308,590 while
+ *                                               the network was at 4,335,553: 26,963
+ *                                               behind. A source that far behind would
+ *                                               tell a frozen node it is AHEAD, and lag
+ *                                               below zero reads as safe. Rejected.
+ *   testnet.cipherscan.app                      no JSON API
+ * So `LIGHTWALLETD_ENDPOINT` (comma-separated, tried in order) is where a second org
+ * goes the day one exists, and until then the honest state is one org, fail closed.
+ *
+ * This is the antidote to the failure that killed Fauzec's faucet
  * (#170): a node that has silently stopped following the chain keeps reporting
  * its own frozen tip as the tip, so any readiness check that trusts our own node
  * is fooled. Comparing our node's tip against a DIFFERENT view is the only way to
@@ -89,6 +103,13 @@ export function heightFromBlockID(buf: Buffer): number | null {
  * dashboard exists precisely to answer "where is the network right now".
  */
 const HOSH_URL = process.env.HOSH_URL ?? "https://hosh.zec.rocks/api/v0/zec.json";
+/**
+ * How long one fetch of the primary may take. EXPORTED because the money path's wait in
+ * shieldGate.ts has to be at least this long: a claim that stopped waiting at 2 s while
+ * hosh answered at 3 s was refused "unverifiable" on a network that was perfectly
+ * reachable, blaming our node for an oracle we never heard from (risk register #6).
+ */
+export const HOSH_TIMEOUT_MS = 5000;
 
 async function fromHosh(timeoutMs: number): Promise<number | null> {
   const res = await fetch(HOSH_URL, { signal: AbortSignal.timeout(timeoutMs) });
@@ -121,7 +142,7 @@ function getLatestBlock(host: string, timeoutMs: number): Promise<number | null>
 
 /** Do the actual network work: hosh first, then a direct node. Carries provenance. */
 async function fetchNetworkTip(): Promise<{ height: number | null; source: TipSource; host: string | null }> {
-  const h = await fromHosh(5000).catch(() => null);
+  const h = await fromHosh(HOSH_TIMEOUT_MS).catch(() => null);
   if (h != null && h > 0) return { height: h, source: "hosh", host: null };
   // hosh down or its testnet filter yielded nothing - degrade to a direct node,
   // and say so, because a silent degrade to a single source defeats the point of
