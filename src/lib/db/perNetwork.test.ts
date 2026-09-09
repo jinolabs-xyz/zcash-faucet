@@ -41,6 +41,7 @@ type Opts = { subnet?: string; network?: string; cap?: number; amount?: number; 
 function claim(d: InstanceType<typeof Database>, addr: string, ip: string, o: Opts = {}): boolean {
   const r = d.prepare(RESERVE_SQL).run(
     ...reserveParams({
+      pendingLeaseSeconds: 120,
       addressHash: addr,
       ipHash: ip,
       subnetHash: o.subnet ?? "",

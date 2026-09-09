@@ -211,7 +211,31 @@ DELETE FROM used_challenges WHERE exp < ?
 
 // A 'pending' row that never finalises (e.g. process died mid-send) shouldn't
 // lock a user out for the whole cooldown - it only blocks for this lease.
-export const PENDING_LEASE_SECONDS = 120;
+//
+// DERIVED FROM THE SEND BUDGET AND THE QUEUE, NOT A CONSTANT (risk register #8). It was
+// 120 s while a legal shielded send may take config.sendTaskDeadlineMs, 309 s on stock
+// settings: a slow send unblocked its own address at two minutes, still pending, and a
+// retry reserved and paid a second drip while the first was being built. The route's
+// unknown-outcome handling (finalise as sent) only begins once the deadline has passed,
+// so the lease has to outlast the deadline.
+//
+// AND THE WAIT IN FRONT OF IT. The row is reserved before the claim joins the serial send
+// queue, and the deadline is armed when the send STARTS, not when it was queued
+// (queue.ts). A claim behind a full queue waits up to sendQueueMaxPending sends, each up
+// to the send's real residence (config.sendResidenceMs: the sender's own worst case, or
+// the deadline if that is higher; a deadline pinned below the sender must not shrink
+// this), before its own send begins. Review reproduced the double drip at queue depth two with a lease that
+// covered one send: the row outlived the lease while the send had not started. So the
+// lease covers a full queue plus the send plus a margin for the finalise write: with
+// stock settings 21 * 309 s + 60 s, about 109 minutes. A process that dies mid-send holds
+// an address that long, against a 24 h cooldown; a double drip is real money. A floor of
+// 120 was considered and rejected: it was the underived number this replaces, and the
+// correctness bound is the sum, not a constant. The db module computes the value once
+// from config; this is the rule, kept pure so it can be tested.
+export const PENDING_LEASE_MARGIN_SECONDS = 60;
+export function pendingLeaseSeconds(sendResidenceMs: number, sendQueueMaxPending: number): number {
+  return Math.ceil(((sendQueueMaxPending + 1) * sendResidenceMs) / 1000) + PENDING_LEASE_MARGIN_SECONDS;
+}
 
 /**
  * Atomic reserve: insert a 'pending' claim ONLY IF no live claim exists for this
@@ -292,9 +316,11 @@ export function reserveParams(o: {
   dailyCapZat: number;
   subnetDailyMax: number;
   network: string;
+  /** How long a pending row blocks: pendingLeaseSeconds(config.sendResidenceMs, config.sendQueueMaxPending). */
+  pendingLeaseSeconds: number;
 }): (string | number)[] {
   const cooldownCut = o.now - o.cooldownSeconds;
-  const leaseCut = o.now - PENDING_LEASE_SECONDS;
+  const leaseCut = o.now - o.pendingLeaseSeconds;
   const since = o.now - 86_400;
   return [
     o.addressHash, o.ipHash, o.subnetHash, o.amountZat, o.now, o.network, // INSERT ... SELECT

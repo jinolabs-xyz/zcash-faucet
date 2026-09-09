@@ -50,6 +50,7 @@ function claim(
 ): boolean {
   const r = db.prepare(RESERVE_SQL).run(
     ...reserveParams({
+      pendingLeaseSeconds: 120,
       addressHash: addr,
       ipHash: ip,
       subnetHash: subnet,

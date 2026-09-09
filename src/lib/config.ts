@@ -8,7 +8,7 @@
 // (type stripping) resolves literal paths only, and config sits on the import
 // chain of every test that touches pow or the senders.
 import { saltRejectionReason } from "./saltGuard.ts";
-import { defaultTaskDeadlineMs } from "./zcash/sendBudget.ts";
+import { defaultTaskDeadlineMs, senderWorstCaseMs } from "./zcash/sendBudget.ts";
 
 export const ZATOSHI_PER_TAZ = 100_000_000n;
 
@@ -341,6 +341,16 @@ export const config = {
     1000,
     Math.floor(num("SEND_TASK_DEADLINE_MS", defaultTaskDeadlineMs(zalletTimings))),
   ),
+  // How long one queued send can really OCCUPY the queue: the sender's own worst case,
+  // or the deadline if an operator raised that above it. The deadline is how long a
+  // caller waits; the queue's tail advances on the send's real completion, which the
+  // sender's timeouts bound. A deadline pinned BELOW the sender (the API harness does
+  // this on purpose) must not shrink anything that has to cover the queue, which is the
+  // pending-claim lease: review found a 60 s deadline gave a 22-minute lease against a
+  // 93-minute real wait (risk register #8).
+  get sendResidenceMs(): number {
+    return Math.max(this.sendTaskDeadlineMs, senderWorstCaseMs(zalletTimings));
+  },
 
   turnstile: {
     siteKey: process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? "",
