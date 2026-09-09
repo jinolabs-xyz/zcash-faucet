@@ -23,9 +23,12 @@
 #     systemctl stop faucet-watchdog.service      # or it restarts zallet mid-repair
 #     bash deploy/z3/zallet-truncate-wallet.sh <MAX_HEIGHT>
 #     systemctl start faucet-watchdog.service
-# It stops zallet, backs up wallet.db, truncates, and starts zallet again, using the
-# image the zallet container is running (ZALLET_IMAGE overrides, for a container that
-# is gone; ZALLET_WALLET_DB overrides the db path, for the suite).
+# It stops zallet, backs up wallet.db, truncates, and starts zallet again, running the
+# exact image the zallet container runs (the image ID, not the tag, which can move under
+# a running container). The container must EXIST, stopped is fine: --volumes-from needs
+# it. ZALLET_IMAGE overrides the image for a container whose inspect you do not trust;
+# ZALLET_WALLET_DB overrides the db path, for the suite. The watchdog must be stopped
+# first and the script refuses if it is not: it would docker-start zallet mid-repair.
 set -uo pipefail
 
 MAX_HEIGHT="${1:-}"
@@ -43,35 +46,64 @@ DB="${ZALLET_WALLET_DB:-/var/lib/docker/volumes/${VOLUME}/_data/wallet.db}"
 
 [ -f "$DB" ] || { echo "ABORT: no wallet.db at $DB" >&2; exit 1; }
 
-# THE IMAGE IS THE ONE THE WALLET RUNS, read off the container, never a pin in this file.
-# The pin here was v0.1.0-beta.1 while the wallet had moved to beta.3, so the mid-incident
-# repair would have opened the funds database with an older schema handler (risk register
-# #14). A repair tool that cannot tell which zallet owns the file has no business touching
-# it: no readable image, no truncate. ZALLET_IMAGE still overrides, for a wallet whose
-# container is gone, and says so in the log so the choice is on record.
-if [ -n "${ZALLET_IMAGE:-}" ]; then
-  IMAGE="$ZALLET_IMAGE"; image_from="ZALLET_IMAGE (an override you set, not the running container)"
-else
-  IMAGE="$(docker inspect --format '{{.Config.Image}}' "$ZALLET_CONTAINER" 2>/dev/null)" || IMAGE=""
-  image_from="the running container $ZALLET_CONTAINER"
-  if [ -z "$IMAGE" ]; then
-    echo "ABORT: could not read the image of container $ZALLET_CONTAINER (docker inspect gave nothing)." >&2
-    echo "  The repair must run the SAME zallet that owns wallet.db. Fix the container name (ZALLET_CONTAINER)," >&2
-    echo "  or, if the container is gone, set ZALLET_IMAGE to the exact image it ran. Nothing was stopped." >&2
-    exit 1
-  fi
+# THE WATCHDOG MUST BE STOPPED FIRST. Its container sweep docker-starts a zallet it finds
+# not running, which is two writers on wallet.db while the truncate has it open. The
+# usage comment said so; a comment is not a guard.
+WATCHDOG_UNIT="${ZALLET_REPAIR_WATCHDOG_UNIT:-faucet-watchdog.service}"
+if [ "$(systemctl is-active "$WATCHDOG_UNIT" 2>/dev/null || true)" = "active" ]; then
+  echo "ABORT: $WATCHDOG_UNIT is active and would docker-start zallet mid-repair. Run: systemctl stop $WATCHDOG_UNIT   (and start it again after). Nothing was stopped." >&2
+  exit 1
 fi
-case "$IMAGE" in
+
+# THE CONTAINER MUST EXIST: --volumes-from needs it (stopped is fine, removed is not),
+# and it is where the image comes from. Its stderr is shown, because "no such container",
+# "permission denied on the socket" and "daemon not running" want three different fixes.
+inspect_err="$(mktemp)"
+container_name="$(docker inspect --format '{{.Config.Image}}' "$ZALLET_CONTAINER" 2>"$inspect_err")" || container_name=""
+container_id_image="$(docker inspect --format '{{.Image}}' "$ZALLET_CONTAINER" 2>/dev/null)" || container_id_image=""
+if [ -z "$container_name" ] || [ -z "$container_id_image" ]; then
+  echo "ABORT: could not inspect container $ZALLET_CONTAINER: $(tr '\n' ' ' < "$inspect_err")" >&2
+  echo "  The repair mounts that container's volumes and runs the zallet it runs, so it has to exist (stopped is fine)." >&2
+  echo "  Fix the name (ZALLET_CONTAINER), the docker socket, or bring the container back with compose. Nothing was stopped." >&2
+  rm -f "$inspect_err"; exit 1
+fi
+rm -f "$inspect_err"
+
+# THE IMAGE IS THE ONE THE WALLET RUNS: the image ID (.Image), never a pin in this file
+# and never the tag name (.Config.Image) either, because a tag can be re-pushed or
+# re-tagged under a running container and then names a different binary than the one
+# holding wallet.db. The pin here was v0.1.0-beta.1 while the wallet had moved to beta.3
+# (risk register #14). The NAME is checked and logged, so a container that is not a
+# zallet is refused with a word a human can read, and the ID is what runs.
+case "$container_name" in
   *zallet*) ;;
-  *) echo "ABORT: image \"$IMAGE\" from $image_from does not look like a zallet image. Nothing was stopped." >&2; exit 1 ;;
+  *) echo "ABORT: container $ZALLET_CONTAINER runs \"$container_name\", which does not look like a zallet image. Nothing was stopped." >&2; exit 1 ;;
 esac
-echo "image: $IMAGE (from $image_from)"
+if [ -n "${ZALLET_IMAGE:-}" ]; then
+  # An override for a container whose image you do not trust. It still has to be a zallet
+  # by name, or a bare ID or digest, which carry no name and are taken as given.
+  case "$ZALLET_IMAGE" in
+    *zallet*|sha256:*|*@sha256:*) ;;
+    *) echo "ABORT: ZALLET_IMAGE \"$ZALLET_IMAGE\" is neither a zallet image by name nor an image ID or digest. Nothing was stopped." >&2; exit 1 ;;
+  esac
+  IMAGE="$ZALLET_IMAGE"
+  echo "image: $IMAGE (from ZALLET_IMAGE, an override you set; the container runs $container_name = $container_id_image)"
+else
+  IMAGE="$container_id_image"
+  echo "image: $container_name, running as $IMAGE (from the container $ZALLET_CONTAINER; the ID is what runs, the tag is a name)"
+fi
 
 echo "=== stop zallet (the daemon must not hold wallet.db during a truncate) ==="
 docker stop "$ZALLET_CONTAINER" >/dev/null 2>&1 || true
 
 BAK="${DB}.bak-pretruncate-$(date +%s)"
-cp -f "$DB" "$BAK" && echo "backup: $BAK"
+if cp -f "$DB" "$BAK"; then
+  echo "backup: $BAK"
+else
+  echo "ABORT: could not back up $DB to $BAK (disk full?). No truncate without a backup." >&2
+  docker start "$ZALLET_CONTAINER" >/dev/null 2>&1 && echo "zallet started again on the untouched state"
+  exit 1
+fi
 
 echo "=== truncate wallet to at most ${MAX_HEIGHT} ==="
 # --volumes-from reuses the exact volumes and config the container had, so this opens the
@@ -83,10 +115,15 @@ docker run --rm --volumes-from "$ZALLET_CONTAINER" --network none "$IMAGE" \
 rc=$?
 
 echo "=== restart zallet ==="
-docker start "$ZALLET_CONTAINER" >/dev/null 2>&1 && echo "started"
+if docker start "$ZALLET_CONTAINER" >/dev/null 2>&1; then
+  restarted="zallet was started again"
+else
+  restarted="AND zallet could NOT be started again (docker start $ZALLET_CONTAINER failed), start it by hand"
+  echo "WARNING: $restarted" >&2
+fi
 
 if [ "$rc" -ne 0 ]; then
-  echo "TRUNCATE FAILED (exit $rc). wallet.db backup is $BAK, and zallet was restarted on the pre-truncate state." >&2
+  echo "TRUNCATE FAILED (exit $rc). wallet.db backup is $BAK; $restarted, on the pre-truncate state." >&2
   exit "$rc"
 fi
 
