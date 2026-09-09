@@ -56,7 +56,7 @@ export interface SendRecord {
  * failure-rate verdict, and any mix of unresolved and failed for the nothing-resolves
  * verdict below. Lowering it loosens both.
  *
- * Below this the verdict is `unknown`, never `ok`. One failed send is not evidence of a
+ * Below this the verdict is `unknown` or, with nothing resolving, `degraded`, never `ok`. One failed send is not evidence of a
  * dead wallet, and on a quiet faucet it may be the only send that hour. Requiring a
  * sample is what stops this from paging on a single unlucky claim, and answering
  * `unknown` rather than `ok` is what stops a quiet faucet from vouching for a wallet
@@ -87,8 +87,13 @@ export const MIN_SAMPLE = 3;
 export function windowFor(sendTaskDeadlineMs: number): number {
   return Math.max(15 * 60_000, (MIN_SAMPLE - 1) * sendTaskDeadlineMs + 60_000);
 }
+
 /** The window in force for this process: derived from the configured deadline, above. */
 export const WINDOW_MS = windowFor(config.sendTaskDeadlineMs);
+/** Whole minutes for the operator-facing sentence: a derived window is not a round number. */
+export function windowMinutes(windowMs: number): number {
+  return Math.round(windowMs / 60_000);
+}
 
 /**
  * The share of recent sends that may fail before the money path is called broken.
@@ -164,7 +169,7 @@ export function readSendHealth(now: number = Date.now(), records: SendRecord[] =
       ok,
       failed,
       unknown,
-      reason: `only ${decided} decided send(s) in the last ${Math.round(WINDOW_MS / 60_000)} min, too few to judge`,
+      reason: `only ${decided} decided send(s) in the last ${windowMinutes(WINDOW_MS)} min, too few to judge`,
     };
   }
 

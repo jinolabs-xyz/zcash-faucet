@@ -15,6 +15,7 @@ import {
   resetSendHealth,
   WINDOW_MS,
   windowFor,
+  windowMinutes,
   MIN_SAMPLE,
   FAIL_RATIO,
   type SendRecord,
@@ -187,9 +188,12 @@ test("THE WINDOW HOLDS A SAMPLE OF DEADLINE-SPACED UNKNOWNS, so the deadline cla
   assert.equal(windowFor(309_000), 15 * 60_000);
   assert.equal(windowFor(451_000), 2 * 451_000 + 60_000);
   assert.equal(windowFor(1_929_000), 2 * 1_929_000 + 60_000, "ZALLET_OP_TIMEOUT_MS at 30 min still fits three deadline-spaced unknowns");
-  // The sentence a derived window prints is a whole number of minutes, not 18.633333.
-  const quiet = readSendHealth(NOW, []);
-  assert.match(quiet.reason, /in the last \d+ min, too few to judge/);
+  // The sentence prints whole minutes. In CI's env the window is the 15 min floor, where
+  // rounding is a no-op, so the rounding is pinned on a DERIVED window here, not on the
+  // sentence alone: 1_118_000 ms is 18.633 min and must read 19.
+  assert.equal(windowMinutes(windowFor(529_000)), 19);
+  assert.equal(windowMinutes(windowFor(1_929_000)), 65);
+  assert.match(readSendHealth(NOW, []).reason, new RegExp(`in the last ${windowMinutes(WINDOW_MS)} min, too few to judge`));
   const spaced = Array.from({ length: MIN_SAMPLE }, (_, i) => at("unknown", i * deadline));
   assert.equal(readSendHealth(NOW, spaced).state, "degraded", "deadline-spaced unknowns must fit the window");
 });
