@@ -29,9 +29,16 @@ wd_env() {
   # WATCHDOG_MINER_HEARTBEAT too: exported by the miner cases, it otherwise points every
   # later case at a stale, stalled heartbeat in an old scratch dir, and the miner heal
   # runs (and gives up, and pages) inside tests that are about something else.
+  # STUB_READY too, and it is the worst of them: the redeploy suite exports it as a FILE
+  # PATH for its own curl double, and this suite's curl stub reads it as a 0/1 flag, so
+  # in the full run (redeploy before watchdog) every /api/ready here answered 503 "node
+  # syncing". Nothing noticed for as long as the grace window was 999999, because a
+  # faucet that is never ready and never paged looks exactly like one that is fine.
+  # The first case that set the grace to 0 failed in CI and passed alone.
   unset STUB_CRASHLOOP STUB_HEAL_FIXES STUB_ZEBRA_BLOCKS STUB_ZEBRA_EST STUB_ZEBRA_ADVANCE STUB_ZEBRA_STUCK_CALLS \
         WATCHDOG_NODE_HEAL_ENABLED WATCHDOG_NODE_STOPS_MINER WATCHDOG_MINER_HEARTBEAT WATCHDOG_MINER_UNIT STUB_START_FAIL \
-        WATCHDOG_SIGNAL_MATCH STUB_READY_CANBUILD STUB_READY_CANBUILD_ONCE
+        WATCHDOG_SIGNAL_MATCH STUB_READY_CANBUILD STUB_READY_CANBUILD_ONCE \
+        STUB_READY STUB_READY_REASON STUB_READY_FAIL_UNTIL STUB_HEALTH
   # Capture what would have been paged, without a webhook.
   # Records EVERY argument, so the suite can see that the watchdog passes --now (its
   # messages are one per episode and must never be held by alert.sh's cooldown).
@@ -694,6 +701,8 @@ export WATCHDOG_READY_GRACE_SECS=0
 echo running > "$STUB_CONTAINERS/faucet-web"
 wd_run 2
 check "no NOT READY page for a faucet that can build a transaction" "! grep -q 'NOT READY' '$T/alerts.log'"
+check "and the stub really answered 200, so the silence is readiness and not a probe that never asked" \
+  "grep -q 'ready' '$T/stub.log' && ! grep -q 'node syncing' '$T/run.log'"
 
 echo "== watchdog: the gate reopening is ONE fixed report, like every other recovery"
 wd_env
