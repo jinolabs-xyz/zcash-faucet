@@ -44,7 +44,11 @@ const BASE = (process.env.SMOKE_URL ?? "").replace(/\/$/, "");
  * "today" runs out before ours does). Anything else, including the old "1", is
  * not a hatch, and the caller says so on stderr.
  */
-const MAX_HATCH_DAYS = Number(process.env.SMOKE_ALLOW_UNREADY_MAX_DAYS ?? 14);
+// A malformed value must not DISABLE the cap: `daysOut > NaN` is false, which is the
+// fail-open direction, so anything unparseable falls back to the default.
+const MAX_HATCH_DAYS = Number.isFinite(Number(process.env.SMOKE_ALLOW_UNREADY_MAX_DAYS))
+  ? Number(process.env.SMOKE_ALLOW_UNREADY_MAX_DAYS)
+  : 14;
 
 function unreadyHatch(raw, now = new Date(), maxDays = MAX_HATCH_DAYS) {
   const v = (raw ?? "").trim();
@@ -61,7 +65,10 @@ function unreadyHatch(raw, now = new Date(), maxDays = MAX_HATCH_DAYS) {
   if (until < now.getTime()) {
     return { on: false, why: `SMOKE_ALLOW_UNREADY expired on ${v}, so it is IGNORED and this probe fails on a faucet that cannot drip, as it should` };
   }
-  const daysOut = Math.ceil((until - now.getTime()) / 86_400_000);
+  // WHOLE days, floored. The hatch runs to the end of its day, so a date 14 calendar days
+  // out is 14.5 days of clock; ceil made that 15 and refused the very value the runbook
+  // tells an operator to type.
+  const daysOut = Math.floor((until - now.getTime()) / 86_400_000);
   if (daysOut > maxDays) {
     return { on: false, why: `SMOKE_ALLOW_UNREADY is "${v}", ${daysOut} days out, past the ${maxDays}-day cap, so it is IGNORED: a far-future date is the old never-expiring hatch with extra typing` };
   }

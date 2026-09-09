@@ -7,7 +7,7 @@
 # detector was one of the things that never installed, so nothing noticed for weeks.
 #
 # This writes counts into the faucet's /app/data volume. The app turns them into a
-# verdict and live-smoke asserts that verdict from outside every 15 minutes, which is
+# verdict and live-smoke asserts that verdict from outside on every scheduled run, which is
 # the only channel that has ever reached us unprompted: it caught both outages this
 # week while every on-box signal read healthy.
 #

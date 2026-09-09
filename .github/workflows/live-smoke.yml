@@ -11,7 +11,12 @@
 # on every run having probed nothing, which is the shape of every false pass in
 # this tree (risk register #17). To turn the monitoring off deliberately, set the
 # variable FAUCET_LIVE_SMOKE_DISABLED=1 and it says so and exits 0, whether or not
-# the URL is set.
+# the URL is set. THAT ONE HAS NO EXPIRY, and it is the last switch here that does not:
+# it silences all off-box monitoring on a green check, and nothing on the box can see a
+# GitHub repository variable, so there is no second signal. It stays a deliberate,
+# named, human action rather than a date because turning monitoring off for a planned
+# window is not the same act as suppressing one failing check; if it is ever set and
+# forgotten, this comment is the only thing that will say so.
 #
 # TWO MORE WAYS THIS CAN GO QUIET, both of them outside the run:
 #   - GitHub disables scheduled workflows after 60 days with no repository activity.
@@ -93,13 +98,15 @@ jobs:
             echo "FAUCET_ALERT_URL secret is not set, cannot page (email only)"
             exit 0
           fi
-          # COMPLETED runs only. A sibling scheduled run queued a minute ago has a null
-          # conclusion and a fresh timestamp, and taking it as "the previous run" made the
-          # gap look like one minute and suppressed the page: an outage hidden by an
-          # overlapping run, which is worse than the rule it replaced.
-          prev_json="$(gh run list --workflow live-smoke --event schedule --status completed --limit 3 \
+          # A run that SUCCEEDED or FAILED, nothing else. A sibling scheduled run queued a
+          # minute ago has a null conclusion and a fresh timestamp, and taking it as "the
+          # previous run" made the gap look like one minute and suppressed the page. So does
+          # a run an operator CANCELLED mid-incident, which --status completed still returns
+          # (GitHub conflates status and conclusion in that parameter), so the filter is on
+          # the conclusion itself.
+          prev_json="$(gh run list --workflow live-smoke --event schedule --limit 10 \
                     --json conclusion,databaseId,createdAt \
-                    --jq "[.[] | select(.databaseId != $GITHUB_RUN_ID)][0]" 2>/dev/null || echo '')"
+                    --jq "[.[] | select(.databaseId != $GITHUB_RUN_ID) | select(.conclusion == \"success\" or .conclusion == \"failure\")][0]" 2>/dev/null || echo '')"
           prev="$(printf '%s' "$prev_json" | jq -r '.conclusion // "unknown"' 2>/dev/null || echo unknown)"
           prev_at="$(printf '%s' "$prev_json" | jq -r '.createdAt // empty' 2>/dev/null || true)"
           gap_min=0

@@ -108,7 +108,11 @@ suite_deps() { # $1 suite name -> commands it needs beyond the base set
     # suites exercise the refusal path when neither exists.
     drift)    echo "python3" ;;
     # repo reads checked-in files only, so it needs nothing beyond the base set.
-    repo)     echo "" ;;
+    # repo runs python3 now: it extracts the live-smoke workflow's own steps and executes
+    # them, and without the interpreter those checks fail as though the workflow were
+    # broken. A harness that cannot tell "not installed" from "defect" makes every number
+    # it prints suspect, which is what this table exists to prevent.
+    repo)     echo "python3 jq" ;;
     # installops copies files and asks systemctl via a stub; nothing beyond the base set.
     installops) echo "" ;;
     # boxreport reads files and asks a stubbed systemctl; python3 parses its JSON output.

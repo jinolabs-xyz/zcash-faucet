@@ -249,13 +249,19 @@ mk_scratch "${TMPDIR:-/tmp}/repo-livesmoke.XXXXXX"
 # Plain text, not PyYAML: the harness image has python3 but no yaml module, and this
 # only has to find a `run: |` block under a named step.
 python3 - "$LS" "$T" <<'PY'
-import sys, pathlib, textwrap
+import sys, pathlib
 lines = open(sys.argv[1]).read().splitlines()
 out = pathlib.Path(sys.argv[2])
 
 def script(name):
     i = next(k for k, l in enumerate(lines) if l.strip().startswith("- name:") and name in l)
-    j = next(k for k in range(i, len(lines)) if lines[k].strip() in ("run: |", "run: |-"))
+    # Stop at the NEXT step. Without a boundary, a step that stops using a block scalar
+    # makes this silently return the following step's script, and the checks then fail
+    # about properties of a step that was never found.
+    end = next((k for k in range(i + 1, len(lines)) if lines[k].strip().startswith("- name:")), len(lines))
+    j = next((k for k in range(i, end) if lines[k].strip() in ("run: |", "run: |-")), None)
+    if j is None:
+        raise SystemExit(f"step {name!r} has no `run: |` block")
     body, indent = [], None
     for l in lines[j + 1:]:
         if l.strip() == "":
@@ -274,6 +280,21 @@ def script(name):
 PY
 check "the workflow's two steps could be extracted, so what follows is the shipped script" \
   "[ -s '$T/probe-step.sh' ] && [ -s '$T/page-step.sh' ]"
+# And they are the RIGHT two: a boundary bug that returned the same block twice would
+# otherwise be reported as a pile of failures about the step it never found.
+check "the probe step is the probe step, and the page step is the page step" \
+  "grep -q 'live-probe.mjs' '$T/probe-step.sh' && ! grep -q 'live-probe.mjs' '$T/page-step.sh' && grep -q 'gh run list' '$T/page-step.sh'"
+
+# THE ENV BLOCK IS PART OF THE STEP. Extracting only `run:` left the mapping invisible:
+# renaming the secret to FAUCET_ALERT_URL_TYPO turned every outage into "cannot page
+# (email only)", green, and no check moved.
+check "the probe step is handed the URL, the hatch and the off switch" \
+  "grep -q 'SMOKE_URL: ..{ vars.FAUCET_LIVE_URL }' '$LS' && grep -q 'SMOKE_ALLOW_UNREADY: ..{ vars.FAUCET_LIVE_ALLOW_UNREADY }' '$LS' && grep -q 'SMOKE_DISABLED: ..{ vars.FAUCET_LIVE_SMOKE_DISABLED }' '$LS'"
+check "the page step is handed the webhook secret and a token to read run history with" \
+  "grep -q 'ALERT_URL: ..{ secrets.FAUCET_ALERT_URL }' '$LS' && grep -q 'GH_TOKEN: ..{ github.token }' '$LS'"
+check "and it only runs when the probe failed" "grep -q 'if: failure()' '$LS'"
+check "the cap knob is NOT settable from the workflow, so a variable cannot widen it" \
+  "! grep -q 'SMOKE_ALLOW_UNREADY_MAX_DAYS' '$LS'"
 
 # The probe step, run for real. `node scripts/live-probe.mjs` is never reached in these
 # two cases, which is the point: both must decide before probing anything.
@@ -289,9 +310,21 @@ check "and ALSO with a URL set, which is when a maintenance window needs it" "[ 
 mkdir -p "$T/bin"
 cat > "$T/bin/gh" <<'GH'
 #!/usr/bin/env bash
-# Ignores the --jq filter and prints the fixture the case chose, which is what the
-# filter would have selected.
-cat "${STUB_PREV_JSON:?}"
+# APPLIES THE WORKFLOW'S OWN --jq FILTER to a fixture list, with real jq. A stub that
+# just printed the fixture answered any query, so deleting `--event schedule` or the
+# conclusion filter from the workflow changed nothing here; the filter is most of the
+# rule. The --event flag is not expressible in jq, so it is asserted instead.
+echo "gh $*" >> "${STUB_GH_LOG:?}"
+case "$*" in
+  *"--event schedule"*) ;;
+  *) echo "stub gh: query does not filter --event schedule: $*" >&2; exit 90 ;;
+esac
+filter=""
+while [ $# -gt 0 ]; do
+  case "$1" in --jq) filter="$2"; shift 2 ;; *) shift ;; esac
+done
+[ -n "$filter" ] || { echo "stub gh: no --jq filter in the query" >&2; exit 91; }
+jq -r "$filter" < "${STUB_PREV_JSON:?}"
 GH
 cat > "$T/bin/curl" <<'CURL'
 #!/usr/bin/env bash
@@ -299,29 +332,39 @@ echo "curl $*" >> "${STUB_CURL_LOG:?}"
 exit 0
 CURL
 chmod +x "$T/bin/gh" "$T/bin/curl"
-export STUB_CURL_LOG="$T/curl.log"
-page_run() { # $1 = fixture json, sets $T/page.log
-  : > "$STUB_CURL_LOG"
+export STUB_CURL_LOG="$T/curl.log" STUB_GH_LOG="$T/gh.log"
+# $1 = the run LIST the API would return, newest first; the workflow's own --jq picks
+# from it, so the selection itself is under test.
+page_run() {
+  : > "$STUB_CURL_LOG"; : > "$STUB_GH_LOG"
   printf '%s' "$1" > "$T/prev.json"
-  ( cd "$REPO" && PATH="$T/bin:$BASE_PATH" STUB_PREV_JSON="$T/prev.json" \
+  ( cd "$REPO" && PATH="$T/bin:$BASE_PATH" STUB_PREV_JSON="$T/prev.json" STUB_GH_LOG="$STUB_GH_LOG" \
       ALERT_URL="https://hook.example/x" ALERT_FORMAT="" GH_TOKEN=x SMOKE_URL="https://f.example" \
       GITHUB_RUN_ID=999 GITHUB_SERVER_URL=https://github.com GITHUB_REPOSITORY=o/r \
       bash "$T/page-step.sh" > "$T/page.log" 2>&1 )
 }
 old="$(date -u -d '-300 minutes' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-300M +%Y-%m-%dT%H:%M:%SZ)"
 recent="$(date -u -d '-10 minutes' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-10M +%Y-%m-%dT%H:%M:%SZ)"
-page_run "{\"conclusion\":\"success\",\"databaseId\":1,\"createdAt\":\"$old\"}"
-check "a previous SUCCESS does not page: one red run is a blip" "! grep -q 'curl ' '$STUB_CURL_LOG'"
-page_run "{\"conclusion\":\"failure\",\"databaseId\":1,\"createdAt\":\"$recent\"}"
-check "two failures only 10 minutes apart do not page: the rule is 30 MINUTES, not two runs" "! grep -q 'curl ' '$STUB_CURL_LOG'"
-page_run "{\"conclusion\":\"failure\",\"databaseId\":1,\"createdAt\":\"$old\"}"
+# The negatives need a control: "no curl" is also what a step that never ran looks like,
+# and this suite has been bitten by exactly that (a missing python3 made three checks
+# pass while nothing executed). Each asserts the step ran AND said why it held back.
+page_run "[{\"conclusion\":\"success\",\"databaseId\":1,\"createdAt\":\"$old\"}]"
+check "a previous SUCCESS does not page: one red run is a blip" \
+  "! grep -q 'curl ' '$STUB_CURL_LOG' && grep -q 'first failure: not paging yet' '$T/page.log'"
+page_run "[{\"conclusion\":\"failure\",\"databaseId\":1,\"createdAt\":\"$recent\"}]"
+check "two failures only 10 minutes apart do not page: the rule is 30 MINUTES, not two runs" \
+  "! grep -q 'curl ' '$STUB_CURL_LOG' && grep -q 'only 10 minutes apart' '$T/page.log'"
+page_run "[{\"conclusion\":\"cancelled\",\"databaseId\":1,\"createdAt\":\"$recent\"},{\"conclusion\":\"failure\",\"databaseId\":2,\"createdAt\":\"$old\"}]"
+check "a CANCELLED run is not the previous run: the older real failure is, and it pages" \
+  "grep -q 'curl ' '$STUB_CURL_LOG'"
+page_run "[{\"conclusion\":\"failure\",\"databaseId\":1,\"createdAt\":\"$old\"}]"
 check "two failures spanning 300 minutes DO page" "grep -q 'curl ' '$STUB_CURL_LOG'"
 check "and the message carries the real span, not an assumed 30" "grep -qE 'spanning 3[0-9][0-9]\+ minutes' '$T/page.log' '$STUB_CURL_LOG'"
 check "and it says the schedule is not keeping its cron" "grep -q 'not the 15 the cron asks for' '$T/page.log'"
-page_run "{}"
+page_run "[]"
 check "an unreadable previous run PAGES rather than exiting quietly" "grep -q 'curl ' '$STUB_CURL_LOG'"
-check "the query asks only for COMPLETED runs, so an overlapping queued one cannot hide an outage" \
-  "grep -q -- '--status completed' '$T/page-step.sh'"
+check "the query was actually run, and the stub accepted it: scheduled, self-excluded, by conclusion" \
+  "grep -q 'gh run list' '$STUB_GH_LOG' && ! grep -q 'stub gh:' '$T/page.log'"
 
 check "the probe's un-ready hatch is a DATE, not a value that never expires" \
   "grep -q 'not a YYYY-MM-DD date, so it is IGNORED' '$REPO/scripts/live-probe.mjs' && ! grep -q 'SMOKE_ALLOW_UNREADY === \"1\"' '$REPO/scripts/live-probe.mjs'"

@@ -121,19 +121,37 @@ test("today's date still holds: the hatch runs to the END of the day it names", 
 });
 
 test("the hatch is CAPPED: a far-future date is the old forever-hatch with extra typing", async () => {
-  const far = new Date(Date.now() + 60 * 86_400_000).toISOString().slice(0, 10);
-  const r = await runProbe({ SMOKE_ALLOW_UNREADY: far }, NOT_READY);
-  assert.notEqual(r.code, 0, "a 60-day hatch was honoured");
+  const day = (n) => new Date(Date.now() + n * 86_400_000).toISOString().slice(0, 10);
+  assert.notEqual((await runProbe({ SMOKE_ALLOW_UNREADY: day(60) }, NOT_READY)).code, 0, "a 60-day hatch was honoured");
+  assert.match((await runProbe({ SMOKE_ALLOW_UNREADY: day(60) }, NOT_READY)).err, /past the 14-day cap/);
+  assert.equal((await runProbe({ SMOKE_ALLOW_UNREADY: day(7) }, NOT_READY)).code, 0, "a week out is inside the cap");
+  // THE BOUNDARY THE RUNBOOK NAMES. It says "at most 14 days out", and a ceil-based day
+  // count refused exactly that value: the operator types the documented number and is
+  // told it is 15 days out.
+  assert.equal((await runProbe({ SMOKE_ALLOW_UNREADY: day(14) }, NOT_READY)).code, 0, "14 days out, the documented maximum, was refused");
+  assert.notEqual((await runProbe({ SMOKE_ALLOW_UNREADY: day(15) }, NOT_READY)).code, 0, "15 days out was honoured");
+  // And a malformed cap must not DISABLE the cap: `daysOut > NaN` is false, fail-open.
+  const r = await runProbe({ SMOKE_ALLOW_UNREADY: day(60), SMOKE_ALLOW_UNREADY_MAX_DAYS: "abc" }, NOT_READY);
+  assert.notEqual(r.code, 0, "a malformed cap disabled the cap");
   assert.match(r.err, /past the 14-day cap/);
-  const inside = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
-  assert.equal((await runProbe({ SMOKE_ALLOW_UNREADY: inside }, NOT_READY)).code, 0, "a week out is inside the cap");
 });
 
 test("garbage is ignored rather than trusted", async () => {
-  for (const v of ["yes", "true", "forever", "2026-13-45", "2026-02-30", "2099-01-01"]) {
+  // The REASON matters, not just the refusal: "2026-02-30" is refused by the calendar
+  // round-trip, and without that check V8 rolls it to March 2nd and the expiry rule
+  // refuses it instead, for the wrong reason and with the wrong message.
+  const why = [
+    ["yes", /not a YYYY-MM-DD date/],
+    ["true", /not a YYYY-MM-DD date/],
+    ["forever", /not a YYYY-MM-DD date/],
+    ["2026-13-45", /not a real calendar date/],
+    ["2026-02-30", /not a real calendar date/],
+    ["2099-01-01", /past the 14-day cap/],
+  ];
+  for (const [v, expected] of why) {
     const r = await runProbe({ SMOKE_ALLOW_UNREADY: v }, NOT_READY);
     assert.notEqual(r.code, 0, `"${v}" was treated as a hatch`);
-    assert.match(r.err, /IGNORED/);
+    assert.match(r.err, expected, `"${v}" was refused for the wrong reason`);
     assert.match(r.out, /FAIL: faucet is ready to drip/, `"${v}": the probe did not reach the readiness check`);
   }
 });

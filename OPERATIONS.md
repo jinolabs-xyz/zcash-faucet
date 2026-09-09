@@ -1066,7 +1066,7 @@ curl -s "https://$(cat /etc/faucet-domain)/api/ready" | jq
    variable) `FAUCET_LIVE_ALLOW_UNREADY` to **the date it should stop
    silencing**, `YYYY-MM-DD`, at most 14 days out: it is honoured to the end of
    that day **in UTC**, which is earlier than the end of your day if you are
-   west of it. `=1` used to mean forever and is now ignored, because a hatch
+   west of it. The cap is 14 whole days, so today+14 is accepted. `=1` used to mean forever and is now ignored, because a hatch
    set during one incident silenced the drip check for good.
 9. **`wallet balance unknown`.** Zallet did not answer. It is known to exit
    when zebra closes the mempool stream, the watchdog docker-starts it
