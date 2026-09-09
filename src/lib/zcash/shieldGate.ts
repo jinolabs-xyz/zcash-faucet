@@ -250,7 +250,16 @@ export const ORACLE_WAIT_MS = HOSH_TIMEOUT_MS + 1000;
 export async function readChainFreshnessAsking(
   nodeHeight: number | null,
   waitMs = ORACLE_WAIT_MS,
+  // Injectable so the WAITING can be tested without a network: the module-level cache
+  // is otherwise the only thing a test can reach, and only cold.
+  readTip: () => number | null = getExternalTip,
+  warm: () => unknown = warmExternalTip,
 ): Promise<ChainGate> {
+  // NOTHING TO WAIT FOR when our own node's height is unknown: the verdict is
+  // "unverifiable" whatever the oracle says, and spending the whole budget to reach a
+  // foregone conclusion put ~6 s on every queued claim while the wallet was down, which
+  // is the moment claims are already failing (review of register #6).
+  if (nodeHeight == null) return chainFreshness(null, readTip());
   // POLL for the value rather than awaiting one refresh. warmExternalTip() returns
   // IMMEDIATELY when a refresh is already in flight (externalTip.ts guards on a
   // `refreshing` flag), so awaiting it once can be a silent no-op: the read that
@@ -258,11 +267,11 @@ export async function readChainFreshnessAsking(
   // waiting on. That bug shipped in the first version of this function and the
   // integration suite caught it, refusing a claim against a healthy wallet.
   const deadline = Date.now() + waitMs;
-  while (getExternalTip() == null && Date.now() < deadline) {
-    void warmExternalTip();
+  while (readTip() == null && Date.now() < deadline) {
+    void warm();
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  return chainFreshness(nodeHeight, getExternalTip());
+  return chainFreshness(nodeHeight, readTip());
 }
 
 /*

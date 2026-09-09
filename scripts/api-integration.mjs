@@ -554,6 +554,7 @@ try {
     `status ${dripD.status} ${JSON.stringify(dripD.body.txid ?? dripD.body.error ?? "")}`,
   );
   ok("D the refusal says it will expire rather than blaming the user", /expire/i.test(dripD.body.error ?? ""), dripD.body.error ?? "");
+  ok("D and it blames OUR node, which IS behind here, not the oracle", /catching up/i.test(dripD.body.error ?? "") && !/could not verify/i.test(dripD.body.error ?? ""), dripD.body.error ?? "");
   ok("D the refusal carries a retry hint", typeof dripD.body.retryAfterSeconds === "number", JSON.stringify(dripD.body.retryAfterSeconds));
 
   // THE ONE THAT PINS THE ORDERING. The gate sits above reserveClaim, so a refusal

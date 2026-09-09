@@ -193,21 +193,24 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
       `drip refused, chain view ${freshness.state} (lag ${freshness.lag ?? "unknown"}): ${freshness.reason}`,
       "chain freshness gate",
     );
-    // TWO REFUSALS, TWO SENTENCES. "unsafe" is our node measurably behind: say so.
-    // "unverifiable" is the network's tip being unknowable to us right now, and telling
-    // the user our node is behind in that case blames the wrong thing and sends the
-    // operator who reads the same text to the wrong fix (register #6).
-    return apiError(
-      503,
-      freshness.state === "unverifiable"
-        ? "We could not verify the network's current height just now, so we are not sending: a drip " +
-          "built against an unverified tip could expire before it confirms. Nothing was claimed, your " +
-          "cooldown is untouched. Try again shortly."
-        : "Our node is catching up with the network, so a drip sent right now would expire " +
-          "before it could confirm. Nothing was claimed, your cooldown is untouched. Try again shortly.",
-      api,
-      { retryAfterSeconds: FRESHNESS_RETRY_SECONDS },
-    );
+    // THREE REFUSALS, THREE SENTENCES, because the same text is what the operator reads
+    // and it sends them to a fix. "unsafe" is our node measurably behind: say so.
+    // "unverifiable" has two causes and they are different people's problems: our own
+    // node did not report a height (the wallet or its RPC is down: ours), or the
+    // network's tip could not be verified (the oracle: not ours). The first version
+    // folded both into the oracle sentence and would have sent someone to check
+    // hosh.zec.rocks while zallet crash-looped (register #6 review).
+    const text =
+      freshness.state !== "unverifiable"
+        ? "Our node is catching up with the network, so a drip sent right now would expire " +
+          "before it could confirm. Nothing was claimed, your cooldown is untouched. Try again shortly."
+        : freshness.nodeHeight == null
+          ? "Our node did not report its height just now, so we are not sending: we cannot tell whether " +
+            "a drip built now would confirm. Nothing was claimed, your cooldown is untouched. Try again shortly."
+          : "We could not verify the network's current height just now, so we are not sending: a drip " +
+            "built against an unverified tip could expire before it confirms. Nothing was claimed, your " +
+            "cooldown is untouched. Try again shortly.";
+    return apiError(503, text, api, { retryAfterSeconds: FRESHNESS_RETRY_SECONDS });
   }
 
   // 3.55. Our WALLET's lag behind our OWN node, which is a different question to 3.5 and

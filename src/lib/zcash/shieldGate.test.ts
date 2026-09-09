@@ -134,12 +134,45 @@ test("a positive lag inside the budget still says within, so the split is narrow
 });
 
 // ── THE MONEY PATH WAITS AT LEAST ONE FULL FETCH (risk register #6) ─────────────────────
-import { ORACLE_WAIT_MS } from "./shieldGate.ts";
+import { ORACLE_WAIT_MS, readChainFreshnessAsking } from "./shieldGate.ts";
 import { HOSH_TIMEOUT_MS } from "./externalTip.ts";
 
-test("the wait in front of a drip covers the primary oracle's own timeout", () => {
+test("the wait in front of a drip covers the primary oracle's own timeout, and both numbers are pinned", () => {
   // 2 s against a 5 s fetch refused claims as "unverifiable" while hosh was answering at
-  // 3 s. Pinned as an inequality, so retuning either number alone cannot reopen it.
+  // 3 s. The wait is DEFINED from the fetch, so the inequality alone is tautological;
+  // the fetch itself is pinned, so walking the money-path wait up by retuning the fetch
+  // has to come through here on purpose.
   assert.ok(ORACLE_WAIT_MS >= HOSH_TIMEOUT_MS, `wait ${ORACLE_WAIT_MS} < fetch ${HOSH_TIMEOUT_MS}`);
-  assert.ok(ORACLE_WAIT_MS <= 10_000, "and it is still a request-path number, not a batch one");
+  assert.equal(HOSH_TIMEOUT_MS, 5000, "the primary fetch is 5 s; change it deliberately, with the wait");
+  assert.equal(ORACLE_WAIT_MS, 6000);
+});
+
+test("a tip that lands inside the wait is USED, and one that never lands refuses at the deadline", async () => {
+  // The behaviour, not the constant. A fake oracle that answers after 250 ms against a
+  // 1 s wait must produce a verdict from that answer; one that never answers must return
+  // unverifiable at about the deadline, not before and not long after.
+  let tip: number | null = null;
+  let warms = 0;
+  const warm = () => { warms += 1; setTimeout(() => { tip = 4_335_600; }, 250); };
+  const t0 = Date.now();
+  const late = await readChainFreshnessAsking(4_335_598, 1000, () => tip, warm);
+  assert.equal(late.state, "safe", `expected the late tip to be used, got ${late.state}: ${late.reason}`);
+  assert.ok(Date.now() - t0 < 900, "and it returned as soon as the tip landed, not at the deadline");
+  assert.ok(warms >= 1, "the wait kicked a refresh");
+
+  const t1 = Date.now();
+  const never = await readChainFreshnessAsking(4_335_598, 400, () => null, () => {});
+  const took = Date.now() - t1;
+  assert.equal(never.state, "unverifiable");
+  assert.ok(took >= 350 && took < 900, `waited ${took} ms for a 400 ms budget`);
+});
+
+test("an unknown node height does not wait for the oracle at all: the verdict cannot change", async () => {
+  let warms = 0;
+  const t0 = Date.now();
+  const r = await readChainFreshnessAsking(null, 2000, () => null, () => { warms += 1; });
+  assert.equal(r.state, "unverifiable");
+  assert.match(r.reason, /our node's height is unknown/);
+  assert.ok(Date.now() - t0 < 100, "returned immediately");
+  assert.equal(warms, 0, "and did not spend a refresh on a foregone conclusion");
 });

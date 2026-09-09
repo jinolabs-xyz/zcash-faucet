@@ -23,8 +23,13 @@
  *                                               tell a frozen node it is AHEAD, and lag
  *                                               below zero reads as safe. Rejected.
  *   testnet.cipherscan.app                      no JSON API
- * So `LIGHTWALLETD_ENDPOINT` (comma-separated, tried in order) is where a second org
- * goes the day one exists, and until then the honest state is one org, fail closed.
+ * So no second organisation can serve as a PERMISSIVE tip today, the kind that could
+ * say "safe". A stale one could still serve as a one-directional FLOOR: if its height
+ * exceeds ours by more than the lag budget we are provably behind however stale it is,
+ * and wired to produce only "unsafe" it would bite while zec.rocks is dark. That is not
+ * wired here; it is a follow-up with its own tests. `LIGHTWALLETD_ENDPOINT`
+ * (comma-separated, tried in order) is where a permissive second org goes the day one
+ * exists, and until then the honest state is one org, fail closed.
  *
  * This is the antidote to the failure that killed Fauzec's faucet
  * (#170): a node that has silently stopped following the chain keeps reporting
