@@ -54,8 +54,9 @@ REMOTE="$(git rev-parse "origin/$BRANCH")"
 # amplifier for a persistently bad commit: every two minutes a full rebuild, a container
 # recreate, a rollback and a page, until someone pushes a fix. After BACKOFF_AFTER
 # consecutive failures on the SAME commit the retry waits BACKOFF_SECONDS between
-# attempts, quietly (exit 0 with a log line: the failures already paged, and the
-# watchdog and box report carry the live state). A new commit resets the count.
+# attempts, doing nothing but logging and exiting non-zero (the unit stays red and the
+# page is the hourly-deduped one it already was; the watchdog and box report carry the
+# live state). A new commit resets the count.
 FAIL_FILE="${STATE_FILE}.failures"
 BACKOFF_AFTER="${AUTODEPLOY_BACKOFF_AFTER:-3}"
 BACKOFF_SECONDS="${AUTODEPLOY_BACKOFF_SECONDS:-1800}"
@@ -250,8 +251,9 @@ if [ "$app" = "1" ]; then
   if [ "$app_rc" -ne 0 ]; then
     note_failure
     # redeploy's 2 is "did not ship, faucet serving: can wait until morning", and that
-    # is not true of a box whose ops half also failed; the box-not-at-spec 1 wins there.
-    [ "$rc" -eq 0 ] && exit "$app_rc"
+    # is not true of a box whose ops or miner half also failed; the box-not-at-spec 1
+    # wins there.
+    [ "$rc" -eq 0 ] && [ "$miner_rc" -eq 0 ] && exit "$app_rc"
     exit 1
   fi
   # A failed miner rebuild leaves the box at 40 of 41 and the live probe red, which is

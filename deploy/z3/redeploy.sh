@@ -478,8 +478,17 @@ if ! probe_usable; then
     do_rollback || die "rollback failed after the new build did not come up, the faucet may be down"
     not_shipped "the new build did not come up (and the probe could not be used to ask why)"
   fi
-  log "NOT VERIFIED: could not probe the app at all (no $FAUCET_URL and docker compose exec failed)"
-  log "The new build is running (docker says so) and may be fine. Nothing was rolled back."
+  # And is the running container THE NEW BUILD, not a survivor compose declined to
+  # recreate (the #278/#279 shape assert_running_is exists for)? A running old build is
+  # serving fine and shipped nothing: did-not-ship, no rollback needed.
+  running_id="$(running_image_id)"
+  new_id="$(image_id "$IMAGE")"
+  if [ -n "$running_id" ] && [ -n "$new_id" ] && [ "$running_id" != "$new_id" ]; then
+    log "the running container is $running_id, not the build $new_id: compose did not recreate it, the old build is still serving"
+    not_shipped "the new image was built but the running container is still the old one"
+  fi
+  log "NOT VERIFIED: could not probe the app at all (no REDEPLOY_FAUCET_URL and docker compose exec failed)"
+  log "The new build is running (docker says so, and it is the image we built) and may be fine. Nothing was rolled back."
   log "Set REDEPLOY_FAUCET_URL to something reachable and re-run to get a real verdict."
   exit 3
 fi
