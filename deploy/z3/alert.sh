@@ -426,8 +426,11 @@ redact_patterns() {
     -e 's/((^|[^A-Za-z0-9])xprv)[0-9A-Za-z]{20,}/\1REDACTED/g' \
     -e 's/(eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})\.[A-Za-z0-9_-]+/\1.REDACTED/g' \
     -e 's/("[A-Za-z0-9_-]*(password|passwd|passphrase|pwhash|secret|api[-_]?key|apikey|token|privkey|private[-_]?key|seed|mnemonic|salt|cookie|authorization|credentials?)[A-Za-z0-9_-]*"[[:space:]]*:[[:space:]]*")[^"]*/\1REDACTED/Ig' \
-    -e 's/(['"'"'"][A-Za-z0-9_-]*(password|passwd|passphrase|pwhash|secret|api[-_]?key|apikey|token|authorization|privkey|private[-_]?key|seed|mnemonic|salt|cookie|credentials?)[A-Za-z0-9_-]*['"'"'"][[:space:]]*:[[:space:]]*)[^"[:space:],}][^,}]*/\1REDACTED/Ig' \
-    -e 's/((^|[^A-Za-z0-9_"-])[A-Za-z0-9_-]*(authorization|cookie|mnemonic|passphrase)[A-Za-z0-9_-]*[[:space:]]*[:=][[:space:]]*).*/\1REDACTED/I' \
+    -e 's/(([{,][[:space:]]*['"'"'"][A-Za-z0-9_-]*(password|passwd|passphrase|pwhash|secret|api[-_]?key|apikey|token|authorization|privkey|private[-_]?key|seed|mnemonic|salt|cookie|credentials?)[A-Za-z0-9_-]*['"'"'"][[:space:]]*:[[:space:]]*))\[[^]]*\]/\1REDACTED/Ig' \
+    -e 's/(([{,][[:space:]]*['"'"'"][A-Za-z0-9_-]*(password|passwd|passphrase|pwhash|secret|api[-_]?key|apikey|token|authorization|privkey|private[-_]?key|seed|mnemonic|salt|cookie|credentials?)[A-Za-z0-9_-]*['"'"'"][[:space:]]*:[[:space:]]*))\{[^}]*\}/\1REDACTED/Ig' \
+    -e 's/(([{,][[:space:]]*['"'"'"][A-Za-z0-9_-]*(password|passwd|passphrase|pwhash|secret|api[-_]?key|apikey|token|authorization|privkey|private[-_]?key|seed|mnemonic|salt|cookie|credentials?)[A-Za-z0-9_-]*['"'"'"][[:space:]]*:[[:space:]]*))[^"[:space:],}{[][^,}]{5,}/\1REDACTED/Ig' \
+    -e 's/((^|[^A-Za-z0-9_"-])[A-Za-z0-9_-]*(authorization|cookie|mnemonic|passphrase)[[:space:]]*[:=][[:space:]]*).*/\1REDACTED/I' \
+    -e 's/((^|[^A-Za-z0-9_"-])[A-Za-z0-9_-]*(authorization|cookie|mnemonic|passphrase)[A-Za-z0-9_-]+[[:space:]]*[:=][[:space:]]*)[^[:space:],\/0-9][^[:space:],]{5,}.*/\1REDACTED/I' \
     -e 's/((^|[^A-Za-z0-9_"-])[A-Za-z0-9_-]*(password|passwd|pwhash|secret|api[-_]?key|apikey|token|privkey|private[-_]?key|seed|salt|credentials?)[A-Za-z0-9_-]*[[:space:]]*[:=][[:space:]]*"?)[^[:space:]",;}]{6,}/\1REDACTED/Ig' \
     -e 's/((^|[[:space:]])(-u|--user)[[:space:]]+)[^[:space:]:]*[A-Za-z][^[:space:]:]*:[^[:space:]]+/\1REDACTED/g' \
     -e 's/((^|[[:space:]])--[A-Za-z0-9_-]*(password|passwd|passphrase|pwhash|secret|api[-_]?key|apikey|token|privkey|private[-_]?key|seed|mnemonic|salt|cookie|authorization|credentials?)[A-Za-z0-9_-]*[[:space:]]+)[^[:space:]]+/\1REDACTED/Ig'

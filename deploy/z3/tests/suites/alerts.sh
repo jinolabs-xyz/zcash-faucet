@@ -225,6 +225,10 @@ echo "faucet-backup: ABORT: cannot read the age identity at identity.txt"
 echo "turnstile site key 0x4AAAAAAApublicsitekey is in the page"
 echo "ABORT: could not read zebra rpc cookie file at /run/zebra"
 echo "short lived cache entry"
+# THE THRESHOLD, from both sides. Five characters after the separator is prose and six is
+# a credential; without a fixture at each side the number is invisible to the suite.
+echo "watchdog: token: fifth attempt, backing off"
+echo "zallet: token=abc123 accepted"
 echo "zebra rpc cookie name is __cookie__value1 on this box"
 echo "metrics push endpoint https://metrics.example.org/push answered 204"
 echo "peers from seed1.example.org,seed2.example.org accepted"
@@ -244,6 +248,34 @@ echo "COOKIE_VALUE=__cookie__:9a8b7c6d5e4f3a2b1c0d"
 # JSON whose value is not a quoted string: an array, a bare literal, a python dict repr.
 echo '{"headers":{"Authorization":["Bearer arraybearer123"]}}'
 echo '{"password":null,"api_key":["leakedinarray1"]}'
+# MORE THAN ONE ELEMENT. The rule stopped at the first comma, so a recovery phrase
+# printed as a JSON array put 23 of its 24 words on the webhook - and the one-element
+# fixture above could not see it.
+echo '{"seed": ["abandon","ability","able","about","above","absent","absorb","abstract"]}'
+echo '{"authorization": ["Bearer aaa1secret","Bearer bbb2secret"]}'
+echo '{"credentials": {"user": "faucet", "password": "nestedpw123"}}'
+# The four end-of-line names with an ordinary suffix, which the suffix class now reaches.
+echo "AUTHORIZATION_HEADER: Bearer leakedbearertoken1"
+echo "PASSPHRASE_HINT=correct horse battery staple hint"
+# And the bare header form, whose value is two tokens and five characters of scheme.
+echo "Authorization: Basic ZmF1Y2V0Omh1bnRlcjI="
+# Lines a Rust service prints when a config key is wrong. A quoted key in PROSE is not a
+# JSON member, and blanking after it takes the fix instruction with it.
+echo 'zallet: unknown field "seed": expected one of height, network, account'
+echo 'serde: invalid type at "api_key": expected string, found integer'
+echo "zaino: field 'cookie': not present in the response envelope"
+echo 'error: missing key "token": add it to /etc/faucet/faucet.env and restart'
+echo '{"reserveTaz": 950, "tokens": 4, "height": 3396810}'
+# Config whose NAME contains one of the four end-of-line keywords. MINING.md names the
+# first as the setting that decides whether the miner needs auth, and the miner unit has
+# OnFailure=faucet-alert@.
+echo "enable_cookie_auth = false"
+echo "ZEBRA_RPC__ENABLE_COOKIE_AUTH=false and the miner needs no auth"
+echo "cookie_path: /var/run/auth/.cookie, threads: 4"
+echo "cookies: 3 accepted, 0 rejected"
+echo "authorization_mode: basic, retries: 2"
+echo "mnemonic_length: 24 words expected"
+echo "add ZALLET_COOKIE_PATH= to /etc/faucet/faucet.env"
 echo "{'password': 'pythonreprsecret1'}"
 J
 chmod +x "$T/bin/journalctl"
@@ -263,6 +295,12 @@ check "a passphrase that happens to start with a slash is still a passphrase" \
 # A short value is a placeholder, and blanking it would erase the word from ordinary lines.
 check "a secret under 12 characters is NOT matched by value: it would erase log text" \
   "grep -q 'short lived cache entry' '$HOOK_LOG'"
+# SIX, not five and not seven. A five-character token after a separator is prose ("retries:
+# fifth"); a six-character one is short but it is a value. Both sides are pinned or the
+# number is a comment.
+check "five characters after a separator is prose and survives" \
+  "grep -q 'token: fifth attempt, backing off' '$HOOK_LOG'"
+check "and six is a value and does not" "! grep -q 'abc123 accepted' '$HOOK_LOG'"
 # Each stage-1 guard has a fixture only IT can save, or deleting one of them changes
 # nothing and the narrowing is not actually pinned.
 check "a name the old broad list took (*COOKIE*) is not a secret, and its value survives" \
@@ -316,6 +354,14 @@ check "and zebra's cookie in its on-disk form, which is not hex alone" \
 # A JSON value that is not a quoted string was invisible to both JSON-aware rules.
 check "a secret inside a JSON array" \
   "! grep -q 'arraybearer123' '$HOOK_LOG' && ! grep -q 'leakedinarray1' '$HOOK_LOG'"
+# The rule stopped at the first comma, so element 2 onward went out. One element could
+# not show that; a 24-word recovery phrase is the case that matters.
+check "EVERY element of a multi-element array, not just the first" \
+  "! grep -q 'ability' '$HOOK_LOG' && ! grep -q 'abstract' '$HOOK_LOG' && ! grep -q 'bbb2secret' '$HOOK_LOG'"
+check "and a nested object under a secret key, whole" \
+  "! grep -q 'nestedpw123' '$HOOK_LOG'"
+check "the bare Authorization header, whose scheme is only five characters" \
+  "! grep -q 'ZmF1Y2V0Omh1bnRlcjI' '$HOOK_LOG'"
 check "and one in a python dict repr, which is what a traceback prints" \
   "! grep -q 'pythonreprsecret1' '$HOOK_LOG'"
 check "one passed as a flag" "! grep -q 's3cr3t2' '$HOOK_LOG'"
@@ -357,6 +403,27 @@ check "and 'credentials: none required' still says none" "grep -q 'credentials: 
 # audit-drift.sh prints this verbatim, and faucet-drift-report reaches the webhook.
 check "and the instruction audit-drift prints keeps the file it names" \
   "grep -q 'add ZALLET_RPC_PASSWORD= to /etc/faucet/faucet.env' '$HOOK_LOG'"
+# A QUOTED KEY IN PROSE IS NOT A JSON MEMBER. zallet, zaino and the miner are Rust, and
+# serde prints "unknown field X: expected one of ..." on a config typo; blanking after it
+# takes the list of valid names, or the fix instruction, with it.
+check "a serde field error keeps the names it is telling you to use" \
+  "grep -q 'expected one of height, network, account' '$HOOK_LOG'"
+check "and an invalid-type error keeps what it expected and what it found" \
+  "grep -q 'expected string, found integer' '$HOOK_LOG'"
+check "and a missing-key error keeps the file it tells you to edit" \
+  "grep -q 'add it to /etc/faucet/faucet.env and restart' '$HOOK_LOG'"
+check "a JSON member that is an ordinary counter keeps its number" \
+  "grep -q 'tokens.*: 4, .*height.*: 3396810' '$HOOK_LOG'"
+# NAMES CONTAINING ONE OF THE FOUR END-OF-LINE KEYWORDS. All ordinary config; blanking to
+# end of line took the path, the counts and the retry budget.
+check "the setting that decides whether the miner needs auth keeps its value" \
+  "grep -q 'enable_cookie_auth = false' '$HOOK_LOG' && grep -q 'ENABLE_COOKIE_AUTH=false and the miner' '$HOOK_LOG'"
+check "a cookie PATH is a path, and the thread count beside it survives" \
+  "grep -q 'cookie_path: /var/run/auth/.cookie, threads: 4' '$HOOK_LOG'"
+check "counts, modes and lengths are not credentials" \
+  "grep -q 'cookies: 3 accepted, 0 rejected' '$HOOK_LOG' && grep -q 'authorization_mode: basic, retries: 2' '$HOOK_LOG' && grep -q 'mnemonic_length: 24 words expected' '$HOOK_LOG'"
+check "and the same fix instruction with a cookie-shaped name" \
+  "grep -q 'add ZALLET_COOKIE_PATH= to /etc/faucet/faucet.env' '$HOOK_LOG'"
 # The -u rule needs the value to LOOK like credentials, or it eats the one actionable
 # token in the page drift-report sends and the prefix on every line in the tree.
 check "journalctl -u <unit> survives: it is the fix drift-report's own page tells you to run" \
@@ -418,6 +485,31 @@ check "a DIFFERENT cause is not held back as a repeat of the first" "grep -q 'NE
 bash "$ALERT" "🚨 NEEDS YOU: ZALLET CRASH-LOOPING" > /dev/null 2>&1
 check "and nor is a third: one broken filter must not mute the box for an hour" "grep -q 'NEEDS YOU' '$HOOK_LOG'"
 rm -f "$T/bin/awk"
+
+echo "== alerts: the secrets file is parsed the way the shell would read it"
+alerts_env
+# A quoted value: the file is written for `source`, so the quotes are the shell's, not
+# part of the secret. Loading them into the literal makes stage 1 match nothing.
+printf 'ZALLET_RPC_PASSWORD="quotedsecretvalue1"\n' > "$T/quoted.env"
+printf '#!/usr/bin/env bash\necho "boom: quotedsecretvalue1 in a log line"\n' > "$T/bin/journalctl"
+chmod +x "$T/bin/journalctl"
+FAUCET_ALERT_SECRET_FILES="$T/quoted.env" bash "$ALERT" --unit zallet.service > /dev/null 2>&1
+check "the send arrived, so the negative below means something" \
+  "grep -q 'unit FAILED: zallet.service' '$HOOK_LOG'"
+check "a quoted value is unquoted before it becomes a pattern" \
+  "! grep -q 'quotedsecretvalue1' '$HOOK_LOG'"
+# alert.sh runs as root from systemd, so an unreadable file means someone ran it by hand
+# and the strongest stage is off. That has to be said, not silently skipped.
+alerts_env
+printf 'ZALLET_RPC_PASSWORD=unreadablesecret1\n' > "$T/locked.env"; chmod 000 "$T/locked.env"
+if [ -r "$T/locked.env" ]; then
+  echo "  skip: running as root, an unreadable file cannot be modelled"
+else
+  FAUCET_ALERT_SECRET_FILES="$T/locked.env" bash "$ALERT" "hello" > "$T/locked.log" 2>&1
+  check "an unreadable secrets file is named in the journal, not skipped in silence" \
+    "grep -q 'cannot read .*locked.env' '$T/locked.log'"
+fi
+chmod 644 "$T/locked.env"
 
 echo "== alerts: stage 1 reads the files this box actually keeps secrets in"
 alerts_env
@@ -823,6 +915,38 @@ alerts_env; unset FAUCET_ALERT_URL
 bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
 check "no state was written" "[ ! -d '$T/alert-state' ] || [ -z \"\$(ls -A '$T/alert-state' 2>/dev/null | grep -v '^.lock$')\" ]"
 
+echo "== alerts: with no JSON encoder it refuses loudly instead of sending junk"
+alerts_env
+mkdir -p "$T/nobin"
+# A PATH with neither jq nor python3, but with the tools alert.sh still needs.
+# bash itself must be reachable, plus what alert.sh actually calls.
+for b in bash curl date hostname sed tr cat; do
+  src="$(command -v $b 2>/dev/null)"; [ -n "$src" ] && ln -sf "$src" "$T/nobin/$b"
+done
+PATH="$T/nobin" bash "$ALERT" "would be malformed" > "$T/noenc.log" 2>&1
+check "exits nonzero" "[ $? -ne 0 ]"
+check "says it cannot encode" "grep -q 'CANNOT SEND' '$T/noenc.log'"
+check "explains the refusal is deliberate" "grep -q 'Refusing rather than sending a malformed body' '$T/noenc.log'"
+# A control send FIRST, or "nothing reached the webhook" is true of a receiver that is
+# simply not listening - which is how this passed for a whole round below the teardown.
+bash "$ALERT" "the receiver is alive" > /dev/null 2>&1
+check "the receiver is alive, so the negative below means something" \
+  "grep -q 'the receiver is alive' '$HOOK_LOG'"
+check "nothing reached the webhook" "! grep -q 'would be malformed' '$HOOK_LOG'"
+
+echo "== alerts: a quote in the operator prefix cannot break the body"
+alerts_env
+FAUCET_ALERT_PREFIX='[fau"cet]' bash "$ALERT" "hello" > /dev/null 2>&1
+# Parsing an EMPTY file is not parsing JSON. Count the lines first, or a prefix that broke
+# the body would pass this by producing nothing at all.
+check "the send arrived, so there is a body to validate" "[ -s '$HOOK_LOG' ]"
+check "body is still valid JSON" "python3 -c \"import json,sys;ls=[l for l in open('$HOOK_LOG') if l.strip()];sys.exit(1) if not ls else [json.loads(l) for l in ls]\""
+check "and the quoted prefix is in it, escaped rather than dropped" "grep -q 'fau' '$HOOK_LOG'"
+
+# EVERY case that asserts on $HOOK_LOG must sit ABOVE this line. Two of them did not:
+# "nothing reached the webhook" passed against an empty file, and the JSON-validity check
+# parsed ZERO lines, so a prefix that DID break the body would have passed. Both now run
+# above, and both assert something arrived first.
 kill "$HOOK_PID" 2>/dev/null
 
 echo "== alerts: the webhook URL never reaches the log (it is a credential)"
@@ -859,25 +983,6 @@ bash "$ALERT" "$(printf 'unit failed\ncolumn1\tcolumn2')" > "$T/tab.log" 2>&1
 check "the send succeeded" "[ $? -eq 0 ]"
 check "the tab and newline survive as real characters after decoding" "python3 -c \"import json;b=[json.loads(l) for l in open('$TAB_LOG') if l.strip()][-1];t=b.get('text','');assert chr(9) in t and chr(10) in t, repr(t)\""
 kill "$TAB_PID" 2>/dev/null
-
-echo "== alerts: with no JSON encoder it refuses loudly instead of sending junk"
-alerts_env
-mkdir -p "$T/nobin"
-# A PATH with neither jq nor python3, but with the tools alert.sh still needs.
-# bash itself must be reachable, plus what alert.sh actually calls.
-for b in bash curl date hostname sed tr cat; do
-  src="$(command -v $b 2>/dev/null)"; [ -n "$src" ] && ln -sf "$src" "$T/nobin/$b"
-done
-PATH="$T/nobin" bash "$ALERT" "would be malformed" > "$T/noenc.log" 2>&1
-check "exits nonzero" "[ $? -ne 0 ]"
-check "says it cannot encode" "grep -q 'CANNOT SEND' '$T/noenc.log'"
-check "explains the refusal is deliberate" "grep -q 'Refusing rather than sending a malformed body' '$T/noenc.log'"
-check "nothing reached the webhook" "! grep -q 'would be malformed' '$HOOK_LOG'"
-
-echo "== alerts: a quote in the operator prefix cannot break the body"
-alerts_env
-FAUCET_ALERT_PREFIX='[fau"cet]' bash "$ALERT" "hello" > /dev/null 2>&1
-check "body is still valid JSON" "python3 -c \"import json;[json.loads(l) for l in open('$HOOK_LOG') if l.strip()]\""
 
 echo "== alerts: self-test names the real cause, not a plausible one"
 # rc=4 (no encoder) used to print "the webhook rejected the POST", sending an
