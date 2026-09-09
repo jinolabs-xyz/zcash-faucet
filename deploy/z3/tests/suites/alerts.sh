@@ -35,7 +35,9 @@ class H(http.server.BaseHTTPRequestHandler):
         code=500 if 'FAIL' in self.path else 204
         self.send_response(code); self.end_headers()
     def log_message(self,*a): pass
-http.server.HTTPServer(("127.0.0.1",port),H).serve_forever()
+# Threaded, so parallel POSTs are served in parallel: with a single-threaded receiver the
+# "distinct causes do not queue" case would measure the receiver's queue, not ours.
+http.server.ThreadingHTTPServer(("127.0.0.1",port),H).serve_forever()
 PY
 HOOK_PID=$!
 for _ in $(seq 1 40); do curl -sf -o /dev/null -X POST -d '{}' "http://127.0.0.1:$HOOK_PORT/warmup" && break; sleep 0.25; done
@@ -322,6 +324,46 @@ wait $par_pids
 check "exactly one reached the webhook" "[ \"\$(grep -c 'disk low' '$HOOK_LOG')\" = 1 ]"
 check "and the other seven were held back, not lost or errored" "[ \"\$(cat '$T'/par*.log | grep -c 'HELD BACK')\" = 7 ]"
 check "and none gave up on the lock" "! grep -q 'could not take the cooldown lock' '$T'/par*.log"
+
+echo "== alerts: DISTINCT causes do not queue behind each other's POST"
+# One shared lock made eight causes wait for eight sends in a row and, at curl's ceiling,
+# blow the 30 s wait and fail fully open. Per-cause locks: eight causes against the slow
+# receiver finish in about one POST's time, and every one is delivered.
+alerts_env; export FAUCET_ALERT_URL="http://127.0.0.1:$HOOK_PORT/slow"
+start=$(date +%s); par_pids=""
+# Distinct in WORDS: digits are blanked from the key, so "cause 1" and "cause 2" would be one cause.
+for w in alpha bravo charlie delta echo foxtrot golf hotel; do bash "$ALERT" "cause $w is distinct" > "$T/dist-$w.log" 2>&1 & par_pids="$par_pids $!"; done
+# shellcheck disable=SC2086
+wait $par_pids; took=$(( $(date +%s) - start ))
+check "all eight distinct causes reached the webhook" "[ \"\$(grep -c 'is distinct' '$HOOK_LOG')\" = 8 ]"
+check "in parallel, not one POST after another (under 6 s for eight 1.2 s POSTs)" "[ $took -lt 6 ]"
+check "and none was held back or gave up" "! grep -qE 'HELD BACK|could not take' '$T'/dist-*.log"
+
+echo "== alerts: a lock file this process cannot open is dedup OFF in words, not two raw errors"
+alerts_env
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1   # creates the dir and one key's lock
+lockf="$(ls "$T"/alert-state/.lock.* | head -1)"; chmod 444 "$lockf"
+# the lock is opened for writing; a read-only lock file must not be a shower of errors
+if [ "$(id -u)" != 0 ]; then
+  bash "$ALERT" "disk low: / has 9% free" > "$T/lockro.log" 2>&1
+  check "sent" "grep -q 'sent: disk low' '$T/lockro.log'"
+  check "dedup OFF, in the designed words" "grep -q 'dedup OFF: cannot open the cooldown lock' '$T/lockro.log' && ! grep -q 'Permission denied\|Bad file descriptor' '$T/lockro.log'"
+else
+  ok "lock-permission case skipped: running as root, mode bits do not apply"
+  ok "lock-permission case skipped: running as root, mode bits do not apply"
+fi
+chmod 644 "$lockf"
+
+echo "== alerts: a sub-minute cooldown says seconds, not '0 min'"
+alerts_env; export FAUCET_ALERT_COOLDOWN_SECONDS=30
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+for f in "$T"/alert-state/*; do
+  [ -f "$f" ] || continue; case "$(basename "$f")" in .*) continue ;; esac
+  read -r _ n < "$f" || n=0; printf '%s %s\n' "$(( $(date -u +%s) - 120 ))" "${n:-0}" > "$f"
+done
+bash "$ALERT" "disk low: / has 9% free" > /dev/null 2>&1
+check "the note is in seconds" "grep -q 'held back in the last 30s' '$HOOK_LOG'"
 
 echo "== alerts: the weekly sweep touches ONLY forty-hex key files, never a neighbour"
 # In a directory we adopted and someone later shared, `[0-9a-f]*` matched access.log,

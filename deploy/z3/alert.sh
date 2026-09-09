@@ -117,7 +117,7 @@ dedup_dir_ok() {
       [ -e "$entry" ] || continue
       entry="${entry##*/}"
       case "$entry" in
-        .faucet-alerts|.lock) ;;
+        .faucet-alerts|.lock|.lock.*) ;;
         *) [ "${#entry}" = 40 ] && [ -z "${entry//[0-9a-f]/}" ] || return 1 ;;
       esac
     done
@@ -146,7 +146,20 @@ dedup_check() { # $1 message
     return 0
   fi
   f="$STATE_DIR/$key"
-  exec 9>"$STATE_DIR/.lock"
+  # ONE LOCK PER CAUSE, not one for the directory. The lock is held across the POST, so a
+  # shared lock made every distinct cause queue behind every other's send: eight causes at
+  # curl's 10-second ceiling blew the 30-second wait, and past the wait the decision fails
+  # fully open, which is the original flood back under exactly the load this exists for.
+  # Per cause, the queue is only ever the identical alerts, which is the one set that
+  # should wait. The file is named after the key and dot-prefixed, so the weekly sweep and
+  # the ownership check both know it as ours.
+  # Tried in a subshell first, because a failed redirection on `exec` prints its own error
+  # before any 2>/dev/null on the same command can take effect.
+  if ! ( : >> "$STATE_DIR/.lock.$key" ) 2>/dev/null; then
+    log "dedup OFF: cannot open the cooldown lock in $STATE_DIR; repeats of this alert will all be sent"
+    return 0
+  fi
+  exec 9>>"$STATE_DIR/.lock.$key"
   DEDUP_LOCKED=1
   # The wait outlives curl's --max-time (10 s) with room, because the holder keeps the lock
   # across its POST: a waiter that gives up early sends unserialised, and review measured
@@ -176,7 +189,13 @@ dedup_check() { # $1 message
     return 1
   fi
   DEDUP_FILE="$f"
-  [ "$count" -gt 0 ] && HELD_BACK_NOTE=" (+$count identical held back in the last $((COOLDOWN / 60)) min)"
+  if [ "$count" -gt 0 ]; then
+    if [ "$COOLDOWN" -ge 60 ]; then
+      HELD_BACK_NOTE=" (+$count identical held back in the last $((COOLDOWN / 60)) min)"
+    else
+      HELD_BACK_NOTE=" (+$count identical held back in the last ${COOLDOWN}s)"
+    fi
+  fi
   return 0
 }
 
