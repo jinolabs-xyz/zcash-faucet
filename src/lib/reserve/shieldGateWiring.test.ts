@@ -125,12 +125,12 @@ test("two warms inside the attempt gap dial the oracle once, and the test bypass
   // hosh is still answering 503 here (a dial is a dial), so the cache stays cold for the
   // "no independent tip" tests below, which can only run before anything primes it.
   await warmExternalTipNowForTests();
-  const after = hoshHits;
+  const baseline = hoshHits;
   await warmExternalTip();
   await warmExternalTip();
-  assert.equal(hoshHits, after, "a warm inside the gap re-dialled the oracle");
+  assert.equal(hoshHits, baseline, "a warm inside the gap re-dialled the oracle");
   await warmExternalTipNowForTests();
-  assert.equal(hoshHits, after + 1, "the bypass did not dial");
+  assert.equal(hoshHits, baseline + 1, "the bypass did not dial");
 });
 
 test("no independent tip means UNVERIFIABLE, and unverifiable does not broadcast", async () => {

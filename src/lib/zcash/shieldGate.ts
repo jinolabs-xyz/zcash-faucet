@@ -34,7 +34,7 @@
  */
 
 import { num } from "../config.ts";
-import { getExternalTip, warmExternalTip, HOSH_TIMEOUT_MS } from "./externalTip.ts";
+import { getExternalTip, warmExternalTip, HOSH_TIMEOUT_MS, MIN_ATTEMPT_GAP_MS } from "./externalTip.ts";
 
 /*
  * The decision itself is a PURE function of two heights (see shieldFreshness),
@@ -257,12 +257,17 @@ export function readChainFreshness(nodeHeight: number | null): ChainGate {
  * AT LEAST ONE FULL FETCH OF THE PRIMARY. The first version waited 2 s against a hosh
  * fetch allowed 5 s, so a slow-but-answering oracle produced "unverifiable" and a
  * refusal that blamed our node, on the money path, for nothing (risk register #6).
- * One second of margin on top, for the poll interval and the hand-off into the
- * fallback. Six seconds in front of a drip that takes seconds to build is tolerable,
+ * PLUS THE ATTEMPT GAP. The status read that precedes the gate kicks a refresh of its
+ * own; if that one fails fast (hosh down, fallback refusing the connection) the gap
+ * holds every poll for a second, and the claim's first real fetch starts a second late.
+ * With the gap drawing on the same second of margin, an oracle answering at 4.98 s
+ * (inside its own 5 s allowance) was refused as unverifiable, reproduced in review.
+ * One second of margin on top of both, for the poll interval and the hand-off into the
+ * fallback. Seven seconds in front of a drip that takes seconds to build is tolerable,
  * and it is paid only on a cold cache; the background refresh keeps it warm the rest
  * of the time.
  */
-export const ORACLE_WAIT_MS = HOSH_TIMEOUT_MS + 1000;
+export const ORACLE_WAIT_MS = HOSH_TIMEOUT_MS + MIN_ATTEMPT_GAP_MS + 1000;
 
 /**
  * The reading for a caller that is ABOUT TO BUILD a transaction, rather than one
@@ -303,7 +308,9 @@ export async function readChainFreshnessAsking(
   // `refreshing` flag), so awaiting it once can be a silent no-op: the read that
   // returned null a moment ago is exactly what kicked the refresh we would then be
   // waiting on. That bug shipped in the first version of this function and the
-  // integration suite caught it, refusing a claim against a healthy wallet.
+  // integration suite caught it, refusing a claim against a healthy wallet. It also
+  // returns immediately inside MIN_ATTEMPT_GAP_MS of the last attempt, so up to one
+  // second of this budget can pass with no fetch in flight; the wait is sized for that.
   const deadline = Date.now() + waitMs;
   while (readTip() == null && Date.now() < deadline) {
     void warm();

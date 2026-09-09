@@ -214,13 +214,13 @@ let refreshing = false;
 // nothing about a public endpoint changes faster than that.
 let lastAttemptAt = 0;
 // Exported so the money path's wait can assert that several attempts fit inside it. At
-// 10 s a cold cache could not START a fetch within the 6 s wait, and every claim would
+// 10 s a cold cache could not START a fetch within the wait, and every claim would
 // read "could not verify the network" with the oracle answering: register #6 again.
 export const MIN_ATTEMPT_GAP_MS = 1000;
 
-async function refresh(): Promise<void> {
+async function refresh(waiveGap = false): Promise<void> {
   if (refreshing) return;
-  if (Date.now() - lastAttemptAt < MIN_ATTEMPT_GAP_MS) return;
+  if (!waiveGap && Date.now() - lastAttemptAt < MIN_ATTEMPT_GAP_MS) return;
   lastAttemptAt = Date.now();
   refreshing = true;
   try {
@@ -247,8 +247,9 @@ export function warmExternalTip(): Promise<void> {
  * per claim.
  */
 export function warmExternalTipNowForTests(): Promise<void> {
-  lastAttemptAt = 0;
-  return refresh();
+  // Waived inside refresh, after its in-flight check, so a call that lands mid-fetch
+  // does not disarm the gap for whoever polls next without dialling itself.
+  return refresh(true);
 }
 
 /**
