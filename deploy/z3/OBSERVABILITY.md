@@ -180,6 +180,18 @@ a few seconds before the watchdog restarts, so for that window the old
 watchdog's episode reports go through the cooldown; a restart that fails is
 logged as an error by install-ops.
 
+**A faucet that refuses every drip.** Claims run the send gate: a node
+measurably behind an independent view of the network reads not-ready
+(`... behind the network, drips would expire`), and redeploy knows that reason
+is the chain, not the code, so it never rolls back on it. A tip the faucet
+cannot verify at all keeps `/api/ready` at 200, so a public oracle's outage
+cannot roll back a good deploy, but the body says `canBuildTx: false` and both
+the watchdog (`drips refused: ...`) and the off-box probe page on that, and the
+metrics file carries it as `faucet_can_build_tx`. That field is the gate's
+cached verdict; the claim path asks the oracle with a budget before deciding,
+so readiness is the more pessimistic of the two and a cold cache after a
+restart reads as refusing for a few seconds.
+
 ## Metrics
 
 ```bash
@@ -200,6 +212,7 @@ What lands in the file:
 | `faucet_empty` | nothing left to send |
 | `faucet_queue_depth` | sends waiting in the serialized queue |
 | `faucet_node_ready` / `faucet_node_sync_percent` / `faucet_node_height` | node sync state |
+| `faucet_can_build_tx` | the send gate's verdict: 0 with `faucet_ready 1` is a faucet refusing every drip while readiness stays green on purpose |
 | `faucet_container_up` / `faucet_zallet_container_up` / `faucet_web_container_up` | container states |
 | `faucet_metrics_scrape_timestamp` | when this file was written |
 

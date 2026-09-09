@@ -47,8 +47,38 @@ jfield() { # $1 json, $2 key
 # Pulls a nested object out by key, e.g. the "node":{...} blob, so its fields
 # can be read without confusing them with same-named top-level keys ("ready"
 # exists at both levels and means different things).
+# Returns the body from just inside the object's opening brace to the END of the input, so
+# jfield on it finds the object's OWN fields first. The previous regex, `{[^{}]*}`, could
+# not match an object containing another object, and `node` has carried nested `shield`
+# and `chain` objects since the freshness gate landed: faucet_node_ready,
+# faucet_node_sync_percent and faucet_node_height had silently vanished from the real
+# metrics file while the fixture, which had no nesting, kept the suite green. Bash
+# expansion rather than sed: `#*` strips the SHORTEST prefix, so it is the first `"node":`
+# in the body, not the last.
 jobject() { # $1 json, $2 key
-  printf '%s' "$1" | sed -n "s/.*\"$2\":[[:space:]]*{\([^{}]*\)}.*/\1/p"
+  local rest="${1#*\"$2\":}"
+  [ "$rest" != "$1" ] || return 0
+  # The value must BE an object: for `"node":null` the first brace after the key belongs
+  # to the NEXT object, and with cTAZ enabled that object also carries height and
+  # syncPercent, so the node gauges reported the feature-net's numbers. Review, 2026-09-09.
+  rest="${rest#"${rest%%[! ]*}"}"
+  case "$rest" in \{*) ;; *) return 0 ;; esac
+  # And ONLY that object: cut at the brace that closes it, counting nesting, so a key the
+  # object lacks is answered by nothing rather than by the next object's field of the
+  # same name. Strings are skipped so a brace inside a reason text does not count.
+  printf '%s' "$rest" | awk '
+    BEGIN { depth = 0; instr = 0; esc = 0; out = "" }
+    {
+      n = length($0)
+      for (i = 1; i <= n; i++) {
+        c = substr($0, i, 1)
+        if (instr) { if (esc) esc = 0; else if (c == "\\") esc = 1; else if (c == "\"") instr = 0 }
+        else if (c == "\"") instr = 1
+        else if (c == "{") depth++
+        else if (c == "}") { depth--; if (depth == 0) { printf "%s", substr($0, 2, i - 2); exit } }
+      }
+      printf "%s", substr($0, 2); exit
+    }'
 }
 # Booleans become 1/0 so Prometheus can graph them; anything else drops out.
 as_gauge() {
@@ -95,6 +125,11 @@ status_body="$(curl -fsS --max-time "$CURL_TIMEOUT" "$FAUCET_URL/api/status" 2>/
       "$(as_gauge "$(jfield "$ready_body" ready)")"
     emit faucet_node_ready "1 when the node reports itself synced." gauge \
       "$(as_gauge "$(jfield "$(jobject "$ready_body" node)" ready)")"
+    # The send gate's verdict. A 200 with this at 0 is a faucet refusing every drip while
+    # readiness stays green on purpose (a tip it cannot verify); whatever scrapes this file
+    # must not believe faucet_ready alone. The key is unique in the body.
+    emit faucet_can_build_tx "1 when the send gate would let a drip be built right now." gauge \
+      "$(as_gauge "$(jfield "$ready_body" canBuildTx)")"
   else
     # Distinguish "the app said no" from "the app said nothing". Only the
     # second one means the web process itself is the problem.

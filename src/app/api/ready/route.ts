@@ -17,6 +17,7 @@ import { getNodeStatus } from "@/lib/zcash/nodeStatus";
 import { cachedLedgerHealth } from "@/lib/db";
 import { ledgerBlocksServing } from "@/lib/db/probe";
 import { readSendHealth, sendHealthBlocksServing } from "@/lib/zcash/sendHealth";
+import { readinessReason } from "@/lib/readiness";
 import { withApi } from "@/lib/api";
 
 export const runtime = "nodejs";
@@ -66,18 +67,35 @@ export const GET = withApi("ready", async () => {
   // being quiet, and a slow one would hand a blip the power to roll back a deploy.
   const sends = readSendHealth();
 
-  let reason: string | null = null;
-  if (ledgerBlocksServing(ledger)) reason = "ledger unreadable";
-  else if (!backend.reachable) reason = "backend unreachable";
-  else if (node && node.frozen) reason = "node frozen behind network";
-  else if (node && node.ready === false) reason = "node syncing";
-  else if (balanceZat === null) reason = "wallet balance unknown";
-  // AFTER the upstream causes and BEFORE the reserve line, deliberately. If the node is
-  // frozen or the backend is down, that is why sends are failing and the operator
-  // should be told the cause rather than the symptom. But a wallet failing every send
-  // with everything else healthy is its own fault and outranks "topping up".
-  else if (sendHealthBlocksServing(sends)) reason = `sends failing: ${sends.reason}`;
-  else if (balanceZat < config.dripZatoshi + config.minReserveZatoshi) reason = "below reserve, refilling";
+  // THE SEND GATE, finally on the readiness path (risk register #7, 2026-09-08). Every
+  // claim runs mayBuildTransaction() and refuses when our node's view of the chain is
+  // stale, because a transaction stamped from a stale tip expires before it confirms.
+  // This endpoint never asked, so a faucet refusing every drip answered 200 here, the
+  // probe read healthy, nobody was paged, and the first signal was a forum post.
+  //
+  // The order and the one asymmetry live in readinessReason() with their tests: only
+  // "unsafe" 503s; "unverifiable" keeps 200 because redeploy rolls back on this endpoint
+  // and a public oracle's outage must not roll back a good deploy. The refusal still
+  // rides in the body as node.canBuildTx, which the watchdog and the probe read.
+  //
+  // WHAT canBuildTx IS HERE: the gate's CACHED verdict, from the non-blocking oracle read
+  // in getNodeStatus(). The claim path asks the oracle with a budget before deciding, so
+  // readiness is the more pessimistic of the two: right after a restart the cache is cold
+  // and this can say canBuildTx:false for a claim that would have succeeded. The pagers
+  // absorb that with their grace and retries; nothing here should be read as "a claim
+  // just now was refused".
+  const reason = readinessReason({
+    ledgerBlocks: ledgerBlocksServing(ledger),
+    backendReachable: backend.reachable,
+    node,
+    balanceZat,
+    sendsBlock: sendHealthBlocksServing(sends),
+    sendsReason: sends.reason ?? null,
+    floorZat: config.dripZatoshi + config.minReserveZatoshi,
+    // getNodeStatus() returns null both when there is no node to ask and when the node
+    // did not answer; only the first is fine, and this is how the verdict tells them apart.
+    nodeExpected: config.sender === "zallet",
+  });
 
   const ready = reason === null;
   const balanceTaz = balanceZat === null ? null : Number(balanceZat) / Number(ZATOSHI_PER_TAZ);
@@ -86,7 +104,11 @@ export const GET = withApi("ready", async () => {
     {
       ready,
       reason, // null when ready; otherwise the most upstream blocker
-      node, // { ready, syncPercent, height, nodeHeight } or null
+      // { ready, syncPercent, height, nodeHeight, shield, canBuildTx, ... } or null.
+      // canBuildTx is the send gate's verdict; false with a 200 means "serving, but
+      // refusing every drip because the tip cannot be verified". Readers that page
+      // (watchdog step 4, scripts/live-probe.mjs) treat that as not ready.
+      node,
       backend: { reachable: backend.reachable },
       // Reported even when serving, and carrying its own three-state verdict, so
       // "container up but not serving" has a name in the alert. "The faucet is

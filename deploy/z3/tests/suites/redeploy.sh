@@ -91,7 +91,7 @@ check "rolled back to the previous image" "[ \"\$(img zcash-faucet:latest)\" = '
 # for a reason a rollback CAN address, must still roll back. Without this, making the
 # two new cases pass by never rolling back at all would look like a fix.
 check "and the ordinary not-ready case names the app's own reason" \
-  "grep -q 'node syncing' '$T/nr.log'"
+  "grep -q 'wallet balance unknown' '$T/nr.log'"
 
 echo "== redeploy: a probe that never ANSWERS is not evidence against the build (#229)"
 # A timeout is not a negative. better-sqlite3 is synchronous, so a wedged read makes
@@ -127,6 +127,20 @@ check "and says the cause is DATA, not code" "grep -q 'DATA, not code' '$T/ledg.
 check "and says a rollback would not have fixed it" \
   "grep -q 'would not fix this' '$T/ledg.log'"
 check "and names the reason it read from the app" "grep -q 'ledger unreadable' '$T/ledg.log'"
+
+echo "== redeploy: a node BEHIND THE NETWORK is not rolled back either, the previous image has the same node"
+# /api/ready 503s with the send gate's reason since risk register #7. The node is a
+# separate container the previous build would talk to just the same, so reverting the app
+# fixes nothing and would blame a good build.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_READY_MAX=1 STUB_READY_REASON="node 60 blocks behind the network, drips would expire" bash "$REDEPLOY" > "$T/chain.log" 2>&1
+rc=$?
+check "a chain-lag failure does NOT roll back" "[ \"\$(img zcash-faucet:latest)\" != 'sha256:old' ]"
+check "and exits 1, because a human should look" "[ $rc -eq 1 ]"
+check "and says the cause is the CHAIN, not code" "grep -q 'CHAIN, not code' '$T/chain.log'"
+check "and says a rollback would not fix it" "grep -q 'would not fix this' '$T/chain.log'"
+check "and names the reason it read from the app" "grep -q 'behind the network' '$T/chain.log'"
 
 echo "== redeploy: connection REFUSED still rolls back, it is not a timeout (#229)"
 # After the deadline, refused means nothing is listening, so the build did not come up.
@@ -167,6 +181,38 @@ check "a failing build on the exec path DOES roll back" \
 check "and exits 2, because service was restored" "[ $rc -eq 2 ]"
 check "and does NOT claim the probe never answered" \
   "! grep -q 'never answered' '$T/nourl.log'"
+
+echo "== redeploy: a FROZEN or SYNCING node is not the image's fault either"
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_READY_MAX=1 STUB_READY_REASON="node frozen behind network" bash "$REDEPLOY" > "$T/frozen.log" 2>&1
+check "frozen: no rollback" "[ \"\$(img zcash-faucet:latest)\" != 'sha256:old' ] && grep -q 'CHAIN, not code' '$T/frozen.log'"
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_READY_MAX=1 STUB_READY_REASON="node syncing" bash "$REDEPLOY" > "$T/syncing.log" 2>&1
+check "syncing: no rollback" "[ \"\$(img zcash-faucet:latest)\" != 'sha256:old' ] && grep -q 'CHAIN, not code' '$T/syncing.log'"
+# The mirror, so the exemption cannot quietly widen to everything: a wallet reason still
+# rolls back, because a broken image failing to reach the wallet is what a rollback fixes.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_READY_MAX=1 STUB_READY_REASON="wallet balance unknown" bash "$REDEPLOY" > "$T/wallet.log" 2>&1
+check "a wallet reason STILL rolls back" "[ \"\$(img zcash-faucet:latest)\" = 'sha256:old' ]"
+
+echo "== redeploy: ON THE EXEC PATH TOO, a node behind the network is not rolled back"
+# The URL path read the reason from the body; the exec path (the default, and production)
+# printed only the status, so reason_is_not_the_code() could never match there and a node
+# that fell behind during a build rolled a good image back with the non-paging exit 2.
+redeploy_env
+unset REDEPLOY_FAUCET_URL
+export STUB_EXEC_HEALTH="$T/exechealth" STUB_EXEC_READY="$T/execready"
+touch "$STUB_EXEC_HEALTH" "$STUB_EXEC_READY"
+STUB_EXEC_READY_MAX=1 STUB_EXEC_READY_REASON="node 60 blocks behind the network, drips would expire" bash "$REDEPLOY" > "$T/execchain.log" 2>&1
+rc=$?
+check "the new image stays: no rollback for a chain-lag reason on the exec path" \
+  "[ \"\$(img zcash-faucet:latest)\" != 'sha256:old' ]"
+check "and exits 1, a human should look" "[ $rc -eq 1 ]"
+check "and says the cause is the CHAIN, not code" "grep -q 'CHAIN, not code' '$T/execchain.log'"
+check "and the reason it read came through the in-container probe" "grep -q 'HTTP 503 node 60 blocks behind the network' '$T/execchain.log'"
 
 echo "== redeploy: on the exec path a THROW is cannot-tell, so it does NOT roll back (#244)"
 # The other half of the distinction. A fetch that throws is no answer, and reverting on

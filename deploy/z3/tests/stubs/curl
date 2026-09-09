@@ -20,9 +20,18 @@ case "$*" in
     # Same gap that made redeploy-curl unable to express any of this (#229).
     want_code=200
     [ "${STUB_READY:-1}" = "1" ] || want_code=503
+    # STUB_READY_CANBUILD=0: a 200 whose send gate refuses (canBuildTx:false, tip
+    # unverifiable), the shape the watchdog must page on. STUB_READY_CANBUILD_ONCE names
+    # a marker: refuse on the first call only, so a recovery can be observed.
+    canbuild="${STUB_READY_CANBUILD:-1}"
+    if [ -n "${STUB_READY_CANBUILD_ONCE:-}" ] && [ ! -e "$STUB_READY_CANBUILD_ONCE" ]; then
+      touch "$STUB_READY_CANBUILD_ONCE"; canbuild=0
+    fi
     for a in "$@"; do
       case "$a" in *"%{http_code}"*)
-        if [ "$want_code" = "200" ]; then printf '{"ready":true,"reason":null}'
+        if [ "$want_code" = "200" ] && [ "$canbuild" = "0" ]; then
+          printf '{"ready":true,"reason":null,"node":{"ready":true,"canBuildTx":false,"shield":{"state":"unverifiable","lag":null,"reason":"no independent tip to compare against"}}}'
+        elif [ "$want_code" = "200" ]; then printf '{"ready":true,"reason":null,"node":{"ready":true,"canBuildTx":true}}'
         else printf '{"ready":false,"reason":"%s"}' "${STUB_READY_REASON:-node syncing}"; fi
         printf '\n%s' "$want_code"
         exit 0 ;;

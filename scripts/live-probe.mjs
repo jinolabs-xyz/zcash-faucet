@@ -292,7 +292,32 @@ async function runFaucetChecks() {
 
   const ready = await probe("/api/ready");
   if (ready.status === 200) {
-    ok("GET /api/ready says a drip can be served", true, `${ready.ms}ms`);
+    // THE GATE THE STATUS CODE CANNOT SHOW. A tip the faucet cannot verify keeps /api/ready
+    // at 200 on purpose (redeploy rolls back on that code, and a public oracle's outage
+    // must not roll back a good deploy), while every claim is refused. That is a faucet
+    // nobody can get coins from, which is what this probe exists to catch, so the send
+    // gate's verdict is read out of the body BEFORE anything here is called healthy.
+    //
+    // A body with a node but no boolean canBuildTx FAILS: a refactor that dropped the
+    // field would otherwise disable this check for ever behind a green line. A body with
+    // no node at all is a server that predates the field, and that is cannot-verify.
+    const node = ready.body?.node;
+    const canBuild = node?.canBuildTx;
+    if (node == null) {
+      ok("GET /api/ready says a drip can be served", true, `${ready.ms}ms, server sends no node block, gate cannot be verified`);
+    } else if (typeof canBuild !== "boolean") {
+      ok("GET /api/ready carries the send gate's verdict (node.canBuildTx)", false, `node.canBuildTx is ${JSON.stringify(canBuild)}; the field this probe pages on is gone`);
+    } else if (canBuild) {
+      ok("GET /api/ready says a drip can be served, and the send gate agrees", true, `${ready.ms}ms`);
+    } else {
+      const why = node.shield?.reason ?? "no reason given";
+      ok(
+        "GET /api/ready is 200 but the send gate refuses every drip (canBuildTx false)",
+        ALLOW_UNREADY,
+        `${why}. Usually the tip oracle (hosh.zec.rocks) is unreachable from the box; check /api/status node.externalHeight. ` +
+          (ALLOW_UNREADY ? "allowed by SMOKE_ALLOW_UNREADY" : "SMOKE_ALLOW_UNREADY=1 suppresses this during a known oracle outage"),
+      );
+    }
   } else if (ready.status === 503 && ready.body) {
     const reason = ready.body.reason ?? ready.body.error ?? JSON.stringify(ready.body);
     ok("faucet is ready to drip", ALLOW_UNREADY, `app says not ready: ${reason}${ALLOW_UNREADY ? ", allowed by SMOKE_ALLOW_UNREADY" : ""}`);

@@ -56,8 +56,15 @@ check "not-ready is recorded as faucet_ready 0" "grep -qx 'faucet_ready 0' '$MET
 check "balance comes through" "grep -qx 'faucet_balance_taz 3.5' '$METRICS_FILE'"
 check "queue depth comes through" "grep -qx 'faucet_queue_depth 2' '$METRICS_FILE'"
 check "empty=false becomes 0" "grep -qx 'faucet_empty 0' '$METRICS_FILE'"
-# The nested node object, not the top-level "ready" that means something else.
-check "nested node.ready read correctly" "grep -qx 'faucet_node_ready 1' '$METRICS_FILE'"
+# The nested node object, not the top-level "ready" that means something else. The fixture's
+# node carries nested shield/chain objects like the real one; with the old `{[^{}]*}`
+# extractor these three gauges were absent from the real file and this check passed on a
+# fixture without nesting.
+check "nested node.ready read correctly, past the objects nested inside node" "grep -qx 'faucet_node_ready 1' '$METRICS_FILE'"
+check "node.syncPercent and node.height survive the nesting too" "grep -qx 'faucet_node_sync_percent 99.98' '$METRICS_FILE' && grep -qx 'faucet_node_height 4204726' '$METRICS_FILE'"
+# The send gate's verdict, which faucet_ready cannot carry: this fixture's node is ready
+# and its gate is closed, the exact pair a scraper must be able to tell apart.
+check "the send gate's verdict is its own gauge" "grep -qx 'faucet_can_build_tx 0' '$METRICS_FILE'"
 check "nested node.syncPercent read correctly" "grep -qx 'faucet_node_sync_percent 99.98' '$METRICS_FILE'"
 check "nested node.height read correctly" "grep -qx 'faucet_node_height 4204726' '$METRICS_FILE'"
 check "running container reported up" "grep -qx 'faucet_container_up 1' '$METRICS_FILE'"
@@ -123,3 +130,58 @@ export METRICS_ALERT_SH="$T/fake-alert.sh"
 bash "$METRICS_SH" > "$T/valid.log" 2>&1
 check "warning appears in the log, not the metrics file" "grep -q 'DISK LOW' '$T/valid.log' && ! grep -q 'DISK LOW' '$METRICS_FILE'"
 check "every line is a comment or a metric" "! grep -vE '^(#|[a-z_]+(\{[^}]*\})? -?[0-9.]+$)' '$METRICS_FILE'"
+
+echo "== metrics: a node that is NULL yields no node gauges, never the next object's numbers"
+# With cTAZ enabled the object after "node" carries height and syncPercent too; an extractor
+# that took the next brace reported the feature-net's figures as the Zcash node's.
+metrics_env
+NULL_PORT=$((API_PORT + 7))
+python3 - "$NULL_PORT" <<'PY' >/dev/null 2>&1 &
+import http.server, json, sys
+port = int(sys.argv[1])
+READY = {"ready": True, "reason": None, "node": None, "backend": {"reachable": True}, "balanceTaz": 3.5, "ts": 1}
+STATUS = {"network": "testnet", "dripTaz": 0.1, "balanceTaz": 3.5, "empty": False, "queueDepth": 2, "node": None,
+          "ctaz": {"enabled": True, "height": 9999, "syncPercent": 42.5, "readiness": "ready"}}
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = json.dumps(READY if self.path == "/api/ready" else STATUS).encode()
+        self.send_response(200); self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body))); self.end_headers(); self.wfile.write(body)
+    def log_message(self, *a): pass
+http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()
+PY
+NULL_PID=$!
+for _ in $(seq 1 40); do "$REAL_CURL" -sf -o /dev/null "http://127.0.0.1:$NULL_PORT/api/status" && break; sleep 0.25; done
+METRICS_FAUCET_URL="http://127.0.0.1:$NULL_PORT" bash "$METRICS_SH" > /dev/null 2>&1
+check "no node height invented from the cTAZ object" "! grep -q '^faucet_node_height ' '$METRICS_FILE'"
+check "no node sync percent invented either" "! grep -q '^faucet_node_sync_percent ' '$METRICS_FILE'"
+check "no node ready gauge from a null node" "! grep -q '^faucet_node_ready ' '$METRICS_FILE'"
+check "while the top-level gauges are still there, so the file was written" "grep -qx 'faucet_up 1' '$METRICS_FILE' && grep -qx 'faucet_balance_taz 3.5' '$METRICS_FILE'"
+kill "$NULL_PID" 2>/dev/null
+
+echo "== metrics: a key the node object LACKS is answered by nothing, not by the next object"
+# The slice is bounded at the node object's own closing brace, nesting and strings
+# counted, so cTAZ's height cannot stand in for a node height that was never sent.
+metrics_env
+python3 - "$((API_PORT + 8))" <<'PY' >/dev/null 2>&1 &
+import http.server, json, sys
+port = int(sys.argv[1])
+READY = {"ready": True, "reason": None, "node": {"ready": True, "shield": {"state": "safe", "reason": "a } brace in text"}}, "backend": {"reachable": True}, "balanceTaz": 3.5, "ts": 1}
+STATUS = {"network": "testnet", "dripTaz": 0.1, "balanceTaz": 3.5, "empty": False, "queueDepth": 2,
+          "node": {"ready": True, "shield": {"state": "safe", "reason": "a } brace in text"}},
+          "ctaz": {"enabled": True, "height": 9999, "syncPercent": 42.5, "ready": False}}
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = json.dumps(READY if self.path == "/api/ready" else STATUS).encode()
+        self.send_response(200); self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body))); self.end_headers(); self.wfile.write(body)
+    def log_message(self, *a): pass
+http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()
+PY
+LACK_PID=$!; LACK_PORT=$((API_PORT + 8))
+for _ in $(seq 1 40); do "$REAL_CURL" -sf -o /dev/null "http://127.0.0.1:$LACK_PORT/api/status" && break; sleep 0.25; done
+METRICS_FAUCET_URL="http://127.0.0.1:$LACK_PORT" bash "$METRICS_SH" > /dev/null 2>&1
+check "node.ready is read from the node object, past a brace inside a string" "grep -qx 'faucet_node_ready 1' '$METRICS_FILE'"
+check "no node height: the node object has none and cTAZ's is not borrowed" "! grep -q '^faucet_node_height ' '$METRICS_FILE'"
+check "no node sync percent either" "! grep -q '^faucet_node_sync_percent ' '$METRICS_FILE'"
+kill "$LACK_PID" 2>/dev/null
