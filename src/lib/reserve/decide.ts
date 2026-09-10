@@ -76,11 +76,67 @@ export function initialRefilling(spendableZat: bigint | null, levels: ReserveLev
  */
 export function shouldStartStep(opts: {
   refilling: boolean;
+  /**
+   * The harvest trigger (shouldHarvest). Optional so every existing caller and
+   * test keeps its meaning: absent is "not harvesting", which is what the loop
+   * did before there was such a thing.
+   *
+   * It is an OR rather than a second code path because everything after the
+   * decision is identical - the same bounded step, the same queue, the same
+   * gate. Only the reason for starting differs, and that difference belongs in
+   * the two predicates, not in a duplicated branch.
+   */
+  harvesting?: boolean;
   canAct: boolean;
   stepInFlight: boolean;
   queueDepth: number;
 }): boolean {
-  return opts.refilling && opts.canAct && !opts.stepInFlight && opts.queueDepth === 0;
+  const wanted = opts.refilling || opts.harvesting === true;
+  return wanted && opts.canAct && !opts.stepInFlight && opts.queueDepth === 0;
+}
+
+/**
+ * Whether to sweep transparent coinbase because it is THERE, independent of how
+ * much is shielded.
+ *
+ * decideRefilling answers "are we short?". This answers "is there a harvest
+ * waiting?", and the faucet needs both: the refill rule shields what we spend
+ * and never touches what we mine, so on a box that mines continuously the
+ * transparent side only grows. Live, 2026-09-10: 1778 TAZ and 1346 coinbase
+ * UTXOs stranded behind a trigger that had not fired since July, while the
+ * shielded side sat comfortably above its low-water mark the whole time.
+ *
+ * TWO REASONS TO SWEEP, and they are not the same reason:
+ *
+ *   backlog   the last sweep reported at least `minUTXOs` still there, so there
+ *             is known work. Fire on the next tick rather than waiting out the
+ *             interval, or draining 1346 UTXOs at one batch per hour takes a
+ *             day and a half.
+ *   probe     nothing is known and the interval has passed. While idle we
+ *             cannot see new coinbase arrive - remainingUTXOs only updates when
+ *             a sweep reports it - so the sweep IS the probe: z_shieldcoinbase
+ *             shields a batch and says what is left, answering both questions
+ *             for one round-trip.
+ *
+ * `knownRemainingUTXOs` is null when the backend did not report a count, which is
+ * the count-not-reported case classifySweep exists to keep distinct. Null is not
+ * zero here either: it falls through to the interval rather than being read as
+ * "nothing to do", because an absence of information must not look like a fact.
+ *
+ * An interval of 0 disables harvesting outright, backlog included. That is the
+ * only way back to demand-only behaviour, and it is one knob rather than two so
+ * "is harvesting on?" has a single answer.
+ */
+export function shouldHarvest(opts: {
+  knownRemainingUTXOs: number | null;
+  minUTXOs: number;
+  /** Milliseconds since the last harvest attempt; null when there has never been one. */
+  msSinceLastHarvest: number | null;
+  intervalMs: number;
+}): boolean {
+  if (opts.intervalMs <= 0) return false;
+  if (opts.knownRemainingUTXOs !== null && opts.knownRemainingUTXOs >= opts.minUTXOs) return true;
+  return opts.msSinceLastHarvest === null || opts.msSinceLastHarvest >= opts.intervalMs;
 }
 
 /**

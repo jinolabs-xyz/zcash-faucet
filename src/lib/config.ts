@@ -214,6 +214,40 @@ export const config = {
     // turned fund recovery off, and 47.5 TAZ sat unswept through a shortage.
     // Default false because it broadcasts a transaction, so it stays opt-in.
     shieldCoinbase: process.env.FAUCET_SHIELD_COINBASE === "true",
+
+    /**
+     * HARVEST: sweep transparent coinbase because it EXISTS, not because the
+     * shielded side ran low.
+     *
+     * The refill rule above is demand-driven - it shields when spendable falls
+     * under lowZat and stops at targetZat. That refills what we spend and never
+     * harvests what we mine, so on a faucet that mines continuously the
+     * transparent pile only grows. Measured on the live box 2026-09-10: 1801 TAZ
+     * drippable, 1778 TAZ stranded transparent, and 1346 unspent coinbase UTXOs
+     * behind a trigger that had not fired since July.
+     *
+     * The count is the trigger, not the value. A shield costs one transaction
+     * whatever it carries, z_shieldcoinbase takes at most SHIELD_UTXO_LIMIT (50)
+     * UTXOs per call, and an unbounded UTXO set is its own problem: 1346 of them
+     * is 27 passes before the money is usable. One batch's worth is therefore the
+     * natural unit of "enough to be worth a transaction".
+     *
+     * The sweep is also the probe. While idle we cannot see new coinbase arrive -
+     * remainingUTXOs only updates after a sweep - so the loop attempts one on an
+     * interval, and z_shieldcoinbase answers both questions at once: it shields a
+     * batch and reports what is left. A backlog then drains on consecutive ticks
+     * without waiting out the interval each time.
+     *
+     * 0 turns harvesting off entirely, which is the only way to get the old
+     * demand-only behaviour back.
+     */
+    harvestIntervalSeconds: Math.max(0, Math.floor(num("FAUCET_HARVEST_INTERVAL_SECONDS", 3600))),
+    /**
+     * Coinbase UTXOs that make a harvest worth a transaction. Defaults to one
+     * full shield batch: below this a sweep spends a fee to move a fraction of
+     * what the next one would.
+     */
+    harvestMinUTXOs: Math.max(1, Math.floor(num("FAUCET_HARVEST_MIN_UTXOS", 50))),
   },
 
   // Whether we may MINE. The app itself never mines, that is the miner container

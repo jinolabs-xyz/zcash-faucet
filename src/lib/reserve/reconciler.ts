@@ -21,7 +21,7 @@
 import { config, ZATOSHI_PER_TAZ } from "../config.ts";
 import { safeBalance } from "../zcash/send.ts";
 import { getSendQueue } from "../zcash/queue.ts";
-import { classifySweep, decideRefilling, initialRefilling, shouldStartStep } from "./decide.ts";
+import { classifySweep, decideRefilling, initialRefilling, shouldHarvest, shouldStartStep } from "./decide.ts";
 import type { ShieldFreshness } from "../zcash/shieldGate.ts";
 import { getRefiller } from "./refiller.ts";
 import { classifyStepFailure, shouldAttempt, type StepOutcome } from "./stepFailure.ts";
@@ -56,6 +56,19 @@ export interface ReserveStatus {
   lastRefusal: { state: ShieldFreshness; reason: string; lag: number | null } | null;
   /** UTXOs the backend last reported as still shieldable, when it says. */
   remainingUTXOs: number | null;
+  /**
+   * Whether the loop is sweeping because coinbase is THERE rather than because the
+   * shielded side ran low. Distinct from `refilling` on purpose: they answer
+   * different questions, and folding them together would report a healthy harvest
+   * as a shortage - which is the state an operator pages on.
+   */
+  harvesting: boolean;
+  /** Seconds since the last harvest ATTEMPT; null when there has not been one. */
+  harvestAgeSeconds: number | null;
+  /** The count at or above which a harvest is worth a transaction. */
+  harvestMinUTXOs: number;
+  /** 0 means harvesting is off and only the demand-driven refill remains. */
+  harvestIntervalSeconds: number;
   /**
    * Consecutive ticks where the step THREW. Separate from emptySweeps because an
    * empty sweep means we tried and there was nothing, while this means we could not
@@ -121,6 +134,15 @@ class ReserveReconciler {
   private ticksSinceAttempt = 0;
   private lastRefusal: ReserveStatus["lastRefusal"] = null;
   private remainingUTXOs: number | null = null;
+  /**
+   * When a harvest was last ATTEMPTED, not last succeeded. The interval exists to
+   * bound how often we spend a round-trip asking, and a sweep that found nothing
+   * asked just as much as one that moved funds. Timing from success would retry
+   * every tick forever on an empty wallet.
+   */
+  private lastHarvestAt: number | null = null;
+  /** Whether the step now in flight was started by the harvest trigger. */
+  private harvesting = false;
 
   /**
    * Arm the loop. Called from instrumentation.ts only - status polls read
@@ -196,14 +218,30 @@ class ReserveReconciler {
       } else {
         this.forbiddenTicks = 0;
       }
+      // Sweep because coinbase is THERE, not only because the shielded side ran
+      // low. Same permission, same queue, same gate as a refill - only the reason
+      // differs. See shouldHarvest for why the count is the trigger and why the
+      // sweep doubles as the probe.
+      const harvest = shouldHarvest({
+        knownRemainingUTXOs: this.remainingUTXOs,
+        minUTXOs: config.reserve.harvestMinUTXOs,
+        msSinceLastHarvest: this.lastHarvestAt === null ? null : Date.now() - this.lastHarvestAt,
+        intervalMs: config.reserve.harvestIntervalSeconds * 1000,
+      });
       const start = shouldStartStep({
         // Undecided must not act. We have not established that a refill is wanted.
         refilling: this.refilling === true,
+        harvesting: harvest,
         canAct: config.reserve.shieldCoinbase,
         stepInFlight: this.stepInFlight,
         queueDepth: getSendQueue().depth, // user traffic first, refill can wait
       });
       if (!start) return;
+      // Recorded only once the tick has actually decided to run a step. Stamping it
+      // at the decision above would let a tick that yields to the queue reset the
+      // clock, and harvesting would then starve behind steady traffic while
+      // reporting that it had just run.
+      this.harvesting = harvest && this.refilling !== true;
 
         // Back off a step that keeps throwing, rather than tightening a loop that
         // cannot succeed. decide.ts is untouched: the hysteresis rule is correct and
@@ -214,6 +252,11 @@ class ReserveReconciler {
         this.ticksSinceAttempt = 0;
 
       this.stepInFlight = true;
+      // Stamped on ATTEMPT, and only for a harvest. A refill sweep is driven by the
+      // balance and must not push the harvest clock forward: if it did, a long refill
+      // would look like a recent harvest and new coinbase would go unnoticed for an
+      // interval after the refill ended.
+      if (this.harvesting) this.lastHarvestAt = Date.now();
       getSendQueue()
         // Same backstop as a drip (#88). A shield sweep goes through the same
         // wallet and the same async-operation polling, so a stuck one would
@@ -331,6 +374,11 @@ class ReserveReconciler {
       shieldRefusals: this.shieldRefusals,
       lastRefusal: this.lastRefusal,
       remainingUTXOs: this.remainingUTXOs,
+      harvesting: this.harvesting,
+      harvestAgeSeconds:
+        this.lastHarvestAt === null ? null : Math.floor((Date.now() - this.lastHarvestAt) / 1000),
+      harvestMinUTXOs: config.reserve.harvestMinUTXOs,
+      harvestIntervalSeconds: config.reserve.harvestIntervalSeconds,
       failedSteps: this.failedSteps,
       lastFailure: this.lastFailure,
     };

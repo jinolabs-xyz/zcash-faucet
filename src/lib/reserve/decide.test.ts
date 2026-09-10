@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decideRefilling, initialRefilling, shouldStartStep } from "./decide.ts";
+import { decideRefilling, initialRefilling, shouldHarvest, shouldStartStep } from "./decide.ts";
 
 const levels = { lowZat: 5_0000_0000n, targetZat: 15_0000_0000n }; // 5 / 15 TAZ
 
@@ -116,4 +116,102 @@ test("once decided, hysteresis owns it: reaching target still stops the refill",
   assert.equal(refilling, true, "still climbing");
   refilling = decideRefilling(refilling, 1000_0000_0000n, live);
   assert.equal(refilling, false, "resuming on cold start must not mean refilling forever");
+});
+
+/* ------------------------------------------- harvest: sweep because it is THERE (#26x) */
+
+const HARVEST = { minUTXOs: 50, intervalMs: 3_600_000 };
+
+test("a known backlog harvests on the next tick, without waiting out the interval", () => {
+  // 1346 UTXOs at one batch an hour is a day and a half. The backlog rule is what
+  // makes a drain a drain rather than a trickle.
+  assert.equal(
+    shouldHarvest({ knownRemainingUTXOs: 1346, msSinceLastHarvest: 0, ...HARVEST }),
+    true,
+  );
+  assert.equal(
+    shouldHarvest({ knownRemainingUTXOs: 50, msSinceLastHarvest: 0, ...HARVEST }),
+    true,
+  );
+});
+
+test("below the batch size it waits, because a sweep costs a transaction either way", () => {
+  assert.equal(
+    shouldHarvest({ knownRemainingUTXOs: 49, msSinceLastHarvest: 0, ...HARVEST }),
+    false,
+  );
+  assert.equal(
+    shouldHarvest({ knownRemainingUTXOs: 0, msSinceLastHarvest: 0, ...HARVEST }),
+    false,
+  );
+});
+
+test("the interval is what notices new coinbase, since an idle loop cannot see it arrive", () => {
+  // remainingUTXOs only updates when a sweep reports it, so a wallet that was empty
+  // an hour ago says nothing about the blocks mined since. The sweep is the probe.
+  assert.equal(
+    shouldHarvest({ knownRemainingUTXOs: 0, msSinceLastHarvest: 3_600_000, ...HARVEST }),
+    true,
+  );
+  assert.equal(
+    shouldHarvest({ knownRemainingUTXOs: 0, msSinceLastHarvest: 3_599_999, ...HARVEST }),
+    false,
+  );
+});
+
+test("never having harvested is due, not idle", () => {
+  assert.equal(
+    shouldHarvest({ knownRemainingUTXOs: null, msSinceLastHarvest: null, ...HARVEST }),
+    true,
+  );
+});
+
+test("an UNREPORTED count is not a reported zero", () => {
+  // classifySweep keeps count-not-reported distinct for the same reason: an absence
+  // of information must not read as a fact. Null falls through to the interval
+  // rather than being treated as "nothing to do".
+  assert.equal(
+    shouldHarvest({ knownRemainingUTXOs: null, msSinceLastHarvest: 0, ...HARVEST }),
+    false,
+  );
+  assert.equal(
+    shouldHarvest({ knownRemainingUTXOs: null, msSinceLastHarvest: 3_600_000, ...HARVEST }),
+    true,
+  );
+});
+
+test("interval 0 turns harvesting off outright, backlog included", () => {
+  // The only way back to demand-only behaviour, and it has to beat the backlog rule
+  // or "off" would not mean off.
+  assert.equal(
+    shouldHarvest({ knownRemainingUTXOs: 5000, msSinceLastHarvest: null, minUTXOs: 50, intervalMs: 0 }),
+    false,
+  );
+});
+
+test("a harvest starts a step even when the balance is comfortable", () => {
+  // The whole point: refilling false, plenty shielded, and coinbase still gets swept.
+  assert.equal(
+    shouldStartStep({ refilling: false, harvesting: true, canAct: true, stepInFlight: false, queueDepth: 0 }),
+    true,
+  );
+});
+
+test("a harvest yields to exactly what a refill yields to", () => {
+  const base = { refilling: false, harvesting: true, canAct: true, stepInFlight: false, queueDepth: 0 };
+  assert.equal(shouldStartStep({ ...base, canAct: false }), false, "shielding not permitted");
+  assert.equal(shouldStartStep({ ...base, stepInFlight: true }), false, "one step at a time");
+  assert.equal(shouldStartStep({ ...base, queueDepth: 1 }), false, "user traffic first");
+});
+
+test("no harvest and no refill still means no step", () => {
+  assert.equal(
+    shouldStartStep({ refilling: false, harvesting: false, canAct: true, stepInFlight: false, queueDepth: 0 }),
+    false,
+  );
+  // And omitting the field entirely is the pre-harvest meaning, unchanged.
+  assert.equal(
+    shouldStartStep({ refilling: false, canAct: true, stepInFlight: false, queueDepth: 0 }),
+    false,
+  );
 });
