@@ -79,11 +79,24 @@ SELECTED="${SUITES:-$SUITE_ORDER}"
 
 # Only when running the default set: a deliberately narrowed SUITES= is not a mismatch.
 if [ -z "${SUITES:-}" ]; then
-  on_disk=""
+  on_disk=""; broken_links=""
   for f in "$SCRATCH"/suites/*.sh; do
+    # -e is FALSE for a dangling symlink, so `[ -e ] || continue` dropped one silently:
+    # a .sh-named entry sitting in suites/, never run, never mentioned, green tally. That
+    # is the defect this guard exists for, arriving through the one door the guard did not
+    # watch. -L catches the link itself regardless of where it points.
+    if [ -L "$f" ] && [ ! -e "$f" ]; then
+      broken_links="$broken_links ${f##*/}"
+      continue
+    fi
     [ -e "$f" ] || continue
     n="${f##*/}"; on_disk="$on_disk ${n%.sh}"
   done
+  if [ -n "$broken_links" ]; then
+    echo "REFUSING TO RUN: suites/ holds a broken symlink:$broken_links" >&2
+    echo "It is named like a suite and can never run. Fix the target or remove it." >&2
+    exit 2
+  fi
   unlisted=""; missing_file=""
   for n in $on_disk; do
     case " $SUITE_ORDER " in *" $n "*) ;; *) unlisted="$unlisted $n" ;; esac
@@ -387,8 +400,22 @@ for suite in $SELECTED; do
   [ -f "$file" ] || { bad "no such suite: $suite"; continue; }
   echo
   echo "### suite: $suite"
+  # A SUITE THAT DOES NOT SOURCE IS A SUITE THAT DID NOT RUN, and until this it was a
+  # GREEN one. `set -uo pipefail` carries no -e, so an unreadable file or a parse error
+  # left `. "$file"` returning non-zero and the loop moved on: measured, a prune.sh with a
+  # syntax error gave "23 passed, 0 failed" where 60 checks were due, exit 0. That is this
+  # file's own subject - a suite nobody ran and nothing said so - one door over from the
+  # list guard above, which is why it is not left to CI's shellcheck to catch one half of.
+  #
+  # The count is the evidence, not the exit status: a suite can source cleanly and still
+  # be a no-op if its body is guarded off, and `. file || bad` would not notice.
+  before=$(( pass + fail ))
   # shellcheck source=/dev/null
-  . "$file"
+  if ! . "$file"; then
+    bad "suite $suite did NOT source cleanly, so some or all of its checks never ran"
+  elif [ "$(( pass + fail ))" -eq "$before" ]; then
+    bad "suite $suite sourced but ran no checks at all, which is not a pass"
+  fi
 done
 
 echo

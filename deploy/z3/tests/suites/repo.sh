@@ -439,6 +439,38 @@ rc=$?
 check "SUITES that names no suite REFUSES rather than passing having run nothing" \
   "[ $rc -eq 2 ] && grep -q 'names no suite' '$T/blank.log'"
 
+# A BROKEN SYMLINK IS A SUITE THAT CAN NEVER RUN. `[ -e ]` is false for one, so the
+# comparison above simply did not see it: a .sh-named entry in suites/, never run, never
+# mentioned, green tally - the exact shape the guard exists to refuse, arriving through
+# the one door it was not watching.
+cp -r "$REPO/deploy/z3/tests" "$T/tests2"
+ln -sf /nonexistent/nope "$T/tests2/suites/zzzbroken.sh"
+( cd "$REPO" && env -u SUITES TEST_SCRATCH="$T/tests2" bash "$T/tests2/run-tests.sh" > "$T/broken.log" 2>&1 )
+rc=$?
+# Both halves in one check, because exit 2 is this harness's refusal code generally: with
+# the guard removed the run still exited 2 for an unrelated reason and a bare rc test
+# passed on it. A refusal has to be THIS refusal.
+check "a broken symlink in suites/ REFUSES the run, and says which file" \
+  "[ $rc -eq 2 ] && grep -q 'broken symlink:.*zzzbroken' '$T/broken.log'"
+rm -f "$T/tests2/suites/zzzbroken.sh"
+
+# A LISTED SUITE THAT DOES NOT SOURCE IS A SUITE THAT DID NOT RUN. Without the floor a
+# parse error left the loop moving on: measured, 23 passed / 0 failed and exit 0 where
+# sixty checks were due. Same sentence as the guard above, one door over.
+printf '# shellcheck shell=bash\ncheck "counts once" "true"\nif true; then\n' > "$T/tests2/suites/prune.sh"
+( cd "$REPO" && SUITES="prune" TEST_SCRATCH="$T/tests2" bash "$T/tests2/run-tests.sh" > "$T/nosource.log" 2>&1 )
+rc=$?
+check "a suite that fails to SOURCE fails the run rather than passing it" "[ $rc -ne 0 ]"
+check "and says which suite, and that its checks never ran" \
+  "grep -q 'suite prune did NOT source cleanly' '$T/nosource.log'"
+# And a suite that sources fine but asserts nothing is not a pass either.
+printf '# shellcheck shell=bash\n: nothing to see here\n' > "$T/tests2/suites/prune.sh"
+( cd "$REPO" && SUITES="prune" TEST_SCRATCH="$T/tests2" bash "$T/tests2/run-tests.sh" > "$T/nochecks.log" 2>&1 )
+rc=$?
+check "a suite that runs NO checks fails the run rather than reporting a clean zero" "[ $rc -ne 0 ]"
+check "and says so in those terms" "grep -q 'ran no checks at all' '$T/nochecks.log'"
+rm -rf "$T/tests2"
+
 # THE INSTALL LINE IS GENERATED, so it cannot omit a command the guard demands. The three
 # functions are sourced out of the shipped script rather than re-implemented here.
 sed -n '/^suite_deps() {/,/^}/p; /^suite_caps() {/,/^}/p; /^dep_package() {/,/^}/p' "$RT" > "$T/fns.sh"
