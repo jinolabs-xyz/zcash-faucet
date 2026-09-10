@@ -33,7 +33,16 @@
 // So the faucet checks run up to SMOKE_ATTEMPTS times with SMOKE_RETRY_DELAY_MS
 // between: a transient failure that clears on retry passes, and only a failure
 // that PERSISTS across the whole window (a real outage) exits non-zero.
-const BASE = (process.env.SMOKE_URL ?? "").replace(/\/$/, "");
+// TRIMMED, not just de-slashed. The workflow accepts surrounding whitespace on
+// FAUCET_LIVE_URL because `new URL()` does; without the trim here a TRAILING space lands
+// inside the request path and the run pages about a missing API field instead of a typo.
+// TRIMMED, and that is load-bearing rather than tidy. The workflow's scheme gate folds
+// surrounding whitespace deliberately - refusing " https://host " pages a human about a
+// variable that would otherwise have worked - so this side has to fold it too. Without
+// the trim the value cleared the gate and then died on EVERY scheduled run with
+// "Failed to parse URL from  https://host /api/status", which names nothing about the
+// variable and is a worse diagnosis than the refusal it replaced.
+const BASE = (process.env.SMOKE_URL ?? "").trim().replace(/\/$/, "");
 /**
  * Is the un-ready escape hatch in force? This is the one knob that can turn the whole
  * probe into a pass, so scripts/live-probe.test.mjs spawns the probe and pins it (this
@@ -78,7 +87,31 @@ function unreadyHatch(raw, now = new Date(), maxDays = MAX_HATCH_DAYS) {
 const hatch = unreadyHatch(process.env.SMOKE_ALLOW_UNREADY);
 const ALLOW_UNREADY = hatch.on;
 if (hatch.why) console.error(hatch.why);
-const TIMEOUT_MS = Number(process.env.SMOKE_TIMEOUT_MS ?? 15000);
+/**
+ * A number from the environment, or the default, with an explicit floor.
+ *
+ * `?? d` does not catch the EMPTY STRING, and an empty string is exactly what GitHub
+ * Actions hands an unset repository variable: Number("") is 0. For the handshake timeout
+ * that is the worst possible value - 0 means NO timeout, so a black-holed 443 waits out
+ * the OS connect timeout (~2 min) instead of 15 seconds. The certificate floor below had
+ * the same hole and it was closed one knob at a time; this applies the argument to the
+ * rest, so the next one added inherits it.
+ *
+ * `min` IS A PARAMETER BECAUSE ZERO IS NOT UNIFORMLY WRONG. A zero retry DELAY is a
+ * legitimate "do not wait", and the tests pass exactly that. Treating it like the timeout
+ * turned every retry in the suite into a 30-second sleep and hung the run - and the test
+ * that caught it was the whitespace one, which stopped failing for the mutation it is
+ * named for and started failing for this instead. A helper that quietly overrides a value
+ * someone set is the same defect as one that quietly accepts a bad one.
+ */
+function numEnv(name, fallback, min) {
+  const raw = String(process.env[name] ?? "").trim();
+  if (raw === "") return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= min ? n : fallback;
+}
+
+const TIMEOUT_MS = numEnv("SMOKE_TIMEOUT_MS", 15000, 1);
 // Days of certificate life below which this fails. Caddy renews a 90-day Let's Encrypt
 // certificate at about 30 days left, so 21 means "two renewal attempts have already not
 // worked", not "renewal is due" (risk register #18).
@@ -91,8 +124,9 @@ const TLS_MIN_DAYS =
   String(process.env.SMOKE_TLS_MIN_DAYS ?? "").trim() !== "" &&
   Number.isFinite(TLS_MIN_DAYS_RAW) && TLS_MIN_DAYS_RAW >= 0
     ? TLS_MIN_DAYS_RAW : 21;
-const RETRY_ATTEMPTS = Math.max(1, Number(process.env.SMOKE_ATTEMPTS ?? 3));
-const RETRY_DELAY_MS = Number(process.env.SMOKE_RETRY_DELAY_MS ?? 30000);
+const RETRY_ATTEMPTS = Math.max(1, numEnv("SMOKE_ATTEMPTS", 3, 1));
+// 0 floor, not 1: "retry immediately" is a real setting and the tests use it.
+const RETRY_DELAY_MS = numEnv("SMOKE_RETRY_DELAY_MS", 30000, 0);
 
 if (!BASE) {
   console.error("SMOKE_URL is not set, nothing to probe");

@@ -81,7 +81,9 @@ jobs:
           # would have worked.
           smoke_scheme="$(printf '%s' "$SMOKE_URL" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
           case "$smoke_scheme" in
-            https://*|https:[!/]*) ;;
+            # `https:/host` too: one dropped slash, which `new URL()` normalises and the
+            # probe runs clean on, so refusing it pages a human for a variable that works.
+            https://*|https:[!/]*|https:/[!/]*) ;;
             *) echo "FAUCET_LIVE_URL is '$SMOKE_URL', which is not https, so the certificate check would be skipped on every run." >&2
                echo "Point it at the https origin. The faucet checks would still pass through the redirect, which is exactly why this refuses." >&2
                exit 1 ;;

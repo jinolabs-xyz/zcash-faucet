@@ -319,10 +319,12 @@ check "and neither is the certificate floor" \
 # the scheme is ever looked at, so the check passed on a byte-exact mutant of the guard it
 # was written for. The step has to reach the case, which means it also reaches `node`, so
 # node is stubbed the way the page step's tools are.
-mkdir -p "$T/bin"
-printf '#!/usr/bin/env bash\necho "stub node ran: $*"\n' > "$T/bin/node"
-chmod +x "$T/bin/node"
-( cd "$REPO" && PATH="$T/bin:$BASE_PATH" SMOKE_URL="HTTPS://faucet.example.org" SMOKE_DISABLED="" \
+# ITS OWN DIR, not the $T/bin the page step's gh and curl stubs live in: anything added to
+# that block later would silently get this node too.
+mkdir -p "$T/nodebin"
+printf '#!/usr/bin/env bash\necho "stub node ran: $*"\n' > "$T/nodebin/node"
+chmod +x "$T/nodebin/node"
+( cd "$REPO" && PATH="$T/nodebin:$BASE_PATH" SMOKE_URL="HTTPS://faucet.example.org" SMOKE_DISABLED="" \
     bash "$T/probe-step.sh" > "$T/upper.log" 2>&1 )
 rc=$?
 check "an uppercase HTTPS:// is accepted, because new URL() normalises it and a refusal pages" \
@@ -331,14 +333,18 @@ check "and the step really got past the scheme check, rather than exiting before
   "grep -q 'stub node ran' '$T/upper.log'"
 # The two other forms new URL() accepts. Refusing either pages a human for a variable that
 # would have worked, which is the harm the fold was added for.
-( cd "$REPO" && PATH="$T/bin:$BASE_PATH" SMOKE_URL=" https://faucet.example.org " SMOKE_DISABLED="" \
+( cd "$REPO" && PATH="$T/nodebin:$BASE_PATH" SMOKE_URL=" https://faucet.example.org " SMOKE_DISABLED="" \
     bash "$T/probe-step.sh" > "$T/ws.log" 2>&1 )
 check "surrounding whitespace does not turn a good URL into a page" \
   "[ $? -eq 0 ] && grep -q 'stub node ran' '$T/ws.log'"
-( cd "$REPO" && PATH="$T/bin:$BASE_PATH" SMOKE_URL="https:faucet.example.org" SMOKE_DISABLED="" \
+( cd "$REPO" && PATH="$T/nodebin:$BASE_PATH" SMOKE_URL="https:faucet.example.org" SMOKE_DISABLED="" \
     bash "$T/probe-step.sh" > "$T/noslash.log" 2>&1 )
 check "and neither does https: with no slashes, which new URL() normalises" \
   "[ $? -eq 0 ] && grep -q 'stub node ran' '$T/noslash.log'"
+( cd "$REPO" && PATH="$T/nodebin:$BASE_PATH" SMOKE_URL="https:/faucet.example.org" SMOKE_DISABLED="" \
+    bash "$T/probe-step.sh" > "$T/oneslash.log" 2>&1 )
+check "nor one dropped slash, which the probe runs clean on" \
+  "[ $? -eq 0 ] && grep -q 'stub node ran' '$T/oneslash.log'"
 
 # The probe step, run for real. `node scripts/live-probe.mjs` is never reached in these
 # two cases, which is the point: both must decide before probing anything.

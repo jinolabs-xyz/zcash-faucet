@@ -270,7 +270,7 @@ test("the floor is settable, so a shorter-lived certificate can still be watched
   assert.match(r.out, /ok: the TLS certificate has more than 5 whole days left/);
 });
 
-test("an ALREADY EXPIRED certificate says so, and does not read like a dead box", async (t) => {
+test("an ALREADY EXPIRED certificate says so, and does not read like a dead box", async () => {
   // rejectUnauthorized is on by default, so an expired certificate fails the HANDSHAKE
   // and never reaches the days-left branch - which is where the runbook sentence lives.
   // Without the error code, "expired three days ago" and "nothing is listening" printed
@@ -442,6 +442,54 @@ test("an IP-literal origin sends no SNI, because RFC 6066 forbids it", async (t)
   if (!r) return t.skip("SMOKE_TEST_ALLOW_NO_OPENSSL=1 and no openssl here");
   assert.equal(r.code, 0, r.out);
   assert.doesNotMatch(r.err, /DEP0123/);
+});
+
+test("SMOKE_RETRY_DELAY_MS=0 means retry immediately, and is not overridden", async () => {
+  // A helper that quietly REPLACES a value someone set is the same defect as one that
+  // quietly accepts a bad one. Guarding the numeric env vars with a "must be positive"
+  // floor rejected 0 - a legitimate "do not wait" - and every retry in this file became a
+  // 30-second sleep, which hung the whole run. The bound below is deliberately loose:
+  // two attempts with no delay take well under a second, and the mutation costs 30s, so
+  // this distinguishes them by a factor of thirty rather than by milliseconds.
+  const dead = "https://127.0.0.1:1";   // nothing listens on port 1
+  const started = Date.now();
+  const r = await run(process.execPath, [PROBE], {
+    SMOKE_URL: dead,
+    SMOKE_ATTEMPTS: "2", SMOKE_RETRY_DELAY_MS: "0", SMOKE_SKIP_EXPLORER: "1",
+  });
+  const elapsed = Date.now() - started;
+  assert.notEqual(r.code, 0, "a dead origin must fail");
+  assert.ok(elapsed < 20_000, `two attempts with no delay took ${elapsed}ms; the delay was not honoured`);
+});
+
+test("a SMOKE_URL with surrounding whitespace works, rather than paging about a missing field", async (t) => {
+  // The workflow accepts it because `new URL()` does. Without a trim HERE, a TRAILING
+  // space lands inside the request path: measured, `" https://host/ "` fetched
+  // `https://host/%20/api/status` and the run paged with "node.canBuildTx is undefined;
+  // the field this probe pages on is gone" - an operator hunting an API regression for a
+  // stray space. The workflow's own check for this runs against a stubbed node, so it
+  // cannot see this half; this is where it is seen.
+  const pair = selfSigned(60);
+  if (!pair) {
+    if (process.env.SMOKE_TEST_ALLOW_NO_OPENSSL === "1") return t.skip("no openssl here");
+    assert.fail("openssl produced no certificate");
+  }
+  const server = createTlsServer(pair, (req, res) => {
+    res.end(JSON.stringify(req.url.startsWith("/api/ready") ? READY : STATUS_BODY));
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const base = `https://127.0.0.1:${server.address().port}`;
+  for (const raw of [` ${base} `, ` ${base}/ `, `\t${base}\n`]) {
+    const r = await run(process.execPath, [PROBE], {
+      SMOKE_URL: raw,
+      SMOKE_ATTEMPTS: "1", SMOKE_RETRY_DELAY_MS: "0", SMOKE_SKIP_EXPLORER: "1",
+      NODE_TLS_REJECT_UNAUTHORIZED: "0",
+    });
+    assert.equal(r.code, 0, `${JSON.stringify(raw)}: ${r.out}`);
+    assert.match(r.out, /live-probe: healthy/);
+    assert.doesNotMatch(r.out, /the field this probe pages on is gone/);
+  }
+  server.close();
 });
 
 test("a SMOKE_URL that is not a URL says the check was skipped, rather than nothing", async () => {
