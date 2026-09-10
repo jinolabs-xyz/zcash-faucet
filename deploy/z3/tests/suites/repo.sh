@@ -254,7 +254,7 @@ check "and its last is ts, which is what tells a truncated body from a whole one
 check "and the metrics script says it depends on both, so the coupling is not a surprise" \
   "grep -q 'has to be the body.s FIRST key' '$REPO/deploy/z3/faucet-metrics.sh'"
 
-echo "== repo: every image this box runs is watched by something (risk register #26)"
+echo "== repo: every image this REPO declares is watched, and the rest are named (register #26)"
 # npm, cargo and the actions were covered. The IMAGES the faucet runs as - node:22-slim
 # under the app, caddy:2 terminating TLS - were not, so a CVE in either arrived only if
 # somebody happened to read a release note. Adding entries is easy; the hard parts are
@@ -324,12 +324,43 @@ missing = []
 for d in sorted(EXEMPT):
     if d.lstrip("/") not in config_text:
         missing.append(f"{d} is exempt in the test but unexplained in dependabot.yml")
+    # AND THE REASON HAS TO STILL HOLD. Naming the path in a comment is satisfied by any
+    # mention at all, including one left behind after the cause was fixed - an exemption
+    # that outlives its reason is an unwatched directory with paperwork. The reason here
+    # is specific and checkable: dependabot's Dockerfile parser has no ARG handling, so a
+    # FROM that interpolates a variable yields it no dependencies. If someone inlines that
+    # tag, the exemption stops being true and this says so.
+    dockerfile = os.path.join(repo, d.lstrip("/"), "Dockerfile")
+    try:
+        froms = [l for l in open(dockerfile, encoding="utf-8") if l.startswith("FROM ")]
+    except OSError:
+        missing.append(f"{d} is exempt but has no Dockerfile to be exempt about")
+        continue
+    resolvable = [l.strip() for l in froms
+                  if "${" not in l and "$" not in l and not l.startswith("FROM scratch")]
+    if resolvable:
+        missing.append(
+            f"{d} is exempt because dependabot cannot resolve its FROM, but "
+            f"{resolvable[0]!r} is resolvable now - either watch it or update the reason")
 for d, ecos in sorted(want.items()):
     if d in EXEMPT:
         continue
     for e in sorted(ecos):
         if e not in have.get(d, set()):
             missing.append(f"{d} needs a {e} entry")
+
+# AND IT HAS TO PARSE. A malformed dependabot.yml does not fail a build: GitHub stops
+# opening pull requests and says so only on a settings page nobody visits, which is the
+# same no-signal shape this whole entry exists to remove. PyYAML is not in the harness
+# image, so this asserts the shape the plain-text parser above depends on rather than
+# validating YAML in general: every entry names an ecosystem AND a directory.
+for e, d in entries:
+    if not e:
+        missing.append("an updates entry has no package-ecosystem")
+    if not d:
+        missing.append(f"the {e} entry names no directory")
+if not entries:
+    missing.append("dependabot.yml holds no updates entries at all")
 
 with open(out, "w") as fh:
     fh.write(f"SCANNED={scanned}\n")
@@ -342,6 +373,25 @@ MISSING="$(sed -n 's/^MISSING=//p' "$T/report.txt")"
 # would report healthy. Three image-bearing files exist today; fewer means the walk broke.
 check "the scan actually found image files, rather than reporting healthy on nothing" \
   "[ \"$SCANNED\" -ge 3 ]"
+# THE TWO NOTHING CAN WATCH, held to a list so a THIRD cannot join them quietly. zebra and
+# zallet are pinned in stack-versions.env, a shell env file no dependabot ecosystem parses,
+# so they move only when a person moves them. "Every image this box runs is watched" was
+# therefore false while they existed, and a false claim in a header is worse than none: it
+# is what stops the next person looking. The claim is scoped to what this repo DECLARES,
+# and the exceptions are enumerated here, where a new one reds the suite.
+SV="$REPO/deploy/z3/stack-versions.env"
+extra_unwatched=""
+for img in $(grep -oE '^Z3_[A-Z_]*IMAGE' "$SV" 2>/dev/null | sort -u); do
+  case "$img" in
+    Z3_ZEBRA_IMAGE|Z3_ZALLET_IMAGE) ;;
+    *) extra_unwatched="$extra_unwatched $img" ;;
+  esac
+done
+check "the hand-updated images are still exactly zebra and zallet, and no others" \
+  "[ -z '$extra_unwatched' ]"
+check "and stack-versions.env says plainly that nothing automated watches them" \
+  "grep -qi 'no dependabot ecosystem\|nothing automated watches' '$SV'"
+
 check "every directory holding an image has an entry OF THE RIGHT KIND" \
   "[ -z \"$MISSING\" ] || { echo \"missing: $MISSING\"; false; }"
 # The two that matter, by name, so deleting either is a named failure rather than an

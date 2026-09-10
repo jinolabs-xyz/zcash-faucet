@@ -38,11 +38,18 @@ updates:
       day: monday
     open-pull-requests-limit: 3
 
-  # THE BASE IMAGES, which were the one supply chain nobody watched. npm, cargo and the
-  # actions were covered; the images the faucet actually RUNS as - node:22-slim under the
-  # app, caddy:2 terminating TLS - were not, so a CVE in either arrived only if someone
-  # happened to read a release note. That is the same "no signal, only luck" shape #85 was
-  # about (risk register #26).
+  # THE BASE IMAGES THIS REPO DECLARES, which were the one supply chain nobody watched.
+  # npm, cargo and the actions were covered; the images the app is BUILT and SERVED from -
+  # node:22-slim under the app, caddy:2 terminating TLS - were not, so a CVE in either
+  # arrived only if someone happened to read a release note. Same "no signal, only luck"
+  # shape as #85 (risk register #26).
+  #
+  # SCOPED TO WHAT THIS REPO DECLARES, and the wording matters. The box also runs
+  # zfnd/zebra and zodlinc/zallet, pinned in deploy/z3/stack-versions.env - a shell env
+  # file no dependabot ecosystem parses, so those two are updated by hand and always will
+  # be under this tool. Claiming "every image this box runs" would be false, and a false
+  # claim here is worse than none: it is what stops the next person checking. The repo
+  # suite pins that exception list at exactly those two.
   #
   # AND THERE IS NO SAFETY NET HERE. The audit gate covers npm and cargo advisories; CI
   # runs no image scanner at all, so unlike the other three ecosystems there is nothing
