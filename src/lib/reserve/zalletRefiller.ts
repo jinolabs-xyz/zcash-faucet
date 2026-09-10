@@ -22,7 +22,7 @@ import { mayShield, readShieldFreshness } from "../zcash/shieldGate.ts";
 // Cap coinbase UTXOs per shield tx (zcashd's old default). A long mining
 // backlog gets swept over several steps instead of one oversized tx, and it
 // keeps each queue-held step bounded so drips never wait long.
-const SHIELD_UTXO_LIMIT = 50;
+export const SHIELD_UTXO_LIMIT = 50;
 
 interface RpcError {
   code: number;

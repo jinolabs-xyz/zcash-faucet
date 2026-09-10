@@ -21,7 +21,7 @@
 import { config, ZATOSHI_PER_TAZ } from "../config.ts";
 import { safeBalance } from "../zcash/send.ts";
 import { getSendQueue } from "../zcash/queue.ts";
-import { classifySweep, decideRefilling, initialRefilling, shouldStartStep } from "./decide.ts";
+import { classifySweep, decideRefilling, initialRefilling, shouldHarvest, shouldStartStep } from "./decide.ts";
 import type { ShieldFreshness } from "../zcash/shieldGate.ts";
 import { getRefiller } from "./refiller.ts";
 import { classifyStepFailure, shouldAttempt, type StepOutcome } from "./stepFailure.ts";
@@ -56,6 +56,28 @@ export interface ReserveStatus {
   lastRefusal: { state: ShieldFreshness; reason: string; lag: number | null } | null;
   /** UTXOs the backend last reported as still shieldable, when it says. */
   remainingUTXOs: number | null;
+  /** Consecutive sweeps that moved funds without reporting what was left. */
+  movedWithoutCount: number;
+  /**
+   * Whether a step is ENQUEUED OR RUNNING - it is set before the send queue is asked,
+   * so a step waiting behind a drip counts. That is the useful sense for both readers
+   * (the tick must not start a second one, and the harness must not sample until it has
+   * settled), but it is not "executing", and a panel that says so would overclaim.
+   */
+  stepInFlight: boolean;
+  /**
+   * Whether the loop is sweeping because coinbase is THERE rather than because the
+   * shielded side ran low. Distinct from `refilling` on purpose: they answer
+   * different questions, and folding them together would report a healthy harvest
+   * as a shortage - which is the state an operator pages on.
+   */
+  harvesting: boolean;
+  /** Seconds since the last harvest ATTEMPT; null when there has not been one. */
+  harvestAgeSeconds: number | null;
+  /** The count at or above which a harvest is worth a transaction. */
+  harvestMinUTXOs: number;
+  /** 0 means harvesting is off and only the demand-driven refill remains. */
+  harvestIntervalSeconds: number;
   /**
    * Consecutive ticks where the step THREW. Separate from emptySweeps because an
    * empty sweep means we tried and there was nothing, while this means we could not
@@ -121,6 +143,29 @@ class ReserveReconciler {
   private ticksSinceAttempt = 0;
   private lastRefusal: ReserveStatus["lastRefusal"] = null;
   private remainingUTXOs: number | null = null;
+  /**
+   * When a harvest was last ATTEMPTED, not last succeeded. The interval exists to
+   * bound how often we spend a round-trip asking, and a sweep that found nothing
+   * asked just as much as one that moved funds. Timing from success would retry
+   * every tick forever on an empty wallet.
+   */
+  private lastHarvestAt: number | null = null;
+  /**
+   * Did the last sweep move anything? Gates the harvest fast path, which would
+   * otherwise run every tick forever on coinbase that cannot be spent - the
+   * routine case while blocks mature, since a fruitless sweep is not a failure
+   * and gets no backoff. Starts true so a fresh process may drain a backlog it
+   * inherited; the first sweep settles it either way.
+   */
+  private lastSweepMoved = true;
+  /**
+   * Consecutive sweeps that moved funds without saying what was left. Counted rather
+   * than only logged, for the same reason every other state here is: the log line is
+   * sampled and the state has to stay readable between samples.
+   */
+  private movedWithoutCount = 0;
+  /** Whether the step now in flight was started by the harvest trigger. */
+  private harvesting = false;
 
   /**
    * Arm the loop. Called from instrumentation.ts only - status polls read
@@ -138,6 +183,18 @@ class ReserveReconciler {
     this.timer = setInterval(() => void this.tick(), config.reserve.checkSeconds * 1000);
     this.timer.unref(); // never keep the process alive just to top up
     void this.tick(); // first read immediately, not one interval late
+  }
+
+  /**
+   * Disarm the timer. The mirror of start(), and the honest way to drop a loop: reaching
+   * into the private field from outside does not typecheck, and unref() would otherwise
+   * hide an orphaned reconciler still ticking against someone else's mock.
+   */
+  stop(): void {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
   }
 
   /** One reconcile pass. Exposed for tests; never throws. */
@@ -196,24 +253,72 @@ class ReserveReconciler {
       } else {
         this.forbiddenTicks = 0;
       }
+      // Sweep because coinbase is THERE, not only because the shielded side ran
+      // low. Same permission, same queue, same gate as a refill - only the reason
+      // differs. See shouldHarvest for why the count is the trigger and why the
+      // sweep doubles as the probe.
+      const harvest = shouldHarvest({
+        // Undecided must not act, harvest included. A null balance means the loop
+        // has established nothing about its own reserve, and broadcasting from
+        // there is #172's blind loop with money attached.
+        spendableKnown: this.spendableZat !== null,
+        knownRemainingUTXOs: this.remainingUTXOs,
+        minUTXOs: config.reserve.harvestMinUTXOs,
+        lastSweepMoved: this.lastSweepMoved,
+        msSinceLastHarvest: this.lastHarvestAt === null ? null : Date.now() - this.lastHarvestAt,
+        intervalMs: config.reserve.harvestIntervalSeconds * 1000,
+      });
       const start = shouldStartStep({
         // Undecided must not act. We have not established that a refill is wanted.
         refilling: this.refilling === true,
+        harvesting: harvest,
         canAct: config.reserve.shieldCoinbase,
         stepInFlight: this.stepInFlight,
         queueDepth: getSendQueue().depth, // user traffic first, refill can wait
       });
-      if (!start) return;
+      if (!start) {
+        // Reset before returning, or the flag keeps its previous value on every tick
+        // that yields - and /api/status then reports a harvest in progress while
+        // nothing is happening, which is what an operator reads during a stall.
+        //
+        // BUT NOT WHILE THE STEP IS STILL ON THE WIRE. The tick does not await the
+        // queued step, so the NEXT tick arrives with stepInFlight true, takes this
+        // branch, and used to clear the flag out from under a harvest that was still
+        // running. Any shield outliving one FAUCET_RESERVE_CHECK_SECONDS hits it, and
+        // proving plus operation polling routinely does: the panel flipped from
+        // "shielding coinbase" back to "idle" WHILE MONEY WAS MOVING, which is the
+        // exact sentence this reset was added to stop printing.
+        if (!this.stepInFlight) this.harvesting = false;
+        return;
+      }
+      // Recorded only once the tick has actually decided to run a step. Stamping it
+      // at the decision above would let a tick that yields to the queue reset the
+      // clock, and harvesting would then starve behind steady traffic while
+      // reporting that it had just run.
+      this.harvesting = harvest && this.refilling !== true;
 
         // Back off a step that keeps throwing, rather than tightening a loop that
         // cannot succeed. decide.ts is untouched: the hysteresis rule is correct and
         // the problem was never the decision, it was hammering an impossible action
         // every 30 seconds and reporting nothing.
         this.ticksSinceAttempt++;
-        if (!shouldAttempt(this.failedSteps, this.ticksSinceAttempt)) return;
+        if (!shouldAttempt(this.failedSteps, this.ticksSinceAttempt)) {
+          // Nothing runs this tick, so nothing is in progress. Without this the flag set
+          // just above survives the whole backoff window - twenty ticks at the cap - and
+          // /api/status reports a harvest running with no step behind it, the same lie
+          // the yield path above was fixed to stop telling.
+          this.harvesting = false;
+          return;
+        }
         this.ticksSinceAttempt = 0;
 
       this.stepInFlight = true;
+      // Stamped on ATTEMPT, and only for a harvest. A refill sweep is driven by the
+      // balance and must not push the harvest clock forward: if it did, a long refill
+      // would look like a recent harvest and new coinbase would go unnoticed for an
+      // interval after the refill ended.
+      const harvestClockBefore = this.lastHarvestAt;
+      if (this.harvesting) this.lastHarvestAt = Date.now();
       getSendQueue()
         // Same backstop as a drip (#88). A shield sweep goes through the same
         // wallet and the same async-operation polling, so a stuck one would
@@ -225,7 +330,15 @@ class ReserveReconciler {
           // ten minutes and stay there for the life of the process.
           this.failedSteps = 0;
           this.lastFailure = null;
-          this.remainingUTXOs = outcome.remainingUTXOs ?? null;
+          // A REFUSAL CARRIES NO COUNT: the wallet was never asked, so it says
+          // nothing about what is there. Overwriting a known 1346 with null on a
+          // single gate blip erased the backlog fact and left the drain waiting out
+          // a full interval with the work still queued - this file's own rule
+          // ("an absence of information must not look like a fact") run backwards.
+          if (!outcome.refused) {
+            this.remainingUTXOs = outcome.remainingUTXOs ?? null;
+            this.lastSweepMoved = outcome.moved === true;
+          }
 
           // A refusal is handled BEFORE the empty-sweep path and never touches
           // emptySweeps, because the step did not look. Counting it would report
@@ -239,6 +352,11 @@ class ReserveReconciler {
           // being indistinguishable from an idle loop. Loud and repeated is the
           // point, one line at the transition is not.
           if (outcome.refused) {
+            // AND IT CARRIES NO CLOCK, for the reason the count above is left alone: the
+            // gate answered before the wallet was asked, so this tick consumed no
+            // interval. Stamping it anyway meant one lag blip at the moment a harvest
+            // fell due cost a full hour of not sweeping with the work still sitting there.
+            this.lastHarvestAt = harvestClockBefore;
             this.shieldRefusals++;
             this.lastRefusal = outcome.refused;
             if (shouldSay(this.shieldRefusals)) {
@@ -262,6 +380,29 @@ class ReserveReconciler {
               console.log(`[reserve] sweep moved funds after ${this.emptySweeps} empty sweep(s)`);
             }
             this.emptySweeps = 0;
+            // A SWEEP THAT MOVED BUT REPORTED NO COUNT IS THE SLOW DRAIN, and it was the
+            // one outcome here that said nothing at all. remainingUTXOs is what the
+            // backlog path reads, so without it every sweep falls back to the interval:
+            // 1346 UTXOs at one batch an hour is 56 days, not the quarter of an hour the
+            // docs promise. Whether this zallet returns the field is UNVERIFIED
+            // (zalletRefiller.ts), and the only other evidence is a null on /api/status
+            // that ALSO means "nothing left" - the not-seen-versus-cannot-say confusion
+            // this tree refuses everywhere else. Sampled, because if it is true once it
+            // is true every time.
+            if (outcome.remainingUTXOs == null) {
+              this.movedWithoutCount++;
+              if (shouldSay(this.movedWithoutCount)) {
+                console.error(
+                  `[reserve] sweep MOVED but reported no remainingUTXOs (${this.movedWithoutCount} consecutive). ` +
+                    "The backlog fast path needs that count, so the drain falls back to one batch per " +
+                    "FAUCET_HARVEST_INTERVAL_SECONDS: 1346 UTXOs is 27 batches, so about 27 hours at the " +
+                    "default hour rather than the quarter of an hour the backlog path would take." +
+                    sampledNote(this.movedWithoutCount),
+                );
+              }
+            } else {
+              this.movedWithoutCount = 0;
+            }
             return;
           }
           // A sweep that shields nothing is normal once and suspicious in a run.
@@ -292,12 +433,26 @@ class ReserveReconciler {
           const outcome = classifyStepFailure(reason);
           this.failedSteps++;
           this.lastFailure = { outcome, reason };
+          // A THROW ENDS THE BACKLOG PATH. The .then above clears lastSweepMoved when a
+          // sweep returns having moved nothing, but a step that throws never reaches it,
+          // so `draining` stayed true and the backlog branch re-fired on every tick the
+          // backoff allowed, indefinitely - remainingUTXOs is deliberately left alone, so
+          // nothing else could clear it. The throw that does this is the routine one on
+          // this box: "Insufficient balance (have 0, need 10000 including fee)" the
+          // moment the mature coinbase runs out. The count is still not touched here: we
+          // know the sweep did not move funds, we do not know what is left.
+          this.lastSweepMoved = false;
           // Sampled like every other repeating state here, and worded by outcome:
           // having no coinbase to shield is WAITING on this testnet, not a fault, and
           // saying "failed" every tick is how a real fault gets lost in the noise.
           if (shouldSay(this.failedSteps)) {
-            const verb = outcome === "waiting" ? "cannot sweep yet" : "FAILED";
-            const log = outcome === "waiting" ? console.log : console.error;
+            const verb =
+              outcome === "waiting"
+                ? "cannot sweep yet"
+                : outcome === "resyncing"
+                  ? "is waiting for the wallet to resync"
+                  : "FAILED";
+            const log = outcome === "error" ? console.error : console.log;
             log(
               `[reserve] refill step ${verb} (${this.failedSteps} consecutive): ${reason}` +
                 sampledNote(this.failedSteps),
@@ -331,6 +486,13 @@ class ReserveReconciler {
       shieldRefusals: this.shieldRefusals,
       lastRefusal: this.lastRefusal,
       remainingUTXOs: this.remainingUTXOs,
+      harvesting: this.harvesting,
+      stepInFlight: this.stepInFlight,
+      movedWithoutCount: this.movedWithoutCount,
+      harvestAgeSeconds:
+        this.lastHarvestAt === null ? null : Math.floor((Date.now() - this.lastHarvestAt) / 1000),
+      harvestMinUTXOs: config.reserve.harvestMinUTXOs,
+      harvestIntervalSeconds: config.reserve.harvestIntervalSeconds,
       failedSteps: this.failedSteps,
       lastFailure: this.lastFailure,
     };
@@ -344,4 +506,23 @@ const g = globalThis as unknown as { __faucetReserve?: ReserveReconciler };
 /** The singleton. Getting it is passive - only start() (instrumentation) arms it. */
 export function getReserveReconciler(): ReserveReconciler {
   return (g.__faucetReserve ??= new ReserveReconciler());
+}
+
+/**
+ * Test-only: drop the singleton so a test can start from a known state.
+ *
+ * Every piece of harvest state - the clock, the count, lastSweepMoved - carries from one
+ * test to the next through this global, and review has twice found a test in the wiring
+ * suite passing for an inherited reason rather than the one in its name. Asserting
+ * preconditions catches that; it does not let a test that needs a LIVE backlog run after
+ * one that leaves the backlog dead, which is a real constraint on the order and not an
+ * obvious one. This gives a test the third option: start clean and build exactly the
+ * state it means to exercise.
+ *
+ * The timer is cleared first. A dropped reconciler with a live interval keeps ticking
+ * against the next test's mock, and unref() hides that by letting the process exit anyway.
+ */
+export function resetReserveReconcilerForTests(): void {
+  g.__faucetReserve?.stop();
+  delete g.__faucetReserve;
 }

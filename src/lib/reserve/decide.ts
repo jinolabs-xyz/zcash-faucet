@@ -76,11 +76,102 @@ export function initialRefilling(spendableZat: bigint | null, levels: ReserveLev
  */
 export function shouldStartStep(opts: {
   refilling: boolean;
+  /**
+   * The harvest trigger (shouldHarvest). Optional so every existing caller and
+   * test keeps its meaning: absent is "not harvesting", which is what the loop
+   * did before there was such a thing.
+   *
+   * It is an OR rather than a second code path because everything after the
+   * decision is identical - the same bounded step, the same queue, the same
+   * gate. Only the reason for starting differs, and that difference belongs in
+   * the two predicates, not in a duplicated branch.
+   */
+  harvesting?: boolean;
   canAct: boolean;
   stepInFlight: boolean;
   queueDepth: number;
 }): boolean {
-  return opts.refilling && opts.canAct && !opts.stepInFlight && opts.queueDepth === 0;
+  const wanted = opts.refilling || opts.harvesting === true;
+  return wanted && opts.canAct && !opts.stepInFlight && opts.queueDepth === 0;
+}
+
+/**
+ * Whether to sweep transparent coinbase because it is THERE, independent of how
+ * much is shielded.
+ *
+ * decideRefilling answers "are we short?". This answers "is there a harvest
+ * waiting?", and the faucet needs both: the refill rule shields what we spend
+ * and never touches what we mine, so on a box that mines continuously the
+ * transparent side only grows. Live, 2026-09-10: 1778 TAZ and 1346 coinbase
+ * UTXOs stranded behind a trigger that had not fired since July, while the
+ * shielded side sat comfortably above its low-water mark the whole time.
+ *
+ * TWO REASONS TO SWEEP, and they are not the same reason:
+ *
+ *   backlog   the last sweep MOVED funds and reported at least `minUTXOs` still
+ *             there, so there is known work and the work is going somewhere. Fire
+ *             on the next tick rather than waiting out the interval, or draining
+ *             1346 UTXOs at one batch per hour takes a day and a half.
+ *
+ *             THE "MOVED" HALF IS THE TERMINATION ARGUMENT, not a nicety. A sweep
+ *             that finds nothing is NOT a failure - the step returned, so
+ *             failedSteps resets and backoffTicks(0) is 0 - so nothing upstream
+ *             would rate-limit it. Without this the loop sweeps every tick forever
+ *             whenever the count stays high and nothing can be spent, and that is
+ *             the ROUTINE case on a mining faucet: coinbase needs 100
+ *             confirmations, so there is normally a pile of transparent UTXOs
+ *             z_shieldcoinbase cannot touch yet. It is also #172's
+ *             present-but-unspendable shape exactly. Requiring progress means a
+ *             fruitless sweep drops straight back to the interval, where one
+ *             attempt an hour is the cost of asking.
+ *   probe     nothing is known and the interval has passed. While idle we
+ *             cannot see new coinbase arrive - remainingUTXOs only updates when
+ *             a sweep reports it - so the sweep IS the probe: z_shieldcoinbase
+ *             shields a batch and says what is left, answering both questions
+ *             for one round-trip.
+ *
+ * `knownRemainingUTXOs` is null when the backend did not report a count, which is
+ * the count-not-reported case classifySweep exists to keep distinct. Null is not
+ * zero here either: it falls through to the interval rather than being read as
+ * "nothing to do", because an absence of information must not look like a fact.
+ *
+ * An interval of 0 disables harvesting outright, backlog included. That is the
+ * only way back to demand-only behaviour, and it is one knob rather than two so
+ * "is harvesting on?" has a single answer.
+ */
+export function shouldHarvest(opts: {
+  /**
+   * Whether the reserve state is ESTABLISHED - a balance was readable this tick.
+   *
+   * "Undecided must not act" is the refill rule and it applies here for the same
+   * reason, but harvest is not driven by the balance so it read as exempt. It is
+   * not: `safeBalance` swallows every error, so a wallet whose status call answers
+   * while its balance call times out looks healthy to the shield gate, and a fresh
+   * process has a null clock, which used to mean "due". Composed, that broadcast a
+   * shielding transaction every tick while the loop had established nothing about
+   * its own reserve - #172's blind loop, except now it moves money. Measured by
+   * review on the first cut of this file: three blind ticks, three broadcasts.
+   */
+  spendableKnown: boolean;
+  knownRemainingUTXOs: number | null;
+  minUTXOs: number;
+  /**
+   * Whether the LAST sweep actually moved funds. The fast path requires it, and
+   * that requirement is the whole termination argument - see below.
+   */
+  lastSweepMoved: boolean;
+  /** Milliseconds since the last harvest attempt; null when there has never been one. */
+  msSinceLastHarvest: number | null;
+  intervalMs: number;
+}): boolean {
+  if (opts.intervalMs <= 0) return false;
+  if (!opts.spendableKnown) return false;
+  const draining =
+    opts.lastSweepMoved &&
+    opts.knownRemainingUTXOs !== null &&
+    opts.knownRemainingUTXOs >= opts.minUTXOs;
+  if (draining) return true;
+  return opts.msSinceLastHarvest === null || opts.msSinceLastHarvest >= opts.intervalMs;
 }
 
 /**

@@ -32,7 +32,15 @@ export interface ReserveFacts {
    * fault, it is having no coinbase to shield on a testnet where we lose block races.
    */
   failedSteps?: number;
-  lastFailure?: { outcome: "waiting" | "error"; reason: string } | null;
+  lastFailure?: { outcome: "waiting" | "resyncing" | "error"; reason: string } | null;
+  /**
+   * Whether the loop is sweeping because coinbase is THERE, not because the balance
+   * dipped. Every failure branch below used to sit inside `if (refilling)`, and a
+   * harvest runs precisely when refilling is false - so a harvest failing every hour
+   * for a day rendered byte-identical to an idle loop with nothing to do. That is #172's
+   * shape again: present-but-stalled indistinguishable from nothing-to-do.
+   */
+  harvesting?: boolean;
 }
 
 export interface ReserveRows {
@@ -69,10 +77,34 @@ export function reserveRows(r: ReserveFacts): ReserveRows {
       // carries the not-forever sense.
       return { reserve: balance, refill: "waiting, nothing to shield", refillBad: false };
     }
+    if (stuck?.outcome === "resyncing") {
+      // Also unflagged - a solo-mining faucet gets reorged and the wallet heals itself in
+      // minutes - but it must not borrow the line above. Saying "nothing to shield" while
+      // the wallet cannot spend AT ALL is a different claim and a false one.
+      return { reserve: balance, refill: "wallet resyncing after a reorg", refillBad: false };
+    }
     if (stuck?.outcome === "error") {
       return { reserve: balance, refill: `refill FAILING, ${r.failedSteps} consecutive`, refillBad: true };
     }
     return { reserve: balance, refill: `topping up to ${r.targetTaz.toFixed(0)} TAZ`, refillBad: false };
+  }
+
+  if (r.harvesting) {
+    // Same three-way split as the refill line above, because the same two facts apply:
+    // wanting to sweep and being able to are different, and only one of them is worth
+    // waking someone for. The wording says coinbase rather than "topping up" - nobody is
+    // aiming at the target here, the sweep happens because the money exists.
+    const stuck = (r.failedSteps ?? 0) > 0 ? r.lastFailure : null;
+    if (stuck?.outcome === "waiting") {
+      return { reserve: balance, refill: "waiting, nothing to shield", refillBad: false };
+    }
+    if (stuck?.outcome === "resyncing") {
+      return { reserve: balance, refill: "wallet resyncing after a reorg", refillBad: false };
+    }
+    if (stuck?.outcome === "error") {
+      return { reserve: balance, refill: `harvest FAILING, ${r.failedSteps} consecutive`, refillBad: true };
+    }
+    return { reserve: balance, refill: "shielding coinbase", refillBad: false };
   }
 
   // Idle, and the reason depends on which side of the mark we are on. Below it with no

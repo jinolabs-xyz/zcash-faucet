@@ -31,7 +31,7 @@
  * Adding a pattern here is a deliberate act, and mis-classifying toward silence is the
  * failure mode this whole change exists to remove.
  */
-export type StepOutcome = "waiting" | "error";
+export type StepOutcome = "waiting" | "resyncing" | "error";
 
 /**
  * zallet reports "nothing to shield" as an insufficient-balance error on the
@@ -42,7 +42,29 @@ export type StepOutcome = "waiting" | "error";
  */
 const NOTHING_TO_SHIELD = [/insufficient balance/i, /no (spendable )?(coinbase|utxos?) /i];
 
+/**
+ * The wallet rewinding after a chain reorganisation, which OBSERVED on the box reads:
+ *
+ *   Wallet is recovering from a chain reorganization (rolled back to 4337568); balance
+ *   and spend operations are unavailable until it has resynced (code -2)
+ *
+ * A solo-mining faucet on a public testnet loses block races and gets reorged; the
+ * wallet says so, refuses the spend, and heals itself in minutes. Adding it here is the
+ * deliberate act the default-to-`error` rule asks for: without it the panel showed a red
+ * "harvest FAILING, N consecutive" and console.error every tick throughout a transient
+ * that needed nobody. It is narrow on purpose - "recovering from a chain reorg", not
+ * "reorg" - so an unrelated message mentioning one still arrives loud.
+ */
+const RESYNCING = [/recovering from a chain reorgani[sz]ation/i];
+
 export function classifyStepFailure(message: string): StepOutcome {
+  // Its OWN outcome, not folded into `waiting`. Both are "nobody needs to act", but they
+  // are not the same fact and the panel prints the fact: `waiting` renders "nothing to
+  // shield", which is true of an immature pile and FALSE of a wallet that cannot spend at
+  // all. On the refill path - faucet under its low mark, wallet rewinding - that sentence
+  // is present-but-stalled dressed as nothing-to-do, which is the exact confusion #172
+  // cost sixteen hours to. Review caught it one round after the reclassification landed.
+  if (RESYNCING.some((re) => re.test(message))) return "resyncing";
   return NOTHING_TO_SHIELD.some((re) => re.test(message)) ? "waiting" : "error";
 }
 

@@ -74,6 +74,38 @@ export function num(name: string, fallback: number): number {
   return n;
 }
 
+/**
+ * A whole number of seconds, where 0 is a deliberate OFF and anything else invalid is
+ * a mistake worth refusing at boot.
+ *
+ * Math.max(0, Math.floor(...)) looked equivalent and was not: it silently turned -1 and
+ * 0.5 into 0, and 0 here means harvesting is disabled. A typo in the knob that decides
+ * how often the faucet moves money would have restored, quietly and at boot, exactly
+ * the money-stranding behaviour this setting exists to end.
+ */
+export function wholeSeconds(name: string, fallback: number): number {
+  const n = num(name, fallback);
+  if (n < 0 || !Number.isInteger(n)) {
+    throw new Error(`Env ${name} must be a whole number of seconds (0 to disable), got "${process.env[name]}"`);
+  }
+  return n;
+}
+
+/**
+ * A whole count of at least one. Same argument as wholeSeconds, and it is here because
+ * this PR shipped both knobs and validated them on opposite principles: -1 and 0.5 threw
+ * for the interval and were silently rounded to 1 for the minimum. A rounded typo is not
+ * as costly here (0 still terminates, via the progress guard) but "the value you set is
+ * not the value in force, and nothing said so" is the shape, not the size.
+ */
+export function wholeCount(name: string, fallback: number): number {
+  const n = num(name, fallback);
+  if (n < 1 || !Number.isInteger(n)) {
+    throw new Error(`Env ${name} must be a whole number of 1 or more, got "${process.env[name]}"`);
+  }
+  return n;
+}
+
 export function tazToZatoshi(taz: number): bigint {
   // Round to nearest zatoshi.
   return BigInt(Math.round(taz * Number(ZATOSHI_PER_TAZ)));
@@ -214,6 +246,45 @@ export const config = {
     // turned fund recovery off, and 47.5 TAZ sat unswept through a shortage.
     // Default false because it broadcasts a transaction, so it stays opt-in.
     shieldCoinbase: process.env.FAUCET_SHIELD_COINBASE === "true",
+
+    /**
+     * HARVEST: sweep transparent coinbase because it EXISTS, not because the
+     * shielded side ran low.
+     *
+     * The refill rule above is demand-driven - it shields when spendable falls
+     * under lowZat and stops at targetZat. That refills what we spend and never
+     * harvests what we mine, so on a faucet that mines continuously the
+     * transparent pile only grows. Measured on the live box 2026-09-10: 1801 TAZ
+     * drippable, 1778 TAZ stranded transparent, and 1346 unspent coinbase UTXOs
+     * behind a trigger that had not fired since July.
+     *
+     * The count is the trigger, not the value. A shield costs one transaction
+     * whatever it carries, z_shieldcoinbase takes at most SHIELD_UTXO_LIMIT (50)
+     * UTXOs per call, and an unbounded UTXO set is its own problem: 1346 of them
+     * is 27 passes before the money is usable. One batch's worth is therefore the
+     * natural unit of "enough to be worth a transaction".
+     *
+     * The sweep is also the probe. While idle we cannot see new coinbase arrive -
+     * remainingUTXOs only updates after a sweep - so the loop attempts one on an
+     * interval, and z_shieldcoinbase answers both questions at once: it shields a
+     * batch and reports what is left. A backlog then drains on consecutive ticks
+     * without waiting out the interval each time.
+     *
+     * 0 turns harvesting off entirely, which is the only way to get the old
+     * demand-only behaviour back.
+     */
+    harvestIntervalSeconds: wholeSeconds("FAUCET_HARVEST_INTERVAL_SECONDS", 3600),
+    /**
+     * Coinbase UTXOs that make the BACKLOG path worth taking. Defaults to one full
+     * shield batch: at or above this, sweeps run on consecutive ticks until the pile
+     * clears instead of one an hour.
+     *
+     * It does NOT gate sweeping. The hourly probe ignores it and will shield three
+     * UTXOs, fee and all - that is the cost of asking, and asking is also how new
+     * coinbase gets noticed at all. Both docs say so; this comment did not, and it is
+     * the one someone reads while changing the value.
+     */
+    harvestMinUTXOs: wholeCount("FAUCET_HARVEST_MIN_UTXOS", 50),
   },
 
   // Whether we may MINE. The app itself never mines, that is the miner container
