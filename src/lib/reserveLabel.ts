@@ -32,7 +32,7 @@ export interface ReserveFacts {
    * fault, it is having no coinbase to shield on a testnet where we lose block races.
    */
   failedSteps?: number;
-  lastFailure?: { outcome: "waiting" | "error"; reason: string } | null;
+  lastFailure?: { outcome: "waiting" | "resyncing" | "error"; reason: string } | null;
   /**
    * Whether the loop is sweeping because coinbase is THERE, not because the balance
    * dipped. Every failure branch below used to sit inside `if (refilling)`, and a
@@ -77,6 +77,12 @@ export function reserveRows(r: ReserveFacts): ReserveRows {
       // carries the not-forever sense.
       return { reserve: balance, refill: "waiting, nothing to shield", refillBad: false };
     }
+    if (stuck?.outcome === "resyncing") {
+      // Also unflagged - a solo-mining faucet gets reorged and the wallet heals itself in
+      // minutes - but it must not borrow the line above. Saying "nothing to shield" while
+      // the wallet cannot spend AT ALL is a different claim and a false one.
+      return { reserve: balance, refill: "wallet resyncing after a reorg", refillBad: false };
+    }
     if (stuck?.outcome === "error") {
       return { reserve: balance, refill: `refill FAILING, ${r.failedSteps} consecutive`, refillBad: true };
     }
@@ -91,6 +97,9 @@ export function reserveRows(r: ReserveFacts): ReserveRows {
     const stuck = (r.failedSteps ?? 0) > 0 ? r.lastFailure : null;
     if (stuck?.outcome === "waiting") {
       return { reserve: balance, refill: "waiting, nothing to shield", refillBad: false };
+    }
+    if (stuck?.outcome === "resyncing") {
+      return { reserve: balance, refill: "wallet resyncing after a reorg", refillBad: false };
     }
     if (stuck?.outcome === "error") {
       return { reserve: balance, refill: `harvest FAILING, ${r.failedSteps} consecutive`, refillBad: true };

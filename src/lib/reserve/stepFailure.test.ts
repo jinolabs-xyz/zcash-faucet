@@ -56,7 +56,7 @@ test("recovery is immediate: one success and the next tick attempts again", () =
   assert.equal(shouldAttempt(0, 0), true);
 });
 
-test("a wallet resyncing after a reorg is WAITING, not a fault", () => {
+test("a wallet resyncing after a reorg is its OWN state, not a fault and not nothing-to-shield", () => {
   // Observed verbatim on the box, 2026-09-10, while the faucet was serving normally:
   // a solo-mining faucet on a public testnet loses block races, the wallet rewinds,
   // refuses spends for a few minutes and heals itself. Classified as `error` it painted
@@ -68,10 +68,10 @@ test("a wallet resyncing after a reorg is WAITING, not a fault", () => {
         "(rolled back to 4337568); balance and spend operations are unavailable until " +
         "it has resynced (code -2)",
     ),
-    "waiting",
+    "resyncing",
   );
   // Both spellings, because the wallet's is American and ours is not.
-  assert.equal(classifyStepFailure("recovering from a chain reorganisation"), "waiting");
+  assert.equal(classifyStepFailure("recovering from a chain reorganisation"), "resyncing");
   // And NARROW: the default is `error` on purpose, so a message that merely mentions a
   // reorg must not be absorbed into the quiet bucket.
   assert.equal(classifyStepFailure("reorg detected, wallet database is corrupt"), "error");

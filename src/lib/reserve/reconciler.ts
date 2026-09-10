@@ -395,7 +395,8 @@ class ReserveReconciler {
                 console.error(
                   `[reserve] sweep MOVED but reported no remainingUTXOs (${this.movedWithoutCount} consecutive). ` +
                     "The backlog fast path needs that count, so the drain falls back to one batch per " +
-                    "FAUCET_HARVEST_INTERVAL_SECONDS and a large pile will take days rather than minutes." +
+                    "FAUCET_HARVEST_INTERVAL_SECONDS: 1346 UTXOs is 27 batches, so about 27 hours at the " +
+                    "default hour rather than the quarter of an hour the backlog path would take." +
                     sampledNote(this.movedWithoutCount),
                 );
               }
@@ -445,8 +446,13 @@ class ReserveReconciler {
           // having no coinbase to shield is WAITING on this testnet, not a fault, and
           // saying "failed" every tick is how a real fault gets lost in the noise.
           if (shouldSay(this.failedSteps)) {
-            const verb = outcome === "waiting" ? "cannot sweep yet" : "FAILED";
-            const log = outcome === "waiting" ? console.log : console.error;
+            const verb =
+              outcome === "waiting"
+                ? "cannot sweep yet"
+                : outcome === "resyncing"
+                  ? "is waiting for the wallet to resync"
+                  : "FAILED";
+            const log = outcome === "error" ? console.error : console.log;
             log(
               `[reserve] refill step ${verb} (${this.failedSteps} consecutive): ${reason}` +
                 sampledNote(this.failedSteps),

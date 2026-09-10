@@ -275,9 +275,14 @@ export const config = {
      */
     harvestIntervalSeconds: wholeSeconds("FAUCET_HARVEST_INTERVAL_SECONDS", 3600),
     /**
-     * Coinbase UTXOs that make a harvest worth a transaction. Defaults to one
-     * full shield batch: below this a sweep spends a fee to move a fraction of
-     * what the next one would.
+     * Coinbase UTXOs that make the BACKLOG path worth taking. Defaults to one full
+     * shield batch: at or above this, sweeps run on consecutive ticks until the pile
+     * clears instead of one an hour.
+     *
+     * It does NOT gate sweeping. The hourly probe ignores it and will shield three
+     * UTXOs, fee and all - that is the cost of asking, and asking is also how new
+     * coinbase gets noticed at all. Both docs say so; this comment did not, and it is
+     * the one someone reads while changing the value.
      */
     harvestMinUTXOs: wholeCount("FAUCET_HARVEST_MIN_UTXOS", 50),
   },

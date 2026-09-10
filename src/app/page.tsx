@@ -48,7 +48,7 @@ interface Status {
   /** The box's own integrity, measured by a unit on the host. Optional: a deploy
    * older than #287 does not send it, and absent must not read as complete. */
   box?: IntegrityStatus;
-  reserve?: { targetTaz: number; lowTaz: number; refilling: boolean; spendableTaz: number | null; harvesting?: boolean; failedSteps?: number; lastFailure?: { outcome: "waiting" | "error"; reason: string } | null };
+  reserve?: { targetTaz: number; lowTaz: number; refilling: boolean; spendableTaz: number | null; harvesting?: boolean; failedSteps?: number; lastFailure?: { outcome: "waiting" | "resyncing" | "error"; reason: string } | null };
   donationAddress?: string;
   /** Mainnet, for project upkeep. Empty when unset OR rejected by config validation. */
   maintenanceAddress?: string;

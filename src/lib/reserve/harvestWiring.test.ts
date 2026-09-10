@@ -252,8 +252,8 @@ test("A SWEEP THAT MOVES WITHOUT A COUNT SAYS SO, because it halves the drain", 
   // leaves remainingUTXOs null, which kills that path for whatever runs next - so the
   // refill test follows, and that one fires on `refilling` rather than on the backlog.
   // Whether this zallet returns remainingUTXOs at all is UNVERIFIED. If it does not, the
-  // backlog path can never fire and 1346 UTXOs drain at one batch an hour - 56 days
-  // rather than minutes - while /api/status shows `remainingUTXOs: null`, which also
+  // backlog path can never fire and 1346 UTXOs drain at one batch an hour - 27 batches,
+  // so about 27 hours rather than minutes - while /api/status shows `remainingUTXOs: null`, which also
   // means "nothing left". This was the one sweep outcome that logged nothing at all.
   const calls: string[] = [];
   globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
@@ -280,6 +280,39 @@ test("A SWEEP THAT MOVES WITHOUT A COUNT SAYS SO, because it halves the drain", 
     "a sweep that moved without a count must be counted, not silent",
   );
   assert.equal(getReserveReconciler().status.remainingUTXOs, null);
+
+  // AND IT RESETS. The field is documented as "consecutive"; without the reset it becomes
+  // a lifetime total on /api/status, so a long-healed blip keeps reading as a live one.
+  // Every sibling counter in the reconciler has a reset and a test that notices.
+  //
+  // Driven through the REFILL trigger, because after a no-count sweep nothing else can
+  // start one: the backlog needs a count and the clock has just been stamped, so a
+  // harvest is an hour away. A balance under the low mark fires every tick regardless.
+  // (primeBacklog would reset the singleton, and zeroing the counter by construction is
+  // not a test of the reset.)
+  const counted: string[] = [];
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+    if (!String(url).includes("59995")) return realFetch(url as string, init);
+    const req = JSON.parse(String(init?.body)) as { method: string };
+    counted.push(req.method);
+    const result =
+      req.method === "getwalletstatus"
+        ? { wallet_tip: { height: NETWORK_TIP }, node_tip: { height: NETWORK_TIP } }
+        : req.method === "z_getbalanceforaccount"
+          ? { pools: { orchard: { valueZat: "100000000" } } } // 1 TAZ, under the low mark
+          : req.method === "z_shieldcoinbase"
+            ? { opid: "opid-shield", remainingUTXOs: 1346 } // and this one SAYS what is left
+            : req.method === "z_getoperationstatus" || req.method === "z_getoperationresult"
+              ? [{ id: "opid-shield", status: "success" }]
+              : null;
+    return new Response(JSON.stringify({ result }), { status: 200 });
+  }) as typeof fetch;
+  assert.ok((await runTicks(counted, 2)) >= 1, "a sweep must have run, or this asserted nothing");
+  assert.equal(
+    getReserveReconciler().status.movedWithoutCount,
+    0,
+    "a sweep that DOES report a count must clear the consecutive tally",
+  );
 });
 
 test("A REFILL SWEEP DOES NOT PUSH THE HARVEST CLOCK FORWARD", async () => {

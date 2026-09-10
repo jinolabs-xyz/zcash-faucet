@@ -180,6 +180,22 @@ test("a healthy harvest says what it is doing, and is not flagged", () => {
   assert.equal(waiting.refillBad, false);
 });
 
+test("a resyncing wallet does not borrow the nothing-to-shield line", () => {
+  // Folding the reorg message into `waiting` printed "waiting, nothing to shield" for a
+  // wallet that could not spend at all - and on the refill path, with the faucet under
+  // its low mark, that is present-but-stalled dressed as nothing-to-do. Unflagged is
+  // right (it heals itself in minutes); saying the wrong thing is not.
+  const resync = { outcome: "resyncing" as const, reason: "recovering from a chain reorganization" };
+  for (const row of [
+    reserveRows({ ...BAND, spendableTaz: 1, refilling: true, failedSteps: 4, lastFailure: resync }),
+    reserveRows({ ...BAND, spendableTaz: 758, refilling: false, harvesting: true, failedSteps: 4, lastFailure: resync }),
+  ]) {
+    assert.doesNotMatch(row.refill, /nothing to shield/);
+    assert.match(row.refill, /resyncing/);
+    assert.equal(row.refillBad, false, "a wallet that heals itself in minutes is not a page");
+  }
+});
+
 test("every SHOUTED line is flagged, so caps and marker cannot disagree", () => {
   // A sweep rather than a case list: any wording that shouts must also be marked.
   const cases = [

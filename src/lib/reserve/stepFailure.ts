@@ -31,7 +31,7 @@
  * Adding a pattern here is a deliberate act, and mis-classifying toward silence is the
  * failure mode this whole change exists to remove.
  */
-export type StepOutcome = "waiting" | "error";
+export type StepOutcome = "waiting" | "resyncing" | "error";
 
 /**
  * zallet reports "nothing to shield" as an insufficient-balance error on the
@@ -58,7 +58,13 @@ const NOTHING_TO_SHIELD = [/insufficient balance/i, /no (spendable )?(coinbase|u
 const RESYNCING = [/recovering from a chain reorgani[sz]ation/i];
 
 export function classifyStepFailure(message: string): StepOutcome {
-  if (RESYNCING.some((re) => re.test(message))) return "waiting";
+  // Its OWN outcome, not folded into `waiting`. Both are "nobody needs to act", but they
+  // are not the same fact and the panel prints the fact: `waiting` renders "nothing to
+  // shield", which is true of an immature pile and FALSE of a wallet that cannot spend at
+  // all. On the refill path - faucet under its low mark, wallet rewinding - that sentence
+  // is present-but-stalled dressed as nothing-to-do, which is the exact confusion #172
+  // cost sixteen hours to. Review caught it one round after the reclassification landed.
+  if (RESYNCING.some((re) => re.test(message))) return "resyncing";
   return NOTHING_TO_SHIELD.some((re) => re.test(message)) ? "waiting" : "error";
 }
 
