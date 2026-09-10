@@ -141,6 +141,14 @@ class ReserveReconciler {
    * every tick forever on an empty wallet.
    */
   private lastHarvestAt: number | null = null;
+  /**
+   * Did the last sweep move anything? Gates the harvest fast path, which would
+   * otherwise run every tick forever on coinbase that cannot be spent - the
+   * routine case while blocks mature, since a fruitless sweep is not a failure
+   * and gets no backoff. Starts true so a fresh process may drain a backlog it
+   * inherited; the first sweep settles it either way.
+   */
+  private lastSweepMoved = true;
   /** Whether the step now in flight was started by the harvest trigger. */
   private harvesting = false;
 
@@ -225,6 +233,7 @@ class ReserveReconciler {
       const harvest = shouldHarvest({
         knownRemainingUTXOs: this.remainingUTXOs,
         minUTXOs: config.reserve.harvestMinUTXOs,
+        lastSweepMoved: this.lastSweepMoved,
         msSinceLastHarvest: this.lastHarvestAt === null ? null : Date.now() - this.lastHarvestAt,
         intervalMs: config.reserve.harvestIntervalSeconds * 1000,
       });
@@ -269,6 +278,7 @@ class ReserveReconciler {
           this.failedSteps = 0;
           this.lastFailure = null;
           this.remainingUTXOs = outcome.remainingUTXOs ?? null;
+          this.lastSweepMoved = outcome.moved === true;
 
           // A refusal is handled BEFORE the empty-sweep path and never touches
           // emptySweeps, because the step did not look. Counting it would report

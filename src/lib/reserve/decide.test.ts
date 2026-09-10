@@ -120,7 +120,7 @@ test("once decided, hysteresis owns it: reaching target still stops the refill",
 
 /* ------------------------------------------- harvest: sweep because it is THERE (#26x) */
 
-const HARVEST = { minUTXOs: 50, intervalMs: 3_600_000 };
+const HARVEST = { minUTXOs: 50, intervalMs: 3_600_000, lastSweepMoved: true };
 
 test("a known backlog harvests on the next tick, without waiting out the interval", () => {
   // 1346 UTXOs at one batch an hour is a day and a half. The backlog rule is what
@@ -180,11 +180,37 @@ test("an UNREPORTED count is not a reported zero", () => {
   );
 });
 
+test("A SWEEP THAT MOVED NOTHING DROPS BACK TO THE INTERVAL, however many UTXOs remain", () => {
+  // The termination argument. A fruitless sweep is not a failure - the step returned,
+  // so failedSteps resets and backoffTicks(0) is 0 - so nothing upstream rate-limits
+  // it. Without the moved check this is a sweep every tick, for ever, and it is the
+  // ROUTINE case on a mining faucet: coinbase needs 100 confirmations, so there is
+  // normally a heap of transparent UTXOs z_shieldcoinbase cannot touch yet. It is
+  // #172's present-but-unspendable shape too.
+  assert.equal(
+    shouldHarvest({ ...HARVEST, lastSweepMoved: false, knownRemainingUTXOs: 1346, msSinceLastHarvest: 0 }),
+    false,
+    "1346 unspendable UTXOs must not mean a sweep every tick",
+  );
+  // ...and the hourly probe still runs, so maturing coinbase is picked up.
+  assert.equal(
+    shouldHarvest({ ...HARVEST, lastSweepMoved: false, knownRemainingUTXOs: 1346, msSinceLastHarvest: 3_600_000 }),
+    true,
+  );
+});
+
+test("progress is what earns the fast path: moved plus a backlog keeps draining", () => {
+  assert.equal(
+    shouldHarvest({ ...HARVEST, lastSweepMoved: true, knownRemainingUTXOs: 1346, msSinceLastHarvest: 0 }),
+    true,
+  );
+});
+
 test("interval 0 turns harvesting off outright, backlog included", () => {
   // The only way back to demand-only behaviour, and it has to beat the backlog rule
   // or "off" would not mean off.
   assert.equal(
-    shouldHarvest({ knownRemainingUTXOs: 5000, msSinceLastHarvest: null, minUTXOs: 50, intervalMs: 0 }),
+    shouldHarvest({ knownRemainingUTXOs: 5000, msSinceLastHarvest: null, lastSweepMoved: true, minUTXOs: 50, intervalMs: 0 }),
     false,
   );
 });

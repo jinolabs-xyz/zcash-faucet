@@ -108,10 +108,22 @@ export function shouldStartStep(opts: {
  *
  * TWO REASONS TO SWEEP, and they are not the same reason:
  *
- *   backlog   the last sweep reported at least `minUTXOs` still there, so there
- *             is known work. Fire on the next tick rather than waiting out the
- *             interval, or draining 1346 UTXOs at one batch per hour takes a
- *             day and a half.
+ *   backlog   the last sweep MOVED funds and reported at least `minUTXOs` still
+ *             there, so there is known work and the work is going somewhere. Fire
+ *             on the next tick rather than waiting out the interval, or draining
+ *             1346 UTXOs at one batch per hour takes a day and a half.
+ *
+ *             THE "MOVED" HALF IS THE TERMINATION ARGUMENT, not a nicety. A sweep
+ *             that finds nothing is NOT a failure - the step returned, so
+ *             failedSteps resets and backoffTicks(0) is 0 - so nothing upstream
+ *             would rate-limit it. Without this the loop sweeps every tick forever
+ *             whenever the count stays high and nothing can be spent, and that is
+ *             the ROUTINE case on a mining faucet: coinbase needs 100
+ *             confirmations, so there is normally a pile of transparent UTXOs
+ *             z_shieldcoinbase cannot touch yet. It is also #172's
+ *             present-but-unspendable shape exactly. Requiring progress means a
+ *             fruitless sweep drops straight back to the interval, where one
+ *             attempt an hour is the cost of asking.
  *   probe     nothing is known and the interval has passed. While idle we
  *             cannot see new coinbase arrive - remainingUTXOs only updates when
  *             a sweep reports it - so the sweep IS the probe: z_shieldcoinbase
@@ -130,12 +142,21 @@ export function shouldStartStep(opts: {
 export function shouldHarvest(opts: {
   knownRemainingUTXOs: number | null;
   minUTXOs: number;
+  /**
+   * Whether the LAST sweep actually moved funds. The fast path requires it, and
+   * that requirement is the whole termination argument - see below.
+   */
+  lastSweepMoved: boolean;
   /** Milliseconds since the last harvest attempt; null when there has never been one. */
   msSinceLastHarvest: number | null;
   intervalMs: number;
 }): boolean {
   if (opts.intervalMs <= 0) return false;
-  if (opts.knownRemainingUTXOs !== null && opts.knownRemainingUTXOs >= opts.minUTXOs) return true;
+  const draining =
+    opts.lastSweepMoved &&
+    opts.knownRemainingUTXOs !== null &&
+    opts.knownRemainingUTXOs >= opts.minUTXOs;
+  if (draining) return true;
   return opts.msSinceLastHarvest === null || opts.msSinceLastHarvest >= opts.intervalMs;
 }
 
