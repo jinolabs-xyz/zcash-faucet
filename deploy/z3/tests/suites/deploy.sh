@@ -513,6 +513,73 @@ check "no domain anywhere is not an error" "[ $? -eq 0 ]"
 check "and it says plainly that this serves plain HTTP" \
   "grep -q 'serves plain HTTP' '$T/dom-none.log'"
 
+echo "== domain: the domain is recorded where a BARE compose run will read it"
+# The guards above protect a deploy that goes through deploy.sh. Compose interpolates
+# ${FAUCET_DOMAIN:-:80} from its own environment, so `docker compose up -d` in deploy/z3
+# - the obvious thing to type when changing one setting - recreated Caddy with ':80' and
+# dropped 443. That happened on 2026-09-10 with every guard above already passing, which
+# is the point: they were never reachable from that command.
+deploy_fresh_env
+printf 'faucet.example.org\n' > "$T/faucet-domain"
+FAUCET_DOMAIN_FILE="$T/faucet-domain" run_deploy > "$T/dom-persist.log" 2>&1
+# Beside the compose file, because that is the ONLY location compose reads on its own.
+check "the .env sits next to docker-compose.faucet.yml" \
+  "[ -f '$D/z3/.env' ] && [ -f '$D/z3/docker-compose.faucet.yml' ]"
+check "and it carries the domain compose would otherwise default to :80" \
+  "grep -q '^FAUCET_DOMAIN=faucet.example.org$' '$D/z3/.env'"
+check "and the deploy says it did so, rather than doing it silently" \
+  "grep -q 'Recorded FAUCET_DOMAIN' '$T/dom-persist.log'"
+
+echo "== domain: recording it MERGES, and a second deploy does not churn the file"
+# That same .env is documented in docker-compose.faucet.yml as the place to put
+# Z3_NETWORK_NAME. Fixing a domain by clobbering someone's network selection would trade
+# one silent misconfiguration for another.
+printf 'Z3_NETWORK_NAME=z3-mainnet\n' >> "$D/z3/.env"
+# Compared as FILES. The first cut interpolated the whole multi-line body into the
+# check string and let eval see it, which fails on the newlines rather than on the
+# behaviour - a red result that says nothing about the code.
+cp "$D/z3/.env" "$T/env-before"
+FAUCET_DOMAIN_FILE="$T/faucet-domain" run_deploy > "$T/dom-persist2.log" 2>&1
+check "an unrelated key set by hand survives the next deploy" \
+  "grep -q '^Z3_NETWORK_NAME=z3-mainnet$' '$D/z3/.env'"
+check "and an unchanged domain rewrites nothing" \
+  "cmp -s '$T/env-before' '$D/z3/.env'"
+# A changed domain must actually take, and must not leave the old one behind: two
+# FAUCET_DOMAIN lines would hand compose whichever it read last.
+printf 'moved.example.org\n' > "$T/faucet-domain"
+FAUCET_DOMAIN_FILE="$T/faucet-domain" run_deploy > "$T/dom-persist3.log" 2>&1
+rc=$?
+# ASSERTED SEPARATELY, and this is why. The value check below reads the file that a
+# SUCCESSFUL deploy leaves behind, so a deploy that died early failed it too - reporting
+# "the write is wrong" for a run where the write never happened. That is what a flaky
+# check looks like from the outside, and it trains people to re-run until green. One
+# observed failure here was exactly that shape: the count was right and the value stale.
+check "the deploy that should rewrite the domain actually completed" "[ $rc -eq 0 ]"
+check "and it says which line it rewrote, so the write is attributable" \
+  "grep -q 'Updated FAUCET_DOMAIN' '$T/dom-persist3.log'"
+check "a changed domain replaces the old line rather than appending a second" \
+  "[ \"\$(grep -c '^FAUCET_DOMAIN=' '$D/z3/.env')\" = 1 ] && grep -q '^FAUCET_DOMAIN=moved.example.org$' '$D/z3/.env'"
+check "and the unrelated key is still there afterwards" \
+  "grep -q '^Z3_NETWORK_NAME=z3-mainnet$' '$D/z3/.env'"
+
+echo "== domain: a box with NO domain does not get :80 pinned into the file"
+# The inverse failure, and the worse one: writing the placeholder here would make the
+# downgrade permanent and survive someone later setting /etc/faucet-domain properly.
+deploy_fresh_env
+FAUCET_DOMAIN_FILE="$T/no-such-domain-file" run_deploy > "$T/dom-none-env.log" 2>&1
+check "no domain means no FAUCET_DOMAIN line is written at all" \
+  "! grep -q '^FAUCET_DOMAIN=' '$D/z3/.env' 2>/dev/null"
+# And the reachable half of the same rule: ':80' is a legitimate value to pass by hand
+# for a localhost or IP smoke test, and it is NOT a domain. Recording it would make the
+# downgrade permanent and outlive someone later writing a real domain to the record
+# file - turning a one-command mistake into a sticky one. The no-domain case above
+# cannot reach this guard (persist_domain is only called for a non-empty value), so
+# without this the guard is untested.
+deploy_fresh_env
+FAUCET_DOMAIN=":80" FAUCET_DOMAIN_FILE="$T/no-such-domain-file" run_deploy > "$T/dom-port.log" 2>&1
+check "an explicit :80 is not recorded as if it were a domain" \
+  "! grep -q '^FAUCET_DOMAIN=' '$D/z3/.env' 2>/dev/null"
+
 echo "== account: an account already in use is NEVER replaced by a generated one"
 # This took the visible balance from 758.46 TAZ to 0. The funds never moved; the faucet
 # was repointed at a fresh empty account and could no longer see them. The old guard
