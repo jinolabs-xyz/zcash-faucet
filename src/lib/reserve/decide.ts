@@ -140,6 +140,19 @@ export function shouldStartStep(opts: {
  * "is harvesting on?" has a single answer.
  */
 export function shouldHarvest(opts: {
+  /**
+   * Whether the reserve state is ESTABLISHED - a balance was readable this tick.
+   *
+   * "Undecided must not act" is the refill rule and it applies here for the same
+   * reason, but harvest is not driven by the balance so it read as exempt. It is
+   * not: `safeBalance` swallows every error, so a wallet whose status call answers
+   * while its balance call times out looks healthy to the shield gate, and a fresh
+   * process has a null clock, which used to mean "due". Composed, that broadcast a
+   * shielding transaction every tick while the loop had established nothing about
+   * its own reserve - #172's blind loop, except now it moves money. Measured by
+   * review on the first cut of this file: three blind ticks, three broadcasts.
+   */
+  spendableKnown: boolean;
   knownRemainingUTXOs: number | null;
   minUTXOs: number;
   /**
@@ -152,6 +165,7 @@ export function shouldHarvest(opts: {
   intervalMs: number;
 }): boolean {
   if (opts.intervalMs <= 0) return false;
+  if (!opts.spendableKnown) return false;
   const draining =
     opts.lastSweepMoved &&
     opts.knownRemainingUTXOs !== null &&

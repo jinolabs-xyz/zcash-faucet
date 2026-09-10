@@ -120,7 +120,7 @@ test("once decided, hysteresis owns it: reaching target still stops the refill",
 
 /* ------------------------------------------- harvest: sweep because it is THERE (#26x) */
 
-const HARVEST = { minUTXOs: 50, intervalMs: 3_600_000, lastSweepMoved: true };
+const HARVEST = { minUTXOs: 50, intervalMs: 3_600_000, lastSweepMoved: true, spendableKnown: true };
 
 test("a known backlog harvests on the next tick, without waiting out the interval", () => {
   // 1346 UTXOs at one batch an hour is a day and a half. The backlog rule is what
@@ -210,7 +210,7 @@ test("interval 0 turns harvesting off outright, backlog included", () => {
   // The only way back to demand-only behaviour, and it has to beat the backlog rule
   // or "off" would not mean off.
   assert.equal(
-    shouldHarvest({ knownRemainingUTXOs: 5000, msSinceLastHarvest: null, lastSweepMoved: true, minUTXOs: 50, intervalMs: 0 }),
+    shouldHarvest({ knownRemainingUTXOs: 5000, msSinceLastHarvest: null, lastSweepMoved: true, spendableKnown: true, minUTXOs: 50, intervalMs: 0 }),
     false,
   );
 });
@@ -240,4 +240,40 @@ test("no harvest and no refill still means no step", () => {
     shouldStartStep({ refilling: false, canAct: true, stepInFlight: false, queueDepth: 0 }),
     false,
   );
+});
+
+test("A BLIND LOOP DOES NOT BROADCAST, however overdue the harvest is", () => {
+  // safeBalance swallows every error, so a wallet whose status call answers while its
+  // balance call times out passes the shield gate. A fresh process also has a null
+  // clock, which reads as due. Composed, that was a shielding transaction every tick
+  // while the loop had established nothing about its own reserve - measured by review
+  // as three blind ticks, three broadcasts. "Undecided must not act" is not a refill
+  // rule, it is the loop's rule.
+  assert.equal(
+    shouldHarvest({ ...HARVEST, spendableKnown: false, knownRemainingUTXOs: null, msSinceLastHarvest: null }),
+    false,
+    "a fresh process that cannot read its balance must not sweep",
+  );
+  assert.equal(
+    shouldHarvest({ ...HARVEST, spendableKnown: false, knownRemainingUTXOs: 1346, msSinceLastHarvest: 86_400_000 }),
+    false,
+    "a day overdue with a known backlog is still no reason to act blind",
+  );
+  // And it resumes the moment a balance is readable again.
+  assert.equal(
+    shouldHarvest({ ...HARVEST, spendableKnown: true, knownRemainingUTXOs: null, msSinceLastHarvest: 86_400_000 }),
+    true,
+  );
+});
+
+test("the harvest minimum defaults to ONE shield batch, and the two stay in step", async () => {
+  // CONFIGURATION.md calls FAUCET_HARVEST_MIN_UTXOS "the size of one z_shieldcoinbase
+  // batch". That is only true while the default equals SHIELD_UTXO_LIMIT, and they are
+  // separate literals in separate files - config.ts importing the refiller would be a
+  // cycle, so the seam is asserted here instead. Raising one without the other breaks
+  // the drain rationale silently: below the limit the loop stops before a batch is
+  // full, above it the backlog rule can never fire.
+  const { SHIELD_UTXO_LIMIT } = await import("./zalletRefiller.ts");
+  const { config } = await import("../config.ts");
+  assert.equal(config.reserve.harvestMinUTXOs, SHIELD_UTXO_LIMIT);
 });

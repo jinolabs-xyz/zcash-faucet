@@ -231,6 +231,10 @@ class ReserveReconciler {
       // differs. See shouldHarvest for why the count is the trigger and why the
       // sweep doubles as the probe.
       const harvest = shouldHarvest({
+        // Undecided must not act, harvest included. A null balance means the loop
+        // has established nothing about its own reserve, and broadcasting from
+        // there is #172's blind loop with money attached.
+        spendableKnown: this.spendableZat !== null,
         knownRemainingUTXOs: this.remainingUTXOs,
         minUTXOs: config.reserve.harvestMinUTXOs,
         lastSweepMoved: this.lastSweepMoved,
@@ -245,7 +249,13 @@ class ReserveReconciler {
         stepInFlight: this.stepInFlight,
         queueDepth: getSendQueue().depth, // user traffic first, refill can wait
       });
-      if (!start) return;
+      if (!start) {
+        // Reset before returning, or the flag keeps its previous value on every tick
+        // that yields - and /api/status then reports a harvest in progress while
+        // nothing is happening, which is what an operator reads during a stall.
+        this.harvesting = false;
+        return;
+      }
       // Recorded only once the tick has actually decided to run a step. Stamping it
       // at the decision above would let a tick that yields to the queue reset the
       // clock, and harvesting would then starve behind steady traffic while
@@ -277,8 +287,15 @@ class ReserveReconciler {
           // ten minutes and stay there for the life of the process.
           this.failedSteps = 0;
           this.lastFailure = null;
-          this.remainingUTXOs = outcome.remainingUTXOs ?? null;
-          this.lastSweepMoved = outcome.moved === true;
+          // A REFUSAL CARRIES NO COUNT: the wallet was never asked, so it says
+          // nothing about what is there. Overwriting a known 1346 with null on a
+          // single gate blip erased the backlog fact and left the drain waiting out
+          // a full interval with the work still queued - this file's own rule
+          // ("an absence of information must not look like a fact") run backwards.
+          if (!outcome.refused) {
+            this.remainingUTXOs = outcome.remainingUTXOs ?? null;
+            this.lastSweepMoved = outcome.moved === true;
+          }
 
           // A refusal is handled BEFORE the empty-sweep path and never touches
           // emptySweeps, because the step did not look. Counting it would report
