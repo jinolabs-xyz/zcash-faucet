@@ -74,6 +74,23 @@ export function num(name: string, fallback: number): number {
   return n;
 }
 
+/**
+ * A whole number of seconds, where 0 is a deliberate OFF and anything else invalid is
+ * a mistake worth refusing at boot.
+ *
+ * Math.max(0, Math.floor(...)) looked equivalent and was not: it silently turned -1 and
+ * 0.5 into 0, and 0 here means harvesting is disabled. A typo in the knob that decides
+ * how often the faucet moves money would have restored, quietly and at boot, exactly
+ * the money-stranding behaviour this setting exists to end.
+ */
+export function wholeSeconds(name: string, fallback: number): number {
+  const n = num(name, fallback);
+  if (n < 0 || !Number.isInteger(n)) {
+    throw new Error(`Env ${name} must be a whole number of seconds (0 to disable), got "${process.env[name]}"`);
+  }
+  return n;
+}
+
 export function tazToZatoshi(taz: number): bigint {
   // Round to nearest zatoshi.
   return BigInt(Math.round(taz * Number(ZATOSHI_PER_TAZ)));
@@ -241,7 +258,7 @@ export const config = {
      * 0 turns harvesting off entirely, which is the only way to get the old
      * demand-only behaviour back.
      */
-    harvestIntervalSeconds: Math.max(0, Math.floor(num("FAUCET_HARVEST_INTERVAL_SECONDS", 3600))),
+    harvestIntervalSeconds: wholeSeconds("FAUCET_HARVEST_INTERVAL_SECONDS", 3600),
     /**
      * Coinbase UTXOs that make a harvest worth a transaction. Defaults to one
      * full shield batch: below this a sweep spends a fee to move a fraction of

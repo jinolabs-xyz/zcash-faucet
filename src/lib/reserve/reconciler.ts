@@ -57,6 +57,13 @@ export interface ReserveStatus {
   /** UTXOs the backend last reported as still shieldable, when it says. */
   remainingUTXOs: number | null;
   /**
+   * Whether a step is running right now. Reported because "the loop wants to act" and
+   * "the loop IS acting" are different states and the panel conflates them otherwise;
+   * the harness also needs it to know a tick has finished rather than sleeping a fixed
+   * interval and hoping.
+   */
+  stepInFlight: boolean;
+  /**
    * Whether the loop is sweeping because coinbase is THERE rather than because the
    * shielded side ran low. Distinct from `refilling` on purpose: they answer
    * different questions, and folding them together would report a healthy harvest
@@ -267,7 +274,14 @@ class ReserveReconciler {
         // the problem was never the decision, it was hammering an impossible action
         // every 30 seconds and reporting nothing.
         this.ticksSinceAttempt++;
-        if (!shouldAttempt(this.failedSteps, this.ticksSinceAttempt)) return;
+        if (!shouldAttempt(this.failedSteps, this.ticksSinceAttempt)) {
+          // Nothing runs this tick, so nothing is in progress. Without this the flag set
+          // just above survives the whole backoff window - twenty ticks at the cap - and
+          // /api/status reports a harvest running with no step behind it, the same lie
+          // the yield path above was fixed to stop telling.
+          this.harvesting = false;
+          return;
+        }
         this.ticksSinceAttempt = 0;
 
       this.stepInFlight = true;
@@ -275,6 +289,7 @@ class ReserveReconciler {
       // balance and must not push the harvest clock forward: if it did, a long refill
       // would look like a recent harvest and new coinbase would go unnoticed for an
       // interval after the refill ended.
+      const harvestClockBefore = this.lastHarvestAt;
       if (this.harvesting) this.lastHarvestAt = Date.now();
       getSendQueue()
         // Same backstop as a drip (#88). A shield sweep goes through the same
@@ -309,6 +324,11 @@ class ReserveReconciler {
           // being indistinguishable from an idle loop. Loud and repeated is the
           // point, one line at the transition is not.
           if (outcome.refused) {
+            // AND IT CARRIES NO CLOCK, for the reason the count above is left alone: the
+            // gate answered before the wallet was asked, so this tick consumed no
+            // interval. Stamping it anyway meant one lag blip at the moment a harvest
+            // fell due cost a full hour of not sweeping with the work still sitting there.
+            this.lastHarvestAt = harvestClockBefore;
             this.shieldRefusals++;
             this.lastRefusal = outcome.refused;
             if (shouldSay(this.shieldRefusals)) {
@@ -362,6 +382,15 @@ class ReserveReconciler {
           const outcome = classifyStepFailure(reason);
           this.failedSteps++;
           this.lastFailure = { outcome, reason };
+          // A THROW ENDS THE BACKLOG PATH. The .then above clears lastSweepMoved when a
+          // sweep returns having moved nothing, but a step that throws never reaches it,
+          // so `draining` stayed true and the backlog branch re-fired on every tick the
+          // backoff allowed, indefinitely - remainingUTXOs is deliberately left alone, so
+          // nothing else could clear it. The throw that does this is the routine one on
+          // this box: "Insufficient balance (have 0, need 10000 including fee)" the
+          // moment the mature coinbase runs out. The count is still not touched here: we
+          // know the sweep did not move funds, we do not know what is left.
+          this.lastSweepMoved = false;
           // Sampled like every other repeating state here, and worded by outcome:
           // having no coinbase to shield is WAITING on this testnet, not a fault, and
           // saying "failed" every tick is how a real fault gets lost in the noise.
@@ -402,6 +431,7 @@ class ReserveReconciler {
       lastRefusal: this.lastRefusal,
       remainingUTXOs: this.remainingUTXOs,
       harvesting: this.harvesting,
+      stepInFlight: this.stepInFlight,
       harvestAgeSeconds:
         this.lastHarvestAt === null ? null : Math.floor((Date.now() - this.lastHarvestAt) / 1000),
       harvestMinUTXOs: config.reserve.harvestMinUTXOs,

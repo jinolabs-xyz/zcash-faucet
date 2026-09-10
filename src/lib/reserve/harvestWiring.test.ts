@@ -103,12 +103,17 @@ function mockWallet(o: WalletOpts) {
 async function runTicks(calls: string[], n: number): Promise<number> {
   for (let i = 0; i < n; i++) {
     await getReserveReconciler().tick();
-    // The step runs through the queue after the tick resolves; without settling,
-    // the next tick sees stepInFlight and the count means nothing.
-    for (let j = 0; j < 20 && getReserveReconciler().status.refilling === undefined; j++) {
-      await new Promise((r) => setTimeout(r, 10));
+    // The step runs through the queue AFTER the tick resolves, so wait for it to
+    // finish. This condition used to read `status.refilling === undefined`, which is
+    // typed boolean and therefore never true - the loop never ran once and the whole
+    // settle was a fixed 60 ms sleep. Adding 120 ms per RPC to the mock (a slow but
+    // perfectly healthy wallet, or a loaded CI box) broke two tests and, worse, made
+    // the two `<=` assertions pass MORE easily: a step still in flight suppresses the
+    // next tick's sweep, which looks exactly like the guard working.
+    for (let j = 0; j < 600 && getReserveReconciler().status.stepInFlight; j++) {
+      await new Promise((r) => setTimeout(r, 5));
     }
-    await new Promise((r) => setTimeout(r, 60));
+    assert.equal(getReserveReconciler().status.stepInFlight, false, "step did not settle in 3s");
   }
   return calls.filter((m) => m === "z_shieldcoinbase").length;
 }
@@ -143,6 +148,42 @@ test("A BLIND LOOP DOES NOT BROADCAST, even on the very first tick", async () =>
   const sweeps = await runTicks(calls, 3);
   assert.equal(sweeps, 0, "a loop that cannot read its balance must not move money");
   assert.equal(getReserveReconciler().status.spendableTaz, null);
+});
+
+test("A REFUSAL DOES NOT ADVANCE THE HARVEST CLOCK: the wallet was never asked", async () => {
+  // The count rule and the clock rule are the same rule. The gate answers before the
+  // wallet is reached, so a refused tick consumed no interval - but the stamp was
+  // written at the ATTEMPT, before the outcome was known. One lag blip at the moment an
+  // hourly harvest fell due then cost the whole hour, with the work still sitting there.
+  // PRECONDITION: a null clock. It is what makes this the interval path rather than the
+  // backlog path, and the backlog path would fire regardless of the clock and prove
+  // nothing. Only true before any sweep, hence the position directly after the blind test.
+  assert.equal(getReserveReconciler().status.harvestAgeSeconds, null, "clock must be pristine");
+
+  const calls: string[] = [];
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+    if (!String(url).includes("59995")) return realFetch(url as string, init);
+    const req = JSON.parse(String(init?.body)) as { method: string };
+    calls.push(req.method);
+    const stale = NETWORK_TIP - 40;
+    const result =
+      req.method === "getwalletstatus"
+        ? { wallet_tip: { height: stale }, node_tip: { height: stale } }
+        : req.method === "z_getbalanceforaccount"
+          ? { pools: { orchard: { valueZat: RICH } } }
+          : null;
+    return new Response(JSON.stringify({ result }), { status: 200 });
+  }) as typeof fetch;
+
+  const sweeps = await runTicks(calls, 2);
+  assert.equal(sweeps, 0, "a refused tick must not reach z_shieldcoinbase");
+  assert.ok(getReserveReconciler().status.shieldRefusals > 0, "the gate should have refused");
+  // null, not 0. A stamped clock reads 0 here, and 0 means "harvested just now".
+  assert.equal(
+    getReserveReconciler().status.harvestAgeSeconds,
+    null,
+    "a refusal must leave the clock alone: no interval was spent",
+  );
 });
 
 test("A DRAINING BACKLOG SWEEPS ON CONSECUTIVE TICKS, which is what makes a drain a drain", async () => {
@@ -187,6 +228,55 @@ test("A REFUSAL DOES NOT ERASE THE KNOWN BACKLOG, so one blip does not stall the
     getReserveReconciler().status.remainingUTXOs,
     1346,
     "a refusal must leave the count alone: it is not evidence about coinbase",
+  );
+});
+
+test("A STEP THAT THROWS ENDS THE BACKLOG PATH, or the drain never terminates", async () => {
+  // The progress guard is cleared in .then, which a throwing step never reaches: with
+  // lastSweepMoved latched true and remainingUTXOs deliberately left alone, `draining`
+  // stayed true forever and the loop re-attempted on every tick the backoff allowed,
+  // settling at the backoff cap instead of the hourly interval. The throw that does it is
+  // the routine one on the live box - "Insufficient balance (have 0, need 10000 including
+  // fee)" - which is exactly how a drain ENDS, so this is the normal case, not a rare one.
+  const draining = mockWallet({ remainingUTXOs: 1346, moves: true });
+  assert.ok((await runTicks(draining, 1)) >= 1, "the backlog path must be live first");
+  assert.equal(getReserveReconciler().status.remainingUTXOs, 1346);
+
+  // Now the mature coinbase runs out and the RPC starts throwing.
+  const calls: string[] = [];
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+    if (!String(url).includes("59995")) return realFetch(url as string, init);
+    const req = JSON.parse(String(init?.body)) as { method: string };
+    calls.push(req.method);
+    if (req.method === "z_shieldcoinbase") {
+      return new Response(
+        JSON.stringify({
+          error: { code: -4, message: "Insufficient balance (have 0, need 10000 including fee)" },
+        }),
+        { status: 200 },
+      );
+    }
+    const result =
+      req.method === "getwalletstatus"
+        ? { wallet_tip: { height: NETWORK_TIP }, node_tip: { height: NETWORK_TIP } }
+        : req.method === "z_getbalanceforaccount"
+          ? { pools: { orchard: { valueZat: RICH } } }
+          : null;
+    return new Response(JSON.stringify({ result }), { status: 200 });
+  }) as typeof fetch;
+
+  // Twelve ticks is chosen so the BACKOFF alone cannot explain the result: it lets
+  // roughly four attempts through at these failure counts, and the interval lets none.
+  const sweeps = await runTicks(calls, 12);
+  assert.ok(sweeps <= 1, `a throwing sweep must fall back to the interval, saw ${sweeps} in 12`);
+  assert.ok(getReserveReconciler().status.failedSteps > 0, "the throw must be recorded");
+  // And nothing claims to be running. The flag is set before the backoff check, so a
+  // suppressed tick used to leave it true for the whole window - up to twenty ticks -
+  // and /api/status reported a harvest in progress with no step behind it.
+  assert.equal(
+    getReserveReconciler().status.harvesting,
+    false,
+    "a backed-off tick must not report a harvest in progress",
   );
 });
 

@@ -277,3 +277,29 @@ test("the harvest minimum defaults to ONE shield batch, and the two stay in step
   const { config } = await import("../config.ts");
   assert.equal(config.reserve.harvestMinUTXOs, SHIELD_UTXO_LIMIT);
 });
+
+test("the harvest interval defaults to an hour, and a typo cannot silently disable it", async () => {
+  // This default IS the fee rate: it decides how often an unattended faucet broadcasts a
+  // shielding transaction forever. Nothing pinned it, so changing 3600 to 1 - a shield
+  // every tick on every default deployment - passed the whole suite. harvestWiring.test.ts
+  // sets the env var explicitly and so is immune to its own default; this is the seam.
+  const { config } = await import("../config.ts");
+  assert.equal(config.reserve.harvestIntervalSeconds, 3600);
+
+  // 0 is the documented off switch and must keep working. -1 and 0.5 used to CLAMP to 0,
+  // which turned a typo into that off switch and stranded the money again in silence.
+  const { wholeSeconds } = await import("../config.ts");
+  const key = "FAUCET_HARVEST_INTERVAL_SECONDS";
+  const restore = process.env[key];
+  try {
+    process.env[key] = "0";
+    assert.equal(wholeSeconds(key, 3600), 0);
+    for (const bad of ["-1", "0.5", "-0.5"]) {
+      process.env[key] = bad;
+      assert.throws(() => wholeSeconds(key, 3600), /whole number of seconds/, `${bad} must be refused`);
+    }
+  } finally {
+    if (restore === undefined) delete process.env[key];
+    else process.env[key] = restore;
+  }
+});
