@@ -276,6 +276,25 @@ test("the harvest minimum defaults to ONE shield batch, and the two stay in step
   const { SHIELD_UTXO_LIMIT } = await import("./zalletRefiller.ts");
   const { config } = await import("../config.ts");
   assert.equal(config.reserve.harvestMinUTXOs, SHIELD_UTXO_LIMIT);
+
+  // And it is validated the same way as the interval beside it. One PR shipped both and
+  // gave them opposite rules: -1 and 0.5 threw for the seconds and were silently rounded
+  // to 1 for the count. The cost differs, the shape does not - the value in force was
+  // not the value someone set, and nothing said so.
+  const { wholeCount } = await import("../config.ts");
+  const key = "FAUCET_HARVEST_MIN_UTXOS";
+  const restore = process.env[key];
+  try {
+    process.env[key] = "1";
+    assert.equal(wholeCount(key, 50), 1);
+    for (const bad of ["-1", "0", "0.5", "2.5"]) {
+      process.env[key] = bad;
+      assert.throws(() => wholeCount(key, 50), /whole number of 1 or more/, `${bad} must be refused`);
+    }
+  } finally {
+    if (restore === undefined) delete process.env[key];
+    else process.env[key] = restore;
+  }
 });
 
 test("the harvest interval defaults to an hour, and a typo cannot silently disable it", async () => {

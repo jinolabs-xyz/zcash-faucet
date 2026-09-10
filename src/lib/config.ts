@@ -91,6 +91,21 @@ export function wholeSeconds(name: string, fallback: number): number {
   return n;
 }
 
+/**
+ * A whole count of at least one. Same argument as wholeSeconds, and it is here because
+ * this PR shipped both knobs and validated them on opposite principles: -1 and 0.5 threw
+ * for the interval and were silently rounded to 1 for the minimum. A rounded typo is not
+ * as costly here (0 still terminates, via the progress guard) but "the value you set is
+ * not the value in force, and nothing said so" is the shape, not the size.
+ */
+export function wholeCount(name: string, fallback: number): number {
+  const n = num(name, fallback);
+  if (n < 1 || !Number.isInteger(n)) {
+    throw new Error(`Env ${name} must be a whole number of 1 or more, got "${process.env[name]}"`);
+  }
+  return n;
+}
+
 export function tazToZatoshi(taz: number): bigint {
   // Round to nearest zatoshi.
   return BigInt(Math.round(taz * Number(ZATOSHI_PER_TAZ)));
@@ -264,7 +279,7 @@ export const config = {
      * full shield batch: below this a sweep spends a fee to move a fraction of
      * what the next one would.
      */
-    harvestMinUTXOs: Math.max(1, Math.floor(num("FAUCET_HARVEST_MIN_UTXOS", 50))),
+    harvestMinUTXOs: wholeCount("FAUCET_HARVEST_MIN_UTXOS", 50),
   },
 
   // Whether we may MINE. The app itself never mines, that is the miner container

@@ -56,11 +56,13 @@ export interface ReserveStatus {
   lastRefusal: { state: ShieldFreshness; reason: string; lag: number | null } | null;
   /** UTXOs the backend last reported as still shieldable, when it says. */
   remainingUTXOs: number | null;
+  /** Consecutive sweeps that moved funds without reporting what was left. */
+  movedWithoutCount: number;
   /**
-   * Whether a step is running right now. Reported because "the loop wants to act" and
-   * "the loop IS acting" are different states and the panel conflates them otherwise;
-   * the harness also needs it to know a tick has finished rather than sleeping a fixed
-   * interval and hoping.
+   * Whether a step is ENQUEUED OR RUNNING - it is set before the send queue is asked,
+   * so a step waiting behind a drip counts. That is the useful sense for both readers
+   * (the tick must not start a second one, and the harness must not sample until it has
+   * settled), but it is not "executing", and a panel that says so would overclaim.
    */
   stepInFlight: boolean;
   /**
@@ -156,6 +158,12 @@ class ReserveReconciler {
    * inherited; the first sweep settles it either way.
    */
   private lastSweepMoved = true;
+  /**
+   * Consecutive sweeps that moved funds without saying what was left. Counted rather
+   * than only logged, for the same reason every other state here is: the log line is
+   * sampled and the state has to stay readable between samples.
+   */
+  private movedWithoutCount = 0;
   /** Whether the step now in flight was started by the harvest trigger. */
   private harvesting = false;
 
@@ -175,6 +183,18 @@ class ReserveReconciler {
     this.timer = setInterval(() => void this.tick(), config.reserve.checkSeconds * 1000);
     this.timer.unref(); // never keep the process alive just to top up
     void this.tick(); // first read immediately, not one interval late
+  }
+
+  /**
+   * Disarm the timer. The mirror of start(), and the honest way to drop a loop: reaching
+   * into the private field from outside does not typecheck, and unref() would otherwise
+   * hide an orphaned reconciler still ticking against someone else's mock.
+   */
+  stop(): void {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
   }
 
   /** One reconcile pass. Exposed for tests; never throws. */
@@ -260,7 +280,15 @@ class ReserveReconciler {
         // Reset before returning, or the flag keeps its previous value on every tick
         // that yields - and /api/status then reports a harvest in progress while
         // nothing is happening, which is what an operator reads during a stall.
-        this.harvesting = false;
+        //
+        // BUT NOT WHILE THE STEP IS STILL ON THE WIRE. The tick does not await the
+        // queued step, so the NEXT tick arrives with stepInFlight true, takes this
+        // branch, and used to clear the flag out from under a harvest that was still
+        // running. Any shield outliving one FAUCET_RESERVE_CHECK_SECONDS hits it, and
+        // proving plus operation polling routinely does: the panel flipped from
+        // "shielding coinbase" back to "idle" WHILE MONEY WAS MOVING, which is the
+        // exact sentence this reset was added to stop printing.
+        if (!this.stepInFlight) this.harvesting = false;
         return;
       }
       // Recorded only once the tick has actually decided to run a step. Stamping it
@@ -352,6 +380,28 @@ class ReserveReconciler {
               console.log(`[reserve] sweep moved funds after ${this.emptySweeps} empty sweep(s)`);
             }
             this.emptySweeps = 0;
+            // A SWEEP THAT MOVED BUT REPORTED NO COUNT IS THE SLOW DRAIN, and it was the
+            // one outcome here that said nothing at all. remainingUTXOs is what the
+            // backlog path reads, so without it every sweep falls back to the interval:
+            // 1346 UTXOs at one batch an hour is 56 days, not the quarter of an hour the
+            // docs promise. Whether this zallet returns the field is UNVERIFIED
+            // (zalletRefiller.ts), and the only other evidence is a null on /api/status
+            // that ALSO means "nothing left" - the not-seen-versus-cannot-say confusion
+            // this tree refuses everywhere else. Sampled, because if it is true once it
+            // is true every time.
+            if (outcome.remainingUTXOs == null) {
+              this.movedWithoutCount++;
+              if (shouldSay(this.movedWithoutCount)) {
+                console.error(
+                  `[reserve] sweep MOVED but reported no remainingUTXOs (${this.movedWithoutCount} consecutive). ` +
+                    "The backlog fast path needs that count, so the drain falls back to one batch per " +
+                    "FAUCET_HARVEST_INTERVAL_SECONDS and a large pile will take days rather than minutes." +
+                    sampledNote(this.movedWithoutCount),
+                );
+              }
+            } else {
+              this.movedWithoutCount = 0;
+            }
             return;
           }
           // A sweep that shields nothing is normal once and suspicious in a run.
@@ -432,6 +482,7 @@ class ReserveReconciler {
       remainingUTXOs: this.remainingUTXOs,
       harvesting: this.harvesting,
       stepInFlight: this.stepInFlight,
+      movedWithoutCount: this.movedWithoutCount,
       harvestAgeSeconds:
         this.lastHarvestAt === null ? null : Math.floor((Date.now() - this.lastHarvestAt) / 1000),
       harvestMinUTXOs: config.reserve.harvestMinUTXOs,
@@ -449,4 +500,23 @@ const g = globalThis as unknown as { __faucetReserve?: ReserveReconciler };
 /** The singleton. Getting it is passive - only start() (instrumentation) arms it. */
 export function getReserveReconciler(): ReserveReconciler {
   return (g.__faucetReserve ??= new ReserveReconciler());
+}
+
+/**
+ * Test-only: drop the singleton so a test can start from a known state.
+ *
+ * Every piece of harvest state - the clock, the count, lastSweepMoved - carries from one
+ * test to the next through this global, and review has twice found a test in the wiring
+ * suite passing for an inherited reason rather than the one in its name. Asserting
+ * preconditions catches that; it does not let a test that needs a LIVE backlog run after
+ * one that leaves the backlog dead, which is a real constraint on the order and not an
+ * obvious one. This gives a test the third option: start clean and build exactly the
+ * state it means to exercise.
+ *
+ * The timer is cleared first. A dropped reconciler with a live interval keeps ticking
+ * against the next test's mock, and unref() hides that by letting the process exit anyway.
+ */
+export function resetReserveReconcilerForTests(): void {
+  g.__faucetReserve?.stop();
+  delete g.__faucetReserve;
 }

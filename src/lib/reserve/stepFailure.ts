@@ -42,7 +42,23 @@ export type StepOutcome = "waiting" | "error";
  */
 const NOTHING_TO_SHIELD = [/insufficient balance/i, /no (spendable )?(coinbase|utxos?) /i];
 
+/**
+ * The wallet rewinding after a chain reorganisation, which OBSERVED on the box reads:
+ *
+ *   Wallet is recovering from a chain reorganization (rolled back to 4337568); balance
+ *   and spend operations are unavailable until it has resynced (code -2)
+ *
+ * A solo-mining faucet on a public testnet loses block races and gets reorged; the
+ * wallet says so, refuses the spend, and heals itself in minutes. Adding it here is the
+ * deliberate act the default-to-`error` rule asks for: without it the panel showed a red
+ * "harvest FAILING, N consecutive" and console.error every tick throughout a transient
+ * that needed nobody. It is narrow on purpose - "recovering from a chain reorg", not
+ * "reorg" - so an unrelated message mentioning one still arrives loud.
+ */
+const RESYNCING = [/recovering from a chain reorgani[sz]ation/i];
+
 export function classifyStepFailure(message: string): StepOutcome {
+  if (RESYNCING.some((re) => re.test(message))) return "waiting";
   return NOTHING_TO_SHIELD.some((re) => re.test(message)) ? "waiting" : "error";
 }
 

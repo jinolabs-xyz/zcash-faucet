@@ -55,3 +55,24 @@ test("recovery is immediate: one success and the next tick attempts again", () =
   // The counter resetting is the reconciler's job, but the rule has to allow it.
   assert.equal(shouldAttempt(0, 0), true);
 });
+
+test("a wallet resyncing after a reorg is WAITING, not a fault", () => {
+  // Observed verbatim on the box, 2026-09-10, while the faucet was serving normally:
+  // a solo-mining faucet on a public testnet loses block races, the wallet rewinds,
+  // refuses spends for a few minutes and heals itself. Classified as `error` it painted
+  // a red "FAILING, N consecutive" across the panel and console.error'd every tick
+  // through a transient that needed nobody, which is how a real fault gets ignored.
+  assert.equal(
+    classifyStepFailure(
+      "zallet RPC z_shieldcoinbase: Wallet is recovering from a chain reorganization " +
+        "(rolled back to 4337568); balance and spend operations are unavailable until " +
+        "it has resynced (code -2)",
+    ),
+    "waiting",
+  );
+  // Both spellings, because the wallet's is American and ours is not.
+  assert.equal(classifyStepFailure("recovering from a chain reorganisation"), "waiting");
+  // And NARROW: the default is `error` on purpose, so a message that merely mentions a
+  // reorg must not be absorbed into the quiet bucket.
+  assert.equal(classifyStepFailure("reorg detected, wallet database is corrupt"), "error");
+});

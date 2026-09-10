@@ -46,7 +46,7 @@ process.env.FAUCET_RESERVE_TARGET_TAZ = "15";
 process.env.FAUCET_HARVEST_INTERVAL_SECONDS = "3600";
 process.env.FAUCET_HARVEST_MIN_UTXOS = "50";
 
-const { getReserveReconciler } = await import("./reconciler.ts");
+const { getReserveReconciler, resetReserveReconcilerForTests } = await import("./reconciler.ts");
 const { getExternalTip, warmExternalTipNowForTests } = await import("../zcash/externalTip.ts");
 
 const NETWORK_TIP = 4_220_000;
@@ -116,6 +116,21 @@ async function runTicks(calls: string[], n: number): Promise<number> {
     assert.equal(getReserveReconciler().status.stepInFlight, false, "step did not settle in 3s");
   }
   return calls.filter((m) => m === "z_shieldcoinbase").length;
+}
+
+/**
+ * Start clean and put the loop in the DRAINING state: a sweep that moved, with a count
+ * above the minimum still outstanding. That is the only trigger that fires without
+ * waiting out the hour, so a test needing a sweep either builds it here or inherits it
+ * from whatever ran before - and the inherited version is how two tests in this file
+ * ended up asserting nothing.
+ */
+async function primeBacklog(): Promise<void> {
+  resetReserveReconcilerForTests();
+  const calls = mockWallet({ remainingUTXOs: 1346, moves: true });
+  const swept = await runTicks(calls, 1);
+  assert.ok(swept >= 1, "primer failed: the backlog path did not sweep");
+  assert.equal(getReserveReconciler().status.remainingUTXOs, 1346);
 }
 
 before(() => primeTip(NETWORK_TIP));
@@ -231,6 +246,92 @@ test("A REFUSAL DOES NOT ERASE THE KNOWN BACKLOG, so one blip does not stall the
   );
 });
 
+test("A SWEEP THAT MOVES WITHOUT A COUNT SAYS SO, because it halves the drain", async () => {
+  // POSITION: directly after the two backlog tests, because it needs a sweep to happen
+  // and the BACKLOG path is the only one that fires without waiting out the hour. It
+  // leaves remainingUTXOs null, which kills that path for whatever runs next - so the
+  // refill test follows, and that one fires on `refilling` rather than on the backlog.
+  // Whether this zallet returns remainingUTXOs at all is UNVERIFIED. If it does not, the
+  // backlog path can never fire and 1346 UTXOs drain at one batch an hour - 56 days
+  // rather than minutes - while /api/status shows `remainingUTXOs: null`, which also
+  // means "nothing left". This was the one sweep outcome that logged nothing at all.
+  const calls: string[] = [];
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+    if (!String(url).includes("59995")) return realFetch(url as string, init);
+    const req = JSON.parse(String(init?.body)) as { method: string };
+    calls.push(req.method);
+    const result =
+      req.method === "getwalletstatus"
+        ? { wallet_tip: { height: NETWORK_TIP }, node_tip: { height: NETWORK_TIP } }
+        : req.method === "z_getbalanceforaccount"
+          ? { pools: { orchard: { valueZat: RICH } } }
+          : req.method === "z_shieldcoinbase"
+            ? { opid: "opid-shield" } // moved, and said nothing about what is left
+            : req.method === "z_getoperationstatus" || req.method === "z_getoperationresult"
+              ? [{ id: "opid-shield", status: "success" }]
+              : null;
+    return new Response(JSON.stringify({ result }), { status: 200 });
+  }) as typeof fetch;
+
+  const sweeps = await runTicks(calls, 2);
+  assert.ok(sweeps >= 1, "a sweep must have happened, or this asserted nothing");
+  assert.ok(
+    getReserveReconciler().status.movedWithoutCount > 0,
+    "a sweep that moved without a count must be counted, not silent",
+  );
+  assert.equal(getReserveReconciler().status.remainingUTXOs, null);
+});
+
+test("A REFILL SWEEP DOES NOT PUSH THE HARVEST CLOCK FORWARD", async () => {
+  // The two triggers share one step, so the clock has to know which one asked. If a
+  // refill stamped it, a long refill would look like a recent harvest and newly matured
+  // coinbase would go unnoticed for a full interval after the refill ended - the exact
+  // stranding this PR exists to end, reintroduced through the back door. Two lines carry
+  // it (`if (this.harvesting)` on the stamp, and `&& this.refilling !== true` on the
+  // flag) and neither was checked.
+  //
+  // POOR: below the 5 TAZ low mark, so `refilling` is true and every sweep here is a
+  // REFILL. That is the opposite of this file's RICH default and the reason it is set
+  // per-test rather than at import.
+  resetReserveReconcilerForTests();
+  const poorCalls: string[] = [];
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+    if (!String(url).includes("59995")) return realFetch(url as string, init);
+    const req = JSON.parse(String(init?.body)) as { method: string };
+    poorCalls.push(req.method);
+    const result =
+      req.method === "getwalletstatus"
+        ? { wallet_tip: { height: NETWORK_TIP }, node_tip: { height: NETWORK_TIP } }
+        : req.method === "z_getbalanceforaccount"
+          ? { pools: { orchard: { valueZat: "100000000" } } } // 1 TAZ, under the low mark
+          : req.method === "z_shieldcoinbase"
+            ? { opid: "opid-shield", remainingUTXOs: 1346 }
+            : req.method === "z_getoperationstatus" || req.method === "z_getoperationresult"
+              ? [{ id: "opid-shield", status: "success" }]
+              : null;
+    return new Response(JSON.stringify({ result }), { status: 200 });
+  }) as typeof fetch;
+
+  const sweeps = await runTicks(poorCalls, 2);
+  assert.ok(sweeps >= 1, "a refill must actually have swept, or this asserted nothing");
+  assert.equal(getReserveReconciler().status.refilling, true, "these sweeps must be refills");
+  assert.equal(
+    getReserveReconciler().status.harvesting,
+    false,
+    "a refill sweep must not be reported as a harvest",
+  );
+  // NULL, not 0, and that is the whole assertion. harvestAgeSeconds is whole seconds, so
+  // comparing before against after inside a fast test compares 0 with 0 and a stamped
+  // clock slips straight through - which is exactly what the first version of this test
+  // did. A clock that has never been stamped reads null; one stamped by this refill
+  // reads 0. Hence the reset above: an untouched clock is the only readable baseline.
+  assert.equal(
+    getReserveReconciler().status.harvestAgeSeconds,
+    null,
+    "a refill must not stamp the harvest clock: newly matured coinbase would go unseen for an interval",
+  );
+});
+
 test("A STEP THAT THROWS ENDS THE BACKLOG PATH, or the drain never terminates", async () => {
   // The progress guard is cleared in .then, which a throwing step never reaches: with
   // lastSweepMoved latched true and remainingUTXOs deliberately left alone, `draining`
@@ -238,9 +339,7 @@ test("A STEP THAT THROWS ENDS THE BACKLOG PATH, or the drain never terminates", 
   // settling at the backoff cap instead of the hourly interval. The throw that does it is
   // the routine one on the live box - "Insufficient balance (have 0, need 10000 including
   // fee)" - which is exactly how a drain ENDS, so this is the normal case, not a rare one.
-  const draining = mockWallet({ remainingUTXOs: 1346, moves: true });
-  assert.ok((await runTicks(draining, 1)) >= 1, "the backlog path must be live first");
-  assert.equal(getReserveReconciler().status.remainingUTXOs, 1346);
+  await primeBacklog();
 
   // Now the mature coinbase runs out and the RPC starts throwing.
   const calls: string[] = [];
@@ -280,13 +379,78 @@ test("A STEP THAT THROWS ENDS THE BACKLOG PATH, or the drain never terminates", 
   );
 });
 
+test("A HARVEST STILL ON THE WIRE IS NOT REPORTED AS IDLE", async () => {
+  // The tick does not await the queued step, so the NEXT tick arrives with stepInFlight
+  // true, takes the yield branch, and used to clear `harvesting` out from under a shield
+  // that was still running. Round two added that reset to stop the panel saying "idle"
+  // while the loop broadcast; for any shield outliving one tick it did the opposite.
+  // Proving plus operation polling routinely outlives 30 seconds, so this is the normal
+  // case, not a slow-wallet edge.
+  resetReserveReconcilerForTests();
+  let finish = false;
+  const calls: string[] = [];
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+    if (!String(url).includes("59995")) return realFetch(url as string, init);
+    const req = JSON.parse(String(init?.body)) as { method: string };
+    calls.push(req.method);
+    const result =
+      req.method === "getwalletstatus"
+        ? { wallet_tip: { height: NETWORK_TIP }, node_tip: { height: NETWORK_TIP } }
+        : req.method === "z_getbalanceforaccount"
+          ? { pools: { orchard: { valueZat: RICH } } }
+          : req.method === "z_shieldcoinbase"
+            ? { opid: "opid-slow", remainingUTXOs: 1346 }
+            : req.method === "z_getoperationstatus" || req.method === "z_getoperationresult"
+              ? // Still proving until the test says otherwise, which is what makes the
+                // step outlive the tick that started it.
+                [{ id: "opid-slow", status: finish ? "success" : "executing" }]
+              : null;
+    return new Response(JSON.stringify({ result }), { status: 200 });
+  }) as typeof fetch;
+
+  await getReserveReconciler().tick();
+  assert.equal(getReserveReconciler().status.stepInFlight, true, "a step must be in flight");
+  assert.equal(getReserveReconciler().status.harvesting, true, "and it must be a harvest");
+
+  // The next tick, arriving while that shield is still unfinished.
+  await getReserveReconciler().tick();
+  assert.equal(getReserveReconciler().status.stepInFlight, true, "the step is still running");
+  assert.equal(
+    getReserveReconciler().status.harvesting,
+    true,
+    "a harvest still on the wire must not be reported as idle",
+  );
+  // And the panel row, because that is where an operator actually reads it.
+  const { reserveRows } = await import("../reserveLabel.ts");
+  const st = getReserveReconciler().status;
+  assert.match(
+    reserveRows({ ...st, spendableTaz: st.spendableTaz, refilling: st.refilling }).refill,
+    /shielding coinbase/,
+  );
+
+  finish = true;
+  for (let i = 0; i < 600 && getReserveReconciler().status.stepInFlight; i++) {
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  assert.equal(getReserveReconciler().status.stepInFlight, false, "the step must settle");
+});
+
 test("A PINNED COUNT DOES NOT SWEEP EVERY TICK, which is the fee loop", async () => {
   // Nothing moves and the count stays high: coinbase that is not mature yet, which
   // is the ROUTINE state on a mining faucet, or #172's unspendable shape. Review
   // measured 20 ticks -> 20 broadcasts here before the progress guard.
+  //
+  // THE TRANSITION IS THE TEST, and it used to be missing. This inherited
+  // lastSweepMoved=false from the throw test above and observed ZERO sweeps, so
+  // `sweeps <= 1` passed without the moved-to-not-moved step ever happening - and
+  // `this.lastSweepMoved = outcome.moved === true` could be replaced with a bare `true`
+  // with all 730 tests still green. So the drain is restarted here first, and the
+  // precondition below is asserted rather than assumed.
+  await primeBacklog();
   const calls = mockWallet({ remainingUTXOs: 1346, moves: false });
   const sweeps = await runTicks(calls, 6);
   assert.ok(sweeps <= 1, `a pinned count must not sweep every tick, saw ${sweeps} in 6`);
+  assert.ok(sweeps >= 1, "and it must have actually swept once, or this asserted nothing");
   // And the flag tells the truth about it. `harvesting` was assigned only after the
   // decision to run a step, so on every tick that yielded it kept its previous value
   // and /api/status reported a harvest in progress through the whole stall.
