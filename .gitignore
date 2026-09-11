@@ -42,6 +42,14 @@ tsconfig.tsbuildinfo
 
 # deploy secrets + generated artifacts - NEVER commit (keep the .example templates)
 deploy/**/faucet.env
+# Every suffix too. faucet.env.bak.<epoch> backups sat untracked in the production
+# checkout, which is what put -untracked on the deployed build commit and what let one
+# into the image context. Untracked is not ignored: git status showed them, nothing read it.
+deploy/**/faucet.env.*
+deploy/**/*.env.*
+deploy/**/*.env~
+deploy/**/#*.env#
+!deploy/**/faucet.env.example
 deploy/**/.env
 deploy/z3-stack/
 deploy/.zallet-rpc-password

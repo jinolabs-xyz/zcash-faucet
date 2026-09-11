@@ -362,6 +362,53 @@ jobs:
       - name: build the app image
         run: docker build --no-cache --progress=plain -t faucet-ci-check:${{ github.sha }} .
 
+      # THE IGNORE FILE, CHECKED WITH DOCKER'S OWN MATCHER. The step below looks for
+      # secrets in the built image, but CI builds from a clean checkout where no backup
+      # file exists, so it can only ever prove the rules against names that are present.
+      # The box is where backups accumulate, and the box is where the image is built.
+      # So this builds a throwaway context holding every spelling a secrets file has ever
+      # taken here - and the ones it has not yet - and asserts .dockerignore lets through
+      # exactly the example and nothing else. fnmatch is NOT used: it disagreed with
+      # docker on this very file family and gave a confident wrong answer.
+      - name: .dockerignore excludes every spelling of the secrets file
+        run: |
+          set -euo pipefail
+          ctx="$(mktemp -d)"
+          mkdir -p "$ctx/deploy/z3"
+          cp .dockerignore "$ctx/"
+          # Real spellings from the box, plus shapes nobody has used yet. '#faucet.env#' is
+          # emacs's autosave: present from the first keystroke to the save.
+          for f in faucet.env faucet.env.example \
+                   faucet.env.bak-20260730T173852Z faucet.env.pre-acct-restore-20260731T080219Z \
+                   faucet.env.bak.1789032981 faucet.env.orig faucet.env.tmp.4242 faucet.env~ '#faucet.env#' \
+                   alerts.env watchdog.env miner.env .env .env.tmp.99; do
+            echo "secret=$f" > "$ctx/deploy/z3/$f"
+          done
+          echo "secret=root" > "$ctx/.env"
+          printf 'FROM busybox\nCOPY . /ctx\nRUN find /ctx -type f | sort > /ctx.list\n' > "$ctx/Dockerfile"
+          docker build -q -t dockerignore-probe "$ctx" >/dev/null
+          got="$(docker run --rm --entrypoint sh dockerignore-probe -c 'grep -vE "^/ctx/(Dockerfile|\.dockerignore)$" /ctx.list' || true)"
+          docker rmi -f dockerignore-probe >/dev/null 2>&1 || true
+          rm -rf "$ctx"
+          want="/ctx/deploy/z3/faucet.env.example"
+          if [ -z "$got" ]; then
+            # The opposite failure, and the message has to point the opposite way: the
+            # example is documentation the README links to, and losing it means the
+            # negation was deleted or is no longer the LAST matching rule.
+            echo "THE BUILD CONTEXT EXCLUDED THE EXAMPLE TOO."
+            echo "!**/faucet.env.example must be present and must be the last rule that matches it."
+            exit 1
+          fi
+          if [ "$got" != "$want" ]; then
+            echo "THE BUILD CONTEXT LET THESE THROUGH (only the example is allowed):"
+            printf '%s\n' "$got" | sed 's/^/  /'
+            echo
+            echo "Every one of these is a copy of the secrets file under another name."
+            echo "Add the missing shape to .dockerignore ABOVE the !**/faucet.env.example negation."
+            exit 1
+          fi
+          echo "context admits only $want"
+
       # The cheap half of #377's contract, run where it is free. An absence check only
       # catches what someone listed, so it is not the whole answer, but a secret reaching
       # a layer is the failure with the longest tail and it costs one command to refuse.
@@ -377,7 +424,7 @@ jobs:
           # loosening the secret pattern, which is the wrong direction. Naming the
           # exceptions here keeps the pattern strict and the exception reviewable.
           found="$(docker run --rm --entrypoint sh faucet-ci-check:${{ github.sha }} -c '
-            find /app -name "*.env" -o -name "*.env.bak-*" -o -name "*.env.pre-*" \
+            find /app -name "*.env" -o -name "*.env.*" \
                  -o -name "*.pem" -o -name "*.key" 2>/dev/null |
             grep -vE "\.env\.example$|/stack-versions\.env$" || true' )"
           if [ -n "$found" ]; then
