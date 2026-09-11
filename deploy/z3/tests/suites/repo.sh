@@ -267,7 +267,10 @@ mk_scratch "${TMPDIR:-/tmp}/repo-dependabot.XXXXXX"
 # Pair every entry with its ecosystem by walking the updates list, rather than grepping
 # `directory:` anywhere in the file: npm and github-actions both carry `directory: /`, so a
 # bare grep was satisfied by them and passed with the docker entry deleted outright.
-python3 - "$DB" "$REPO" "$T/report.txt" <<'PY'
+# A function, so the same scan can be run against a FIXTURE tree below: a check on the
+# real tree proves it is quiet on a good tree, and only a planted defect proves it speaks.
+scan_images() { # $1 dependabot.yml  $2 repo root  $3 report file
+python3 - "$1" "$2" "$3" <<'PY'
 import os, re, sys
 db, repo, out = sys.argv[1], sys.argv[2], sys.argv[3]
 
@@ -332,12 +335,24 @@ for d in sorted(EXEMPT):
     # tag, the exemption stops being true and this says so.
     dockerfile = os.path.join(repo, d.lstrip("/"), "Dockerfile")
     try:
-        froms = [l for l in open(dockerfile, encoding="utf-8") if l.startswith("FROM ")]
+        # THE WAY DEPENDABOT READS IT, not the way a person writes it. Its parser matches
+        # the instruction case-insensitively (/FROM/i) and its --platform group swallows
+        # the whole flag before it reads the image, so `from rust:1.90` and
+        # `FROM --platform=$BUILDPLATFORM rust:1.90` both yield it a dependency. The
+        # first cut matched `FROM ` in uppercase only and treated any `$` on the line as
+        # "unresolvable", so both spellings passed the exemption while dependabot would
+        # have had something to watch - an unwatched directory with paperwork, the exact
+        # failure this check exists for (#482).
+        froms = [l for l in open(dockerfile, encoding="utf-8") if re.match(r"(?i)^\s*FROM\s", l)]
     except OSError:
         missing.append(f"{d} is exempt but has no Dockerfile to be exempt about")
         continue
+    def image_ref(line):
+        rest = re.sub(r"(?i)^\s*FROM\s+", "", line.strip())
+        rest = re.sub(r"^--platform=\S+\s+", "", rest)   # dependabot strips this first
+        return rest.split()[0] if rest.split() else ""
     resolvable = [l.strip() for l in froms
-                  if "${" not in l and "$" not in l and not l.startswith("FROM scratch")]
+                  if (ref := image_ref(l)) and "$" not in ref and ref.lower() != "scratch"]
     if resolvable:
         missing.append(
             f"{d} is exempt because dependabot cannot resolve its FROM, but "
@@ -367,6 +382,8 @@ with open(out, "w") as fh:
     fh.write("MISSING=" + ("; ".join(missing) if missing else "") + "\n")
     fh.write("ENTRIES=" + ",".join(f"{e}:{d}" for e, d in entries) + "\n")
 PY
+}
+scan_images "$DB" "$REPO" "$T/report.txt"
 SCANNED="$(sed -n 's/^SCANNED=//p' "$T/report.txt")"
 MISSING="$(sed -n 's/^MISSING=//p' "$T/report.txt")"
 # ITERATION CONTROL, the rule this file states 30 lines up: a scan that found nothing
@@ -381,7 +398,11 @@ check "the scan actually found image files, rather than reporting healthy on not
 # and the exceptions are enumerated here, where a new one reds the suite.
 SV="$REPO/deploy/z3/stack-versions.env"
 extra_unwatched=""
-for img in $(grep -oE '^Z3_[A-Z_]*IMAGE' "$SV" 2>/dev/null | sort -u); do
+# deploy.sh SOURCES this file, so `export Z3_ZAINO_IMAGE=...` or an indented line pins an
+# image the box will run just as surely as a bare one - and the bare-anchored grep did not
+# see either. The realistic edit, uncommenting the existing line, was caught; these two
+# were not (#482).
+for img in $(grep -oE '^\s*(export\s+)?Z3_[A-Z_]*IMAGE' "$SV" 2>/dev/null | sed -E 's/^\s*(export\s+)?//' | sort -u); do
   case "$img" in
     Z3_ZEBRA_IMAGE|Z3_ZALLET_IMAGE) ;;
     *) extra_unwatched="$extra_unwatched $img" ;;
@@ -389,6 +410,13 @@ for img in $(grep -oE '^Z3_[A-Z_]*IMAGE' "$SV" 2>/dev/null | sort -u); do
 done
 check "the hand-updated images are still exactly zebra and zallet, and no others" \
   "[ -z '$extra_unwatched' ]"
+# The pin has to see the spellings deploy.sh sees. It SOURCES stack-versions.env, so an
+# exported or indented assignment pins an image just as a bare one does.
+pinned_by() { printf '%s\n' "$1" | grep -oE '^\s*(export\s+)?Z3_[A-Z_]*IMAGE' | sed -E 's/^\s*(export\s+)?//'; }
+check "an 'export Z3_ZAINO_IMAGE=...' line would be seen by the pin" \
+  "[ \"\$(pinned_by 'export Z3_ZAINO_IMAGE=x')\" = Z3_ZAINO_IMAGE ]"
+check "and so would an indented one" \
+  "[ \"\$(pinned_by '  Z3_ZAINO_IMAGE=x')\" = Z3_ZAINO_IMAGE ]"
 check "and stack-versions.env says plainly that nothing automated watches them" \
   "grep -qi 'no dependabot ecosystem\|nothing automated watches' '$SV'"
 
@@ -400,6 +428,30 @@ check "the app's own base image is watched by a docker entry at the root" \
   "grep -q '^ENTRIES=.*docker:/,' '$T/report.txt' || grep -q '^ENTRIES=.*docker:/$' '$T/report.txt'"
 check "and caddy by a docker-compose entry, because docker does not read compose files" \
   "grep -q 'docker-compose:/deploy/z3' '$T/report.txt'"
+
+# THE EXEMPTION HAS TO FAIL WHEN ITS REASON FAILS, and only a planted Dockerfile proves
+# that. The reason is "dependabot cannot resolve this FROM"; three spellings make it
+# resolvable, and the first cut of the check saw only the first. Each is planted in a
+# fixture copy of the image-bearing files, the same scan runs, and MISSING must name the
+# directory. A check that is quiet on the real tree has only proved it can be quiet.
+fx="$T/imgfix"; rm -rf "$fx"; mkdir -p "$fx/deploy/z3/ctaz-build" "$fx/.github"
+cp "$DB" "$fx/.github/dependabot.yml"; cp "$REPO/Dockerfile" "$fx/Dockerfile"
+cp "$REPO/deploy/z3/docker-compose.faucet.yml" "$fx/deploy/z3/"
+plant_from() { # $1 the FROM line to plant; the rest of the file is the real one
+  sed -E "s|^FROM \\$\\{RUST_IMAGE\\} AS build|$1|" "$REPO/deploy/z3/ctaz-build/Dockerfile" > "$fx/deploy/z3/ctaz-build/Dockerfile"
+  grep -qxF "$1" "$fx/deploy/z3/ctaz-build/Dockerfile" || { echo "fixture did not take: $1"; return 1; }
+  scan_images "$fx/.github/dependabot.yml" "$fx" "$T/imgfix.txt"
+  grep -q '^MISSING=.*ctaz-build.*resolvable now' "$T/imgfix.txt"
+}
+check "the exemption is earned: the real ctaz FROM still interpolates a variable" \
+  "grep -qE '^FROM \\\$\\{RUST_IMAGE\\} AS build' '$REPO/deploy/z3/ctaz-build/Dockerfile'"
+check "an inlined tag makes the exemption FALSE, and the scan says so" \
+  "plant_from 'FROM rust:1.90-bookworm AS build'"
+check "so does a lowercase 'from', which dependabot reads and the first cut did not" \
+  "plant_from 'from rust:1.90-bookworm AS build'"
+check "and so does --platform=\$BUILDPLATFORM, which dependabot strips before it reads the image" \
+  "plant_from 'FROM --platform=\$BUILDPLATFORM rust:1.90-bookworm AS build'"
+rm -rf "$fx"
 
 echo "== repo: the harness cannot keep a list that disagrees with the tree (risk register #29)"
 # Two lists in run-tests.sh have to match something outside themselves, and both have
