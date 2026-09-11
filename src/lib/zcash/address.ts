@@ -82,24 +82,7 @@ export function validateTestnetAddress(input: string): AddressInfo {
     if (bytes.length !== 43) {
       return { valid: false, reason: "Malformed Sapling address (wrong payload size)." };
     }
-    // REFUSED HERE, WITH A REASON, rather than eight steps later with a 502.
-    //
-    // The wallet's notes are in the Ironwood pool. Paying a Sapling recipient crosses
-    // pools, which reveals the amount, and the send goes out under FullPrivacy - so
-    // zallet declines to build it. Twice on 2026-09-10 that reached a user as a bare
-    // 502 AFTER they had solved the proof-of-work, and neither of them reported it; they
-    // were found in the logs while chasing something else.
-    //
-    // Refusing at step 1 costs them nothing and says what to do instead. If the pools
-    // ever line up, or the policy is deliberately loosened to AllowRevealedAmounts, this
-    // branch goes back to returning valid - and the test named for it will say so.
-    return {
-      valid: false,
-      reason:
-        "Sapling addresses cannot be paid by this faucet. Its funds are in the Ironwood " +
-        "pool, and paying Sapling would reveal the amount, so the wallet refuses to build " +
-        "it. Use a unified address (utest1...) for a shielded drip, or a transparent one.",
-    };
+    return { valid: true, kind: "sapling", shielded: true };
   }
 
   // Transparent testnet: tm... (P2PKH) or t2... (P2SH), base58check.

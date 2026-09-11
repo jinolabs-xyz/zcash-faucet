@@ -16,6 +16,7 @@ const { safeBalance, safeDonations, resetDonationCache } = await import("./send.
 
 const UA_INFO: AddressInfo = { valid: true, kind: "unified", shielded: true };
 const TM_INFO: AddressInfo = { valid: true, kind: "transparent", shielded: false };
+const ZS_INFO: AddressInfo = { valid: true, kind: "sapling", shielded: true };
 
 /**
  * Install a fake JSON-RPC endpoint by replacing global fetch. Handlers get the
@@ -77,6 +78,57 @@ test("send to a transparent recipient opts into AllowRevealedRecipients", async 
   await new ZalletSender().send({ toAddress: "tmRecipient", addressInfo: TM_INFO, amountZat: 10_000_000n });
   const [, , , , policy] = calls.find((c) => c.method === "z_sendmany")!.params as [string, unknown, number, null, string];
   assert.equal(policy, "AllowRevealedRecipients");
+});
+
+test("send to a SAPLING recipient opts into AllowRevealedAmounts", async () => {
+  // The wallet's notes are in Ironwood, so paying Sapling crosses pools and the moved
+  // value is public. Under FullPrivacy zallet refuses to build it, and that reached two
+  // users on 2026-09-10 as a bare 502 after they had already solved the proof-of-work.
+  //
+  // Acceptable to reveal HERE specifically: the drip is a fixed 0.1 TAZ published on the
+  // homepage, so the revealed amount is a number everyone already has. The recipient's
+  // note stays shielded; only the cross-pool value is in the clear. We already pay
+  // transparent addresses, which reveals strictly more.
+  //
+  // ZIP 258 restricts ORCHARD after NU6.3, not Sapling, so there is no protocol reason
+  // to turn these users away.
+  const calls = mockRpc({
+    z_sendmany: () => "opid-z",
+    z_getoperationstatus: () => [{ id: "opid-z", status: "success" }],
+    z_getoperationresult: () => [{ id: "opid-z", status: "success", result: { txid: "b".repeat(64) } }],
+  });
+  await new ZalletSender().send({ toAddress: "ztestsapling1recipient", addressInfo: ZS_INFO, amountZat: 10_000_000n });
+  const [, , , , policy] = calls.find((c) => c.method === "z_sendmany")!.params as [string, unknown, number, null, string];
+  assert.equal(policy, "AllowRevealedAmounts");
+});
+
+test("each recipient kind gets the WEAKEST policy that can build, and no weaker", async () => {
+  // The three branches in one place, because the risk is drift: a future edit that made
+  // unified reveal amounts, or sapling reveal recipients, would still pass the three
+  // tests above if each only checked its own branch. AllowRevealedRecipients is strictly
+  // weaker than AllowRevealedAmounts, so handing it to a shielded recipient would give
+  // away more than the send needs.
+  const seen: Record<string, string> = {};
+  for (const [label, info, addr] of [
+    ["unified", UA_INFO, "utest1r"],
+    ["sapling", ZS_INFO, "ztestsapling1r"],
+    ["transparent", TM_INFO, "tmR"],
+  ] as const) {
+    const calls = mockRpc({
+      z_sendmany: () => "opid-p",
+      z_getoperationstatus: () => [{ id: "opid-p", status: "success" }],
+      z_getoperationresult: () => [{ id: "opid-p", status: "success", result: { txid: "c".repeat(64) } }],
+    });
+    await new ZalletSender().send({ toAddress: addr, addressInfo: info, amountZat: 10_000_000n });
+    const [, , , , policy] = calls.find((c) => c.method === "z_sendmany")!.params as [string, unknown, number, null, string];
+    seen[label] = policy;
+    globalThis.fetch = realFetch;
+  }
+  assert.deepEqual(seen, {
+    unified: "FullPrivacy",
+    sapling: "AllowRevealedAmounts",
+    transparent: "AllowRevealedRecipients",
+  });
 });
 
 test("send surfaces the wallet's failure message", async () => {
