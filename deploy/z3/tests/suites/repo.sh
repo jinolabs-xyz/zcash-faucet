@@ -327,6 +327,42 @@ check "and it only runs when the probe failed, on the PAGE step and not the prob
   "grep -q 'if: failure()' '$T/page-step.yml' && ! grep -q 'if: failure()' '$T/probe-step.yml'"
 check "the cap knob is NOT settable from the workflow, so a variable cannot widen it" \
   "! grep -q 'SMOKE_ALLOW_UNREADY_MAX_DAYS' '$LS'"
+# Same shape, same reason: OBSERVABILITY.md says the certificate floor is deliberately not
+# plumbed into a repository variable, because widening it is a way to silence the check
+# rather than fix it. A documented invariant with no guard is a comment.
+check "and neither is the certificate floor" \
+  "! grep -q 'SMOKE_TLS_MIN_DAYS' '$LS'"
+# The https guard, both ways round: an uppercase scheme is legal and must not page.
+# NOT SMOKE_DISABLED=1: that hits the off switch at the top of the step and exits 0 before
+# the scheme is ever looked at, so the check passed on a byte-exact mutant of the guard it
+# was written for. The step has to reach the case, which means it also reaches `node`, so
+# node is stubbed the way the page step's tools are.
+# ITS OWN DIR, not the $T/bin the page step's gh and curl stubs live in: anything added to
+# that block later would silently get this node too.
+mkdir -p "$T/nodebin"
+printf '#!/usr/bin/env bash\necho "stub node ran: $*"\n' > "$T/nodebin/node"
+chmod +x "$T/nodebin/node"
+( cd "$REPO" && PATH="$T/nodebin:$BASE_PATH" SMOKE_URL="HTTPS://faucet.example.org" SMOKE_DISABLED="" \
+    bash "$T/probe-step.sh" > "$T/upper.log" 2>&1 )
+rc=$?
+check "an uppercase HTTPS:// is accepted, because new URL() normalises it and a refusal pages" \
+  "[ $rc -eq 0 ] && ! grep -q 'which is not https' '$T/upper.log'"
+check "and the step really got past the scheme check, rather than exiting before it" \
+  "grep -q 'stub node ran' '$T/upper.log'"
+# The two other forms new URL() accepts. Refusing either pages a human for a variable that
+# would have worked, which is the harm the fold was added for.
+( cd "$REPO" && PATH="$T/nodebin:$BASE_PATH" SMOKE_URL=" https://faucet.example.org " SMOKE_DISABLED="" \
+    bash "$T/probe-step.sh" > "$T/ws.log" 2>&1 )
+check "surrounding whitespace does not turn a good URL into a page" \
+  "[ $? -eq 0 ] && grep -q 'stub node ran' '$T/ws.log'"
+( cd "$REPO" && PATH="$T/nodebin:$BASE_PATH" SMOKE_URL="https:faucet.example.org" SMOKE_DISABLED="" \
+    bash "$T/probe-step.sh" > "$T/noslash.log" 2>&1 )
+check "and neither does https: with no slashes, which new URL() normalises" \
+  "[ $? -eq 0 ] && grep -q 'stub node ran' '$T/noslash.log'"
+( cd "$REPO" && PATH="$T/nodebin:$BASE_PATH" SMOKE_URL="https:/faucet.example.org" SMOKE_DISABLED="" \
+    bash "$T/probe-step.sh" > "$T/oneslash.log" 2>&1 )
+check "nor one dropped slash, which the probe runs clean on" \
+  "[ $? -eq 0 ] && grep -q 'stub node ran' '$T/oneslash.log'"
 
 # The probe step, run for real. `node scripts/live-probe.mjs` is never reached in these
 # two cases, which is the point: both must decide before probing anything.
@@ -340,6 +376,12 @@ check "and says what it has been doing" "grep -q 'probed NOTHING' '$T/nourl.log'
 check "the named off switch exits 0 with no URL" "[ $? -eq 0 ] && grep -q 'deliberately off' '$T/off1.log'"
 ( cd "$REPO" && SMOKE_URL="https://example.invalid" SMOKE_DISABLED="1" bash "$T/probe-step.sh" > "$T/off2.log" 2>&1 )
 check "and ALSO with a URL set, which is when a maintenance window needs it" "[ $? -eq 0 ] && grep -q 'deliberately off' '$T/off2.log'"
+# Caddy 308s :80 to :443 and fetch follows redirects, so an http origin passes every
+# faucet check while the certificate check is skipped: off-box TLS monitoring absent for
+# ever behind a green run, from one mistyped variable.
+( cd "$REPO" && SMOKE_URL="http://faucet.example.org" SMOKE_DISABLED="" bash "$T/probe-step.sh" > "$T/http.log" 2>&1 )
+check "an http FAUCET_LIVE_URL FAILS the step rather than skipping the certificate check" \
+  "[ $? -ne 0 ] && grep -q 'which is not https' '$T/http.log'"
 
 # The page step, run for real against a stub gh/curl. This is the 30-minute rule.
 mkdir -p "$T/bin"
@@ -430,5 +472,9 @@ check "and the runbook an operator opens mid-incident names the date form, not t
   "grep -q 'FAUCET_LIVE_ALLOW_UNREADY' '$REPO/OPERATIONS.md' && ! grep -q 'FAUCET_LIVE_ALLOW_UNREADY=1' '$REPO/OPERATIONS.md'"
 check "the workflow's own explorer skip is NOT set in the workflow, so the real run still checks it" \
   "! grep -q 'SMOKE_SKIP_EXPLORER' '$LS'"
+check "the probe watches the certificate, which nothing on the box can see" \
+  "grep -q 'the TLS certificate has more than' '$REPO/scripts/live-probe.mjs' && grep -q 'SMOKE_TLS_MIN_DAYS' '$REPO/scripts/live-probe.mjs'"
+check "and the Caddyfile says where certificate expiry is watched from" \
+  "grep -q 'SMOKE_TLS_MIN_DAYS' '$REPO/deploy/z3/Caddyfile'"
 check "the probe has tests, and npm test runs them" \
   "[ -f '$REPO/scripts/live-probe.test.mjs' ] && grep -q 'scripts/\*\*/\*.test.mjs' '$REPO/package.json'"

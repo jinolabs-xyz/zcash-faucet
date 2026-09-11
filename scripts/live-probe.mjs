@@ -33,7 +33,16 @@
 // So the faucet checks run up to SMOKE_ATTEMPTS times with SMOKE_RETRY_DELAY_MS
 // between: a transient failure that clears on retry passes, and only a failure
 // that PERSISTS across the whole window (a real outage) exits non-zero.
-const BASE = (process.env.SMOKE_URL ?? "").replace(/\/$/, "");
+// TRIMMED, not just de-slashed. The workflow accepts surrounding whitespace on
+// FAUCET_LIVE_URL because `new URL()` does; without the trim here a TRAILING space lands
+// inside the request path and the run pages about a missing API field instead of a typo.
+// TRIMMED, and that is load-bearing rather than tidy. The workflow's scheme gate folds
+// surrounding whitespace deliberately - refusing " https://host " pages a human about a
+// variable that would otherwise have worked - so this side has to fold it too. Without
+// the trim the value cleared the gate and then died on EVERY scheduled run with
+// "Failed to parse URL from  https://host /api/status", which names nothing about the
+// variable and is a worse diagnosis than the refusal it replaced.
+const BASE = (process.env.SMOKE_URL ?? "").trim().replace(/\/$/, "");
 /**
  * Is the un-ready escape hatch in force? This is the one knob that can turn the whole
  * probe into a pass, so scripts/live-probe.test.mjs spawns the probe and pins it (this
@@ -78,9 +87,46 @@ function unreadyHatch(raw, now = new Date(), maxDays = MAX_HATCH_DAYS) {
 const hatch = unreadyHatch(process.env.SMOKE_ALLOW_UNREADY);
 const ALLOW_UNREADY = hatch.on;
 if (hatch.why) console.error(hatch.why);
-const TIMEOUT_MS = Number(process.env.SMOKE_TIMEOUT_MS ?? 15000);
-const RETRY_ATTEMPTS = Math.max(1, Number(process.env.SMOKE_ATTEMPTS ?? 3));
-const RETRY_DELAY_MS = Number(process.env.SMOKE_RETRY_DELAY_MS ?? 30000);
+/**
+ * A number from the environment, or the default, with an explicit floor.
+ *
+ * `?? d` does not catch the EMPTY STRING, and an empty string is exactly what GitHub
+ * Actions hands an unset repository variable: Number("") is 0. For the handshake timeout
+ * that is the worst possible value - 0 means NO timeout, so a black-holed 443 waits out
+ * the OS connect timeout (~2 min) instead of 15 seconds. The certificate floor below had
+ * the same hole and it was closed one knob at a time; this applies the argument to the
+ * rest, so the next one added inherits it.
+ *
+ * `min` IS A PARAMETER BECAUSE ZERO IS NOT UNIFORMLY WRONG. A zero retry DELAY is a
+ * legitimate "do not wait", and the tests pass exactly that. Treating it like the timeout
+ * turned every retry in the suite into a 30-second sleep and hung the run - and the test
+ * that caught it was the whitespace one, which stopped failing for the mutation it is
+ * named for and started failing for this instead. A helper that quietly overrides a value
+ * someone set is the same defect as one that quietly accepts a bad one.
+ */
+function numEnv(name, fallback, min) {
+  const raw = String(process.env[name] ?? "").trim();
+  if (raw === "") return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= min ? n : fallback;
+}
+
+const TIMEOUT_MS = numEnv("SMOKE_TIMEOUT_MS", 15000, 1);
+// Days of certificate life below which this fails. Caddy renews a 90-day Let's Encrypt
+// certificate at about 30 days left, so 21 means "two renewal attempts have already not
+// worked", not "renewal is due" (risk register #18).
+// `?? 21` does not catch the EMPTY STRING, and an empty string is exactly what GitHub
+// Actions hands an unset repository variable: Number("") is 0, so the check passed green
+// with a threshold of zero. A NEGATIVE one is the same hole with extra typing, so both
+// fall back to the default rather than being honoured.
+const TLS_MIN_DAYS_RAW = Number(process.env.SMOKE_TLS_MIN_DAYS);
+const TLS_MIN_DAYS =
+  String(process.env.SMOKE_TLS_MIN_DAYS ?? "").trim() !== "" &&
+  Number.isFinite(TLS_MIN_DAYS_RAW) && TLS_MIN_DAYS_RAW >= 0
+    ? TLS_MIN_DAYS_RAW : 21;
+const RETRY_ATTEMPTS = Math.max(1, numEnv("SMOKE_ATTEMPTS", 3, 1));
+// 0 floor, not 1: "retry immediately" is a real setting and the tests use it.
+const RETRY_DELAY_MS = numEnv("SMOKE_RETRY_DELAY_MS", 30000, 0);
 
 if (!BASE) {
   console.error("SMOKE_URL is not set, nothing to probe");
@@ -100,10 +146,16 @@ function tally() {
   return { ok, count: () => failures };
 }
 
+// True once ANY request to BASE has come back with an HTTP status. Over https that means
+// the handshake succeeded, which is what lets the certificate check tell a runner-side
+// blip from a real TLS failure.
+let originAnswered = false;
+
 async function probe(path) {
   const started = Date.now();
   try {
     const res = await fetch(BASE + path, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+    originAnswered = true;
     const body = await res.json().catch(() => null);
     return { status: res.status, body, ms: Date.now() - started };
   } catch (err) {
@@ -158,6 +210,137 @@ async function loadExplorerTxUrl() {
     console.log(`cannot-verify: could not load the shipped explorer URL builder (${err.message})`);
     return null;
   }
+}
+
+/**
+ * THE CERTIFICATE, WHICH ONLY AN OUTSIDE PROBE CAN SEE. Nothing on the box watches it:
+ * the watchdog asks the app over loopback, the metrics timer likewise, and Caddy renews
+ * silently or fails silently. A renewal that stops working is invisible for a month and
+ * then the site is hard-down for every browser while /api/health still answers 200
+ * inside the box (risk register #18). Let's Encrypt would email about it, except the
+ * ACME account here has no contact address, which is its own line in HTTPS.md.
+ *
+ * Not fatal to the rest: an http:// origin (the :80 smoke shape) skips this. A box that
+ * is simply down DOES count here as well as in the faucet checks, so the summary reads
+ * `2 FAILED (faucet 1 ... certificate 1)` - the certificate line names the connection
+ * error rather than claiming the certificate is bad, which is what the code carried into
+ * the message for.
+ */
+async function checkTlsExpiry(faucetReachable = false) {
+  const { ok, count } = tally();
+  let url;
+  try {
+    url = new URL(BASE);
+  } catch {
+    // Silence reading as success is the shape this whole file argues against. The faucet
+    // checks will fail on the same URL, but this line says which check did not run.
+    console.log(`\ncertificate: skipped, ${JSON.stringify(BASE)} is not a URL`);
+    return count();
+  }
+  if (url.protocol !== "https:") {
+    console.log(`\ncertificate: skipped, ${BASE} is not https`);
+    return count();
+  }
+  console.log(`\ncertificate (#18): ${url.host}`);
+  const tls = await import("node:tls");
+  // servername only when the host is a NAME. RFC 6066 forbids an IP literal there, and
+  // node warns (DEP0123) on every one of this file's own tests, which use 127.0.0.1.
+  const isIpLiteral = /^\d{1,3}(\.\d{1,3}){3}$/.test(url.hostname) || url.hostname.startsWith("[");
+  const handshake = await new Promise((resolve) => {
+    const socket = tls.connect(
+      {
+        host: url.hostname.replace(/^\[|\]$/g, ""),
+        port: Number(url.port || 443),
+        ...(isIpLiteral ? {} : { servername: url.hostname }),
+        timeout: TIMEOUT_MS,
+      },
+      () => { const c = socket.getPeerCertificate(); socket.end(); resolve({ cert: c && c.valid_to ? c : null }); },
+    );
+    socket.on("error", (e) => resolve({ cert: null, err: e }));
+    socket.on("timeout", () => { socket.destroy(); resolve({ cert: null, err: new Error("handshake timed out") }); });
+  });
+  const cert = handshake.cert;
+  if (!cert) {
+    // WHY IT FAILED, not just that it did. rejectUnauthorized is on by default, so an
+    // ALREADY-EXPIRED certificate fails the handshake and never reaches the days-left
+    // branch below - and without the code, "expired three days ago" and "the box is
+    // dead" read identically at 3am. CERT_HAS_EXPIRED also means caddy may have fallen
+    // back to its internal issuer after ACME gave up, which is the same fix.
+    const code = handshake.err?.code ?? "";
+    // A TRANSPORT failure beside a working fetch is the probe, not the box: a reset or a
+    // refused connection on one socket while another carried a whole HTTP exchange is a
+    // runner-side blip, and a false page costs the same trust a missed one does.
+    //
+    // AN ALLOWLIST, NOT A DENYLIST. The first version downgraded everything except
+    // CERT_HAS_EXPIRED, which swept up DEPTH_ZERO_SELF_SIGNED_CERT - Caddy falling back to
+    // its internal issuer after ACME gave up, named three lines down as a real failure
+    // mode - and printed `live-probe: healthy` on a site no browser can load. Measured.
+    // A certificate fault is never a blip, whatever the fetches did: undici reuses a
+    // pooled keep-alive socket and never re-handshakes, so fetch and tls.connect really
+    // do disagree, and fetch is the one that is wrong.
+    // ECONNRESET is the awkward one: node reports it both for a runner-side reset AND for
+    // a TLS terminator that aborts the handshake by closing. It stays because a terminator
+    // that does that persistently also kills the fetches on a fresh connection, so
+    // faucetReachable is false and this never fires - the residual is a sub-second
+    // transition inside one run, against a real cost in false pages if it came out. Every
+    // other realistic TLS fault lands outside this list and pages: a plaintext port gives
+    // ERR_SSL_WRONG_VERSION_NUMBER, a version mismatch ERR_SSL_TLSV1_ALERT_PROTOCOL_VERSION,
+    // a name mismatch ERR_TLS_CERT_ALTNAME_INVALID, and a stalled handshake has no code at
+    // all, which fails closed.
+    const TRANSPORT_BLIPS = ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH", "EPIPE", "EAI_AGAIN"];
+    if (faucetReachable && TRANSPORT_BLIPS.includes(code)) {
+      console.log(`  --: TLS handshake failed (${code || handshake.err?.message || "no answer"}) but the faucet answered over the same origin, so this is the probe, not the certificate`);
+      return count();
+    }
+    // NOT anchored: the code for an untrusted leaf is DEPTH_ZERO_SELF_SIGNED_CERT, so a
+    // `^SELF_SIGNED` test misses the commonest one of these.
+    const CERT_FAULTS = /(CERT|SELF_SIGNED|UNABLE_TO_VERIFY|ERR_TLS)/;
+    let why;
+    if (code === "CERT_HAS_EXPIRED") {
+      why = "the certificate has ALREADY EXPIRED, so the handshake is refused. Caddy renews at about 30 days, " +
+        "so renewal stopped long ago: check `docker logs` on the caddy container, that ports 80 and 443 reach " +
+        "the box, and DNS";
+    } else if (CERT_FAULTS.test(code)) {
+      // Untrusted chain, wrong name, internal issuer. Definitively the certificate, and
+      // browser-fatal; saying "not necessarily the certificate" sent the operator to
+      // check the box at 3am for something that is not the box.
+      why = `${code} - the certificate is there but not usable (a wrong name, or an issuer nobody trusts, ` +
+        "which is what Caddy falls back to when ACME has given up). Same place to look: `docker logs` on the " +
+        "caddy container, ports 80 and 443, and DNS";
+    } else {
+      why = `${code || handshake.err?.message || "no answer"} - this is a connection failure, not necessarily the certificate`;
+    }
+    ok("the TLS certificate can be read", false, `${url.host}: ${why}`);
+    return count();
+  }
+  const expiresAt = Date.parse(cert.valid_to);
+  // UNTESTED ON PURPOSE, and said so rather than left to be discovered: a real server
+  // cannot be made to present an unparseable valid_to, and the only way to reach this
+  // would be a test-only switch in the shipped script. It fails closed, which is the
+  // safe direction if a node release ever changes the shape of this field.
+  if (Number.isNaN(expiresAt)) {
+    ok("the TLS certificate carries an expiry", false, `unparseable valid_to ${JSON.stringify(cert.valid_to)}`);
+    return count();
+  }
+  // Whole days remaining, floored: 21 days and 23 hours is "21 days left". The check
+  // FAILS at exactly 21, which is a day earlier than "fewer than 21 remain" reads - the
+  // safe direction, and now said the same way in the name, the docs and here.
+  const days = Math.floor((expiresAt - Date.now()) / 86_400_000);
+  if (days < 0) {
+    ok("the TLS certificate is still valid", false,
+      `it ALREADY EXPIRED ${-days} day(s) ago (${cert.valid_to}). Caddy renews at about 30 days, so renewal ` +
+      "stopped long ago: check `docker logs` on the caddy container, that ports 80 and 443 reach the box, and DNS");
+    return count();
+  }
+  ok(
+    `the TLS certificate has more than ${TLS_MIN_DAYS} whole days left`,
+    days > TLS_MIN_DAYS,
+    days > TLS_MIN_DAYS
+      ? `${days} days, expires ${cert.valid_to}`
+      : `${days} days left (expires ${cert.valid_to}). Caddy renews at about 30 days, so this means renewal has ALREADY not worked: ` +
+        `check \`docker logs\` on the caddy container, that ports 80 and 443 reach the box, and DNS`,
+  );
+  return count();
 }
 
 /** Fetch an explorer tx page. Returns {status, text}; status 0 = unreachable. */
@@ -422,15 +605,16 @@ for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt += 1) {
   }
 }
 
+const tlsFailures = await checkTlsExpiry(originAnswered);
 const explorerFailures = await checkExplorerProperty();
 
-const total = faucetFailures + explorerFailures;
+const total = faucetFailures + tlsFailures + explorerFailures;
 if (total === 0) {
   console.log(`\nlive-probe: healthy`);
 } else {
   console.log(
     `\nlive-probe: ${total} FAILED` +
-      ` (faucet ${faucetFailures} after ${RETRY_ATTEMPTS} attempt(s), explorer ${explorerFailures})`,
+      ` (faucet ${faucetFailures} after ${RETRY_ATTEMPTS} attempt(s), certificate ${tlsFailures}, explorer ${explorerFailures})`,
   );
 }
 process.exit(total === 0 ? 0 : 1);
