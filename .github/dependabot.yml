@@ -40,7 +40,7 @@ updates:
 
   # THE BASE IMAGES THIS REPO DECLARES, which were the one supply chain nobody watched.
   # npm, cargo and the actions were covered; the images the app is BUILT and SERVED from -
-  # node:22-slim under the app, caddy:2 terminating TLS - were not, so a CVE in either
+  # node:24-slim under the app, caddy:2 terminating TLS - were not, so a CVE in either
   # arrived only if someone happened to read a release note. Same "no signal, only luck"
   # shape as #85 (risk register #26).
   #

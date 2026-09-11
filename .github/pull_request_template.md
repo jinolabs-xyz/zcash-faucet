@@ -15,7 +15,7 @@
      evidence. Screenshots for UI, command output for scripts. -->
 
 - [ ] `npm run typecheck`
-- [ ] `npm test` (Node 23+)
+- [ ] `npm test` (Node 24, the pinned runtime)
 - [ ] `npm run build` (never dev, it does not bundle)
 - [ ] `shellcheck -S warning` on any touched `deploy/` scripts
 - [ ] Exercised the change for real (browser for UI, stubs for infra)

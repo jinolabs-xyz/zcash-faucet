@@ -4,7 +4,7 @@ Two paths. Pick by what you are doing.
 
 | Path | Needs | Use it for |
 |---|---|---|
-| [Local, against fakes](#local-against-fakes) | Node 23, nothing else | Working on the app. No keys, no chain, no wallet, no coins move. |
+| [Local, against fakes](#local-against-fakes) | Node 24, nothing else | Working on the app. No keys, no chain, no wallet, no coins move. |
 | [A real server](#a-real-server-the-z3-stack) | One VM | The actual faucet: Zebra, Zallet, the miner, Caddy and TLS. |
 
 ## Local, against fakes

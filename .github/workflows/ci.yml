@@ -32,16 +32,21 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          # Matches the Dockerfile (node:22-slim). Tests must run on the runtime we
+          # Matches the Dockerfile (node:24-slim). Tests must run on the runtime we
           # ship: this was pinned to 23 while production ran 22, so every green
-          # suite was green on a runtime that does not exist in production.
+          # suite was green on a runtime that does not exist in production. The
+          # repo suite now asserts the agreement.
           #
-          # The real floor is 22.18, not 23. `npm test` runs .ts files through
-          # `node --test`, which needs type stripping, and that became available
-          # unflagged in 22.18. Below it the test script needs
-          # --experimental-strip-types. CI resolves to 22.23.1 today, so no flag is
-          # needed; if this is ever pinned lower than 22.18, change the script too.
-          node-version: 22
+          # 24 is Active LTS until 2026-10-20 and supported until 2028-04-30; 22
+          # has been Maintenance since 2025-10-21. 26 is Current until it becomes
+          # LTS on 2026-10-28, and an unattended faucet does not want a Current
+          # line, so revisit then.
+          #
+          # The floor for `npm test` is 22.18: it runs .ts through `node --test`,
+          # which needs type stripping, unflagged from 22.18. Below that the script
+          # needs --experimental-strip-types; if this is ever pinned lower, change
+          # the script too.
+          node-version: 24
           cache: npm
       - run: npm ci
       - run: npm run typecheck
@@ -80,7 +85,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       - run: npm ci
       - run: npm run build
@@ -160,7 +165,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       - run: npm ci
       - run: npm run build
@@ -232,7 +237,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       - run: npm ci
       - run: npm run build
@@ -253,7 +258,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       # High or critical advisories fail the build. Lows are visible in the
       # log but do not gate: for a hot-wallet faucet the bar is no known-bad
@@ -338,7 +343,7 @@ jobs:
   #
   # Every other job here runs `npm ci` on the runner, which proves the dependency tree
   # installs. None of them proved the IMAGE builds. Those differ: the Dockerfile installs
-  # build tooling for better-sqlite3, runs `npm run build` inside node:22-slim, and copies
+  # build tooling for better-sqlite3, runs `npm run build` inside node:24-slim, and copies
   # a context filtered by .dockerignore. A dependency that breaks any of that was
   # discovered when redeploy failed on the box, in production, after the merge.
   #
