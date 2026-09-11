@@ -401,6 +401,151 @@ check "the app's own base image is watched by a docker entry at the root" \
 check "and caddy by a docker-compose entry, because docker does not read compose files" \
   "grep -q 'docker-compose:/deploy/z3' '$T/report.txt'"
 
+echo "== repo: the harness cannot keep a list that disagrees with the tree (risk register #29)"
+# Two lists in run-tests.sh have to match something outside themselves, and both have
+# failed at it: the default suite order against the files on disk, and the printed
+# `apt-get install` against suite_deps (it missed `git`, then `jq` - each time an operator
+# copy-pasted our own remedy and was refused again). The order is still written out
+# because it is load-bearing; the install line is generated. These check the seams.
+RT="$REPO/deploy/z3/tests/run-tests.sh"
+mk_scratch "${TMPDIR:-/tmp}/repo-runtests.XXXXXX"
+
+# THE REFUSAL, RUN FOR REAL: a suite file the default order does not name.
+cp -r "$REPO/deploy/z3/tests" "$T/tests"
+printf '# shellcheck shell=bash\ncheck "never runs" "true"\n' > "$T/tests/suites/zzznew.sh"
+# `env -u SUITES`: this suite runs with SUITES set, and the guard only applies to the
+# DEFAULT set - inherited, the inner run would skip the guard and recurse into itself.
+( cd "$REPO" && env -u SUITES TEST_SCRATCH="$T/tests" bash "$T/tests/run-tests.sh" > "$T/unlisted.log" 2>&1 )
+rc=$?
+check "a suite file the default order does not name REFUSES the run" "[ $rc -eq 2 ]"
+check "and says which file would never have run" "grep -q 'on disk but never run: zzznew' '$T/unlisted.log'"
+check "rather than a green tally that silently skipped it" "! grep -q 'passed,' '$T/unlisted.log'"
+rm -f "$T/tests/suites/zzznew.sh"
+# And the other direction: a name in the order with no file behind it.
+sed -i.bak 's/^SUITE_ORDER="zsnap/SUITE_ORDER="ghostsuite zsnap/' "$T/tests/run-tests.sh"
+( cd "$REPO" && env -u SUITES TEST_SCRATCH="$T/tests" bash "$T/tests/run-tests.sh" > "$T/ghost.log" 2>&1 )
+rc=$?
+check "a name in the order with no file REFUSES too" "[ $rc -eq 2 ] && grep -q 'no file: ghostsuite' '$T/ghost.log'"
+# A DUPLICATE is neither of those: set membership passes, the suite is sourced twice, the
+# tally is inflated, and the second sourcing inherits the first one's leftovers.
+sed -i.bak 's/^SUITE_ORDER="ghostsuite zsnap/SUITE_ORDER="zsnap zsnap/' "$T/tests/run-tests.sh"
+( cd "$REPO" && env -u SUITES TEST_SCRATCH="$T/tests" bash "$T/tests/run-tests.sh" > "$T/dupe.log" 2>&1 )
+rc=$?
+check "a suite named twice REFUSES rather than running twice and counting twice" \
+  "[ $rc -eq 2 ] && grep -q 'named more than once' '$T/dupe.log'"
+# A selection that names nothing sourced no suite and exited 0 - a green run of nothing.
+( cd "$REPO" && SUITES=" " bash "$RT" > "$T/blank.log" 2>&1 )
+rc=$?
+check "SUITES that names no suite REFUSES rather than passing having run nothing" \
+  "[ $rc -eq 2 ] && grep -q 'names no suite' '$T/blank.log'"
+
+# A BROKEN SYMLINK IS A SUITE THAT CAN NEVER RUN. `[ -e ]` is false for one, so the
+# comparison above simply did not see it: a .sh-named entry in suites/, never run, never
+# mentioned, green tally - the exact shape the guard exists to refuse, arriving through
+# the one door it was not watching.
+cp -r "$REPO/deploy/z3/tests" "$T/tests2"
+ln -sf /nonexistent/nope "$T/tests2/suites/zzzbroken.sh"
+( cd "$REPO" && env -u SUITES TEST_SCRATCH="$T/tests2" bash "$T/tests2/run-tests.sh" > "$T/broken.log" 2>&1 )
+rc=$?
+# Both halves in one check, because exit 2 is this harness's refusal code generally: with
+# the guard removed the run still exited 2 for an unrelated reason and a bare rc test
+# passed on it. A refusal has to be THIS refusal.
+check "a broken symlink in suites/ REFUSES the run, and says which file" \
+  "[ $rc -eq 2 ] && grep -q 'broken symlink:.*zzzbroken' '$T/broken.log'"
+rm -f "$T/tests2/suites/zzzbroken.sh"
+
+# A LISTED SUITE THAT DOES NOT SOURCE IS A SUITE THAT DID NOT RUN. Without the floor a
+# parse error left the loop moving on: measured, 23 passed / 0 failed and exit 0 where
+# sixty checks were due. Same sentence as the guard above, one door over.
+printf '# shellcheck shell=bash\ncheck "counts once" "true"\nif true; then\n' > "$T/tests2/suites/prune.sh"
+( cd "$REPO" && SUITES="prune" TEST_SCRATCH="$T/tests2" bash "$T/tests2/run-tests.sh" > "$T/nosource.log" 2>&1 )
+rc=$?
+check "a suite that does not PARSE fails the run rather than passing it" "[ $rc -ne 0 ]"
+check "and says which suite, and quotes the parse error" \
+  "grep -q 'suite prune does not parse' '$T/nosource.log' && grep -q 'syntax error' '$T/nosource.log'"
+# AND A SUITE WHOSE LAST COMMAND FAILS IS NOT A BROKEN SUITE. The first cut of the floor
+# read the exit status of `.`, which is the exit status of the suite's last line, and
+# ctazbroker.sh ends with `wait` on a process it just killed (143). It failed a suite
+# whose every check had passed. The parse check cannot make that mistake, and this pins
+# that a healthy suite ending in a non-zero command is left alone.
+printf '# shellcheck shell=bash\ncheck "one real check" "true"\nfalse\n' > "$T/tests2/suites/prune.sh"
+( cd "$REPO" && SUITES="prune" TEST_SCRATCH="$T/tests2" bash "$T/tests2/run-tests.sh" > "$T/lastfalse.log" 2>&1 )
+rc=$?
+check "a suite whose LAST command exits non-zero is not reported as broken" \
+  "[ $rc -eq 0 ] && grep -q '1 passed, 0 failed' '$T/lastfalse.log'"
+# And a suite that sources fine but asserts nothing is not a pass either.
+printf '# shellcheck shell=bash\n: nothing to see here\n' > "$T/tests2/suites/prune.sh"
+( cd "$REPO" && SUITES="prune" TEST_SCRATCH="$T/tests2" bash "$T/tests2/run-tests.sh" > "$T/nochecks.log" 2>&1 )
+rc=$?
+check "a suite that runs NO checks fails the run rather than reporting a clean zero" "[ $rc -ne 0 ]"
+check "and says so in those terms" "grep -q 'ran no checks at all' '$T/nochecks.log'"
+rm -rf "$T/tests2"
+
+# THE INSTALL LINE IS GENERATED, so it cannot omit a command the guard demands. The three
+# functions are sourced out of the shipped script rather than re-implemented here.
+sed -n '/^suite_deps() {/,/^}/p; /^suite_caps() {/,/^}/p; /^dep_package() {/,/^}/p' "$RT" > "$T/fns.sh"
+ORDER="$(grep -oE '^SUITE_ORDER="[^"]*"' "$RT" | sed 's/^SUITE_ORDER="//; s/"$//')"
+GEN="$(
+  # shellcheck disable=SC1090
+  . "$T/fns.sh"
+  P=""
+  for s in $ORDER; do
+    for c in $(suite_deps "$s") $(suite_caps "$s"); do
+      p="$(dep_package "$c")"
+      [ "$p" = "-" ] && continue
+      [ -n "$p" ] || { echo "UNMAPPED:$c"; continue; }
+      case " $P " in *" $p "*) ;; *) P="$P $p" ;; esac
+    done
+  done
+  printf '%s' "${P# }"
+)"
+check "the package list was actually generated, not empty" "[ -n '$GEN' ]"
+check "every command any suite declares has a package behind it" \
+  "case '$GEN' in *UNMAPPED*) false ;; *) true ;; esac"
+# THE CAPS REFUSAL PRINTS ITS OWN RECIPE, and nothing read it: the grep below resolves to
+# the header COMMENT, and the check further down reads only the DEPS refusal. That is the
+# recipe a macOS operator pastes - the population that hit both earlier misses - and it
+# could be hardcoded with every check green. Force it by shimming a GNU-only behaviour.
+mkdir -p "$T/nostat"
+for b in bash sh env dirname basename sed grep awk tr cut head tail sort uniq cat ls mkdir rm cp mv chmod printf date find sha256sum seq id tee wc readlink xargs zstd curl gpg python3 git jq; do
+  src="$(command -v "$b" 2>/dev/null)"; [ -n "$src" ] && ln -sf "$src" "$T/nostat/$b"
+done
+printf '#!/usr/bin/env bash\ncase " $* " in *" -c "*) exit 1 ;; esac\nexec /usr/bin/stat "$@"\n' > "$T/nostat/stat"
+chmod +x "$T/nostat/stat"
+( cd "$REPO" && env -u SUITES PATH="$T/nostat" bash "$RT" > "$T/caps.log" 2>&1 )
+rc=$?
+check "a missing GNU behaviour refuses, so the caps recipe is reachable" \
+  "[ $rc -eq 2 ] && grep -q 'stat -c' '$T/caps.log'"
+caps_printed="$(grep -oE 'apt-get install -y -qq [a-zA-Z0-9 ._+-]+' "$T/caps.log" | head -n1 | sed 's/apt-get install -y -qq //')"
+caps_sorted="$(printf '%s\n' $caps_printed | sort | tr '\n' ' ')"
+
+# The header comment is prose an operator copy-pastes and cannot be generated, so it is
+# compared. Sorted: the order in a comment is not the thing under test.
+HDR="$(grep -oE 'apt-get install -y -qq .*' "$RT" | head -n1 | sed 's/apt-get install -y -qq //')"
+hdr_sorted="$(printf '%s\n' $HDR | sort | tr '\n' ' ')"
+gen_sorted="$(printf '%s\n' $GEN | sort | tr '\n' ' ')"
+check "the recipe in the header comment names exactly the generated package set" \
+  "[ '$hdr_sorted' = '$gen_sorted' ]"
+
+# AND THE LINE IT ACTUALLY PRINTS, by making it refuse. Comparing only the header comment
+# left the printed remedy free to be hardcoded again, which is the whole defect.
+mkdir -p "$T/nojq"
+for b in bash sh env dirname basename sed grep awk tr cut head tail sort uniq cat ls mkdir rm cp mv chmod printf date find stat sha256sum seq id whoami tee wc dd du df sleep touch readlink realpath xargs zstd curl gpg python3 git; do
+  src="$(command -v "$b" 2>/dev/null)"; [ -n "$src" ] && ln -sf "$src" "$T/nojq/$b"
+done
+( cd "$REPO" && env -u SUITES PATH="$T/nojq" bash "$RT" > "$T/norecipe.log" 2>&1 )
+rc=$?
+check "a missing command still refuses, so the printed remedy is reachable" "[ $rc -eq 2 ]"
+# The charset takes a package with a dot, a plus or a capital (python3.12, g++): a
+# narrower one truncates silently and the comparison fails for the wrong reason.
+printed="$(grep -oE 'apt-get install -y [a-zA-Z0-9 ._+-]+' "$T/norecipe.log" | head -n1 | sed 's/apt-get install -y //')"
+printed_sorted="$(printf '%s\n' $printed | sort | tr '\n' ' ')"
+check "the remedy it PRINTS is the generated set, not a hand-kept copy of it" \
+  "[ '$printed_sorted' = '$gen_sorted' ]"
+check "and so is the one the capability refusal prints, which nothing read before" \
+  "[ '$caps_sorted' = '$gen_sorted' ]"
+
+
 echo "== repo: the off-box probe cannot pass without probing (risk register #17)"
 # It is the only signal that has ever reached us unprompted. Three ways it used to go
 # green while watching nothing: no FAUCET_LIVE_URL (skipped, exit 0), an escape hatch
