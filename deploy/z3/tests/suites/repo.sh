@@ -52,6 +52,22 @@ check "workflows were actually found and read" "[ '$WF_COUNT' -gt 0 ]"
 check "every node-version pin matches the Dockerfile's node $PROD_MAJOR" \
   "[ -z '$WF_BAD' ] || { echo '   mismatched:$WF_BAD'; false; }"
 
+echo "== repo: every workflow job carries a timeout, so a hang costs minutes and not an afternoon"
+# GitHub's default job timeout is six hours. A `node --test` that leaked a listener after a
+# red assertion held a runner that long (#481); #490 closed that leak and this is the layer
+# under it (#496). Counted per job by the `runs-on:` line, anchored so the header comment
+# that names the key does not count as a job having it.
+WF_NO_TIMEOUT=""
+for wf in "$REPO"/.github/workflows/*.yml "$REPO"/.github/workflows/*.yaml; do
+  [ -e "$wf" ] || continue
+  jobs="$(grep -cE '^[[:space:]]+runs-on:' "$wf")"
+  budgets="$(grep -cE '^[[:space:]]+timeout-minutes:[[:space:]]*[0-9]+' "$wf")"
+  [ "$jobs" -gt 0 ] || WF_NO_TIMEOUT="$WF_NO_TIMEOUT $(basename "$wf"):no-jobs-found"
+  [ "$budgets" -eq "$jobs" ] || WF_NO_TIMEOUT="$WF_NO_TIMEOUT $(basename "$wf"):$budgets/$jobs"
+done
+check "every job in every workflow has a numeric timeout-minutes" \
+  "[ -z '$WF_NO_TIMEOUT' ] || { echo '   without:$WF_NO_TIMEOUT'; false; }"
+
 echo "== repo: CI lints EVERY tracked shell script, not a glob's worth of them"
 # WHY THIS IS A RULE AND NOT A ONE-TIME FIX. CI ran `shellcheck -S warning deploy/deploy.sh
 # deploy/z3/*.sh`, which is 22 of this repo's 41 tracked .sh files. The 19 it missed are the

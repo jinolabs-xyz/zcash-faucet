@@ -1,5 +1,13 @@
 # CI: typecheck + tests + build for the app, shellcheck + harness for the infra scripts.
 # No secrets, no deploy. Green here means main is buildable and the scripts parse.
+#
+# EVERY JOB HAS A timeout-minutes. GitHub's default is six hours, and a hung `node --test`
+# (a leaked listener after a failed assertion, #481) sat in that for a whole afternoon
+# once. #490 fixed the leak we knew about; this is the second layer, so the next one costs
+# minutes. Budgets are about three times the slowest run of the last eight on main
+# (shell ~14 min, audit ~3.5, ui ~2.5, the rest under 2), rounded up to a 5. A job that
+# legitimately outgrows its budget should raise the number here with the measurement,
+# not have the line removed: the repo suite asserts every job carries one.
 name: CI
 
 on:
@@ -28,6 +36,7 @@ concurrency:
 jobs:
   app:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -60,6 +69,7 @@ jobs:
 
   smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       # Real ZalletSender against the fake-zallet double (#68): the path under
       # test is production code, only the wallet RPC boundary is faked.
@@ -120,6 +130,7 @@ jobs:
 
   ui:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       # Same double-backed setup as the smoke job, see #68.
       FAUCET_SENDER: zallet
@@ -233,6 +244,7 @@ jobs:
 
   api-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -254,6 +266,7 @@ jobs:
 
   audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -278,6 +291,7 @@ jobs:
 
   shell:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - name: shellcheck every tracked shell script
@@ -323,6 +337,7 @@ jobs:
 
   miner:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       # Guarded the same way as the harness suites: green before the miner
@@ -357,6 +372,7 @@ jobs:
   # Anyone citing this job as evidence about the box is making the #377 mistake again.
   image:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       # v7 like every other job here. v4 was an inconsistency, and CI version skew is
       # what later produces works-in-one-job-not-the-other with no diff to explain it.

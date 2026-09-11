@@ -43,6 +43,9 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
+    # The probe bounds itself (SMOKE_ATTEMPTS x SMOKE_TIMEOUT_MS plus retry delays, a few
+    # minutes at most); this is the layer under that, same reason as every job in ci.yml.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
