@@ -292,6 +292,21 @@ if eco:
 dockerish = re.compile(r"dockerfile|containerfile", re.I)
 composeish = re.compile(r"^(docker-)?compose(-[\w]+)?(\.[\w-]+)?\.ya?ml$", re.I)
 
+# docker/lib/dependabot/docker/file_parser.rb FROM_LINE, ported piece by piece from the
+# Ruby (shared_file_parser.rb holds the image pieces). `^` with no leading whitespace and
+# /FROM/i are dependabot's choices, not ours; an indented FROM is invisible to it.
+_DOMAIN_COMPONENT = r"(?:[A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9-]*[A-Za-z0-9])"
+_DOMAIN = rf"(?:{_DOMAIN_COMPONENT}(?:\.{_DOMAIN_COMPONENT})+)"
+_REGISTRY = rf"(?P<registry>{_DOMAIN}(?::\d+)?)"
+_NAME_COMPONENT = r"(?:[a-z\d]+(?:(?:[._]|__|[-]*)[a-z\d]+)*)"
+_IMAGE = rf"(?P<image>{_NAME_COMPONENT}(?:/{_NAME_COMPONENT})*)"
+_TAG = r"(?::(?P<tag>[\w][\w.-]{0,127}))"
+_DIGEST = r"(?:@sha256:(?P<digest>[0-9a-f]{64}))"
+_NAME = r"(?:\s+AS\s+(?P<name>[\w-]+))"
+FROM_LINE = re.compile(
+    rf"^(?i:FROM)\s+(?:--platform=(?P<platform>\S+)\s+)?(?:{_REGISTRY}/)?{_IMAGE}{_TAG}?{_DIGEST}?{_NAME}?",
+    re.ASCII)
+
 want = {}   # directory -> set of required ecosystems
 scanned = 0
 for root, dirs, files in os.walk(repo):
@@ -335,24 +350,20 @@ for d in sorted(EXEMPT):
     # tag, the exemption stops being true and this says so.
     dockerfile = os.path.join(repo, d.lstrip("/"), "Dockerfile")
     try:
-        # THE WAY DEPENDABOT READS IT, not the way a person writes it. Its parser matches
-        # the instruction case-insensitively (/FROM/i) and its --platform group swallows
-        # the whole flag before it reads the image, so `from rust:1.90` and
-        # `FROM --platform=$BUILDPLATFORM rust:1.90` both yield it a dependency. The
-        # first cut matched `FROM ` in uppercase only and treated any `$` on the line as
-        # "unresolvable", so both spellings passed the exemption while dependabot would
-        # have had something to watch - an unwatched directory with paperwork, the exact
-        # failure this check exists for (#482).
-        froms = [l for l in open(dockerfile, encoding="utf-8") if re.match(r"(?i)^\s*FROM\s", l)]
+        lines = list(open(dockerfile, encoding="utf-8"))
     except OSError:
         missing.append(f"{d} is exempt but has no Dockerfile to be exempt about")
         continue
-    def image_ref(line):
-        rest = re.sub(r"(?i)^\s*FROM\s+", "", line.strip())
-        rest = re.sub(r"^--platform=\S+\s+", "", rest)   # dependabot strips this first
-        return rest.split()[0] if rest.split() else ""
-    resolvable = [l.strip() for l in froms
-                  if (ref := image_ref(l)) and "$" not in ref and ref.lower() != "scratch"]
+    # THE WAY DEPENDABOT READS IT, not the way a person writes it. A dependency exists
+    # when FROM_LINE matches AND a tag or digest was captured; nothing else. Two cuts of
+    # this check approximated that and were wrong in both directions: uppercase-only
+    # `FROM ` and "any $ on the line" let `from rust:1.90` and `--platform=$BUILDPLATFORM
+    # rust:1.90` through (#482); then "any $ in the ref" was quiet on `rust:1.90-${V}`,
+    # which dependabot DOES watch (tag `1.90-`, the regex is not end-anchored), and red
+    # on `FROM build AS test`, which it does not (no tag). So the regex is ported rather
+    # than paraphrased; the fixture plants below hold it to dependabot's answers.
+    resolvable = [l.strip() for l in lines
+                  if (m := FROM_LINE.match(l)) and (m["tag"] or m["digest"])]
     if resolvable:
         missing.append(
             f"{d} is exempt because dependabot cannot resolve its FROM, but "
@@ -383,7 +394,8 @@ with open(out, "w") as fh:
     fh.write("ENTRIES=" + ",".join(f"{e}:{d}" for e, d in entries) + "\n")
 PY
 }
-scan_images "$DB" "$REPO" "$T/report.txt"
+scan_images "$DB" "$REPO" "$T/report.txt"; scan_rc=$?
+check "the scan ran to completion, rather than leaving a report to be misread" "[ $scan_rc -eq 0 ]"
 SCANNED="$(sed -n 's/^SCANNED=//p' "$T/report.txt")"
 MISSING="$(sed -n 's/^MISSING=//p' "$T/report.txt")"
 # ITERATION CONTROL, the rule this file states 30 lines up: a scan that found nothing
@@ -402,7 +414,10 @@ extra_unwatched=""
 # image the box will run just as surely as a bare one - and the bare-anchored grep did not
 # see either. The realistic edit, uncommenting the existing line, was caught; these two
 # were not (#482).
-for img in $(grep -oE '^\s*(export\s+)?Z3_[A-Z_]*IMAGE' "$SV" 2>/dev/null | sed -E 's/^\s*(export\s+)?//' | sort -u); do
+# ONE function for the pin and for the checks on it. The first cut gave the checks their
+# own copy of the regex, so reverting the pin to the bare-anchored grep left them green.
+pins_in() { grep -oE '^\s*(export\s+)?Z3_[A-Z_]*IMAGE' | sed -E 's/^\s*(export\s+)?//'; }
+for img in $(pins_in < "$SV" 2>/dev/null | sort -u); do
   case "$img" in
     Z3_ZEBRA_IMAGE|Z3_ZALLET_IMAGE) ;;
     *) extra_unwatched="$extra_unwatched $img" ;;
@@ -412,11 +427,10 @@ check "the hand-updated images are still exactly zebra and zallet, and no others
   "[ -z '$extra_unwatched' ]"
 # The pin has to see the spellings deploy.sh sees. It SOURCES stack-versions.env, so an
 # exported or indented assignment pins an image just as a bare one does.
-pinned_by() { printf '%s\n' "$1" | grep -oE '^\s*(export\s+)?Z3_[A-Z_]*IMAGE' | sed -E 's/^\s*(export\s+)?//'; }
 check "an 'export Z3_ZAINO_IMAGE=...' line would be seen by the pin" \
-  "[ \"\$(pinned_by 'export Z3_ZAINO_IMAGE=x')\" = Z3_ZAINO_IMAGE ]"
+  "[ \"\$(printf '%s\\n' 'export Z3_ZAINO_IMAGE=x' | pins_in)\" = Z3_ZAINO_IMAGE ]"
 check "and so would an indented one" \
-  "[ \"\$(pinned_by '  Z3_ZAINO_IMAGE=x')\" = Z3_ZAINO_IMAGE ]"
+  "[ \"\$(printf '%s\\n' '  Z3_ZAINO_IMAGE=x' | pins_in)\" = Z3_ZAINO_IMAGE ]"
 check "and stack-versions.env says plainly that nothing automated watches them" \
   "grep -qi 'no dependabot ecosystem\|nothing automated watches' '$SV'"
 
@@ -437,20 +451,44 @@ check "and caddy by a docker-compose entry, because docker does not read compose
 fx="$T/imgfix"; rm -rf "$fx"; mkdir -p "$fx/deploy/z3/ctaz-build" "$fx/.github"
 cp "$DB" "$fx/.github/dependabot.yml"; cp "$REPO/Dockerfile" "$fx/Dockerfile"
 cp "$REPO/deploy/z3/docker-compose.faucet.yml" "$fx/deploy/z3/"
+# The first FROM is replaced, whatever it says, so a legitimate edit to that line does not
+# read as "fixture did not take" three times over. The report is removed before each scan
+# and the scan's exit status is honoured: a scanner that died used to leave the previous
+# plant's MISSING line in place, and the next plant passed on it.
 plant_from() { # $1 the FROM line to plant; the rest of the file is the real one
-  sed -E "s|^FROM \\$\\{RUST_IMAGE\\} AS build|$1|" "$REPO/deploy/z3/ctaz-build/Dockerfile" > "$fx/deploy/z3/ctaz-build/Dockerfile"
+  PLANT="$1" awk '!done && /^FROM /{print ENVIRON["PLANT"]; done=1; next}{print}' \
+    "$REPO/deploy/z3/ctaz-build/Dockerfile" > "$fx/deploy/z3/ctaz-build/Dockerfile"
   grep -qxF "$1" "$fx/deploy/z3/ctaz-build/Dockerfile" || { echo "fixture did not take: $1"; return 1; }
-  scan_images "$fx/.github/dependabot.yml" "$fx" "$T/imgfix.txt"
+  rm -f "$T/imgfix.txt"
+  scan_images "$fx/.github/dependabot.yml" "$fx" "$T/imgfix.txt" || { echo "scan failed on plant: $1"; return 1; }
   grep -q '^MISSING=.*ctaz-build.*resolvable now' "$T/imgfix.txt"
 }
+# And the opposite: a plant dependabot yields NOTHING for must stay quiet. Without this
+# half the port could match every line and pass the three above.
+quiet_on() {
+  PLANT="$1" awk '!done && /^FROM /{print ENVIRON["PLANT"]; done=1; next}{print}' \
+    "$REPO/deploy/z3/ctaz-build/Dockerfile" > "$fx/deploy/z3/ctaz-build/Dockerfile"
+  grep -qxF "$1" "$fx/deploy/z3/ctaz-build/Dockerfile" || { echo "fixture did not take: $1"; return 1; }
+  rm -f "$T/imgfix.txt"
+  scan_images "$fx/.github/dependabot.yml" "$fx" "$T/imgfix.txt" || { echo "scan failed on plant: $1"; return 1; }
+  grep -q '^MISSING=$' "$T/imgfix.txt"
+}
 check "the exemption is earned: the real ctaz FROM still interpolates a variable" \
-  "grep -qE '^FROM \\\$\\{RUST_IMAGE\\} AS build' '$REPO/deploy/z3/ctaz-build/Dockerfile'"
+  "grep -qE '^FROM \\\$\\{[A-Z_]+\\}' '$REPO/deploy/z3/ctaz-build/Dockerfile'"
 check "an inlined tag makes the exemption FALSE, and the scan says so" \
   "plant_from 'FROM rust:1.90-bookworm AS build'"
 check "so does a lowercase 'from', which dependabot reads and the first cut did not" \
   "plant_from 'from rust:1.90-bookworm AS build'"
 check "and so does --platform=\$BUILDPLATFORM, which dependabot strips before it reads the image" \
   "plant_from 'FROM --platform=\$BUILDPLATFORM rust:1.90-bookworm AS build'"
+check "and a variable in the SUFFIX of a tag: dependabot's regex stops at the \$ and keeps 'rust:1.90-'" \
+  "plant_from 'FROM rust:1.90-\${VARIANT} AS build'"
+check "a stage reference is NOT a dependency (no tag), and the scan stays quiet on it" \
+  "quiet_on 'FROM build AS test'"
+check "nor is an untagged image, which dependabot skips for want of a version" \
+  "quiet_on 'FROM rust AS build'"
+check "nor an indented FROM, which dependabot's ^FROM never sees" \
+  "quiet_on '  FROM rust:1.90-bookworm AS build'"
 rm -rf "$fx"
 
 echo "== repo: the harness cannot keep a list that disagrees with the tree (risk register #29)"
