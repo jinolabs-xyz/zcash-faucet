@@ -122,6 +122,12 @@ case "${1:-}" in
         mk zcash-faucet-faucet-1 "${STUB_FAUCET_STATE:-running}" zcash-faucet
         mk zcash-faucet-caddy-1  running zcash-faucet
         echo "overlay-up" >> "$STUB_LOG"
+        # The domain as compose RECEIVED it on the overlay up, the way redeploy-docker
+        # records it. overlay_up is the call that recreates Caddy, i.e. the outage path
+        # itself, and until this line its env(1) guard had no direct observer: reverting
+        # `-u` left the suite green, and putting the bare prefix back reddened only three
+        # unrelated post-condition checks, none naming the cause.
+        echo "overlay-up FAUCET_DOMAIN=${FAUCET_DOMAIN-<unset>}" >> "$STUB_LOG"
       else
         for svc in zebra zallet; do
           printf '%s\n' "$@" | grep -qx "$svc" || continue

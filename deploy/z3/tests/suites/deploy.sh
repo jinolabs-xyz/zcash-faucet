@@ -599,6 +599,26 @@ else
     "[ $rc -ne 0 ] && grep -q 'could not rewrite FAUCET_DOMAIN' '$T/dom-ro.log'"
 fi
 
+echo "== domain: what overlay_up hands compose - present when there is one, ABSENT when not"
+# The overlay up is what recreates Caddy, so this is the outage path itself. Three shapes,
+# all checked on the same stub line: a real domain reaches compose; no domain at all
+# reaches it UNSET (a set-but-empty variable beats .env in compose and yields ':80'); and
+# an EMPTY inherited variable - cloud-init's own `FAUCET_DOMAIN="$(cat /etc/faucet-domain
+# || true)"` on a box with no record file - is stripped rather than passed through.
+deploy_fresh_env
+printf 'faucet.example.org\n' > "$T/faucet-domain"
+FAUCET_DOMAIN_FILE="$T/faucet-domain" run_deploy > "$T/ov-dom.log" 2>&1
+check "overlay_up hands compose the domain when there is one" \
+  "grep -qx 'overlay-up FAUCET_DOMAIN=faucet.example.org' '$STUB_LOG'"
+deploy_fresh_env
+FAUCET_DOMAIN_FILE="$T/no-such-domain-file" run_deploy > "$T/ov-none.log" 2>&1
+check "and hands compose NOTHING when there is none, not an empty string" \
+  "grep -q 'overlay-up FAUCET_DOMAIN=<unset>' '$STUB_LOG' && ! grep -qx 'overlay-up FAUCET_DOMAIN=' '$STUB_LOG'"
+deploy_fresh_env
+FAUCET_DOMAIN="" FAUCET_DOMAIN_FILE="$T/no-such-domain-file" run_deploy > "$T/ov-empty.log" 2>&1
+check "and an EMPTY inherited FAUCET_DOMAIN is stripped before compose sees it" \
+  "grep -q 'overlay-up FAUCET_DOMAIN=<unset>' '$STUB_LOG' && ! grep -qx 'overlay-up FAUCET_DOMAIN=' '$STUB_LOG'"
+
 echo "== domain: a box with NO domain does not get :80 pinned into the file"
 # The inverse failure, and the worse one: writing the placeholder here would make the
 # downgrade permanent and survive someone later setting /etc/faucet-domain properly.
