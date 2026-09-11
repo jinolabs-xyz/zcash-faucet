@@ -110,27 +110,33 @@ interface Tx { txid?: string; to: string; priv: boolean; explorerUrl?: string; a
  * side - which is also the case that actually happened: paid, retried from the same tab a
  * hundred seconds later, told "come back tomorrow" with no mention of the payment.
  *
- * Keyed by address, capped small, and pruned past the cooldown: it exists to answer "did
- * this address just get paid here", not to be a history.
+ * Keyed by NETWORK AND address, capped small, and expired past the cooldown on both
+ * write and read: it exists to answer "did this address just get paid here, in this
+ * asset", not to be a history. Two review findings shaped that sentence. Keyed by address
+ * alone, a cTAZ receipt overwrote the TAZ one and the TAZ card read "got its 0.5 cTAZ" -
+ * the exact wrong sentence this page once removed. And pruned only on write, a receipt
+ * from days ago was presented as the payment behind TODAY's block, which may have been
+ * someone else's claim of the same address entirely.
  */
 const RECEIPTS_KEY = "zfaucet_receipts";
 const RECEIPTS_MAX = 8;
 interface Receipt { txid?: string; explorerUrl?: string; at: number; network: FaucetNetwork; amountText: string }
-function readReceipts(): Record<string, Receipt> {
+const receiptKey = (network: FaucetNetwork, address: string) => `${network}:${address.trim().toLowerCase()}`;
+function readReceipts(ttlMs: number): Record<string, Receipt> {
   try {
     const raw = localStorage.getItem(RECEIPTS_KEY);
     const parsed = raw ? (JSON.parse(raw) as Record<string, Receipt>) : {};
-    return typeof parsed === "object" && parsed ? parsed : {};
+    if (typeof parsed !== "object" || !parsed) return {};
+    const cutoff = Date.now() - ttlMs;
+    return Object.fromEntries(Object.entries(parsed).filter(([, v]) => v && typeof v.at === "number" && v.at >= cutoff));
   } catch {
     return {};
   }
 }
-function rememberReceipt(address: string, r: Receipt, ttlMs: number) {
+function rememberReceipt(network: FaucetNetwork, address: string, r: Receipt, ttlMs: number) {
   try {
-    const all = readReceipts();
-    const cutoff = Date.now() - ttlMs;
-    const kept = Object.entries(all).filter(([, v]) => v.at >= cutoff);
-    kept.push([address, r]);
+    const kept = Object.entries(readReceipts(ttlMs));
+    kept.push([receiptKey(network, address), r]);
     const trimmed = kept.slice(-RECEIPTS_MAX);
     localStorage.setItem(RECEIPTS_KEY, JSON.stringify(Object.fromEntries(trimmed)));
   } catch {
@@ -244,7 +250,7 @@ export default function Home() {
   // address that was just paid and a connection that is out of drips are different
   // situations with different advice - and "try a different address" is WRONG advice
   // for the second one, which is what the reported user was told.
-  const [refusal, setRefusal] = useState<{ kind: "address" | "connection"; reason: string; nextAt: number | null; receipt: Receipt | null } | null>(null);
+  const [refusal, setRefusal] = useState<{ kind: "address" | "connection" | "subnet"; reason: string; nextAt: number | null; receipt: Receipt | null } | null>(null);
   // 0 rather than Date.now(): calling it during render gives the SERVER's clock on
   // the first paint and the client's on hydration, which is a mismatch, and it makes
   // render impure. The effect below sets the real value on mount and every second,
@@ -568,6 +574,7 @@ export default function Home() {
           amountText: data.paidZat ? formatAmount(BigInt(data.paidZat), data.network === "ctaz" ? "ctaz" : "taz") : dripText,
         });
         rememberReceipt(
+          data.network === "ctaz" ? "ctaz" : "taz",
           address,
           {
             txid: data.txid,
@@ -584,16 +591,21 @@ export default function Home() {
         // the same instant; the ISO form is the one a person can read.
         const nextAtMs = data.nextAt ? Date.parse(data.nextAt) : NaN;
         setCooldownEnd(Number.isFinite(nextAtMs) ? nextAtMs : Date.now() + (data.retryAfterSeconds ?? status?.cooldownSeconds ?? 86400) * 1000);
-        // Which limit refused, read from the server's sentence rather than guessed. The
-        // API distinguishes them ("This address already claimed" vs "This connection has
-        // used all N"), and the two need different advice on screen.
+        // Which limit refused, from the FIELDS the API sends, not from its sentence. A
+        // first cut matched /connection/ over the reason and worked on the subnet refusal
+        // only because that sentence happens to end "from a different connection" - a
+        // rewording away from offering "Try a different address" to someone whose whole
+        // network is over quota. Unknown shapes fall to "address", the card with the
+        // least specific advice.
         const reason: string = typeof data.error === "string" ? data.error : "";
-        const kind: "address" | "connection" = /connection/i.test(reason) ? "connection" : "address";
+        const kind: "address" | "connection" | "subnet" =
+          data.kind === "subnet" ? "subnet" : data.scope === "connection" ? "connection" : "address";
         // Only an ADDRESS refusal can be about a payment this browser made to this
-        // address. A connection refusal may be someone else's drip on the same router,
-        // and showing them a receipt from this tab would be claiming a payment that was
-        // not theirs.
-        const receipt = kind === "address" ? (readReceipts()[address] ?? null) : null;
+        // address in this asset. A connection or subnet refusal may be someone else's
+        // drip on the same router, and showing them a receipt from this tab would be
+        // claiming a payment that was not theirs.
+        const ttl = (status?.cooldownSeconds ?? 86400) * 1000;
+        const receipt = kind === "address" ? (readReceipts(ttl)[receiptKey(network, address)] ?? null) : null;
         setRefusal({ kind, reason, nextAt: Number.isFinite(nextAtMs) ? nextAtMs : null, receipt });
         setPhase("cooldown");
       } else if (res.status === 503 && /empty/i.test(data.error || "")) {
@@ -1389,14 +1401,19 @@ export default function Home() {
           const whenText = when
             ? when.toLocaleString(undefined, { hour: "2-digit", minute: "2-digit", weekday: "short", timeZoneName: "short" })
             : null;
-          if (r?.kind === "connection") {
+          if (r?.kind === "connection" || r?.kind === "subnet") {
+            // The subnet refusal carries a fixed hour, not a measured expiry, and the
+            // server sends no nextAt for it - so no clock time is promised here either.
+            // Rendering one next to the reason's own "try again tomorrow" put two
+            // contradictory times on one card.
+            const sub = r.kind === "subnet";
             return (
               <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
-                <span style={kicker}>Connection limit reached</span>
-                <h2 style={{ margin: 0, fontSize: 19, lineHeight: 1.25 }}>This connection is out of drips for now.</h2>
+                <span style={kicker}>{sub ? "Network limit reached" : "Connection limit reached"}</span>
+                <h2 style={{ margin: 0, fontSize: 19, lineHeight: 1.25 }}>{sub ? "Your network is over its quota for now." : "This connection is out of drips for now."}</h2>
                 <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
                   {r.reason || "Everyone on the same network shares this limit."}{" "}
-                  {whenText ? <>A slot frees at <strong>{whenText}</strong> (in {dur(remain)}).</> : <>A slot frees in {dur(remain)}.</>}
+                  {!sub && whenText ? <>A slot frees at <strong>{whenText}</strong> (in {dur(remain)}).</> : null}
                 </p>
                 <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
                   The faucet is up. This is a limit, not a fault.
