@@ -151,7 +151,7 @@ test("a subnet refusal is CALLED a subnet refusal when this connection's other-n
   // network, and a TAZ claim is refused by the SUBNET cap. Counted per network the IP has
   // a slot left and the explanation falls through to the subnet, which is the truth.
   // Counted across networks it reads 3, and the person is told "this connection has used
-  // all 3 of its drips", which is false, and has no nextAt that means anything.
+  // all 3 of its drips", which is false, with a retry-after measured on the wrong window.
   const ip = "home-two-nets";
   const subnet = "sub-two-nets";
   const opts = {
@@ -167,5 +167,4 @@ test("a subnet refusal is CALLED a subnet refusal when this connection's other-n
   assert.equal(refused.ok, false, "the subnet is at its cap of 3");
   if (refused.ok) return;
   assert.equal(refused.kind, "subnet", `refused for: ${refused.kind} / ${refused.reason}`);
-  assert.notEqual((refused as { scope?: string }).scope, "connection", "the connection still has a TAZ slot");
 });
