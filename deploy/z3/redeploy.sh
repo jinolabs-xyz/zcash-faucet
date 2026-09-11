@@ -130,10 +130,13 @@ FAUCET_BUILD_COMMIT="${REDEPLOY_BUILD_COMMIT:-$(build_commit)}"
 # FAUCET_DOMAIN=host". The first cut of this did exactly that, on the path auto-deploy
 # runs unattended; measured with a stub docker before it shipped. env receives the
 # expanded word as an argument and applies it, and with dom empty the word is simply
-# absent, which is the whole point.
+# absent, which is the whole point. `-u FAUCET_DOMAIN` first: if the CALLER's environment
+# already holds an empty FAUCET_DOMAIN (a `FAUCET_DOMAIN= redeploy.sh` invocation, or a
+# unit file that sets it blank), the conditional word cannot remove it and env would pass
+# the empty value straight through to the same ':80'. Unset, then re-add if there is one.
 compose() {
   local dom="${FAUCET_DOMAIN:-$(cat /etc/faucet-domain 2>/dev/null || true)}"
-  ( cd "$OVERLAY_DIR" && env Z3_NETWORK_NAME="$Z3_NETWORK_NAME" \
+  ( cd "$OVERLAY_DIR" && env -u FAUCET_DOMAIN Z3_NETWORK_NAME="$Z3_NETWORK_NAME" \
       FAUCET_BUILD_COMMIT="$FAUCET_BUILD_COMMIT" \
       ${dom:+FAUCET_DOMAIN="$dom"} \
       docker compose -f "$COMPOSE_FILE" "$@" )

@@ -512,6 +512,15 @@ env -u FAUCET_DOMAIN bash "$REDEPLOY" --no-pull > "$T/dom-no.log" 2>&1
 # The record file is real on a box and absent in this scratch, which is the case under test.
 check "with no domain anywhere, compose sees the variable UNSET, so .env can answer" \
   "grep -q 'FAUCET_DOMAIN=<unset>' '$STUB_LOG' && ! grep -qx 'FAUCET_DOMAIN=' '$STUB_LOG'"
+# And the third shape, which the conditional word alone cannot handle: the CALLER's
+# environment already carries an EMPTY FAUCET_DOMAIN (`FAUCET_DOMAIN= redeploy.sh`, or a
+# unit file that sets it blank). Inherited, it reaches compose as set-but-empty, which is
+# the ':80' case. env -u removes it before the conditional word re-adds a real one.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+FAUCET_DOMAIN="" bash "$REDEPLOY" --no-pull > "$T/dom-empty.log" 2>&1
+check "an EMPTY inherited FAUCET_DOMAIN is not passed through to compose" \
+  "grep -q 'FAUCET_DOMAIN=<unset>' '$STUB_LOG' && ! grep -qx 'FAUCET_DOMAIN=' '$STUB_LOG'"
 
 echo "== redeploy: MODIFIED and UNTRACKED are named separately, not both as -dirty"
 # #366. The old marker came from `status --porcelain`, which counts untracked files, so

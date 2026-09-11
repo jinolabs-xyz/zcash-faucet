@@ -130,12 +130,13 @@ persist_domain() {
     # say() below is deliberately AFTER the move and gated on it: an unconditional
     # "Updated" line next to a write that failed is how a mutated build convinced me the
     # test was flaky rather than right.
-    # awk with -v, not sed with the value spliced into the pattern: in a sed
-    # replacement `&` expands to the matched text and `|` ends it, so a hostname carrying
-    # either would have been written wrong and reported "Updated". Not valid hostnames,
-    # but the create path below writes the same bytes raw, and two paths that disagree
-    # on the same input is how the next surprise gets in.
-    if awk -v v="$FAUCET_DOMAIN" '/^FAUCET_DOMAIN=/ { print "FAUCET_DOMAIN=" v; next } { print }' "$f" > "$tmp" && mv "$tmp" "$f"; then
+    # awk reading the value from ENVIRON, not sed with it spliced into the pattern and
+    # not `awk -v` either. In a sed replacement `&` expands to the matched text and `|`
+    # ends it; `awk -v` processes backslash escapes, so `a\nb` became two lines here and
+    # one line on the create path below. Not valid hostnames, any of them - but the two
+    # paths writing different bytes for one input is exactly how the next surprise gets
+    # in, and ENVIRON hands awk the bytes untouched.
+    if FAUCET_DOMAIN_NEW="$FAUCET_DOMAIN" awk '/^FAUCET_DOMAIN=/ { print "FAUCET_DOMAIN=" ENVIRON["FAUCET_DOMAIN_NEW"]; next } { print }' "$f" > "$tmp" && mv "$tmp" "$f"; then
       say "Updated FAUCET_DOMAIN in $f (was $cur)"
       return 0
     fi
@@ -634,8 +635,14 @@ if needs_salt:
 open(f,"w").write(s)
 PY
 }
+# Same rule as redeploy.sh's compose(): the domain goes to compose only when there is one,
+# through env(1) so the conditional word is an argument and not a command name. Passing
+# FAUCET_DOMAIN="" here when no domain was found would shadow the .env persist_domain
+# just declined to write - a set-but-empty shell variable beats .env in compose and
+# yields ':80'. deploy.sh already announces "serves plain HTTP" in that case, so this was
+# never silent, but two callers with two rules is how the next one gets it wrong.
 overlay_up(){
-  ( cd "$HERE/z3" && Z3_NETWORK_NAME="$NETNAME" FAUCET_DOMAIN="$FAUCET_DOMAIN" \
+  ( cd "$HERE/z3" && env -u FAUCET_DOMAIN Z3_NETWORK_NAME="$NETNAME" ${FAUCET_DOMAIN:+FAUCET_DOMAIN="$FAUCET_DOMAIN"} \
       docker compose -f docker-compose.faucet.yml up -d --build )
 }
 
