@@ -23,7 +23,6 @@ import { createServer, type Server } from "node:http";
 let hoshHeight: number | null = null;
 let hoshHits = 0;
 let hoshDelayMs = 0;
-const port = 59_431;
 
 const hosh: Server = createServer((_req, res) => {
   hoshHits += 1;
@@ -41,7 +40,16 @@ function answer(res: import("node:http").ServerResponse): void {
   res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify({ servers: [{ chain: "test", online: true, height: hoshHeight }] }));
 }
-await new Promise<void>((r) => hosh.listen(port, "127.0.0.1", r));
+// NOT ON A PORT THIS DIRECTORY STUBS BY NUMBER. The wallet stubs below route a fetch by
+// `includes("5999x")`, and the kernel can hand the hosh double exactly that number
+// (~1 in 28k on Linux); then HOSH_URL and the stubbed URL are the same string and no
+// check could tell them apart. Re-listen until it is anything else.
+let port = 0;
+do {
+  if (port) await new Promise<void>((r) => hosh.close(() => r()));
+  await new Promise<void>((r) => hosh.listen(0, "127.0.0.1", r));
+  port = (hosh.address() as { port: number }).port;
+} while (port >= 59_990 && port <= 59_999);
 
 // Env before the dynamic imports: config and HOSH_URL are both read at module load.
 // The lightwalletd fallback is pointed at a closed port rather than cleared, since

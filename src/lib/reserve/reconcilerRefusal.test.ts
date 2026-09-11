@@ -21,7 +21,6 @@ import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 
 let hoshHeight: number | null = 4_220_000;
-const port = 59_432;
 const hosh: Server = createServer((_req, res) => {
   if (hoshHeight == null) {
     res.writeHead(503).end("{}");
@@ -30,7 +29,16 @@ const hosh: Server = createServer((_req, res) => {
   res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify({ servers: [{ chain: "test", online: true, height: hoshHeight }] }));
 });
-await new Promise<void>((r) => hosh.listen(port, "127.0.0.1", r));
+// NOT ON A PORT THIS DIRECTORY STUBS BY NUMBER. The wallet stubs below route a fetch by
+// `includes("5999x")`, and the kernel can hand the hosh double exactly that number
+// (~1 in 28k on Linux); then HOSH_URL and the stubbed URL are the same string and no
+// check could tell them apart. Re-listen until it is anything else.
+let port = 0;
+do {
+  if (port) await new Promise<void>((r) => hosh.close(() => r()));
+  await new Promise<void>((r) => hosh.listen(0, "127.0.0.1", r));
+  port = (hosh.address() as { port: number }).port;
+} while (port >= 59_990 && port <= 59_999);
 
 process.env.HOSH_URL = `http://127.0.0.1:${port}/`;
 process.env.LIGHTWALLETD_ENDPOINT = "https://127.0.0.1:59997";
