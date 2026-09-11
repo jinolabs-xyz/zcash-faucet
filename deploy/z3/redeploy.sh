@@ -123,9 +123,17 @@ FAUCET_BUILD_COMMIT="${REDEPLOY_BUILD_COMMIT:-$(build_commit)}"
 # with no /etc/faucet-domain handed compose an empty string and shadowed the .env that
 # deploy.sh writes precisely so a bare compose cannot drop HTTPS. Measured with real
 # compose during the #477 review. With the variable omitted, .env is the fallback here too.
+#
+# THROUGH env(1), NOT A BARE PREFIX. Bash decides what is an assignment BEFORE expanding
+# anything, so a word that only becomes `FAUCET_DOMAIN=host` after `${dom:+...}` expands is
+# not an assignment - it is the command name, and the shell says "command not found:
+# FAUCET_DOMAIN=host". The first cut of this did exactly that, on the path auto-deploy
+# runs unattended; measured with a stub docker before it shipped. env receives the
+# expanded word as an argument and applies it, and with dom empty the word is simply
+# absent, which is the whole point.
 compose() {
   local dom="${FAUCET_DOMAIN:-$(cat /etc/faucet-domain 2>/dev/null || true)}"
-  ( cd "$OVERLAY_DIR" && Z3_NETWORK_NAME="$Z3_NETWORK_NAME" \
+  ( cd "$OVERLAY_DIR" && env Z3_NETWORK_NAME="$Z3_NETWORK_NAME" \
       FAUCET_BUILD_COMMIT="$FAUCET_BUILD_COMMIT" \
       ${dom:+FAUCET_DOMAIN="$dom"} \
       docker compose -f "$COMPOSE_FILE" "$@" )
