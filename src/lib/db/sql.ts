@@ -284,10 +284,21 @@ AND (
   -- The SUBNET cap below stays global on purpose. That one is a volume control against a
   -- range, not a per-person entitlement, and splitting it would hand a farmer exactly the
   -- lever the comment above warns about: alternate networks, take twice as much.
-  ? = '' OR NOT EXISTS (
-    SELECT 1 FROM claims WHERE ip_hash = ? AND network = ?
+  -- A COUNT, NOT AN EXISTS, SINCE 2026-09-11. One drip per IP meant one drip per
+  -- HOUSEHOLD: every laptop and phone behind a home router shares one public address, so
+  -- the first person to claim locked out everyone else for a day. Reported twice - a
+  -- forum user who read the refusal as an outage, and the owner's own house.
+  --
+  -- Keyed on the IP still, because the alternative is identifying devices, and a device
+  -- is a cookie (cleared in one click) or a fingerprint (durable, bypassable anyway, and
+  -- it would make "it calls nobody and tracks nobody" false). A slightly looser IP rule
+  -- costs a farmer FAUCET_IP_DAILY_MAX drips instead of one; a fingerprint costs us the
+  -- reason people trust this faucet. The per-ADDRESS rule below is still one, the subnet
+  -- cap still bounds a range, and proof-of-work is still paid per claim.
+  ? = '' OR (
+    SELECT COUNT(*) FROM claims WHERE ip_hash = ? AND network = ?
       AND ((status='sent' AND created_at > ?) OR (status='pending' AND created_at > ?))
-  )
+  ) < ?
 )
 AND (
   ? = '' OR (
@@ -315,6 +326,8 @@ export function reserveParams(o: {
   /** This network's cap, not a global one. cTAZ carries its own (config.crosslink). */
   dailyCapZat: number;
   subnetDailyMax: number;
+  /** Distinct claims one IP may hold inside the cooldown window. 1 restores the old rule. */
+  ipDailyMax: number;
   network: string;
   /** How long a pending row blocks: pendingLeaseSeconds(config.sendResidenceMs, config.sendQueueMaxPending). */
   pendingLeaseSeconds: number;
@@ -325,7 +338,7 @@ export function reserveParams(o: {
   return [
     o.addressHash, o.ipHash, o.subnetHash, o.amountZat, o.now, o.network, // INSERT ... SELECT
     o.addressHash, o.network, cooldownCut, leaseCut, //           address NOT EXISTS, per network
-    o.ipHash, o.ipHash, o.network, cooldownCut, leaseCut, //      ip branch, PER NETWORK since 2026-08-04
+    o.ipHash, o.ipHash, o.network, cooldownCut, leaseCut, o.ipDailyMax, // ip branch, N per IP since 2026-09-11
     o.subnetHash, o.subnetHash, since, leaseCut, o.subnetDailyMax, // subnet branch, GLOBAL
     o.network, since, leaseCut, o.amountZat, o.dailyCapZat, //    daily cap, per network
   ];
@@ -396,10 +409,24 @@ WHERE subnet_hash = ?
  * reason, and the user is told the daily cap was reached when it was not.
  */
 export const LIVE_BLOCK_SQL = (column: "address_hash" | "ip_hash") => `
-SELECT created_at, status FROM claims
+SELECT created_at, status, txid FROM claims
 WHERE ${column} = ? AND network = ?
   AND ((status='sent' AND created_at > ?) OR (status='pending' AND created_at > ?))
 ORDER BY created_at DESC LIMIT 1
+`;
+
+/**
+ * How many live claims one IP holds, and the age of the OLDEST, in one round trip.
+ *
+ * Scoped exactly as RESERVE_SQL's ip branch is. The count decides whether the gate
+ * blocked; the oldest decides when a slot frees, because with N per window the next
+ * opening is the expiry of the earliest claim, not the latest. Reporting the latest
+ * would tell a household to come back tomorrow when a slot opens in minutes.
+ */
+export const IP_WINDOW_SQL = `
+SELECT COUNT(*) AS n, MIN(created_at) AS oldest FROM claims
+WHERE ip_hash = ? AND network = ?
+  AND ((status='sent' AND created_at > ?) OR (status='pending' AND created_at > ?))
 `;
 
 export const FINALIZE_SQL = `UPDATE claims SET status = ?, txid = ? WHERE id = ?`;

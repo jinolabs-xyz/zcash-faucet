@@ -61,6 +61,7 @@ function claim(
       now: at,
       cooldownSeconds: COOLDOWN,
       dailyCapZat: CAP,
+      ipDailyMax: 1,
       subnetDailyMax: SUBNET_MAX,
     }),
   );
