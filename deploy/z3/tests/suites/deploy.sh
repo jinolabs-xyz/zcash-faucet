@@ -562,6 +562,43 @@ check "a changed domain replaces the old line rather than appending a second" \
 check "and the unrelated key is still there afterwards" \
   "grep -q '^Z3_NETWORK_NAME=z3-mainnet$' '$D/z3/.env'"
 
+echo "== domain: a hand-written .env with no trailing newline is not corrupted"
+# The compose file tells people to put Z3_NETWORK_NAME "in an .env here", and a file written
+# with printf or echo -n has no final newline. Appending straight onto it made ONE line -
+# `Z3_NETWORK_NAME=z3-mainnetFAUCET_DOMAIN=faucet.example.org` - deploy.sh announced
+# success, and real compose then read neither key: FAUCET_DOMAIN back to ':80', the outage
+# this function exists to prevent, plus a broken network name. Found by review.
+deploy_fresh_env
+printf 'faucet.example.org\n' > "$T/faucet-domain"
+printf 'Z3_NETWORK_NAME=z3-mainnet' > "$D/z3/.env"   # deliberately no newline
+FAUCET_DOMAIN_FILE="$T/faucet-domain" run_deploy > "$T/dom-nonl.log" 2>&1
+check "the two keys land on two lines, not one" \
+  "grep -q '^Z3_NETWORK_NAME=z3-mainnet$' '$D/z3/.env' && grep -q '^FAUCET_DOMAIN=faucet.example.org$' '$D/z3/.env'"
+check "and nothing in the file is a fused line" \
+  "! grep -q 'mainnetFAUCET_DOMAIN' '$D/z3/.env'"
+
+echo "== domain: 'Updated' is said only when the write actually happened"
+# This gating is the lesson the commit message records: an unconditional success line
+# next to a failed write is how a mutated build convinced the author the TEST was flaky.
+# It had no check behind it - moving say() above the write left all 150 green. Make the
+# file unwritable, ask for a change, and the deploy must neither claim success nor pass.
+deploy_fresh_env
+printf 'faucet.example.org\n' > "$T/faucet-domain"
+FAUCET_DOMAIN_FILE="$T/faucet-domain" run_deploy > "$T/dom-ro-setup.log" 2>&1
+printf 'moved.example.org\n' > "$T/faucet-domain"
+chmod 0555 "$D/z3"   # the rewrite goes through a temp file in this directory
+FAUCET_DOMAIN_FILE="$T/faucet-domain" run_deploy > "$T/dom-ro.log" 2>&1
+rc=$?
+chmod 0755 "$D/z3"
+if [ "$(id -u)" = "0" ]; then
+  echo "  skip: running as root, so an unwritable directory cannot be made (the harness user is not root in CI)"
+else
+  check "a deploy that could not rewrite the domain does not say it did" \
+    "! grep -q 'Updated FAUCET_DOMAIN' '$T/dom-ro.log'"
+  check "and it fails rather than shipping a stale domain into the file" \
+    "[ $rc -ne 0 ] && grep -q 'could not rewrite FAUCET_DOMAIN' '$T/dom-ro.log'"
+fi
+
 echo "== domain: a box with NO domain does not get :80 pinned into the file"
 # The inverse failure, and the worse one: writing the placeholder here would make the
 # downgrade permanent and survive someone later setting /etc/faucet-domain properly.

@@ -130,7 +130,12 @@ persist_domain() {
     # say() below is deliberately AFTER the move and gated on it: an unconditional
     # "Updated" line next to a write that failed is how a mutated build convinced me the
     # test was flaky rather than right.
-    if sed "s|^FAUCET_DOMAIN=.*|FAUCET_DOMAIN=$FAUCET_DOMAIN|" "$f" > "$tmp" && mv "$tmp" "$f"; then
+    # awk with -v, not sed with the value spliced into the pattern: in a sed
+    # replacement `&` expands to the matched text and `|` ends it, so a hostname carrying
+    # either would have been written wrong and reported "Updated". Not valid hostnames,
+    # but the create path below writes the same bytes raw, and two paths that disagree
+    # on the same input is how the next surprise gets in.
+    if awk -v v="$FAUCET_DOMAIN" '/^FAUCET_DOMAIN=/ { print "FAUCET_DOMAIN=" v; next } { print }' "$f" > "$tmp" && mv "$tmp" "$f"; then
       say "Updated FAUCET_DOMAIN in $f (was $cur)"
       return 0
     fi
@@ -142,8 +147,19 @@ persist_domain() {
     '# Read automatically by docker compose in this directory, so that a bare' \
     '# `docker compose up -d` here cannot fall back to the Caddyfile'"'"'s :80 default' \
     "# and silently drop the TLS listener. Written by deploy.sh; mirrors $DOMAIN_FILE." > "$f"
-  printf 'FAUCET_DOMAIN=%s\n' "$FAUCET_DOMAIN" >> "$f"
-  say "Recorded FAUCET_DOMAIN in $f, so a bare compose run here cannot drop HTTPS"
+  # END THE LAST LINE FIRST. The compose file tells people to put Z3_NETWORK_NAME "in an
+  # .env here", and a hand-written file often has no trailing newline. Appending straight
+  # onto it produced ONE line, `Z3_NETWORK_NAME=z3-mainnetFAUCET_DOMAIN=faucet.example.org`,
+  # deploy.sh announced success, and compose then read neither key - FAUCET_DOMAIN back
+  # to ':80', which is the outage this whole function exists to prevent, plus a broken
+  # network name for good measure. Found by review, reproduced with real compose.
+  if [ -s "$f" ] && [ -n "$(tail -c1 "$f")" ]; then echo >> "$f"; fi
+  if printf 'FAUCET_DOMAIN=%s\n' "$FAUCET_DOMAIN" >> "$f"; then
+    say "Recorded FAUCET_DOMAIN in $f, so a bare compose run here cannot drop HTTPS"
+  else
+    echo "could not write FAUCET_DOMAIN to $f; a bare compose run here may drop HTTPS" >&2
+    return 1
+  fi
 }
 
 if [ -n "$FAUCET_DOMAIN" ]; then
