@@ -477,6 +477,19 @@ check "ours is added as a hash alongside theirs" \
 # ── the three defects a real deploy on the box produced ──────────────────────────
 # All three share one shape: the script asserted nothing about the state it left behind.
 
+echo "== env: faucet.env is 0600 from the deploy that creates it, and after the one that rewrites it"
+# It holds the wallet RPC password. Copied from the example with the umask's 0644 and
+# never touched, it was world-readable on the box for six weeks (#487). `ls -l` rather than
+# stat: the mode column is the same on GNU and BSD, and the suite must run on both.
+deploy_fresh_env
+run_deploy > "$T/mode-first.log" 2>&1
+check "a fresh deploy writes faucet.env as -rw-------" \
+  "[ \"\$(ls -l '$D/z3/faucet.env' | cut -c1-10)\" = '-rw-------' ]"
+chmod 0644 "$D/z3/faucet.env"   # a hand edit, a restore, a copy: something loosened it
+run_deploy > "$T/mode-again.log" 2>&1
+check "and a re-run puts a loosened file back to -rw-------" \
+  "[ \"\$(ls -l '$D/z3/faucet.env' | cut -c1-10)\" = '-rw-------' ]"
+
 echo "== domain: an unset FAUCET_DOMAIN does not mean plain HTTP on a box that has one"
 # Running without the variable took the Caddyfile's ':80' default, Caddy stopped binding
 # 443, and HSTS with a one-year max-age meant browsers refused to fall back to HTTP. A

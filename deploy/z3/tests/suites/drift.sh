@@ -96,6 +96,52 @@ check "prints no DRIFT lines" "! grep -q 'DRIFT' '$T/clean.log'"
 # job reads the same as one that passed it.
 check "and the audit was complete, not merely quiet" "! grep -q 'NOT VERIFIED' '$T/clean.log'"
 
+echo "== drift: a world-readable faucet.env is drift, and 0600 is not"
+# faucet.env holds the wallet RPC password. It sat 0644 on the box for six weeks because
+# nothing looked (#487). Silent on the right mode, loud on the wrong one, and the fix line
+# names the command. The live file is a copy of the example so the env-contract half sees
+# nothing else to say.
+drift_env; make_clean_box
+cp "$T/repo/deploy/z3/faucet.env.example" "$T/repo/deploy/z3/faucet.env"; chmod 0600 "$T/repo/deploy/z3/faucet.env"
+bash "$AUDIT" > "$T/mode-ok.log" 2>&1
+check "a 0600 faucet.env is not drift" "[ $? -eq 0 ] && ! grep -q 'faucet.env is mode' '$T/mode-ok.log'"
+chmod 0644 "$T/repo/deploy/z3/faucet.env"
+bash "$AUDIT" > "$T/mode-bad.log" 2>&1
+check "a 0644 faucet.env IS drift, exit 1" "[ $? -eq 1 ]"
+# Positive control for the wording: 644 IS world-readable and must be said to be. The 0660
+# case below only asserts the sentence is absent, and with the world-readable arm deleted
+# outright both stayed green.
+check "and the line says the mode and what it exposes" \
+  "grep -q 'faucet.env is mode 644' '$T/mode-bad.log' && grep -q 'wallet RPC password' '$T/mode-bad.log' && grep -q 'readable by every user' '$T/mode-bad.log'"
+check "and the fix is the command, not a paragraph" "grep -q 'fix: chmod 0600' '$T/mode-bad.log'"
+chmod 0400 "$T/repo/deploy/z3/faucet.env"
+bash "$AUDIT" > "$T/mode-ro.log" 2>&1
+check "a read-only 0400 is also fine: the point is group and other, not the owner's write bit" \
+  "[ $? -eq 0 ] && ! grep -q 'faucet.env is mode' '$T/mode-ro.log'"
+# The sentence must not outrun the mode: 660 is wrong, and nobody but root and the group
+# can read it. The first cut said "every user on the box" for anything that was not 600.
+chmod 0660 "$T/repo/deploy/z3/faucet.env"
+bash "$AUDIT" > "$T/mode-grp.log" 2>&1
+check "a 0660 faucet.env is drift too" "[ $? -eq 1 ] && grep -q 'faucet.env is mode 660' '$T/mode-grp.log'"
+check "but is not described as readable by every user, because it is not" \
+  "! grep -q 'every user' '$T/mode-grp.log' && grep -q 'fix: chmod 0600' '$T/mode-grp.log'"
+# A SYMLINKED faucet.env is judged by its target. deploy.sh, compose's env_file and the
+# fix line all follow the link; the first cut's stat did not, reported the link's own 777,
+# and the printed chmod fixed the already-fine target - a drift that could never clear,
+# which is how a nightly report gets ignored.
+rm -f "$T/repo/deploy/z3/faucet.env"
+mkdir -p "$T/secrets"; cp "$T/repo/deploy/z3/faucet.env.example" "$T/secrets/faucet.env"; chmod 0600 "$T/secrets/faucet.env"
+ln -s "$T/secrets/faucet.env" "$T/repo/deploy/z3/faucet.env"
+bash "$AUDIT" > "$T/mode-link-ok.log" 2>&1
+check "a symlink to a 0600 file is not drift: the target's mode is the one that matters" \
+  "[ $? -eq 0 ] && ! grep -q 'faucet.env is mode' '$T/mode-link-ok.log'"
+chmod 0644 "$T/secrets/faucet.env"
+bash "$AUDIT" > "$T/mode-link-bad.log" 2>&1
+check "and a symlink to a 0644 file IS drift, reported as 644 and not as the link's 777" \
+  "[ $? -eq 1 ] && grep -q 'faucet.env is mode 644' '$T/mode-link-bad.log' && ! grep -q 'mode 777' '$T/mode-link-bad.log'"
+rm -f "$T/repo/deploy/z3/faucet.env"
+cp "$T/repo/deploy/z3/faucet.env.example" "$T/repo/deploy/z3/faucet.env"; chmod 0600 "$T/repo/deploy/z3/faucet.env"
+
 echo "== drift: the env-completeness half actually FIRES"
 # The clean case above proves the check is SILENT on a good box, which is only half
 # a proof - a check that never speaks at all passes it too. This is the positive
