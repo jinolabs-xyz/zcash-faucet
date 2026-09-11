@@ -108,8 +108,11 @@ check "a 0600 faucet.env is not drift" "[ $? -eq 0 ] && ! grep -q 'faucet.env is
 chmod 0644 "$T/repo/deploy/z3/faucet.env"
 bash "$AUDIT" > "$T/mode-bad.log" 2>&1
 check "a 0644 faucet.env IS drift, exit 1" "[ $? -eq 1 ]"
+# Positive control for the wording: 644 IS world-readable and must be said to be. The 0660
+# case below only asserts the sentence is absent, and with the world-readable arm deleted
+# outright both stayed green.
 check "and the line says the mode and what it exposes" \
-  "grep -q 'faucet.env is mode 644' '$T/mode-bad.log' && grep -q 'wallet RPC password' '$T/mode-bad.log'"
+  "grep -q 'faucet.env is mode 644' '$T/mode-bad.log' && grep -q 'wallet RPC password' '$T/mode-bad.log' && grep -q 'readable by every user' '$T/mode-bad.log'"
 check "and the fix is the command, not a paragraph" "grep -q 'fix: chmod 0600' '$T/mode-bad.log'"
 chmod 0400 "$T/repo/deploy/z3/faucet.env"
 bash "$AUDIT" > "$T/mode-ro.log" 2>&1
