@@ -434,8 +434,12 @@ check "and so would an indented one" \
 check "and stack-versions.env says plainly that nothing automated watches them" \
   "grep -qi 'no dependabot ecosystem\|nothing automated watches' '$SV'"
 
+# \$MISSING is expanded when `check` evals the string, not here: the message now carries
+# whatever the Dockerfile said, and `${VARIANT}` interpolated at definition time was an
+# unbound variable under set -u that aborted the run with no summary line. Expanded inside
+# the eval it is data, and a `$(...)` in a FROM line is printed rather than run.
 check "every directory holding an image has an entry OF THE RIGHT KIND" \
-  "[ -z \"$MISSING\" ] || { echo \"missing: $MISSING\"; false; }"
+  "[ -z \"\$MISSING\" ] || { echo \"missing: \$MISSING\"; false; }"
 # The two that matter, by name, so deleting either is a named failure rather than an
 # arithmetic one.
 check "the app's own base image is watched by a docker entry at the root" \
