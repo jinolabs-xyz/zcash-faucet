@@ -238,6 +238,20 @@ env_optional() {
   esac
 }
 
+# THE SECRETS FILE'S MODE. faucet.env holds the wallet RPC password and the rate-limit
+# salt, and it sat world-readable for six weeks because nothing looked (#487). deploy.sh
+# writes it 0600 now; this is what notices if a hand edit, a restore, or a copy puts it
+# back. Group and other bits are what matter - the owner is root either way.
+if [ -f "$LIVE_ENV" ]; then
+  env_mode="$(stat -c '%a' "$LIVE_ENV" 2>/dev/null || stat -f '%Lp' "$LIVE_ENV" 2>/dev/null || echo unknown)"
+  case "$env_mode" in
+    600|400) ok "faucet.env is mode $env_mode" ;;
+    unknown) note_unverified "faucet.env mode: stat could not read it" ;;
+    *) found "faucet.env is mode $env_mode: the wallet RPC password is readable by every user on the box" \
+             "chmod 0600 $LIVE_ENV" ;;
+  esac
+fi
+
 if [ ! -d "$REPO_DIR/src" ]; then
   note_unverified "env completeness: no $REPO_DIR/src, cannot list what the app reads"
 elif [ ! -f "$ENV_EXAMPLE" ]; then

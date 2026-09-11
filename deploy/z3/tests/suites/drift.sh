@@ -96,6 +96,27 @@ check "prints no DRIFT lines" "! grep -q 'DRIFT' '$T/clean.log'"
 # job reads the same as one that passed it.
 check "and the audit was complete, not merely quiet" "! grep -q 'NOT VERIFIED' '$T/clean.log'"
 
+echo "== drift: a world-readable faucet.env is drift, and 0600 is not"
+# faucet.env holds the wallet RPC password. It sat 0644 on the box for six weeks because
+# nothing looked (#487). Silent on the right mode, loud on the wrong one, and the fix line
+# names the command. The live file is a copy of the example so the env-contract half sees
+# nothing else to say.
+drift_env; make_clean_box
+cp "$T/repo/deploy/z3/faucet.env.example" "$T/repo/deploy/z3/faucet.env"; chmod 0600 "$T/repo/deploy/z3/faucet.env"
+bash "$AUDIT" > "$T/mode-ok.log" 2>&1
+check "a 0600 faucet.env is not drift" "[ $? -eq 0 ] && ! grep -q 'faucet.env is mode' '$T/mode-ok.log'"
+chmod 0644 "$T/repo/deploy/z3/faucet.env"
+bash "$AUDIT" > "$T/mode-bad.log" 2>&1
+check "a 0644 faucet.env IS drift, exit 1" "[ $? -eq 1 ]"
+check "and the line says the mode and what it exposes" \
+  "grep -q 'faucet.env is mode 644' '$T/mode-bad.log' && grep -q 'wallet RPC password' '$T/mode-bad.log'"
+check "and the fix is the command, not a paragraph" "grep -q 'fix: chmod 0600' '$T/mode-bad.log'"
+chmod 0400 "$T/repo/deploy/z3/faucet.env"
+bash "$AUDIT" > "$T/mode-ro.log" 2>&1
+check "a read-only 0400 is also fine: the point is group and other, not the owner's write bit" \
+  "[ $? -eq 0 ] && ! grep -q 'faucet.env is mode' '$T/mode-ro.log'"
+chmod 0600 "$T/repo/deploy/z3/faucet.env"
+
 echo "== drift: the env-completeness half actually FIRES"
 # The clean case above proves the check is SILENT on a good box, which is only half
 # a proof - a check that never speaks at all passes it too. This is the positive

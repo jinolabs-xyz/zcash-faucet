@@ -594,7 +594,17 @@ PREV_ACCOUNT="$(env_value ZALLET_ACCOUNT)"
 SALT_CANDIDATE="$(openssl rand -hex 32)"
 
 write_env(){  # $1 = account uuid, $2 = address
-  [ -f "$ENVOUT" ] || cp "$HERE/z3/faucet.env.example" "$ENVOUT"
+  # 0600 FROM THE MOMENT IT EXISTS. This file carries the wallet RPC password and the
+  # rate-limit salt. It was copied from the example with the umask's 0644 and stayed that
+  # way for six weeks, world-readable, beside an alerts.env that was 0600 only because of
+  # how it happened to be installed (#487). Set before the secrets are written into it,
+  # and again after python rewrites it: open(f,"w") keeps the inode and its mode today,
+  # but a future rewrite through a temp file would not, and "it stayed 0600 by accident"
+  # is the state this fixes.
+  if [ ! -f "$ENVOUT" ]; then
+    ( umask 077 && cp "$HERE/z3/faucet.env.example" "$ENVOUT" )
+  fi
+  chmod 0600 "$ENVOUT"
   python3 - "$ENVOUT" "$RPCPW" "$1" "$2" "$SALT_CANDIDATE" <<'PY'
 import re,sys
 f,pw,uuid,addr,salt=sys.argv[1:6]; s=open(f).read()
@@ -634,6 +644,7 @@ if needs_salt:
         s = re.sub(r'(?m)^RATE_LIMIT_SALT=.*$', f'RATE_LIMIT_SALT={salt}', s)
 open(f,"w").write(s)
 PY
+  chmod 0600 "$ENVOUT"
 }
 # Same rule as redeploy.sh's compose(): the domain goes to compose only when there is one,
 # through env(1) so the conditional word is an argument and not a command name. Passing
