@@ -397,6 +397,7 @@ PY
 scan_images "$DB" "$REPO" "$T/report.txt"; scan_rc=$?
 check "the scan ran to completion, rather than leaving a report to be misread" "[ $scan_rc -eq 0 ]"
 SCANNED="$(sed -n 's/^SCANNED=//p' "$T/report.txt")"
+# shellcheck disable=SC2034  # read inside the eval'd check string below, not here
 MISSING="$(sed -n 's/^MISSING=//p' "$T/report.txt")"
 # ITERATION CONTROL, the rule this file states 30 lines up: a scan that found nothing
 # would report healthy. Three image-bearing files exist today; fewer means the walk broke.
