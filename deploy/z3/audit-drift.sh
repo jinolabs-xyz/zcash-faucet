@@ -242,13 +242,24 @@ env_optional() {
 # salt, and it sat world-readable for six weeks because nothing looked (#487). deploy.sh
 # writes it 0600 now; this is what notices if a hand edit, a restore, or a copy puts it
 # back. Group and other bits are what matter - the owner is root either way.
+# `stat -L`: the mode of the FILE, not of a symlink pointing at it. deploy.sh, compose's
+# env_file and the fix line all follow the link, so a symlinked faucet.env with a 0600
+# target is fine, and without -L it read as 777, a drift no chmod could clear. GNU stat
+# only: every host this audit runs on is Linux, and a BSD fallback that nothing exercised
+# also dropped the setuid digit.
 if [ -f "$LIVE_ENV" ]; then
-  env_mode="$(stat -c '%a' "$LIVE_ENV" 2>/dev/null || stat -f '%Lp' "$LIVE_ENV" 2>/dev/null || echo unknown)"
+  env_mode="$(stat -L -c '%a' "$LIVE_ENV" 2>/dev/null || echo unknown)"
   case "$env_mode" in
     600|400) ok "faucet.env is mode $env_mode" ;;
     unknown) note_unverified "faucet.env mode: stat could not read it" ;;
-    *) found "faucet.env is mode $env_mode: the wallet RPC password is readable by every user on the box" \
-             "chmod 0600 $LIVE_ENV" ;;
+    *[4567])
+      found "faucet.env is mode $env_mode: the wallet RPC password is readable by every user on the box" \
+            "chmod 0600 $LIVE_ENV" ;;
+    *)
+      # Group-readable, or a mode with nobody's read bit. Wrong, but not world-readable,
+      # and the sentence should not claim more than the mode says.
+      found "faucet.env is mode $env_mode, not 0600: the wallet RPC password is in it" \
+            "chmod 0600 $LIVE_ENV" ;;
   esac
 fi
 

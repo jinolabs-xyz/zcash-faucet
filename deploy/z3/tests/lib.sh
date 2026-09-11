@@ -89,6 +89,9 @@ deploy_fresh_env() {
   # for an environmental reason - the exact "looks flaky, is the checkout" shape this
   # suite has already lost an hour to once. CI is a clean checkout and never saw it.
   rm -f "$D/z3/.env"
+  # Same shape for faucet.env: copied in from a checkout that has deployed locally, the
+  # "fresh deploy writes it 0600" check would exercise the chmod path, not the create path.
+  rm -f "$D/z3/faucet.env"
   # Pre-seed the z3 clone so `git clone` and setup-network are skipped, and
   # give it the two scripts deploy.sh calls. The readiness one logs a marker
   # so tests can assert what came before the sync wait.

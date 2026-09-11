@@ -115,7 +115,29 @@ chmod 0400 "$T/repo/deploy/z3/faucet.env"
 bash "$AUDIT" > "$T/mode-ro.log" 2>&1
 check "a read-only 0400 is also fine: the point is group and other, not the owner's write bit" \
   "[ $? -eq 0 ] && ! grep -q 'faucet.env is mode' '$T/mode-ro.log'"
-chmod 0600 "$T/repo/deploy/z3/faucet.env"
+# The sentence must not outrun the mode: 660 is wrong, and nobody but root and the group
+# can read it. The first cut said "every user on the box" for anything that was not 600.
+chmod 0660 "$T/repo/deploy/z3/faucet.env"
+bash "$AUDIT" > "$T/mode-grp.log" 2>&1
+check "a 0660 faucet.env is drift too" "[ $? -eq 1 ] && grep -q 'faucet.env is mode 660' '$T/mode-grp.log'"
+check "but is not described as readable by every user, because it is not" \
+  "! grep -q 'every user' '$T/mode-grp.log' && grep -q 'fix: chmod 0600' '$T/mode-grp.log'"
+# A SYMLINKED faucet.env is judged by its target. deploy.sh, compose's env_file and the
+# fix line all follow the link; the first cut's stat did not, reported the link's own 777,
+# and the printed chmod fixed the already-fine target - a drift that could never clear,
+# which is how a nightly report gets ignored.
+rm -f "$T/repo/deploy/z3/faucet.env"
+mkdir -p "$T/secrets"; cp "$T/repo/deploy/z3/faucet.env.example" "$T/secrets/faucet.env"; chmod 0600 "$T/secrets/faucet.env"
+ln -s "$T/secrets/faucet.env" "$T/repo/deploy/z3/faucet.env"
+bash "$AUDIT" > "$T/mode-link-ok.log" 2>&1
+check "a symlink to a 0600 file is not drift: the target's mode is the one that matters" \
+  "[ $? -eq 0 ] && ! grep -q 'faucet.env is mode' '$T/mode-link-ok.log'"
+chmod 0644 "$T/secrets/faucet.env"
+bash "$AUDIT" > "$T/mode-link-bad.log" 2>&1
+check "and a symlink to a 0644 file IS drift, reported as 644 and not as the link's 777" \
+  "[ $? -eq 1 ] && grep -q 'faucet.env is mode 644' '$T/mode-link-bad.log' && ! grep -q 'mode 777' '$T/mode-link-bad.log'"
+rm -f "$T/repo/deploy/z3/faucet.env"
+cp "$T/repo/deploy/z3/faucet.env.example" "$T/repo/deploy/z3/faucet.env"; chmod 0600 "$T/repo/deploy/z3/faucet.env"
 
 echo "== drift: the env-completeness half actually FIRES"
 # The clean case above proves the check is SILENT on a good box, which is only half
