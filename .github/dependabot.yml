@@ -24,8 +24,10 @@ updates:
       # 2025, peer eslint ^9.7) still calls it, and eslint-config-next pulls that plugin
       # in, so `eslint .` dies at react/display-name before it lints a file. Not ours
       # to fix. Two PRs landed red the same way (#437, #495); this stops the third.
-      # Lift it when eslint-plugin-react publishes an ESLint 10 release and
-      # eslint-config-next depends on it.
+      # Lift it when eslint-plugin-react publishes an ESLint 10 release (the fix has
+      # sat unreleased on its master since 2025-12). This also mutes a SECURITY update
+      # whose fix is only in 10.x; the audit job still reds on the advisory, so the
+      # signal survives, the PR does not.
       - dependency-name: "eslint"
         update-types: ["version-update:semver-major"]
 
