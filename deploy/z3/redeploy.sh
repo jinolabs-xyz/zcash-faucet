@@ -117,10 +117,19 @@ build_commit() {
 }
 FAUCET_BUILD_COMMIT="${REDEPLOY_BUILD_COMMIT:-$(build_commit)}"
 
-compose() { ( cd "$OVERLAY_DIR" && Z3_NETWORK_NAME="$Z3_NETWORK_NAME" \
-                FAUCET_BUILD_COMMIT="$FAUCET_BUILD_COMMIT" \
-                FAUCET_DOMAIN="${FAUCET_DOMAIN:-$(cat /etc/faucet-domain 2>/dev/null || true)}" \
-                docker compose -f "$COMPOSE_FILE" "$@" ); }
+# FAUCET_DOMAIN IS PASSED ONLY WHEN IT HAS A VALUE. Compose resolves ${FAUCET_DOMAIN:-:80}
+# from the shell first and the project .env second - and a shell variable that is SET BUT
+# EMPTY wins over .env, yielding ':80'. This used to export it unconditionally, so a box
+# with no /etc/faucet-domain handed compose an empty string and shadowed the .env that
+# deploy.sh writes precisely so a bare compose cannot drop HTTPS. Measured with real
+# compose during the #477 review. With the variable omitted, .env is the fallback here too.
+compose() {
+  local dom="${FAUCET_DOMAIN:-$(cat /etc/faucet-domain 2>/dev/null || true)}"
+  ( cd "$OVERLAY_DIR" && Z3_NETWORK_NAME="$Z3_NETWORK_NAME" \
+      FAUCET_BUILD_COMMIT="$FAUCET_BUILD_COMMIT" \
+      ${dom:+FAUCET_DOMAIN="$dom"} \
+      docker compose -f "$COMPOSE_FILE" "$@" )
+}
 
 image_id() { docker image inspect -f '{{.Id}}' "$1" 2>/dev/null; }
 
