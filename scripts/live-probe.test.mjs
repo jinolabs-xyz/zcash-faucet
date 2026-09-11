@@ -217,6 +217,24 @@ function expiredCert() {
   };
 }
 
+/**
+ * A TLS server that is closed when the TEST ends, however it ends.
+ *
+ * Five tests below used to start a server and close it on the last line of the test
+ * body. An assertion failing above that line skipped the close, the listening socket
+ * kept the process alive, and `node --test` never exited: measured, a single red test
+ * printed its failure at 101ms and the process was still there at 90s. ci.yml has no
+ * timeout on the test job, so a five-second red became GitHub's six-hour default hang
+ * (#481). t.after() runs on failure too. `listening` is checked because one test closes
+ * its server early from inside the handler, and closing twice is not an error worth
+ * having in a cleanup hook.
+ */
+function serveFor(t, pair, handler) {
+  const server = createTlsServer(pair, handler);
+  t.after(() => { if (server.listening) server.close(); });
+  return server;
+}
+
 async function runTlsProbe(days, env = {}) {
   const pair = selfSigned(days);
   if (!pair) {
@@ -270,13 +288,13 @@ test("the floor is settable, so a shorter-lived certificate can still be watched
   assert.match(r.out, /ok: the TLS certificate has more than 5 whole days left/);
 });
 
-test("an ALREADY EXPIRED certificate says so, and does not read like a dead box", async () => {
+test("an ALREADY EXPIRED certificate says so, and does not read like a dead box", async (t) => {
   // rejectUnauthorized is on by default, so an expired certificate fails the HANDSHAKE
   // and never reaches the days-left branch - which is where the runbook sentence lives.
   // Without the error code, "expired three days ago" and "nothing is listening" printed
   // the same line, at the one moment the difference matters most.
   const pair = expiredCert();
-  const server = createTlsServer(pair, (req, res) => {
+  const server = serveFor(t, pair, (req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify(req.url.startsWith("/api/ready") ? READY : STATUS_BODY));
   });
@@ -288,7 +306,6 @@ test("an ALREADY EXPIRED certificate says so, and does not read like a dead box"
     SMOKE_URL: `https://127.0.0.1:${server.address().port}`,
     SMOKE_ATTEMPTS: "1", SMOKE_RETRY_DELAY_MS: "0", SMOKE_SKIP_EXPLORER: "1",
   });
-  server.close();
   assert.notEqual(r.code, 0, r.out);
   assert.match(r.out, /ALREADY EXPIRED/);
   assert.match(r.out, /renewal stopped long ago/);
@@ -308,7 +325,7 @@ test("a handshake that fails while the faucet answers is the probe, not the cert
     assert.fail("openssl produced no certificate");
   }
   let answered = 0;
-  const server = createTlsServer(pair, (req, res) => {
+  const server = serveFor(t, pair, (req, res) => {
     const isReady = req.url.startsWith("/api/ready");
     res.writeHead(200, { "content-type": "application/json" });
     answered += 1;
@@ -324,7 +341,6 @@ test("a handshake that fails while the faucet answers is the probe, not the cert
     SMOKE_ATTEMPTS: "1", SMOKE_RETRY_DELAY_MS: "0", SMOKE_SKIP_EXPLORER: "1",
     NODE_TLS_REJECT_UNAUTHORIZED: "0",
   });
-  server.close();
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /the faucet answered over the same origin, so this is the probe/);
 });
@@ -347,7 +363,7 @@ test("A CERTIFICATE FAULT IS NEVER A BLIP, however well the fetches went", async
     assert.fail("openssl produced no certificate");
   }
   let answered = 0;
-  const server = createTlsServer(trusted, (req, res) => {
+  const server = serveFor(t, trusted, (req, res) => {
     answered += 1;
     res.end(JSON.stringify(req.url.startsWith("/api/ready") ? READY : STATUS_BODY), () => {
       if (answered >= 2) server.setSecureContext(untrusted);
@@ -359,17 +375,16 @@ test("A CERTIFICATE FAULT IS NEVER A BLIP, however well the fetches went", async
     SMOKE_ATTEMPTS: "1", SMOKE_RETRY_DELAY_MS: "0", SMOKE_SKIP_EXPLORER: "1",
     NODE_EXTRA_CA_CERTS: trusted.certPath,
   });
-  server.close();
   assert.notEqual(r.code, 0, r.out);
   assert.doesNotMatch(r.out, /so this is the probe, not the certificate/);
   assert.match(r.out, /not usable \(a wrong name, or an issuer nobody trusts/);
 });
 
-test("an expired certificate reads as expired even on the lenient path", async () => {
+test("an expired certificate reads as expired even on the lenient path", async (t) => {
   // With verification off the handshake succeeds and the days-left branch runs, where
   // "-4 days left" is exactly the reading the expiry message exists to stop.
   const pair = expiredCert();
-  const server = createTlsServer(pair, (req, res) => {
+  const server = serveFor(t, pair, (req, res) => {
     res.end(JSON.stringify(req.url.startsWith("/api/ready") ? READY : STATUS_BODY));
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
@@ -378,7 +393,6 @@ test("an expired certificate reads as expired even on the lenient path", async (
     SMOKE_ATTEMPTS: "1", SMOKE_RETRY_DELAY_MS: "0", SMOKE_SKIP_EXPLORER: "1",
     NODE_TLS_REJECT_UNAUTHORIZED: "0",
   });
-  server.close();
   assert.notEqual(r.code, 0, r.out);
   assert.match(r.out, /ALREADY EXPIRED/);
   assert.doesNotMatch(r.out, /days left/);
@@ -444,6 +458,43 @@ test("an IP-literal origin sends no SNI, because RFC 6066 forbids it", async (t)
   assert.doesNotMatch(r.err, /DEP0123/);
 });
 
+test("SMOKE_ATTEMPTS=0 still probes once: zero attempts must not read as healthy", async () => {
+  // The floor is `Math.max(1, numEnv(..., 1))`, and nothing pinned it. Review removed
+  // both halves and the probe, pointed at a dead origin with SMOKE_ATTEMPTS=0, printed
+  // "live-probe: healthy" and exited 0 - a probe that passes having probed nothing,
+  // which is the one thing this file exists to refuse.
+  const r = await run(process.execPath, [PROBE], {
+    SMOKE_URL: "http://127.0.0.1:1",
+    SMOKE_ATTEMPTS: "0", SMOKE_RETRY_DELAY_MS: "0", SMOKE_SKIP_EXPLORER: "1",
+  });
+  assert.notEqual(r.code, 0, "a dead origin must fail whatever SMOKE_ATTEMPTS says");
+  assert.doesNotMatch(r.out, /live-probe: healthy/);
+  // 0 is below the floor, so the DEFAULT applies (three attempts), not a clamp to one.
+  // What matters is that at least one attempt happened at all.
+  assert.match(r.out, /attempt 1\//, "at least one attempt was made, not zero");
+});
+
+test("SMOKE_TIMEOUT_MS=0 falls back to the default rather than meaning no timeout", async (t) => {
+  // A handshake timeout of 0 is no timeout: a black-holed 443 - accepts the TCP
+  // connection and never speaks - would hold the probe for the OS's own connect timeout,
+  // minutes, on every scheduled run. The floor is 1 and nothing pinned it. This server
+  // accepts and says nothing; with the fallback of 15s the probe gives up in ~15-30s
+  // (two fetch attempts share the budget), and the bound below is generous on purpose -
+  // the mutant hangs for minutes, so it separates by more than a factor of two.
+  const net = await import("node:net");
+  const hole = net.createServer((sock) => { /* accept, never write, never close */ sock.on("error", () => {}); });
+  await new Promise((r) => hole.listen(0, "127.0.0.1", r));
+  t.after(() => hole.close());
+  const started = Date.now();
+  const r = await run(process.execPath, [PROBE], {
+    SMOKE_URL: `https://127.0.0.1:${hole.address().port}`,
+    SMOKE_TIMEOUT_MS: "0", SMOKE_ATTEMPTS: "1", SMOKE_RETRY_DELAY_MS: "0", SMOKE_SKIP_EXPLORER: "1",
+  });
+  const elapsed = Date.now() - started;
+  assert.notEqual(r.code, 0, "a black hole must fail");
+  assert.ok(elapsed < 50_000, `took ${elapsed}ms: with SMOKE_TIMEOUT_MS=0 the fallback timeout did not apply`);
+});
+
 test("SMOKE_RETRY_DELAY_MS=0 means retry immediately, and is not overridden", async () => {
   // A helper that quietly REPLACES a value someone set is the same defect as one that
   // quietly accepts a bad one. Guarding the numeric env vars with a "must be positive"
@@ -474,7 +525,7 @@ test("a SMOKE_URL with surrounding whitespace works, rather than paging about a 
     if (process.env.SMOKE_TEST_ALLOW_NO_OPENSSL === "1") return t.skip("no openssl here");
     assert.fail("openssl produced no certificate");
   }
-  const server = createTlsServer(pair, (req, res) => {
+  const server = serveFor(t, pair, (req, res) => {
     res.end(JSON.stringify(req.url.startsWith("/api/ready") ? READY : STATUS_BODY));
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
@@ -489,7 +540,6 @@ test("a SMOKE_URL with surrounding whitespace works, rather than paging about a 
     assert.match(r.out, /live-probe: healthy/);
     assert.doesNotMatch(r.out, /the field this probe pages on is gone/);
   }
-  server.close();
 });
 
 test("a SMOKE_URL that is not a URL says the check was skipped, rather than nothing", async () => {
