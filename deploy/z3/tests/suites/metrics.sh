@@ -687,8 +687,15 @@ check "and the gauges around them still arrive, so a bad value costs one gauge, 
   "grep -qx 'faucet_empty 0' '$METRICS_FILE' && grep -qx 'faucet_up 1' '$METRICS_FILE'"
 # The exposition check proper runs later with its own parser; here it is enough that no
 # line carries the malformed value.
+#
+# -F, FIXED STRINGS. `grep -q '1.2.3'` is a regex in which each dot matches ANY character,
+# so it matched a disk byte count or the scrape timestamp whenever one happened to hold a
+# 1?2?3 digit run - values that change every run and every host. That made this check go
+# red on a PR that touched nothing here (1850 passed, 1 failed, CI for #480), which is the
+# exact shape this harness exists to refuse: a result that depends on the clock rather
+# than on the code.
 check "and neither value is anywhere in the file" \
-  "! grep -q '1.2.3' '$METRICS_FILE' && ! grep -q 'e400' '$METRICS_FILE'"
+  "! grep -qF '1.2.3' '$METRICS_FILE' && ! grep -qF 'e400' '$METRICS_FILE'"
 kill "$BADNUM_PID" 2>/dev/null
 
 echo "== metrics: a 200 on /api/status that is not the faucet's is not five gauges"
