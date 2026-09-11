@@ -87,7 +87,8 @@ export const INDEXES = `
 DROP INDEX IF EXISTS idx_claims_addrhash;
 CREATE INDEX IF NOT EXISTS idx_claims_addr_net ON claims(address_hash, network, created_at);
 -- ip and subnet are deliberately NOT keyed by network, and that matches their queries
--- rather than being an omission: those two limits are global. See RESERVE_SQL.
+-- rather than being an omission: the subnet cap is global; the ip cap has been per
+-- network since 2026-08-04. See RESERVE_SQL.
 CREATE INDEX IF NOT EXISTS idx_claims_iphash   ON claims(ip_hash, created_at);
 CREATE INDEX IF NOT EXISTS idx_claims_created  ON claims(created_at);
 CREATE INDEX IF NOT EXISTS idx_used_exp        ON used_challenges(exp);

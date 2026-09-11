@@ -56,6 +56,13 @@ export type ReserveResult =
   | {
       ok: false;
       kind: "cooldown" | "cap" | "subnet";
+      /**
+       * Which cooldown, when kind is "cooldown". The page renders two different cards
+       * for these - a paid address gets its receipt and "try a different address"; a
+       * full connection gets "a different address will not help" - and it used to tell
+       * them apart by regex over `reason`, which worked by coincidence of wording.
+       */
+      scope?: "address" | "connection";
       reason: string;
       retryAfterSeconds?: number;
     };
@@ -96,6 +103,7 @@ async function whyBlocked(
       return {
         ok: false,
         kind: "cooldown",
+        scope: "address",
         reason: `This ${label} already claimed recently. Try again later.`,
         retryAfterSeconds: Math.max(1, window - (now - row.created_at)),
       };
@@ -118,11 +126,12 @@ async function whyBlocked(
       return {
         ok: false,
         kind: "cooldown",
+        scope: "connection",
         // "connection", not "client" or "IP": the person reading it shares a router with
         // whoever used the other slots, and "your connection" is the thing they can
         // actually reason about.
         reason:
-          `This connection has used all ${ipDailyMax} of its drips for the last 24 hours. ` +
+          `This connection has used all ${ipDailyMax} of its drips for the last ${Math.round(cooldownSeconds / 3600)} hours. ` +
           "Everyone on the same network shares this limit, so a different address will not help. Try again later.",
         retryAfterSeconds: Math.max(1, (row?.frees_at ?? now) - now),
       };

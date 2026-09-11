@@ -27,9 +27,32 @@ export function fingerprintIp(ip: string): string {
   return fingerprint("ip", ip);
 }
 
+/**
+ * Bech32 is case-insensitive by specification (all-lower or all-upper, same address), and
+ * these are the human-readable parts the validator accepts. Base58 - the transparent
+ * kinds - is case-SENSITIVE, so it must not be touched: `tm` and `TM` are different
+ * payloads, and folding them would merge two real addresses into one fingerprint.
+ */
+const BECH32_HRPS = ["utest1", "uregtest1", "ztestsapling1", "zregtestsapling1"];
+
+/**
+ * The form of an address that means the same address, for the ledger's purposes.
+ *
+ * Without this, `UTEST1...` and `utest1...` were two addresses to the cooldown: the
+ * validator accepted both (bech32m decodes either case) and they hashed differently, so
+ * the same recipient could be paid twice. That hole predates the per-IP change but the
+ * per-IP change is what made it cheap: under one-drip-per-IP a second claim needed a
+ * second connection; under five it costs one more proof-of-work from the same one.
+ */
+export function canonicalAddress(address: string): string {
+  const t = address.trim();
+  const lower = t.toLowerCase();
+  return BECH32_HRPS.some((hrp) => lower.startsWith(hrp)) ? lower : t;
+}
+
 /** Fingerprint a recipient address - we never store the plaintext address. */
 export function fingerprintAddress(address: string): string {
-  return fingerprint("addr", address.trim());
+  return fingerprint("addr", canonicalAddress(address));
 }
 
 /**

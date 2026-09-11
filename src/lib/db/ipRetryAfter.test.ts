@@ -123,3 +123,22 @@ test("the refusal never names a transaction", async () => {
   assert.equal(full.ok, false);
   assert.doesNotMatch(JSON.stringify(full), /tx-o-/, "a connection refusal must not disclose anyone's txid");
 });
+
+test("the explanation is scoped to the network the gate refused on", async () => {
+  // RESERVE_SQL's ip branch is per network. If whyBlocked counted across both, a TAZ
+  // household full of TAZ claims would be told its cTAZ slot frees when a TAZ one does -
+  // or refused a cTAZ drip the gate would have allowed. Mutation (drop `network = ?` from
+  // IP_WINDOW_SQL) survived until this existed.
+  const ip = "home-net";
+  for (let i = 0; i < IP_MAX; i++) assert.equal((await claim(`n-${i}`, ip, NOW, true)).ok, true);
+  const full = await claim("n-late", ip, NOW + 10, true);
+  assert.equal(full.ok, false, "taz is full");
+  // Same connection, other network: the gate ALLOWS it, so whyBlocked must never be the
+  // thing that says no. Driven through reserveClaim with network set.
+  const r = await reserveClaim({
+    address: "n-ctaz", ipHash: ip, subnetHash: null, amountZat: 100n, now: NOW + 10,
+    cooldownSeconds: COOLDOWN, dailyCapZat: 1_000_000_000n, subnetDailyMax: 100, ipDailyMax: IP_MAX,
+    network: "ctaz",
+  });
+  assert.equal(r.ok, true, "the other network has its own allowance");
+});
