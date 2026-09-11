@@ -142,3 +142,29 @@ test("the explanation is scoped to the network the gate refused on", async () =>
   });
   assert.equal(r.ok, true, "the other network has its own allowance");
 });
+
+test("a subnet refusal is CALLED a subnet refusal when this connection's other-network claims would fill its allowance", async () => {
+  // The test above proves the scope only in the direction the gate ALLOWS, and whyBlocked
+  // runs only after the gate has refused - so a mutant that drops the network clause but
+  // keeps the param count (`AND ? IS NOT NULL`) survived all 750 tests. The answer it gives
+  // wrong is this one: the connection holds 2 TAZ + 1 cTAZ, the per-IP allowance is 3 per
+  // network, and a TAZ claim is refused by the SUBNET cap. Counted per network the IP has
+  // a slot left and the explanation falls through to the subnet, which is the truth.
+  // Counted across networks it reads 3, and the person is told "this connection has used
+  // all 3 of its drips", which is false, with a retry-after measured on the wrong window.
+  const ip = "home-two-nets";
+  const subnet = "sub-two-nets";
+  const opts = {
+    ipHash: ip, subnetHash: subnet, amountZat: 100n, cooldownSeconds: COOLDOWN,
+    dailyCapZat: 1_000_000_000n, subnetDailyMax: 3, ipDailyMax: IP_MAX,
+  };
+  for (const [addr, network] of [["m-taz-0", "taz"], ["m-taz-1", "taz"], ["m-ctaz-0", "ctaz"]] as const) {
+    const r = await reserveClaim({ ...opts, address: addr, network, now: NOW });
+    assert.equal(r.ok, true, `${addr} should be paid`);
+    if (r.ok) await finalizeClaim(r.claimId, "sent", `tx-${addr}`, undefined, NOW * 1000);
+  }
+  const refused = await reserveClaim({ ...opts, address: "m-taz-late", network: "taz", now: NOW + 10 });
+  assert.equal(refused.ok, false, "the subnet is at its cap of 3");
+  if (refused.ok) return;
+  assert.equal(refused.kind, "subnet", `refused for: ${refused.kind} / ${refused.reason}`);
+});

@@ -24,6 +24,7 @@ const PORT_D = 3213;
 const PORT_E = 3214;
 const PORT_F = 3215; // boots only to prove it dies
 const PORT_H = 3216; // H for HOUSEHOLD: several addresses behind one forwarded IP
+const PORT_I = 3217; // I for the /24: the subnet cap, the one refusal that must NOT carry a clock time
 // Somewhere to keep the output of the server that is supposed to die, so the
 // assertion can check WHY it died rather than only that it did.
 const LOG_DIR = mkdtempSync(join(tmpdir(), "faucet-api-integration-"));
@@ -33,6 +34,7 @@ const BASE_C = `http://localhost:${PORT_C}`;
 const BASE_D = `http://localhost:${PORT_D}`;
 const BASE_E = `http://localhost:${PORT_E}`;
 const BASE_H = `http://localhost:${PORT_H}`;
+const BASE_I = `http://localhost:${PORT_I}`;
 
 let failures = 0;
 const ok = (name, cond, detail = "") => {
@@ -203,6 +205,8 @@ const walletD = wallet(WALLET_D, 10);
 // H's wallet is plain and funded; what is special about H is only its env.
 const WALLET_H = 28329; // 28327 was E's, and the second fake-zallet died silently on EADDRINUSE
 const walletH = wallet(WALLET_H, 10);
+const WALLET_I = 28330;
+const walletI = wallet(WALLET_I, 10);
 // E's wallet is healthy too. E's oracle is the one that has nothing to say.
 const WALLET_E = 28327;
 const walletE = wallet(WALLET_E, 10);
@@ -337,6 +341,20 @@ const serverH = boot(PORT_H, {
   // fired on the eleventh run and every H assertion went red for a rule H is not about.
   FAUCET_SUBNET_DAILY_MAX: "100000",
 });
+// THE SUBNET REFUSAL, which no server above can produce: H pins the /24 cap out of
+// reach on purpose. Its retryAfterSeconds is a fixed hour, not a measured expiry, so
+// the route withholds nextAt for it - and `const measured = kind === "cooldown"` in
+// route.ts survived every test at every layer, because nothing ever tripped this cap
+// through the shipped route (#484). Allowance per IP is wide so the only rule that can
+// refuse the third claim is the /24.
+const serverI = boot(PORT_I, {
+  ...zallet(WALLET_I),
+  ...chainView,
+  FAUCET_CHALLENGE: "none",
+  TRUSTED_PROXY_COUNT: "1",
+  FAUCET_IP_DAILY_MAX: "5",
+  FAUCET_SUBNET_DAILY_MAX: "2",
+});
 
 try {
   // Wait for the oracle double BEFORE the apps are usable. If an app's first
@@ -351,7 +369,7 @@ try {
   // false: this fixture serves no testnet row BY DESIGN, so requiring one would
   // hang and then throw. Responding at all is the whole requirement.
   await waitHosh(false, 15_000, HOSH_EMPTY_PORT);
-  await Promise.all([waitReady(BASE_A), waitReady(BASE_B), waitReady(BASE_C), waitReady(BASE_D), waitReady(BASE_E), waitReady(BASE_H)]);
+  await Promise.all([waitReady(BASE_A), waitReady(BASE_B), waitReady(BASE_C), waitReady(BASE_D), waitReady(BASE_E), waitReady(BASE_H), waitReady(BASE_I)]);
 
   /* ── A: /api/status shape ────────────────────────────────────────────── */
   const status = await get(BASE_A, "/api/status");
@@ -659,6 +677,32 @@ try {
   const upper = await req(BASE_H, "/api/faucet", { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": AWAY }, body: JSON.stringify({ address: CASE_UA.toUpperCase() }) });
   ok("H a bech32 address in another letter case is the SAME address to the cooldown", lower.status === 200 && upper.status === 429 && upper.body.scope === "address", `lower ${lower.status} ${lower.body.error ?? ""}, upper ${upper.status} ${upper.body.scope ?? ""}`);
 
+  /* ── I: three connections in ONE /24 ─────────────────────────────────── */
+  // The cap on I is 2 per /24. Two neighbours are paid; the third is refused by the
+  // subnet rule and nothing else (its own IP is fresh, the allowance is 5). A subnet
+  // refusal says "try again tomorrow" and its retryAfterSeconds is a fixed hour; a
+  // wall-clock nextAt beside that would be two times on one card, one of them invented.
+  // The /24 is unique per run for the same reason H's host octet is: the ledger survives
+  // between local runs, and a fixed subnet would arrive at its cap already spent.
+  const SUBNET_I = `10.${runByte}.${Math.floor(Date.now() / 256) % 250}`;
+  // The first cut wrote `(Date.now() >> 8) % 250`, which is negative (>> coerces to
+  // int32), the octet did not parse, subnetOf() returned null, and the rule was SKIPPED:
+  // three paid, and "two are paid" was green about a subnet that did not exist.
+  ok("I precondition: the planted /24 is a parseable IPv4 prefix", /^10\.\d{1,3}\.\d{1,3}$/.test(SUBNET_I), SUBNET_I);
+  const fromNeighbour = async (host) =>
+    req(BASE_I, "/api/faucet", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-forwarded-for": `${SUBNET_I}.${host}` },
+      body: JSON.stringify({ address: (await post(BASE_I, "/api/account", { type: "transparent" })).body.account?.address ?? "" }),
+    });
+  const n1 = await fromNeighbour(11);
+  const n2 = await fromNeighbour(12);
+  ok("I two connections in one /24 are paid", n1.status === 200 && n2.status === 200, `${n1.status} ${n1.body.error ?? ""} / ${n2.status} ${n2.body.error ?? ""}`);
+  const n3 = await fromNeighbour(13);
+  ok("I the third connection in the /24 is refused", n3.status === 429, `status ${n3.status} ${n3.body.error ?? ""}`);
+  ok("I and the refusal is the SUBNET rule, as a field", n3.body.kind === "subnet", JSON.stringify({ kind: n3.body.kind, scope: n3.body.scope }));
+  ok("I and it carries a duration but NO clock time, because a fixed hour is not a measured expiry", typeof n3.body.retryAfterSeconds === "number" && !("nextAt" in n3.body), JSON.stringify(n3.body));
+
   const statusE = await get(BASE_E, "/api/status");
   ok(
     "E the tip is genuinely unknown, not merely stale",
@@ -751,6 +795,8 @@ try {
   stop(walletE);
   stop(serverH);
   stop(walletH);
+  stop(serverI);
+  stop(walletI);
   stop(serverA);
   stop(serverB);
   stop(serverC);
