@@ -16,7 +16,7 @@ services:
     autoDeploy: true
     envVars:
       - key: NODE_VERSION
-        value: "22"
+        value: "24"
       - key: FAUCET_DRIP_TAZ
         value: "0.1"
       - key: FAUCET_COOLDOWN_SECONDS
