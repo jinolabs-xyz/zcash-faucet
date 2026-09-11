@@ -201,7 +201,7 @@ const walletC = spawn("node", ["scripts/fake-zallet.mjs"], {
 const WALLET_D = 28325;
 const walletD = wallet(WALLET_D, 10);
 // H's wallet is plain and funded; what is special about H is only its env.
-const WALLET_H = 28327;
+const WALLET_H = 28329; // 28327 was E's, and the second fake-zallet died silently on EADDRINUSE
 const walletH = wallet(WALLET_H, 10);
 // E's wallet is healthy too. E's oracle is the one that has nothing to say.
 const WALLET_E = 28327;
@@ -332,6 +332,10 @@ const serverH = boot(PORT_H, {
   FAUCET_CHALLENGE: "none",
   TRUSTED_PROXY_COUNT: "1",
   FAUCET_IP_DAILY_MAX: "2",
+  // The per-run byte varies the HOST octet only, so every local run still lands its
+  // claims in the same two /24s on the shared ledger; at the default 20 the subnet cap
+  // fired on the eleventh run and every H assertion went red for a rule H is not about.
+  FAUCET_SUBNET_DAILY_MAX: "100000",
 });
 
 try {
