@@ -101,8 +101,71 @@ current_served_domain() { # -> the domain caddy is running with, or empty
   case "$v" in ""|:*) return 0 ;; *) printf '%s' "$v" ;; esac
 }
 
+# AND THE DOMAIN GETS WRITTEN WHERE COMPOSE ITSELF WILL FIND IT.
+#
+# Everything above only protects a deploy that goes through THIS script. Compose
+# interpolates ${FAUCET_DOMAIN:-:80} out of its own environment, so a bare
+# `docker compose up -d` in deploy/z3 - the obvious thing to type when changing one
+# setting - recreates Caddy with ':80' and drops 443. That is exactly how the outage on
+# 2026-09-10 happened, with every guard below already written and passing: the guards
+# protect the door, and this closes the window beside it.
+#
+# Compose reads `.env` from the project directory on its own, so recording the domain
+# there covers EVERY invocation rather than only this one. Merged, never rewritten: the
+# compose file documents that same `.env` as the place to put Z3_NETWORK_NAME, and
+# clobbering someone's network selection while fixing a domain is a poor trade.
+persist_domain() {
+  local dir="$HERE/z3" f tmp cur
+  f="$dir/.env"
+  [ -d "$dir" ] || return 0
+  # ":80" and anything else starting with a colon is a port, not a domain. Writing one
+  # here would PIN the downgrade instead of preventing it.
+  case "$FAUCET_DOMAIN" in ""|:*) return 0 ;; esac
+  if [ -f "$f" ] && grep -q '^FAUCET_DOMAIN=' "$f"; then
+    cur="$(sed -n 's/^FAUCET_DOMAIN=//p' "$f" | head -n1)"
+    [ "$cur" = "$FAUCET_DOMAIN" ] && return 0
+    tmp="$f.tmp.$$"
+    # Rewrite through a temp file rather than `sed -i`, whose spelling differs between
+    # GNU and BSD and whose BSD form leaves a .bak this directory does not want. The
+    # say() below is deliberately AFTER the move and gated on it: an unconditional
+    # "Updated" line next to a write that failed is how a mutated build convinced me the
+    # test was flaky rather than right.
+    # awk reading the value from ENVIRON, not sed with it spliced into the pattern and
+    # not `awk -v` either. In a sed replacement `&` expands to the matched text and `|`
+    # ends it; `awk -v` processes backslash escapes, so `a\nb` became two lines here and
+    # one line on the create path below. Not valid hostnames, any of them - but the two
+    # paths writing different bytes for one input is exactly how the next surprise gets
+    # in, and ENVIRON hands awk the bytes untouched.
+    if FAUCET_DOMAIN_NEW="$FAUCET_DOMAIN" awk '/^FAUCET_DOMAIN=/ { print "FAUCET_DOMAIN=" ENVIRON["FAUCET_DOMAIN_NEW"]; next } { print }' "$f" > "$tmp" && mv "$tmp" "$f"; then
+      say "Updated FAUCET_DOMAIN in $f (was $cur)"
+      return 0
+    fi
+    rm -f "$tmp"
+    echo "could not rewrite FAUCET_DOMAIN in $f; a bare compose run here may drop HTTPS" >&2
+    return 1
+  fi
+  [ -f "$f" ] || printf '%s\n' \
+    '# Read automatically by docker compose in this directory, so that a bare' \
+    '# `docker compose up -d` here cannot fall back to the Caddyfile'"'"'s :80 default' \
+    "# and silently drop the TLS listener. Written by deploy.sh; mirrors $DOMAIN_FILE." > "$f"
+  # END THE LAST LINE FIRST. The compose file tells people to put Z3_NETWORK_NAME "in an
+  # .env here", and a hand-written file often has no trailing newline. Appending straight
+  # onto it produced ONE line, `Z3_NETWORK_NAME=z3-mainnetFAUCET_DOMAIN=faucet.example.org`,
+  # deploy.sh announced success, and compose then read neither key - FAUCET_DOMAIN back
+  # to ':80', which is the outage this whole function exists to prevent, plus a broken
+  # network name for good measure. Found by review, reproduced with real compose.
+  if [ -s "$f" ] && [ -n "$(tail -c1 "$f")" ]; then echo >> "$f"; fi
+  if printf 'FAUCET_DOMAIN=%s\n' "$FAUCET_DOMAIN" >> "$f"; then
+    say "Recorded FAUCET_DOMAIN in $f, so a bare compose run here cannot drop HTTPS"
+  else
+    echo "could not write FAUCET_DOMAIN to $f; a bare compose run here may drop HTTPS" >&2
+    return 1
+  fi
+}
+
 if [ -n "$FAUCET_DOMAIN" ]; then
   say "Serving https://$FAUCET_DOMAIN"
+  persist_domain
 else
   SERVING="$(current_served_domain)"
   if [ -n "$SERVING" ]; then
@@ -572,8 +635,14 @@ if needs_salt:
 open(f,"w").write(s)
 PY
 }
+# Same rule as redeploy.sh's compose(): the domain goes to compose only when there is one,
+# through env(1) so the conditional word is an argument and not a command name. Passing
+# FAUCET_DOMAIN="" here when no domain was found would shadow the .env persist_domain
+# just declined to write - a set-but-empty shell variable beats .env in compose and
+# yields ':80'. deploy.sh already announces "serves plain HTTP" in that case, so this was
+# never silent, but two callers with two rules is how the next one gets it wrong.
 overlay_up(){
-  ( cd "$HERE/z3" && Z3_NETWORK_NAME="$NETNAME" FAUCET_DOMAIN="$FAUCET_DOMAIN" \
+  ( cd "$HERE/z3" && env -u FAUCET_DOMAIN Z3_NETWORK_NAME="$NETNAME" ${FAUCET_DOMAIN:+FAUCET_DOMAIN="$FAUCET_DOMAIN"} \
       docker compose -f docker-compose.faucet.yml up -d --build )
 }
 

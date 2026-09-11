@@ -13,6 +13,11 @@ echo "docker $*" >> "${STUB_LOG:?}"
 # lines were accurate and meaningless, and they made a correct run look broken.
 [ "${1:-}" = "compose" ] && \
   printf 'FAUCET_BUILD_COMMIT=%s\n' "${FAUCET_BUILD_COMMIT-<unset>}" >> "${STUB_LOG:?}"
+# And the domain, the same way, because how it reaches compose is the whole of #477's
+# redeploy change: present when there is one, ABSENT (not empty) when there is not. An
+# empty value shadows the project .env in real compose and yields ':80'.
+[ "${1:-}" = "compose" ] && \
+  printf 'FAUCET_DOMAIN=%s\n' "${FAUCET_DOMAIN-<unset>}" >> "${STUB_LOG:?}"
 IMG="${STUB_IMAGES:?}"
 
 case "${1:-}" in
