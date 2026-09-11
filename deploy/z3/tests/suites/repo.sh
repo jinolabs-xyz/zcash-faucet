@@ -254,6 +254,153 @@ check "and its last is ts, which is what tells a truncated body from a whole one
 check "and the metrics script says it depends on both, so the coupling is not a surprise" \
   "grep -q 'has to be the body.s FIRST key' '$REPO/deploy/z3/faucet-metrics.sh'"
 
+echo "== repo: every image this REPO declares is watched, and the rest are named (register #26)"
+# npm, cargo and the actions were covered. The IMAGES the faucet runs as - node:22-slim
+# under the app, caddy:2 terminating TLS - were not, so a CVE in either arrived only if
+# somebody happened to read a release note. Adding entries is easy; the hard parts are
+# that the ENTRY IS OF THE RIGHT KIND (`docker` reads Dockerfiles, Compose needs
+# `docker-compose`, and the wrong one parses nothing and says nothing) and that the list
+# keeps up with a tree that grows image references.
+DB="$REPO/.github/dependabot.yml"
+mk_scratch "${TMPDIR:-/tmp}/repo-dependabot.XXXXXX"
+
+# Pair every entry with its ecosystem by walking the updates list, rather than grepping
+# `directory:` anywhere in the file: npm and github-actions both carry `directory: /`, so a
+# bare grep was satisfied by them and passed with the docker entry deleted outright.
+python3 - "$DB" "$REPO" "$T/report.txt" <<'PY'
+import os, re, sys
+db, repo, out = sys.argv[1], sys.argv[2], sys.argv[3]
+
+# Plain-text parse: the harness image has no PyYAML, and this file's shape is fixed.
+entries, eco, directory = [], None, None
+for line in open(db):
+    if re.match(r"^\s*-\s*package-ecosystem:", line):
+        if eco:
+            entries.append((eco, directory))
+        eco = line.split(":", 1)[1].strip().strip('"\'')
+        directory = None
+    elif eco and re.match(r"^\s+directory:", line):
+        directory = line.split(":", 1)[1].strip().strip('"\'')
+if eco:
+    entries.append((eco, directory))
+
+# What dependabot's own fetchers match: docker/lib/dependabot/docker/file_fetcher.rb uses
+# /dockerfile|containerfile/i, and the compose fetcher uses the filename regex below.
+dockerish = re.compile(r"dockerfile|containerfile", re.I)
+composeish = re.compile(r"^(docker-)?compose(-[\w]+)?(\.[\w-]+)?\.ya?ml$", re.I)
+
+want = {}   # directory -> set of required ecosystems
+scanned = 0
+for root, dirs, files in os.walk(repo):
+    dirs[:] = [d for d in dirs if d not in (".git", "node_modules", ".next", ".claude", "coverage")]
+    for f in files:
+        rel = os.path.relpath(root, repo)
+        d = "/" if rel == "." else "/" + rel
+        if dockerish.search(f):
+            scanned += 1
+            want.setdefault(d, set()).add("docker")
+        elif composeish.match(f):
+            # Only if it actually names an image; a compose file with none is nothing to watch.
+            try:
+                body = open(os.path.join(root, f), encoding="utf-8", errors="replace").read()
+            except OSError:
+                continue
+            if re.search(r"^\s+image:", body, re.M):
+                scanned += 1
+                want.setdefault(d, set()).add("docker-compose")
+
+have = {}
+for e, d in entries:
+    have.setdefault(d, set()).add(e)
+
+# DELIBERATELY UNWATCHED, and it has to be said in the config or it is not deliberate.
+# dependabot's Dockerfile parser has no ARG handling, so `FROM ${RUST_IMAGE}` yields no
+# dependencies and an entry there would sit silent; the file's own note says the Rust
+# version is not pinned by that line anyway, and nothing from that image ships.
+EXEMPT = {"/deploy/z3/ctaz-build"}
+config_text = open(db, encoding="utf-8").read()
+
+missing = []
+for d in sorted(EXEMPT):
+    if d.lstrip("/") not in config_text:
+        missing.append(f"{d} is exempt in the test but unexplained in dependabot.yml")
+    # AND THE REASON HAS TO STILL HOLD. Naming the path in a comment is satisfied by any
+    # mention at all, including one left behind after the cause was fixed - an exemption
+    # that outlives its reason is an unwatched directory with paperwork. The reason here
+    # is specific and checkable: dependabot's Dockerfile parser has no ARG handling, so a
+    # FROM that interpolates a variable yields it no dependencies. If someone inlines that
+    # tag, the exemption stops being true and this says so.
+    dockerfile = os.path.join(repo, d.lstrip("/"), "Dockerfile")
+    try:
+        froms = [l for l in open(dockerfile, encoding="utf-8") if l.startswith("FROM ")]
+    except OSError:
+        missing.append(f"{d} is exempt but has no Dockerfile to be exempt about")
+        continue
+    resolvable = [l.strip() for l in froms
+                  if "${" not in l and "$" not in l and not l.startswith("FROM scratch")]
+    if resolvable:
+        missing.append(
+            f"{d} is exempt because dependabot cannot resolve its FROM, but "
+            f"{resolvable[0]!r} is resolvable now - either watch it or update the reason")
+for d, ecos in sorted(want.items()):
+    if d in EXEMPT:
+        continue
+    for e in sorted(ecos):
+        if e not in have.get(d, set()):
+            missing.append(f"{d} needs a {e} entry")
+
+# AND IT HAS TO PARSE. A malformed dependabot.yml does not fail a build: GitHub stops
+# opening pull requests and says so only on a settings page nobody visits, which is the
+# same no-signal shape this whole entry exists to remove. PyYAML is not in the harness
+# image, so this asserts the shape the plain-text parser above depends on rather than
+# validating YAML in general: every entry names an ecosystem AND a directory.
+for e, d in entries:
+    if not e:
+        missing.append("an updates entry has no package-ecosystem")
+    if not d:
+        missing.append(f"the {e} entry names no directory")
+if not entries:
+    missing.append("dependabot.yml holds no updates entries at all")
+
+with open(out, "w") as fh:
+    fh.write(f"SCANNED={scanned}\n")
+    fh.write("MISSING=" + ("; ".join(missing) if missing else "") + "\n")
+    fh.write("ENTRIES=" + ",".join(f"{e}:{d}" for e, d in entries) + "\n")
+PY
+SCANNED="$(sed -n 's/^SCANNED=//p' "$T/report.txt")"
+MISSING="$(sed -n 's/^MISSING=//p' "$T/report.txt")"
+# ITERATION CONTROL, the rule this file states 30 lines up: a scan that found nothing
+# would report healthy. Three image-bearing files exist today; fewer means the walk broke.
+check "the scan actually found image files, rather than reporting healthy on nothing" \
+  "[ \"$SCANNED\" -ge 3 ]"
+# THE TWO NOTHING CAN WATCH, held to a list so a THIRD cannot join them quietly. zebra and
+# zallet are pinned in stack-versions.env, a shell env file no dependabot ecosystem parses,
+# so they move only when a person moves them. "Every image this box runs is watched" was
+# therefore false while they existed, and a false claim in a header is worse than none: it
+# is what stops the next person looking. The claim is scoped to what this repo DECLARES,
+# and the exceptions are enumerated here, where a new one reds the suite.
+SV="$REPO/deploy/z3/stack-versions.env"
+extra_unwatched=""
+for img in $(grep -oE '^Z3_[A-Z_]*IMAGE' "$SV" 2>/dev/null | sort -u); do
+  case "$img" in
+    Z3_ZEBRA_IMAGE|Z3_ZALLET_IMAGE) ;;
+    *) extra_unwatched="$extra_unwatched $img" ;;
+  esac
+done
+check "the hand-updated images are still exactly zebra and zallet, and no others" \
+  "[ -z '$extra_unwatched' ]"
+check "and stack-versions.env says plainly that nothing automated watches them" \
+  "grep -qi 'no dependabot ecosystem\|nothing automated watches' '$SV'"
+
+check "every directory holding an image has an entry OF THE RIGHT KIND" \
+  "[ -z \"$MISSING\" ] || { echo \"missing: $MISSING\"; false; }"
+# The two that matter, by name, so deleting either is a named failure rather than an
+# arithmetic one.
+check "the app's own base image is watched by a docker entry at the root" \
+  "grep -q '^ENTRIES=.*docker:/,' '$T/report.txt' || grep -q '^ENTRIES=.*docker:/$' '$T/report.txt'"
+check "and caddy by a docker-compose entry, because docker does not read compose files" \
+  "grep -q 'docker-compose:/deploy/z3' '$T/report.txt'"
+
 echo "== repo: the off-box probe cannot pass without probing (risk register #17)"
 # It is the only signal that has ever reached us unprompted. Three ways it used to go
 # green while watching nothing: no FAUCET_LIVE_URL (skipped, exit 0), an escape hatch
