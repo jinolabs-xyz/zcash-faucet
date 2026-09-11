@@ -66,12 +66,21 @@ for wf in "$REPO"/.github/workflows/*.yml "$REPO"/.github/workflows/*.yaml; do
   # on a line indented exactly like that file's `runs-on:` lines, and only when it is a
   # positive literal: `0` is not a budget, and an expression or a quoted string is
   # deliberately not accepted rather than guessed at.
+  # Two passes over the file, so a budget written above its runs-on line counts too, and
+  # a trailing `# measured ...` comment is allowed: the header asks for the measurement
+  # on that line, and the first cut reds exactly that.
   tally="$(awk '
-    /^[[:space:]]+runs-on:/ { match($0, /^[[:space:]]+/); ind = RLENGTH; jobs++; seen[ind] = 1 }
-    /^[[:space:]]+timeout-minutes:[[:space:]]*[1-9][0-9]*[[:space:]]*$/ {
-      match($0, /^[[:space:]]+/); if (seen[RLENGTH]) budgets++
-    }
-    END { printf "%d %d", budgets + 0, jobs + 0 }' "$wf")"
+    { line[NR] = $0 }
+    END {
+      for (i = 1; i <= NR; i++) if (line[i] ~ /^[[:space:]]+runs-on:/) {
+        match(line[i], /^[[:space:]]+/); seen[RLENGTH] = 1; jobs++
+      }
+      for (i = 1; i <= NR; i++)
+        if (line[i] ~ /^[[:space:]]+timeout-minutes:[[:space:]]*[1-9][0-9]*[[:space:]]*(#.*)?$/) {
+          match(line[i], /^[[:space:]]+/); if (seen[RLENGTH]) budgets++
+        }
+      printf "%d %d", budgets + 0, jobs + 0
+    }' "$wf")"
   budgets="${tally% *}"; jobs="${tally#* }"
   # A file with no runs-on has no job this check can speak to: a caller of a reusable
   # workflow (`uses:` at job level) is the legitimate case and cannot carry a budget. None
