@@ -213,10 +213,33 @@ export class ZalletSender implements Sender {
 
     await this.unlockIfNeeded();
 
-    // Paying a transparent recipient unavoidably reveals it, so the default
-    // fully-shielded policy would reject the build - opt in explicitly. Shielded
-    // recipients (unified/sapling) keep the strict default.
-    const policy = req.addressInfo.kind === "transparent" ? "AllowRevealedRecipients" : "FullPrivacy";
+    // ONE POLICY PER RECIPIENT KIND, each the WEAKEST that can build the transaction.
+    //
+    //   transparent  the recipient is unavoidably in the clear, so FullPrivacy would
+    //                refuse the build outright. Opted into explicitly.
+    //   sapling      the wallet's notes are in Ironwood, so paying Sapling crosses pools
+    //                and the moved value is public. FullPrivacy forbids that, and two
+    //                claims died of it on 2026-09-10 with a bare 502 - AFTER the user had
+    //                solved the proof-of-work, and neither person reported it.
+    //   unified      a receiver in our own pool, fully shielded, nothing revealed.
+    //
+    // WHY REVEALING THE AMOUNT IS ACCEPTABLE HERE and nowhere else: the drip is a fixed
+    // 0.1 TAZ published on the homepage, so the "revealed" amount is a number everyone
+    // already has. Nothing is learned. The recipient's note stays shielded either way -
+    // only the cross-pool value moves in the clear - and we already pay transparent
+    // addresses, which reveals strictly more than this does.
+    //
+    // AND SAPLING IS NOT DEPRECATED. ZIP 258 restricts ORCHARD after NU6.3 (spend-only,
+    // no new value, internal transfers disabled); it says nothing about Sapling, which
+    // remains a legacy but working pool. Refusing it was a guess about the protocol that
+    // the ZIP does not support, and it turned away people asking for exactly what this
+    // faucet is for.
+    const policy =
+      req.addressInfo.kind === "transparent"
+        ? "AllowRevealedRecipients"
+        : req.addressInfo.kind === "sapling"
+          ? "AllowRevealedAmounts"
+          : "FullPrivacy";
     const amount = zatToZecLiteral(req.amountZat);
     // z_sendmany <fromaddress> [{address,amount}] <minconf> <fee=null> <privacyPolicy>
     const params =

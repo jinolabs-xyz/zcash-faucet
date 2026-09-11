@@ -280,6 +280,7 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     cooldownSeconds: config.cooldownSeconds,
     dailyCapZat: policy.dailyCapZat,
     subnetDailyMax: config.subnetDailyMax,
+    ipDailyMax: config.ipDailyMax,
     network,
   });
   if (!reservation.ok) {
@@ -298,8 +299,38 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     }
     // 429 for both cooldown kinds and the subnet rule, because all three are "you,
     // later". 503 stays for the global cap, which is "the faucet, later".
+    // WHEN, not just how long. "Try again in 83400 seconds" is arithmetic homework; a
+    // clock time is something a person can act on. Both are sent so an existing client
+    // keeps working.
+    //
+    // WHAT IS DELIBERATELY NOT HERE: the txid that already paid the address. A first cut
+    // returned it, and review showed what that is - an oracle. Anyone who knows address X
+    // can POST it with one solved proof-of-work and learn which transaction paid X. For a
+    // shielded recipient that is a link the chain itself does not reveal, and PRIVACY.md
+    // says we refuse to build that record. The browser that made the claim already holds
+    // the txid from its own 200; it can remember its own receipt without asking us to
+    // repeat it to whoever asks.
+    //
+    // NO CLOCK TIME FOR A SUBNET REFUSAL. Its retryAfterSeconds is a fixed hour, not a
+    // measured expiry, and rendering that as "a slot frees at 10:21" next to the reason's
+    // own "try again tomorrow" put two contradictory times on one card. A duration that is
+    // honestly approximate stays a duration.
+    //
+    // AND THE KIND, so the page can decide what to say from a field rather than from a
+    // regex over the sentence. It matched /connection/ and worked on the subnet reason
+    // only because that sentence happens to end "...from a different connection" - reword
+    // the copy and the card would have offered "Try a different address" to someone whose
+    // whole network is over quota, the exact wrong advice this change exists to stop.
+    const measured = reservation.kind === "cooldown";
+    const nextAt =
+      measured && reservation.retryAfterSeconds != null
+        ? new Date((now + reservation.retryAfterSeconds) * 1000).toISOString()
+        : undefined;
     return apiError(reservation.kind === "cap" ? 503 : 429, reservation.reason, api, {
+      kind: reservation.kind,
+      ...(reservation.scope ? { scope: reservation.scope } : {}),
       retryAfterSeconds: reservation.retryAfterSeconds,
+      ...(nextAt ? { nextAt } : {}),
     });
   }
 

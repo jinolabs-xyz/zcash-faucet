@@ -49,6 +49,10 @@ function claim(d: InstanceType<typeof Database>, addr: string, ip: string, o: Op
       now: o.at ?? NOW,
       cooldownSeconds: COOLDOWN,
       dailyCapZat: o.cap ?? CAP,
+      // 1 keeps the rule this file was written against: one drip per IP. The default
+      // is 5 now, and a test that silently inherited it would stop asserting the thing
+      // it is named for.
+      ipDailyMax: 1,
       subnetDailyMax: 2,
       network: o.network ?? "taz",
     }),

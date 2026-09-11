@@ -194,6 +194,19 @@ export const config = {
    * the counts say what normal looks like.
    */
   subnetDailyMax: Math.max(1, Math.floor(num("FAUCET_SUBNET_DAILY_MAX", 20))),
+  /**
+   * Drips one IP may hold inside the cooldown window. Was effectively 1 until
+   * 2026-09-11, which is one drip per HOUSEHOLD: every laptop and phone behind a home
+   * router shares a public address, so the first claim locked out everyone else for a
+   * day. Two reports, one from a forum user who read the refusal as the faucet being
+   * down, one from the owner's own house.
+   *
+   * 5 rather than a bigger number because the point is a family, not a fleet: it covers
+   * every device in a normal home and still costs a farmer on one address five drips a
+   * day instead of unlimited. The per-address rule is still one, the subnet cap still
+   * bounds a whole range, and proof-of-work is still paid per claim.
+   */
+  ipDailyMax: Math.max(1, Math.floor(num("FAUCET_IP_DAILY_MAX", 5))),
 
   // How many reverse proxies YOU operate in front of the app (nginx, Cloudflare,
   // Vercel, …). Each appends to X-Forwarded-For, so only the last N hops are

@@ -23,6 +23,7 @@ const PORT_C = 3212;
 const PORT_D = 3213;
 const PORT_E = 3214;
 const PORT_F = 3215; // boots only to prove it dies
+const PORT_H = 3216; // H for HOUSEHOLD: several addresses behind one forwarded IP
 // Somewhere to keep the output of the server that is supposed to die, so the
 // assertion can check WHY it died rather than only that it did.
 const LOG_DIR = mkdtempSync(join(tmpdir(), "faucet-api-integration-"));
@@ -31,6 +32,7 @@ const BASE_B = `http://localhost:${PORT_B}`;
 const BASE_C = `http://localhost:${PORT_C}`;
 const BASE_D = `http://localhost:${PORT_D}`;
 const BASE_E = `http://localhost:${PORT_E}`;
+const BASE_H = `http://localhost:${PORT_H}`;
 
 let failures = 0;
 const ok = (name, cond, detail = "") => {
@@ -198,6 +200,9 @@ const walletC = spawn("node", ["scripts/fake-zallet.mjs"], {
 // network has moved 40 blocks past our node, which is the tx 29 lag exactly.
 const WALLET_D = 28325;
 const walletD = wallet(WALLET_D, 10);
+// H's wallet is plain and funded; what is special about H is only its env.
+const WALLET_H = 28329; // 28327 was E's, and the second fake-zallet died silently on EADDRINUSE
+const walletH = wallet(WALLET_H, 10);
 // E's wallet is healthy too. E's oracle is the one that has nothing to say.
 const WALLET_E = 28327;
 const walletE = wallet(WALLET_E, 10);
@@ -314,6 +319,25 @@ const serverE = boot(PORT_E, {
   FAUCET_CHALLENGE: "none",
 });
 
+// H: THE HOUSEHOLD. The per-IP allowance is the headline of #480, and nothing exercised
+// it over HTTP: server A does not trust a forwarded IP, so every claim there has ipHash
+// null and the IP rule is skipped by design. Review measured the cost - deleting the one
+// line that wires config.ipDailyMax into the route left the whole suite green. This
+// server trusts one proxy hop (what Caddy is in production), pins the allowance at 2 so
+// the ceiling is reachable in three claims, and runs with the challenge off so each claim
+// is one POST and the assertions are about the ledger and nothing else.
+const serverH = boot(PORT_H, {
+  ...zallet(WALLET_H),
+  ...chainView,
+  FAUCET_CHALLENGE: "none",
+  TRUSTED_PROXY_COUNT: "1",
+  FAUCET_IP_DAILY_MAX: "2",
+  // The per-run byte varies the HOST octet only, so every local run still lands its
+  // claims in the same two /24s on the shared ledger; at the default 20 the subnet cap
+  // fired on the eleventh run and every H assertion went red for a rule H is not about.
+  FAUCET_SUBNET_DAILY_MAX: "100000",
+});
+
 try {
   // Wait for the oracle double BEFORE the apps are usable. If an app's first
   // background tip refresh runs while the fixture is still binding, hosh yields
@@ -327,7 +351,7 @@ try {
   // false: this fixture serves no testnet row BY DESIGN, so requiring one would
   // hang and then throw. Responding at all is the whole requirement.
   await waitHosh(false, 15_000, HOSH_EMPTY_PORT);
-  await Promise.all([waitReady(BASE_A), waitReady(BASE_B), waitReady(BASE_C), waitReady(BASE_D), waitReady(BASE_E)]);
+  await Promise.all([waitReady(BASE_A), waitReady(BASE_B), waitReady(BASE_C), waitReady(BASE_D), waitReady(BASE_E), waitReady(BASE_H)]);
 
   /* ── A: /api/status shape ────────────────────────────────────────────── */
   const status = await get(BASE_A, "/api/status");
@@ -401,6 +425,17 @@ try {
 
   const repeat = await claim(BASE_A, tmAddr, await solvedChallenge(BASE_A));
   ok("A immediate repeat is 429 with retryAfterSeconds", repeat.status === 429 && typeof repeat.body.retryAfterSeconds === "number", `status ${repeat.status}`);
+  // A COOLDOWN IS NOT AN OUTAGE, and the refusal has to carry enough for a client to say
+  // so. A forum user read exactly this response as the faucet being down while holding a
+  // confirmed drip, so the 429 now carries a wall-clock time rather than a duration to do
+  // arithmetic on, and says WHICH limit refused. What it deliberately does not carry is
+  // the txid - see the assertion below.
+  ok("A the 429 says WHEN, not just how long", typeof repeat.body.nextAt === "string" && !Number.isNaN(Date.parse(repeat.body.nextAt)), JSON.stringify(repeat.body.nextAt));
+  // AND IT DOES NOT HAND BACK THE TXID. A first cut did, and that is an oracle: anyone who
+  // knows an address can learn which transaction paid it for the price of one PoW, which
+  // for a shielded recipient is a link the chain does not reveal. The browser that made
+  // the claim already has the txid from its own 200 and remembers it itself.
+  ok("A the 429 does NOT disclose which transaction paid the address", !("priorTxid" in repeat.body) && !/[0-9a-f]{64}/.test(JSON.stringify(repeat.body)), JSON.stringify(repeat.body));
 
   const bad = await claim(BASE_A, UNIFIED_BAD, await solvedChallenge(BASE_A));
   ok("A checksum-broken address is 400", bad.status === 400, `status ${bad.status}`);
@@ -575,6 +610,55 @@ try {
   // and that is the point: we cannot show that it is, so we do not pay. Anyone who
   // writes `state !== "unsafe"` at a call site passes this state straight through,
   // which is why mayBuildTransaction() is the only asker.
+  /* ── H: several addresses behind ONE forwarded IP ─────────────────────── */
+  // The household case, end to end through the shipped route. Three devices, three
+  // addresses, one router. The allowance on H is 2, so the first two pay and the third
+  // is refused BY THE CONNECTION, with the fields the page now reads.
+  // UNIQUE PER RUN. Every server here shares one ledger at cwd/data/faucet.db and it
+  // survives between runs; the other servers get away with that because their addresses
+  // are minted fresh and their IP rule never fires. H's whole point is the IP rule, so a
+  // fixed address here found its two slots already spent on the second local run - a
+  // red that CI (a clean checkout) would never show and a reviewer re-running would.
+  // 203.0.113.0/24 is TEST-NET-3, reserved for documentation, never routed.
+  const runByte = 1 + (Date.now() % 250);
+  const HOME = `203.0.113.${runByte}`;
+  // A DIFFERENT subnet for the neighbour and the case test, so the /24 cap never enters
+  // into what these assert.
+  const AWAY = `198.51.100.${runByte}`;
+  const fromHome = (address) =>
+    req(BASE_H, "/api/faucet", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-forwarded-for": HOME },
+      body: JSON.stringify({ address }),
+    });
+  const freshTm = async () => (await post(BASE_H, "/api/account", { type: "transparent" })).body.account?.address ?? "";
+  const dev1 = await fromHome(await freshTm());
+  const dev2 = await fromHome(await freshTm());
+  ok("H the first device behind the router is paid", dev1.status === 200 && typeof dev1.body.txid === "string", `status ${dev1.status} ${dev1.body.error ?? ""}`);
+  ok("H the SECOND device behind the same router is paid too, which one-per-IP never allowed", dev2.status === 200 && typeof dev2.body.txid === "string", `status ${dev2.status} ${dev2.body.error ?? ""}`);
+  const dev3 = await fromHome(await freshTm());
+  ok("H the third is refused, so the allowance is a ceiling and not an absence of one", dev3.status === 429, `status ${dev3.status}`);
+  ok("H and the refusal names the CONNECTION as a field, not only in prose", dev3.body.kind === "cooldown" && dev3.body.scope === "connection", JSON.stringify({ kind: dev3.body.kind, scope: dev3.body.scope }));
+  ok("H and carries a measured nextAt, because this expiry is real", typeof dev3.body.nextAt === "string" && !Number.isNaN(Date.parse(dev3.body.nextAt)), JSON.stringify(dev3.body.nextAt));
+  ok("H and discloses no transaction of anyone's", !/[0-9a-f]{64}/.test(JSON.stringify(dev3.body)), JSON.stringify(dev3.body));
+  // A neighbour on a different connection is untouched by this household's ceiling.
+  const nb = await req(BASE_H, "/api/faucet", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-forwarded-for": AWAY },
+    body: JSON.stringify({ address: await freshTm() }),
+  });
+  ok("H a different connection is unaffected", nb.status === 200, `status ${nb.status} ${nb.body.error ?? ""}`);
+  // And the SAME address in a different letter case is the same address to the ledger.
+  // Bech32 is case-insensitive by spec, and until now UTEST1... and utest1... hashed
+  // apart, so one recipient could be paid twice from one connection.
+  // A checksum-valid unified address minted from this run's byte, the same way the
+  // file's own fixtures are; the account endpoint only mints transparent keys, and
+  // base58 is case-sensitive so a tm address cannot test this at all.
+  const CASE_UA = ua(runByte);
+  const lower = await req(BASE_H, "/api/faucet", { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": AWAY }, body: JSON.stringify({ address: CASE_UA.toLowerCase() }) });
+  const upper = await req(BASE_H, "/api/faucet", { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": AWAY }, body: JSON.stringify({ address: CASE_UA.toUpperCase() }) });
+  ok("H a bech32 address in another letter case is the SAME address to the cooldown", lower.status === 200 && upper.status === 429 && upper.body.scope === "address", `lower ${lower.status} ${lower.body.error ?? ""}, upper ${upper.status} ${upper.body.scope ?? ""}`);
+
   const statusE = await get(BASE_E, "/api/status");
   ok(
     "E the tip is genuinely unknown, not merely stale",
@@ -665,6 +749,8 @@ try {
   stop(walletD);
   stop(serverE);
   stop(walletE);
+  stop(serverH);
+  stop(walletH);
   stop(serverA);
   stop(serverB);
   stop(serverC);

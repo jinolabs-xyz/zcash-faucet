@@ -15,6 +15,7 @@ import {
   farmingSignalsParams,
   RESERVE_SQL,
   SUBNET_COUNT_SQL,
+  IP_WINDOW_SQL,
   reserveParams,
   LIVE_BLOCK_SQL,
   FINALIZE_SQL,
@@ -52,7 +53,19 @@ function driver(): DbDriver {
 
 export type ReserveResult =
   | { ok: true; claimId: number }
-  | { ok: false; kind: "cooldown" | "cap" | "subnet"; reason: string; retryAfterSeconds?: number };
+  | {
+      ok: false;
+      kind: "cooldown" | "cap" | "subnet";
+      /**
+       * Which cooldown, when kind is "cooldown". The page renders two different cards
+       * for these - a paid address gets its receipt and "try a different address"; a
+       * full connection gets "a different address will not help" - and it used to tell
+       * them apart by regex over `reason`, which worked by coincidence of wording.
+       */
+      scope?: "address" | "connection";
+      reason: string;
+      retryAfterSeconds?: number;
+    };
 
 /** Diagnose why an atomic reserve inserted 0 rows (for a useful error message). */
 async function whyBlocked(
@@ -63,9 +76,13 @@ async function whyBlocked(
   now: number,
   cooldownSeconds: number,
   network: DripNetwork,
+  ipDailyMax: number,
 ): Promise<ReserveResult & { ok: false }> {
+  // ADDRESS ONLY. The ip branch moved to a COUNT when the per-IP limit became N, and
+  // leaving it here would report "this client already claimed recently" off a single row
+  // while the gate was happily allowing four more - diagnosing a block nobody made, which
+  // is the failure this function's own comment warns about. It is handled below.
   const keys: [("address_hash" | "ip_hash"), string, string][] = [["address_hash", addressHash, "address"]];
-  if (ipHash) keys.push(["ip_hash", ipHash, "client"]);
 
   for (const [col, val, label] of keys) {
     // Params follow the statement, and the statement only carries a network clause on
@@ -86,11 +103,41 @@ async function whyBlocked(
       return {
         ok: false,
         kind: "cooldown",
+        scope: "address",
         reason: `This ${label} already claimed recently. Try again later.`,
         retryAfterSeconds: Math.max(1, window - (now - row.created_at)),
       };
     }
   }
+  // THE PER-IP ALLOWANCE, counted the way the gate counts it. The slot frees at the
+  // EARLIEST EXPIRY among the live claims - each on its own window, since a pending row
+  // lives for the lease and a sent one for the cooldown. Telling someone to come back in
+  // 24h when a slot opens in two is the same kind of wrong answer as not telling them.
+  if (ipHash && ipDailyMax > 0) {
+    const row = await driver().get<{ n: number; frees_at: number }>(IP_WINDOW_SQL, [
+      cooldownSeconds,
+      PENDING_LEASE_SECONDS,
+      ipHash,
+      network,
+      now - cooldownSeconds,
+      now - PENDING_LEASE_SECONDS,
+    ]);
+    if ((row?.n ?? 0) >= ipDailyMax) {
+      return {
+        ok: false,
+        kind: "cooldown",
+        scope: "connection",
+        // "connection", not "client" or "IP": the person reading it shares a router with
+        // whoever used the other slots, and "your connection" is the thing they can
+        // actually reason about.
+        reason:
+          `This connection has used all ${ipDailyMax} of its drips for the last ${Math.round(cooldownSeconds / 3600)} hours. ` +
+          "Everyone on the same network shares this limit, so a different address will not help. Try again later.",
+        retryAfterSeconds: Math.max(1, (row?.frees_at ?? now) - now),
+      };
+    }
+  }
+
   // Distinguish the SUBNET rule from the global cap before falling through. Both
   // block, and telling someone the faucet is empty for the day when it is actually
   // their network that is over quota sends them away for the wrong reason, and hides
@@ -141,6 +188,12 @@ export async function reserveClaim(opts: {
   dailyCapZat: bigint;
   subnetDailyMax: number;
   /**
+   * Drips one IP may hold at once. Defaulted to 1 so every existing caller keeps the
+   * behaviour it was written against: a test that predates this knob is asserting the
+   * old rule and must keep asserting it.
+   */
+  ipDailyMax?: number;
+  /**
    * Which chain the claim is for. Defaulted so every existing caller and test keeps
    * meaning what it meant, rather than being silently re-pointed by a new parameter.
    */
@@ -168,6 +221,7 @@ export async function reserveClaim(opts: {
       cooldownSeconds: opts.cooldownSeconds,
       dailyCapZat: Number(opts.dailyCapZat),
       subnetDailyMax: opts.subnetDailyMax,
+      ipDailyMax: opts.ipDailyMax ?? 1,
       network,
     }),
   );
@@ -181,6 +235,7 @@ export async function reserveClaim(opts: {
     opts.now,
     opts.cooldownSeconds,
     network,
+    opts.ipDailyMax ?? 1,
   );
 }
 

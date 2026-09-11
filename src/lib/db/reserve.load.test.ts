@@ -40,6 +40,7 @@ function reserve(db: InstanceType<typeof Database>, addr: string, ip: string, no
       now,
       cooldownSeconds: COOLDOWN,
       dailyCapZat: CAP,
+      ipDailyMax: 1,
       subnetDailyMax: 1_000_000,
     }),
   );

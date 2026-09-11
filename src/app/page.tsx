@@ -96,6 +96,54 @@ type CopyTarget = "txid" | "receipt" | "donation";
  * is only ever consulted once the absence has already been established.
  */
 interface Tx { txid?: string; to: string; priv: boolean; explorerUrl?: string; at: number; network: FaucetNetwork; amountText: string }
+
+/**
+ * The receipts THIS BROWSER was handed, so a cooldown can show the drip that already went
+ * out without asking the server to repeat it.
+ *
+ * WHY NOT ASK THE SERVER. A first cut had the 429 return the txid that paid the address,
+ * and review showed what that is: an oracle. Anyone who knows address X can POST it with
+ * one solved proof-of-work and learn which transaction paid X, which for a shielded
+ * recipient is a link the chain itself does not reveal. PRIVACY.md refuses to build that
+ * record. The browser that made the claim already received the txid in its own 200; it
+ * can remember its own receipt. Same device, same browser, and nothing new stored on our
+ * side - which is also the case that actually happened: paid, retried from the same tab a
+ * hundred seconds later, told "come back tomorrow" with no mention of the payment.
+ *
+ * Keyed by NETWORK AND address, capped small, and expired past the cooldown on both
+ * write and read: it exists to answer "did this address just get paid here, in this
+ * asset", not to be a history. Two review findings shaped that sentence. Keyed by address
+ * alone, a cTAZ receipt overwrote the TAZ one and the TAZ card read "got its 0.5 cTAZ" -
+ * the exact wrong sentence this page once removed. And pruned only on write, a receipt
+ * from days ago was presented as the payment behind TODAY's block, which may have been
+ * someone else's claim of the same address entirely.
+ */
+const RECEIPTS_KEY = "zfaucet_receipts";
+const RECEIPTS_MAX = 8;
+interface Receipt { txid?: string; explorerUrl?: string; at: number; network: FaucetNetwork; amountText: string }
+const receiptKey = (network: FaucetNetwork, address: string) => `${network}:${address.trim().toLowerCase()}`;
+function readReceipts(ttlMs: number): Record<string, Receipt> {
+  try {
+    const raw = localStorage.getItem(RECEIPTS_KEY);
+    const parsed = raw ? (JSON.parse(raw) as Record<string, Receipt>) : {};
+    if (typeof parsed !== "object" || !parsed) return {};
+    const cutoff = Date.now() - ttlMs;
+    return Object.fromEntries(Object.entries(parsed).filter(([, v]) => v && typeof v.at === "number" && v.at >= cutoff));
+  } catch {
+    return {};
+  }
+}
+function rememberReceipt(network: FaucetNetwork, address: string, r: Receipt, ttlMs: number) {
+  try {
+    const kept = Object.entries(readReceipts(ttlMs));
+    kept.push([receiptKey(network, address), r]);
+    const trimmed = kept.slice(-RECEIPTS_MAX);
+    localStorage.setItem(RECEIPTS_KEY, JSON.stringify(Object.fromEntries(trimmed)));
+  } catch {
+    // Storage blocked or full: the receipt is still on screen right now, and a cooldown
+    // without it degrades to the wording alone, which is still true.
+  }
+}
 interface PowSolution { seed: string; difficulty: number; exp: number; sig: string; nonce: string }
 
 /**
@@ -198,6 +246,11 @@ export default function Home() {
   const [tx, setTx] = useState<Tx | null>(null);
   const [copied, setCopied] = useState<CopyTarget | null>(null);
   const [cooldownEnd, setCooldownEnd] = useState(0);
+  // What the 429 actually said. `kind` decides which of two screens renders, because an
+  // address that was just paid and a connection that is out of drips are different
+  // situations with different advice - and "try a different address" is WRONG advice
+  // for the second one, which is what the reported user was told.
+  const [refusal, setRefusal] = useState<{ kind: "address" | "connection" | "subnet"; reason: string; nextAt: number | null; receipt: Receipt | null } | null>(null);
   // 0 rather than Date.now(): calling it during render gives the SERVER's clock on
   // the first paint and the client's on hydration, which is a mismatch, and it makes
   // render impure. The effect below sets the real value on mount and every second,
@@ -520,9 +573,40 @@ export default function Home() {
           // the request), falling back to what we asked for.
           amountText: data.paidZat ? formatAmount(BigInt(data.paidZat), data.network === "ctaz" ? "ctaz" : "taz") : dripText,
         });
+        rememberReceipt(
+          data.network === "ctaz" ? "ctaz" : "taz",
+          address,
+          {
+            txid: data.txid,
+            explorerUrl: data.explorerUrl,
+            at: Date.now(),
+            network: data.network === "ctaz" ? "ctaz" : "taz",
+            amountText: data.paidZat ? formatAmount(BigInt(data.paidZat), data.network === "ctaz" ? "ctaz" : "taz") : dripText,
+          },
+          (status?.cooldownSeconds ?? 86400) * 1000,
+        );
         setPhase("success");
       } else if (res.status === 429) {
-        setCooldownEnd(Date.now() + (data.retryAfterSeconds ?? status?.cooldownSeconds ?? 86400) * 1000);
+        // The server's clock time when it gives one, its duration otherwise. Both mean
+        // the same instant; the ISO form is the one a person can read.
+        const nextAtMs = data.nextAt ? Date.parse(data.nextAt) : NaN;
+        setCooldownEnd(Number.isFinite(nextAtMs) ? nextAtMs : Date.now() + (data.retryAfterSeconds ?? status?.cooldownSeconds ?? 86400) * 1000);
+        // Which limit refused, from the FIELDS the API sends, not from its sentence. A
+        // first cut matched /connection/ over the reason and worked on the subnet refusal
+        // only because that sentence happens to end "from a different connection" - a
+        // rewording away from offering "Try a different address" to someone whose whole
+        // network is over quota. Unknown shapes fall to "address", the card with the
+        // least specific advice.
+        const reason: string = typeof data.error === "string" ? data.error : "";
+        const kind: "address" | "connection" | "subnet" =
+          data.kind === "subnet" ? "subnet" : data.scope === "connection" ? "connection" : "address";
+        // Only an ADDRESS refusal can be about a payment this browser made to this
+        // address in this asset. A connection or subnet refusal may be someone else's
+        // drip on the same router, and showing them a receipt from this tab would be
+        // claiming a payment that was not theirs.
+        const ttl = (status?.cooldownSeconds ?? 86400) * 1000;
+        const receipt = kind === "address" ? (readReceipts(ttl)[receiptKey(network, address)] ?? null) : null;
+        setRefusal({ kind, reason, nextAt: Number.isFinite(nextAtMs) ? nextAtMs : null, receipt });
         setPhase("cooldown");
       } else if (res.status === 503 && /empty/i.test(data.error || "")) {
         inFlow.current = false;
@@ -541,7 +625,7 @@ export default function Home() {
 
   const again = () => {
     inFlow.current = false;
-    setAddr(""); setTouched(false); setTx(null); setCopied(null); setErrMsg("");
+    setAddr(""); setTouched(false); setTx(null); setCopied(null); setErrMsg(""); setRefusal(null);
     setQueuedAddr(null);
     setPhase(basePhase(status, network));
   };
@@ -1294,31 +1378,75 @@ export default function Home() {
           </div>
         )}
 
-        {phase === "cooldown" && (
-          <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
-            <span style={kicker}>Already claimed</span>
-            <h2 style={{ margin: 0, fontSize: 19, lineHeight: 1.25 }}>Come back in {dur(remain)}.</h2>
-            {/* THE SERVER'S REASON, NOT OUR GUESS AT IT. This sentence used to read
-                "<address> got its 0.5 cTAZ", which asserted two things the page cannot
-                know: that THIS address was the one blocked, and that it received THIS
-                asset. Both were wrong in the case that surfaced it - the ledger held
-                ZERO cTAZ claims, and the block came from the per-client limit after a
-                TAZ claim. So the page told someone they had been paid an asset the
-                faucet had never sent to anyone.
+        {phase === "cooldown" && (() => {
+          /* TWO SCREENS, because a paid address and a full connection are different
+             situations with different advice. The old single card said "Come back in
+             23h 58m" and offered "Try a different address" for BOTH - and a user who was
+             refused by the connection limit, holding a confirmed drip, read that as the
+             faucet being down and said so on the forum. A different address would not
+             have helped him, and the card told him to try exactly that.
 
-                The API already distinguishes the cases ("This address already claimed
-                recently" vs "This client already claimed recently"), and whyBlocked
-                only puts a network clause on the address branch precisely because the
-                client limit is shared. Rendering that instead of inventing one is the
-                whole fix. */}
-            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
-              {errMsg || "This claim is on cooldown."}{" "}
-              One drip per address every 24 hours, and the per-connection limit is shared
-              across TAZ and cTAZ so the budget is per person rather than per asset.
-            </p>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}><button className="btn btn-secondary btn-sm" onClick={again}>Try a different address</button></div>
-          </div>
-        )}
+             THE SERVER'S REASON, NOT OUR GUESS AT IT. An earlier version invented "<address>
+             got its 0.5 cTAZ" and was wrong about both the address and the asset. The API
+             says which limit refused; this renders that. And it renders the time as a
+             clock reading - a person can act on "09:21 tomorrow"; "83400 seconds" is
+             homework.
+
+             THE RECEIPT IS THIS BROWSER'S OWN. It is never asked of the server (that was an
+             address-to-txid oracle, see rememberReceipt) and it is never shown for a
+             connection refusal, where the blocking drip may be someone else's on the same
+             router. */
+          const r = refusal;
+          const when = r?.nextAt ? new Date(r.nextAt) : cooldownEnd ? new Date(cooldownEnd) : null;
+          const whenText = when
+            ? when.toLocaleString(undefined, { hour: "2-digit", minute: "2-digit", weekday: "short", timeZoneName: "short" })
+            : null;
+          if (r?.kind === "connection" || r?.kind === "subnet") {
+            // The subnet refusal carries a fixed hour, not a measured expiry, and the
+            // server sends no nextAt for it - so no clock time is promised here either.
+            // Rendering one next to the reason's own "try again tomorrow" put two
+            // contradictory times on one card.
+            const sub = r.kind === "subnet";
+            return (
+              <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
+                <span style={kicker}>{sub ? "Network limit reached" : "Connection limit reached"}</span>
+                <h2 style={{ margin: 0, fontSize: 19, lineHeight: 1.25 }}>{sub ? "Your network is over its quota for now." : "This connection is out of drips for now."}</h2>
+                <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
+                  {r.reason || "Everyone on the same network shares this limit."}{" "}
+                  {!sub && whenText ? <>A slot frees at <strong>{whenText}</strong> (in {dur(remain)}).</> : null}
+                </p>
+                <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
+                  The faucet is up. This is a limit, not a fault.
+                </p>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}><button className="btn btn-ghost btn-sm" onClick={again} style={{ padding: 0 }}>Start over</button></div>
+              </div>
+            );
+          }
+          const rc = r?.receipt ?? null;
+          return (
+            <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
+              <span style={kicker}>{rc ? "Already paid" : "Already claimed"}</span>
+              <h2 style={{ margin: 0, fontSize: 19, lineHeight: 1.25 }}>
+                {rc ? `This address got its ${rc.amountText}.` : "This address already claimed recently."}
+              </h2>
+              {rc?.txid && (
+                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
+                  <code data-testid="cooldown-txid" style={{ fontSize: 12, wordBreak: "break-all" }}>{rc.txid}</code>
+                  <button className="btn btn-secondary btn-sm" onClick={() => void copy("txid", rc.txid!)}>{copied === "txid" ? "Copied" : "Copy"}</button>
+                  {rc.explorerUrl && <a className="btn btn-secondary btn-sm" href={rc.explorerUrl} target="_blank" rel="noreferrer">Open in explorer ↗</a>}
+                </div>
+              )}
+              <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
+                {r?.reason || "This claim is on cooldown."}{" "}
+                {whenText ? <>The next drip for this address is available at <strong>{whenText}</strong> (in {dur(remain)}).</> : <>The next one is available in {dur(remain)}.</>}
+              </p>
+              <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
+                The faucet is up. This is a limit, not a fault.
+              </p>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}><button className="btn btn-secondary btn-sm" onClick={again}>Try a different address</button></div>
+            </div>
+          );
+        })()}
 
         {phase === "error" && (
           <div role="alert" style={{ border: "2px solid var(--color-accent)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 11 }}>

@@ -87,7 +87,8 @@ export const INDEXES = `
 DROP INDEX IF EXISTS idx_claims_addrhash;
 CREATE INDEX IF NOT EXISTS idx_claims_addr_net ON claims(address_hash, network, created_at);
 -- ip and subnet are deliberately NOT keyed by network, and that matches their queries
--- rather than being an omission: those two limits are global. See RESERVE_SQL.
+-- rather than being an omission: the subnet cap is global; the ip cap has been per
+-- network since 2026-08-04. See RESERVE_SQL.
 CREATE INDEX IF NOT EXISTS idx_claims_iphash   ON claims(ip_hash, created_at);
 CREATE INDEX IF NOT EXISTS idx_claims_created  ON claims(created_at);
 CREATE INDEX IF NOT EXISTS idx_used_exp        ON used_challenges(exp);
@@ -284,10 +285,21 @@ AND (
   -- The SUBNET cap below stays global on purpose. That one is a volume control against a
   -- range, not a per-person entitlement, and splitting it would hand a farmer exactly the
   -- lever the comment above warns about: alternate networks, take twice as much.
-  ? = '' OR NOT EXISTS (
-    SELECT 1 FROM claims WHERE ip_hash = ? AND network = ?
+  -- A COUNT, NOT AN EXISTS, SINCE 2026-09-11. One drip per IP meant one drip per
+  -- HOUSEHOLD: every laptop and phone behind a home router shares one public address, so
+  -- the first person to claim locked out everyone else for a day. Reported twice - a
+  -- forum user who read the refusal as an outage, and the owner's own house.
+  --
+  -- Keyed on the IP still, because the alternative is identifying devices, and a device
+  -- is a cookie (cleared in one click) or a fingerprint (durable, bypassable anyway, and
+  -- it would make "it calls nobody and tracks nobody" false). A slightly looser IP rule
+  -- costs a farmer FAUCET_IP_DAILY_MAX drips instead of one; a fingerprint costs us the
+  -- reason people trust this faucet. The per-ADDRESS rule below is still one, the subnet
+  -- cap still bounds a range, and proof-of-work is still paid per claim.
+  ? = '' OR (
+    SELECT COUNT(*) FROM claims WHERE ip_hash = ? AND network = ?
       AND ((status='sent' AND created_at > ?) OR (status='pending' AND created_at > ?))
-  )
+  ) < ?
 )
 AND (
   ? = '' OR (
@@ -315,6 +327,8 @@ export function reserveParams(o: {
   /** This network's cap, not a global one. cTAZ carries its own (config.crosslink). */
   dailyCapZat: number;
   subnetDailyMax: number;
+  /** Distinct claims one IP may hold inside the cooldown window. 1 restores the old rule. */
+  ipDailyMax: number;
   network: string;
   /** How long a pending row blocks: pendingLeaseSeconds(config.sendResidenceMs, config.sendQueueMaxPending). */
   pendingLeaseSeconds: number;
@@ -325,7 +339,7 @@ export function reserveParams(o: {
   return [
     o.addressHash, o.ipHash, o.subnetHash, o.amountZat, o.now, o.network, // INSERT ... SELECT
     o.addressHash, o.network, cooldownCut, leaseCut, //           address NOT EXISTS, per network
-    o.ipHash, o.ipHash, o.network, cooldownCut, leaseCut, //      ip branch, PER NETWORK since 2026-08-04
+    o.ipHash, o.ipHash, o.network, cooldownCut, leaseCut, o.ipDailyMax, // ip branch, N per IP since 2026-09-11
     o.subnetHash, o.subnetHash, since, leaseCut, o.subnetDailyMax, // subnet branch, GLOBAL
     o.network, since, leaseCut, o.amountZat, o.dailyCapZat, //    daily cap, per network
   ];
@@ -400,6 +414,29 @@ SELECT created_at, status FROM claims
 WHERE ${column} = ? AND network = ?
   AND ((status='sent' AND created_at > ?) OR (status='pending' AND created_at > ?))
 ORDER BY created_at DESC LIMIT 1
+`;
+
+/**
+ * How many live claims one IP holds, and the age of the OLDEST, in one round trip.
+ *
+ * Scoped exactly as RESERVE_SQL's ip branch is. The count decides whether the gate
+ * blocked; frees_at is when the next slot opens.
+ *
+ * EACH ROW EXPIRES ON ITS OWN WINDOW, which is why this is MIN of an expiry and not
+ * MIN of a creation time. A sent row blocks for the cooldown; a pending one only for the
+ * lease, which is hours shorter under shipped config. The first cut took the oldest
+ * created_at and added the cooldown to it regardless of status, and review measured the
+ * cost: five devices claim and stay pending behind a slow sender, the sixth is told
+ * 23h 59m, the slot actually opened in 1h 48m. The address branch already did this
+ * per-status; this branch dropped it, and then stamped the wrong answer onto a
+ * confident wall-clock nextAt.
+ */
+export const IP_WINDOW_SQL = `
+SELECT COUNT(*) AS n,
+       MIN(created_at + CASE status WHEN 'sent' THEN ? ELSE ? END) AS frees_at
+FROM claims
+WHERE ip_hash = ? AND network = ?
+  AND ((status='sent' AND created_at > ?) OR (status='pending' AND created_at > ?))
 `;
 
 export const FINALIZE_SQL = `UPDATE claims SET status = ?, txid = ? WHERE id = ?`;
