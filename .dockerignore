@@ -46,6 +46,16 @@ env.*
 **/faucet.env
 **/faucet.env.bak-*
 **/faucet.env.pre-*
+# THE SHAPE, NOT A LIST OF SUFFIXES. The two rules above name the backup spellings that
+# existed in July. On 2026-09-10 a threshold edit made backups as faucet.env.bak.<epoch>
+# - a DOT after bak - and no rule here matched it: verified with a throwaway build, the
+# live secrets file was the one name that reached /app. Any suffix on the secrets file
+# is the secrets file. The example is re-admitted below, as before.
+**/faucet.env.*
+**/*.env.*
+# And the editor's spelling, which has no dot: vim and emacs write faucet.env~ beside
+# the file they are editing, and the probe in ci.yml found it was the one still admitted.
+**/*.env~
 
 # The tracked template is documentation, carries no values, and the README points at it.
 # Negation last: .dockerignore takes the LAST matching rule, so this has to follow the
