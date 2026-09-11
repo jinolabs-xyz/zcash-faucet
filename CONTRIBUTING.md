@@ -139,16 +139,16 @@ these two places, change the other.
 ```sh
 npm ci
 npm run typecheck   # tsc --noEmit
-npm test            # node --test, needs Node 23+ (native type stripping)
+npm test            # node --test, needs Node 22.18+ (native type stripping)
 npm run build       # next build
 ```
 
 Gotchas that have already bitten us once each:
 
 - The unit tests are TypeScript run straight through `node --test`. That
-  relies on native type stripping, so Node 23 or newer is required. CI pins
-  23.x for this reason. Do not "fix" the test script to work around an old
-  local Node without talking to the CTO.
+  relies on native type stripping, unflagged from Node 22.18. CI and the
+  Dockerfile pin 24, and the repo suite asserts they agree. Do not "fix" the
+  test script to work around an old local Node without talking to the CTO.
 - `npm run dev` does not bundle (a `node:` import in `src/lib/zcash/t2z.ts`).
   Verify changes against `npm run build` and `npm start`, never dev.
 - Shell scripts in `deploy/` must pass `shellcheck` at warning severity.

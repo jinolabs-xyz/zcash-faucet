@@ -37,8 +37,10 @@ jobs:
           # suite was green on a runtime that does not exist in production. The
           # repo suite now asserts the agreement.
           #
-          # 24 is the Active LTS (until 2028-04); 26 is Current until it enters LTS
-          # in 2026-10, and an unattended faucet does not want a Current line.
+          # 24 is Active LTS until 2026-10-20 and supported until 2028-04-30; 22
+          # has been Maintenance since 2025-10-21. 26 is Current until it becomes
+          # LTS on 2026-10-28, and an unattended faucet does not want a Current
+          # line, so revisit then.
           #
           # The floor for `npm test` is 22.18: it runs .ts through `node --test`,
           # which needs type stripping, unflagged from 22.18. Below that the script
