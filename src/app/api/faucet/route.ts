@@ -303,10 +303,13 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     // clock time is something a person can act on. Both are sent so an existing client
     // keeps working.
     //
-    // And for an ADDRESS cooldown, the transaction that already paid. That is the whole
-    // of this refusal's news: you have the money already, here it is. It is sent ONLY on
-    // the address branch on purpose - an IP refusal can be someone else on the same
-    // router, and handing their txid to whoever shares their Wi-Fi is not ours to do.
+    // WHAT IS DELIBERATELY NOT HERE: the txid that already paid the address. A first cut
+    // returned it, and review showed what that is - an oracle. Anyone who knows address X
+    // can POST it with one solved proof-of-work and learn which transaction paid X. For a
+    // shielded recipient that is a link the chain itself does not reveal, and PRIVACY.md
+    // says we refuse to build that record. The browser that made the claim already holds
+    // the txid from its own 200; it can remember its own receipt without asking us to
+    // repeat it to whoever asks.
     const nextAt =
       reservation.retryAfterSeconds != null
         ? new Date((now + reservation.retryAfterSeconds) * 1000).toISOString()
@@ -314,7 +317,6 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     return apiError(reservation.kind === "cap" ? 503 : 429, reservation.reason, api, {
       retryAfterSeconds: reservation.retryAfterSeconds,
       nextAt,
-      ...(reservation.priorTxid ? { priorTxid: reservation.priorTxid } : {}),
     });
   }
 

@@ -58,12 +58,6 @@ export type ReserveResult =
       kind: "cooldown" | "cap" | "subnet";
       reason: string;
       retryAfterSeconds?: number;
-      /**
-       * The transaction that already paid this ADDRESS, when that is why it was refused.
-       * Never set for an IP refusal: the row behind that one may belong to someone else
-       * on the same router, and their txid is not ours to hand out.
-       */
-      priorTxid?: string;
     };
 
 /** Diagnose why an atomic reserve inserted 0 rows (for a useful error message). */
@@ -87,7 +81,7 @@ async function whyBlocked(
     // Params follow the statement, and the statement only carries a network clause on
     // the address branch. Built here rather than always passing one, so a mismatch is
     // a compile-visible shape difference instead of a silently ignored extra param.
-    const row = await driver().get<{ created_at: number; status: string; txid: string | null }>(LIVE_BLOCK_SQL(col), [
+    const row = await driver().get<{ created_at: number; status: string }>(LIVE_BLOCK_SQL(col), [
       val,
       // BOTH branches carry the network now. The ip branch became per-network on
       // 2026-08-04 so each asset is claimable once a day, and a whyBlocked that still
@@ -104,16 +98,17 @@ async function whyBlocked(
         kind: "cooldown",
         reason: `This ${label} already claimed recently. Try again later.`,
         retryAfterSeconds: Math.max(1, window - (now - row.created_at)),
-        ...(row.txid ? { priorTxid: row.txid } : {}),
       };
     }
   }
-  // THE PER-IP ALLOWANCE, counted the way the gate counts it. The slot frees when the
-  // OLDEST of the live claims ages out, not the newest, so that is what the retry-after
-  // is measured from: telling someone to come back in 24h when a slot opens in ten
-  // minutes is the same kind of wrong answer as not telling them at all.
+  // THE PER-IP ALLOWANCE, counted the way the gate counts it. The slot frees at the
+  // EARLIEST EXPIRY among the live claims - each on its own window, since a pending row
+  // lives for the lease and a sent one for the cooldown. Telling someone to come back in
+  // 24h when a slot opens in two is the same kind of wrong answer as not telling them.
   if (ipHash && ipDailyMax > 0) {
-    const row = await driver().get<{ n: number; oldest: number }>(IP_WINDOW_SQL, [
+    const row = await driver().get<{ n: number; frees_at: number }>(IP_WINDOW_SQL, [
+      cooldownSeconds,
+      PENDING_LEASE_SECONDS,
       ipHash,
       network,
       now - cooldownSeconds,
@@ -127,9 +122,9 @@ async function whyBlocked(
         // whoever used the other slots, and "your connection" is the thing they can
         // actually reason about.
         reason:
-          `This connection has used all ${ipDailyMax} of its drips for today. ` +
-          "Everyone on the same network shares this limit. Try again later.",
-        retryAfterSeconds: Math.max(1, cooldownSeconds - (now - (row?.oldest ?? now))),
+          `This connection has used all ${ipDailyMax} of its drips for the last 24 hours. ` +
+          "Everyone on the same network shares this limit, so a different address will not help. Try again later.",
+        retryAfterSeconds: Math.max(1, (row?.frees_at ?? now) - now),
       };
     }
   }

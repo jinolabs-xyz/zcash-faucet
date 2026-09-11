@@ -406,7 +406,11 @@ try {
   // confirmed drip, so the 429 now hands back the transaction that already paid and a
   // wall-clock time rather than a duration to do arithmetic on.
   ok("A the 429 says WHEN, not just how long", typeof repeat.body.nextAt === "string" && !Number.isNaN(Date.parse(repeat.body.nextAt)), JSON.stringify(repeat.body.nextAt));
-  ok("A the 429 hands back the txid that already paid this address", repeat.body.priorTxid === sent.body.txid, `${repeat.body.priorTxid} vs ${sent.body.txid}`);
+  // AND IT DOES NOT HAND BACK THE TXID. A first cut did, and that is an oracle: anyone who
+  // knows an address can learn which transaction paid it for the price of one PoW, which
+  // for a shielded recipient is a link the chain does not reveal. The browser that made
+  // the claim already has the txid from its own 200 and remembers it itself.
+  ok("A the 429 does NOT disclose which transaction paid the address", !("priorTxid" in repeat.body) && !/[0-9a-f]{64}/.test(JSON.stringify(repeat.body)), JSON.stringify(repeat.body));
 
   const bad = await claim(BASE_A, UNIFIED_BAD, await solvedChallenge(BASE_A));
   ok("A checksum-broken address is 400", bad.status === 400, `status ${bad.status}`);

@@ -409,7 +409,7 @@ WHERE subnet_hash = ?
  * reason, and the user is told the daily cap was reached when it was not.
  */
 export const LIVE_BLOCK_SQL = (column: "address_hash" | "ip_hash") => `
-SELECT created_at, status, txid FROM claims
+SELECT created_at, status FROM claims
 WHERE ${column} = ? AND network = ?
   AND ((status='sent' AND created_at > ?) OR (status='pending' AND created_at > ?))
 ORDER BY created_at DESC LIMIT 1
@@ -419,12 +419,21 @@ ORDER BY created_at DESC LIMIT 1
  * How many live claims one IP holds, and the age of the OLDEST, in one round trip.
  *
  * Scoped exactly as RESERVE_SQL's ip branch is. The count decides whether the gate
- * blocked; the oldest decides when a slot frees, because with N per window the next
- * opening is the expiry of the earliest claim, not the latest. Reporting the latest
- * would tell a household to come back tomorrow when a slot opens in minutes.
+ * blocked; frees_at is when the next slot opens.
+ *
+ * EACH ROW EXPIRES ON ITS OWN WINDOW, which is why this is MIN of an expiry and not
+ * MIN of a creation time. A sent row blocks for the cooldown; a pending one only for the
+ * lease, which is hours shorter under shipped config. The first cut took the oldest
+ * created_at and added the cooldown to it regardless of status, and review measured the
+ * cost: five devices claim and stay pending behind a slow sender, the sixth is told
+ * 23h 59m, the slot actually opened in 1h 48m. The address branch already did this
+ * per-status; this branch dropped it, and then stamped the wrong answer onto a
+ * confident wall-clock nextAt.
  */
 export const IP_WINDOW_SQL = `
-SELECT COUNT(*) AS n, MIN(created_at) AS oldest FROM claims
+SELECT COUNT(*) AS n,
+       MIN(created_at + CASE status WHEN 'sent' THEN ? ELSE ? END) AS frees_at
+FROM claims
 WHERE ip_hash = ? AND network = ?
   AND ((status='sent' AND created_at > ?) OR (status='pending' AND created_at > ?))
 `;
