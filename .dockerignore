@@ -53,9 +53,15 @@ env.*
 # is the secrets file. The example is re-admitted below, as before.
 **/faucet.env.*
 **/*.env.*
-# And the editor's spelling, which has no dot: vim and emacs write faucet.env~ beside
-# the file they are editing, and the probe in ci.yml found it was the one still admitted.
+# And the editors' spellings, which have no dot. vim and emacs write faucet.env~ beside
+# the file they are editing; emacs ALSO keeps its in-flight copy as #faucet.env#, from the
+# first keystroke until save - the full secrets file, alive for exactly as long as an
+# operator has it open, which is when an auto-deploy tick can fire.
 **/*.env~
+**/#*.env#
+# Root .env.example is caught by *.env.* too and is NOT re-admitted: nothing at runtime
+# reads it, and the deploy manifest verifier agrees it is absent. Saying so here so the
+# next person to notice /app/.env.example is gone does not go looking for a bug.
 
 # The tracked template is documentation, carries no values, and the README points at it.
 # Negation last: .dockerignore takes the LAST matching rule, so this has to follow the

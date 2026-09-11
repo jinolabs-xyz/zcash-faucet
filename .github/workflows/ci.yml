@@ -374,12 +374,13 @@ jobs:
         run: |
           set -euo pipefail
           ctx="$(mktemp -d)"
-          mkdir -p "$ctx/deploy/z3" "$ctx/deploy/z3/tests"
+          mkdir -p "$ctx/deploy/z3"
           cp .dockerignore "$ctx/"
-          # Real spellings from the box, plus shapes nobody has used yet.
+          # Real spellings from the box, plus shapes nobody has used yet. '#faucet.env#' is
+          # emacs's autosave: present from the first keystroke to the save.
           for f in faucet.env faucet.env.example \
                    faucet.env.bak-20260730T173852Z faucet.env.pre-acct-restore-20260731T080219Z \
-                   faucet.env.bak.1789032981 faucet.env.orig faucet.env.tmp.4242 faucet.env~ \
+                   faucet.env.bak.1789032981 faucet.env.orig faucet.env.tmp.4242 faucet.env~ '#faucet.env#' \
                    alerts.env watchdog.env miner.env .env .env.tmp.99; do
             echo "secret=$f" > "$ctx/deploy/z3/$f"
           done
@@ -390,6 +391,14 @@ jobs:
           docker rmi -f dockerignore-probe >/dev/null 2>&1 || true
           rm -rf "$ctx"
           want="/ctx/deploy/z3/faucet.env.example"
+          if [ -z "$got" ]; then
+            # The opposite failure, and the message has to point the opposite way: the
+            # example is documentation the README links to, and losing it means the
+            # negation was deleted or is no longer the LAST matching rule.
+            echo "THE BUILD CONTEXT EXCLUDED THE EXAMPLE TOO."
+            echo "!**/faucet.env.example must be present and must be the last rule that matches it."
+            exit 1
+          fi
           if [ "$got" != "$want" ]; then
             echo "THE BUILD CONTEXT LET THESE THROUGH (only the example is allowed):"
             printf '%s\n' "$got" | sed 's/^/  /'

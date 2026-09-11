@@ -98,7 +98,7 @@ command -v docker >/dev/null || not_shipped "docker is not installed, nothing wa
 # learns to ignore it, and the day the box really does run modified code nobody looks.
 #
 # The obvious fix is `--untracked-files=no`, and it is WRONG HERE. This repo's Dockerfile
-# does `COPY . .` from the repo root, and `.dockerignore` does not exclude backups, so an
+# does `COPY . .` from the repo root, and `.dockerignore` did not, until #486, exclude every backup spelling, so an
 # untracked file in the checkout IS copied into the image. Untracked genuinely can change
 # what runs. Dropping it would trade a noisy true claim for a quiet false one.
 #
