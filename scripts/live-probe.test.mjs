@@ -469,18 +469,23 @@ test("SMOKE_ATTEMPTS=0 still probes once: zero attempts must not read as healthy
   });
   assert.notEqual(r.code, 0, "a dead origin must fail whatever SMOKE_ATTEMPTS says");
   assert.doesNotMatch(r.out, /live-probe: healthy/);
-  // 0 is below the floor, so the DEFAULT applies (three attempts), not a clamp to one.
-  // What matters is that at least one attempt happened at all.
-  assert.match(r.out, /attempt 1\//, "at least one attempt was made, not zero");
+  // The proof that an attempt happened is the failure line from the status fetch and a
+  // non-zero attempt count in the verdict. Not "attempt 1/": that line is printed only
+  // when there is a SECOND attempt to wait for, so it pinned "the default of 3 applied"
+  // and would fail a probe that clamped 0 to exactly one attempt - which is also fine.
+  assert.match(r.out, /FAIL: GET \/api\/status/, "the status fetch was attempted and failed");
+  assert.match(r.out, /after [1-9]\d* attempt\(s\)/, "the verdict counts at least one attempt");
 });
 
 test("SMOKE_TIMEOUT_MS=0 falls back to the default rather than meaning no timeout", async (t) => {
   // A handshake timeout of 0 is no timeout: a black-holed 443 - accepts the TCP
   // connection and never speaks - would hold the probe for the OS's own connect timeout,
   // minutes, on every scheduled run. The floor is 1 and nothing pinned it. This server
-  // accepts and says nothing; with the fallback of 15s the probe gives up in ~15-30s
-  // (two fetch attempts share the budget), and the bound below is generous on purpose -
-  // the mutant hangs for minutes, so it separates by more than a factor of two.
+  // accepts and says nothing. With the fallback in place the status fetch dies at ~10s
+  // (undici's own connect timeout lands before the 15s signal) and the TLS handshake at
+  // 15s, ~25s measured; run()'s 60s bomb is the ceiling. The mutant fails the fetch at
+  // once and then sits in tls.connect with timeout 0 for minutes, so 50s separates them
+  // by more than a factor of two either way.
   const net = await import("node:net");
   const hole = net.createServer((sock) => { /* accept, never write, never close */ sock.on("error", () => {}); });
   await new Promise((r) => hole.listen(0, "127.0.0.1", r));
