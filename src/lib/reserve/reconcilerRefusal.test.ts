@@ -21,7 +21,6 @@ import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 
 let hoshHeight: number | null = 4_220_000;
-const port = 59_432;
 const hosh: Server = createServer((_req, res) => {
   if (hoshHeight == null) {
     res.writeHead(503).end("{}");
@@ -30,7 +29,8 @@ const hosh: Server = createServer((_req, res) => {
   res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify({ servers: [{ chain: "test", online: true, height: hoshHeight }] }));
 });
-await new Promise<void>((r) => hosh.listen(port, "127.0.0.1", r));
+await new Promise<void>((r) => hosh.listen(0, "127.0.0.1", r));
+const port = (hosh.address() as { port: number }).port;
 
 process.env.HOSH_URL = `http://127.0.0.1:${port}/`;
 process.env.LIGHTWALLETD_ENDPOINT = "https://127.0.0.1:59997";

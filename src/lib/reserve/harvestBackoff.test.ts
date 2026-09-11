@@ -19,15 +19,19 @@ import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 
 let hoshHeight: number | null = 4_220_000;
-// 59_431 is shieldGateWiring's and 59_432/59_433 are taken too. The suites run as
-// separate processes but bind the same loopback, so a duplicate here takes down the
-// OTHER file, which is how this first showed up: a green file and a crashed neighbour.
-const port = 59_430;
+// PORT 0: the kernel picks one that is free. This file used to pin 59_430 and its three
+// siblings 59_431..59_433, with a note about the day a duplicate crashed a neighbour.
+// The pin had a second failure the note did not cover: `node --test` runs files in
+// parallel processes, any of them can be handed 59_430 as an EPHEMERAL port for an
+// outbound connection, and this file then dies with EADDRINUSE on a runner where nothing
+// else is listening. Once, on #491, 766/767 (#492). Nothing in this file needs to know
+// the number before the listener exists.
 const hosh: Server = createServer((_req, res) => {
   res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify({ servers: [{ chain: "test", online: true, height: hoshHeight }] }));
 });
-await new Promise<void>((r) => hosh.listen(port, "127.0.0.1", r));
+await new Promise<void>((r) => hosh.listen(0, "127.0.0.1", r));
+const port = (hosh.address() as { port: number }).port;
 
 process.env.HOSH_URL = `http://127.0.0.1:${port}/`;
 process.env.LIGHTWALLETD_ENDPOINT = "https://127.0.0.1:59997";

@@ -23,7 +23,6 @@ import { createServer, type Server } from "node:http";
 let hoshHeight: number | null = null;
 let hoshHits = 0;
 let hoshDelayMs = 0;
-const port = 59_431;
 
 const hosh: Server = createServer((_req, res) => {
   hoshHits += 1;
@@ -41,7 +40,8 @@ function answer(res: import("node:http").ServerResponse): void {
   res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify({ servers: [{ chain: "test", online: true, height: hoshHeight }] }));
 }
-await new Promise<void>((r) => hosh.listen(port, "127.0.0.1", r));
+await new Promise<void>((r) => hosh.listen(0, "127.0.0.1", r));
+const port = (hosh.address() as { port: number }).port;
 
 // Env before the dynamic imports: config and HOSH_URL are both read at module load.
 // The lightwalletd fallback is pointed at a closed port rather than cleared, since
