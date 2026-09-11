@@ -407,13 +407,37 @@ for suite in $SELECTED; do
   # file's own subject - a suite nobody ran and nothing said so - one door over from the
   # list guard above, which is why it is not left to CI's shellcheck to catch one half of.
   #
-  # The count is the evidence, not the exit status: a suite can source cleanly and still
-  # be a no-op if its body is guarded off, and `. file || bad` would not notice.
+  # THE EXIT STATUS OF `.` IS NOT THE EVIDENCE. `. file` returns whatever the suite's LAST
+  # command returned, and ctazbroker.sh ends with `wait` on a process it just killed,
+  # which is 143. The first cut of this floor read that as "did not source cleanly" and
+  # failed a suite whose every check had passed - measured: 144 ok, then one FAIL saying
+  # its checks never ran, exit 1 on the whole harness. A false alarm from the guard
+  # against false passes.
+  #
+  # So the two real conditions are checked directly, BEFORE sourcing: can the file be
+  # read, and does it parse. Those are the two shapes that were green before (an
+  # unreadable prune.sh and one with a syntax error both gave "23 passed, 0 failed" where
+  # sixty checks were due). After sourcing, the count is the evidence that it ran: pass
+  # and fail are assigned in lib.sh, sourced above, and a suite that leaves them where it
+  # found them asserted nothing, whatever the shell thought of its last line.
+  if [ ! -r "$file" ]; then
+    bad "suite $suite is not readable, so none of its checks ran"
+    continue
+  fi
+  # Captured into a variable, NOT a file beside the suite: the tree is mounted read-only
+  # in the harness container, and the first cut wrote the parse error to $SCRATCH - the
+  # failed redirect then counted as a parse failure and every suite "did not parse" with
+  # an empty message. A guard against false results that produces one is worse than none.
+  if ! parse_err="$(bash -n "$file" 2>&1)"; then
+    bad "suite $suite does not parse, so none of its checks ran: $(printf '%s' "$parse_err" | head -n1)"
+    continue
+  fi
+  # shellcheck disable=SC2154 # pass and fail are assigned in lib.sh, sourced above
   before=$(( pass + fail ))
   # shellcheck source=/dev/null
-  if ! . "$file"; then
-    bad "suite $suite did NOT source cleanly, so some or all of its checks never ran"
-  elif [ "$(( pass + fail ))" -eq "$before" ]; then
+  . "$file"
+  # shellcheck disable=SC2154
+  if [ "$(( pass + fail ))" -eq "$before" ]; then
     bad "suite $suite sourced but ran no checks at all, which is not a pass"
   fi
 done

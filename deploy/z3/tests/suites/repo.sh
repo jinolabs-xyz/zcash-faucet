@@ -460,9 +460,19 @@ rm -f "$T/tests2/suites/zzzbroken.sh"
 printf '# shellcheck shell=bash\ncheck "counts once" "true"\nif true; then\n' > "$T/tests2/suites/prune.sh"
 ( cd "$REPO" && SUITES="prune" TEST_SCRATCH="$T/tests2" bash "$T/tests2/run-tests.sh" > "$T/nosource.log" 2>&1 )
 rc=$?
-check "a suite that fails to SOURCE fails the run rather than passing it" "[ $rc -ne 0 ]"
-check "and says which suite, and that its checks never ran" \
-  "grep -q 'suite prune did NOT source cleanly' '$T/nosource.log'"
+check "a suite that does not PARSE fails the run rather than passing it" "[ $rc -ne 0 ]"
+check "and says which suite, and quotes the parse error" \
+  "grep -q 'suite prune does not parse' '$T/nosource.log' && grep -q 'syntax error' '$T/nosource.log'"
+# AND A SUITE WHOSE LAST COMMAND FAILS IS NOT A BROKEN SUITE. The first cut of the floor
+# read the exit status of `.`, which is the exit status of the suite's last line, and
+# ctazbroker.sh ends with `wait` on a process it just killed (143). It failed a suite
+# whose every check had passed. The parse check cannot make that mistake, and this pins
+# that a healthy suite ending in a non-zero command is left alone.
+printf '# shellcheck shell=bash\ncheck "one real check" "true"\nfalse\n' > "$T/tests2/suites/prune.sh"
+( cd "$REPO" && SUITES="prune" TEST_SCRATCH="$T/tests2" bash "$T/tests2/run-tests.sh" > "$T/lastfalse.log" 2>&1 )
+rc=$?
+check "a suite whose LAST command exits non-zero is not reported as broken" \
+  "[ $rc -eq 0 ] && grep -q '1 passed, 0 failed' '$T/lastfalse.log'"
 # And a suite that sources fine but asserts nothing is not a pass either.
 printf '# shellcheck shell=bash\n: nothing to see here\n' > "$T/tests2/suites/prune.sh"
 ( cd "$REPO" && SUITES="prune" TEST_SCRATCH="$T/tests2" bash "$T/tests2/run-tests.sh" > "$T/nochecks.log" 2>&1 )
