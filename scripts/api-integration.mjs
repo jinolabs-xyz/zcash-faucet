@@ -401,6 +401,12 @@ try {
 
   const repeat = await claim(BASE_A, tmAddr, await solvedChallenge(BASE_A));
   ok("A immediate repeat is 429 with retryAfterSeconds", repeat.status === 429 && typeof repeat.body.retryAfterSeconds === "number", `status ${repeat.status}`);
+  // A COOLDOWN IS NOT AN OUTAGE, and the refusal has to carry enough for a client to say
+  // so. A forum user read exactly this response as the faucet being down while holding a
+  // confirmed drip, so the 429 now hands back the transaction that already paid and a
+  // wall-clock time rather than a duration to do arithmetic on.
+  ok("A the 429 says WHEN, not just how long", typeof repeat.body.nextAt === "string" && !Number.isNaN(Date.parse(repeat.body.nextAt)), JSON.stringify(repeat.body.nextAt));
+  ok("A the 429 hands back the txid that already paid this address", repeat.body.priorTxid === sent.body.txid, `${repeat.body.priorTxid} vs ${sent.body.txid}`);
 
   const bad = await claim(BASE_A, UNIFIED_BAD, await solvedChallenge(BASE_A));
   ok("A checksum-broken address is 400", bad.status === 400, `status ${bad.status}`);

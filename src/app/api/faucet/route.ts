@@ -280,6 +280,7 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     cooldownSeconds: config.cooldownSeconds,
     dailyCapZat: policy.dailyCapZat,
     subnetDailyMax: config.subnetDailyMax,
+    ipDailyMax: config.ipDailyMax,
     network,
   });
   if (!reservation.ok) {
@@ -298,8 +299,22 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     }
     // 429 for both cooldown kinds and the subnet rule, because all three are "you,
     // later". 503 stays for the global cap, which is "the faucet, later".
+    // WHEN, not just how long. "Try again in 83400 seconds" is arithmetic homework; a
+    // clock time is something a person can act on. Both are sent so an existing client
+    // keeps working.
+    //
+    // And for an ADDRESS cooldown, the transaction that already paid. That is the whole
+    // of this refusal's news: you have the money already, here it is. It is sent ONLY on
+    // the address branch on purpose - an IP refusal can be someone else on the same
+    // router, and handing their txid to whoever shares their Wi-Fi is not ours to do.
+    const nextAt =
+      reservation.retryAfterSeconds != null
+        ? new Date((now + reservation.retryAfterSeconds) * 1000).toISOString()
+        : undefined;
     return apiError(reservation.kind === "cap" ? 503 : 429, reservation.reason, api, {
       retryAfterSeconds: reservation.retryAfterSeconds,
+      nextAt,
+      ...(reservation.priorTxid ? { priorTxid: reservation.priorTxid } : {}),
     });
   }
 
