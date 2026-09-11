@@ -168,3 +168,30 @@ test("a subnet refusal is CALLED a subnet refusal when this connection's other-n
   if (refused.ok) return;
   assert.equal(refused.kind, "subnet", `refused for: ${refused.kind} / ${refused.reason}`);
 });
+
+test("a full connection is CALLED a connection when a subnet hash is set, not only when there is none", async () => {
+  // Every test above that expects the connection answer passes subnetHash null, so a
+  // whyBlocked that skipped its ip branch whenever a subnet was known (`&& !subnetHash`)
+  // survived all 770 unit tests; only integration server H caught it, falling through to
+  // "cap"/503 with the subnet nowhere near its limit. Production always has a subnet
+  // hash when it has an ip hash, so the null-subnet path the tests lean on is the one
+  // path production never takes (#499).
+  const ip = "home-with-subnet";
+  const opts = {
+    ipHash: ip, subnetHash: "sub-with-subnet", amountZat: 100n, cooldownSeconds: COOLDOWN,
+    dailyCapZat: 1_000_000_000n, subnetDailyMax: 100, ipDailyMax: IP_MAX,
+  };
+  for (let i = 0; i < IP_MAX; i++) {
+    const r = await reserveClaim({ ...opts, address: `w-${i}`, now: NOW + i * 3600 });
+    assert.equal(r.ok, true, `device ${i} should be paid`);
+    if (r.ok) await finalizeClaim(r.claimId, "sent", `tx-w-${i}`, undefined, (NOW + i * 3600) * 1000);
+  }
+  const at = NOW + 10_000;
+  const refused = await reserveClaim({ ...opts, address: "w-late", now: at });
+  assert.equal(refused.ok, false, "the connection is full");
+  if (refused.ok) return;
+  assert.equal(refused.kind, "cooldown", `refused for: ${refused.kind} / ${refused.reason}`);
+  assert.equal(refused.scope, "connection");
+  // And the retry-after is the connection's measured expiry, not the subnet's fixed hour.
+  assert.equal(refused.retryAfterSeconds, NOW + COOLDOWN - at);
+});
