@@ -12,7 +12,7 @@
 # backup, tests/deploy-stubs for deploy, which needs a different docker
 # model). sqlite, tar, gpg and every hash check run for real.
 #
-# Needs Linux (flock, GNU find) plus zstd, gnupg, python3, jq, curl, and
+# Needs Linux (flock, GNU find) plus zstd, gnupg, python3, jq, curl, git and
 # openssh-server for the access suite. Missing ones are named and refused rather than reported as
 # failures, so trust the refusal over guessing.
 #
@@ -66,7 +66,77 @@ BASE_PATH="$PATH"
 # shellcheck source=lib.sh
 . "$SCRATCH/lib.sh"
 
-SELECTED="${SUITES:-zsnap backup deploy metrics redeploy drift alerts access watchdog repo installops boxreport bringtospec ctazports ctazconfig ctazbroker prune imagemanifest autodeploy zalletrepair}"
+# THE ORDER IS DELIBERATE and stays written out: every suite is sourced into ONE shell, so
+# what one leaves behind the next inherits, and this order is the one CI runs. Discovering
+# the list from the directory would lose that, and a re-ordering has twice cost a review
+# round on its own (a STUB_READY that meant a path in one suite and a flag in another).
+#
+# WHAT IS NOT WRITTEN OUT IS WHETHER IT IS COMPLETE. A suite file added and not named here
+# never runs, on a green tally, which is the same silent-pass shape the suites themselves
+# exist to catch. So the two are compared below and a mismatch refuses the run.
+SUITE_ORDER="zsnap backup deploy metrics redeploy drift alerts access watchdog repo installops boxreport bringtospec ctazports ctazconfig ctazbroker prune imagemanifest autodeploy zalletrepair"
+SELECTED="${SUITES:-$SUITE_ORDER}"
+
+# Only when running the default set: a deliberately narrowed SUITES= is not a mismatch.
+if [ -z "${SUITES:-}" ]; then
+  on_disk=""; broken_links=""
+  for f in "$SCRATCH"/suites/*.sh; do
+    # -e is FALSE for a dangling symlink, so `[ -e ] || continue` dropped one silently:
+    # a .sh-named entry sitting in suites/, never run, never mentioned, green tally. That
+    # is the defect this guard exists for, arriving through the one door the guard did not
+    # watch. -L catches the link itself regardless of where it points.
+    if [ -L "$f" ] && [ ! -e "$f" ]; then
+      broken_links="$broken_links ${f##*/}"
+      continue
+    fi
+    [ -e "$f" ] || continue
+    n="${f##*/}"; on_disk="$on_disk ${n%.sh}"
+  done
+  if [ -n "$broken_links" ]; then
+    echo "REFUSING TO RUN: suites/ holds a broken symlink:$broken_links" >&2
+    echo "It is named like a suite and can never run. Fix the target or remove it." >&2
+    exit 2
+  fi
+  unlisted=""; missing_file=""
+  for n in $on_disk; do
+    case " $SUITE_ORDER " in *" $n "*) ;; *) unlisted="$unlisted $n" ;; esac
+  done
+  for n in $SUITE_ORDER; do
+    case " $on_disk " in *" $n "*) ;; *) missing_file="$missing_file $n" ;; esac
+  done
+  # And NOT TWICE. Set membership says nothing about multiplicity, and a duplicate on that
+  # one 20-name line is what a careless merge produces: the suite is sourced again, the
+  # tally is inflated, and the second sourcing inherits the first one's leftovers.
+  dupes=""
+  for n in $SUITE_ORDER; do
+    seen=0
+    for m in $SUITE_ORDER; do [ "$m" = "$n" ] && seen=$((seen + 1)); done
+    if [ "$seen" -gt 1 ]; then
+      case " $dupes " in *" $n "*) ;; *) dupes="$dupes $n" ;; esac
+    fi
+  done
+  if [ -z "$on_disk" ]; then
+    # Not a disagreement, a wrong path: SCRATCH has no readlink, so invoking this through
+    # a symlink resolves it to the link's directory and every name looks missing.
+    echo "REFUSING TO RUN: no suites found under $SCRATCH/suites." >&2
+    echo "That is a path problem, not a list problem - this script has no readlink, so" >&2
+    echo "running it through a symlink resolves SCRATCH to the link's directory. Run it" >&2
+    echo "by its real path, or set TEST_SCRATCH." >&2
+    exit 2
+  fi
+  if [ -n "$unlisted" ] || [ -n "$missing_file" ] || [ -n "$dupes" ]; then
+    echo "REFUSING TO RUN: the default suite order and deploy/z3/tests/suites/ disagree." >&2
+    [ -n "$unlisted" ] && echo "  on disk but never run:$unlisted" >&2
+    [ -n "$missing_file" ] && echo "  named in the order but no file:$missing_file" >&2
+    [ -n "$dupes" ] && echo "  named more than once, so it would be sourced twice:$dupes" >&2
+    echo >&2
+    echo "A suite that is not named here does not run, and the tally is green anyway -" >&2
+    echo "the exact silent pass these suites exist to catch. Add it to SUITE_ORDER, in the" >&2
+    echo "position you want it sourced: the order is load-bearing, because every suite" >&2
+    echo "shares one shell and inherits what the previous one left behind." >&2
+    exit 2
+  fi
+fi
 
 # A missing dependency used to look exactly like broken code. With no sshd on
 # PATH the access suite reports 3 plain FAILs, and an `apt-get install` that
@@ -214,6 +284,55 @@ cap_reason() { # $1 key -> what is missing, in the operator's terms
   esac
 }
 
+# THE PACKAGES THAT SATISFY suite_deps, in one place. The install line below is generated
+# from this, so a command named in suite_deps and forgotten here is impossible rather than
+# discovered by an operator who copy-pasted our own remedy and was refused again. That has
+# happened twice: `git`, then `jq`.
+# `-` means "deliberately not a package": a GNU behaviour or a property of who we are,
+# which the capability refusal explains on its own. An EMPTY answer means nobody has said,
+# and that is treated as a defect below rather than quietly dropped - dropping is exactly
+# how `git` and then `jq` shipped missing from the remedy.
+dep_package() { # $1 command or capability -> the apt package that provides it
+  case "$1" in
+    zstd)        echo zstd ;;
+    curl)        echo curl ;;
+    gpg)         echo gnupg ;;
+    python3)     echo python3 ;;
+    jq)          echo jq ;;
+    sshd)        echo openssh-server ;;
+    git)         echo git ;;
+    # GNU behaviours (coreutils/findutils) and non-rootness: the capability refusal tells
+    # you to use the Linux container as a normal user, which no package can do for you.
+    stat_c|find_printf|sha256sum|nonroot) echo "-" ;;
+    *)           echo "" ;;
+  esac
+}
+
+# Every package any suite could ask for, in a stable order, whatever this run selected:
+# the printed remedy has to work for the NEXT run too, not only for the narrowed one that
+# refused. An empty answer from dep_package is itself a defect and is named, because a
+# recipe that silently omits a command is how both earlier misses shipped.
+ALL_PACKAGES=""
+UNMAPPED=""
+for _s in $SUITE_ORDER; do
+  for _c in $(suite_deps "$_s") $(suite_caps "$_s"); do
+    [ "$(dep_package "$_c")" = "-" ] && continue
+    _p="$(dep_package "$_c")"
+    if [ -z "$_p" ]; then
+      case " $UNMAPPED " in *" $_c "*) ;; *) UNMAPPED="$UNMAPPED $_c" ;; esac
+      continue
+    fi
+    case " $ALL_PACKAGES " in *" $_p "*) ;; *) ALL_PACKAGES="$ALL_PACKAGES $_p" ;; esac
+  done
+done
+ALL_PACKAGES="${ALL_PACKAGES# }"
+if [ -n "$UNMAPPED" ]; then
+  echo "REFUSING TO RUN: suite_deps names commands with no package in dep_package:$UNMAPPED" >&2
+  echo "The install line this script prints is generated from dep_package, so without an" >&2
+  echo "entry the remedy would leave them out and refuse again. Add them." >&2
+  exit 2
+fi
+
 missing=""
 missing_caps=""
 for suite in $SELECTED; do
@@ -243,7 +362,7 @@ if [ -n "$missing_caps" ]; then
   echo >&2
   echo "  docker run --rm -v \"\$PWD:/repo:ro\" ubuntu:24.04 bash -c '" >&2
   echo "    set -e; apt-get update -qq" >&2
-  echo "    apt-get install -y -qq zstd curl gnupg python3 jq openssh-server git" >&2
+  echo "    apt-get install -y -qq $ALL_PACKAGES" >&2
   echo "    useradd -m runner; cp -r /repo /home/runner/repo" >&2
   echo "    chown -R runner /home/runner/repo" >&2
   echo "    su runner -c \"bash /home/runner/repo/deploy/z3/tests/run-tests.sh\"'" >&2
@@ -256,10 +375,23 @@ if [ -n "$missing" ]; then
   echo >&2
   echo "Running anyway would report them as test failures, which reads as broken" >&2
   echo "code rather than a missing package. On Ubuntu:" >&2
-  echo "  apt-get update && apt-get install -y zstd curl gnupg python3 jq openssh-server git" >&2
+  echo "  apt-get update && apt-get install -y $ALL_PACKAGES" >&2
   echo >&2
   echo "Use 'set -e' on that install. A silently failed one is how 25 phantom" >&2
   echo "failures happen. Narrow the run instead with SUITES=\"drift alerts\"." >&2
+  exit 2
+fi
+
+# A SELECTION THAT NAMES NOTHING IS NOT A PASS. `SUITES=" "` is not -z, so it skipped the
+# order guard, selected zero suites, and exited 0 having sourced none of them - a green
+# pipeline that ran nothing, which is the shape this file exists to refuse. Counted rather
+# than string-tested, so it covers every way of arriving at an empty set.
+_selected_count=0
+for suite in $SELECTED; do _selected_count=$((_selected_count + 1)); done
+if [ "$_selected_count" -eq 0 ]; then
+  echo "REFUSING TO RUN: SUITES is set but names no suite (it was '${SUITES:-}')." >&2
+  echo "Nothing would be sourced and the run would exit 0, which reads as a pass." >&2
+  echo "Unset SUITES for the default order, or name one: SUITES=\"drift alerts\"." >&2
   exit 2
 fi
 
@@ -268,8 +400,46 @@ for suite in $SELECTED; do
   [ -f "$file" ] || { bad "no such suite: $suite"; continue; }
   echo
   echo "### suite: $suite"
+  # A SUITE THAT DOES NOT SOURCE IS A SUITE THAT DID NOT RUN, and until this it was a
+  # GREEN one. `set -uo pipefail` carries no -e, so an unreadable file or a parse error
+  # left `. "$file"` returning non-zero and the loop moved on: measured, a prune.sh with a
+  # syntax error gave "23 passed, 0 failed" where 60 checks were due, exit 0. That is this
+  # file's own subject - a suite nobody ran and nothing said so - one door over from the
+  # list guard above, which is why it is not left to CI's shellcheck to catch one half of.
+  #
+  # THE EXIT STATUS OF `.` IS NOT THE EVIDENCE. `. file` returns whatever the suite's LAST
+  # command returned, and ctazbroker.sh ends with `wait` on a process it just killed,
+  # which is 143. The first cut of this floor read that as "did not source cleanly" and
+  # failed a suite whose every check had passed - measured: 144 ok, then one FAIL saying
+  # its checks never ran, exit 1 on the whole harness. A false alarm from the guard
+  # against false passes.
+  #
+  # So the two real conditions are checked directly, BEFORE sourcing: can the file be
+  # read, and does it parse. Those are the two shapes that were green before (an
+  # unreadable prune.sh and one with a syntax error both gave "23 passed, 0 failed" where
+  # sixty checks were due). After sourcing, the count is the evidence that it ran: pass
+  # and fail are assigned in lib.sh, sourced above, and a suite that leaves them where it
+  # found them asserted nothing, whatever the shell thought of its last line.
+  if [ ! -r "$file" ]; then
+    bad "suite $suite is not readable, so none of its checks ran"
+    continue
+  fi
+  # Captured into a variable, NOT a file beside the suite: the tree is mounted read-only
+  # in the harness container, and the first cut wrote the parse error to $SCRATCH - the
+  # failed redirect then counted as a parse failure and every suite "did not parse" with
+  # an empty message. A guard against false results that produces one is worse than none.
+  if ! parse_err="$(bash -n "$file" 2>&1)"; then
+    bad "suite $suite does not parse, so none of its checks ran: $(printf '%s' "$parse_err" | head -n1)"
+    continue
+  fi
+  # shellcheck disable=SC2154 # pass and fail are assigned in lib.sh, sourced above
+  before=$(( pass + fail ))
   # shellcheck source=/dev/null
   . "$file"
+  # shellcheck disable=SC2154
+  if [ "$(( pass + fail ))" -eq "$before" ]; then
+    bad "suite $suite sourced but ran no checks at all, which is not a pass"
+  fi
 done
 
 echo

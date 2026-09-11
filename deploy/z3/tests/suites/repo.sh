@@ -254,6 +254,298 @@ check "and its last is ts, which is what tells a truncated body from a whole one
 check "and the metrics script says it depends on both, so the coupling is not a surprise" \
   "grep -q 'has to be the body.s FIRST key' '$REPO/deploy/z3/faucet-metrics.sh'"
 
+echo "== repo: every image this REPO declares is watched, and the rest are named (register #26)"
+# npm, cargo and the actions were covered. The IMAGES the faucet runs as - node:22-slim
+# under the app, caddy:2 terminating TLS - were not, so a CVE in either arrived only if
+# somebody happened to read a release note. Adding entries is easy; the hard parts are
+# that the ENTRY IS OF THE RIGHT KIND (`docker` reads Dockerfiles, Compose needs
+# `docker-compose`, and the wrong one parses nothing and says nothing) and that the list
+# keeps up with a tree that grows image references.
+DB="$REPO/.github/dependabot.yml"
+mk_scratch "${TMPDIR:-/tmp}/repo-dependabot.XXXXXX"
+
+# Pair every entry with its ecosystem by walking the updates list, rather than grepping
+# `directory:` anywhere in the file: npm and github-actions both carry `directory: /`, so a
+# bare grep was satisfied by them and passed with the docker entry deleted outright.
+python3 - "$DB" "$REPO" "$T/report.txt" <<'PY'
+import os, re, sys
+db, repo, out = sys.argv[1], sys.argv[2], sys.argv[3]
+
+# Plain-text parse: the harness image has no PyYAML, and this file's shape is fixed.
+entries, eco, directory = [], None, None
+for line in open(db):
+    if re.match(r"^\s*-\s*package-ecosystem:", line):
+        if eco:
+            entries.append((eco, directory))
+        eco = line.split(":", 1)[1].strip().strip('"\'')
+        directory = None
+    elif eco and re.match(r"^\s+directory:", line):
+        directory = line.split(":", 1)[1].strip().strip('"\'')
+if eco:
+    entries.append((eco, directory))
+
+# What dependabot's own fetchers match: docker/lib/dependabot/docker/file_fetcher.rb uses
+# /dockerfile|containerfile/i, and the compose fetcher uses the filename regex below.
+dockerish = re.compile(r"dockerfile|containerfile", re.I)
+composeish = re.compile(r"^(docker-)?compose(-[\w]+)?(\.[\w-]+)?\.ya?ml$", re.I)
+
+want = {}   # directory -> set of required ecosystems
+scanned = 0
+for root, dirs, files in os.walk(repo):
+    dirs[:] = [d for d in dirs if d not in (".git", "node_modules", ".next", ".claude", "coverage")]
+    for f in files:
+        rel = os.path.relpath(root, repo)
+        d = "/" if rel == "." else "/" + rel
+        if dockerish.search(f):
+            scanned += 1
+            want.setdefault(d, set()).add("docker")
+        elif composeish.match(f):
+            # Only if it actually names an image; a compose file with none is nothing to watch.
+            try:
+                body = open(os.path.join(root, f), encoding="utf-8", errors="replace").read()
+            except OSError:
+                continue
+            if re.search(r"^\s+image:", body, re.M):
+                scanned += 1
+                want.setdefault(d, set()).add("docker-compose")
+
+have = {}
+for e, d in entries:
+    have.setdefault(d, set()).add(e)
+
+# DELIBERATELY UNWATCHED, and it has to be said in the config or it is not deliberate.
+# dependabot's Dockerfile parser has no ARG handling, so `FROM ${RUST_IMAGE}` yields no
+# dependencies and an entry there would sit silent; the file's own note says the Rust
+# version is not pinned by that line anyway, and nothing from that image ships.
+EXEMPT = {"/deploy/z3/ctaz-build"}
+config_text = open(db, encoding="utf-8").read()
+
+missing = []
+for d in sorted(EXEMPT):
+    if d.lstrip("/") not in config_text:
+        missing.append(f"{d} is exempt in the test but unexplained in dependabot.yml")
+    # AND THE REASON HAS TO STILL HOLD. Naming the path in a comment is satisfied by any
+    # mention at all, including one left behind after the cause was fixed - an exemption
+    # that outlives its reason is an unwatched directory with paperwork. The reason here
+    # is specific and checkable: dependabot's Dockerfile parser has no ARG handling, so a
+    # FROM that interpolates a variable yields it no dependencies. If someone inlines that
+    # tag, the exemption stops being true and this says so.
+    dockerfile = os.path.join(repo, d.lstrip("/"), "Dockerfile")
+    try:
+        froms = [l for l in open(dockerfile, encoding="utf-8") if l.startswith("FROM ")]
+    except OSError:
+        missing.append(f"{d} is exempt but has no Dockerfile to be exempt about")
+        continue
+    resolvable = [l.strip() for l in froms
+                  if "${" not in l and "$" not in l and not l.startswith("FROM scratch")]
+    if resolvable:
+        missing.append(
+            f"{d} is exempt because dependabot cannot resolve its FROM, but "
+            f"{resolvable[0]!r} is resolvable now - either watch it or update the reason")
+for d, ecos in sorted(want.items()):
+    if d in EXEMPT:
+        continue
+    for e in sorted(ecos):
+        if e not in have.get(d, set()):
+            missing.append(f"{d} needs a {e} entry")
+
+# AND IT HAS TO PARSE. A malformed dependabot.yml does not fail a build: GitHub stops
+# opening pull requests and says so only on a settings page nobody visits, which is the
+# same no-signal shape this whole entry exists to remove. PyYAML is not in the harness
+# image, so this asserts the shape the plain-text parser above depends on rather than
+# validating YAML in general: every entry names an ecosystem AND a directory.
+for e, d in entries:
+    if not e:
+        missing.append("an updates entry has no package-ecosystem")
+    if not d:
+        missing.append(f"the {e} entry names no directory")
+if not entries:
+    missing.append("dependabot.yml holds no updates entries at all")
+
+with open(out, "w") as fh:
+    fh.write(f"SCANNED={scanned}\n")
+    fh.write("MISSING=" + ("; ".join(missing) if missing else "") + "\n")
+    fh.write("ENTRIES=" + ",".join(f"{e}:{d}" for e, d in entries) + "\n")
+PY
+SCANNED="$(sed -n 's/^SCANNED=//p' "$T/report.txt")"
+MISSING="$(sed -n 's/^MISSING=//p' "$T/report.txt")"
+# ITERATION CONTROL, the rule this file states 30 lines up: a scan that found nothing
+# would report healthy. Three image-bearing files exist today; fewer means the walk broke.
+check "the scan actually found image files, rather than reporting healthy on nothing" \
+  "[ \"$SCANNED\" -ge 3 ]"
+# THE TWO NOTHING CAN WATCH, held to a list so a THIRD cannot join them quietly. zebra and
+# zallet are pinned in stack-versions.env, a shell env file no dependabot ecosystem parses,
+# so they move only when a person moves them. "Every image this box runs is watched" was
+# therefore false while they existed, and a false claim in a header is worse than none: it
+# is what stops the next person looking. The claim is scoped to what this repo DECLARES,
+# and the exceptions are enumerated here, where a new one reds the suite.
+SV="$REPO/deploy/z3/stack-versions.env"
+extra_unwatched=""
+for img in $(grep -oE '^Z3_[A-Z_]*IMAGE' "$SV" 2>/dev/null | sort -u); do
+  case "$img" in
+    Z3_ZEBRA_IMAGE|Z3_ZALLET_IMAGE) ;;
+    *) extra_unwatched="$extra_unwatched $img" ;;
+  esac
+done
+check "the hand-updated images are still exactly zebra and zallet, and no others" \
+  "[ -z '$extra_unwatched' ]"
+check "and stack-versions.env says plainly that nothing automated watches them" \
+  "grep -qi 'no dependabot ecosystem\|nothing automated watches' '$SV'"
+
+check "every directory holding an image has an entry OF THE RIGHT KIND" \
+  "[ -z \"$MISSING\" ] || { echo \"missing: $MISSING\"; false; }"
+# The two that matter, by name, so deleting either is a named failure rather than an
+# arithmetic one.
+check "the app's own base image is watched by a docker entry at the root" \
+  "grep -q '^ENTRIES=.*docker:/,' '$T/report.txt' || grep -q '^ENTRIES=.*docker:/$' '$T/report.txt'"
+check "and caddy by a docker-compose entry, because docker does not read compose files" \
+  "grep -q 'docker-compose:/deploy/z3' '$T/report.txt'"
+
+echo "== repo: the harness cannot keep a list that disagrees with the tree (risk register #29)"
+# Two lists in run-tests.sh have to match something outside themselves, and both have
+# failed at it: the default suite order against the files on disk, and the printed
+# `apt-get install` against suite_deps (it missed `git`, then `jq` - each time an operator
+# copy-pasted our own remedy and was refused again). The order is still written out
+# because it is load-bearing; the install line is generated. These check the seams.
+RT="$REPO/deploy/z3/tests/run-tests.sh"
+mk_scratch "${TMPDIR:-/tmp}/repo-runtests.XXXXXX"
+
+# THE REFUSAL, RUN FOR REAL: a suite file the default order does not name.
+cp -r "$REPO/deploy/z3/tests" "$T/tests"
+printf '# shellcheck shell=bash\ncheck "never runs" "true"\n' > "$T/tests/suites/zzznew.sh"
+# `env -u SUITES`: this suite runs with SUITES set, and the guard only applies to the
+# DEFAULT set - inherited, the inner run would skip the guard and recurse into itself.
+( cd "$REPO" && env -u SUITES TEST_SCRATCH="$T/tests" bash "$T/tests/run-tests.sh" > "$T/unlisted.log" 2>&1 )
+rc=$?
+check "a suite file the default order does not name REFUSES the run" "[ $rc -eq 2 ]"
+check "and says which file would never have run" "grep -q 'on disk but never run: zzznew' '$T/unlisted.log'"
+check "rather than a green tally that silently skipped it" "! grep -q 'passed,' '$T/unlisted.log'"
+rm -f "$T/tests/suites/zzznew.sh"
+# And the other direction: a name in the order with no file behind it.
+sed -i.bak 's/^SUITE_ORDER="zsnap/SUITE_ORDER="ghostsuite zsnap/' "$T/tests/run-tests.sh"
+( cd "$REPO" && env -u SUITES TEST_SCRATCH="$T/tests" bash "$T/tests/run-tests.sh" > "$T/ghost.log" 2>&1 )
+rc=$?
+check "a name in the order with no file REFUSES too" "[ $rc -eq 2 ] && grep -q 'no file: ghostsuite' '$T/ghost.log'"
+# A DUPLICATE is neither of those: set membership passes, the suite is sourced twice, the
+# tally is inflated, and the second sourcing inherits the first one's leftovers.
+sed -i.bak 's/^SUITE_ORDER="ghostsuite zsnap/SUITE_ORDER="zsnap zsnap/' "$T/tests/run-tests.sh"
+( cd "$REPO" && env -u SUITES TEST_SCRATCH="$T/tests" bash "$T/tests/run-tests.sh" > "$T/dupe.log" 2>&1 )
+rc=$?
+check "a suite named twice REFUSES rather than running twice and counting twice" \
+  "[ $rc -eq 2 ] && grep -q 'named more than once' '$T/dupe.log'"
+# A selection that names nothing sourced no suite and exited 0 - a green run of nothing.
+( cd "$REPO" && SUITES=" " bash "$RT" > "$T/blank.log" 2>&1 )
+rc=$?
+check "SUITES that names no suite REFUSES rather than passing having run nothing" \
+  "[ $rc -eq 2 ] && grep -q 'names no suite' '$T/blank.log'"
+
+# A BROKEN SYMLINK IS A SUITE THAT CAN NEVER RUN. `[ -e ]` is false for one, so the
+# comparison above simply did not see it: a .sh-named entry in suites/, never run, never
+# mentioned, green tally - the exact shape the guard exists to refuse, arriving through
+# the one door it was not watching.
+cp -r "$REPO/deploy/z3/tests" "$T/tests2"
+ln -sf /nonexistent/nope "$T/tests2/suites/zzzbroken.sh"
+( cd "$REPO" && env -u SUITES TEST_SCRATCH="$T/tests2" bash "$T/tests2/run-tests.sh" > "$T/broken.log" 2>&1 )
+rc=$?
+# Both halves in one check, because exit 2 is this harness's refusal code generally: with
+# the guard removed the run still exited 2 for an unrelated reason and a bare rc test
+# passed on it. A refusal has to be THIS refusal.
+check "a broken symlink in suites/ REFUSES the run, and says which file" \
+  "[ $rc -eq 2 ] && grep -q 'broken symlink:.*zzzbroken' '$T/broken.log'"
+rm -f "$T/tests2/suites/zzzbroken.sh"
+
+# A LISTED SUITE THAT DOES NOT SOURCE IS A SUITE THAT DID NOT RUN. Without the floor a
+# parse error left the loop moving on: measured, 23 passed / 0 failed and exit 0 where
+# sixty checks were due. Same sentence as the guard above, one door over.
+printf '# shellcheck shell=bash\ncheck "counts once" "true"\nif true; then\n' > "$T/tests2/suites/prune.sh"
+( cd "$REPO" && SUITES="prune" TEST_SCRATCH="$T/tests2" bash "$T/tests2/run-tests.sh" > "$T/nosource.log" 2>&1 )
+rc=$?
+check "a suite that does not PARSE fails the run rather than passing it" "[ $rc -ne 0 ]"
+check "and says which suite, and quotes the parse error" \
+  "grep -q 'suite prune does not parse' '$T/nosource.log' && grep -q 'syntax error' '$T/nosource.log'"
+# AND A SUITE WHOSE LAST COMMAND FAILS IS NOT A BROKEN SUITE. The first cut of the floor
+# read the exit status of `.`, which is the exit status of the suite's last line, and
+# ctazbroker.sh ends with `wait` on a process it just killed (143). It failed a suite
+# whose every check had passed. The parse check cannot make that mistake, and this pins
+# that a healthy suite ending in a non-zero command is left alone.
+printf '# shellcheck shell=bash\ncheck "one real check" "true"\nfalse\n' > "$T/tests2/suites/prune.sh"
+( cd "$REPO" && SUITES="prune" TEST_SCRATCH="$T/tests2" bash "$T/tests2/run-tests.sh" > "$T/lastfalse.log" 2>&1 )
+rc=$?
+check "a suite whose LAST command exits non-zero is not reported as broken" \
+  "[ $rc -eq 0 ] && grep -q '1 passed, 0 failed' '$T/lastfalse.log'"
+# And a suite that sources fine but asserts nothing is not a pass either.
+printf '# shellcheck shell=bash\n: nothing to see here\n' > "$T/tests2/suites/prune.sh"
+( cd "$REPO" && SUITES="prune" TEST_SCRATCH="$T/tests2" bash "$T/tests2/run-tests.sh" > "$T/nochecks.log" 2>&1 )
+rc=$?
+check "a suite that runs NO checks fails the run rather than reporting a clean zero" "[ $rc -ne 0 ]"
+check "and says so in those terms" "grep -q 'ran no checks at all' '$T/nochecks.log'"
+rm -rf "$T/tests2"
+
+# THE INSTALL LINE IS GENERATED, so it cannot omit a command the guard demands. The three
+# functions are sourced out of the shipped script rather than re-implemented here.
+sed -n '/^suite_deps() {/,/^}/p; /^suite_caps() {/,/^}/p; /^dep_package() {/,/^}/p' "$RT" > "$T/fns.sh"
+ORDER="$(grep -oE '^SUITE_ORDER="[^"]*"' "$RT" | sed 's/^SUITE_ORDER="//; s/"$//')"
+GEN="$(
+  # shellcheck disable=SC1090
+  . "$T/fns.sh"
+  P=""
+  for s in $ORDER; do
+    for c in $(suite_deps "$s") $(suite_caps "$s"); do
+      p="$(dep_package "$c")"
+      [ "$p" = "-" ] && continue
+      [ -n "$p" ] || { echo "UNMAPPED:$c"; continue; }
+      case " $P " in *" $p "*) ;; *) P="$P $p" ;; esac
+    done
+  done
+  printf '%s' "${P# }"
+)"
+check "the package list was actually generated, not empty" "[ -n '$GEN' ]"
+check "every command any suite declares has a package behind it" \
+  "case '$GEN' in *UNMAPPED*) false ;; *) true ;; esac"
+# THE CAPS REFUSAL PRINTS ITS OWN RECIPE, and nothing read it: the grep below resolves to
+# the header COMMENT, and the check further down reads only the DEPS refusal. That is the
+# recipe a macOS operator pastes - the population that hit both earlier misses - and it
+# could be hardcoded with every check green. Force it by shimming a GNU-only behaviour.
+mkdir -p "$T/nostat"
+for b in bash sh env dirname basename sed grep awk tr cut head tail sort uniq cat ls mkdir rm cp mv chmod printf date find sha256sum seq id tee wc readlink xargs zstd curl gpg python3 git jq; do
+  src="$(command -v "$b" 2>/dev/null)"; [ -n "$src" ] && ln -sf "$src" "$T/nostat/$b"
+done
+printf '#!/usr/bin/env bash\ncase " $* " in *" -c "*) exit 1 ;; esac\nexec /usr/bin/stat "$@"\n' > "$T/nostat/stat"
+chmod +x "$T/nostat/stat"
+( cd "$REPO" && env -u SUITES PATH="$T/nostat" bash "$RT" > "$T/caps.log" 2>&1 )
+rc=$?
+check "a missing GNU behaviour refuses, so the caps recipe is reachable" \
+  "[ $rc -eq 2 ] && grep -q 'stat -c' '$T/caps.log'"
+caps_printed="$(grep -oE 'apt-get install -y -qq [a-zA-Z0-9 ._+-]+' "$T/caps.log" | head -n1 | sed 's/apt-get install -y -qq //')"
+caps_sorted="$(printf '%s\n' $caps_printed | sort | tr '\n' ' ')"
+
+# The header comment is prose an operator copy-pastes and cannot be generated, so it is
+# compared. Sorted: the order in a comment is not the thing under test.
+HDR="$(grep -oE 'apt-get install -y -qq .*' "$RT" | head -n1 | sed 's/apt-get install -y -qq //')"
+hdr_sorted="$(printf '%s\n' $HDR | sort | tr '\n' ' ')"
+gen_sorted="$(printf '%s\n' $GEN | sort | tr '\n' ' ')"
+check "the recipe in the header comment names exactly the generated package set" \
+  "[ '$hdr_sorted' = '$gen_sorted' ]"
+
+# AND THE LINE IT ACTUALLY PRINTS, by making it refuse. Comparing only the header comment
+# left the printed remedy free to be hardcoded again, which is the whole defect.
+mkdir -p "$T/nojq"
+for b in bash sh env dirname basename sed grep awk tr cut head tail sort uniq cat ls mkdir rm cp mv chmod printf date find stat sha256sum seq id whoami tee wc dd du df sleep touch readlink realpath xargs zstd curl gpg python3 git; do
+  src="$(command -v "$b" 2>/dev/null)"; [ -n "$src" ] && ln -sf "$src" "$T/nojq/$b"
+done
+( cd "$REPO" && env -u SUITES PATH="$T/nojq" bash "$RT" > "$T/norecipe.log" 2>&1 )
+rc=$?
+check "a missing command still refuses, so the printed remedy is reachable" "[ $rc -eq 2 ]"
+# The charset takes a package with a dot, a plus or a capital (python3.12, g++): a
+# narrower one truncates silently and the comparison fails for the wrong reason.
+printed="$(grep -oE 'apt-get install -y [a-zA-Z0-9 ._+-]+' "$T/norecipe.log" | head -n1 | sed 's/apt-get install -y //')"
+printed_sorted="$(printf '%s\n' $printed | sort | tr '\n' ' ')"
+check "the remedy it PRINTS is the generated set, not a hand-kept copy of it" \
+  "[ '$printed_sorted' = '$gen_sorted' ]"
+check "and so is the one the capability refusal prints, which nothing read before" \
+  "[ '$caps_sorted' = '$gen_sorted' ]"
+
+
 echo "== repo: the off-box probe cannot pass without probing (risk register #17)"
 # It is the only signal that has ever reached us unprompted. Three ways it used to go
 # green while watching nothing: no FAUCET_LIVE_URL (skipped, exit 0), an escape hatch
@@ -327,6 +619,42 @@ check "and it only runs when the probe failed, on the PAGE step and not the prob
   "grep -q 'if: failure()' '$T/page-step.yml' && ! grep -q 'if: failure()' '$T/probe-step.yml'"
 check "the cap knob is NOT settable from the workflow, so a variable cannot widen it" \
   "! grep -q 'SMOKE_ALLOW_UNREADY_MAX_DAYS' '$LS'"
+# Same shape, same reason: OBSERVABILITY.md says the certificate floor is deliberately not
+# plumbed into a repository variable, because widening it is a way to silence the check
+# rather than fix it. A documented invariant with no guard is a comment.
+check "and neither is the certificate floor" \
+  "! grep -q 'SMOKE_TLS_MIN_DAYS' '$LS'"
+# The https guard, both ways round: an uppercase scheme is legal and must not page.
+# NOT SMOKE_DISABLED=1: that hits the off switch at the top of the step and exits 0 before
+# the scheme is ever looked at, so the check passed on a byte-exact mutant of the guard it
+# was written for. The step has to reach the case, which means it also reaches `node`, so
+# node is stubbed the way the page step's tools are.
+# ITS OWN DIR, not the $T/bin the page step's gh and curl stubs live in: anything added to
+# that block later would silently get this node too.
+mkdir -p "$T/nodebin"
+printf '#!/usr/bin/env bash\necho "stub node ran: $*"\n' > "$T/nodebin/node"
+chmod +x "$T/nodebin/node"
+( cd "$REPO" && PATH="$T/nodebin:$BASE_PATH" SMOKE_URL="HTTPS://faucet.example.org" SMOKE_DISABLED="" \
+    bash "$T/probe-step.sh" > "$T/upper.log" 2>&1 )
+rc=$?
+check "an uppercase HTTPS:// is accepted, because new URL() normalises it and a refusal pages" \
+  "[ $rc -eq 0 ] && ! grep -q 'which is not https' '$T/upper.log'"
+check "and the step really got past the scheme check, rather than exiting before it" \
+  "grep -q 'stub node ran' '$T/upper.log'"
+# The two other forms new URL() accepts. Refusing either pages a human for a variable that
+# would have worked, which is the harm the fold was added for.
+( cd "$REPO" && PATH="$T/nodebin:$BASE_PATH" SMOKE_URL=" https://faucet.example.org " SMOKE_DISABLED="" \
+    bash "$T/probe-step.sh" > "$T/ws.log" 2>&1 )
+check "surrounding whitespace does not turn a good URL into a page" \
+  "[ $? -eq 0 ] && grep -q 'stub node ran' '$T/ws.log'"
+( cd "$REPO" && PATH="$T/nodebin:$BASE_PATH" SMOKE_URL="https:faucet.example.org" SMOKE_DISABLED="" \
+    bash "$T/probe-step.sh" > "$T/noslash.log" 2>&1 )
+check "and neither does https: with no slashes, which new URL() normalises" \
+  "[ $? -eq 0 ] && grep -q 'stub node ran' '$T/noslash.log'"
+( cd "$REPO" && PATH="$T/nodebin:$BASE_PATH" SMOKE_URL="https:/faucet.example.org" SMOKE_DISABLED="" \
+    bash "$T/probe-step.sh" > "$T/oneslash.log" 2>&1 )
+check "nor one dropped slash, which the probe runs clean on" \
+  "[ $? -eq 0 ] && grep -q 'stub node ran' '$T/oneslash.log'"
 
 # The probe step, run for real. `node scripts/live-probe.mjs` is never reached in these
 # two cases, which is the point: both must decide before probing anything.
@@ -340,6 +668,12 @@ check "and says what it has been doing" "grep -q 'probed NOTHING' '$T/nourl.log'
 check "the named off switch exits 0 with no URL" "[ $? -eq 0 ] && grep -q 'deliberately off' '$T/off1.log'"
 ( cd "$REPO" && SMOKE_URL="https://example.invalid" SMOKE_DISABLED="1" bash "$T/probe-step.sh" > "$T/off2.log" 2>&1 )
 check "and ALSO with a URL set, which is when a maintenance window needs it" "[ $? -eq 0 ] && grep -q 'deliberately off' '$T/off2.log'"
+# Caddy 308s :80 to :443 and fetch follows redirects, so an http origin passes every
+# faucet check while the certificate check is skipped: off-box TLS monitoring absent for
+# ever behind a green run, from one mistyped variable.
+( cd "$REPO" && SMOKE_URL="http://faucet.example.org" SMOKE_DISABLED="" bash "$T/probe-step.sh" > "$T/http.log" 2>&1 )
+check "an http FAUCET_LIVE_URL FAILS the step rather than skipping the certificate check" \
+  "[ $? -ne 0 ] && grep -q 'which is not https' '$T/http.log'"
 
 # The page step, run for real against a stub gh/curl. This is the 30-minute rule.
 mkdir -p "$T/bin"
@@ -430,5 +764,9 @@ check "and the runbook an operator opens mid-incident names the date form, not t
   "grep -q 'FAUCET_LIVE_ALLOW_UNREADY' '$REPO/OPERATIONS.md' && ! grep -q 'FAUCET_LIVE_ALLOW_UNREADY=1' '$REPO/OPERATIONS.md'"
 check "the workflow's own explorer skip is NOT set in the workflow, so the real run still checks it" \
   "! grep -q 'SMOKE_SKIP_EXPLORER' '$LS'"
+check "the probe watches the certificate, which nothing on the box can see" \
+  "grep -q 'the TLS certificate has more than' '$REPO/scripts/live-probe.mjs' && grep -q 'SMOKE_TLS_MIN_DAYS' '$REPO/scripts/live-probe.mjs'"
+check "and the Caddyfile says where certificate expiry is watched from" \
+  "grep -q 'SMOKE_TLS_MIN_DAYS' '$REPO/deploy/z3/Caddyfile'"
 check "the probe has tests, and npm test runs them" \
   "[ -f '$REPO/scripts/live-probe.test.mjs' ] && grep -q 'scripts/\*\*/\*.test.mjs' '$REPO/package.json'"

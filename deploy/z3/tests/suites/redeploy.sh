@@ -486,6 +486,42 @@ check "and it is not left unset" "! grep -q 'FAUCET_BUILD_COMMIT=<unset>' '$STUB
 check "and not left empty, which would read as a deployed unknown" \
   "! grep -qx 'FAUCET_BUILD_COMMIT=' '$STUB_LOG'"
 
+echo "== redeploy: the domain reaches compose when there is one, and is ABSENT when there is not"
+# The #477 change. Compose resolves \${FAUCET_DOMAIN:-:80} from the shell first and the
+# project .env second, and a shell variable that is SET BUT EMPTY wins - yielding ':80',
+# the TLS-dropping default. redeploy.sh used to export it unconditionally, so a box with
+# no /etc/faucet-domain shadowed the .env that deploy.sh writes to prevent exactly that.
+#
+# BOTH BRANCHES, because only the empty one was ever exercised here before. The first
+# version of the fix wrote `\${dom:+FAUCET_DOMAIN="$dom"} docker compose`, and bash decides
+# what is an assignment BEFORE expansion, so with a domain present that word became the
+# COMMAND and every compose call was "command not found: FAUCET_DOMAIN=host". This suite
+# never sets a domain, so it passed. It goes through env(1) now, and this pins it.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+FAUCET_DOMAIN="faucet.example.org" bash "$REDEPLOY" --no-pull > "$T/dom-yes.log" 2>&1
+rc=$?
+check "with a domain, redeploy still runs compose at all (the bare-prefix form could not)" \
+  "[ $rc -eq 0 ] && grep -q 'docker compose' '$STUB_LOG'"
+check "and compose receives the domain" \
+  "grep -qx 'FAUCET_DOMAIN=faucet.example.org' '$STUB_LOG'"
+check "and never an empty one" "! grep -qx 'FAUCET_DOMAIN=' '$STUB_LOG'"
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+env -u FAUCET_DOMAIN bash "$REDEPLOY" --no-pull > "$T/dom-no.log" 2>&1
+# The record file is real on a box and absent in this scratch, which is the case under test.
+check "with no domain anywhere, compose sees the variable UNSET, so .env can answer" \
+  "grep -q 'FAUCET_DOMAIN=<unset>' '$STUB_LOG' && ! grep -qx 'FAUCET_DOMAIN=' '$STUB_LOG'"
+# And the third shape, which the conditional word alone cannot handle: the CALLER's
+# environment already carries an EMPTY FAUCET_DOMAIN (`FAUCET_DOMAIN= redeploy.sh`, or a
+# unit file that sets it blank). Inherited, it reaches compose as set-but-empty, which is
+# the ':80' case. env -u removes it before the conditional word re-adds a real one.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+FAUCET_DOMAIN="" bash "$REDEPLOY" --no-pull > "$T/dom-empty.log" 2>&1
+check "an EMPTY inherited FAUCET_DOMAIN is not passed through to compose" \
+  "grep -q 'FAUCET_DOMAIN=<unset>' '$STUB_LOG' && ! grep -qx 'FAUCET_DOMAIN=' '$STUB_LOG'"
+
 echo "== redeploy: MODIFIED and UNTRACKED are named separately, not both as -dirty"
 # #366. The old marker came from `status --porcelain`, which counts untracked files, so
 # the box reported -dirty forever over five stale env backups while `git diff` was empty

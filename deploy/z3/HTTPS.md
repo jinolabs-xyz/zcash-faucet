@@ -75,6 +75,17 @@ echo | openssl s_client -connect faucet.example.org:443 -servername faucet.examp
   | openssl x509 -noout -issuer -dates
 ```
 
+**Something already watches this.** Nothing on the box can: the watchdog and the
+metrics timer both reach the app over loopback, where TLS is not in play, and
+HSTS means a browser that has been here before will not fall back to http, so an
+expired certificate is not a soft failure. `scripts/live-probe.mjs`, run off-box
+by `live-smoke.yml`, completes a real handshake and fails at `SMOKE_TLS_MIN_DAYS`
+(21) whole days remaining or fewer — Caddy renews at about 30, so 21 means
+renewal has already not worked twice. An already-expired certificate fails the
+handshake and the probe says `ALREADY EXPIRED` rather than "could not connect".
+The floor lives in `scripts/live-probe.mjs` and is deliberately not settable from
+a repository variable; see OBSERVABILITY.md.
+
 ## What the config does beyond terminating TLS
 
 - **Security headers.** HSTS (one year, subdomains), `nosniff`,

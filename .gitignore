@@ -20,6 +20,16 @@
 # misc
 .DS_Store
 *.pem
+# ...except two test fixtures. `scripts/live-probe.test.mjs` needs a genuinely EXPIRED
+# certificate to prove the probe tells "already expired" apart from "nothing is
+# listening" - tls.connect verifies by default, so an expired certificate fails the
+# handshake and never reaches the days-left branch. Generating one needs
+# `openssl req -not_before/-not_after`, which did not exist before OpenSSL 3.5, and
+# ubuntu-latest, node:22 and this repo's harness all ship 3.0.x - so the test skipped on
+# every machine that runs the gate. The key is a throwaway for localhost, expired in 2020
+# before it was committed, and secures nothing. See scripts/fixtures/README.md.
+!scripts/fixtures/expired-localhost.crt.pem
+!scripts/fixtures/expired-localhost.key.pem
 npm-debug.log*
 next-env.d.ts
 tsconfig.tsbuildinfo

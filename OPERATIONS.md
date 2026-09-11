@@ -1068,12 +1068,21 @@ curl -s "https://$(cat /etc/faucet-domain)/api/ready" | jq
    that day **in UTC**, which is earlier than the end of your day if you are
    west of it. The cap is 14 whole days, so today+14 is accepted. `=1` used to mean forever and is now ignored, because a hatch
    set during one incident silenced the drip check for good.
-9. **`wallet balance unknown`.** Zallet did not answer. It is known to exit
+9. **The live probe fails `the TLS certificate has more than 21 whole days
+   left`, or says `ALREADY EXPIRED`.** Caddy renews at about 30 days left, so
+   either means renewal has already stopped working; the second means it stopped
+   long enough ago that browsers are now refusing the site, and HSTS makes that
+   unrecoverable for anyone who has visited before. Check the caddy container's
+   logs for acme/challenge lines, that ports 80 and 443 reach the box from
+   outside, and DNS. There is no escape hatch for this on purpose: a certificate
+   should never legitimately sit under three weeks. See
+   [deploy/z3/HTTPS.md](deploy/z3/HTTPS.md).
+10. **`wallet balance unknown`.** Zallet did not answer. It is known to exit
    when zebra closes the mempool stream, the watchdog docker-starts it
    again within a sweep. If it is crash-looping instead, read
    `docker logs <zallet container>` and check the RPC auth in
    `z3-stack/config/testnet/zallet.toml` matches `faucet.env`.
-10. **`sends failing: ...`.** The last real sends failed although the wallet
+11. **`sends failing: ...`.** The last real sends failed although the wallet
    answered and every check above passed, or (`... never resolved and none
    succeeded`) the recent sends were lost (an opid the wallet forgot, or the
    deadline) or refused, with no success among them, which is what a
@@ -1082,7 +1091,7 @@ curl -s "https://$(cat /etc/faucet-domain)/api/ready" | jq
    `docker logs <zallet container>`, and the poison auto-heal in the watchdog
    journal. One send that lands clears the unresolved sentence on its own; the
    failure-rate rule still applies to whatever failed outright.
-11. **`below reserve, refilling`.** Not broken, broke. **Fund the faucet
+12. **`below reserve, refilling`.** Not broken, broke. **Fund the faucet
    address.** That is the fix, not a fallback. Mining lands a block rarely
    enough that it is not the answer at 3am, and even a block won right now
    needs 100 confirmations plus a shielding step before the balance moves, so
