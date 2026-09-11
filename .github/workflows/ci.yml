@@ -5,9 +5,11 @@
 # (a leaked listener after a failed assertion, #481) sat in that for a whole afternoon
 # once. #490 fixed the leak we knew about; this is the second layer, so the next one costs
 # minutes. Budgets are about three times the slowest run of the last eight on main
-# (shell ~14 min, audit ~3.5, ui ~2.5, the rest under 2), rounded up to a 5. A job that
-# legitimately outgrows its budget should raise the number here with the measurement,
-# not have the line removed: the repo suite asserts every job carries one.
+# (shell ~14 min, audit ~3.5, ui ~2.5, the rest under 2), rounded up to a 5. shell's is
+# the one that grows: eleven of its minutes are three sleep-bound harness suites, and
+# every suite added brings its own wait. A job that legitimately outgrows its budget
+# should raise the number here with the measurement, not have the line removed: the
+# repo suite asserts every job carries one, at the job level, as a positive literal.
 name: CI
 
 on:
@@ -291,7 +293,7 @@ jobs:
 
   shell:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       - name: shellcheck every tracked shell script

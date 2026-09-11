@@ -60,9 +60,23 @@ echo "== repo: every workflow job carries a timeout, so a hang costs minutes and
 WF_NO_TIMEOUT=""
 for wf in "$REPO"/.github/workflows/*.yml "$REPO"/.github/workflows/*.yaml; do
   [ -e "$wf" ] || continue
-  jobs="$(grep -cE '^[[:space:]]+runs-on:' "$wf")"
-  budgets="$(grep -cE '^[[:space:]]+timeout-minutes:[[:space:]]*[0-9]+' "$wf")"
-  [ "$jobs" -gt 0 ] || WF_NO_TIMEOUT="$WF_NO_TIMEOUT $(basename "$wf"):no-jobs-found"
+  # AT THE JOB'S OWN INDENT. Steps accept the same key, and the first cut counted any
+  # depth, so a job with no budget and one slow step carrying `timeout-minutes` read as
+  # covered - the exact job that sits under the six-hour default. A budget counts only
+  # on a line indented exactly like that file's `runs-on:` lines, and only when it is a
+  # positive literal: `0` is not a budget, and an expression or a quoted string is
+  # deliberately not accepted rather than guessed at.
+  tally="$(awk '
+    /^[[:space:]]+runs-on:/ { match($0, /^[[:space:]]+/); ind = RLENGTH; jobs++; seen[ind] = 1 }
+    /^[[:space:]]+timeout-minutes:[[:space:]]*[1-9][0-9]*[[:space:]]*$/ {
+      match($0, /^[[:space:]]+/); if (seen[RLENGTH]) budgets++
+    }
+    END { printf "%d %d", budgets + 0, jobs + 0 }' "$wf")"
+  budgets="${tally% *}"; jobs="${tally#* }"
+  # A file with no runs-on has no job this check can speak to: a caller of a reusable
+  # workflow (`uses:` at job level) is the legitimate case and cannot carry a budget. None
+  # exists today; the day one does, exclude it here by name rather than loosening the rule.
+  [ "$jobs" -gt 0 ] || WF_NO_TIMEOUT="$WF_NO_TIMEOUT $(basename "$wf"):no-runs-on-lines"
   [ "$budgets" -eq "$jobs" ] || WF_NO_TIMEOUT="$WF_NO_TIMEOUT $(basename "$wf"):$budgets/$jobs"
 done
 check "every job in every workflow has a numeric timeout-minutes" \
