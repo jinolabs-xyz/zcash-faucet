@@ -19,6 +19,15 @@ updates:
       npm-minor-patch:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+    ignore:
+      # ESLint 10 removed context.getFilename(); eslint-plugin-react (7.37.5, April
+      # 2025, peer eslint ^9.7) still calls it, and eslint-config-next pulls that plugin
+      # in, so `eslint .` dies at react/display-name before it lints a file. Not ours
+      # to fix. Two PRs landed red the same way (#437, #495); this stops the third.
+      # Lift it when eslint-plugin-react publishes an ESLint 10 release and
+      # eslint-config-next depends on it.
+      - dependency-name: "eslint"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: cargo
     directory: /deploy/z3/miner
