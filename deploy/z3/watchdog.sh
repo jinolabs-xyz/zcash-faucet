@@ -75,7 +75,15 @@ NODE_STOPS_MINER="${WATCHDOG_NODE_STOPS_MINER:-1}"
 # correctly refused every drip for over an hour until a human restarted zebra by hand.
 # Twice in one day. This is that hand.
 NODE_HEAL_ENABLED="${WATCHDOG_NODE_HEAL_ENABLED:-1}"
-NODE_LAG_LIMIT="${WATCHDOG_NODE_LAG_LIMIT:-50}"                 # blocks behind before a stuck tip counts as a stall
+# 100, NOT 50, AND THE MINER'S NUMBER FOR THE MINER'S REASON. The lag here is zebra's own
+# `estimatedheight` minus `blocks`, a CLOCK extrapolation from the tip's timestamp, not a
+# measurement of any other node. Testnet goes an hour without a block; a 62-minute gap
+# reads as ~50 "behind" with nobody ahead at all. At 50 the harness showed this heal
+# restarting a node at the tip, wiping its peers, dropping its state and parking the one
+# miner that would have ended the lull, then paging for a snapshot reimport. The miner's
+# guard reads the same two fields and documents why it chose 100 (miner/src/sync.rs);
+# the repo suite holds the two defaults equal so they cannot drift apart again.
+NODE_LAG_LIMIT="${WATCHDOG_NODE_LAG_LIMIT:-100}"                # blocks behind before a stuck tip counts as a stall
 NODE_STALL_SECS="${WATCHDOG_NODE_STALL_SECS:-300}"              # behind AND tip unmoved this long = wedged
 NODE_HEAL_MAX="${WATCHDOG_NODE_HEAL_MAX:-5}"                    # restarts before paging instead
 NODE_CLEAR_CACHE_AFTER="${WATCHDOG_NODE_CLEAR_CACHE_AFTER:-2}"  # from this attempt on, also drop the peer cache
@@ -409,6 +417,16 @@ zebra_chain_heights() {
 #
 # If the RPC will not answer, that is a different failure (steps 1-2 and the pager), not
 # evidence of a stall, so this asserts nothing.
+#
+# A CLOCK ESTIMATE MAY RESTART, NEVER REWIND. Zebra's `estimatedheight` is extrapolated
+# from the tip's timestamp, so a quiet network and a wedged node look the same to it.
+# Rung 1 (restart) is cheap and reversible, so zebra's own word is enough for it. Rungs
+# 2-3 (wipe peers, drop the non-finalized state) and stopping the miner are not: those
+# happen only when an INDEPENDENT height confirms the lag. The app already holds one
+# (`node.externalHeight` on /api/ready, from the tip oracle), and step 4 fetched that
+# body this very sweep. No confirmation - app unreachable, oracle dark, or the external
+# tip within the limit - means restarts only, and the give-up page says exactly that
+# instead of prescribing a snapshot reimport for a node that may be at the tip.
 # Starts a miner that a node heal stopped, once the node is fit again. Sets
 # MINER_RELEASE_NOTE (the sentence for the report) on success and empties it otherwise. A
 # variable rather than printed output: called through $(...), its journal line would land
@@ -512,12 +530,24 @@ heal_node_if_stalled() {
   local stalled_for=$(( now - node_stall_since ))
   [ "$stalled_for" -ge "$NODE_STALL_SECS" ] || return 0
 
+  # The independent height, from the /api/ready body step 4 fetched this sweep. Empty
+  # when the app did not answer or the oracle had nothing; the readers below treat empty
+  # as "unconfirmed", never as "at the tip" and never as "behind".
+  local external="" confirmed=0
+  external="$(printf '%s' "${ready_body:-}" | grep -o '"externalHeight":[0-9][0-9]*' | head -n1 | cut -d: -f2)"
+  case "$external" in ''|*[!0-9]*) external="" ;; esac
+  if [ -n "$external" ] && [ $(( external - blocks )) -gt "$NODE_LAG_LIMIT" ]; then confirmed=1; fi
+
   local n=$(( node_heal_attempts + 1 ))
   if [ "$n" -gt "$NODE_HEAL_MAX" ]; then
     if [ "$alerted_node_giveup" = "0" ]; then
       local miner_note=""
       [ "$(flap_get "$MINER_STOP_KEY")" = "1" ] && miner_note=" The miner is left STOPPED until the node is fixed: systemctl start $MINER_UNIT afterwards."
-      danger "zebra still ${lag} blocks behind after $NODE_HEAL_MAX tries (restart, clear peers, drop fork state). Likely a fork past the finalized tip: compare getblockhash with an explorer and reimport a snapshot (SNAPSHOTS.md).${miner_note}"
+      if [ "$confirmed" = "1" ]; then
+        danger "zebra still ${lag} blocks behind after $NODE_HEAL_MAX tries (restart, clear peers, drop fork state); the network tip (${external}) confirms it. Likely a fork past the finalized tip: compare getblockhash with an explorer and reimport a snapshot (SNAPSHOTS.md).${miner_note}"
+      else
+        danger "zebra reports itself ${lag} blocks behind its own estimate and the tip has not moved after $NODE_HEAL_MAX restarts, but no independent tip confirms it (external: ${external:-unknown}), so nothing was rewound and the miner was not stopped. A quiet testnet looks like this; so does an app or oracle that cannot be reached. Compare getblockhash with an explorer before touching state."
+      fi
       alerted_node_giveup=1
     fi
     return 0
@@ -525,10 +555,14 @@ heal_node_if_stalled() {
   node_heal_attempts="$n"
   [ "$node_stall_lag" = "0" ] && node_stall_lag="$lag"
 
-  # Stop the miner for the episode, once, and only if it is running. Every heal below
-  # moves the node's tip backwards (a restart drops the non-finalized tip, a state drop
-  # rewinds ~100 blocks); a miner submitting through that extends whatever it was on.
-  if [ "$NODE_STOPS_MINER" != "1" ]; then
+  # Stop the miner for the episode, once, and only if it is running, and only when the
+  # lag is CONFIRMED. Every rewind below moves the node's tip backwards; a miner
+  # submitting through that extends whatever it was on. But on an unconfirmed lag there
+  # is no rewind, and stopping the miner on a quiet testnet parks the one thing that
+  # would have ended the quiet; its own sync guard (the same 100) idles it if needed.
+  if [ "$confirmed" != "1" ]; then
+    log "not stopping $MINER_UNIT: zebra's own estimate says ${lag} behind but no independent tip confirms it (external: ${external:-unknown})"
+  elif [ "$NODE_STOPS_MINER" != "1" ]; then
     log "not stopping $MINER_UNIT for this heal (WATCHDOG_NODE_STOPS_MINER=$NODE_STOPS_MINER); its own sync guard is the only protection"
   elif [ "$(flap_get "$MINER_STOP_KEY")" != "1" ] && systemctl is-active --quiet "$MINER_UNIT" 2>/dev/null; then
     if systemctl stop "$MINER_UNIT" >/dev/null 2>&1; then
@@ -543,7 +577,12 @@ heal_node_if_stalled() {
     fi
   fi
 
-  if [ "$n" -ge "$NODE_CLEAR_CACHE_AFTER" ]; then
+  if [ "$n" -ge "$NODE_CLEAR_CACHE_AFTER" ] && [ "$confirmed" != "1" ]; then
+    # The rung that would rewind, withheld: zebra's own estimate is the only evidence.
+    log "zebra stalled ${stalled_for}s at height $blocks (${lag} behind by its own estimate, unconfirmed: external ${external:-unknown}); restarting only, not rewinding state on a clock estimate ($n/$NODE_HEAL_MAX)"
+    docker restart "$name" >/dev/null 2>&1
+    node_heal_what="Restarted it (lag unconfirmed, nothing rewound)"
+  elif [ "$n" -ge "$NODE_CLEAR_CACHE_AFTER" ]; then
     # Both live on the chain volume: the peer cache at network/<net>.peers, and the
     # non-finalized state backup at non_finalized_state/. Stop FIRST: zebra rewrites both
     # on shutdown, so a delete before the stop is undone by the stop.

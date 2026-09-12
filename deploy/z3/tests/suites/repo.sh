@@ -91,6 +91,17 @@ done
 check "every job in every workflow has a numeric timeout-minutes" \
   "[ -z '$WF_NO_TIMEOUT' ] || { echo '   without:$WF_NO_TIMEOUT'; false; }"
 
+echo "== repo: the watchdog's node-lag limit is the miner's, for the miner's reason"
+# Both read zebra's clock-based estimatedheight. The miner's guard (sync.rs) explains why
+# 100 and not less: hour-long testnet gaps push the estimate ~50 "behind" with nobody
+# ahead. The watchdog trips its heal on the same number and had 50 (risk register II,
+# R-11). Held equal here rather than pinned to a literal, so a considered change to one
+# is a considered change to both.
+MINER_LAG="$(sed -nE 's/^pub const DEFAULT_MAX_LAG: u64 = ([0-9]+);$/\1/p' "$REPO/deploy/z3/miner/src/sync.rs")"
+WD_LAG="$(sed -nE 's/^NODE_LAG_LIMIT="\$\{WATCHDOG_NODE_LAG_LIMIT:-([0-9]+)\}".*/\1/p' "$REPO/deploy/z3/watchdog.sh")"
+check "both defaults could be read" "[ -n '$MINER_LAG' ] && [ -n '$WD_LAG' ]"
+check "and the watchdog's default equals the miner's DEFAULT_MAX_LAG ($WD_LAG vs $MINER_LAG)" "[ '$WD_LAG' = '$MINER_LAG' ]"
+
 echo "== repo: CI lints EVERY tracked shell script, not a glob's worth of them"
 # WHY THIS IS A RULE AND NOT A ONE-TIME FIX. CI ran `shellcheck -S warning deploy/deploy.sh
 # deploy/z3/*.sh`, which is 22 of this repo's 41 tracked .sh files. The 19 it missed are the

@@ -27,12 +27,21 @@ case "$*" in
     if [ -n "${STUB_READY_CANBUILD_ONCE:-}" ] && [ ! -e "$STUB_READY_CANBUILD_ONCE" ]; then
       touch "$STUB_READY_CANBUILD_ONCE"; canbuild=0
     fi
+    # The node block's heights, for the watchdog's step 7: STUB_READY_EXTERNAL is the
+    # independent tip the body carries (empty: the field is absent, as when the oracle
+    # is dark); STUB_READY_EXTERNAL=zebra-est copies STUB_ZEBRA_EST, i.e. the network
+    # agrees with zebra's own estimate, which is what every pre-existing stall case
+    # assumed before the watchdog started asking.
+    ext="${STUB_READY_EXTERNAL:-}"
+    [ "$ext" = "zebra-est" ] && ext="${STUB_ZEBRA_EST:-}"
+    heights=""
+    [ -n "$ext" ] && heights=",\"nodeHeight\":${STUB_ZEBRA_BLOCKS:-0},\"externalHeight\":${ext}"
     for a in "$@"; do
       case "$a" in *"%{http_code}"*)
         if [ "$want_code" = "200" ] && [ "$canbuild" = "0" ]; then
-          printf '{"ready":true,"reason":null,"node":{"ready":true,"canBuildTx":false,"shield":{"state":"unverifiable","lag":null,"reason":"no independent tip to compare against"}}}'
-        elif [ "$want_code" = "200" ]; then printf '{"ready":true,"reason":null,"node":{"ready":true,"canBuildTx":true}}'
-        else printf '{"ready":false,"reason":"%s"}' "${STUB_READY_REASON:-node syncing}"; fi
+          printf '{"ready":true,"reason":null,"node":{"ready":true,"canBuildTx":false%s,"shield":{"state":"unverifiable","lag":null,"reason":"no independent tip to compare against"}}}' "$heights"
+        elif [ "$want_code" = "200" ]; then printf '{"ready":true,"reason":null,"node":{"ready":true,"canBuildTx":true%s}}' "$heights"
+        else printf '{"ready":false,"reason":"%s","node":{"ready":false%s}}' "${STUB_READY_REASON:-node syncing}" "$heights"; fi
         printf '\n%s' "$want_code"
         exit 0 ;;
       esac
