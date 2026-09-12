@@ -402,20 +402,27 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
 
     // Everything else genuinely did not send. Release the reservation so the
     // user can retry immediately.
-    //
-    // Counted, because this is the only place in the app that knows a drip failed. A
-    // 502 to one caller and a log line is not a signal anything can act on, which is
-    // how a crash-looping wallet stays invisible behind a readiness probe that only
-    // reads a balance.
-    recordSend("failed");
     try {
       await finalizeClaim(reservation.claimId, "failed", null, undefined, Date.now(), network);
     } catch (finErr) {
       api.logError(finErr, "finalize(failed) after failed send");
     }
     if (err instanceof QueueFullError) {
+      // A QUEUE WE FILLED IS NOT A WALLET THAT FAILED (risk register II, R-19). This
+      // used to be counted below, so 24 simultaneous claims (a classroom, a forum
+      // post) put three "busy" refusals into the send log and /api/ready read "3 of the
+      // last 3 sends failed": the watchdog pages on that, redeploy rolls a merge back
+      // on it, live-smoke pages on it, and at 42 concurrent nothing could dilute it
+      // for the whole window. Twelve IPs could hold it open without one drip failing.
+      // The wallet was never asked. Not recorded: queue depth is on /api/status and
+      // says what this is.
       return apiError(503, err.message, api);
     }
+    // Counted, because this is the only place in the app that knows a drip failed. A
+    // 502 to one caller and a log line is not a signal anything can act on, which is
+    // how a crash-looping wallet stays invisible behind a readiness probe that only
+    // reads a balance.
+    recordSend("failed");
     // The raw send error can carry wallet/RPC internals. Log it under the
     // request id, tell the user only what they need: nothing moved, retry.
     api.logError(err, "send failed");
