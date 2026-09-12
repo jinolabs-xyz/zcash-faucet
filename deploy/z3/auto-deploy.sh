@@ -86,6 +86,103 @@ fi
 note_failure() { printf '%s %s %s\n' "$REMOTE" "$((fail_count + 1))" "$(now_epoch)" > "$FAIL_FILE"; }
 clear_failures() { rm -f "$FAIL_FILE"; }
 
+# CI IS IN THE PATH NOW (risk register II, R-1). Until this, nothing here knew CI
+# existed: the box reset to whatever origin/main said and built it as root, two minutes
+# after the merge and usually before the merge's own checks had finished. Branch
+# protection was the only gate, it required four of eight jobs, and it does not bind the
+# account that does every merge. Measured over the forty merges before this: thirteen
+# shipped with the audit job red (a critical Next.js advisory, live for eleven hours),
+# two shipped before any required check had run, and four main commits never got a run
+# at all. Nothing paged "deployed a commit CI rejected", because nothing could.
+#
+# So the box asks. The check-runs endpoint is public for a public repo and needs no
+# token; sixty calls an hour is twice what a two-minute timer spends. The rule is the
+# repo's, not GitHub's settings page: every job ci.yml defines must have completed with
+# success on the exact commit, or the box does not move. The repo suite holds the list
+# below equal to ci.yml's jobs so a renamed or added job cannot silently drop out.
+#
+# Three answers, three behaviours. GREEN: carry on. RED: refuse, loudly, and keep
+# refusing (exit 1, so the unit is red and pages; the backoff above stops the API
+# hammering after three). PENDING, which includes "no runs yet": not a failure, exit 0
+# and look again next tick; after CI_PENDING_MAX with still no verdict it becomes a
+# loud refusal, because a commit CI never judged is not one to ship either. Cannot ask
+# (API down, no jq): refuse and say so. A failed git fetch would have stopped us two
+# lines up, so an unreachable API with a reachable git host is worth a human's look.
+#
+# The hatch is DATED, like live-smoke's: set AUTODEPLOY_CI_GATE_OFF_UNTIL=YYYY-MM-DD to
+# ship without a verdict until that day, never after. A hatch with no expiry becomes
+# the permanent configuration by the second week; this one turns itself back on.
+CI_API="${AUTODEPLOY_CHECKS_API:-https://api.github.com}"
+CI_REQUIRED="${AUTODEPLOY_REQUIRED_CHECKS:-app smoke ui api-tests audit shell miner image}"
+CI_PENDING_MAX="${AUTODEPLOY_CI_PENDING_MAX:-2700}"
+CI_PENDING_FILE="${STATE_FILE}.ci-pending"
+ci_repo() {
+  if [ -n "${AUTODEPLOY_CHECKS_REPO:-}" ]; then printf '%s' "$AUTODEPLOY_CHECKS_REPO"; return 0; fi
+  git remote get-url origin 2>/dev/null | sed -E 's#/$##' | sed -nE 's#^.*github\.com[:/]([^/]+/[^/]+)$#\1#p' | sed -E 's#\.git$##'
+}
+ci_gate() {
+  local until="${AUTODEPLOY_CI_GATE_OFF_UNTIL:-}" today
+  if [ -n "$until" ]; then
+    today="$(date -u +%F)"
+    if [[ "$until" > "$today" || "$until" == "$today" ]]; then
+      log "CI GATE OFF by AUTODEPLOY_CI_GATE_OFF_UNTIL=$until: shipping $(git rev-parse --short "$REMOTE") with no CI verdict"
+      return 0
+    fi
+    log "AUTODEPLOY_CI_GATE_OFF_UNTIL=$until has passed, the CI gate applies again"
+  fi
+  local repo; repo="$(ci_repo)"
+  if [ -z "$repo" ]; then log "REFUSING $(git rev-parse --short "$REMOTE"): cannot tell which GitHub repo origin is, so cannot ask CI"; return 2; fi
+  command -v jq >/dev/null 2>&1 || { log "REFUSING $(git rev-parse --short "$REMOTE"): jq is missing, cannot read CI's verdict"; return 2; }
+  local body
+  body="$(curl -fsS --max-time 20 -H 'Accept: application/vnd.github+json' \
+          "$CI_API/repos/$repo/commits/$REMOTE/check-runs?per_page=100" 2>/dev/null)" \
+    || { log "REFUSING $(git rev-parse --short "$REMOTE"): could not read check-runs from $CI_API"; return 2; }
+  # One line per required job: "<name> <status> <conclusion>" for its NEWEST run
+  # (a rerun supersedes the run it replaced), or "<name> absent -" when it has no run.
+  local verdicts
+  verdicts="$(printf '%s' "$body" | jq -r --arg req "$CI_REQUIRED" '
+      ($req | split(" ")) as $names
+      | (.check_runs // []) as $runs
+      | $names[] as $n
+      | ([$runs[] | select(.name == $n)] | sort_by(.id) | last) as $r
+      | if $r == null then "\($n) absent -" else "\($n) \($r.status) \($r.conclusion // "-")" end' 2>/dev/null)" \
+    || { log "REFUSING $(git rev-parse --short "$REMOTE"): check-runs response did not parse"; return 2; }
+  local red="" pending=""
+  while read -r name status conclusion; do
+    [ -n "$name" ] || continue
+    if [ "$status" = "completed" ]; then
+      [ "$conclusion" = "success" ] || red="$red $name=$conclusion"
+    else
+      pending="$pending $name"
+    fi
+  done <<< "$verdicts"
+  if [ -n "$red" ]; then
+    log "REFUSING $(git rev-parse --short "$REMOTE"): CI is red on main ($red ). The box stays on $(git rev-parse --short HEAD) until a green commit lands."
+    return 1
+  fi
+  if [ -n "$pending" ]; then
+    local first_seen="" sha=""
+    [ -f "$CI_PENDING_FILE" ] && { read -r sha first_seen < "$CI_PENDING_FILE" || true; }
+    [ "$sha" = "$REMOTE" ] || { first_seen="$(now_epoch)"; printf '%s %s\n' "$REMOTE" "$first_seen" > "$CI_PENDING_FILE"; }
+    case "$first_seen" in ''|*[!0-9]*) first_seen="$(now_epoch)" ;; esac
+    local waited=$(( $(now_epoch) - first_seen )); [ "$waited" -ge 0 ] || waited=0
+    if [ "$waited" -ge "$CI_PENDING_MAX" ]; then
+      log "REFUSING $(git rev-parse --short "$REMOTE"): no CI verdict after ${waited}s (still waiting on$pending ). A commit CI never judged does not ship either."
+      return 1
+    fi
+    log "waiting for CI on $(git rev-parse --short "$REMOTE") (${waited}s so far, pending:$pending ), nothing deployed this tick"
+    return 3
+  fi
+  rm -f "$CI_PENDING_FILE"
+  return 0
+}
+ci_gate; ci_rc=$?
+case "$ci_rc" in
+  0) ;;
+  3) exit 0 ;;
+  *) note_failure; exit 1 ;;
+esac
+
 rc=0
 changed="$(git diff --name-only "$LOCAL" "$REMOTE")"
 
