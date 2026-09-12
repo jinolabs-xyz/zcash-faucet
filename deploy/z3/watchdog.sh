@@ -36,6 +36,13 @@ ALERT_FORMAT="${WATCHDOG_ALERT_FORMAT:-slack}"      # slack (default) or discord
 # Counts live on disk so a watchdog restart does not reset the evidence.
 FLAP_ESCALATE="${WATCHDOG_FLAP_ESCALATE:-3}"        # consecutive attempts before we page
 FLAP_REALERT="${WATCHDOG_FLAP_REALERT:-60}"         # then re-page every N attempts
+# UP IS NOT RECOVERED (risk register II, R-13). A container that starts, runs forty
+# seconds and dies is seen "running" on every other sweep. One sighting used to reset
+# the count and send a FIXED, so a slow crash loop produced a green tick per minute and
+# never the three consecutive misses that page: the 812-restarts night with a slightly
+# slower crash. Recovery now needs the container to have been up for this long, read
+# from docker's own StartedAt; a young "running" keeps the count and says nothing.
+RECOVERY_MIN_UPTIME="${WATCHDOG_RECOVERY_MIN_UPTIME:-$(( INTERVAL * 3 ))}"
 STATE_DIR="${WATCHDOG_STATE_DIR:-/run/faucet-watchdog}"
 
 # Poison auto-heal (step 5). Restarting zallet cannot fix a crash whose cause is a row
@@ -122,26 +129,40 @@ json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 # Delegates to the shared sender so one URL covers every unit. Falls back to
 # posting inline if alert.sh is not installed yet, so an upgrade cannot mute us.
 ALERT_SH="${WATCHDOG_ALERT_SH:-$(dirname "$0")/alert.sh}"
+# RETURNS WHETHER THE PAGE LEFT (risk register II, R-14). This used to return 0 whatever
+# alert.sh said, and every caller set its "already paged" flag right after, so a NEEDS
+# YOU whose POST failed (the bridge restarting, which step 2 itself does, or signal-cli's
+# link dropped) was the one page for that episode, lost, and the channel's next word was
+# the ✅ for the bridge coming back. Now: 0 delivered; alert.sh's own non-zero for a send
+# that failed; 3 for "no channel configured at all", which callers treat as done, since
+# retrying into nothing every sweep is not a page either.
 alert() {
   log "ALERT: $1"
+  local rc
   if [ -x "$ALERT_SH" ]; then
     # --now: these are already one per episode, so alert.sh's per-cause cooldown must not
     # hold a NEEDS YOU behind the FIXED that preceded it. Its output is kept: "sent" and
     # any refusal belong in this journal, not in /dev/null.
     "$ALERT_SH" --now "$1" 2>&1 | sed 's/^/alert.sh: /'
-    [ "${PIPESTATUS[0]}" -eq 0 ] || log "alert send failed via $ALERT_SH"
-    return 0
+    rc="${PIPESTATUS[0]}"
+    [ "$rc" -eq 0 ] || log "alert send failed via $ALERT_SH (rc $rc); the caller retries next sweep"
+    return "$rc"
   fi
-  [ -n "$ALERT_URL" ] || return 0
+  [ -n "$ALERT_URL" ] || return 3
   local msg body
   msg="[zcash-faucet watchdog] $(json_escape "$1")"
   case "$ALERT_FORMAT" in
     discord) body="{\"content\":\"$msg\"}" ;;
     slack|*)  body="{\"text\":\"$msg\"}" ;;
   esac
-  curl -fsS --max-time 10 -H 'content-type: application/json' \
-    -d "$body" "$ALERT_URL" >/dev/null 2>&1 || log "alert webhook POST failed"
+  if curl -fsS --max-time 10 -H 'content-type: application/json' \
+       -d "$body" "$ALERT_URL" >/dev/null 2>&1; then return 0; fi
+  log "alert webhook POST failed; the caller retries next sweep"
+  return 1
 }
+# "Did that page count as sent": delivered, or nowhere to deliver to. A failed send is
+# the one case a caller must not mark as done.
+paged() { [ "$1" -eq 0 ] || [ "$1" -eq 3 ]; }
 
 # TWO KINDS OF MESSAGE, AND THE MARKER IS THE POINT. A phone shows the first few words,
 # so severity has to be readable before the sentence is. One report per RESOLVED episode,
@@ -249,10 +270,19 @@ recover_if_down() {
 
   if [ "$state" = "running" ]; then
     if [ "$prior" -gt 0 ]; then
-      # This is the only place a recovery claim is honest: it is up on a later
-      # sweep than the one that started it.
-      fixed "$name was down. Started it; running again after $prior restart attempt(s), verified on a later sweep."
+      # Up on a later sweep than the one that started it, AND up for long enough that a
+      # slow crash loop cannot pass for a recovery. docker's StartedAt is the only
+      # witness that does not depend on which sweep happened to look.
+      local up
+      up="$(container_uptime "$name")"
+      if [ -n "$up" ] && [ "$up" -lt "$RECOVERY_MIN_UPTIME" ]; then
+        log "$name is running but only ${up}s old after $prior restart attempt(s); not calling that recovered (needs ${RECOVERY_MIN_UPTIME}s)"
+        return 0
+      fi
+      [ -n "$up" ] || log "could not read StartedAt for $name; judging recovery on the sighting alone"
+      fixed "$name was down. Started it; running again after $prior restart attempt(s), up ${up:-?}s, verified on a later sweep."
       flap_set "$name" 0
+      flap_set "$name.paged" 0
     fi
     return 0
   fi
@@ -268,10 +298,26 @@ recover_if_down() {
   fi
 
   # Page on the threshold, then only periodically: an ongoing outage should keep
-  # reminding us without becoming the 812-messages-a-night noise it replaces.
-  if [ "$n" -eq "$FLAP_ESCALATE" ] || { [ "$n" -gt "$FLAP_ESCALATE" ] && [ $(( (n - FLAP_ESCALATE) % FLAP_REALERT )) -eq 0 ]; }; then
-    danger "$name crash loop: $n consecutive restarts (state '$state'), not recovering."
+  # reminding us without becoming the 812-messages-a-night noise it replaces. The
+  # threshold page is retried every sweep until one leaves; "paged" is the delivery,
+  # not the attempt, and it lives on disk with the count.
+  local was_paged; was_paged="$(flap_get "$name.paged")"
+  if { [ "$n" -ge "$FLAP_ESCALATE" ] && [ "$was_paged" = "0" ]; } \
+     || { [ "$n" -gt "$FLAP_ESCALATE" ] && [ $(( (n - FLAP_ESCALATE) % FLAP_REALERT )) -eq 0 ]; }; then
+    danger "$name crash loop: $n consecutive restarts (state '$state'), not recovering."; rc=$?
+    paged "$rc" && flap_set "$name.paged" 1
   fi
+}
+
+# Seconds since docker last started the container, or empty when it cannot be read.
+# StartedAt is RFC 3339 with nanoseconds; GNU date takes it once the fraction is cut.
+container_uptime() {
+  local started epoch
+  started="$(docker inspect -f '{{.State.StartedAt}}' "$1" 2>/dev/null)" || return 0
+  started="${started%%.*}"; started="${started%Z}Z"
+  epoch="$(date -u -d "$started" +%s 2>/dev/null)" || return 0
+  case "$epoch" in ''|*[!0-9]*) return 0 ;; esac
+  echo $(( $(date -u +%s) - epoch ))
 }
 
 # One string field out of the miner heartbeat, empty if absent or JSON null. grep, not a
@@ -431,8 +477,8 @@ release_miner_after_heal() {
   log "WARNING: could not start $MINER_UNIT after the node heal; will retry next sweep"
   if [ "$alerted_miner_start_failed" = "0" ]; then
     # Not a footnote on a ✅: a miner that will not start is its own page.
-    danger "the node has recovered but 'systemctl start $MINER_UNIT' FAILED. The miner was stopped for the heal and is still stopped; the watchdog retries every sweep, or start it by hand."
-    alerted_miner_start_failed=1
+    danger "the node has recovered but 'systemctl start $MINER_UNIT' FAILED. The miner was stopped for the heal and is still stopped; the watchdog retries every sweep, or start it by hand."; rc=$?
+    paged "$rc" && alerted_miner_start_failed=1
   fi
   return 0
 }
@@ -517,8 +563,8 @@ heal_node_if_stalled() {
     if [ "$alerted_node_giveup" = "0" ]; then
       local miner_note=""
       [ "$(flap_get "$MINER_STOP_KEY")" = "1" ] && miner_note=" The miner is left STOPPED until the node is fixed: systemctl start $MINER_UNIT afterwards."
-      danger "zebra still ${lag} blocks behind after $NODE_HEAL_MAX tries (restart, clear peers, drop fork state). Likely a fork past the finalized tip: compare getblockhash with an explorer and reimport a snapshot (SNAPSHOTS.md).${miner_note}"
-      alerted_node_giveup=1
+      danger "zebra still ${lag} blocks behind after $NODE_HEAL_MAX tries (restart, clear peers, drop fork state). Likely a fork past the finalized tip: compare getblockhash with an explorer and reimport a snapshot (SNAPSHOTS.md).${miner_note}"; rc=$?
+      paged "$rc" && alerted_node_giveup=1
     fi
     return 0
   fi
@@ -672,8 +718,8 @@ while true; do
     [ "$unready_since" = "0" ] && unready_since="$now"
     elapsed=$((now - unready_since))
     if [ "$elapsed" -ge "$READY_GRACE_SECS" ] && [ "$alerted_unready" = "0" ]; then
-      danger "faucet NOT READY for $((elapsed / 60)) min. Reason: ${reason:-unknown}."
-      alerted_unready=1
+      danger "faucet NOT READY for $((elapsed / 60)) min. Reason: ${reason:-unknown}."; rc=$?
+      paged "$rc" && alerted_unready=1
     fi
   fi
 
@@ -717,8 +763,8 @@ while true; do
     if docker logs --tail 40 "$zallet" 2>&1 | grep -q "No such mempool or main chain transaction"; then
       if [ "$heal_attempts" -ge "$HEAL_MAX_ATTEMPTS" ]; then
         if [ "$alerted_heal_giveup" = "0" ]; then
-          danger "zallet poison persists after $heal_attempts repairs. Not retrying. Reason: ${reason:-unknown}."
-          alerted_heal_giveup=1
+          danger "zallet poison persists after $heal_attempts repairs. Not retrying. Reason: ${reason:-unknown}."; rc=$?
+          paged "$rc" && alerted_heal_giveup=1
         fi
       else
         heal_attempts=$((heal_attempts + 1))

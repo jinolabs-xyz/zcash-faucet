@@ -35,6 +35,7 @@ wd_env() {
   # syncing". Nothing noticed for as long as the grace window was 999999, because a
   # faucet that is never ready and never paged looks exactly like one that is fine.
   # The first case that set the grace to 0 failed in CI and passed alone.
+  unset STUB_SLOWLOOP STUB_ALERT_FAIL_N WATCHDOG_RECOVERY_MIN_UPTIME
   unset STUB_CRASHLOOP STUB_HEAL_FIXES STUB_ZEBRA_BLOCKS STUB_ZEBRA_EST STUB_ZEBRA_ADVANCE STUB_ZEBRA_STUCK_CALLS \
         WATCHDOG_NODE_HEAL_ENABLED WATCHDOG_NODE_STOPS_MINER WATCHDOG_MINER_HEARTBEAT WATCHDOG_MINER_UNIT STUB_START_FAIL \
         WATCHDOG_SIGNAL_MATCH STUB_READY_CANBUILD STUB_READY_CANBUILD_ONCE \
@@ -42,8 +43,18 @@ wd_env() {
   # Capture what would have been paged, without a webhook.
   # Records EVERY argument, so the suite can see that the watchdog passes --now (its
   # messages are one per episode and must never be held by alert.sh's cooldown).
-  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/alerts.log"\n' "$T" > "$T/alert.sh"
+  # STUB_ALERT_FAIL_N=k: the first k sends fail (exit 1) after logging the ATTEMPT to
+  # attempts.log; alerts.log only ever holds what was delivered. The default is every
+  # send delivered, as before.
+  cat > "$T/alert.sh" <<ALERT
+#!/bin/sh
+printf '%s\\n' "\$*" >> "$T/attempts.log"
+n=0; [ -f "$T/alert-calls" ] && n=\$(cat "$T/alert-calls"); n=\$((n + 1)); echo "\$n" > "$T/alert-calls"
+if [ "\$n" -le "\${STUB_ALERT_FAIL_N:-0}" ]; then echo "stub alert: send failed"; exit 1; fi
+printf '%s\\n' "\$*" >> "$T/alerts.log"
+ALERT
   chmod +x "$T/alert.sh"
+  export STUB_SLOWLOOP_COUNTER="$T/slowloop-counter"; rm -f "$STUB_SLOWLOOP_COUNTER"
   : > "$T/alerts.log"
 }
 
@@ -95,6 +106,72 @@ check "reports the fix when the container is actually up afterwards" \
   "grep -q 'FIXED: z3-testnet-zallet-1 was down' '$T/alerts.log'"
 check "and names how many attempts it took" \
   "grep -q 'after 1 restart attempt' '$T/alerts.log'"
+
+echo "== watchdog: A SLOW CRASH LOOP IS NOT A STREAM OF FIXES (risk register II, R-13)"
+# A container that starts, runs ~40 s and dies is seen 'running' on every other sweep.
+# One sighting used to reset the count and send ✅ FIXED, so the phone got a green tick
+# per minute and never the three consecutive misses that page. Reproduced in review:
+# 4 FIXED in 8 sweeps, 0 NEEDS YOU. Recovery now needs docker's StartedAt to be older
+# than RECOVERY_MIN_UPTIME; a young 'running' keeps the count and says nothing.
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo restarting > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+export STUB_SLOWLOOP="z3-testnet-zallet-1" WATCHDOG_RECOVERY_MIN_UPTIME=90
+wd_run 8
+check "never once calls it fixed" "! grep -q 'FIXED: z3-testnet-zallet-1' '$T/alerts.log'"
+check "the journal says why: running, but too young" "grep -q 'is running but only [0-9]*s old' '$T/run.log' && grep -q 'not calling that recovered' '$T/run.log'"
+check "and the misses accumulate across the young sightings to the page" "grep -q 'NEEDS YOU: z3-testnet-zallet-1 crash loop' '$T/alerts.log'"
+check "one page for the loop, not one per sweep" "[ \"\$(grep -c 'NEEDS YOU: z3-testnet-zallet-1' '$T/alerts.log')\" = 1 ]"
+
+echo "== watchdog: a container that is up but young is not yet recovered; old enough, it is"
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+echo exited > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+export WATCHDOG_RECOVERY_MIN_UPTIME=90
+wd_run 1   # starts it
+printf 'running\n%s\n' "$(date -u +%Y-%m-%dT%H:%M:%S.000000000Z)" > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+wd_run 2   # seen running twice, both times seconds old
+check "seconds-old is not recovered" "! grep -q 'FIXED: z3-testnet-zallet-1' '$T/alerts.log'"
+check "and the count is kept for the next miss" "[ \"\$(cat '$T/state/z3-testnet-zallet-1.flaps')\" = 1 ]"
+printf 'running\n2000-01-01T00:00:00.000000000Z\n' > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+wd_run 1
+check "old enough is recovered, once, with the uptime in the report" "grep -q 'FIXED: z3-testnet-zallet-1 was down.*up [0-9]*s' '$T/alerts.log' && [ \"\$(grep -c 'FIXED' '$T/alerts.log')\" = 1 ]"
+check "and the count is reset" "[ \"\$(cat '$T/state/z3-testnet-zallet-1.flaps')\" = 0 ]"
+
+echo "== watchdog: A PAGE THAT DID NOT LEAVE IS NOT A PAGE (risk register II, R-14)"
+# alert() returned 0 whatever alert.sh said and every caller set its 'already paged' flag
+# right after, so a NEEDS YOU whose POST failed (the bridge restarting, which step 2
+# itself does) was the one page for that episode, lost. Reproduced: alert.sh failing on
+# every call, four sweeps, exactly one attempt, then silence.
+wd_env
+echo restarting > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+export STUB_CRASHLOOP="z3-testnet-zallet-1" STUB_ALERT_FAIL_N=1
+wd_run 5   # misses 1,2,3 (page attempt fails), 4 (retried, delivered), 5 (quiet)
+check "the crash-loop page is attempted again after a failed send" "[ \"\$(grep -c 'NEEDS YOU: z3-testnet-zallet-1 crash loop' '$T/attempts.log')\" -ge 2 ]"
+check "and delivered exactly once" "[ \"\$(grep -c 'NEEDS YOU' '$T/alerts.log')\" = 1 ]"
+check "the journal names the failed send and the retry" "grep -q 'alert send failed.*the caller retries next sweep' '$T/run.log'"
+check "and does not keep re-paging after the delivery" "[ \"\$(grep -c 'NEEDS YOU' '$T/attempts.log')\" = 2 ]"
+check "the delivered flag is on disk with the count" "[ \"\$(cat '$T/state/z3-testnet-zallet-1.paged.flaps')\" = 1 ]"
+
+echo "== watchdog: the readiness page is retried the same way"
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+export WATCHDOG_READY_GRACE_SECS=0 STUB_READY=0 STUB_ALERT_FAIL_N=2
+wd_run 4
+check "three attempts for two failures, then delivered" "[ \"\$(grep -c 'NOT READY' '$T/attempts.log')\" = 3 ] && [ \"\$(grep -c 'NOT READY' '$T/alerts.log')\" = 1 ]"
+check "and once delivered, the episode is marked and stays quiet" "! grep -q 'NOT READY' <(tail -n1 '$T/attempts.log') || [ \"\$(grep -c 'NOT READY' '$T/attempts.log')\" = 3 ]"
+unset WATCHDOG_READY_GRACE_SECS STUB_READY
+
+echo "== watchdog: no channel at all is 'done', not a retry every sweep"
+wd_env
+echo restarting > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+export STUB_CRASHLOOP="z3-testnet-zallet-1"
+rm -f "$T/alert.sh"   # no alert.sh, and WATCHDOG_ALERT_URL is unset: nowhere to page
+wd_run 5
+check "the page is logged once and not retried into nothing" "[ \"\$(grep -c 'ALERT: 🚨 NEEDS YOU: z3-testnet-zallet-1 crash loop' '$T/run.log')\" = 1 ]"
 
 echo "== watchdog: a healthy stack is silent"
 wd_env
