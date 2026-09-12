@@ -314,10 +314,17 @@ recover_if_down() {
 container_uptime() {
   local started epoch
   started="$(docker inspect -f '{{.State.StartedAt}}' "$1" 2>/dev/null)" || return 0
+  # Empty would become the bare "Z" below, which GNU date reads as today's midnight and
+  # reports as hours of uptime; a never-started container's 0001-01-01 parses to a
+  # negative epoch. Neither is a reading. And a clock stepped back after the start
+  # gives a negative uptime, which is not "young", so it is judged on the sighting.
+  [ -n "$started" ] || return 0
   started="${started%%.*}"; started="${started%Z}Z"
   epoch="$(date -u -d "$started" +%s 2>/dev/null)" || return 0
   case "$epoch" in ''|*[!0-9]*) return 0 ;; esac
-  echo $(( $(date -u +%s) - epoch ))
+  local up=$(( $(date -u +%s) - epoch ))
+  [ "$up" -ge 0 ] || return 0
+  echo "$up"
 }
 
 # One string field out of the miner heartbeat, empty if absent or JSON null. grep, not a

@@ -35,7 +35,7 @@ wd_env() {
   # syncing". Nothing noticed for as long as the grace window was 999999, because a
   # faucet that is never ready and never paged looks exactly like one that is fine.
   # The first case that set the grace to 0 failed in CI and passed alone.
-  unset STUB_SLOWLOOP STUB_ALERT_FAIL_N WATCHDOG_RECOVERY_MIN_UPTIME
+  unset STUB_SLOWLOOP STUB_ALERT_FAIL_N STUB_ALERT_FAIL_RC WATCHDOG_RECOVERY_MIN_UPTIME
   unset STUB_CRASHLOOP STUB_HEAL_FIXES STUB_ZEBRA_BLOCKS STUB_ZEBRA_EST STUB_ZEBRA_ADVANCE STUB_ZEBRA_STUCK_CALLS \
         WATCHDOG_NODE_HEAL_ENABLED WATCHDOG_NODE_STOPS_MINER WATCHDOG_MINER_HEARTBEAT WATCHDOG_MINER_UNIT STUB_START_FAIL \
         WATCHDOG_SIGNAL_MATCH STUB_READY_CANBUILD STUB_READY_CANBUILD_ONCE \
@@ -50,7 +50,7 @@ wd_env() {
 #!/bin/sh
 printf '%s\\n' "\$*" >> "$T/attempts.log"
 n=0; [ -f "$T/alert-calls" ] && n=\$(cat "$T/alert-calls"); n=\$((n + 1)); echo "\$n" > "$T/alert-calls"
-if [ "\$n" -le "\${STUB_ALERT_FAIL_N:-0}" ]; then echo "stub alert: send failed"; exit 1; fi
+if [ "\$n" -le "\${STUB_ALERT_FAIL_N:-0}" ]; then echo "stub alert: send failed"; exit \${STUB_ALERT_FAIL_RC:-1}; fi
 printf '%s\\n' "\$*" >> "$T/alerts.log"
 ALERT
   chmod +x "$T/alert.sh"
@@ -160,10 +160,41 @@ echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
 echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
 echo running > "$STUB_CONTAINERS/faucet-web"
 export WATCHDOG_READY_GRACE_SECS=0 STUB_READY=0 STUB_ALERT_FAIL_N=2
-wd_run 4
-check "three attempts for two failures, then delivered" "[ \"\$(grep -c 'NOT READY' '$T/attempts.log')\" = 3 ] && [ \"\$(grep -c 'NOT READY' '$T/alerts.log')\" = 1 ]"
-check "and once delivered, the episode is marked and stays quiet" "! grep -q 'NOT READY' <(tail -n1 '$T/attempts.log') || [ \"\$(grep -c 'NOT READY' '$T/attempts.log')\" = 3 ]"
+wd_run 6   # attempts on sweeps 1-3 (two fail, the third lands), then three quiet sweeps
+check "three attempts for two failures, then delivered, then quiet: the episode is marked on delivery" \
+  "[ \"\$(grep -c 'NOT READY' '$T/attempts.log')\" = 3 ] && [ \"\$(grep -c 'NOT READY' '$T/alerts.log')\" = 1 ]"
 unset WATCHDOG_READY_GRACE_SECS STUB_READY
+
+echo "== watchdog: a page that fails with a code other than 1 is still a failed page"
+# alert.sh exits 1 for a POST that failed, 3 for no channel configured, 4 for no JSON
+# encoder at all. Only 0 and 3 are "done"; the suite's stub used to fail with 1 alone,
+# so a predicate that treated everything but 1 as delivered passed it.
+wd_env
+echo restarting > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+export STUB_CRASHLOOP="z3-testnet-zallet-1" STUB_ALERT_FAIL_N=1 STUB_ALERT_FAIL_RC=4
+wd_run 5
+check "rc 4 is retried next sweep" "[ \"\$(grep -c 'NEEDS YOU: z3-testnet-zallet-1 crash loop' '$T/attempts.log')\" -ge 2 ]"
+check "and delivered once" "[ \"\$(grep -c 'NEEDS YOU' '$T/alerts.log')\" = 1 ]"
+
+echo "== watchdog: a second episode pages again, because recovery resets the delivered flag"
+# Review deleted the reset on recovery and the suite stayed green. Without it the flag
+# reads 1 from disk on the next loop, the threshold page is skipped, and the second
+# episode is silent until the 63rd consecutive restart.
+wd_env
+echo restarting > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+export STUB_CRASHLOOP="z3-testnet-zallet-1"
+wd_run 3
+check "the first loop paged once and the flag is on disk" "[ \"\$(grep -c 'NEEDS YOU: z3-testnet-zallet-1 crash loop' '$T/alerts.log')\" = 1 ] && [ \"\$(cat '$T/state/z3-testnet-zallet-1.paged.flaps')\" = 1 ]"
+unset STUB_CRASHLOOP
+printf 'running\n2000-01-01T00:00:00.000000000Z\n' > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+wd_run 1
+check "it recovers for real and the count resets" "grep -q 'FIXED: z3-testnet-zallet-1 was down' '$T/alerts.log' && [ \"\$(cat '$T/state/z3-testnet-zallet-1.flaps')\" = 0 ]"
+export STUB_CRASHLOOP="z3-testnet-zallet-1"
+echo restarting > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+: > "$T/alerts.log"; : > "$T/attempts.log"
+wd_run 3   # a fresh process, as after any deploy restart
+check "the second loop pages again at the threshold" "[ \"\$(grep -c 'NEEDS YOU: z3-testnet-zallet-1 crash loop: 3 consecutive' '$T/alerts.log')\" = 1 ]"
+unset STUB_CRASHLOOP
 
 echo "== watchdog: no channel at all is 'done', not a retry every sweep"
 wd_env
