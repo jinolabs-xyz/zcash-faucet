@@ -83,8 +83,25 @@ case "${1:-}" in
     done
     f="${STUB_CONTAINERS:?}/$target"
     [ -f "$f" ] || { echo "Error: No such object: $target" >&2; exit 1; }
+    # STUB_SLOWLOOP=<name>: the container that starts, runs a few seconds and dies. Its
+    # status alternates restarting/running on successive inspects (a counter file), and
+    # its StartedAt is always "just now", which is what the watchdog must not mistake for
+    # a recovery. Every other container's StartedAt is line 2 of its state file, or, when
+    # absent, long ago: the pre-existing cases assume a container seen running is up.
+    # Only the STATUS reads advance the alternation: the watchdog also inspects the
+    # restart policy every sweep, and counting that read made the status land on
+    # 'running' every time, so the loop never looped.
+    if [ "${STUB_SLOWLOOP:-}" = "$target" ]; then
+      case "$fmt" in
+        *State.Status*)
+          cf="${STUB_SLOWLOOP_COUNTER:?}"; k=0; [ -f "$cf" ] && k="$(cat "$cf")"; k=$((k + 1)); echo "$k" > "$cf"
+          if [ $((k % 2)) -eq 0 ]; then echo running; else echo restarting; fi; exit 0 ;;
+        *State.StartedAt*) date -u +%Y-%m-%dT%H:%M:%S.000000000Z; exit 0 ;;
+      esac
+    fi
     case "$fmt" in
-      *State.Status*) head -n1 "$f" ;;
+      *State.Status*)    head -n1 "$f" ;;
+      *State.StartedAt*) st="$(sed -n 2p "$f")"; echo "${st:-2000-01-01T00:00:00.000000000Z}" ;;
       *) echo "stub docker inspect: unsupported fmt $fmt" >&2; exit 64 ;;
     esac
     ;;
