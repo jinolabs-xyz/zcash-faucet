@@ -167,6 +167,10 @@ jobs:
             exit 0
           fi
           case "$PROBE_OUTCOME" in
+            # A green probe with this step still running means the run was cancelled in
+            # the moment between the two. Nothing to page about, and the `if:` above is
+            # the only other thing keeping a recovery run from paging under `always()`.
+            success) echo "the probe passed, nothing to page"; exit 0 ;;
             failure) what="has failed consecutive probes" ;;
             *)       what="was not probed to a verdict (probe step outcome: ${PROBE_OUTCOME:-unknown}) after a failure" ;;
           esac

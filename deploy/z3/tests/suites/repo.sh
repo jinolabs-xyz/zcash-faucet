@@ -903,6 +903,13 @@ PAGE_PROBE_OUTCOME=cancelled page_run "[{\"conclusion\":\"failure\",\"databaseId
 check "a run cut off after an old failure still pages" "grep -q 'curl ' '$STUB_CURL_LOG'"
 check "and the message says the probe reached no verdict, not that it failed" \
   "grep -q 'was not probed to a verdict (probe step outcome: cancelled)' '$STUB_CURL_LOG' && ! grep -q 'has failed consecutive' '$STUB_CURL_LOG'"
+# A GREEN probe under a cancelled run (a person cancelled in the second between the probe
+# passing and this step starting) is nothing to page about, whatever the previous run was.
+# Without this arm the `*)` branch paged "not probed to a verdict (outcome: success)" on a
+# recovery run, and only the `if:` pin stood between that and paging on every recovery.
+PAGE_PROBE_OUTCOME=success page_run "[{\"conclusion\":\"failure\",\"databaseId\":1,\"createdAt\":\"$old\"}]"
+check "a run cut off AFTER a green probe does not page: the probe passed" \
+  "! grep -q 'curl ' '$STUB_CURL_LOG' && grep -q 'the probe passed, nothing to page' '$T/page.log'"
 PAGE_PROBE_OUTCOME=cancelled page_run "[{\"conclusion\":\"success\",\"databaseId\":1,\"createdAt\":\"$old\"}]"
 check "a run cut off after a SUCCESS does not page: a person cancelling one run is not an outage" \
   "! grep -q 'curl ' '$STUB_CURL_LOG' && grep -q 'first failure: not paging yet' '$T/page.log'"
