@@ -65,6 +65,7 @@ process.env.ZALLET_POLL_MS = "250";
 
 const { ZalletRefiller } = await import("./zalletRefiller.ts");
 const { SHIELD_MAX_LAG_BLOCKS } = await import("../zcash/shieldGate.ts");
+const { WALLET_MAX_LAG_BLOCKS } = await import("../zcash/walletLagGate.ts");
 const { getExternalTip, warmExternalTip, warmExternalTipNowForTests } = await import("../zcash/externalTip.ts");
 const { classifySweep } = await import("./decide.ts");
 
@@ -95,7 +96,11 @@ const realFetch = globalThis.fetch;
  * Fake zallet endpoint. Anything that is not our RPC URL goes to the real fetch,
  * so the tip server keeps working while the wallet is mocked.
  */
-function mockWallet(nodeHeight: number | null, handlers: Record<string, (p: unknown[]) => unknown> = {}) {
+function mockWallet(
+  nodeHeight: number | null,
+  handlers: Record<string, (p: unknown[]) => unknown> = {},
+  walletHeight: number | null = nodeHeight,
+) {
   const calls: Array<{ method: string; params: unknown[] }> = [];
   globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
     if (!String(url).includes("59998")) return realFetch(url as string, init);
@@ -106,7 +111,7 @@ function mockWallet(nodeHeight: number | null, handlers: Record<string, (p: unkn
       // unreachable case is covered separately by refusing the connection.
       if (nodeHeight == null) return new Response(JSON.stringify({ result: {} }), { status: 200 });
       return new Response(
-        JSON.stringify({ result: { wallet_tip: { height: nodeHeight }, node_tip: { height: nodeHeight } } }),
+        JSON.stringify({ result: { wallet_tip: { height: walletHeight }, node_tip: { height: nodeHeight } } }),
         { status: 200 },
       );
     }
@@ -241,6 +246,44 @@ test("a node in step with the network DOES broadcast", async () => {
     null,
     50,
   ]);
+});
+
+test("a WALLET behind its own node does not shield, whatever the node says about the network", async () => {
+  // Risk register II, R-17. The node is in step with the network, so the gate above
+  // passes; the wallet is mid-rescan, 5000 behind the node. Before this the sweep
+  // called z_shieldcoinbase here (probed: getwalletstatus, getblockchaininfo,
+  // z_shieldcoinbase on the wire), and a shield built from a stale scanned height is
+  // the born-expired poison the rescan was clearing.
+  await primeTip(NETWORK_TIP);
+  const calls = mockWallet(NETWORK_TIP, WILLING_WALLET, NETWORK_TIP - 5000);
+  const outcome = await new ZalletRefiller().step();
+  assert.equal(outcome.moved, false);
+  assert.equal(outcome.refused?.state, "unsafe");
+  assert.match(outcome.refused?.reason ?? "", /wallet trails our own node by 5000/);
+  assert.equal(outcome.refused?.lag, 5000);
+  assert.ok(!calls.some((c) => c.method === "z_shieldcoinbase"), "no shield may be built from a stale scanned height");
+});
+
+test("a wallet inside its lag budget still shields, so the second gate is not an off switch either", async () => {
+  await primeTip(NETWORK_TIP);
+  const calls = mockWallet(NETWORK_TIP, WILLING_WALLET, NETWORK_TIP - WALLET_MAX_LAG_BLOCKS);
+  const outcome = await new ZalletRefiller().step();
+  assert.equal(outcome.moved, true, `a wallet lag of exactly ${WALLET_MAX_LAG_BLOCKS} is within budget`);
+  assert.ok(calls.some((c) => c.method === "z_shieldcoinbase"));
+});
+
+test("a wallet that reports a node tip but no scanned height is refused by the NODE gate, before the wallet gate is reached", async () => {
+  // Not a wallet-gate case, and it was first written as one. getNodeStatus() folds a
+  // missing wallet height into a null status, so the node gate refuses this as
+  // unverifiable and the wallet gate never runs: review showed the wallet gate deleted
+  // outright leaves this green. It stays as what it is, the shape of the refusal for
+  // a wallet that answers without a scanned height, named honestly.
+  await primeTip(NETWORK_TIP);
+  const calls = mockWallet(NETWORK_TIP, WILLING_WALLET, null);
+  const outcome = await new ZalletRefiller().step();
+  assert.equal(outcome.moved, false);
+  assert.equal(outcome.refused?.state, "unverifiable");
+  assert.ok(!calls.some((c) => c.method === "z_shieldcoinbase"));
 });
 
 test("lag inside the budget still broadcasts, so the gate is not just an off switch", async () => {

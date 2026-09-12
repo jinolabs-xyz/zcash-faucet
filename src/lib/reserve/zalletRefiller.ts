@@ -18,6 +18,7 @@ import { config } from "../config.ts";
 import type { Refiller, StepOutcome } from "./refiller";
 import { getNodeStatus } from "../zcash/nodeStatus.ts";
 import { mayShield, readShieldFreshness } from "../zcash/shieldGate.ts";
+import { mayBuildFromWallet, walletLagFreshness } from "../zcash/walletLagGate.ts";
 
 // Cap coinbase UTXOs per shield tx (zcashd's old default). A long mining
 // backlog gets swept over several steps instead of one oversized tx, and it
@@ -89,6 +90,31 @@ export class ZalletRefiller implements Refiller {
     const gate = status?.shield ?? readShieldFreshness(null);
     if (!mayShield(gate)) {
       return { moved: false, refused: { state: gate.state, reason: gate.reason, lag: gate.lag } };
+    }
+
+    // THE OTHER GATE, the one this step did not have (risk register II, R-17). The
+    // node's freshness above is node-vs-network. The wallet stamps expiry from the
+    // height IT has scanned, and after the 2026-08-17 crash-loop the drip path got a
+    // second check, wallet-vs-node (route.ts step 3.55), for exactly that: a wallet
+    // mid-rescan builds a transaction that is born expired, zebra rejects it, and the
+    // wallet keeps an unmined-expired row it asks zebra about on every boot, which is
+    // the poison watchdog step 5 exists to clear. This sweep builds transactions too,
+    // fires on the first tick after every app restart and hourly regardless of
+    // balance, and had only the node half. So the documented recovery (a rescan)
+    // re-armed the poison it was recovering from: the money the drip path refused to
+    // risk on a drip was spent on a shield. Same helper, same fail-closed rule.
+    //
+    // Only "safe" and "unsafe" are reachable HERE: getNodeStatus() folds a missing
+    // wallet or node height into a null status, and the node gate above refuses that
+    // as unverifiable before this line runs. The allow-list in mayBuildFromWallet is
+    // still the right shape (a state added later refuses by default), and its
+    // unverifiable arm is pinned where it is reachable, in walletLagGate.test.ts.
+    const walletLag = walletLagFreshness(status?.height ?? null, status?.nodeHeight ?? null);
+    if (!mayBuildFromWallet(walletLag)) {
+      return {
+        moved: false,
+        refused: { state: walletLag.state, reason: walletLag.reason, lag: walletLag.lag },
+      };
     }
 
     // z_shieldcoinbase <account-uuid> <toaddress> <fee=null> <limit> - sweep

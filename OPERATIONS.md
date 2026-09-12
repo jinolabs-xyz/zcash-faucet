@@ -520,7 +520,7 @@ curl -s localhost:3000/api/status | jq '.reserve | {shieldRefusals, lastRefusal,
 | read | what it means, and what to do |
 |---|---|
 | `shieldRefusals: 0` | the gate is not what is stopping you. Use the verdict table. |
-| `shieldRefusals` climbing, `state: "unsafe"` | our node is behind the network by more than 5 blocks. **Wait**, do not force it. This is the gate doing its job, and the lag is in `lastRefusal.lag`. |
+| `shieldRefusals` climbing, `state: "unsafe"` | one of two lags, and `lastRefusal.reason` says which: our node is behind the network by more than 5 blocks, or our wallet trails our own node by more than 10 (a rescan does this for as long as it runs). **Wait**, do not force it. This is the gate doing its job, and the lag is in `lastRefusal.lag`. |
 | `shieldRefusals` climbing, `state: "unverifiable"` | we cannot establish the network tip, so we refuse rather than assume. Check the tip oracle before anything else, and note the wallet being down produces this too. |
 
 A refusal is not a fault to route around. It means a shield built now would carry
