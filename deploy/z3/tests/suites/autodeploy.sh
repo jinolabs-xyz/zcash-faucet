@@ -33,6 +33,27 @@ ad_env() {
   export STUB_SYSTEMD="$T/systemd" STUB_LOG="$T/systemctl.calls"
   mkdir -p "$STUB_SYSTEMD" "$T/bin"; : > "$STUB_LOG"
   rm -f "$T/bin/systemctl"; ln -s "$SCRATCH/stubs/systemctl" "$T/bin/systemctl"
+  # THE CI GATE'S ONLY OUTSIDE CALL IS ONE curl TO THE CHECK-RUNS API, so curl is
+  # stubbed HERE (this suite's git stays real). It answers any check-runs URL with the
+  # fixture file and logs the URL, so a case can assert the SHA that was asked about.
+  # Anything else is refused: the script has no other business on the network.
+  export STUB_CHECKS_JSON="$T/check-runs.json" STUB_CURL_LOG="$T/curl.calls"
+  : > "$STUB_CURL_LOG"
+  cat > "$T/bin/curl" <<'CURL'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${STUB_CURL_LOG:?}"
+case "$*" in
+  *check-runs*) [ -f "${STUB_CHECKS_JSON:?}" ] || exit 22; cat "$STUB_CHECKS_JSON" ;;
+  *) exit 7 ;;
+esac
+CURL
+  chmod +x "$T/bin/curl"
+  # Every job green by default, so the cases below that are about diffs and installs
+  # keep meaning what they meant before the gate existed; the gate's own cases set
+  # their own fixture. The origin here is a local bare repo, which is not a GitHub URL,
+  # so the repo name is handed over explicitly.
+  ci_fixture green
+  export AUTODEPLOY_CHECKS_REPO="o/r" AUTODEPLOY_CHECKS_API="https://api.example"
   export PATH="$T/bin:$BASE_PATH"
 
   # -b main on BOTH, and the remote added by hand rather than cloned. Cloning an EMPTY
@@ -70,6 +91,24 @@ printf 'called\n' >> "$REDEPLOY_LOG"
 exit "${STUB_REDEPLOY_RC:-0}"
 RD
   chmod +x "$T/install/redeploy.sh"
+}
+
+# Write a check-runs fixture. Each argument is "name:status:conclusion" (conclusion may be
+# "-" for null); the bare word `green` is all eight jobs completed+success. Ids ascend in
+# argument order, so a later argument with the same name is the NEWER run.
+ci_fixture() {
+  local i=0 rows="" spec
+  if [ "$1" = "green" ]; then
+    set -- app:completed:success smoke:completed:success ui:completed:success api-tests:completed:success \
+           audit:completed:success shell:completed:success miner:completed:success image:completed:success
+  fi
+  for spec in "$@"; do
+    i=$((i + 1))
+    IFS=: read -r n st co <<< "$spec"
+    [ "$co" = "-" ] && co=null || co="\"$co\""
+    rows="$rows{\"id\":$i,\"name\":\"$n\",\"status\":\"$st\",\"conclusion\":$co},"
+  done
+  printf '{"total_count":%s,"check_runs":[%s]}\n' "$i" "${rows%,}" > "$STUB_CHECKS_JSON"
 }
 
 # Move main forward in the remote, touching exactly the paths asked for.
@@ -515,3 +554,137 @@ STUB_INSTALLOPS_RC=1 bash "$AD" > "$T/opsbackoff.log" 2>&1
 check "third tick backs off, non-zero" "[ $? -eq 1 ] && grep -q 'backing off' '$T/opsbackoff.log'"
 check "and did not run install-ops" "[ ! -s '$INSTALLOPS_LOG' ]"
 unset AUTODEPLOY_BACKOFF_AFTER AUTODEPLOY_BACKOFF_SECONDS
+
+echo "== auto-deploy: THE CI GATE (risk register II, R-1)"
+# Until this, the box reset to origin/main and built it two minutes after the merge,
+# usually before the merge's own checks had finished; thirteen of forty merges shipped
+# with a red job. Now it asks the check-runs API about the exact commit first. Every
+# case here drives the real script against the real git fixture; only curl is stubbed.
+ad_env
+export AUTODEPLOY_STATE_FILE="$T/last-processed"
+ad_advance src/page.tsx
+head_before="$(git -C "$T/repo" rev-parse HEAD)"
+ci_fixture app:completed:success smoke:completed:success ui:completed:success api-tests:completed:success \
+           audit:completed:success shell:completed:failure miner:completed:success image:completed:success
+bash "$AD" > "$T/ci-red.log" 2>&1
+check "a commit with a RED job is refused, exit 1 so the unit pages" "[ $? -eq 1 ]"
+check "and the log names the commit, the job and its conclusion" \
+  "grep -q 'REFUSING' '$T/ci-red.log' && grep -q 'shell=failure' '$T/ci-red.log'"
+check "and the checkout did not move" "[ \"\$(git -C '$T/repo' rev-parse HEAD)\" = '$head_before' ]"
+check "and nothing was built or installed" "[ ! -s '$REDEPLOY_LOG' ] && [ ! -s '$INSTALLOPS_LOG' ]"
+check "and the API was asked about the commit at the TIP of main, not the checkout" \
+  "grep -qF \"commits/\$(git -C '$T/repo' rev-parse origin/main)/check-runs\" '$STUB_CURL_LOG'"
+check "and a refusal counts as a failure, so the backoff covers a commit that stays red" \
+  "[ -s '$T/last-processed.failures' ]"
+
+# THE FIX LANDS: a green commit on top is shipped, and it carries the red one with it.
+ad_advance src/page.tsx
+ci_fixture green
+bash "$AD" > "$T/ci-green.log" 2>&1
+check "a green commit on top ships" "[ $? -eq 0 ] && [ -s '$REDEPLOY_LOG' ]"
+check "and the baseline is now main's tip" \
+  "[ \"\$(cat '$T/last-processed')\" = \"\$(git -C '$T/repo' rev-parse origin/main)\" ]"
+
+echo "== auto-deploy: PENDING is not a failure, it is 'ask again next tick'"
+ad_env
+export AUTODEPLOY_STATE_FILE="$T/last-processed"
+ad_advance src/page.tsx
+head_before="$(git -C "$T/repo" rev-parse HEAD)"
+ci_fixture app:completed:success smoke:completed:success ui:completed:success api-tests:completed:success \
+           audit:completed:success shell:in_progress:- miner:completed:success image:completed:success
+bash "$AD" > "$T/ci-pending.log" 2>&1
+check "a commit whose checks are still running exits 0" "[ $? -eq 0 ]"
+check "and says it is waiting, naming the job" "grep -q 'waiting for CI' '$T/ci-pending.log' && grep -q 'pending: shell' '$T/ci-pending.log'"
+check "and did not move the checkout or build" \
+  "[ \"\$(git -C '$T/repo' rev-parse HEAD)\" = '$head_before' ] && [ ! -s '$REDEPLOY_LOG' ]"
+check "and did not record a failure, so a slow CI never trips the backoff" "[ ! -e '$T/last-processed.failures' ]"
+# NO RUNS AT ALL is the same answer. Four main commits had exactly that (the concurrency
+# queue cancelled their runs); with per-commit groups it should not recur, but a commit
+# with no verdict is still not one to ship.
+ci_fixture app:completed:success
+bash "$AD" > "$T/ci-absent.log" 2>&1
+check "a commit with most jobs absent is pending too, not green" \
+  "[ $? -eq 0 ] && grep -q 'waiting for CI' '$T/ci-absent.log' && [ ! -s '$REDEPLOY_LOG' ]"
+# Then the checks finish: the same tick shape ships it.
+ci_fixture green
+bash "$AD" > "$T/ci-then-green.log" 2>&1
+check "the next tick with a verdict ships it" "[ $? -eq 0 ] && [ -s '$REDEPLOY_LOG' ]"
+check "and the pending marker is gone" "[ ! -e '$T/last-processed.ci-pending' ]"
+
+echo "== auto-deploy: pending FOREVER becomes a loud refusal"
+ad_env
+export AUTODEPLOY_STATE_FILE="$T/last-processed" AUTODEPLOY_CI_PENDING_MAX=0
+ad_advance src/page.tsx
+ci_fixture app:in_progress:-
+bash "$AD" > "$T/ci-stale.log" 2>&1
+check "past the pending budget the commit is refused, exit 1" \
+  "[ $? -eq 1 ] && grep -q 'no CI verdict after' '$T/ci-stale.log' && [ ! -s '$REDEPLOY_LOG' ]"
+unset AUTODEPLOY_CI_PENDING_MAX
+
+echo "== auto-deploy: a RERUN supersedes the run it replaced"
+ad_env
+export AUTODEPLOY_STATE_FILE="$T/last-processed"
+ad_advance src/page.tsx
+# shell failed, then was rerun and passed: the newer run (higher id) is the verdict.
+ci_fixture app:completed:success smoke:completed:success ui:completed:success api-tests:completed:success \
+           audit:completed:success shell:completed:failure miner:completed:success image:completed:success \
+           shell:completed:success
+bash "$AD" > "$T/ci-rerun.log" 2>&1
+check "an old failure with a newer success is green" "[ $? -eq 0 ] && [ -s '$REDEPLOY_LOG' ]"
+# And the other way round: a green run that was rerun and FAILED is red.
+ad_advance src/page.tsx
+ci_fixture app:completed:success smoke:completed:success ui:completed:success api-tests:completed:success \
+           audit:completed:success shell:completed:success miner:completed:success image:completed:success \
+           shell:completed:failure
+: > "$REDEPLOY_LOG"
+bash "$AD" > "$T/ci-rerun-red.log" 2>&1
+check "an old success with a newer failure is red" "[ $? -eq 1 ] && [ ! -s '$REDEPLOY_LOG' ]"
+
+echo "== auto-deploy: a skipped or cancelled job is not a pass"
+ad_env
+export AUTODEPLOY_STATE_FILE="$T/last-processed"
+ad_advance src/page.tsx
+ci_fixture app:completed:success smoke:completed:success ui:completed:success api-tests:completed:success \
+           audit:completed:skipped shell:completed:success miner:completed:success image:completed:cancelled
+bash "$AD" > "$T/ci-skipped.log" 2>&1
+check "skipped and cancelled conclusions refuse, and are named" \
+  "[ $? -eq 1 ] && grep -q 'audit=skipped' '$T/ci-skipped.log' && grep -q 'image=cancelled' '$T/ci-skipped.log'"
+
+echo "== auto-deploy: when CI cannot be asked, the box does not guess"
+ad_env
+export AUTODEPLOY_STATE_FILE="$T/last-processed"
+ad_advance src/page.tsx
+rm -f "$STUB_CHECKS_JSON"
+bash "$AD" > "$T/ci-down.log" 2>&1
+check "an unreachable check-runs API refuses, exit 1" \
+  "[ $? -eq 1 ] && grep -q 'could not read check-runs' '$T/ci-down.log' && [ ! -s '$REDEPLOY_LOG' ]"
+printf 'not json' > "$STUB_CHECKS_JSON"
+bash "$AD" > "$T/ci-garbage.log" 2>&1
+check "a response that does not parse refuses, exit 1" \
+  "[ $? -eq 1 ] && grep -q 'did not parse' '$T/ci-garbage.log' && [ ! -s '$REDEPLOY_LOG' ]"
+ci_fixture green
+( unset AUTODEPLOY_CHECKS_REPO; bash "$AD" > "$T/ci-norepo.log" 2>&1 ); rc=$?
+check "an origin that is not a GitHub URL, with no repo given, refuses rather than skipping the gate" \
+  "[ $rc -eq 1 ] && grep -q 'cannot tell which GitHub repo' '$T/ci-norepo.log' && [ ! -s '$REDEPLOY_LOG' ]"
+
+echo "== auto-deploy: the hatch is DATED"
+ad_env
+export AUTODEPLOY_STATE_FILE="$T/last-processed"
+ad_advance src/page.tsx
+ci_fixture app:completed:failure
+tomorrow="$(date -u -d '+1 day' +%F 2>/dev/null || date -u -v+1d +%F)"
+yesterday="$(date -u -d '-1 day' +%F 2>/dev/null || date -u -v-1d +%F)"
+AUTODEPLOY_CI_GATE_OFF_UNTIL="$tomorrow" bash "$AD" > "$T/hatch-open.log" 2>&1
+check "a hatch dated in the future ships a red commit, and says so in capitals" \
+  "[ $? -eq 0 ] && grep -q 'CI GATE OFF' '$T/hatch-open.log' && [ -s '$REDEPLOY_LOG' ]"
+ad_advance src/page.tsx
+: > "$REDEPLOY_LOG"
+AUTODEPLOY_CI_GATE_OFF_UNTIL="$yesterday" bash "$AD" > "$T/hatch-shut.log" 2>&1
+check "a hatch whose date has passed is a hatch that is closed" \
+  "[ $? -eq 1 ] && grep -q 'has passed' '$T/hatch-shut.log' && grep -q 'REFUSING' '$T/hatch-shut.log' && [ ! -s '$REDEPLOY_LOG' ]"
+
+echo "== auto-deploy: an unchanged main never asks CI"
+ad_env
+: > "$STUB_CURL_LOG"
+bash "$AD" > /dev/null 2>&1
+check "nothing to do means no API call, so the hourly budget is spent only on movement" "[ ! -s '$STUB_CURL_LOG' ]"
