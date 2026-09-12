@@ -98,7 +98,12 @@ Every branch goes through the same pipeline, and nothing skips a step:
 7. The CTO then watches the post-merge run on `main` to green. This is not
    optional and it is not paperwork: a PR that was green on its own head has
    reddened `main` after merging, and the gap between "merged" and "someone
-   noticed" is where that sits unseen.
+   noticed" is where that sits unseen. Since risk register II the box enforces
+   this half by itself: auto-deploy asks the check-runs API about the exact
+   commit and ships it only when every job in ci.yml has completed green. A red
+   main is refused and pages; a still-running one waits; a commit with no run
+   at all waits up to 45 minutes and is then refused too. Branch protection on
+   GitHub is a courtesy in front of that, not the gate.
 
 The separation is the point: the author writes and fixes, the non-author finds,
 the CTO audits and merges. Nobody reviews their own work and nobody fixes

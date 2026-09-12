@@ -27,13 +27,16 @@ on:
 permissions:
   contents: read
 
-# Cancel superseded runs on PR branches, never on main: GitHub renders a
-# cancelled run as failing, so rapid merges were flipping the README badge
-# to FAILING while main was healthy. Main runs are few and cheap, let each
-# one finish and keep the badge truthful.
+# Cancel superseded runs on PR branches, never on main. The old group was the ref,
+# and `cancel-in-progress: false` for main did not do what it says: GitHub still
+# cancels the PENDING run in a group when a newer one queues, so rapid merges left
+# four main commits (one of them a security fix) with a cancelled run and no jobs.
+# Nothing could watch those runs to green, and now the box refuses to deploy a commit
+# with no verdict, so a main run that never happens is a deploy that never happens.
+# Per-commit groups on push: main runs never share a group, so none is superseded.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: ci-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
   app:
