@@ -418,11 +418,13 @@ zebra_chain_heights() {
 # If the RPC will not answer, that is a different failure (steps 1-2 and the pager), not
 # evidence of a stall, so this asserts nothing.
 #
-# A CLOCK ESTIMATE MAY RESTART, NEVER REWIND. Zebra's `estimatedheight` is extrapolated
-# from the tip's timestamp, so a quiet network and a wedged node look the same to it.
-# Rung 1 (restart) is cheap and reversible, so zebra's own word is enough for it. Rungs
-# 2-3 (wipe peers, drop the non-finalized state) and stopping the miner are not: those
-# happen only when an INDEPENDENT height confirms the lag. The app already holds one
+# A CLOCK ESTIMATE MAY RESTART, NEVER CLEAR STATE OR PARK THE MINER. Zebra's
+# `estimatedheight` is extrapolated from the tip's timestamp, so a quiet network and a
+# wedged node look the same to it. Rung 1 (restart) is cheap and zebra's own word is
+# enough for it (a restart can itself drop the non-finalized tip if the 10 s stop grace
+# runs out before the backup is written, which the miner's own 100-lag guard covers).
+# Rungs 2-3 (wipe peers, drop the non-finalized state) and stopping the miner are
+# deliberate rewinds: those happen only when an INDEPENDENT height confirms the lag. The app already holds one
 # (`node.externalHeight` on /api/ready, from the tip oracle), and step 4 fetched that
 # body this very sweep. No confirmation - app unreachable, oracle dark, or the external
 # tip within the limit - means restarts only, and the give-up page says exactly that
@@ -546,7 +548,12 @@ heal_node_if_stalled() {
       if [ "$confirmed" = "1" ]; then
         danger "zebra still ${lag} blocks behind after $NODE_HEAL_MAX tries (restart, clear peers, drop fork state); the network tip (${external}) confirms it. Likely a fork past the finalized tip: compare getblockhash with an explorer and reimport a snapshot (SNAPSHOTS.md).${miner_note}"
       else
-        danger "zebra reports itself ${lag} blocks behind its own estimate and the tip has not moved after $NODE_HEAL_MAX restarts, but no independent tip confirms it (external: ${external:-unknown}), so nothing was rewound and the miner was not stopped. A quiet testnet looks like this; so does an app or oracle that cannot be reached. Compare getblockhash with an explorer before touching state."
+        # ${miner_note} here too: an episode can be confirmed for its first attempts
+        # (miner stopped, flag on disk) and lose its confirmation before the budget is
+        # spent, or this process can have inherited the flag from the watchdog a deploy
+        # replaced. Review reproduced both; the page then said "not stopped" over a
+        # unit that was inactive, which told the operator there was nothing to bring back.
+        danger "zebra reports itself ${lag} blocks behind its own estimate and the tip has not moved after $NODE_HEAL_MAX restarts, but no independent tip confirms it (external: ${external:-unknown}), so these restarts rewound nothing and did not stop the miner. A quiet testnet looks like this; so does an app, wallet RPC or tip oracle that cannot be reached (the height comes through /api/ready, which needs zallet's getwalletstatus to answer). Compare getblockhash with an explorer before touching state.${miner_note}"
       fi
       alerted_node_giveup=1
     fi

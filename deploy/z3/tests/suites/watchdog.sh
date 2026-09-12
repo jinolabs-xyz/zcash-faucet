@@ -636,6 +636,24 @@ check "the journal says why the rewind was withheld" "grep -q 'not rewinding sta
 check "the give-up page says the lag is unconfirmed and does not prescribe a snapshot" \
   "grep -q 'NEEDS YOU: zebra reports itself 173 blocks behind its own estimate' '$T/alerts.log' && grep -q 'no independent tip confirms it' '$T/alerts.log' && ! grep -q 'reimport a snapshot' '$T/alerts.log'"
 
+echo "== watchdog: an episode that LOSES its confirmation still tells the operator about the parked miner"
+# Review's M9. Confirmed for its first attempt (miner stopped, flag on disk), then the
+# app or oracle goes dark before the budget is spent, or a deploy replaces the watchdog
+# mid-episode and the new process inherits the flag. The give-up page must carry the
+# miner note either way; the first cut said "the miner was not stopped" over a unit that
+# was inactive, and the operator would have had nothing to bring back.
+wd_node_env
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677
+export STUB_READY_EXTERNAL=4332680   # confirmed
+wd_run 2   # baseline, heal 1 (confirmed: miner stopped, flag on disk)
+check "the first, confirmed heal stopped the miner" "grep -q 'systemctl stop zcash-testnet-miner' '$STUB_LOG' && [ \"\$(cat '$T/state/miner-stopped-for-node-heal.flaps')\" = 1 ]"
+export STUB_READY_EXTERNAL=          # the confirmation is gone
+wd_run 5   # a fresh process: baseline, three unconfirmed restarts, give-up
+check "the unconfirmed give-up page still says the miner is left STOPPED and how to start it" \
+  "grep -q 'no independent tip confirms it' '$T/alerts.log' && grep -q 'The miner is left STOPPED.*systemctl start zcash-testnet-miner.service' '$T/alerts.log'"
+check "and does not claim the miner was never stopped" "! grep -q 'the miner was not stopped' '$T/alerts.log'"
+
 echo "== watchdog: no independent tip at all is 'unconfirmed', not 'behind'"
 wd_node_env
 echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
