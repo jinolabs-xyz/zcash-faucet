@@ -35,6 +35,7 @@ wd_env() {
   # syncing". Nothing noticed for as long as the grace window was 999999, because a
   # faucet that is never ready and never paged looks exactly like one that is fine.
   # The first case that set the grace to 0 failed in CI and passed alone.
+  unset STUB_READY_EXTERNAL
   unset STUB_CRASHLOOP STUB_HEAL_FIXES STUB_ZEBRA_BLOCKS STUB_ZEBRA_EST STUB_ZEBRA_ADVANCE STUB_ZEBRA_STUCK_CALLS \
         WATCHDOG_NODE_HEAL_ENABLED WATCHDOG_NODE_STOPS_MINER WATCHDOG_MINER_HEARTBEAT WATCHDOG_MINER_UNIT STUB_START_FAIL \
         WATCHDOG_SIGNAL_MATCH STUB_READY_CANBUILD STUB_READY_CANBUILD_ONCE \
@@ -375,7 +376,10 @@ wd_node_env() {
   # Sweeps are instant in here, so a stall is judged straight away rather than after five
   # minutes; the decision logic under test is the same either way.
   export WATCHDOG_NODE_STALL_SECS=0
-  export WATCHDOG_NODE_LAG_LIMIT=50
+  export WATCHDOG_NODE_LAG_LIMIT=100
+  # The network agrees with zebra's estimate in every case below unless a case says
+  # otherwise: the ladder's rewind rungs act only on a lag an independent tip confirms.
+  export STUB_READY_EXTERNAL=zebra-est
   export WATCHDOG_NODE_HEAL_MAX=3
   export WATCHDOG_NODE_CLEAR_CACHE_AFTER=2
   export WATCHDOG_NODE_DROP_NONFINAL_AFTER=3
@@ -518,13 +522,13 @@ check "stopped exactly once for the episode" "[ \"\$(grep -c 'systemctl stop zca
 echo "== watchdog: STEP 6 DOES NOT RESTART A MINER STEP 7 STOPPED, mid-heal"
 # Reproduced in review: the stopped miner's last heartbeat stays fresh for two sweeps while
 # its template ages, step 6 read that as a stall and restarted it, and the miner mined
-# through the peer-cache drop and the state rewind. Lag 60 here: above the node heal's
-# limit (50) and below the miner's own (100), so only the watchdog's stop protects.
+# through the peer-cache drop and the state rewind. The lag is confirmed by the network
+# tip here (the stub agrees with zebra's estimate), so the watchdog's stop is expected.
 wd_node_env
 echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
 export WATCHDOG_MINER_HEARTBEAT="$T/heartbeat.json" WATCHDOG_MINER_UNIT="zcash-testnet-miner.service"
 miner_hb 5 7200 3600   # fresh beat, template an hour old: step 6's trigger, exactly
-export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4331294   # 60 behind, stuck
+export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677   # 1443 behind, stuck
 wd_run 4   # baseline, stuck (stop + restart zebra), two more sweeps with the flag set
 check "the miner was stopped for the heal" "grep -q 'systemctl stop zcash-testnet-miner.service' '$STUB_LOG'"
 # Before the stop, step 6 may well restart a miner whose node is wedged (that is its job,
@@ -596,6 +600,82 @@ wd_run 6
 check "the miner was stopped for the episode" "grep -q 'systemctl stop zcash-testnet-miner.service' '$STUB_LOG'"
 check "and never started again, because the node is not fixed" "! grep -q 'systemctl start zcash-testnet-miner.service' '$STUB_LOG'"
 check "the page says the miner is left stopped and how to bring it back" "grep -q 'NEEDS YOU: zebra still 1443 blocks behind.*The miner is left STOPPED.*systemctl start zcash-testnet-miner.service' '$T/alerts.log'"
+
+echo "== watchdog: A QUIET TESTNET IS NOT A FORKED NODE (risk register II, R-11)"
+# zebra's estimatedheight is a clock extrapolation from the tip's timestamp: an hour
+# without a block reads as ~50 "behind" with nobody ahead at all. At a limit of 50 the
+# ladder ran on a healthy node: restart, peers wiped, non-finalized state dropped, the
+# miner parked and left parked, a page to reimport a snapshot. The limit is the miner's
+# 100 now, and the rewind rungs and the miner stop act only on a lag an independent tip
+# confirms; zebra's own word buys a restart and nothing more.
+wd_node_env
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4340727 STUB_ZEBRA_EST=4340782   # 55 "behind" by the clock, tip unmoved
+export STUB_READY_EXTERNAL=4340727                         # the network is exactly where we are
+unset WATCHDOG_NODE_LAG_LIMIT                              # the SCRIPT'S default is what this case is about
+peers="$STUB_VOLROOT/z3-testnet-chain/network/testnet.peers"
+nonfinal="$STUB_VOLROOT/z3-testnet-chain/non_finalized_state"
+wd_run 6
+check "a 55-block clock lag is under the limit: no restart" "! grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
+check "no peer wipe, no state drop" "[ -f '$peers' ] && [ -d '$nonfinal' ]"
+check "the miner is not touched" "! grep -q 'systemctl stop zcash-testnet-miner' '$STUB_LOG'"
+check "and nothing about the node is paged" "! grep -q 'zebra' '$T/alerts.log'"
+
+echo "== watchdog: a lag only zebra believes in buys restarts, never a rewind or a parked miner"
+wd_node_env
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4340727 STUB_ZEBRA_EST=4340900   # 173 by the clock, over the limit, tip unmoved
+export STUB_READY_EXTERNAL=4340730                         # the network says 3 ahead
+peers="$STUB_VOLROOT/z3-testnet-chain/network/testnet.peers"; nonfinal="$STUB_VOLROOT/z3-testnet-chain/non_finalized_state"
+wd_run 6   # baseline, three heals, give-up, quiet
+check "it restarts (cheap, reversible, zebra's own word is enough for that)" "[ \"\$(grep -c 'docker restart z3-testnet-zebra-1' '$STUB_LOG')\" = 3 ]"
+check "but never stops the node to clear state" "! grep -q 'docker stop z3-testnet-zebra-1' '$STUB_LOG'"
+check "the peer cache and the non-finalized state survive every attempt" "[ -f '$peers' ] && [ -d '$nonfinal' ]"
+check "the miner is left running: its own guard is the same 100" "! grep -q 'systemctl stop zcash-testnet-miner' '$STUB_LOG'"
+check "the journal says why the rewind was withheld" "grep -q 'not rewinding state on a clock estimate' '$T/run.log' && grep -q 'external: 4340730' '$T/run.log'"
+check "the give-up page says the lag is unconfirmed and does not prescribe a snapshot" \
+  "grep -q 'NEEDS YOU: zebra reports itself 173 blocks behind its own estimate' '$T/alerts.log' && grep -q 'no independent tip confirms it' '$T/alerts.log' && ! grep -q 'reimport a snapshot' '$T/alerts.log'"
+
+echo "== watchdog: an episode that LOSES its confirmation still tells the operator about the parked miner"
+# Review's M9. Confirmed for its first attempt (miner stopped, flag on disk), then the
+# app or oracle goes dark before the budget is spent, or a deploy replaces the watchdog
+# mid-episode and the new process inherits the flag. The give-up page must carry the
+# miner note either way; the first cut said "the miner was not stopped" over a unit that
+# was inactive, and the operator would have had nothing to bring back.
+wd_node_env
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677
+export STUB_READY_EXTERNAL=4332680   # confirmed
+wd_run 2   # baseline, heal 1 (confirmed: miner stopped, flag on disk)
+check "the first, confirmed heal stopped the miner" "grep -q 'systemctl stop zcash-testnet-miner' '$STUB_LOG' && [ \"\$(cat '$T/state/miner-stopped-for-node-heal.flaps')\" = 1 ]"
+export STUB_READY_EXTERNAL=          # the confirmation is gone
+wd_run 5   # a fresh process: baseline, three unconfirmed restarts, give-up
+check "the unconfirmed give-up page still says the miner is left STOPPED and how to start it" \
+  "grep -q 'no independent tip confirms it' '$T/alerts.log' && grep -q 'The miner is left STOPPED.*systemctl start zcash-testnet-miner.service' '$T/alerts.log'"
+check "and does not claim the miner was never stopped" "! grep -q 'the miner was not stopped' '$T/alerts.log'"
+
+echo "== watchdog: no independent tip at all is 'unconfirmed', not 'behind'"
+wd_node_env
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4340727 STUB_ZEBRA_EST=4340900
+export STUB_READY_EXTERNAL=                                # the field is absent: oracle dark or app unreachable
+peers="$STUB_VOLROOT/z3-testnet-chain/network/testnet.peers"; nonfinal="$STUB_VOLROOT/z3-testnet-chain/non_finalized_state"
+wd_run 6
+check "restarts only" "grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG' && ! grep -q 'docker stop z3-testnet-zebra-1' '$STUB_LOG'"
+check "state untouched, miner untouched" "[ -f '$peers' ] && [ -d '$nonfinal' ] && ! grep -q 'systemctl stop zcash-testnet-miner' '$STUB_LOG'"
+check "and the page names the missing confirmation" "grep -q 'external: unknown' '$T/alerts.log'"
+
+echo "== watchdog: a lag the network CONFIRMS gets the whole ladder, as before"
+wd_node_env
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677
+export STUB_READY_EXTERNAL=4332680                         # the network agrees: 1446 ahead
+peers="$STUB_VOLROOT/z3-testnet-chain/network/testnet.peers"; nonfinal="$STUB_VOLROOT/z3-testnet-chain/non_finalized_state"
+wd_run 6
+check "the miner is stopped for a confirmed heal" "grep -q 'systemctl stop zcash-testnet-miner' '$STUB_LOG'"
+check "the state is rewound on the later rungs" "[ ! -f '$peers' ] && [ ! -d '$nonfinal' ]"
+check "and the give-up page carries the network tip and the snapshot advice" \
+  "grep -q 'the network tip (4332680) confirms it' '$T/alerts.log' && grep -q 'reimport a snapshot' '$T/alerts.log'"
 
 echo "== watchdog: a miner that is not running is not stopped, and the report does not mention it"
 wd_node_env
