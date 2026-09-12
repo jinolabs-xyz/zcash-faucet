@@ -749,8 +749,24 @@ check "the probe step is handed the URL, the hatch and the off switch" \
   "grep -q 'SMOKE_URL: ..{ vars.FAUCET_LIVE_URL }' '$T/probe-step.yml' && grep -q 'SMOKE_ALLOW_UNREADY: ..{ vars.FAUCET_LIVE_ALLOW_UNREADY }' '$T/probe-step.yml' && grep -q 'SMOKE_DISABLED: ..{ vars.FAUCET_LIVE_SMOKE_DISABLED }' '$T/probe-step.yml'"
 check "the page step is handed the webhook secret and a token to read run history with" \
   "grep -q 'ALERT_URL: ..{ secrets.FAUCET_ALERT_URL }' '$T/page-step.yml' && grep -q 'GH_TOKEN: ..{ github.token }' '$T/page-step.yml'"
-check "and it only runs when the probe failed, on the PAGE step and not the probe" \
-  "grep -q 'if: failure()' '$T/page-step.yml' && ! grep -q 'if: failure()' '$T/probe-step.yml'"
+# `failure() || cancelled()`, exactly. A job that hits its budget concludes cancelled, and
+# a `failure()`-only page step never ran on one (#503). And on the PAGE step only: on the
+# probe it would page every run and probe none.
+check "and it runs when the probe failed OR the job was cut off, on the PAGE step and not the probe" \
+  "grep -q 'if: failure() || cancelled()' '$T/page-step.yml' && ! grep -q '^ *if:' '$T/probe-step.yml'"
+# THE PROBE STEP CARRIES ITS OWN BUDGET, BELOW THE JOB'S. A hung probe that reaches the
+# JOB budget is a cancelled run: no failure() step, and the next run's previous-run filter
+# skips cancelled, so every hung run in an outage would look like the first. A step that
+# hits ITS budget fails, which is the shape the paging understands. The two numbers are
+# read and compared rather than pinned, so raising one with a measurement does not need
+# a test edit - only inverting them does.
+job_budget="$(awk '/^    timeout-minutes:[[:space:]]*[0-9]+/ { sub(/.*timeout-minutes:[[:space:]]*/, ""); sub(/[[:space:]].*/, ""); print; exit }' "$LS")"
+step_budget="$(grep -oE '^ *timeout-minutes: *[0-9]+' "$T/probe-step.yml" | grep -oE '[0-9]+$' || true)"
+check "the probe step has a budget of its own" "[ -n '$step_budget' ]"
+check "and it is below the job's, so a hung probe FAILS before the job is cancelled" \
+  "[ -n '$step_budget' ] && [ -n '$job_budget' ] && [ '$step_budget' -lt '$job_budget' ]"
+check "the page step is told how the probe ended, from the probe step by id" \
+  "grep -q 'id: probe' '$T/probe-step.yml' && grep -q 'PROBE_OUTCOME: ..{ steps.probe.outcome }' '$T/page-step.yml'"
 check "the cap knob is NOT settable from the workflow, so a variable cannot widen it" \
   "! grep -q 'SMOKE_ALLOW_UNREADY_MAX_DAYS' '$LS'"
 # Same shape, same reason: OBSERVABILITY.md says the certificate floor is deliberately not
@@ -858,6 +874,7 @@ page_run() {
   printf '%s' "$1" > "$T/prev.json"
   ( cd "$REPO" && PATH="$T/bin:$BASE_PATH" STUB_PREV_JSON="$T/prev.json" STUB_GH_LOG="$STUB_GH_LOG" \
       ALERT_URL="https://hook.example/x" ALERT_FORMAT="" GH_TOKEN=x SMOKE_URL="https://f.example" \
+      PROBE_OUTCOME="${PAGE_PROBE_OUTCOME:-failure}" \
       GITHUB_RUN_ID=999 GITHUB_SERVER_URL=https://github.com GITHUB_REPOSITORY=o/r \
       bash "$T/page-step.sh" > "$T/page.log" 2>&1 )
 }
@@ -878,6 +895,17 @@ check "a CANCELLED run is not the previous run: the older real failure is, and i
 page_run "[{\"conclusion\":\"failure\",\"databaseId\":1,\"createdAt\":\"$old\"}]"
 check "two failures spanning 300 minutes DO page" "grep -q 'curl ' '$STUB_CURL_LOG'"
 check "and the message carries the real span, not an assumed 30" "grep -qE 'spanning 3[0-9][0-9]\+ minutes' '$T/page.log' '$STUB_CURL_LOG'"
+check "and says the probes FAILED, because they did" "grep -q 'has failed consecutive probes' '$STUB_CURL_LOG'"
+# THE CUT-OFF RUN. The probe step did not reach a verdict (the job budget, or a person
+# cancelled the run); the page step still runs, still applies the 30-minute rule, and the
+# message says what happened rather than claiming a failure nobody observed.
+PAGE_PROBE_OUTCOME=cancelled page_run "[{\"conclusion\":\"failure\",\"databaseId\":1,\"createdAt\":\"$old\"}]"
+check "a run cut off after an old failure still pages" "grep -q 'curl ' '$STUB_CURL_LOG'"
+check "and the message says the probe reached no verdict, not that it failed" \
+  "grep -q 'was not probed to a verdict (probe step outcome: cancelled)' '$STUB_CURL_LOG' && ! grep -q 'has failed consecutive' '$STUB_CURL_LOG'"
+PAGE_PROBE_OUTCOME=cancelled page_run "[{\"conclusion\":\"success\",\"databaseId\":1,\"createdAt\":\"$old\"}]"
+check "a run cut off after a SUCCESS does not page: a person cancelling one run is not an outage" \
+  "! grep -q 'curl ' '$STUB_CURL_LOG' && grep -q 'first failure: not paging yet' '$T/page.log'"
 check "and it says the schedule is not keeping its cron" "grep -q 'not the 15 the cron asks for' '$T/page.log'"
 page_run "[]"
 check "an unreadable previous run PAGES rather than exiting quietly" "grep -q 'curl ' '$STUB_CURL_LOG'"
