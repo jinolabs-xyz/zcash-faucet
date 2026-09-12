@@ -43,8 +43,12 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    # The probe bounds itself (SMOKE_ATTEMPTS x SMOKE_TIMEOUT_MS plus retry delays, a few
-    # minutes at most); this is the layer under that, same reason as every job in ci.yml.
+    # The outer layer, same reason as every job in ci.yml. The probe STEP carries its own
+    # budget below, and that one matters more here: a job that hits this budget concludes
+    # CANCELLED, not failed, and a cancelled run neither runs a `failure()` step nor counts
+    # as a failure when the next run asks what the previous one did (#503). So a probe
+    # that hung would have been cut off silently, every run, and never paged. A step
+    # that hits its budget FAILS, which is the shape the paging below understands.
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -58,6 +62,12 @@ jobs:
           node-version: 24
       # No npm ci: the probe has zero dependencies, checkout is enough.
       - name: probe the live faucet
+        id: probe
+        # The probe bounds itself: SMOKE_ATTEMPTS x SMOKE_TIMEOUT_MS x two fetches plus
+        # retry delays, the TLS handshake and the explorer checks come to ~3.5 minutes
+        # at the defaults. Three times that, so a hung probe is a FAILED step with the
+        # page step still to run, rather than a cancelled job with nothing after it.
+        timeout-minutes: 10
         env:
           SMOKE_URL: ${{ vars.FAUCET_LIVE_URL }}
           SMOKE_ALLOW_UNREADY: ${{ vars.FAUCET_LIVE_ALLOW_UNREADY }}
@@ -106,8 +116,14 @@ jobs:
       # for Discord, the repository variable FAUCET_ALERT_FORMAT=discord. Without the
       # secret this step says so and exits 0, so email stays the only channel.
       - name: page on the second consecutive failure (30 minutes down)
-        if: failure()
+        # `cancelled()` too: with the step budget above a hung probe fails rather than
+        # cancels, so this branch is for the job budget or a person cancelling the run.
+        # Both still evaluate the 30-minute rule; a person who wants silence has the
+        # FAUCET_LIVE_SMOKE_DISABLED switch, and the message says the probe was cut off
+        # rather than claiming a failure it did not observe.
+        if: failure() || cancelled()
         env:
+          PROBE_OUTCOME: ${{ steps.probe.outcome }}
           ALERT_URL: ${{ secrets.FAUCET_ALERT_URL }}
           ALERT_FORMAT: ${{ vars.FAUCET_ALERT_FORMAT }}
           GH_TOKEN: ${{ github.token }}
@@ -150,7 +166,15 @@ jobs:
             echo "two failures, but only ${gap_min} minutes apart: under the 30-minute rule, not paging yet"
             exit 0
           fi
-          msg="[zcash-faucet live-smoke] the faucet has failed consecutive probes spanning ${gap_min}+ minutes: $SMOKE_URL - $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          case "$PROBE_OUTCOME" in
+            # A green probe with this step still running means the run was cancelled in
+            # the moment between the two. Nothing to page about, and the `if:` above is
+            # the only other thing keeping a recovery run from paging under `always()`.
+            success) echo "the probe passed, nothing to page"; exit 0 ;;
+            failure) what="has failed consecutive probes" ;;
+            *)       what="was not probed to a verdict (probe step outcome: ${PROBE_OUTCOME:-unknown}) after a failure" ;;
+          esac
+          msg="[zcash-faucet live-smoke] the faucet $what spanning ${gap_min}+ minutes: $SMOKE_URL - $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           case "$ALERT_FORMAT" in
             discord) body="{\"content\":\"$msg\"}" ;;
             *)       body="{\"text\":\"$msg\"}" ;;
