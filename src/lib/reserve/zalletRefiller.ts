@@ -103,6 +103,12 @@ export class ZalletRefiller implements Refiller {
     // balance, and had only the node half. So the documented recovery (a rescan)
     // re-armed the poison it was recovering from: the money the drip path refused to
     // risk on a drip was spent on a shield. Same helper, same fail-closed rule.
+    //
+    // Only "safe" and "unsafe" are reachable HERE: getNodeStatus() folds a missing
+    // wallet or node height into a null status, and the node gate above refuses that
+    // as unverifiable before this line runs. The allow-list in mayBuildFromWallet is
+    // still the right shape (a state added later refuses by default), and its
+    // unverifiable arm is pinned where it is reachable, in walletLagGate.test.ts.
     const walletLag = walletLagFreshness(status?.height ?? null, status?.nodeHeight ?? null);
     if (!mayBuildFromWallet(walletLag)) {
       return {

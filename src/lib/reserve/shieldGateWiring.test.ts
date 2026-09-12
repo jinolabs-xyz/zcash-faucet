@@ -272,7 +272,12 @@ test("a wallet inside its lag budget still shields, so the second gate is not an
   assert.ok(calls.some((c) => c.method === "z_shieldcoinbase"));
 });
 
-test("a wallet that reports a node tip but no scanned height is unverifiable, not a pass", async () => {
+test("a wallet that reports a node tip but no scanned height is refused by the NODE gate, before the wallet gate is reached", async () => {
+  // Not a wallet-gate case, and it was first written as one. getNodeStatus() folds a
+  // missing wallet height into a null status, so the node gate refuses this as
+  // unverifiable and the wallet gate never runs: review showed the wallet gate deleted
+  // outright leaves this green. It stays as what it is, the shape of the refusal for
+  // a wallet that answers without a scanned height, named honestly.
   await primeTip(NETWORK_TIP);
   const calls = mockWallet(NETWORK_TIP, WILLING_WALLET, null);
   const outcome = await new ZalletRefiller().step();
