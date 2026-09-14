@@ -471,6 +471,20 @@ jobs:
           fi
           echo "no secret-shaped files in the image"
 
+      # THE VERIFIER, AGAINST THE IMAGE IT JUST BUILT (risk register II, R-5 review). The
+      # harness proves the verifier's logic on fixtures; twice in one PR a fixture set that
+      # was green shipped a verifier that failed every real build (a matcher that let `*`
+      # cross `/`, then a comment rule that turned one pattern into "match everything").
+      # This is the run redeploy.sh does on the box, done here first. Exit 1 is a real
+      # mismatch; exit 2 (cannot compare) is also a failure HERE, since this runner can
+      # always read its own image.
+      - name: the image matches the commit, by the same verifier the box runs
+        run: |
+          set -uo pipefail
+          VERIFY_REPO_DIR="$GITHUB_WORKSPACE" bash deploy/z3/verify-image-manifest.sh faucet-ci-check:${{ github.sha }}
+          rc=$?
+          [ "$rc" -eq 0 ] || { echo "verify-image-manifest exited $rc against the image this job built"; exit 1; }
+
       # A build that produces nothing runnable is a build that proved nothing.
       - name: the image actually starts
         run: |

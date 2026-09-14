@@ -21,13 +21,22 @@ vim_env() {
   # does not cross a /, so the nested one IS in the image and IS expected), the secret
   # beside its re-admitted .example (a prefix of the secret's name), and a deployment/
   # sibling of deploy/ (a prefix of the directory's name).
-  printf '.git\nnode_modules\n*.md\n**/*.env\n**/faucet.env.*\n!**/faucet.env.example\n' > "$R/.dockerignore"
+  # And the three rules review deleted one at a time with the suite staying green while
+  # every real deploy failed: a pattern with a # in it (a comment is only a line that
+  # STARTS with #; stripping at the first # made `**/#*.env#` into `**/`, which matched
+  # every file), a bare directory rule over a tracked file, and `**/*.env.*` with a
+  # tracked root .env.example that only a zero-segment `**` admits.
+  printf '.git\nnode_modules\n*.md\n**/*.env\n**/faucet.env.*\n**/*.env.*\n**/#*.env#\nworker\n!**/faucet.env.example\n' > "$R/.dockerignore"
+  mkdir -p "$R/worker"; printf 'export {};\n' > "$R/worker/index.ts"
+  printf 'X=1\n' > "$R/.env.example"
   printf 'export const A = 1;\n' > "$R/src/a.ts"
   printf 'export const B = 2;\n' > "$R/src/b.ts"
   printf 'secret=1\n'            > "$R/deploy/z3/faucet.env"
   printf 'SALT=change-me\n'      > "$R/deploy/z3/faucet.env.example"
   printf '# nested doc\n'        > "$R/deploy/z3/README.md"
   mkdir -p "$R/deployment"; printf 'x\n' > "$R/deployment/notes.txt"
+  # deploy/z3/#faucet.env# is emacs's autosave, untracked here as on the box; it is what
+  # the # rule excludes and must never be expected.
   printf '# doc\n'               > "$R/README.md"
   ( cd "$R" && git init -q . && git add -A \
       && git -c user.email=t@t -c user.name=t commit -q -m fixture )
@@ -43,6 +52,12 @@ vim_image() {
   # example (both tracked, both admitted), and the deployment/ sibling's file.
   cp "$R/deploy/z3/README.md" "$R/deploy/z3/faucet.env.example" "$T/img/app/deploy/z3/"
   cp "$R/deployment/notes.txt" "$T/img/app/deployment/"
+  # An UNTRACKED extra under the deployment/ sibling: outside deploy/, so never FORBIDDEN;
+  # a prefix test that read `deploy` for `deploy/` would forbid it.
+  printf 'scratch\n' > "$T/img/app/deployment/untracked.tmp"
+  # worker/ is excluded by its bare directory rule and .env.example by **/*.env.* at depth
+  # zero, so neither is in the image; if the verifier ever expected them they would be
+  # MISSING, which is how the rules that drop them are pinned.
   case "${1:-clean}" in
     stale)   printf 'export const A = 999;\n' > "$T/img/app/src/a.ts" ;;
     missing) rm -f "$T/img/app/src/b.ts" ;;
@@ -58,6 +73,22 @@ vim_image() {
 }
 
 vim_run() { VERIFY_REPO_DIR="$R" VERIFY_TAR="$T/img.tar" bash "$VIM" > "$T/out" 2>&1; echo $?; }
+
+echo "== verify-image-manifest: the emulation reads .dockerignore the way docker does"
+# Behavioural, on what the verifier DEMANDS of an image. Review deleted three matcher
+# rules one at a time and the suite stayed green while every real build failed; each is
+# now pinned by the clean image below plus one absence. The fixture carries a rule with
+# a # in it (a comment is only a line that starts with #), a bare directory rule over a
+# tracked file, and a root .env.example that only a zero-segment `**` drops.
+vim_env; vim_image clean
+check "the clean image passes: worker/ (bare directory rule) and .env.example (**/ at depth zero) are absent and NOT demanded, and the # rule did not swallow the tree" \
+  "[ \"\$(vim_run)\" = '0' ] && ! grep -q 'MISSING' '$T/out'"
+rm -f "$T/img/app/deploy/z3/README.md"; ( cd "$T/img" && tar -cf "$T/img.tar" app )
+check "a nested README is DEMANDED: a root-only *.md does not reach it" \
+  "[ \"\$(vim_run)\" = '1' ] && grep -q 'MISSING' '$T/out' && grep -q '    deploy/z3/README.md$' '$T/out'"
+vim_image clean; rm -f "$T/img/app/deploy/z3/faucet.env.example"; ( cd "$T/img" && tar -cf "$T/img.tar" app )
+check "the re-admitted example is DEMANDED: the negation reaches depth two through **/" \
+  "[ \"\$(vim_run)\" = '1' ] && grep -q '    deploy/z3/faucet.env.example$' '$T/out'"
 
 echo "== verify-image-manifest: an image that matches the commit passes"
 # And it passes WITH a nested README, the example, and a deployment/ sibling in the image:
@@ -104,7 +135,7 @@ echo "== verify-image-manifest: dockerignored files are not expected, and * does
 # FORBIDDEN by name (next block). README.md at the root is still not this check's business.
 vim_env; vim_image secret
 check "an excluded file under deploy/ that reached the image FAILS, and is named" \
-  "[ \"\$(vim_run)\" = '1' ] && grep -q 'FORBIDDEN' '$T/out' && grep -qE 'FORBIDDEN.*|^.*  deploy/z3/faucet.env$' '$T/out' && grep -q '    deploy/z3/faucet.env$' '$T/out'"
+  "[ \"\$(vim_run)\" = '1' ] && grep -q 'FORBIDDEN' '$T/out' && grep -q '    deploy/z3/faucet.env$' '$T/out'"
 check "and the example beside it, a tracked file the secret's name is a prefix of, is NOT forbidden" \
   "! grep -q 'faucet.env.example' '$T/out'"
 check "and the excluded paths were never demanded as MISSING" \
@@ -184,7 +215,8 @@ cp "$R/src/a.ts" "$R/src/b.ts" "$T/img/app/src/"
 # and it is expected; so are the example, now un-ignored, and the deployment/ file.
 cp "$R/deploy/z3/faucet.env" "$R/deploy/z3/faucet.env.example" "$R/deploy/z3/README.md" "$T/img/app/deploy/z3/"
 cp "$R/deployment/notes.txt" "$T/img/app/deployment/"
-cp "$R/.dockerignore" "$R/README.md" "$T/img/app/"
+mkdir -p "$T/img/app/worker"; cp "$R/worker/index.ts" "$T/img/app/worker/"   # no bare dir rule in THIS .dockerignore
+cp "$R/.dockerignore" "$R/README.md" "$R/.env.example" "$T/img/app/"
 ( cd "$T/img" && tar -cf "$T/img.tar" app )
 check "a negated file is EXPECTED and matches, so it is verified rather than skipped" \
   "[ \"\$(vim_run)\" = '0' ]"

@@ -111,9 +111,11 @@ seg_match() { # $1 pattern segments (space-joined), $2 path segments; both array
       done
     fi
     [ "$xi" -lt "$XN" ] || return 1
-    # An EMPTY pattern segment (a trailing slash, or `**/` on its own) must match
-    # nothing: unquoted, an empty word in a case pattern matched everything, and the
-    # comment stripping below once turned `**/#*.env#` into exactly that.
+    # An EMPTY pattern segment (`a//b`, which docker cleans to `a/b`) matches nothing
+    # here: unquoted, an empty word in a case pattern matched everything. A trailing
+    # slash is dropped by the split (`**/` reads as the single segment `**` and matches
+    # everything, as it does for docker); what keeps `**/#*.env#` from becoming that is
+    # the comment rule in dockerignored(), not this line.
     [ -n "${P[$pi]}" ] || return 1
     # shellcheck disable=SC2254
     case "${X[$xi]}" in ${P[$pi]}) ;; *) return 1 ;; esac
