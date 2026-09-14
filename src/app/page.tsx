@@ -82,7 +82,7 @@ interface Status {
         reserve: "unknown";
       };
 }
-type CopyTarget = "txid" | "receipt" | "donation";
+type CopyTarget = "txid" | "receipt" | "donation" | "key";
 /**
  * A completed drip.
  *
@@ -245,6 +245,17 @@ export default function Home() {
   const [theme, setTheme] = useState<"paper" | "ink">("ink");
   const [tx, setTx] = useState<Tx | null>(null);
   const [copied, setCopied] = useState<CopyTarget | null>(null);
+  // THE KEY THAT COMES WITH A GENERATED ADDRESS (risk register II, R-31). /api/account
+  // answers with the address AND its spending key and says "copy the key now, it isn't
+  // stored". The 2026-07-27 redesign kept the button and dropped the key, so for seven
+  // weeks every "Generate a test address" drip went to an address nobody could ever
+  // spend from: the coins gone, the address's 24 h cooldown spent, and nothing in the
+  // ledger to tell it from a real drip. Held here until the person has copied it, and
+  // the request button waits for that: a drip to an address whose key is on nobody's
+  // clipboard is a drip to nobody.
+  const [genKey, setGenKey] = useState<{ address: string; secret: string; label: string; warning: string } | null>(null);
+  const [keyCopied, setKeyCopied] = useState(false);
+  const [keyShown, setKeyShown] = useState(false);
   const [cooldownEnd, setCooldownEnd] = useState(0);
   // What the 429 actually said. `kind` decides which of two screens renders, because an
   // address that was just paid and a connection that is out of drips are different
@@ -627,28 +638,39 @@ export default function Home() {
     inFlow.current = false;
     setAddr(""); setTouched(false); setTx(null); setCopied(null); setErrMsg(""); setRefusal(null);
     setQueuedAddr(null);
+    setGenKey(null); setKeyCopied(false); setKeyShown(false);
     setPhase(basePhase(status, network));
   };
 
   // Clipboard is unavailable on http origins and in some in-app browsers, so
   // fall back to a hidden textarea rather than silently doing nothing.
   const copy = async (what: CopyTarget, text: string) => {
+    // The async clipboard is absent on http origins and DENIED in some in-app and
+    // headless browsers (it exists, then throws). Both fall back to the textarea, so a
+    // blocked clipboard is a copy that still happens rather than a gate that never opens.
+    const viaTextarea = () => {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      const done = document.execCommand("copy");
+      ta.remove();
+      return done;
+    };
     try {
-      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
-      else {
-        const ta = document.createElement("textarea");
-        ta.value = text;
-        ta.style.position = "fixed";
-        ta.style.opacity = "0";
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand("copy");
-        ta.remove();
-      }
+      let done = false;
+      if (navigator.clipboard?.writeText) {
+        try { await navigator.clipboard.writeText(text); done = true; } catch { done = viaTextarea(); }
+      } else done = viaTextarea();
+      if (!done) { setCopied(null); return false; }
       setCopied(what);
       setTimeout(() => setCopied(null), 1700);
+      return true;
     } catch {
       setCopied(null);
+      return false;
     }
   };
 
@@ -683,9 +705,18 @@ export default function Home() {
       const r = await fetch("/api/account", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: "shielded" }) });
       const d = await r.json();
       const generated = d?.account?.address;
-      if (d?.ok && typeof generated === "string" && check(generated).ok) {
+      const secret = d?.account?.secret;
+      if (d?.ok && typeof generated === "string" && check(generated).ok && typeof secret === "string" && secret) {
         setAddr(generated);
         setTouched(false);
+        setGenKey({
+          address: generated,
+          secret,
+          label: typeof d.account.secretLabel === "string" ? d.account.secretLabel : "Spending key (testnet)",
+          warning: typeof d.account.warning === "string" ? d.account.warning : "Copy the key now, it isn't stored.",
+        });
+        setKeyCopied(false);
+        setKeyShown(false);
         return;
       }
       setGenErr(d?.error ?? "Couldn't generate an address just now. Paste one from your wallet, or try again.");
@@ -1245,16 +1276,32 @@ export default function Home() {
         {(phase === "ready" || phase === "checking" || phase === "syncing" || phase === "empty") && (
           <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
             <label htmlFor="zaddr" style={{ ...kicker, color: muted(60) }}>Your testnet address</label>
-            <input id="zaddr" className="input" type="text" spellCheck={false} autoComplete="off" autoCapitalize="off" placeholder="utest1… / ztestsapling… / tm…" value={addr} onChange={(e) => { setAddr(e.target.value); setTouched(false); }} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} aria-describedby="addrmsg" />
+            <input id="zaddr" className="input" type="text" spellCheck={false} autoComplete="off" autoCapitalize="off" placeholder="utest1… / ztestsapling… / tm…" value={addr} onChange={(e) => { setAddr(e.target.value); setTouched(false); if (genKey && e.target.value !== genKey.address) { setGenKey(null); setKeyCopied(false); } }} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} aria-describedby="addrmsg" />
             <div id="addrmsg" aria-live="polite" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 9, minHeight: 24 }}>
               {badgeShow && "label" in c && <span className="tag tag-outline">{c.label}</span>}
               {"priv" in c && c.priv === false && <span style={{ fontSize: 12, lineHeight: 1.45, color: muted(62) }}>Transparent address, so this drip will be visible on-chain.</span>}
               {touched && "err" in c && c.err && <span style={{ fontSize: 12.5, lineHeight: 1.45, color: "var(--color-accent-800)", fontWeight: 500, maxWidth: "52ch" }}>{c.err}</span>}
               {genErr && <span style={{ fontSize: 12.5, lineHeight: 1.45, color: "var(--color-accent-800)", fontWeight: 500, maxWidth: "52ch" }}>{genErr}</span>}
-              {!addr.trim() && <button className="btn btn-ghost btn-sm" onClick={generate} style={{ padding: 0 }}>Generate a test address</button>}
+              {!addr.trim() && <button className="btn btn-ghost btn-sm" onClick={generate} style={{ padding: 0 }}>Make a throwaway address and key</button>}
             </div>
-            <button className="btn btn-primary" onClick={() => void submit()} disabled={phase === "empty"} style={{ width: "100%", justifyContent: "space-between" }}>
-              <span>{phase === "checking" ? "Checking status…" : phase === "syncing" ? "Queue it, sends when the node is ready" : phase === "empty" ? (refilling ? "Topping up, back in a moment" : "Waiting for a refill") : "Request " + dripText}</span>
+            {genKey && genKey.address === addr && (
+              <div data-testid="generated-key" style={{ display: "flex", flexDirection: "column", gap: 8, padding: "12px 14px", border: "1px solid var(--color-divider)", borderRadius: 6 }}>
+                <span style={{ ...kicker, color: muted(60) }}>{genKey.label}</span>
+                <code style={{ fontFamily: "var(--mono)", fontSize: 11.5, lineHeight: 1.5, wordBreak: "break-all", color: keyShown ? "inherit" : muted(55) }}>
+                  {keyShown ? genKey.secret : "•".repeat(Math.min(genKey.secret.length, 48))}
+                </code>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                  <button className="btn btn-secondary btn-sm" onClick={() => void copy("key", genKey.secret).then((okCopy) => { if (okCopy) setKeyCopied(true); })}>{copied === "key" ? "Copied ✓" : keyCopied ? "Copy key again" : "Copy key"}</button>
+                  <button className="btn btn-ghost btn-sm" onClick={() => setKeyShown((v) => !v)} style={{ padding: 0 }}>{keyShown ? "Hide" : "Reveal"}</button>
+                </div>
+                <p style={{ margin: 0, fontSize: 12, lineHeight: 1.5, color: muted(62), maxWidth: "52ch" }}>
+                  {genKey.warning} {keyCopied ? "Keep it somewhere: it is the only way to spend what arrives." : keyShown ? "Copy it from the screen before you request: it is the only way to spend what arrives." : "The request button waits until you have copied or revealed it: a drip to an address whose key is nowhere is a drip to nobody."}
+                </p>
+                <p aria-live="polite" className="sr-only">{copied === "key" ? "Spending key copied." : ""}</p>
+              </div>
+            )}
+            <button className="btn btn-primary" onClick={() => void submit()} disabled={phase === "empty" || (!!genKey && genKey.address === addr && !keyCopied && !keyShown)} style={{ width: "100%", justifyContent: "space-between" }}>
+              <span>{genKey && genKey.address === addr && !keyCopied && !keyShown ? "Copy the key first" : phase === "checking" ? "Checking status…" : phase === "syncing" ? "Queue it, sends when the node is ready" : phase === "empty" ? (refilling ? "Topping up, back in a moment" : "Waiting for a refill") : "Request " + dripText}</span>
               <span aria-hidden="true">→</span>
             </button>
             <p style={{ margin: 0, fontSize: 11.5, letterSpacing: ".02em", color: muted(55), fontFamily: "var(--mono)" }}>{dripText} · once per address / 24h · shielded z→z</p>
@@ -1363,6 +1410,7 @@ export default function Home() {
                     button not being there (#323 ruling). Both keyed off the data. */}
                 {tx.txid && <button className="btn btn-secondary btn-sm" onClick={() => void copy("txid", tx.txid!)}>{copied === "txid" ? "Copied ✓" : "Copy txid"}</button>}
                 <button className="btn btn-secondary btn-sm" onClick={() => void copy("receipt", receiptText(tx))}>{copied === "receipt" ? "Copied ✓" : "Copy receipt"}</button>
+                {genKey && <button className="btn btn-secondary btn-sm" aria-label="Copy spending key" onClick={() => void copy("key", genKey.secret)}>{copied === "key" ? "Copied ✓" : "Copy spending key"}</button>}
                 {tx.explorerUrl && <a className="btn btn-secondary btn-sm" href={tx.explorerUrl} target="_blank" rel="noreferrer">Open in explorer ↗</a>}
                 <button className="btn btn-ghost btn-sm" onClick={again} style={{ padding: 0 }}>Another address</button>
               </div>
