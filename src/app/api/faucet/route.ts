@@ -18,7 +18,7 @@ import { getNodeStatus } from "@/lib/zcash/nodeStatus";
 import { mayBuildTransaction, readChainFreshnessAsking, freshnessRefusalText } from "@/lib/zcash/shieldGate";
 import { mayBuildFromWallet, walletLagFreshness } from "@/lib/zcash/walletLagGate";
 import { getSendQueue, getCtazSendQueue, QueueFullError, TaskDeadlineError } from "@/lib/zcash/queue";
-import { recordSend } from "@/lib/zcash/sendHealth";
+import { readSendHealth, recordSend, sendHealthBlocksServing } from "@/lib/zcash/sendHealth";
 import { DEFAULT_NETWORK, NETWORKS, parseNetwork } from "@/lib/network";
 import { canServeCtaz } from "@/lib/crosslink/recency";
 import { readCtazNodeState } from "@/lib/crosslink/read";
@@ -32,6 +32,9 @@ export const runtime = "nodejs"; // better-sqlite3 needs Node, not Edge.
 // Roughly one testnet block. Long enough that a retry is not a hot loop, short
 // enough that a lag of a few blocks clears within one or two retries.
 const FRESHNESS_RETRY_SECONDS = 75;
+// Send health is judged over a 15-minute window, so a verdict clears when the window
+// does; a shorter promise would send people back to the same refusal.
+const SENDS_RETRY_SECONDS = 15 * 60;
 
 const BodySchema = z.object({
   address: z.string().min(1).max(512),
@@ -106,6 +109,26 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     network === "ctaz"
       ? { amountZat: config.crosslink.expectedZat, dailyCapZat: config.crosslink.dailyCapZatoshi }
       : { amountZat: config.dripZatoshi, dailyCapZat: config.dailyCapZatoshi };
+
+  // 1.5. SENDS ARE FAILING: refuse HERE, before the proof-of-work is verified and
+  //    counted (risk register II, R-32). The verdict is the one /api/ready pages on, so
+  //    the operator already knows; what this closes is the visitor's side. Verified
+  //    below, a solved proof is recorded against the client for escalation whatever
+  //    happens after, so a dead wallet cost each honest retry +2 bits (14, 16, 18
+  //    observed) for a refusal that was ours. Nothing is reserved, no proof is spent.
+  //    Unknown (too few sends to judge) does not block, same as readiness.
+  const sends = readSendHealth();
+  if (sendHealthBlocksServing(sends)) {
+    api.logError(`drip refused before the challenge, sends degraded: ${sends.reason}`, "send health gate");
+    return apiError(
+      503,
+      "Sends are failing on our side right now, so we are not taking claims: " +
+        "nothing was claimed and no proof-of-work was spent. The operator has been paged. " +
+        "Try again in a few minutes.",
+      api,
+      { kind: "sends", retryAfterSeconds: SENDS_RETRY_SECONDS },
+    );
+  }
 
   // 2. Anti-abuse gate - proof-of-work, or nothing by explicit choice (FAUCET_CHALLENGE=none).
   //    PoW is verified against the same salted IP fingerprint the challenge was
