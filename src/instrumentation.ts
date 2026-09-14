@@ -31,6 +31,27 @@ export async function register() {
   const { getReserveReconciler } = await import("@/lib/reserve/reconciler");
   getReserveReconciler().start();
 
+  // DRAIN BEFORE DYING (risk register II, R-27). Only when the container's env has
+  // asked Next to leave the signals to us; without that flag Next's own handler exits
+  // first and this would be dead code, so it is not installed at all rather than
+  // installed and racing.
+  if (process.env.NEXT_MANUAL_SIG_HANDLE) {
+    const { drain } = await import("@/lib/drain");
+    const { getSendQueue, getCtazSendQueue } = await import("@/lib/zcash/queue");
+    const boundMs = Math.max(1000, Math.floor(Number(process.env.FAUCET_DRAIN_MAX_MS ?? 40_000)));
+    const onSignal = (signal: NodeJS.Signals) => {
+      const depth = () => getSendQueue().depth + getCtazSendQueue().depth;
+      const at = depth();
+      console.log(`[drain] ${signal}: refusing new claims, ${at} send(s) in flight, waiting up to ${boundMs}ms`);
+      void drain(depth, boundMs).then((emptied) => {
+        console.log(emptied ? "[drain] queues empty, exiting" : `[drain] bound passed with ${depth()} send(s) still in flight, exiting anyway (they may still broadcast; their rows hold for the lease)`);
+        process.exit(0);
+      });
+    };
+    process.once("SIGTERM", onSignal);
+    process.once("SIGINT", onSignal);
+  }
+
   // Farming visibility (#196). Its own slow timer rather than a route, because these
   // figures must NOT be public: claim volume is not otherwise observable now that
   // drips are shielded, and a distinct-IP count tells a farmer how many identities we

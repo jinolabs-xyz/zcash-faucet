@@ -449,6 +449,44 @@ else
   log "verify-image-manifest.sh is not installed, so the image was not compared: UNVERIFIED"
 fi
 
+# LET THE OLD BUILD FINISH WHAT IT IS SENDING (risk register II, R-27). `compose up -d`
+# stops the running container to replace it, and a send mid-flight there was broadcast
+# by the wallet and forgotten by us: no receipt, a pending row that expires with its
+# lease, the same address paid again on a retry. The app drains on SIGTERM now; this is
+# the layer above it, so a queue that is busy is given time BEFORE the stop begins.
+# Bounded: a wedged send must not hold a deploy for ever, and the drain and the lease
+# cover what is left. Best effort, like the pre-deploy readiness read: a queue depth we
+# cannot read is not a reason to refuse a deploy.
+wait_queue_drained() {
+  local deadline=$((SECONDS + DRAIN_WAIT)) depth
+  while :; do
+    depth="$(queue_depth)"
+    case "$depth" in
+      0) return 0 ;;
+      "") log "could not read the send queue depth, not waiting on it"; return 0 ;;
+    esac
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      log "WARNING: ${depth} send(s) still in flight after ${DRAIN_WAIT}s, replacing the container anyway (the app drains on SIGTERM; rows hold for the lease)"
+      return 0
+    fi
+    log "waiting for ${depth} in-flight send(s) to finish before replacing the container"
+    sleep 2
+  done
+}
+queue_depth() { # prints the running app's queueDepth, or nothing when it cannot be read
+  local body
+  if [ -n "$FAUCET_URL" ]; then
+    # Same convention as probe_state: the status rides on the last line, the body above it.
+    body="$(curl -sS --max-time 8 -w '\n%{http_code}' "$FAUCET_URL/api/status" 2>/dev/null)" || return 0
+    body="${body%$'\n'*}"
+  else
+    body="$(compose exec -T faucet node -e "fetch('http://127.0.0.1:3000/api/status').then(r=>r.text()).then(t=>{process.stdout.write(t)}).catch(()=>process.exit(3))" 2>/dev/null)" || return 0
+  fi
+  printf '%s' "$body" | grep -o '"queueDepth":[0-9]*' | head -n1 | cut -d: -f2
+}
+DRAIN_WAIT="${REDEPLOY_DRAIN_WAIT:-60}"
+wait_queue_drained
+
 log "starting the new image"
 if ! compose up -d faucet 2>&1 | sed 's/^/    /'; then
   log "the new image would not start, rolling back"
