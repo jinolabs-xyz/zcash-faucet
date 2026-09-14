@@ -873,7 +873,7 @@ try {
       await cancelBtn.waitFor({ timeout: 5000 }).catch(() => {});
       // The worker first, so the sentence read below is one the worker's report produced.
       // It starts once the challenge fetch lands, so poll for it rather than assume.
-      for (let i = 0; i < 50 && page.workers().length === 0; i++) await page.waitForFunction(() => true, null, { timeout: 100 }).catch(() => {});
+      for (let i = 0; i < 50 && page.workers().length === 0; i++) await page.waitForTimeout(100);
       ok(`a worker is running while the card is up (rate ${8192 / ms} hashes/ms)`, page.workers().length === 1, `${page.workers().length} workers`);
       await page.waitForFunction((e) => document.body.innerText.includes(`Usually ${e} on this device`), expect, { timeout: 5000 }).catch(() => {});
       const sentence = ((await page.textContent("body")) ?? "").match(/(Usually|Measuring)[^.]*\./)?.[0] ?? "no estimate sentence";
@@ -884,7 +884,7 @@ try {
       // The worker must be gone, not just the card: a Cancel that only hid the card left
       // a phone's CPU pinned, and an orphan that later found would null the refs of the
       // next solve. A never-finding worker cannot exit on its own, so 0 means terminated.
-      await page.waitForFunction(() => true, null, { timeout: 100 }).catch(() => {});
+      await page.waitForTimeout(100);
       ok("and Cancel terminated the worker", page.workers().length === 0, `${page.workers().length} workers still running`);
       await page.unroute("**/pow-worker.js");
     }
