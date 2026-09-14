@@ -76,9 +76,13 @@ export function fingerprintAddress(address: string): string {
  * actor with one free allocation could rotate through ~50 of them at the 20-per-subnet
  * cap and reach the 1,000-drip global cap in about an hour, at one ~1 s proof each:
  * the total spend stayed bounded, and every real person met "daily cap reached" for
- * the rest of the UTC day. A /48 is one site, one customer, one allocation, which is
- * what the per-subnet cap exists to price; it costs a residential claimer nothing
- * (one home is one /48 at most, usually a /56 or /64 inside one).
+ * the rest of the UTC day. A /48 is one allocation, which is what the per-subnet cap
+ * exists to price. The cost is on the other side: residential ISPs delegate a /56 or a
+ * /64 per home and mobile carriers a /64 per handset, so one /48 can be 256 to 65,536
+ * households, or a carrier's gateway, sharing 20 drips a day between them. That is the
+ * trade, chosen over a 65,536-key rotation; it is no worse than IPv4 CGNAT today, where
+ * thousands share one address and five drips. The proof-of-work escalation in pow.ts
+ * keys on the same subnet, so it now escalates per /48 too.
  *
  * Returns null when the input will not parse, which SKIPS the subnet rule for that
  * request rather than inventing a key. A fallback bucket would put every unparseable

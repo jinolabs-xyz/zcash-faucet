@@ -45,9 +45,10 @@ Being straight about what that means, because it cuts both ways:
   network. We could not link two strangers before and now, if they share a range,
   we can see that much.
 - It is why a **shared network can be limited by someone else's** claims. An office,
-  a university or a NAT looks like one network from outside. The per-network cap is
-  set well above what one person needs so this is rare, and it is a real cost we
-  chose rather than an accident.
+  a university or a NAT looks like one network from outside, and on IPv6 a /48 can be
+  a whole carrier region or hundreds of homes. The per-network cap is set well above
+  what one person needs so this is rare, and it is a real cost we chose rather than
+  an accident.
 - An IP we cannot parse gets **no** subnet hash and is simply exempt from that rule,
   rather than being put in a shared bucket with every other unparseable address.
 

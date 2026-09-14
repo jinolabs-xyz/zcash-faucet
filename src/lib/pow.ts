@@ -84,9 +84,12 @@ const perIp = new Map<string, number[]>(); // ipHash -> request timestamps
  * keying escalation on the IP alone meant a farmer paid base difficulty forever: 50
  * attempts from 50 addresses looked like 50 first-time users.
  *
- * Residential users do not cluster this way, which is the same reason the daily cap
- * is per-subnet already. An honest claimer makes one attempt and never reaches the
- * second bucket at all.
+ * Residential IPv4 users do not cluster this way, which is the same reason the daily
+ * cap is per-subnet already. An honest claimer makes one attempt and never reaches
+ * the second bucket at all. IPv6 is coarser since the subnet became a /48 (R-25): a
+ * mobile carrier's gateway can put many handsets in one key, so the fourth claimant
+ * in an hour from one carrier pays the escalated work. That is the same trade the
+ * cap makes, and it is what stops a free /48's 65,536 /64s from resetting this.
  */
 const perSubnet = new Map<string, number[]>(); // subnetHash -> request timestamps
 const globalReqs: number[] = []; // all request timestamps (pressure signal)
