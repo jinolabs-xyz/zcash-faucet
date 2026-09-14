@@ -8,6 +8,8 @@ import { boxRow, boxChip, boxIsBad } from "@/lib/boxLabel";
 import { syncLabel, syncBarWidth } from "@/lib/syncLabel";
 import { networkFacts, formatAmount, type FaucetNetwork } from "@/lib/network";
 import { incomeSentence } from "@/lib/incomeSentence";
+import { validateTestnetAddress } from "@/lib/zcash/address";
+import { powEstimateSeconds, powEstimateText } from "@/lib/powEstimate";
 import type { CtazState } from "@/lib/crosslink/recency";
 import type { IntegrityStatus } from "@/lib/boxIntegrity";
 import type { MinerReading } from "@/lib/miner/heartbeat";
@@ -190,6 +192,14 @@ function check(addr: string) {
     return { ok: false as const, err: "Not a Zcash testnet address. It should start with utest1 (unified), ztestsapling (Sapling) or tm (transparent)." };
   if (a.length < d.min)
     return { ...d, ok: false as const, err: "That address looks cut short: " + a.length + " of about " + d.min + " characters." };
+  // The server decodes the checksum too, but by then the browser has solved a proof of
+  // work for nothing (risk register II, R-38): an address one character off cost a
+  // full solve and came back a 400. Same decoder as the route, same sentences, before
+  // any hashing. Pure JS on @scure/base and @noble/hashes; those were server-only
+  // before, so this is about 7 KB gzipped more on the first load of /, which a wasted
+  // solve costs a phone many times over.
+  const info = validateTestnetAddress(a);
+  if (!info.valid) return { ...d, ok: false as const, err: info.reason ?? "That address does not decode. Re-copy it from your wallet." };
   return { ...d, ok: true as const };
 }
 function short(a: string, h: number, t: number) { return !a ? "" : a.length <= h + t + 1 ? a : a.slice(0, h) + "…" + a.slice(-t); }
@@ -248,6 +258,8 @@ const PROOF_SECONDS = 12; // estimated shielded-proof build time, for the progre
 // and the number only goes up from here.
 const TX_POLL_MS = 10_000;
 const CONFIRMATIONS_ENOUGH = 6;
+// Rejection value of a solve the visitor cancelled; compared by identity, never a message.
+const POW_CANCELLED = new Error("pow cancelled");
 
 /* ── Component ─────────────────────────────────────────────────────────── */
 // Pure functions of a status reply, outside the component so basePhase's useCallback
@@ -375,7 +387,11 @@ export default function Home() {
   const [lookupAddr, setLookupAddr] = useState("");
   const [lookupRes, setLookupRes] = useState("");
   const [elapsed, setElapsed] = useState(0);
-  const [powState, setPowState] = useState<{ hashes: number; difficulty: number } | null>(null);
+  // difficulty is null from the moment the solve starts until the challenge arrives, so
+  // the card (and its Cancel) is on screen for the whole solve, fetch included.
+  const [powState, setPowState] = useState<{ hashes: number; difficulty: number | null; ms: number } | null>(null);
+  // Set while a solve is running; calling it abandons the solve and the claim (R-38).
+  const powCancel = useRef<(() => void) | null>(null);
   const [genErr, setGenErr] = useState("");
   // Which lightwalletd we are talking to. Asked for by name in community feedback.
   const [indexer, setIndexer] = useState<{ vendor: string; version: string } | null>(null);
@@ -607,28 +623,39 @@ export default function Home() {
   }, [theme]);
 
   // Solve the server's proof-of-work challenge in a worker so the tab never
-  // freezes. Resolves with the solution to hand back with the claim.
+  // freezes. Resolves with the solution to hand back with the claim. Rejects with
+  // POW_CANCELLED when the visitor gives up: a solve that cannot be abandoned is a
+  // tab a phone user closes (R-38), and the challenge is single-use so nothing is lost.
   const solvePow = () =>
     new Promise<PowSolution>((resolve, reject) => {
+      let cancelled = false;
+      setPowState({ hashes: 0, difficulty: null, ms: 0 });
+      powCancel.current = () => {
+        cancelled = true;
+        powWorker.current?.terminate(); powWorker.current = null;
+        powCancel.current = null;
+        reject(POW_CANCELLED);
+      };
       fetch("/api/pow/challenge")
         .then((r) => r.json())
         .then((ch) => {
-          if (!ch?.ok) { reject(new Error(ch?.error || "no challenge")); return; }
-          setPowState({ hashes: 0, difficulty: ch.difficulty });
+          if (cancelled) return;
+          if (!ch?.ok) { powCancel.current = null; reject(new Error(ch?.error || "no challenge")); return; }
+          setPowState({ hashes: 0, difficulty: ch.difficulty, ms: 0 });
           const worker = new Worker("/pow-worker.js");
           powWorker.current = worker;
           worker.onmessage = (e: MessageEvent) => {
             const m = e.data;
-            if (m.type === "progress") setPowState((s) => (s ? { ...s, hashes: m.hashes } : s));
+            if (m.type === "progress") setPowState((s) => (s ? { ...s, hashes: m.hashes, ms: m.ms } : s));
             else if (m.type === "found") {
-              worker.terminate(); powWorker.current = null;
+              worker.terminate(); powWorker.current = null; powCancel.current = null;
               resolve({ seed: ch.seed, difficulty: ch.difficulty, exp: ch.exp, sig: ch.sig, nonce: m.nonce });
             }
           };
-          worker.onerror = () => { worker.terminate(); powWorker.current = null; reject(new Error("worker error")); };
+          worker.onerror = () => { worker.terminate(); powWorker.current = null; powCancel.current = null; reject(new Error("worker error")); };
           worker.postMessage({ seed: ch.seed, difficulty: ch.difficulty });
         })
-        .catch(reject);
+        .catch((err) => { if (!cancelled) { powCancel.current = null; reject(err); } });
     });
 
   // The key gate, in submit() and not only on the button: Enter in the address field
@@ -671,8 +698,14 @@ export default function Home() {
     if (status?.challenge === "pow") {
       try {
         pow = await solvePow();
-      } catch {
+      } catch (err) {
         setPowState(null);
+        if (err === POW_CANCELLED) {
+          // Their choice, not a failure: back to the form with the address still in it.
+          sending.current = false; inFlow.current = false;
+          setPhase(basePhase(status, network));
+          return;
+        }
         setFail({ kind: "pow" });
         setErrMsg("Couldn't finish the human check. Refresh the page and try again.");
         setPhase("error");
@@ -960,6 +993,7 @@ export default function Home() {
   // 100% under a UI still saying submitting. Capping on the phase alone is both the
   // intent and reactive.
   const proofFrac = phase === "submitting" ? Math.min(0.95, elapsed / (PROOF_SECONDS * 1000)) : 0;
+  const powEstimate = powState && powState.difficulty != null ? powEstimateSeconds({ ...powState, difficulty: powState.difficulty }) : null;
   const steps: [string, number][] = [
     ["Checking eligibility", 0.09],
     ["Selecting shielded notes", 0.13],
@@ -1014,7 +1048,7 @@ export default function Home() {
     : phase === "fault" ? "The faucet is having a problem and is not taking claims right now. Nothing to do on your side."
     : phase === "empty" ? (refilling ? (refillHealthy ? "Topping up the reserve. Drips resume in a moment." : "The faucet's reserve is low.") : "The faucet is out of TAZ right now.")
     : phase === "degraded" ? "Sends are failing right now, so the faucet is not taking claims. Nothing to do on your side."
-    : phase === "submitting" ? (powState ? "Checking you are human. Nothing to do, it runs on its own." : "Sending your testnet ZEC. Keep this tab open.")
+    : phase === "submitting" ? (powState ? "Checking you are human. It runs on its own; there is a Cancel button if you would rather not wait." : "Sending your testnet ZEC. Keep this tab open.")
     : phase === "success" ? "Sent. Your testnet ZEC is on its way."
     : phase === "cooldown" ? "Already claimed. A drip went out on this address or this connection in the last 24 hours."
     : phase === "error" ? (
@@ -1545,6 +1579,13 @@ export default function Home() {
               <span aria-hidden="true">→</span>
             </button>
             <p style={{ margin: 0, fontSize: 11.5, letterSpacing: ".02em", color: muted(55), fontFamily: "var(--mono)" }}>{dripText} · once per address / 24h · shielded z→z</p>
+            {/* Said BEFORE the button is pressed (R-38): the puzzle used to be explained only
+                once it was already running, so the first a visitor heard of a wait was the wait. */}
+            {status?.challenge === "pow" && (
+              <p style={{ margin: 0, fontSize: 12, lineHeight: 1.5, color: muted(58) }}>
+                Before it sends, your browser solves a short puzzle instead of a CAPTCHA: a few seconds, longer on a phone or after repeated tries. You can cancel it.
+              </p>
+            )}
           </div>
         )}
 
@@ -1555,8 +1596,17 @@ export default function Home() {
             <div style={{ height: 10, border: "2px solid var(--color-text)", position: "relative", overflow: "hidden" }}>
               <i style={{ position: "absolute", top: 0, bottom: 0, left: 0, right: 0, background: "repeating-linear-gradient(135deg,var(--color-accent) 0 3px,transparent 3px 7px)", backgroundSize: "26px 26px", animation: "hatch .9s linear infinite" }} />
             </div>
-            <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.55, color: muted(62) }}>Your browser is solving a small cryptographic puzzle so bots cannot drain the faucet. Nothing to click, nothing tracked. It runs on its own.</p>
-            <p style={{ margin: 0, fontFamily: "var(--mono)", fontSize: 11, color: muted(50) }}>difficulty {powState.difficulty} bits · {powState.hashes.toLocaleString("en-US")} hashes</p>
+            <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.55, color: muted(62) }}>
+              Your browser is solving a small cryptographic puzzle so bots cannot drain the faucet. Nothing to click, nothing tracked.
+              {/* An estimate in seconds, not bits and hashes (R-38): ~10 s on a phone at 20
+                  bits and ~5 min at the 25-bit ceiling are facts a visitor can decide on. It is
+                  a lottery, so "usually about", never a countdown. */}
+              {" "}{powEstimate == null ? "Measuring how fast this device hashes…" : `Usually ${powEstimateText(powEstimate)} on this device; it is a lottery, so it can run longer.`}
+            </p>
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+              <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: muted(50) }}>difficulty {powState.difficulty ?? "…"} bits · {powState.hashes.toLocaleString("en-US")} hashes · {Math.round(powState.ms / 1000)} s</span>
+              <button className="btn btn-ghost btn-sm" onClick={() => powCancel.current?.()} style={{ padding: 0 }}>Cancel</button>
+            </div>
           </div>
         )}
 
