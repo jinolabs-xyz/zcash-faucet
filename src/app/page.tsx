@@ -523,10 +523,16 @@ export default function Home() {
         .catch(reject);
     });
 
+  // The key gate, in submit() and not only on the button: Enter in the address field
+  // calls submit() directly, and a disabled button is no gate against a keyboard. Keyed
+  // on the address so a pasted address is never held; a generated one is held until
+  // its key has been copied or at least revealed.
+  const keyUnseen = (address: string) => !!genKey && genKey.address === address && !keyCopied && !keyShown;
   const submit = async (target?: string) => {
     const address = (target ?? addr).trim();
     const c = check(address);
     if (!c.ok) { setTouched(true); return; }
+    if (!target && keyUnseen(address)) return;
     if (sending.current) return;
     // Node still syncing: hold the claim instead of turning the user away.
     // It fires on its own the moment the node is ready (the effect above).

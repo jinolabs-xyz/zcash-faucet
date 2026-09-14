@@ -782,6 +782,14 @@ try {
   ok("the generated address comes with its spending key on screen", await keyPanel.isVisible());
   const primary = page.locator("button.btn-primary").first();
   ok("and the request button waits until the key has been copied", (await primary.isDisabled()) && /Copy the key first/.test((await primary.textContent()) ?? ""), (await primary.textContent())?.trim());
+  // A disabled button is no gate against a keyboard: Enter in the address field calls
+  // submit() directly. The gate lives in submit() too, so Enter must change nothing.
+  await page.locator("input.input").first().press("Enter");
+  await page.waitForTimeout(400);
+  // If the gate let Enter through, the form is gone (the page is solving or sending)
+  // and the button no longer exists: that is the failure, named, not a locator timeout.
+  const stillHeld = await primary.isDisabled({ timeout: 2_000 }).catch(() => false);
+  ok("Enter in the address field does not slip past the key gate", stillHeld, (await primary.textContent({ timeout: 1_000 }).catch(() => "form gone: the claim went ahead"))?.trim());
   await keyPanel.getByRole("button", { name: "Copy key" }).click();
   await page.waitForFunction(() => !document.querySelector("button.btn-primary")?.disabled, null, { timeout: 5_000 }).catch(() => {});
   ok("copying the key releases the request button", await primary.isEnabled(), (await primary.textContent())?.trim());
