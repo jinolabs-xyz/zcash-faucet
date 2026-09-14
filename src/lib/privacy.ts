@@ -70,11 +70,15 @@ export function fingerprintAddress(address: string): string {
  * hash rather than replacing it only because the IP hash is what enforces the
  * per-person cooldown, which a subnet cannot.
  *
- * /24 for IPv4 and /64 for IPv6. The v6 choice matters: a single host is routinely
- * handed a whole /64 and may use any address inside it at will, so anything finer is
- * not a grouping, it is the same host wearing a different hat. /48 would group a whole
- * customer site and may prove the better boundary, but that is tuning and we have no
- * data yet, which is what #214 exists to produce.
+ * /24 for IPv4 and /48 for IPv6. The v6 boundary was a /64 until risk register II,
+ * R-25: a single host is routinely handed a whole /64, but a tunnel broker or a cloud
+ * account is handed a whole /48 for free, and a /48 holds 65,536 /64s. At /64 one
+ * actor with one free allocation could rotate through ~50 of them at the 20-per-subnet
+ * cap and reach the 1,000-drip global cap in about an hour, at one ~1 s proof each:
+ * the total spend stayed bounded, and every real person met "daily cap reached" for
+ * the rest of the UTC day. A /48 is one site, one customer, one allocation, which is
+ * what the per-subnet cap exists to price; it costs a residential claimer nothing
+ * (one home is one /48 at most, usually a /56 or /64 inside one).
  *
  * Returns null when the input will not parse, which SKIPS the subnet rule for that
  * request rather than inventing a key. A fallback bucket would put every unparseable
@@ -96,7 +100,7 @@ export function subnetOf(ip: string): string | null {
 
   if (!raw.includes(":")) return null;
   const groups = expandIpv6(raw);
-  return groups === null ? null : `${groups.slice(0, 4).join(":")}::/64`;
+  return groups === null ? null : `${groups.slice(0, 3).join(":")}::/48`;
 }
 
 /**

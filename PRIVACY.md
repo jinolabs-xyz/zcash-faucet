@@ -33,7 +33,7 @@ the daily cap or an in-flight claim, so they're deleted.
 
 A single IP is one claimant. A cloud provider hands one person thousands, which is
 why a per-IP cooldown is a speed bump for anyone renting a range. So the ledger
-also stores a salted hash of the client's **network** (`/24` for IPv4, `/64` for
+also stores a salted hash of the client's **network** (`/24` for IPv4, `/48` for
 IPv6) and caps claims per network per day.
 
 Being straight about what that means, because it cuts both ways:
