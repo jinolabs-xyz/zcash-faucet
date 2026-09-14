@@ -126,6 +126,41 @@ interface OperationResult {
   error?: RpcError;
 }
 
+/**
+ * Did this z_sendmany failure happen before the wallet could have acted on it?
+ *
+ * Definite, so the claim may be released and the person told to retry:
+ *   - the connection was refused or the host did not resolve: nothing was sent;
+ *   - the wallet answered with a JSON-RPC error (rpc() throws `zallet RPC z_sendmany:
+ *     …`): the wallet read the request and said no;
+ *   - an HTTP 4xx (rpc() throws `… HTTP 4xx …`): rejected at the door, auth or
+ *     routing, before the method ran.
+ * Everything else is unknown: the abort timer (TimeoutError), a reset or closed socket
+ * after the body went out, a 5xx after the method may have run, an unreadable reply,
+ * and any shape this list has not met. Unknown is the safe default for money.
+ */
+export function sendmanyFailureIsDefinite(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/^zallet RPC z_sendmany: /.test(msg)) return true;
+  if (/^zallet RPC z_sendmany HTTP 4\d\d\b/.test(msg)) return true;
+  const code = causeCode(err);
+  return code === "ECONNREFUSED" || code === "ENOTFOUND" || code === "EAI_AGAIN";
+}
+
+/** undici puts the OS error on `cause.code`; a bare error may carry `code` itself. */
+function causeCode(err: unknown): string | undefined {
+  const e = err as { code?: unknown; cause?: { code?: unknown } } | null;
+  const c = e?.cause?.code ?? e?.code;
+  return typeof c === "string" ? c : undefined;
+}
+
+function describe(err: unknown): string {
+  const code = causeCode(err);
+  const name = err instanceof Error ? err.name : typeof err;
+  const msg = err instanceof Error ? err.message : String(err);
+  return `${name}${code ? ` ${code}` : ""}: ${msg}`;
+}
+
 export class ZalletSender implements Sender {
   readonly name = "zallet";
 
@@ -247,7 +282,22 @@ export class ZalletSender implements Sender {
       `[{"address":${JSON.stringify(req.toAddress)},"amount":${amount}}],` +
       `${minConf},null,${JSON.stringify(policy)}]`;
 
-    const opid = await this.rpc<string>("z_sendmany", params);
+    // A LOST REPLY IS NOT A REFUSAL (risk register II, R-26). rpc() aborts after
+    // rpcTimeoutMs and throws a plain TimeoutError; the route treated any plain throw
+    // here as "nothing left the wallet", released the claim and told the person to
+    // retry in a moment. Under DB contention zallet can sit past the abort before or
+    // after spawning the operation and broadcast anyway, so a retry paid twice, and a
+    // scripted claimer could time it. Only a failure that provably happened BEFORE the
+    // request reached the wallet stays definite; everything after the body was written
+    // is an unknown outcome with no opid, which burns one cooldown instead of paying
+    // twice, the trade this file makes everywhere else.
+    let opid: string;
+    try {
+      opid = await this.rpc<string>("z_sendmany", params);
+    } catch (err) {
+      if (sendmanyFailureIsDefinite(err)) throw err;
+      throw new SendOutcomeUnknownError("no-opid", `z_sendmany reply lost: ${describe(err)}`);
+    }
     const txid = await this.awaitOperation(opid);
     return {
       txid,

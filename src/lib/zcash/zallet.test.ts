@@ -232,3 +232,69 @@ test("safeDonations is null, never a throw, when the wallet is unreachable", asy
   resetDonationCache();
   assert.equal(await safeDonations(), null); // real fetch, closed port
 });
+
+/* ------------------------------------------------------ a lost reply is not a refusal (R-26) */
+
+const { SendOutcomeUnknownError } = await import("./send.ts");
+const { sendmanyFailureIsDefinite } = await import("./zalletsend.ts");
+const sendOnce = () => new ZalletSender().send({ toAddress: "utest1recipient", addressInfo: UA_INFO, amountZat: 1n });
+
+/** fetch that fails z_sendmany the way undici does, and answers nothing else. */
+function failingSendmany(make: () => unknown) {
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    const req = JSON.parse(String(init?.body)) as { method: string };
+    if (req.method === "z_sendmany") {
+      const v = make();
+      if (v instanceof Response) return v;
+      throw v;
+    }
+    return new Response(JSON.stringify({ result: null }), { status: 200 });
+  }) as typeof fetch;
+}
+const undiciError = (code: string, message = code) => Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error(message), { code }) });
+
+test("z_sendmany: the abort timer is an UNKNOWN outcome with no opid, not 'nothing left the wallet'", async () => {
+  // The exact throw AbortSignal.timeout() produces: a DOMException named TimeoutError.
+  failingSendmany(() => new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+  await assert.rejects(sendOnce, (err: unknown) => {
+    assert.ok(err instanceof SendOutcomeUnknownError, `expected SendOutcomeUnknownError, got ${String(err)}`);
+    assert.equal(err.opid, "no-opid");
+    assert.match(err.message, /reply lost: TimeoutError/);
+    return true;
+  });
+});
+
+test("z_sendmany: a socket that dropped after the body went out is unknown too", async () => {
+  for (const code of ["ECONNRESET", "UND_ERR_SOCKET", "EPIPE"]) {
+    failingSendmany(() => undiciError(code));
+    await assert.rejects(sendOnce, (err: unknown) => err instanceof SendOutcomeUnknownError && err.opid === "no-opid" && new RegExp(code).test(err.message));
+  }
+});
+
+test("z_sendmany: a 5xx or an unreadable reply is unknown, the method may have run", async () => {
+  failingSendmany(() => new Response("upstream error", { status: 502, statusText: "Bad Gateway" }));
+  await assert.rejects(sendOnce, (err: unknown) => err instanceof SendOutcomeUnknownError && /HTTP 502/.test(err.message));
+  failingSendmany(() => new Response("<html>not json</html>", { status: 200 }));
+  await assert.rejects(sendOnce, (err: unknown) => err instanceof SendOutcomeUnknownError);
+});
+
+test("z_sendmany: refused, unresolvable, rejected at the door, or refused by the wallet stay DEFINITE", async () => {
+  // Nothing reached a wallet that could act, so the claim may be released and retried.
+  for (const code of ["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN"]) {
+    failingSendmany(() => undiciError(code));
+    await assert.rejects(sendOnce, (err: unknown) => !(err instanceof SendOutcomeUnknownError) && err instanceof Error && new RegExp(code).test(String(err.cause && (err.cause as { code?: string }).code)));
+  }
+  failingSendmany(() => new Response("nope", { status: 401, statusText: "Unauthorized" }));
+  await assert.rejects(sendOnce, (err: unknown) => !(err instanceof SendOutcomeUnknownError) && /HTTP 401/.test(String(err)));
+  failingSendmany(() => new Response(JSON.stringify({ error: { code: -6, message: "Insufficient funds" } }), { status: 200 }));
+  await assert.rejects(sendOnce, (err: unknown) => !(err instanceof SendOutcomeUnknownError) && /Insufficient funds/.test(String(err)));
+});
+
+test("the classifier defaults to unknown for a shape it has not met", () => {
+  assert.equal(sendmanyFailureIsDefinite(new Error("something new")), false);
+  assert.equal(sendmanyFailureIsDefinite("a string"), false);
+  assert.equal(sendmanyFailureIsDefinite(undiciError("ECONNREFUSED")), true);
+  // Only z_sendmany's own wire errors count as its refusal; the same text for another
+  // method must not be read as one.
+  assert.equal(sendmanyFailureIsDefinite(new Error("zallet RPC z_getoperationstatus: boom (code 1)")), false);
+});
