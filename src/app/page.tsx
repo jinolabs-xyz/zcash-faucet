@@ -195,7 +195,9 @@ function check(addr: string) {
   // The server decodes the checksum too, but by then the browser has solved a proof of
   // work for nothing (risk register II, R-38): an address one character off cost a
   // full solve and came back a 400. Same decoder as the route, same sentences, before
-  // any hashing. Pure JS, so it costs the bundle nothing it did not already have.
+  // any hashing. Pure JS on @scure/base and @noble/hashes; those were server-only
+  // before, so this is about 7 KB gzipped more on the first load of /, which a wasted
+  // solve costs a phone many times over.
   const info = validateTestnetAddress(a);
   if (!info.valid) return { ...d, ok: false as const, err: info.reason ?? "That address does not decode. Re-copy it from your wallet." };
   return { ...d, ok: true as const };
@@ -638,7 +640,7 @@ export default function Home() {
         .then((r) => r.json())
         .then((ch) => {
           if (cancelled) return;
-          if (!ch?.ok) { reject(new Error(ch?.error || "no challenge")); return; }
+          if (!ch?.ok) { powCancel.current = null; reject(new Error(ch?.error || "no challenge")); return; }
           setPowState({ hashes: 0, difficulty: ch.difficulty, ms: 0 });
           const worker = new Worker("/pow-worker.js");
           powWorker.current = worker;
@@ -653,7 +655,7 @@ export default function Home() {
           worker.onerror = () => { worker.terminate(); powWorker.current = null; powCancel.current = null; reject(new Error("worker error")); };
           worker.postMessage({ seed: ch.seed, difficulty: ch.difficulty });
         })
-        .catch((err) => { if (!cancelled) reject(err); });
+        .catch((err) => { if (!cancelled) { powCancel.current = null; reject(err); } });
     });
 
   // The key gate, in submit() and not only on the button: Enter in the address field
@@ -1044,7 +1046,7 @@ export default function Home() {
     : phase === "fault" ? "The faucet is having a problem and is not taking claims right now. Nothing to do on your side."
     : phase === "empty" ? (refilling ? (refillHealthy ? "Topping up the reserve. Drips resume in a moment." : "The faucet's reserve is low.") : "The faucet is out of TAZ right now.")
     : phase === "degraded" ? "Sends are failing right now, so the faucet is not taking claims. Nothing to do on your side."
-    : phase === "submitting" ? (powState ? "Checking you are human. Nothing to do, it runs on its own." : "Sending your testnet ZEC. Keep this tab open.")
+    : phase === "submitting" ? (powState ? "Checking you are human. It runs on its own; there is a Cancel button if you would rather not wait." : "Sending your testnet ZEC. Keep this tab open.")
     : phase === "success" ? "Sent. Your testnet ZEC is on its way."
     : phase === "cooldown" ? "Already claimed. A drip went out on this address or this connection in the last 24 hours."
     : phase === "error" ? (

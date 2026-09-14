@@ -25,4 +25,6 @@ test("the text is coarse: whole seconds under ten, fives under a minute, minutes
   // 25 bits on a phone, the register's ~5 min case.
   assert.equal(powEstimateText(290), "about 5 min");
   assert.equal(powEstimateText(61), "about 1 min");
+  assert.equal(powEstimateText(58), "about 1 min", "never 'about 60 s'");
+  assert.equal(powEstimateText(57), "about 55 s");
 });

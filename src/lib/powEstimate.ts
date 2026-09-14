@@ -31,6 +31,7 @@ export function powEstimateText(seconds: number | null): string {
   if (seconds == null) return "measuring";
   if (seconds < 1) return "under a second";
   if (seconds < 10) return `about ${Math.round(seconds)} s`;
-  if (seconds < 60) return `about ${Math.round(seconds / 5) * 5} s`;
+  // 57.5 s and up rounds to "60 s" in fives, which is a minute; say so.
+  if (seconds < 57.5) return `about ${Math.round(seconds / 5) * 5} s`;
   return `about ${Math.max(1, Math.round(seconds / 60))} min`;
 }

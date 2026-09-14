@@ -857,25 +857,45 @@ try {
     // card by now and #addrmsg is gone, and that must read as THIS failing, not a hang.
     const addrmsg = (await page.locator("#addrmsg").textContent({ timeout: 3000 }).catch(() => "")) ?? "";
     ok("a bad checksum is refused on the page, in the route's own words", /Malformed unified address \(bad bech32m checksum\)/.test(addrmsg), addrmsg.slice(0, 120) || "no #addrmsg on the page");
-    if (!/bad bech32m checksum/.test(addrmsg)) { await page.getByRole("button", { name: "Try again" }).click({ timeout: 3000 }).catch(() => {}); }
+    if (!/bad bech32m checksum/.test(addrmsg)) { await page.getByRole("button", { name: "Edit the address" }).click({ timeout: 3000 }).catch(() => {}); }
     ok("and no challenge was fetched and no claim was posted for it", asked.length === 0, asked.join("|"));
     // Cancel, mid-solve: the worker is replaced by one that reports progress and never
-    // finds, so the card is on screen long enough to read and to leave. 8192 hashes in
-    // 8 ms at the stack's 12 bits is "under a second", and the estimate must say so.
-    await page.route("**/pow-worker.js", (route) => route.fulfill({ status: 200, contentType: "application/javascript", body: 'self.onmessage=function(){setInterval(function(){self.postMessage({type:"progress",hashes:8192,ms:8})},40)};' }));
-    await page.locator("input.input").first().fill(good);
-    await page.locator("button.btn-primary").first().click();
-    await page.getByRole("button", { name: "Cancel" }).waitFor({ timeout: 5000 }).catch(() => {});
-    const card = (await page.textContent("body")) ?? "";
-    ok("the solving card carries an estimate in time, not only bits and hashes", /Usually under a second on this device/.test(card) || /Measuring how fast this device hashes/.test(card), card.match(/(Usually|Measuring)[^.]*\./)?.[0] ?? "no estimate sentence");
-    await page.waitForFunction(() => /Usually under a second/.test(document.body.innerText), null, { timeout: 5000 }).catch(() => {});
-    ok("and once the worker has reported, the estimate is measured", /Usually under a second on this device/.test((await page.textContent("body")) ?? ""));
-    await page.getByRole("button", { name: "Cancel" }).click({ timeout: 3000 }).catch(() => {});
-    await page.locator("button.btn-primary").waitFor({ timeout: 5000 }).catch(() => {});
-    ok("Cancel returns to the form with the address still in it", (await page.locator("input.input").first().inputValue({ timeout: 3000 }).catch(() => "")) === good);
+    // finds, so the card is on screen long enough to read and to leave. Two rates in
+    // turn, 8192 hashes in 8000 ms and then in 2000 ms: at the stack's 12 bits those are
+    // 4 s and 1 s, and the card must say each in its turn. One rate landed in the same
+    // bucket as a hard-coded sentence and a constant passed the check (review of #541);
+    // two different figures from two different rates is arithmetic or nothing.
+    for (const [ms, expect] of [[8000, "about 4 s"], [2000, "about 1 s"]]) {
+      await page.route("**/pow-worker.js", (route) => route.fulfill({ status: 200, contentType: "application/javascript", body: `self.onmessage=function(){setInterval(function(){self.postMessage({type:"progress",hashes:8192,ms:${ms}})},40)};` }));
+      await page.locator("input.input").first().fill(good);
+      await page.locator("button.btn-primary").first().click();
+      const cancelBtn = page.getByRole("button", { name: "Cancel", exact: true });
+      await cancelBtn.waitFor({ timeout: 5000 }).catch(() => {});
+      // The worker first, so the sentence read below is one the worker's report produced.
+      // It starts once the challenge fetch lands, so poll for it rather than assume.
+      for (let i = 0; i < 50 && page.workers().length === 0; i++) await page.waitForFunction(() => true, null, { timeout: 100 }).catch(() => {});
+      ok(`a worker is running while the card is up (rate ${8192 / ms} hashes/ms)`, page.workers().length === 1, `${page.workers().length} workers`);
+      await page.waitForFunction((e) => document.body.innerText.includes(`Usually ${e} on this device`), expect, { timeout: 5000 }).catch(() => {});
+      const sentence = ((await page.textContent("body")) ?? "").match(/(Usually|Measuring)[^.]*\./)?.[0] ?? "no estimate sentence";
+      ok(`and the card says "Usually ${expect}": 2^12 at the reported rate, as a lottery's expected duration`, sentence.includes(`Usually ${expect} on this device`), sentence);
+      await cancelBtn.click({ timeout: 3000 }).catch(() => {});
+      await page.locator("button.btn-primary").waitFor({ timeout: 5000 }).catch(() => {});
+      ok("Cancel returns to the form with the address still in it", (await page.locator("input.input").first().inputValue({ timeout: 3000 }).catch(() => "")) === good);
+      // The worker must be gone, not just the card: a Cancel that only hid the card left
+      // a phone's CPU pinned, and an orphan that later found would null the refs of the
+      // next solve. A never-finding worker cannot exit on its own, so 0 means terminated.
+      await page.waitForFunction(() => true, null, { timeout: 100 }).catch(() => {});
+      ok("and Cancel terminated the worker", page.workers().length === 0, `${page.workers().length} workers still running`);
+      await page.unroute("**/pow-worker.js");
+    }
     ok("and the abandoned solve posted nothing", !asked.some((a) => a.startsWith("POST /api/faucet")), asked.join("|"));
     page.off("request", onReq);
-    await page.unroute("**/pow-worker.js");
+    // If a check above left the page off the form, put it back so the rest of the run
+    // is not lost to a 30 s locator timeout with the diagnosis already printed.
+    if (!(await page.locator("button.btn-primary").first().isVisible({ timeout: 1000 }).catch(() => false))) {
+      await page.getByRole("button", { name: "Cancel", exact: true }).click({ timeout: 1000 }).catch(() => {});
+      await page.getByRole("button", { name: /Edit the address|Try again|Another address/ }).first().click({ timeout: 2000 }).catch(() => {});
+    }
     await page.locator("input.input").first().fill("", { timeout: 3000 }).catch(() => {});
   }
 
