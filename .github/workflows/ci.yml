@@ -408,6 +408,15 @@ jobs:
             echo "secret=$f" > "$ctx/deploy/z3/$f"
           done
           echo "secret=root" > "$ctx/.env"
+          # THE OTHER FAMILY (risk register II, R-5): the sidecars deploy.sh writes and the
+          # trees it clones or builds, none of which are env-shaped and all of which the
+          # first version of this probe let through.
+          echo "rpc-password" > "$ctx/deploy/.zallet-rpc-password"
+          echo "account-uuid" > "$ctx/deploy/.faucet-account"
+          mkdir -p "$ctx/deploy/z3-stack/config/testnet" "$ctx/deploy/z3/miner/target/release" "$ctx/deploy/z3/.git"
+          echo "pwhash=..." > "$ctx/deploy/z3-stack/config/testnet/zallet.toml"
+          echo "binary" > "$ctx/deploy/z3/miner/target/release/zcash-testnet-miner"
+          echo "x" > "$ctx/deploy/z3/.some-dotfile"
           printf 'FROM busybox\nCOPY . /ctx\nRUN find /ctx -type f | sort > /ctx.list\n' > "$ctx/Dockerfile"
           docker build -q -t dockerignore-probe "$ctx" >/dev/null
           got="$(docker run --rm --entrypoint sh dockerignore-probe -c 'grep -vE "^/ctx/(Dockerfile|\.dockerignore)$" /ctx.list' || true)"
@@ -448,7 +457,9 @@ jobs:
           # exceptions here keeps the pattern strict and the exception reviewable.
           found="$(docker run --rm --entrypoint sh faucet-ci-check:${{ github.sha }} -c '
             find /app -name "*.env" -o -name "*.env.*" \
-                 -o -name "*.pem" -o -name "*.key" 2>/dev/null |
+                 -o -name "*.pem" -o -name "*.key" \
+                 -o -name ".zallet-rpc-password" -o -name ".faucet-account" \
+                 -o -path "/app/deploy/z3-stack/*" -o -path "/app/deploy/z3/miner/target/*" 2>/dev/null |
             grep -vE "\.env\.example$|/stack-versions\.env$" || true' )"
           if [ -n "$found" ]; then
             echo "SECRET-SHAPED FILES REACHED THE IMAGE:"

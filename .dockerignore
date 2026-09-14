@@ -63,6 +63,23 @@ env.*
 # reads it, and the deploy manifest verifier agrees it is absent. Saying so here so the
 # next person to notice /app/.env.example is gone does not go looking for a bug.
 
+# THE OTHER FILE FAMILY (risk register II, R-5). Every rule above is about the env
+# file. deploy.sh also writes the wallet RPC password in plain text to
+# deploy/.zallet-rpc-password, the account UUID to deploy/.faucet-account, clones the z3
+# stack (its config carries the faucet's pwhash) to deploy/z3-stack/, and auto-deploy
+# builds the miner into deploy/z3/miner/target/ (hundreds of MB after a release build).
+# All four are gitignored and none matched a rule here: docker's own matcher put the
+# password, the account and the wallet config into a throwaway build. #486 called the
+# image clean; these were outside every pattern. The two dotfiles are named, the two
+# trees are named, and the general shape follows: nothing under deploy/ that starts with
+# a dot is something the image should carry. The two tracked .gitignore files under
+# deploy/ are documentation for git and mean nothing to the runtime.
+deploy/.zallet-rpc-password
+deploy/.faucet-account
+deploy/z3-stack
+deploy/z3/miner/target
+deploy/**/.*
+
 # The tracked template is documentation, carries no values, and the README points at it.
 # Negation last: .dockerignore takes the LAST matching rule, so this has to follow the
 # patterns it is exempting itself from.

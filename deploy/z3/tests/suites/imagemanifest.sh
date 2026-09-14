@@ -36,6 +36,11 @@ vim_image() {
     missing) rm -f "$T/img/app/src/b.ts" ;;
     empty)   : > "$T/img/app/src/b.ts" ;;
     secret)  mkdir -p "$T/img/app/deploy/z3"; cp "$R/deploy/z3/faucet.env" "$T/img/app/deploy/z3/" ;;
+    # The R-5 family: gitignored, never in the commit, written by deploy.sh on the box.
+    sidecar) mkdir -p "$T/img/app/deploy/z3-stack/config"; printf 'hunter2\n' > "$T/img/app/deploy/.zallet-rpc-password"
+             printf 'pwhash = "x"\n' > "$T/img/app/deploy/z3-stack/config/zallet.toml" ;;
+    # An extra OUTSIDE deploy/ is what every real image has (node_modules, .next).
+    runtime) mkdir -p "$T/img/app/node_modules/x"; printf 'module.exports = 1;\n' > "$T/img/app/node_modules/x/index.js" ;;
   esac
   ( cd "$T/img" && tar -cf "$T/img.tar" app )
 }
@@ -76,14 +81,30 @@ check "and is NOT reported as missing" "! grep -q 'MISSING' '$T/out'"
 
 echo "== verify-image-manifest: dockerignored files are not expected, and * does not cross /"
 # #369 shipped six patterns on the assumption that * crosses a /. It does not, which is why
-# *.env never matched deploy/z3/faucet.env. This asserts the **/ form works AND that a
-# secret sitting in the image does not fail the equality check, because absence scanning is
-# a separate, weaker job than this one.
+# *.env never matched deploy/z3/faucet.env. This asserts the **/ form works: the excluded
+# paths are never DEMANDED of the image. Until risk register II an excluded file that had
+# nevertheless reached the image passed here too, on the reasoning that absence scanning
+# is a separate job; under deploy/ that reasoning is what let the wallet RPC password
+# into every build, so a file there that the commit does not put in the image is now
+# FORBIDDEN by name (next block). README.md at the root is still not this check's business.
 vim_env; vim_image secret
-check "an excluded file present in the image does not fail the equality check" \
-  "[ \"\$(vim_run)\" = '0' ]"
-check "and the excluded paths were never demanded of the image" \
-  "! grep -q 'faucet.env' '$T/out' && ! grep -q 'README.md' '$T/out'"
+check "an excluded file under deploy/ that reached the image FAILS, and is named" \
+  "[ \"\$(vim_run)\" = '1' ] && grep -q 'FORBIDDEN' '$T/out' && grep -q 'deploy/z3/faucet.env' '$T/out'"
+check "and the excluded paths were never demanded as MISSING" \
+  "! grep -q 'MISSING' '$T/out' && ! grep -q 'README.md' '$T/out'"
+
+echo "== verify-image-manifest: the sidecars deploy.sh writes are FORBIDDEN in the image (risk register II, R-5)"
+# deploy/.zallet-rpc-password is the plaintext wallet RPC password; deploy/z3-stack/ is
+# the z3 clone with the faucet's pwhash. Both gitignored, both outside every env-shaped
+# rule, both put into a throwaway build by docker's own matcher while this verifier
+# reported MATCHES. A file under deploy/ the commit does not expect is a failure.
+vim_env; vim_image sidecar
+check "a password sidecar and the z3 clone in the image fail the check, exit 1" "[ \"\$(vim_run)\" = '1' ]"
+check "and both are named as FORBIDDEN" \
+  "grep -q 'FORBIDDEN' '$T/out' && grep -q 'deploy/.zallet-rpc-password' '$T/out' && grep -q 'deploy/z3-stack/config/zallet.toml' '$T/out'"
+check "and the fix line points at .dockerignore" "grep -q 'dockerignore' '$T/out'"
+vim_env; vim_image runtime
+check "an extra OUTSIDE deploy/ (node_modules, .next, the runtime) is still not an error" "[ \"\$(vim_run)\" = '0' ]"
 
 echo "== verify-image-manifest: an unreadable image is CANNOT-COMPARE, never a failure"
 # 2 is not a softer 1. A comparison that did not happen must not roll back a healthy deploy

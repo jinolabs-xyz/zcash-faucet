@@ -19,9 +19,16 @@
 # one of them:
 #   STALE    the path is present with content that is not the commit's
 #   MISSING  the commit has it and the image does not
-#   EXTRA    is deliberately NOT an error here. The image legitimately contains things the
-#            commit does not (node_modules, .next, the runtime). Secret-pattern scanning
-#            is a separate, weaker check; this one is the equality half.
+#   EXTRA    is deliberately NOT an error here in general. The image legitimately contains
+#            things the commit does not (node_modules, .next, the runtime). Secret-pattern
+#            scanning is a separate, weaker check; this one is the equality half.
+#   FORBIDDEN, the one exception (risk register II, R-5): a file under deploy/ that the
+#            commit does not put in the image. deploy/ is where deploy.sh writes the
+#            wallet RPC password and the account id and clones the z3 stack, all
+#            gitignored, and docker's matcher put every one of them into a build while
+#            this check reported MATCHES because "extra is not an error". Nothing under
+#            deploy/ has a legitimate reason to be in the image unless the commit tracks
+#            it and .dockerignore admits it, so there the rule inverts.
 #
 # EXIT CODES, the same 0/1/2 vocabulary as bring-to-spec.sh (redeploy.sh adds a 3 of its
 # own for shipped-but-unverified, and turns this script's 2 into that):
@@ -189,13 +196,26 @@ while read -r want path; do
   fi
 done <<< "$EXPECTED"
 
+# FORBIDDEN: every regular file the image carries under deploy/ that is not one the commit
+# expects there. Membership is against the expected set (tracked AND admitted by
+# .dockerignore), so a tracked-but-ignored file that reached the image is named too: a
+# rule that stopped matching is exactly what this exists to notice.
+FORBIDDEN=""
+while IFS= read -r member; do
+  [ -n "$member" ] || continue
+  rel="${member#"$APP_DIR"/}"
+  printf '%s\n' "$EXPECTED" | grep -qF "  $rel" && continue
+  FORBIDDEN="$FORBIDDEN $rel"
+done < <(tar -tvf "$TARBALL" 2>/dev/null | awk -v p="$APP_DIR/deploy/" 'substr($0,1,1)=="-" { f=$NF; if (index(f, p)==1) print f }')
+
 log "compared $EXPECTED_N tracked file(s) from $(git -C "$REPO_DIR" rev-parse --short HEAD) against $IMAGE"
 
-if [ -n "$STALE" ] || [ -n "$MISSING" ]; then
+if [ -n "$STALE" ] || [ -n "$MISSING" ] || [ -n "$FORBIDDEN" ]; then
   log "IMAGE DOES NOT MATCH THE COMMIT."
   [ -n "$STALE" ]   && { log "  STALE, present with the wrong content (a cached layer looks exactly like this):"; for p in $STALE; do log "    $p"; done; }
   [ -n "$MISSING" ] && { log "  MISSING, in the commit and not in the image:"; for p in $MISSING; do log "    $p"; done; }
-  log "  $SAME file(s) did match. A rebuild with --no-cache is the usual fix."
+  [ -n "$FORBIDDEN" ] && { log "  FORBIDDEN, under deploy/ and not something the commit puts in the image (deploy.sh writes secrets here; check .dockerignore):"; for p in $FORBIDDEN; do log "    $p"; done; }
+  log "  $SAME file(s) did match. A rebuild with --no-cache is the usual fix for STALE; a .dockerignore rule for FORBIDDEN."
   exit 1
 fi
 
