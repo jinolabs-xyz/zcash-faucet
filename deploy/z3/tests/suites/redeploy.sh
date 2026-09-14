@@ -87,8 +87,11 @@ check "a status body with no queue depth (an older build) is not waited on" \
 
 echo "== redeploy: a build that becomes ready just after the deadline ships, and caddy follows"
 # The late-ready exit 0: not rolled back, and it is a shipped exit, so the pin is
-# followed there too (review of #524, round 2). Ready for the pre-deploy read and one
-# gate poll, then not; no liveness file, so the gate times out; the final read is ready.
+# followed there too (review of #524, round 2). No liveness file, so the gate fails on
+# liveness every poll and never asks readiness; STUB_READY_MAX=2 is therefore spent by
+# the pre-deploy read and the FINAL read, which is what lands this on "IS ready now".
+# Touching STUB_HEALTH here would make the gate pass and the case land on the healthy
+# exit 0 instead, and its check would go red for the wrong reason.
 redeploy_env
 touch "$STUB_READY"
 STUB_READY_MAX=2 REDEPLOY_HEALTH_TIMEOUT=2 bash "$REDEPLOY" > "$T/late.log" 2>&1
