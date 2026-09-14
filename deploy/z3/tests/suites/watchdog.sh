@@ -772,6 +772,11 @@ wd_run 6
 check "restarts only" "grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG' && ! grep -q 'docker stop z3-testnet-zebra-1' '$STUB_LOG'"
 check "state untouched, miner untouched" "[ -f '$peers' ] && [ -d '$nonfinal' ] && ! grep -q 'systemctl stop zcash-testnet-miner' '$STUB_LOG'"
 check "and the page names the missing confirmation" "grep -q 'external: unknown' '$T/alerts.log'"
+# The give-up branches each set rc before paged() reads it. Under set -u a branch that
+# forgot would kill the watchdog on the very sweep that paged, AFTER the page left, so
+# every assertion above still passes: the same false-pass shape the corrupt-flap case
+# guards against, and review showed the hand-resolved hunk was unpinned without this.
+check "and the watchdog survives its own give-up page" "! grep -qi 'unbound variable' '$T/run.log'"
 
 echo "== watchdog: a lag the network CONFIRMS gets the whole ladder, as before"
 wd_node_env
