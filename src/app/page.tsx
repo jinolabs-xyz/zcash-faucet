@@ -356,7 +356,9 @@ export default function Home() {
   // the fault card, NOT as an error phase: the phase effect re-derives the phase from
   // status whenever queuedAddr changes, and it ran in the same commit as the give-up's
   // setPhase("error"), so the old give-up dropped the claim and its message together
-  // (review of #522). Cleared when a claim is made or the visitor starts over.
+  // (review of #522). Cleared the moment the visitor holds a claim again, cancels
+  // one, starts over, or the fault ends: a sentence about a hold nobody made must not
+  // outlive the hold it was about (round 3).
   const [holdDropped, setHoldDropped] = useState(false);
   const [tool, setTool] = useState<"lookup" | "about" | null>(null);
   const [lookupAddr, setLookupAddr] = useState("");
@@ -472,6 +474,7 @@ export default function Home() {
   useEffect(() => {
     if (inFlow.current) return;
     const base = basePhase(status, network);
+    if (base !== "fault") setHoldDropped(false);
     // A held claim shows as "queued" while the node syncs; anything else
     // (ready, empty) falls through so the fire effect below can take over.
     setPhase(queuedAddr && holding(base) ? "queued" : base);
@@ -641,6 +644,7 @@ export default function Home() {
     // It fires on its own the moment the node is ready (the effect above).
     // `target` set means we ARE the fire, never re-queue.
     if (!target && holding(basePhase(status, network))) {
+      setHoldDropped(false);
       setQueuedAddr(address);
       setQueuedAt(Date.now());
       setPhase("queued");
@@ -886,12 +890,23 @@ export default function Home() {
   // reading for the whole of 2026-09-07. Frozen says frozen, and the sync cell says how
   // far behind rather than how close.
   const walletDown = status != null && status.sender === "zallet" && !node;
-  const nodeWord = status == null ? "–" : walletDown ? "no answer" : node?.ready ? "ready" : node?.frozen ? "frozen" : "syncing";
+  // "ready" is the server's readiness word and it stays true while the freshness gate
+  // refuses (a 40-block lag, or an oracle it cannot ask); the card names the node in
+  // both, so the strip must not say ready beside it (round 3).
+  const nodeWord =
+    status == null ? "–"
+    : walletDown ? "no answer"
+    : node?.frozen ? "frozen"
+    : node?.canBuildTx === false ? (node.shield?.state === "unsafe" ? "behind" : "unverified")
+    : node?.ready ? "ready"
+    : "syncing";
   const behindText =
     node?.frozen
       ? node.behind && status && nodeGap(status) != null
         ? `${num(nodeGap(status))} behind`
         : "stalled"
+      : node?.canBuildTx === false
+        ? (node.shield?.state === "unsafe" && node.shield.lag != null ? `${num(node.shield.lag)} behind` : "unverified")
       : walletDown ? "–" : null;
   const syncCell = behindText ?? syncText;
   const height = node?.height ?? null;
@@ -1141,7 +1156,7 @@ export default function Home() {
               // "both" is for facts about the BOX rather than either chain - the integrity
               // count and the lightwalletd backend serve whichever asset you are looking at,
               // so hiding them behind a toggle would just make them harder to find.
-              { net: "taz", k: "node", v: nodeWord + (nodeWord !== "ready" && syncCell && syncCell !== "–" ? " (" + syncCell + ")" : ""), bad: status != null && (walletDown || node?.ready === false) },
+              { net: "taz", k: "node", v: nodeWord + (nodeWord !== "ready" && syncCell && syncCell !== "–" ? " (" + syncCell + ")" : ""), bad: status != null && (walletDown || node?.ready === false || node?.canBuildTx === false) },
               { net: "taz", k: "block height", v: num(height) + (nodeHeight ? " / " + num(nodeHeight) : "") },
               { net: "taz", k: "wallet balance", v: status?.balanceTaz != null ? status.balanceTaz.toFixed(2) + " TAZ" : "–", bad: status?.empty === true },
               // The detail belongs here, per the user: he asked that the miner's real
@@ -1302,7 +1317,7 @@ export default function Home() {
               The moment the {queuedBehindFault ? "faucet is back" : "node is ready"}, {dripText} goes to <span style={{ fontFamily: "var(--mono)", fontSize: 11.5 }}>{short(queuedAddr, 12, 6)}</span>. Keep this tab open or come back later, your place survives a reload.
             </p>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-              <button className="btn btn-secondary btn-sm" onClick={() => { setQueuedAddr(null); setQueuedAt(null); setPhase(basePhase(status, network)); }}>Cancel and change address</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => { setQueuedAddr(null); setQueuedAt(null); setHoldDropped(false); setPhase(basePhase(status, network)); }}>Cancel and change address</button>
             </div>
           </div>
         )}
