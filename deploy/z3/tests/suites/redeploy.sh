@@ -62,6 +62,29 @@ STUB_CADDY_UP_FAIL=1 bash "$REDEPLOY" > "$T/caddy-up.log" 2>&1
 check "a caddy recreate failure leaves the deploy at exit 0" "[ $? -eq 0 ]"
 check "and warns in those words" "grep -q 'WARNING: caddy: pulled but could not be recreated' '$T/caddy-up.log'"
 
+echo "== redeploy: THE OLD BUILD FINISHES WHAT IT IS SENDING before it is replaced (R-27)"
+# A send mid-flight when compose stopped the old container was broadcast by the wallet
+# and forgotten by us. The deploy now reads the running app's queue depth and waits,
+# bounded, for it to reach zero before `up -d`; the app's own SIGTERM drain is the
+# layer under this one.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_QUEUE_DEPTHS="2 1 0" REDEPLOY_DRAIN_WAIT=30 bash "$REDEPLOY" > "$T/drain.log" 2>&1
+check "a busy queue is waited for, and the deploy proceeds once it empties" \
+  "[ $? -eq 0 ] && grep -q 'waiting for 2 in-flight send' '$T/drain.log' && grep -q 'waiting for 1 in-flight send' '$T/drain.log' && ! grep -q 'WARNING:.*still in flight' '$T/drain.log'"
+check "and the wait happened BEFORE the new image was started" \
+  "[ \"\$(grep -n 'api/status' '$STUB_LOG' | head -1 | cut -d: -f1)\" -lt \"\$(grep -n 'compose.*up -d faucet' '$STUB_LOG' | head -1 | cut -d: -f1)\" ]"
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_QUEUE_DEPTHS="3" REDEPLOY_DRAIN_WAIT=3 bash "$REDEPLOY" > "$T/drain-stuck.log" 2>&1
+check "a queue that never empties is given the bound, then replaced anyway with a warning" \
+  "[ $? -eq 0 ] && grep -q 'WARNING: 3 send(s) still in flight after 3s' '$T/drain-stuck.log' && grep -q 'compose.*up -d faucet' '$STUB_LOG'"
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_QUEUE_DEPTHS="none" bash "$REDEPLOY" > "$T/drain-none.log" 2>&1
+check "a status body with no queue depth (an older build) is not waited on" \
+  "[ $? -eq 0 ] && grep -q 'could not read the send queue depth' '$T/drain-none.log' && ! grep -q 'waiting for' '$T/drain-none.log'"
+
 echo "== redeploy: a build failure never touches the running faucet"
 redeploy_env
 touch "$STUB_HEALTH" "$STUB_READY"

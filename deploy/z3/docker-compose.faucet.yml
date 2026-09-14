@@ -34,12 +34,21 @@ services:
       dockerfile: Dockerfile
     image: zcash-faucet:latest
     <<: *common
+    # DRAIN BEFORE DYING (risk register II, R-27). Every merge recreates this container
+    # and compose stops the old one with SIGTERM; a z_sendmany mid-flight was broadcast
+    # by the wallet and forgotten by us. The app now refuses new claims on SIGTERM and
+    # waits for its send queues (FAUCET_DRAIN_MAX_MS, 40 s); this has to be longer than
+    # that or docker's SIGKILL at the default 10 s wins and nothing drains.
+    stop_grace_period: 50s
     env_file:
       - path: ./faucet.env
         required: true
     environment:
       NODE_ENV: production
       PORT: "3000"
+      # Leave SIGTERM to the app (src/instrumentation.ts); Next's own handler exits at
+      # once. Without this the drain above is dead code.
+      NEXT_MANUAL_SIG_HANDLE: "true"
       # Shielded backend: pay z→z through z3's Zallet over the shared network.
       FAUCET_SENDER: zallet
       ZALLET_RPC_URL: http://zallet:28232/

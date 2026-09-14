@@ -14,6 +14,9 @@
 #                       not come up, so it must still roll back. Collapsing 7 into 28
 #                       was a regression, and the stub could not express either (#229).
 #   $STUB_READY_REASON  the reason string to put in the 503 body.
+#   $STUB_QUEUE_DEPTHS  /api/status answers queueDepth from this space-separated list,
+#                       one value per call, the last value repeating. Empty (the
+#                       default) answers 0. "none" answers a body with no queueDepth.
 #
 # Two calling conventions, because the callers differ. With -f (probe(), health) an
 # HTTP error is exit 22 and the body is discarded, which is what curl does. WITHOUT
@@ -66,5 +69,16 @@ case "$*" in
       fi
     fi
     answer 200 '{"ready":true,"reason":null}' ;;
+  */api/status*)
+    # The send queue's depth, for the drain wait (R-27): a sequence so a test can make
+    # the queue empty partway through the wait, the way a real send finishes.
+    depths="${STUB_QUEUE_DEPTHS:-0}"
+    count_file="${STUB_LOG}.status-count"
+    n=$(( $(cat "$count_file" 2>/dev/null || echo 0) + 1 ))
+    echo "$n" > "$count_file"
+    d=""
+    i=0
+    for v in $depths; do i=$((i + 1)); d="$v"; [ "$i" -ge "$n" ] && break; done
+    if [ "$d" = "none" ]; then answer 200 '{"buildCommit":"stub"}'; else answer 200 "{\"buildCommit\":\"stub\",\"queueDepth\":$d}"; fi ;;
   *) answer 404 '' ;;
 esac

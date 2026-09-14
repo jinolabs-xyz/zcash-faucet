@@ -27,6 +27,8 @@ const PORT_H = 3216; // H for HOUSEHOLD: several addresses behind one forwarded 
 const PORT_I = 3217; // I for the /24: the subnet cap, the one refusal that must NOT carry a clock time
 const PORT_J = 3218; // J for a wallet that answers balances and FAILS every send
 const PORT_K = 3219; // K for the daily CAP: one drip a day, so the refusal's clock can be read
+const PORT_L = 3220; // L for the DRAIN with a send stuck in the queue (R-27)
+const PORT_M = 3221; // M for the drain with an empty queue: exits at once
 // Somewhere to keep the output of the server that is supposed to die, so the
 // assertion can check WHY it died rather than only that it did.
 const LOG_DIR = mkdtempSync(join(tmpdir(), "faucet-api-integration-"));
@@ -39,6 +41,8 @@ const BASE_H = `http://localhost:${PORT_H}`;
 const BASE_I = `http://localhost:${PORT_I}`;
 const BASE_J = `http://localhost:${PORT_J}`;
 const BASE_K = `http://localhost:${PORT_K}`;
+const BASE_L = `http://localhost:${PORT_L}`;
+const BASE_M = `http://localhost:${PORT_M}`;
 
 let failures = 0;
 const ok = (name, cond, detail = "") => {
@@ -394,6 +398,46 @@ const serverK = boot(PORT_K, {
   FAUCET_IP_DAILY_MAX: "10",
   FAUCET_SUBNET_DAILY_MAX: "100000",
 });
+// L and M own their SIGTERM (NEXT_MANUAL_SIG_HANDLE): the app drains before exiting
+// (R-27). L's wallet never finishes a send, so its queue stays busy and the drain has to
+// give up at its bound; M's is healthy, so an empty queue lets it exit at once.
+//
+// BOOTED THE WAY THE CONTAINER BOOTS: node running next directly, so the process we
+// signal is the process docker signals (the Dockerfile's exec-form CMD makes node PID 1).
+// `npm run start` puts npm and, on Linux, a non-exec'ing sh above node, and a SIGTERM
+// to npm never reached node there; the first version of this test found the listener
+// with lsof and signalled it directly, which proved a path docker does not take.
+const bootDirect = (port, env) =>
+  spawn("node", ["node_modules/next/dist/bin/next", "start", "-H", "0.0.0.0", "-p", String(port)], {
+    env: { ...process.env, PORT: String(port), ...env },
+    stdio: "ignore",
+  });
+const WALLET_L = 28333;
+const walletL = spawn("node", ["scripts/fake-zallet.mjs"], {
+  env: { ...process.env, PORT: String(WALLET_L), BALANCE_TAZ: "10", SEND_HANGS: "true" },
+  stdio: "ignore",
+  detached: true,
+});
+const serverL = bootDirect(PORT_L, {
+  ...zallet(WALLET_L),
+  ...chainView,
+  FAUCET_CHALLENGE: "none",
+  SEND_TASK_DEADLINE_MS: "1500",
+  ZALLET_OP_TIMEOUT_MS: "600000",
+  NEXT_MANUAL_SIG_HANDLE: "true",
+  FAUCET_DRAIN_MAX_MS: "3000",
+  RATE_LIMIT_SALT: "integration-test-salt-l",
+});
+const WALLET_M = 28334;
+const walletM = wallet(WALLET_M, 10);
+const serverM = bootDirect(PORT_M, {
+  ...zallet(WALLET_M),
+  ...chainView,
+  FAUCET_CHALLENGE: "none",
+  NEXT_MANUAL_SIG_HANDLE: "true",
+  FAUCET_DRAIN_MAX_MS: "10000",
+  RATE_LIMIT_SALT: "integration-test-salt-m",
+});
 const serverJ = boot(PORT_J, {
   ...zallet(WALLET_J),
   ...chainView,
@@ -419,7 +463,7 @@ try {
   // false: this fixture serves no testnet row BY DESIGN, so requiring one would
   // hang and then throw. Responding at all is the whole requirement.
   await waitHosh(false, 15_000, HOSH_EMPTY_PORT);
-  await Promise.all([waitReady(BASE_A), waitReady(BASE_B), waitReady(BASE_C), waitReady(BASE_D), waitReady(BASE_E), waitReady(BASE_H), waitReady(BASE_I), waitReady(BASE_J), waitReady(BASE_K)]);
+  await Promise.all([waitReady(BASE_A), waitReady(BASE_B), waitReady(BASE_C), waitReady(BASE_D), waitReady(BASE_E), waitReady(BASE_H), waitReady(BASE_I), waitReady(BASE_J), waitReady(BASE_K), waitReady(BASE_L), waitReady(BASE_M)]);
 
   /* ── A: /api/status shape ────────────────────────────────────────────── */
   const status = await get(BASE_A, "/api/status");
@@ -828,6 +872,33 @@ try {
   ok("K and it carries a retryAfterSeconds inside the day", typeof capped.body.retryAfterSeconds === "number" && capped.body.retryAfterSeconds > 0 && capped.body.retryAfterSeconds <= 86_400, JSON.stringify(capped.body.retryAfterSeconds));
   ok("K and when, as a clock time that agrees with the duration", Number.isFinite(capNextMs) && Math.abs(capNextMs - Date.now() - (capped.body.retryAfterSeconds ?? 0) * 1000) < 5_000, `${capped.body.nextAt} vs +${capped.body.retryAfterSeconds}s`);
 
+  // ── L and M: THE PROCESS DRAINS BEFORE IT DIES (risk register II, R-27) ──────────
+  // Every merge recreates the container and compose stops the old one with SIGTERM.
+  // The app owns that signal now: new claims are refused with a 503 the page renders
+  // as a countdown, the send queues are given a bounded wait, and only then does the
+  // process exit. The signal goes to the process we spawned, which IS next-server
+  // here (bootDirect), the way docker delivers it to PID 1.
+  const portOpen = async (base) => { try { await fetch(base + "/api/health", { signal: AbortSignal.timeout(500) }); return true; } catch { return false; } };
+  const untilClosed = async (base, ms) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (!(await portOpen(base))) return Date.now() - t0; await new Promise((r) => setTimeout(r, 100)); } return null; };
+  const lIp = `192.0.4.${runByte}`;
+  const fromL = async () => {
+    const address = (await post(BASE_L, "/api/account", { type: "transparent" })).body.account?.address ?? "";
+    return req(BASE_L, "/api/faucet", { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": lIp }, body: JSON.stringify({ address }) });
+  };
+  const stuck = await fromL();
+  ok("L a hung send is a 504 and the queue keeps its slot", stuck.status === 504 && (await get(BASE_L, "/api/status")).body.queueDepth === 1, `status ${stuck.status}`);
+  const lSignalled = Date.now();
+  process.kill(serverL.pid, "SIGTERM");
+  await new Promise((r) => setTimeout(r, 300));
+  const refused = await fromL();
+  ok("L after SIGTERM the app is still up and refuses a new claim as restarting, before any gate", refused.status === 503 && refused.body.kind === "restarting" && refused.body.retryAfterSeconds === 20, `${refused.status} ${refused.body.kind ?? ""} ${refused.body.error ?? ""}`);
+  const lClosedAfter = await untilClosed(BASE_L, 12_000);
+  ok("L with the queue still busy it exits at its 3 s bound, not before and not never", lClosedAfter != null && Date.now() - lSignalled >= 2_800 && Date.now() - lSignalled < 9_000, `closed after ${lClosedAfter}ms (signalled ${Date.now() - lSignalled}ms ago)`);
+  const mSignalled = Date.now();
+  process.kill(serverM.pid, "SIGTERM");
+  const mClosedAfter = await untilClosed(BASE_M, 8_000);
+  ok("M with an empty queue it exits at once, well inside its 10 s bound", mClosedAfter != null && Date.now() - mSignalled < 3_000, `closed after ${mClosedAfter}ms`);
+
   const statusE = await get(BASE_E, "/api/status");
   ok(
     "E the tip is genuinely unknown, not merely stale",
@@ -925,6 +996,10 @@ try {
   stop(serverJ);
   stop(walletJ);
   stop(serverK);
+  try { serverL.kill("SIGKILL"); } catch { /* already gone */ }
+  stop(walletL);
+  try { serverM.kill("SIGKILL"); } catch { /* already gone */ }
+  stop(walletM);
   stop(walletK);
   stop(serverA);
   stop(serverB);

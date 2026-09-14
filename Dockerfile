@@ -26,5 +26,12 @@ WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /app ./
 EXPOSE 3000
-# Render/most platforms inject PORT; the start script binds 0.0.0.0:$PORT.
-CMD ["npm", "run", "start"]
+# NODE IS PID 1, on purpose (risk register II, R-27). `npm run start` made npm PID 1
+# with `sh -c "next start"` under it, and dash (this image's sh) does not exec its
+# command, so docker's SIGTERM reached npm, npm forwarded it to sh, sh died, npm exited
+# and docker SIGKILLed the orphaned node: the app never saw the signal and the drain in
+# src/instrumentation.ts was dead code in production, while passing on a laptop whose
+# sh does exec (found by the #529 review, in this image). Exec form, node directly,
+# same flags as package.json's start script; the port is fixed here because compose
+# sets PORT=3000 and exec form cannot expand an env var.
+CMD ["node", "node_modules/next/dist/bin/next", "start", "-H", "0.0.0.0", "-p", "3000"]

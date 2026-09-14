@@ -19,6 +19,7 @@ import { mayBuildTransaction, readChainFreshnessAsking, freshnessRefusalText } f
 import { mayBuildFromWallet, walletLagFreshness } from "@/lib/zcash/walletLagGate";
 import { getSendQueue, getCtazSendQueue, QueueFullError, TaskDeadlineError } from "@/lib/zcash/queue";
 import { readSendHealth, recordSend, sendHealthBlocksServing, WINDOW_MS as SEND_HEALTH_WINDOW_MS } from "@/lib/zcash/sendHealth";
+import { DRAIN_RETRY_SECONDS, isDraining } from "@/lib/drain";
 import { DEFAULT_NETWORK, NETWORKS, parseNetwork } from "@/lib/network";
 import { canServeCtaz } from "@/lib/crosslink/recency";
 import { readCtazNodeState } from "@/lib/crosslink/read";
@@ -110,6 +111,17 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     network === "ctaz"
       ? { amountZat: config.crosslink.expectedZat, dailyCapZat: config.crosslink.dailyCapZatoshi }
       : { amountZat: config.dripZatoshi, dailyCapZat: config.dailyCapZatoshi };
+
+  // 1.4. RESTARTING (risk register II, R-27): the process has been told to stop and is
+  //    letting in-flight sends finish. New work is refused before any gate so nothing
+  //    is reserved and no proof is spent; the page shows this as our side, not theirs,
+  //    with a countdown, and the replacement container answers by then.
+  if (isDraining()) {
+    return apiError(503, "The faucet is restarting and will be back in a moment. Nothing was claimed and no proof-of-work was spent.", api, {
+      kind: "restarting",
+      retryAfterSeconds: DRAIN_RETRY_SECONDS,
+    });
+  }
 
   // 1.5. SENDS ARE FAILING: refuse HERE, before the proof-of-work is verified and
   //    counted (risk register II, R-32). The verdict is the one /api/ready pages on, so
