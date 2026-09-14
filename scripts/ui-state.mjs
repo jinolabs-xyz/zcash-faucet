@@ -49,6 +49,7 @@ const DIMENSIONS = {
     ready: "balance well above the low mark",
     empty: "no balance at all",
     "topping-up": "balance inside the hysteresis band with shielding permitted",
+    "sends-failing": "balance reads fine, every send fails; three claims judge it and the page goes DEGRADED",
   },
 };
 
@@ -163,6 +164,10 @@ const wallet = {
   // Inside the band, and shielding permitted, so the reserve loop actually engages
   // rather than reporting that it is forbidden to act.
   "topping-up": { BALANCE_TAZ: "15", FAUCET_RESERVE_LOW_TAZ: "5", FAUCET_RESERVE_TARGET_TAZ: "30", FAUCET_SHIELD_COINBASE: "true", FAUCET_MINER_ACTIVE: "true" },
+  // The verdict needs three decided sends inside fifteen minutes, so this state starts
+  // LIVE: make three claims (each fails with a 502) and the badge turns DEGRADED, the
+  // button is held, and a further claim is refused before any proof-of-work is asked.
+  "sends-failing": { BALANCE_TAZ: "15", SEND_FAILS: "true" },
 }[chosen.wallet];
 
 const children = [];

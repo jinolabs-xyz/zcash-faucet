@@ -6,6 +6,7 @@ import { readBoxIntegrity } from "@/lib/boxIntegrityFile";
 import { pingBackend } from "@/lib/zcash/lightwalletd";
 import { safeBalance } from "@/lib/zcash/send";
 import { getSendQueue } from "@/lib/zcash/queue";
+import { readSendHealth } from "@/lib/zcash/sendHealth";
 import { countDrips } from "@/lib/db";
 import { getNodeStatus } from "@/lib/zcash/nodeStatus";
 import { getReserveReconciler } from "@/lib/reserve/reconciler";
@@ -102,6 +103,12 @@ export const GET = withApi("status", async () => {
     // same: show nothing rather than a doubtful address for real funds.
     maintenanceAddress: config.maintenanceAddress,
     queueDepth: getSendQueue().depth,
+    // THE MONEY-PATH VERDICT, on the endpoint the page polls (risk register II, R-32).
+    // /api/ready has carried it since #457 and nothing else read it: with every send
+    // failing, ready answered 503 "3 of the last 3 sends failed" while this endpoint,
+    // the badge and the claim button all said LIVE, and each visitor paid proof-of-work
+    // into a wallet the faucet had already judged, at +2 bits per retry.
+    sends: readSendHealth(),
     // How many drips this faucet has served: ever, last 7 UTC days, last 30. From the
     // privacy-safe per-day counter, not the claims table, whose rows retention deletes.
     // Null when the ledger will not answer; an unknown count is not zero.

@@ -25,6 +25,7 @@ const PORT_E = 3214;
 const PORT_F = 3215; // boots only to prove it dies
 const PORT_H = 3216; // H for HOUSEHOLD: several addresses behind one forwarded IP
 const PORT_I = 3217; // I for the /24: the subnet cap, the one refusal that must NOT carry a clock time
+const PORT_J = 3218; // J for a wallet that answers balances and FAILS every send
 // Somewhere to keep the output of the server that is supposed to die, so the
 // assertion can check WHY it died rather than only that it did.
 const LOG_DIR = mkdtempSync(join(tmpdir(), "faucet-api-integration-"));
@@ -35,6 +36,7 @@ const BASE_D = `http://localhost:${PORT_D}`;
 const BASE_E = `http://localhost:${PORT_E}`;
 const BASE_H = `http://localhost:${PORT_H}`;
 const BASE_I = `http://localhost:${PORT_I}`;
+const BASE_J = `http://localhost:${PORT_J}`;
 
 let failures = 0;
 const ok = (name, cond, detail = "") => {
@@ -84,6 +86,11 @@ const post = (base, path, body) =>
   req(base, path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 const claim = (base, address, pow) => post(base, "/api/faucet", { address, ...(pow ? { pow } : {}) });
 
+async function solvedChallengeFrom(base, ip) {
+  const { status, body } = await req(base, "/api/pow/challenge", { headers: { "x-forwarded-for": ip } });
+  if (status !== 200 || !body.seed) throw new Error(`challenge fetch failed: ${status}`);
+  return { seed: body.seed, difficulty: body.difficulty, exp: body.exp, sig: body.sig, nonce: solve(body) };
+}
 async function solvedChallenge(base) {
   const { status, body } = await get(base, "/api/pow/challenge");
   if (status !== 200 || !body.seed) throw new Error(`challenge fetch failed: ${status}`);
@@ -207,6 +214,14 @@ const WALLET_H = 28329; // 28327 was E's, and the second fake-zallet died silent
 const walletH = wallet(WALLET_H, 10);
 const WALLET_I = 28330;
 const walletI = wallet(WALLET_I, 10);
+// J's wallet reads a healthy balance and refuses every send: the "balance reads, send
+// throws" state the send-health verdict exists for.
+const WALLET_J = 28331;
+const walletJ = spawn("node", ["scripts/fake-zallet.mjs"], {
+  env: { ...process.env, PORT: String(WALLET_J), BALANCE_TAZ: "10", SEND_FAILS: "true" },
+  stdio: "ignore",
+  detached: true,
+});
 // E's wallet is healthy too. E's oracle is the one that has nothing to say.
 const WALLET_E = 28327;
 const walletE = wallet(WALLET_E, 10);
@@ -358,6 +373,20 @@ const serverI = boot(PORT_I, {
   FAUCET_IP_DAILY_MAX: "5",
   FAUCET_SUBNET_DAILY_MAX: "2",
 });
+// J: sends fail, the verdict must reach the endpoint the page polls and the claim route
+// must refuse before proof-of-work (risk register II, R-32). Challenge ON here, because
+// the point is that no proof is asked for or counted once the wallet is judged.
+const serverJ = boot(PORT_J, {
+  ...zallet(WALLET_J),
+  ...chainView,
+  FAUCET_CHALLENGE: "pow",
+  FAUCET_POW_BITS: "8",
+  FAUCET_POW_ESCALATE_BITS: "2",
+  RATE_LIMIT_SALT: "integration-test-salt-j",
+  TRUSTED_PROXY_COUNT: "1",
+  FAUCET_IP_DAILY_MAX: "10",
+  FAUCET_SUBNET_DAILY_MAX: "100000",
+});
 
 try {
   // Wait for the oracle double BEFORE the apps are usable. If an app's first
@@ -372,7 +401,7 @@ try {
   // false: this fixture serves no testnet row BY DESIGN, so requiring one would
   // hang and then throw. Responding at all is the whole requirement.
   await waitHosh(false, 15_000, HOSH_EMPTY_PORT);
-  await Promise.all([waitReady(BASE_A), waitReady(BASE_B), waitReady(BASE_C), waitReady(BASE_D), waitReady(BASE_E), waitReady(BASE_H), waitReady(BASE_I)]);
+  await Promise.all([waitReady(BASE_A), waitReady(BASE_B), waitReady(BASE_C), waitReady(BASE_D), waitReady(BASE_E), waitReady(BASE_H), waitReady(BASE_I), waitReady(BASE_J)]);
 
   /* ── A: /api/status shape ────────────────────────────────────────────── */
   const status = await get(BASE_A, "/api/status");
@@ -718,6 +747,47 @@ try {
   ok("I and the refusal is the SUBNET rule, as a field", n3.body.kind === "subnet", JSON.stringify({ kind: n3.body.kind, scope: n3.body.scope }));
   ok("I and it carries a duration but NO clock time, because a fixed hour is not a measured expiry", typeof n3.body.retryAfterSeconds === "number" && !("nextAt" in n3.body), JSON.stringify(n3.body));
 
+  /* ── J: a wallet that fails every send ─────────────────────────────────── */
+  // Three visitors each solve a proof and get a 502. After the third the faucet has
+  // judged the wallet (readiness refuses on it and the watchdog pages). Before this
+  // change /api/status and the page still said LIVE, and the fourth visitor solved a
+  // proof at +2 bits into it. Now: status carries the verdict, and the claim route
+  // refuses before the challenge is looked at, with nothing spent.
+  const jIp = `192.0.2.${runByte}`; // TEST-NET-1: its own /24, away from H and I
+  const fromJ = async (pow) => {
+    const address = (await post(BASE_J, "/api/account", { type: "transparent" })).body.account?.address ?? "";
+    return req(BASE_J, "/api/faucet", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-forwarded-for": jIp },
+      body: JSON.stringify({ address, ...(pow ? { pow } : {}) }),
+    });
+  };
+  const jPow = () => solvedChallengeFrom(BASE_J, jIp);
+  const j1 = await fromJ(await jPow());
+  const j2 = await fromJ(await jPow());
+  const j3 = await fromJ(await jPow());
+  ok("J three sends fail as 502, each after a solved proof", j1.status === 502 && j2.status === 502 && j3.status === 502, `${j1.status} ${j2.status} ${j3.status}`);
+  const statusJ = await get(BASE_J, "/api/status");
+  ok("J /api/status now carries the send-health verdict the page can read", statusJ.body.sends?.state === "degraded" && statusJ.body.sends.failed >= 3, JSON.stringify(statusJ.body.sends));
+  const readyJ = await get(BASE_J, "/api/ready");
+  ok("J and /api/ready agrees", readyJ.status === 503 && /sends failing/.test(readyJ.body.reason ?? ""), `${readyJ.status} ${readyJ.body.reason ?? ""}`);
+  // The fourth visitor: no proof solved, a bare POST. Refused by the send-health gate
+  // BEFORE the challenge step, so the answer is 503 with the sends kind, not 403.
+  const j4 = await fromJ(null);
+  ok("J a claim with no proof is refused by the send-health gate, 503, before the challenge is asked for", j4.status === 503 && j4.body.kind === "sends", `${j4.status} ${JSON.stringify(j4.body)}`);
+  ok("J and it says nothing was claimed and no proof was spent, with a retry-after", /no proof-of-work was spent/.test(j4.body.error ?? "") && typeof j4.body.retryAfterSeconds === "number", JSON.stringify(j4.body));
+  // And the challenge difficulty did not climb for the refusal. WITH A SOLVED PROOF on
+  // the refused claim: a bare POST is refused before verifySolution with or without the
+  // gate (403 "proof required"), so it proved nothing about escalation; review deleted
+  // the gate and this stayed green. A solved proof is what the gate must turn away
+  // before it is verified and counted: gate present, 503 and 14 -> 14; gate absent,
+  // verified, recorded, 502 and 14 -> 16.
+  const chalBefore = (await req(BASE_J, "/api/pow/challenge", { headers: { "x-forwarded-for": jIp } })).body;
+  const j5 = await fromJ(await jPow());
+  const chalAfter = (await req(BASE_J, "/api/pow/challenge", { headers: { "x-forwarded-for": jIp } })).body;
+  ok("J a claim WITH a solved proof is still refused by the gate, not by the wallet", j5.status === 503 && j5.body.kind === "sends", `${j5.status} ${j5.body.kind ?? ""}`);
+  ok("J a refusal that was ours does not escalate the next challenge", chalBefore.difficulty === chalAfter.difficulty, `${chalBefore.difficulty} -> ${chalAfter.difficulty}`);
+
   const statusE = await get(BASE_E, "/api/status");
   ok(
     "E the tip is genuinely unknown, not merely stale",
@@ -812,6 +882,8 @@ try {
   stop(walletH);
   stop(serverI);
   stop(walletI);
+  stop(serverJ);
+  stop(walletJ);
   stop(serverA);
   stop(serverB);
   stop(serverC);

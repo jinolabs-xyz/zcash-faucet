@@ -17,7 +17,7 @@ import type { MinerReading } from "@/lib/miner/heartbeat";
 // state is on screen for over half a second on localhost and longer over a network.
 // It used to render as "syncing", which told a first-time visitor that a healthy
 // faucet was busy coming up.
-type Phase = "checking" | "syncing" | "queued" | "empty" | "ready" | "submitting" | "success" | "cooldown" | "error";
+type Phase = "checking" | "syncing" | "queued" | "empty" | "degraded" | "ready" | "submitting" | "success" | "cooldown" | "error";
 
 // The two states where we cannot send yet, for different reasons: we have not asked,
 // or we asked and the node is not ready. They differ in what the page SAYS and agree
@@ -35,6 +35,10 @@ interface Status {
   balanceTaz: number | null;
   empty: boolean;
   queueDepth?: number;
+  /** The money-path verdict /api/ready pages on, now on the endpoint the page polls
+   * (risk register II, R-32). Optional: a deploy older than this sends none, and absent
+   * must read as "not judged", never as healthy. */
+  sends?: { state: "ok" | "degraded" | "unknown"; ok: number; failed: number; unknown: number; reason: string };
   /** Drips served: ever, last 7 UTC days, last 30. Null (or absent, from an older
    * deploy) means the ledger would not answer, which is unknown, never zero. */
   drips?: { allTime: number; last7d: number; last30d: number } | null;
@@ -349,6 +353,12 @@ export default function Home() {
     if (s.node && s.node.canBuildTx === false) return "syncing";
     if (s.balanceTaz == null) return "syncing";
     if (s.balanceTaz <= 0 || s.empty) return "empty";
+    // The wallet answers balances and fails sends. Readiness has refused on this since
+    // #457 and the watchdog pages on it; the page said LIVE and invited every visitor
+    // to solve a proof-of-work into it, escalating per retry. Only a DEFINITE verdict
+    // holds: "unknown" is too few sends to judge, and a judgement nobody can make must
+    // not close the faucet.
+    if (s.sends?.state === "degraded") return "degraded";
     return "ready";
   }, []);
 
@@ -537,6 +547,15 @@ export default function Home() {
     const c = check(address);
     if (!c.ok) { setTouched(true); return; }
     if (!target && keyUnseen(address)) return;
+    // Held phases are held for the keyboard and for the error card's "Try again" too:
+    // the button is disabled, but Enter in the address field and Try again land here
+    // directly. Judged from the LIVE status, not from `phase`: the visitor whose failed
+    // send tipped the verdict is sitting on the 502 card, phase "error", and their Try
+    // again must land on the degraded card rather than solve a proof into the wallet.
+    // A 503 rendered as "Send failed" under a card that says "not taking claims" would
+    // be two stories on one screen, so this also leaves the flow.
+    if (!target && basePhase(status, network) === "degraded") { inFlow.current = false; setPhase("degraded"); return; }
+    if (!target && phase === "empty") return;
     if (sending.current) return;
     // Node still syncing: hold the claim instead of turning the user away.
     // It fires on its own the moment the node is ready (the effect above).
@@ -632,6 +651,12 @@ export default function Home() {
       } else if (res.status === 503 && /empty/i.test(data.error || "")) {
         inFlow.current = false;
         setPhase("empty");
+      } else if (res.status === 503 && data.kind === "sends") {
+        // The wallet was judged between this page's last poll and the POST: the reply
+        // is the verdict, so the page shows it rather than a red card that says the
+        // send failed (it was never attempted) under a badge that says LIVE.
+        inFlow.current = false;
+        setPhase("degraded");
       } else {
         setErrMsg(data.error || "The send didn't go through. Nothing left the wallet.");
         setPhase("error");
@@ -753,7 +778,7 @@ export default function Home() {
   // dot must keep saying so, or the header claims a readiness we do not have.
   // "checking" is not live. Leaving it out here made the badge read LIVE before the
   // first status arrived, a louder lie than the "syncing" it replaced.
-  const live = !holding(phase) && phase !== "queued";
+  const live = !holding(phase) && phase !== "queued" && phase !== "degraded";
   const node = status?.node;
   const syncPct = node?.syncPercent ?? null;
   // Never rounds up to 100 while the node is unready: 99.994 printed as "100%" beside
@@ -818,7 +843,9 @@ export default function Home() {
       ? "PREPARING"
       : phase === "empty"
         ? (refilling ? "TOPPING UP" : "EMPTY")
-        : "LIVE";
+        : phase === "degraded"
+          ? "DEGRADED"
+          : "LIVE";
   // Colour carries the state, and red now means what red means. Redundant with
   // the badge text and the status region, never the only signal.
   const dot =
@@ -826,6 +853,8 @@ export default function Home() {
       ? refilling
         ? { fill: "var(--color-accent)", ring: "var(--color-accent)" } // topping up, calm
         : { fill: "var(--color-empty)", ring: "var(--color-empty)" } // genuinely empty
+      : phase === "degraded"
+        ? { fill: "var(--color-empty)", ring: "var(--color-empty)" } // a fault, and red means what red means
       : live
         ? { fill: "var(--color-live)", ring: "var(--color-live)" }
         : { fill: "transparent", ring: muted(45) }; // syncing, no alarm
@@ -839,6 +868,7 @@ export default function Home() {
     : phase === "queued" ? "Your claim is queued. It sends on its own when the node is ready."
     : phase === "syncing" ? "Node is syncing. The faucet will be ready shortly."
     : phase === "empty" ? (refilling ? "Topping up the reserve. Drips resume in a moment." : "The faucet is out of TAZ right now.")
+    : phase === "degraded" ? "Sends are failing right now, so the faucet is not taking claims. Nothing to do on your side."
     : phase === "submitting" ? (powState ? "Checking you are human. Nothing to do, it runs on its own." : "Sending your testnet ZEC. Keep this tab open.")
     : phase === "success" ? "Sent. Your testnet ZEC is on its way."
     : phase === "cooldown" ? "Already claimed. A drip went out on this address or this connection in the last 24 hours."
@@ -1090,7 +1120,7 @@ export default function Home() {
 
       <main style={{ flex: 1, width: "100%", maxWidth: 760, margin: "0 auto", padding: `clamp(22px,5vw,46px) ${pad} 60px`, display: "flex", flexDirection: "column", gap: 20 }}>
         <p className="sr-only" role="status">{announce}</p>
-        {(phase === "ready" || phase === "checking" || phase === "syncing" || phase === "empty") && (
+        {(phase === "ready" || phase === "checking" || phase === "syncing" || phase === "empty" || phase === "degraded") && (
           <div>
             <h1 style={{ fontSize: "clamp(27px,7.4vw,40px)", lineHeight: 1.08, letterSpacing: "-.025em", margin: "0 0 10px" }}>Get free testnet ZEC, sent privately.</h1>
             <p style={{ margin: 0, fontSize: 14.5, lineHeight: 1.55, color: muted(62), maxWidth: "46ch" }}>Paste a testnet address. The drip is shielded, so the amount and the recipient stay off the public ledger.</p>
@@ -1162,6 +1192,17 @@ export default function Home() {
           </div>
         )}
 
+        {phase === "degraded" && (
+          <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 9 }}>
+            <span style={kicker}>Not taking claims</span>
+            <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>Sends are failing on our side right now.</h2>
+            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
+              {status?.sends?.reason ? `${status.sends.reason.charAt(0).toUpperCase()}${status.sends.reason.slice(1)}. ` : ""}
+              The operator has been paged. Nothing you do here will change it, and no proof-of-work is asked for
+              while it lasts; this page re-checks on its own, and the button comes back when sends land again.
+            </p>
+          </div>
+        )}
         {phase === "empty" && !refilling && network === "taz" && (
           <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 9 }}>
             <span style={kicker}>Empty</span>
@@ -1283,7 +1324,7 @@ export default function Home() {
           </div>
         )}
 
-        {(phase === "ready" || phase === "checking" || phase === "syncing" || phase === "empty") && (
+        {(phase === "ready" || phase === "checking" || phase === "syncing" || phase === "empty" || phase === "degraded") && (
           <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
             <label htmlFor="zaddr" style={{ ...kicker, color: muted(60) }}>Your testnet address</label>
             <input id="zaddr" className="input" type="text" spellCheck={false} autoComplete="off" autoCapitalize="off" placeholder="utest1… / ztestsapling… / tm…" value={addr} onChange={(e) => { setAddr(e.target.value); setTouched(false); }} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} aria-describedby="addrmsg" />
@@ -1310,8 +1351,8 @@ export default function Home() {
                 <p aria-live="polite" className="sr-only">{copied === "key" ? "Spending key copied." : ""}</p>
               </div>
             )}
-            <button className="btn btn-primary" onClick={() => void submit()} disabled={phase === "empty" || (!!genKey && genKey.address === addr.trim() && !keyCopied && !keyShown)} style={{ width: "100%", justifyContent: "space-between" }}>
-              <span>{genKey && genKey.address === addr.trim() && !keyCopied && !keyShown ? "Copy the key first" : phase === "checking" ? "Checking status…" : phase === "syncing" ? "Queue it, sends when the node is ready" : phase === "empty" ? (refilling ? "Topping up, back in a moment" : "Waiting for a refill") : "Request " + dripText}</span>
+            <button className="btn btn-primary" onClick={() => void submit()} disabled={phase === "empty" || phase === "degraded" || (!!genKey && genKey.address === addr.trim() && !keyCopied && !keyShown)} style={{ width: "100%", justifyContent: "space-between" }}>
+              <span>{genKey && genKey.address === addr.trim() && !keyCopied && !keyShown ? "Copy the key first" : phase === "checking" ? "Checking status…" : phase === "syncing" ? "Queue it, sends when the node is ready" : phase === "empty" ? (refilling ? "Topping up, back in a moment" : "Waiting for a refill") : phase === "degraded" ? "Not taking claims right now" : "Request " + dripText}</span>
               <span aria-hidden="true">→</span>
             </button>
             <p style={{ margin: 0, fontSize: 11.5, letterSpacing: ".02em", color: muted(55), fontFamily: "var(--mono)" }}>{dripText} · once per address / 24h · shielded z→z</p>
