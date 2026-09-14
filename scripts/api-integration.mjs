@@ -11,7 +11,7 @@
 // with (@scure/base is an app dependency), so they stay checksum-valid by
 // construction and cannot drift from the validator.
 import { createHash } from "node:crypto";
-import { spawn, execSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { openSync, readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -401,13 +401,24 @@ const serverK = boot(PORT_K, {
 // L and M own their SIGTERM (NEXT_MANUAL_SIG_HANDLE): the app drains before exiting
 // (R-27). L's wallet never finishes a send, so its queue stays busy and the drain has to
 // give up at its bound; M's is healthy, so an empty queue lets it exit at once.
+//
+// BOOTED THE WAY THE CONTAINER BOOTS: node running next directly, so the process we
+// signal is the process docker signals (the Dockerfile's exec-form CMD makes node PID 1).
+// `npm run start` puts npm and, on Linux, a non-exec'ing sh above node, and a SIGTERM
+// to npm never reached node there; the first version of this test found the listener
+// with lsof and signalled it directly, which proved a path docker does not take.
+const bootDirect = (port, env) =>
+  spawn("node", ["node_modules/next/dist/bin/next", "start", "-H", "0.0.0.0", "-p", String(port)], {
+    env: { ...process.env, PORT: String(port), ...env },
+    stdio: "ignore",
+  });
 const WALLET_L = 28333;
 const walletL = spawn("node", ["scripts/fake-zallet.mjs"], {
   env: { ...process.env, PORT: String(WALLET_L), BALANCE_TAZ: "10", SEND_HANGS: "true" },
   stdio: "ignore",
   detached: true,
 });
-const serverL = boot(PORT_L, {
+const serverL = bootDirect(PORT_L, {
   ...zallet(WALLET_L),
   ...chainView,
   FAUCET_CHALLENGE: "none",
@@ -419,7 +430,7 @@ const serverL = boot(PORT_L, {
 });
 const WALLET_M = 28334;
 const walletM = wallet(WALLET_M, 10);
-const serverM = boot(PORT_M, {
+const serverM = bootDirect(PORT_M, {
   ...zallet(WALLET_M),
   ...chainView,
   FAUCET_CHALLENGE: "none",
@@ -865,9 +876,8 @@ try {
   // Every merge recreates the container and compose stops the old one with SIGTERM.
   // The app owns that signal now: new claims are refused with a 503 the page renders
   // as a countdown, the send queues are given a bounded wait, and only then does the
-  // process exit. The signal goes to the LISTENING process (next-server), the way
-  // docker delivers it, not to the npm wrapper.
-  const listenerPid = (port) => Number(execSync(`lsof -ti tcp:${port} -sTCP:LISTEN`, { encoding: "utf8" }).trim().split("\n")[0]);
+  // process exit. The signal goes to the process we spawned, which IS next-server
+  // here (bootDirect), the way docker delivers it to PID 1.
   const portOpen = async (base) => { try { await fetch(base + "/api/health", { signal: AbortSignal.timeout(500) }); return true; } catch { return false; } };
   const untilClosed = async (base, ms) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (!(await portOpen(base))) return Date.now() - t0; await new Promise((r) => setTimeout(r, 100)); } return null; };
   const lIp = `192.0.4.${runByte}`;
@@ -877,17 +887,15 @@ try {
   };
   const stuck = await fromL();
   ok("L a hung send is a 504 and the queue keeps its slot", stuck.status === 504 && (await get(BASE_L, "/api/status")).body.queueDepth === 1, `status ${stuck.status}`);
-  const lPid = listenerPid(PORT_L);
   const lSignalled = Date.now();
-  process.kill(lPid, "SIGTERM");
+  process.kill(serverL.pid, "SIGTERM");
   await new Promise((r) => setTimeout(r, 300));
   const refused = await fromL();
   ok("L after SIGTERM the app is still up and refuses a new claim as restarting, before any gate", refused.status === 503 && refused.body.kind === "restarting" && refused.body.retryAfterSeconds === 20, `${refused.status} ${refused.body.kind ?? ""} ${refused.body.error ?? ""}`);
   const lClosedAfter = await untilClosed(BASE_L, 12_000);
   ok("L with the queue still busy it exits at its 3 s bound, not before and not never", lClosedAfter != null && Date.now() - lSignalled >= 2_800 && Date.now() - lSignalled < 9_000, `closed after ${lClosedAfter}ms (signalled ${Date.now() - lSignalled}ms ago)`);
-  const mPid = listenerPid(PORT_M);
   const mSignalled = Date.now();
-  process.kill(mPid, "SIGTERM");
+  process.kill(serverM.pid, "SIGTERM");
   const mClosedAfter = await untilClosed(BASE_M, 8_000);
   ok("M with an empty queue it exits at once, well inside its 10 s bound", mClosedAfter != null && Date.now() - mSignalled < 3_000, `closed after ${mClosedAfter}ms`);
 
@@ -988,9 +996,9 @@ try {
   stop(serverJ);
   stop(walletJ);
   stop(serverK);
-  stop(serverL);
+  try { serverL.kill("SIGKILL"); } catch { /* already gone */ }
   stop(walletL);
-  stop(serverM);
+  try { serverM.kill("SIGKILL"); } catch { /* already gone */ }
   stop(walletM);
   stop(walletK);
   stop(serverA);

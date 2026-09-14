@@ -39,7 +39,13 @@ export async function register() {
     const { drain } = await import("@/lib/drain");
     const { getSendQueue, getCtazSendQueue } = await import("@/lib/zcash/queue");
     const boundMs = Math.max(1000, Math.floor(Number(process.env.FAUCET_DRAIN_MAX_MS ?? 40_000)));
+    let signalled = false;
     const onSignal = (signal: NodeJS.Signals) => {
+      // A second signal while draining is ignored rather than fatal: with `once` the
+      // listener would be gone and Node's default for SIGTERM is immediate exit, which
+      // is exactly the death this exists to prevent.
+      if (signalled) { console.log(`[drain] ${signal} again, already draining`); return; }
+      signalled = true;
       const depth = () => getSendQueue().depth + getCtazSendQueue().depth;
       const at = depth();
       console.log(`[drain] ${signal}: refusing new claims, ${at} send(s) in flight, waiting up to ${boundMs}ms`);
@@ -48,8 +54,8 @@ export async function register() {
         process.exit(0);
       });
     };
-    process.once("SIGTERM", onSignal);
-    process.once("SIGINT", onSignal);
+    process.on("SIGTERM", onSignal);
+    process.on("SIGINT", onSignal);
   }
 
   // Farming visibility (#196). Its own slow timer rather than a route, because these

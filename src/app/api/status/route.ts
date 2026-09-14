@@ -5,7 +5,7 @@ import { classifyIntegrity } from "@/lib/boxIntegrity";
 import { readBoxIntegrity } from "@/lib/boxIntegrityFile";
 import { pingBackend } from "@/lib/zcash/lightwalletd";
 import { safeBalance } from "@/lib/zcash/send";
-import { getSendQueue } from "@/lib/zcash/queue";
+import { getCtazSendQueue, getSendQueue } from "@/lib/zcash/queue";
 import { readSendHealth } from "@/lib/zcash/sendHealth";
 import { countDrips } from "@/lib/db";
 import { getNodeStatus } from "@/lib/zcash/nodeStatus";
@@ -102,7 +102,9 @@ export const GET = withApi("status", async () => {
     // an empty string here means unset OR rejected, and the UI treats both the
     // same: show nothing rather than a doubtful address for real funds.
     maintenanceAddress: config.maintenanceAddress,
-    queueDepth: getSendQueue().depth,
+    // Both send queues: this is what redeploy.sh waits on before replacing the
+    // container, and the in-process drain waits on the same sum (R-27).
+    queueDepth: getSendQueue().depth + getCtazSendQueue().depth,
     // THE MONEY-PATH VERDICT, on the endpoint the page polls (risk register II, R-32).
     // /api/ready has carried it since #457 and nothing else read it: with every send
     // failing, ready answered 503 "3 of the last 3 sends failed" while this endpoint,
