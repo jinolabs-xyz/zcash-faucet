@@ -798,6 +798,8 @@ check "the probe step is the probe step, and the page step is the page step" \
 # (email only)", green, and no check moved.
 check "the probe step is handed the URL, the hatch and the off switch" \
   "grep -q 'SMOKE_URL: ..{ vars.FAUCET_LIVE_URL }' '$T/probe-step.yml' && grep -q 'SMOKE_ALLOW_UNREADY: ..{ vars.FAUCET_LIVE_ALLOW_UNREADY }' '$T/probe-step.yml' && grep -q 'SMOKE_DISABLED: ..{ vars.FAUCET_LIVE_SMOKE_DISABLED }' '$T/probe-step.yml'"
+check "the page step is handed the URL it re-probes, and the probe step's guards verdict" \
+  "grep -q 'SMOKE_URL: ..{ vars.FAUCET_LIVE_URL }' '$T/page-step.yml' && grep -q 'PROBE_GUARDS: ..{ steps.probe.outputs.guards }' '$T/page-step.yml'"
 check "the page step is handed the webhook secret and a token to read run history with" \
   "grep -q 'ALERT_URL: ..{ secrets.FAUCET_ALERT_URL }' '$T/page-step.yml' && grep -q 'GH_TOKEN: ..{ github.token }' '$T/page-step.yml'"
 # `failure() || cancelled()`, exactly. A job that hits its budget concludes cancelled, and
@@ -848,6 +850,9 @@ check "and neither is the certificate floor" \
 mkdir -p "$T/nodebin"
 printf '#!/usr/bin/env bash\necho "stub node ran: $*"\n' > "$T/nodebin/node"
 chmod +x "$T/nodebin/node"
+# GITHUB_OUTPUT is where the step records that its checks passed (the page step reads
+# it before re-probing, R-21); GitHub always sets it, so the runs here do too.
+export GITHUB_OUTPUT="$T/probe.out"; : > "$GITHUB_OUTPUT"
 ( cd "$REPO" && PATH="$T/nodebin:$BASE_PATH" SMOKE_URL="HTTPS://faucet.example.org" SMOKE_DISABLED="" \
     bash "$T/probe-step.sh" > "$T/upper.log" 2>&1 )
 rc=$?
@@ -855,6 +860,8 @@ check "an uppercase HTTPS:// is accepted, because new URL() normalises it and a 
   "[ $rc -eq 0 ] && ! grep -q 'which is not https' '$T/upper.log'"
 check "and the step really got past the scheme check, rather than exiting before it" \
   "grep -q 'stub node ran' '$T/upper.log'"
+check "and recorded guards=ok for the page step, BEFORE the probe ran" \
+  "grep -qx 'guards=ok' '$GITHUB_OUTPUT'"
 # The two other forms new URL() accepts. Refusing either pages a human for a variable that
 # would have worked, which is the harm the fold was added for.
 ( cd "$REPO" && PATH="$T/nodebin:$BASE_PATH" SMOKE_URL=" https://faucet.example.org " SMOKE_DISABLED="" \
@@ -872,12 +879,14 @@ check "nor one dropped slash, which the probe runs clean on" \
 
 # The probe step, run for real. `node scripts/live-probe.mjs` is never reached in these
 # two cases, which is the point: both must decide before probing anything.
+: > "$GITHUB_OUTPUT"
 ( cd "$REPO" && SMOKE_URL="" SMOKE_DISABLED="" bash "$T/probe-step.sh" > "$T/nourl.log" 2>&1 )
 rc=$?
 # Not just non-zero: bash exits 127 for a script that does not exist, so an extractor
 # that wrote nothing would have satisfied `-ne 0` while proving nothing ran.
 check "an unset FAUCET_LIVE_URL FAILS the step, rather than skipping green" "[ $rc -ne 0 ] && [ $rc -ne 127 ]"
 check "and says what it has been doing" "grep -q 'probed NOTHING' '$T/nourl.log'"
+check "and records NO guards=ok, so the page step will not re-probe a missing URL" "! grep -q 'guards=ok' '$GITHUB_OUTPUT'"
 ( cd "$REPO" && SMOKE_URL="" SMOKE_DISABLED="1" bash "$T/probe-step.sh" > "$T/off1.log" 2>&1 )
 check "the named off switch exits 0 with no URL" "[ $? -eq 0 ] && grep -q 'deliberately off' '$T/off1.log'"
 ( cd "$REPO" && SMOKE_URL="https://example.invalid" SMOKE_DISABLED="1" bash "$T/probe-step.sh" > "$T/off2.log" 2>&1 )
@@ -885,9 +894,16 @@ check "and ALSO with a URL set, which is when a maintenance window needs it" "[ 
 # Caddy 308s :80 to :443 and fetch follows redirects, so an http origin passes every
 # faucet check while the certificate check is skipped: off-box TLS monitoring absent for
 # ever behind a green run, from one mistyped variable.
+: > "$GITHUB_OUTPUT"
 ( cd "$REPO" && SMOKE_URL="http://faucet.example.org" SMOKE_DISABLED="" bash "$T/probe-step.sh" > "$T/http.log" 2>&1 )
 check "an http FAUCET_LIVE_URL FAILS the step rather than skipping the certificate check" \
   "[ $? -ne 0 ] && grep -q 'which is not https' '$T/http.log'"
+# THE RE-PROBE MUST NOT UNDO THIS. live-probe.mjs run bare follows Caddy's 308 and SKIPS the
+# certificate check on an http URL, so a re-probe that skipped the scheme check would
+# turn this refusal into "a blip, not paging" 25 minutes later (review of #525).
+check "and records NO guards=ok, so the re-probe cannot run the probe past a check it failed" \
+  "! grep -q 'guards=ok' '$GITHUB_OUTPUT'"
+unset GITHUB_OUTPUT
 
 # The page step, run for real against a stub gh/curl. This is the 30-minute rule.
 mkdir -p "$T/bin"
@@ -932,9 +948,12 @@ CURL
 # THE RE-PROBE (R-21): the page step sleeps and runs the probe again. Both are stubbed
 # so the case takes no 25 minutes, and both are logged so a case can say the wait was
 # asked for in full and the probe was the shipped one.
+# Logged to BOTH logs: its order against the gh query lives in gh.log, its order
+# against the probe in curl.log.
 cat > "$T/bin/sleep" <<'SLEEP'
 #!/usr/bin/env bash
 echo "sleep $*" >> "${STUB_CURL_LOG:?}"
+echo "sleep $*" >> "${STUB_GH_LOG:?}"
 exit 0
 SLEEP
 cat > "$T/bin/node" <<'NODE'
@@ -951,7 +970,7 @@ page_run() {
   printf '%s' "$1" > "$T/prev.json"
   ( cd "$REPO" && PATH="$T/bin:$BASE_PATH" STUB_PREV_JSON="$T/prev.json" STUB_GH_LOG="$STUB_GH_LOG" \
       ALERT_URL="https://hook.example/x" ALERT_FORMAT="" GH_TOKEN=x SMOKE_URL="https://f.example" \
-      PROBE_OUTCOME="${PAGE_PROBE_OUTCOME:-failure}" \
+      PROBE_OUTCOME="${PAGE_PROBE_OUTCOME:-failure}" PROBE_GUARDS="${PAGE_PROBE_GUARDS-ok}" \
       GITHUB_RUN_ID=999 GITHUB_SERVER_URL=https://github.com GITHUB_REPOSITORY=o/r \
       bash "$T/page-step.sh" > "$T/page.log" 2>&1 )
 }
@@ -968,8 +987,8 @@ check "a previous SUCCESS waits 25 minutes IN THE JOB and probes again" \
   "grep -q 'first failure: re-probing in 25 minutes' '$T/page.log' && grep -qx 'sleep 1500' '$STUB_CURL_LOG' && grep -q 'node scripts/live-probe.mjs' '$STUB_CURL_LOG'"
 check "and a re-probe that passes is a blip: no page" \
   "! grep -q 'curl ' '$STUB_CURL_LOG' && grep -q 'a blip, not paging' '$T/page.log'"
-check "and the wait comes after the previous run was read, not before" \
-  "[ \"\$(grep -n 'gh run list' '$STUB_GH_LOG' | head -1 | cut -d: -f1)\" -ge 1 ] && grep -q 'previous scheduled run: success' '$T/page.log'"
+check "and the wait comes after the previous run was read, not before, and exactly once" \
+  "[ \"\$(grep -n 'gh run list' '$STUB_GH_LOG' | head -1 | cut -d: -f1)\" -lt \"\$(grep -n 'sleep 1500' '$STUB_GH_LOG' | head -1 | cut -d: -f1)\" ] && [ \"\$(grep -c 'sleep' '$STUB_GH_LOG')\" -eq 1 ]"
 STUB_REPROBE_RC=1 page_run "[{\"conclusion\":\"success\",\"databaseId\":1,\"createdAt\":\"$old\"}]"
 check "and a re-probe that FAILS pages from this run, 25 minutes after the first red" \
   "grep -q 'curl ' '$STUB_CURL_LOG' && grep -q 'has failed two probes 25 minutes apart spanning 25+ minutes' '$STUB_CURL_LOG'"
@@ -1002,6 +1021,19 @@ check "a run cut off AFTER a green probe does not page: the probe passed" \
 STUB_REPROBE_RC=0 PAGE_PROBE_OUTCOME=cancelled page_run "[{\"conclusion\":\"success\",\"databaseId\":1,\"createdAt\":\"$old\"}]"
 check "a run cut off after a SUCCESS re-probes like a first failure, and does not page when the faucet answers" \
   "! grep -q 'curl ' '$STUB_CURL_LOG' && grep -q 'first failure: re-probing' '$T/page.log' && grep -q 'a blip, not paging' '$T/page.log'"
+STUB_REPROBE_RC=1 PAGE_PROBE_OUTCOME=cancelled page_run "[{\"conclusion\":\"success\",\"databaseId\":1,\"createdAt\":\"$old\"}]"
+check "and when the re-probe then fails, the message says the first probe reached no verdict, not that it failed" \
+  "grep -q 'curl ' '$STUB_CURL_LOG' && grep -q 'was not probed to a verdict (probe step outcome: cancelled), then failed a re-probe 25 minutes later' '$STUB_CURL_LOG' && ! grep -q 'has failed two probes' '$STUB_CURL_LOG'"
+# THE PROBE THAT NEVER RAN. A failed checkout leaves the probe step skipped, an http URL
+# fails it on its own check; neither wrote guards=ok. Re-running node bare would either
+# fail on a missing script and page a runner fault as an outage 25 minutes later, or pass
+# on an http URL and call a misconfiguration a blip. Nothing to re-probe, not paging.
+STUB_REPROBE_RC=1 PAGE_PROBE_GUARDS="" PAGE_PROBE_OUTCOME=skipped page_run "[{\"conclusion\":\"success\",\"databaseId\":1,\"createdAt\":\"$old\"}]"
+check "a probe that never got past its own checks is not re-probed and does not page" \
+  "! grep -q 'curl ' '$STUB_CURL_LOG' && ! grep -q 'node scripts/live-probe.mjs' '$STUB_CURL_LOG' && grep -q 'nothing to re-probe, not paging yet' '$T/page.log'"
+STUB_REPROBE_RC=1 PAGE_PROBE_GUARDS="" page_run "[{\"conclusion\":\"failure\",\"databaseId\":1,\"createdAt\":\"$old\"}]"
+check "but a second failure 30+ minutes after the first still pages without one, guards or not" \
+  "grep -q 'curl ' '$STUB_CURL_LOG' && ! grep -q 'node scripts/live-probe.mjs' '$STUB_CURL_LOG'"
 check "and it says the schedule is not keeping its cron" "grep -q 'not the 15 the cron asks for' '$T/page.log'"
 page_run "[]"
 check "an unreadable previous run PAGES rather than exiting quietly" "grep -q 'curl ' '$STUB_CURL_LOG'"

@@ -40,6 +40,12 @@ on:
     - cron: "4,19,34,49 * * * *"
   workflow_dispatch:
 
+# No concurrency group on purpose. With a punctual cron, a run sleeping through its
+# re-probe can overlap the next scheduled run; that run reads the run BEFORE the sleeper
+# as its previous (an in-progress run has no conclusion and is filtered out), so it
+# re-probes too and both page. A queued group would not change that: the queued run
+# would start after the first has paged, read it as a 25-minute-old failure, and
+# re-probe and page again. Over-paging an outage that is real is the cheaper error.
 permissions:
   contents: read
   actions: read   # the page step reads the previous run's conclusion for the 30-minute rule
@@ -107,6 +113,11 @@ jobs:
                echo "Point it at the https origin. The faucet checks would still pass through the redirect, which is exactly why this refuses." >&2
                exit 1 ;;
           esac
+          # Past every configuration check above. The page step re-probes only when this
+          # was written: a probe that failed on its own checks (no URL, an http URL, a
+          # missing checkout) has nothing to probe again, and re-running node bare would
+          # skip the checks and turn an http URL into "a blip, not paging".
+          echo "guards=ok" >> "$GITHUB_OUTPUT"
           node scripts/live-probe.mjs
       # PAGE A HUMAN, AND ONLY ON A REAL OUTAGE. The on-box watchdog pages after 30
       # minutes of not-ready, but it cannot page when the box itself is dead, so this is
@@ -140,6 +151,7 @@ jobs:
         timeout-minutes: 33
         env:
           PROBE_OUTCOME: ${{ steps.probe.outcome }}
+          PROBE_GUARDS: ${{ steps.probe.outputs.guards }}
           ALERT_URL: ${{ secrets.FAUCET_ALERT_URL }}
           ALERT_FORMAT: ${{ vars.FAUCET_ALERT_FORMAT }}
           GH_TOKEN: ${{ github.token }}
@@ -176,7 +188,7 @@ jobs:
             # exists to notice.
             [ "$gap_min" -gt 45 ] && echo "NOTE: the schedule is running every ${gap_min} minutes, not the 15 the cron asks for"
           else
-            echo "previous scheduled run: $prev (no readable timestamp: ${prev_at:-none}; treating as a page)"
+            echo "previous scheduled run: $prev (no readable timestamp: ${prev_at:-none})"
           fi
           # A green probe with this step still running means the run was cancelled in
           # the moment between the two. Nothing to page about, and the `if:` above is
@@ -185,12 +197,21 @@ jobs:
           if [ "$prev" = "success" ] || { [ -n "$prev_epoch" ] && [ "$gap_min" -lt 30 ]; }; then
             # The first red (or a second one too soon after the first): the 30 minutes
             # are covered from HERE, not by whenever GitHub next runs the cron.
+            if [ "$PROBE_GUARDS" != "ok" ]; then
+              # The probe step never got past its own checks (no URL, an http URL, a
+              # runner that could not check out), so there is nothing to probe again and
+              # the failed step has already emailed with the reason.
+              echo "the probe step did not reach the probe (its configuration checks failed, or the runner did): nothing to re-probe, not paging yet"
+              exit 0
+            fi
             if [ "$prev" = "success" ]; then
               echo "first failure: re-probing in ${REPROBE_WAIT_MIN} minutes rather than waiting for the next scheduled run"
             else
               echo "two failures only ${gap_min} minutes apart: re-probing in ${REPROBE_WAIT_MIN} minutes to cover the 30-minute rule"
             fi
             sleep $(( REPROBE_WAIT_MIN * 60 ))
+            # The same probe under the same checks: the guard above proved they passed
+            # in this run, so the script can run bare here with the step's own env.
             if node scripts/live-probe.mjs; then
               echo "the re-probe passed after ${REPROBE_WAIT_MIN} minutes: a blip, not paging"
               exit 0
@@ -198,7 +219,10 @@ jobs:
             # The span the page reports: this wait, plus the earlier failure's age when
             # there was one.
             if [ "$prev" = "success" ]; then gap_min=$REPROBE_WAIT_MIN; else gap_min=$(( gap_min + REPROBE_WAIT_MIN )); fi
-            what="has failed two probes ${REPROBE_WAIT_MIN} minutes apart"
+            case "$PROBE_OUTCOME" in
+              failure) what="has failed two probes ${REPROBE_WAIT_MIN} minutes apart" ;;
+              *)       what="was not probed to a verdict (probe step outcome: ${PROBE_OUTCOME:-unknown}), then failed a re-probe ${REPROBE_WAIT_MIN} minutes later" ;;
+            esac
           else
             case "$PROBE_OUTCOME" in
               failure) what="has failed consecutive probes" ;;
