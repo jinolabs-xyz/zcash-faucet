@@ -88,6 +88,17 @@ repository variable would be a way to silence this rather than fix it. Change it
 `scripts/live-probe.mjs`, in a pull request, if it ever needs changing: the repo
 suite fails if the name appears in the workflow at all.
 
+**The probe reads the operator's view with a token.** `/api/status` hands out the
+box's named faults (which unit is stopped, whether the pager works) and the running
+commit only to a request carrying `FAUCET_OPS_TOKEN` in the `x-faucet-ops` header;
+the public page gets one word, `ok`, `attention` or `unknown`, and no commit, so it
+never announces when the box can neither heal nor page (risk register II, R-24). Set
+the same value in `deploy/z3/faucet.env` on the box and as the GitHub secret
+`FAUCET_OPS_TOKEN`; without it the probe still fails on `attention` and `unknown`,
+it just cannot say which fault. The watchdog's own start line reports the channel it
+would page through as `alert.sh --describe` answers it (`signal`, `webhook/slack`,
+`none`, `misconfigured/…`), never a URL.
+
 **The off-box probe cannot pass without probing.** `live-smoke.yml` runs
 `scripts/live-probe.mjs` from a GitHub runner: it is the only signal that has ever
 reached us unprompted, and it had three ways to go green while watching nothing. An

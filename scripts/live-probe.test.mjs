@@ -21,13 +21,19 @@ import { spawnSync } from "node:child_process";
 const PROBE = fileURLToPath(new URL("./live-probe.mjs", import.meta.url));
 
 /** A faucet that answers /api/status and /api/ready however the case wants. */
-function fakeFaucet(ready) {
+// The fake answers the way the real route does (R-24): the detailed box only to a
+// request carrying the token in x-faucet-ops, one word to everyone else. `box` overrides
+// the detailed shape; `publicBox` the one-word one.
+function fakeFaucet(ready, { box, publicBox, token = "" } = {}) {
   const server = createServer((req, res) => {
+    const detailed = box ?? { state: "complete", expected: 1, present: 1, notEnabled: 0, watchdogUnit: "active", alertBridge: "ok", minerBinary: "current", ageSeconds: 5 };
+    const ops = token && req.headers["x-faucet-ops"] === token;
     const status = {
       network: "testnet", dripTaz: 0.1, balanceTaz: 100, empty: false, queueDepth: 0,
       challenge: "pow", node: { ready: true, syncPercent: 100, height: 10, frozen: false },
       backend: { reachable: true },
-      box: { state: "complete", expected: 1, present: 1, notEnabled: 0, watchdogUnit: "active", alertBridge: "ok", minerBinary: "current", ageSeconds: 5 },
+      box: ops ? detailed : (publicBox ?? { state: "ok", minerUnit: null }),
+      ...(ops ? { buildCommit: "abc1234" } : {}),
     };
     const body = req.url.startsWith("/api/ready") ? ready : status;
     const code = req.url.startsWith("/api/ready") ? (ready.ready ? 200 : 503) : 200;
@@ -66,8 +72,8 @@ function run(cmd, args, env) {
   });
 }
 
-async function runProbe(env, ready = READY) {
-  const server = fakeFaucet(ready);
+async function runProbe(env, ready = READY, shape = {}) {
+  const server = fakeFaucet(ready, shape);
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   const url = `http://127.0.0.1:${server.address().port}`;
   try {
@@ -89,6 +95,33 @@ test("a healthy faucet passes", async () => {
   const r = await runProbe({});
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /live-probe: healthy/);
+});
+
+// ── THE OPERATOR'S VIEW IS TOKEN-GATED, AND THE PUBLIC WORD STILL CARRIES THE VERDICT (R-24) ──
+
+test("with the token, the probe reads the detailed box and names the fault", async () => {
+  const r = await runProbe({ SMOKE_OPS_TOKEN: "t0ken-t0ken-t0ken-t0ken" }, READY, { token: "t0ken-t0ken-t0ken-t0ken", box: { state: "complete", expected: 1, present: 1, notEnabled: 0, watchdogUnit: "inactive", alertBridge: "ok", minerBinary: "current", ageSeconds: 5 } });
+  assert.notEqual(r.code, 0);
+  assert.match(r.out, /faucet-watchdog\.service is STOPPED/, "the sentence naming the fault is what the token buys");
+});
+
+test("without the token, a box that reports attention is STILL RED: the one word is the same verdict", async () => {
+  const r = await runProbe({}, READY, { token: "t0ken-t0ken-t0ken-t0ken", publicBox: { state: "attention", minerUnit: null } });
+  assert.notEqual(r.code, 0);
+  assert.match(r.out, /the box reports "attention"; set SMOKE_OPS_TOKEN/);
+  assert.doesNotMatch(r.out, /STOPPED|alertBridge/, "and it cannot name the fault, because the server did not");
+});
+
+test("without the token, an ok box passes: the word is affirmative, not a shrug", async () => {
+  const r = await runProbe({}, READY, { token: "t0ken-t0ken-t0ken-t0ken" });
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /the box reports ok \(one-word view\)/);
+});
+
+test("a WRONG token is refused and the probe says so, rather than passing on the public word", async () => {
+  const r = await runProbe({ SMOKE_OPS_TOKEN: "wrong-wrong-wrong-wrong" }, READY, { token: "t0ken-t0ken-t0ken-t0ken", publicBox: { state: "unknown", minerUnit: null } });
+  assert.notEqual(r.code, 0);
+  assert.match(r.out, /the token was refused/);
 });
 
 test("a faucet that cannot drip FAILS, which is the whole point of the probe", async () => {

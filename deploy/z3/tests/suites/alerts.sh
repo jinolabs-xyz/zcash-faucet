@@ -122,6 +122,22 @@ alerts_env; export FAUCET_ALERT_URL="http://127.0.0.1:$HOOK_PORT/FAIL"
 bash "$ALERT" --self-test > "$T/st3.log" 2>&1
 check "fails when the webhook rejects" "[ $? -ne 0 ] && grep -q 'webhook rejected' '$T/st3.log'"
 
+echo "== alerts: --describe says which channel, in one word, and never the URL (R-24)"
+# The watchdog's start line used to print its own WATCHDOG_ALERT_URL, so it read
+# alert=none on a box that paged Signal every day through alerts.env, and would have put
+# the URL in the journal on a box where it was set. This is the answer it prints now.
+alerts_env
+check "a slack webhook describes as webhook/slack" "[ \"\$(bash '$ALERT' --describe)\" = 'webhook/slack' ]"
+alerts_env; export FAUCET_ALERT_FORMAT=signal FAUCET_ALERT_SIGNAL_NUMBER="+15550001111"
+check "signal with a number describes as signal" "[ \"\$(bash '$ALERT' --describe)\" = 'signal' ]"
+alerts_env; export FAUCET_ALERT_FORMAT=signal
+check "signal WITHOUT a number is misconfigured, because send() would refuse it" "[ \"\$(bash '$ALERT' --describe)\" = 'misconfigured/signal-no-number' ]"
+alerts_env; unset FAUCET_ALERT_URL
+check "no URL is none" "[ \"\$(bash '$ALERT' --describe)\" = 'none' ]"
+alerts_env
+check "and the URL never appears in the answer" "! bash '$ALERT' --describe | grep -q '127.0.0.1'"
+check "and describing sends nothing" "! grep -q describe '$HOOK_LOG' && [ ! -s '$HOOK_LOG' ]"
+
 echo "== alerts: the OnFailure hook names the unit and quotes its logs"
 alerts_env
 printf '#!/usr/bin/env bash\necho "boom: something exploded"\n' > "$T/bin/journalctl"

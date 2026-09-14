@@ -8,6 +8,14 @@
  *
  * Same rule as minerLabel.ts and reserveLabel.ts: `unknown` is not `complete` and not
  * a proven fault. It is unverified, and unverified must not read as either.
+ *
+ * WHAT THE PUBLIC PAGE SAYS IS ONE WORD (risk register II, R-24). This file used to
+ * render "WATCHDOG STOPPED, nothing heals" and "CANNOT PAGE" on the public strip, which
+ * told anyone who looked exactly when the box could neither heal nor summon a person.
+ * The verdict still reaches the page, as ATTENTION, so the one channel that survives a
+ * dead pager still says something; the detail (which fault) goes to the operator through
+ * the Signal page, the box's own report, and the token-gated /api/status the off-box
+ * probe reads. The predicates below are that verdict; the public words are at the end.
  */
 import type { IntegrityStatus } from "./boxIntegrity.ts";
 
@@ -44,154 +52,6 @@ export function watchdogStopped(s: IntegrityStatus): boolean {
   return s.watchdogUnit === "inactive" || s.watchdogUnit === "failed" || s.watchdogUnit === "deactivating";
 }
 
-function watchdogUnitClause(s: IntegrityStatus): string {
-  switch (s.watchdogUnit) {
-    case "inactive": return ", WATCHDOG STOPPED, nothing heals";
-    case "failed": return ", WATCHDOG FAILED, nothing heals";
-    case "deactivating": return ", WATCHDOG STOPPING, nothing heals";
-    default: return "";
-  }
-}
-
-/** The clause, when there is one. Null and 0 render nothing: an unread counter must not
- *  arrive as a calm one, and a calm one does not need a word. */
-function watchdog(s: IntegrityStatus): string {
-  const d = s.watchdogRestartsDelta;
-  if (d == null || d < 1) return "";
-  return d >= WATCHDOG_LOOP_RESTARTS
-    ? `, WATCHDOG LOOPING, ${d} restarts`
-    : `, watchdog restarted once`;
-}
-
-/**
- * Units that are enabled on the box but not declared in the repo, when there are any.
- *
- * A SEPARATE CLAUSE, NEVER PART OF THE COUNT. The counts answer "does the box have
- * what the repo says it must", and an extra enabled unit is a different question:
- * something is running that nothing in the repo asked for. Adding it to `present`
- * would make a drifted box look more complete than a clean one.
- *
- * Deliberately not a fault, so boxIsBad and boxChip are untouched. The two on
- * production today are faucet.service and the autodeploy timer, both of which are
- * meant to be there and simply are not declared in the manifest. Marking that red
- * would train an operator to ignore the marker, which costs more than the row is
- * worth. It still has to be VISIBLE, because the day the extra unit is not one of
- * those two, nobody is going to find it by reading a number that never changed.
- *
- * Null and 0 both render nothing, and they mean different things: 0 is a box that
- * reported no drift, null is a report too old to carry the field. Neither is worth a
- * clause, because a row saying "0 undeclared" is noise and one saying "undeclared
- * unknown" would imply a problem where there is only an old deploy.
- */
-function undeclared(s: IntegrityStatus): string {
-  const n = s.enabledUndeclared ?? 0;
-  // "OF OURS" IS LOAD-BEARING AND I SHIPPED IT WITHOUT IT. box-report only walks the units
-  // THIS REPO SHIPS, so the figure is "how many of our own units are enabled without being
-  // declared". The bare phrasing read as "how many undeclared units are on this box", and
-  // on 2026-08-04 the panel said 2 while the box had ELEVEN: ours plus four dbus aliases
-  // and syslog, which we do not ship and would be permanent noise to count.
-  //
-  // The count was never wrong. The label answered a narrower question than it appeared to,
-  // which is the whole of rule 35's second clause, in a row I rendered myself.
-  return n > 0 ? `, ${n} of ours undeclared` : "";
-}
-
-/**
- * Why the file count is short, when the miner binary is the reason.
- *
- * box-report has emitted `minerBinary` as its own field since #332, with a comment
- * saying it exists "so the panel can say WHY the count is short instead of only that
- * it is". The panel could not, because the reader dropped the field (#392). This is
- * the clause that comment was written for.
- *
- * ONLY THE STATES THAT EXPLAIN SOMETHING. `current` is the normal case and needs no
- * words on a row that is already long; `untracked` means the repo does not pin a
- * binary, which is not a fault of this box. `stale` and `absent` are the two that turn
- * "one file missing" into an actionable sentence, and `unknown` is worth saying out
- * loud because an unmeasured binary is not a working one.
- */
-function miner(s: IntegrityStatus): string {
-  switch (s.minerBinary) {
-    case "stale":
-      return ", miner binary STALE";
-    case "absent":
-      return ", miner binary ABSENT";
-    case "unknown":
-      return ", miner binary unverified";
-    default:
-      return "";
-  }
-}
-
-/**
- * The panel line. Counts only, never file names: this endpoint is public, and naming
- * what is missing from a production box is reconnaissance. That constraint is #287's
- * and it holds all the way to the screen, not just to the API.
- */
-export function boxRow(s: IntegrityStatus): string {
-  switch (s.state) {
-    case "complete":
-      // Undeclared units are appended rather than folded into the count, and they do
-      // NOT make the row bad. classifyIntegrity's own comment says drift is a fact to
-      // surface rather than a fault.
-      //
-      // THE HISTORY, CORRECTED, because I got it wrong in the commit that added this
-      // clause and a wrong one here is worse than none. The figure reaches the panel
-      // through three separate additions: #338 taught box-report.sh to write it, #341
-      // passed it through boxIntegrity and boxIntegrityFile to the API, and this is the
-      // third. I checked production with curl, saw the field present, and concluded the
-      // API had never dropped it. It had: before #341 neither src file mentioned the
-      // name at all. I was reading the world after the fix and calling it never-broken,
-      // which is rule 35 running backwards, so the same counter applies. `git show
-      // <commit>^:<file>` is what settles a question about the past, not a live probe.
-      return `${s.expected} of ${s.expected} files, all enabled${miner(s)}${undeclared(s)}${watchdog(s)}${watchdogUnitClause(s)}${bridge(s)}`;
-
-    case "incomplete": {
-      const parts: string[] = [];
-      if ((s.missing ?? 0) > 0) parts.push(`${s.missing} of ${s.expected} MISSING`);
-      // Installed but not enabled works until the next reboot and then silently does
-      // not, which is worse than never having been installed. It gets its own clause
-      // rather than being folded into a count of problems.
-      if ((s.notEnabled ?? 0) > 0) parts.push(`${s.notEnabled} NOT ENABLED`);
-      // Defensive, and it should be unreachable: classifyIntegrity only returns
-      // incomplete when one of the two is non-zero. Saying "incomplete" with no
-      // figures still beats rendering an empty string as though nothing were wrong.
-      return (parts.length ? parts.join(", ") : "incomplete, figures not reported") + miner(s) + undeclared(s) + watchdog(s) + watchdogUnitClause(s) + bridge(s);
-    }
-
-    case "unknown":
-      // Distinguish "never reported" from "reported too long ago", because they call
-      // for different things: one is a unit that was never installed, the other is a
-      // unit that has stopped.
-      return s.ageSeconds == null
-        ? "no box report"
-        : `box report ${Math.round(s.ageSeconds / 60)} min old`;
-  }
-}
-
-/**
- * The strip token, or null when there is nothing to say.
- *
- * Null on `complete` is deliberate and is the only row treated this way. The strip is
- * terse by the user's instruction and already carries seven items, so a permanent
- * "box ok" would cost a slot to tell an operator what they assume. A box that is NOT
- * complete has to be visible without opening the panel, because the panel is a click
- * nobody makes when they think everything is fine.
- */
-export function boxChip(s: IntegrityStatus): string | null {
-  // Before the complete short-circuit: a box can have every file in place and a
-  // watchdog in a restart loop, and that must not be invisible on the terse strip.
-  if (watchdogLooping(s)) return "WATCHDOG LOOP";
-  // A watchdog that is not running heals nothing and sends none of its own reports: the
-  // strip is the one place this can show. (Its OnFailure page still fires via systemd.)
-  if (watchdogStopped(s)) return "WATCHDOG STOPPED";
-  // Same rule, and the stronger case: a complete box whose pages go nowhere is the one
-  // fault no alert can announce, so the strip is where it has to show.
-  if (alertBridgeDown(s)) return "CANNOT PAGE";
-  if (s.state === "complete") return null;
-  return s.state === "incomplete" ? "INCOMPLETE" : "unknown";
-}
-
 /** The box cannot page anyone, by its own report: the Signal bridge is down, the
  *  account is not linked on it, the configuration is one alert.sh refuses to send with,
  *  or no alert URL is configured at all. A fault, and one nothing else can show, because
@@ -202,19 +62,50 @@ export function alertBridgeDown(s: IntegrityStatus): boolean {
   return s.alertBridge === "down" || s.alertBridge === "unlinked" || s.alertBridge === "none" || s.alertBridge === "misconfigured";
 }
 
-/** The clause, when there is one. Only the fault gets words: "ok" is the expected
- *  state and a row saying so on every render is noise. */
-function bridge(s: IntegrityStatus): string {
-  switch (s.alertBridge) {
-    case "down": return ", ALERT BRIDGE DOWN, pages go nowhere";
-    case "unlinked": return ", ALERT BRIDGE UNLINKED, pages go nowhere";
-    case "none": return ", NO ALERT CHANNEL, pages go nowhere";
-    case "misconfigured": return ", ALERT CHANNEL MISCONFIGURED, pages go nowhere";
-    default: return "";
-  }
-}
-
 /** Anything other than a clean report. Matches isIntegrityFailing, plus the three faults only the report can carry: a looping watchdog, a stopped one, and a box that cannot page; unknown counts. */
 export function boxIsBad(s: IntegrityStatus): boolean {
   return s.state !== "complete" || watchdogLooping(s) || watchdogStopped(s) || alertBridgeDown(s);
+}
+
+/** What the public page is told about the box: one word (R-24). "unknown" is a report
+ *  that is missing or stale, which the off-box probe fails on and the page must not
+ *  read as fine; "attention" is any fault the detail-bearing predicates above would
+ *  name; "ok" is a complete box with a running watchdog and a working pager. */
+export type PublicBoxState = "ok" | "attention" | "unknown";
+export interface PublicBox {
+  state: PublicBoxState;
+  /** systemd's word for the miner unit, passed through: the miner panel uses it to tell a
+   *  parked miner from a dead one, and the miner strip already says which. */
+  minerUnit: string | null;
+}
+
+export function publicBox(s: IntegrityStatus): PublicBox {
+  return {
+    state: s.state === "unknown" ? "unknown" : boxIsBad(s) ? "attention" : "ok",
+    minerUnit: s.minerUnit,
+  };
+}
+
+/** The strip's one slot. Nothing for ok: a permanent "box ok" would spend the slot on
+ *  what an operator already assumes; anything else has to be visible without a click. */
+export function publicBoxChip(b: PublicBox): string | null {
+  switch (b.state) {
+    case "ok": return null;
+    case "attention": return "OPS ATTENTION";
+    default: return "unknown";
+  }
+}
+
+/** The panel row. Names no fault: the operator has the box's report and the page; a
+ *  visitor needs to know only that the people running it have something to look at. */
+export function publicBoxRow(b: PublicBox): string {
+  switch (b.state) {
+    case "ok": return "ok, everything the repo requires is installed and running";
+    case "attention": return "needs the operator's attention (detail is on the box, not here)";
+    default: return "unknown, the box has not reported recently";
+  }
+}
+
+export function publicBoxIsBad(b: PublicBox): boolean {
+  return b.state !== "ok";
 }

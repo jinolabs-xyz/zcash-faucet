@@ -43,6 +43,11 @@
 // "Failed to parse URL from  https://host /api/status", which names nothing about the
 // variable and is a worse diagnosis than the refusal it replaced.
 const BASE = (process.env.SMOKE_URL ?? "").trim().replace(/\/$/, "");
+// The operator's view of /api/status (risk register II, R-24): the box's named faults
+// and the running commit come back only with FAUCET_OPS_TOKEN, sent as x-faucet-ops.
+// Without it the box check still runs on the one word the public gets, and a fault is
+// still red; only the sentence naming it is lost. Never printed.
+const OPS_TOKEN = (process.env.SMOKE_OPS_TOKEN ?? "").trim();
 /**
  * Is the un-ready escape hatch in force? This is the one knob that can turn the whole
  * probe into a pass, so scripts/live-probe.test.mjs spawns the probe and pins it (this
@@ -154,7 +159,7 @@ let originAnswered = false;
 async function probe(path) {
   const started = Date.now();
   try {
-    const res = await fetch(BASE + path, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+    const res = await fetch(BASE + path, { signal: AbortSignal.timeout(TIMEOUT_MS), headers: OPS_TOKEN ? { "x-faucet-ops": OPS_TOKEN } : {} });
     originAnswered = true;
     const body = await res.json().catch(() => null);
     return { status: res.status, body, ms: Date.now() - started };
@@ -468,6 +473,15 @@ async function runFaucetChecks() {
     // An older deployment that predates the field. Not a pass and not a failure:
     // asserting against a server that cannot answer would fail for the wrong reason.
     ok("box integrity reported", true, "server does not send `box` yet, cannot verify");
+  } else if (!("expected" in box)) {
+    // THE ONE-WORD SHAPE (R-24): this run has no token, or the wrong one, so the server
+    // answered as it answers the public. The verdict is the same one the detail would
+    // fold into, so a fault is red here too; what is lost is the sentence naming it.
+    // "ok" is affirmative: the server says complete, watchdog running, pager working.
+    const hint = OPS_TOKEN ? "the token was refused: FAUCET_OPS_TOKEN on the box and SMOKE_OPS_TOKEN here differ" : "set SMOKE_OPS_TOKEN (GitHub secret FAUCET_OPS_TOKEN) to see which";
+    ok("box has everything the repo requires", box.state === "ok", box.state === "ok" ? "the box reports ok (one-word view)" : `the box reports ${JSON.stringify(box.state)}; ${hint}`);
+    ok("the watchdog is running", box.state === "ok", box.state === "ok" ? "folded into the box's ok" : `not affirmed: box is ${JSON.stringify(box.state)}`);
+    ok("the box can page someone", box.state === "ok", box.state === "ok" ? "folded into the box's ok" : `not affirmed: box is ${JSON.stringify(box.state)}`);
   } else {
     ok(
       "box has everything the repo requires",

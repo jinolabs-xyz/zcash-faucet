@@ -707,7 +707,19 @@ case "$ALERT_FORMAT" in
   *) log "WARNING: unknown WATCHDOG_ALERT_FORMAT '$ALERT_FORMAT', sending the slack shape (valid: slack, discord)" ;;
 esac
 
-log "starting: interval=${INTERVAL}s faucet=${FAUCET_URL} ready_grace=${READY_GRACE_SECS}s alert=${ALERT_URL:-none} format=${ALERT_FORMAT}"
+# WHAT THE START LINE SAYS ABOUT ALERTING IS alert.sh's ANSWER, not this script's own
+# variable (risk register II, R-24). Pages go through alert.sh, which reads
+# /etc/faucet/alerts.env (FAUCET_ALERT_*); WATCHDOG_ALERT_URL is the fallback for a box
+# without alert.sh. So "alert=none" printed here on a box paging Signal every day, and
+# a URL, had one been set, would have gone into the journal. Now: the channel kind, and
+# never the URL.
+alert_channel="none"
+if [ -x "$ALERT_SH" ]; then
+  alert_channel="$("$ALERT_SH" --describe 2>/dev/null || echo unknown)"
+elif [ -n "$ALERT_URL" ]; then
+  alert_channel="inline/${ALERT_FORMAT}"
+fi
+log "starting: interval=${INTERVAL}s faucet=${FAUCET_URL} ready_grace=${READY_GRACE_SECS}s alert=${alert_channel}"
 
 ticks=0
 while true; do

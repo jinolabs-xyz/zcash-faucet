@@ -40,6 +40,9 @@ const LOG_DIR = mkdtempSync(join(tmpdir(), "faucet-api-integration-"));
 // each server's output in a file under LOG_DIR rather than discarded, so a boot that
 // dies says why.
 const RUN_NONCE = `api-integration-${process.pid}-${Date.now().toString(36)}`;
+// The operator's token for this run, so waitReady can read buildCommit: /api/status
+// hands it out only to a request carrying it (R-24). Per run, like the nonce.
+const OPS_TOKEN = `ops-${RUN_NONCE}`;
 const DATA_DIR = join(LOG_DIR, "data");
 const BASE_A = `http://localhost:${PORT_A}`;
 const BASE_B = `http://localhost:${PORT_B}`;
@@ -116,7 +119,7 @@ async function solvedChallenge(base) {
 function boot(port, env) {
   const fd = openSync(join(LOG_DIR, `server-${port}.log`), "w");
   const child = spawn("npm", ["run", "start"], {
-    env: { ...process.env, PORT: String(port), FAUCET_BUILD_COMMIT: RUN_NONCE, FAUCET_DATA_DIR: DATA_DIR, ...env },
+    env: { ...process.env, PORT: String(port), FAUCET_BUILD_COMMIT: RUN_NONCE, FAUCET_OPS_TOKEN: OPS_TOKEN, FAUCET_DATA_DIR: DATA_DIR, ...env },
     stdio: ["ignore", fd, fd],
     detached: true, // own process group, so kill(-pid) reaps next too
   });
@@ -195,7 +198,7 @@ async function waitReady(base, ms = 90_000) {
       // seconds, because status probes the read-side backend with its own 4 s budget:
       // with egress blackholed a 200 takes 4.03 s (review of #537), and a 2 s abort here
       // read a healthy server as one that never came up.
-      const res = await fetch(base + "/api/status", { signal: AbortSignal.timeout(8000) });
+      const res = await fetch(base + "/api/status", { signal: AbortSignal.timeout(8000), headers: { "x-faucet-ops": OPS_TOKEN } });
       if (res.ok) {
         const body = await res.json().catch(() => ({}));
         if (body.buildCommit === RUN_NONCE) return;
@@ -437,7 +440,7 @@ const bootDirect = (port, env) => {
   // errors go to stderr, which is the text a dead boot needs to keep (review of #537).
   const fd = openSync(join(LOG_DIR, `server-${port}.log`), "w");
   return spawn("node", ["node_modules/next/dist/bin/next", "start", "-H", "0.0.0.0", "-p", String(port)], {
-    env: { ...process.env, PORT: String(port), FAUCET_BUILD_COMMIT: RUN_NONCE, FAUCET_DATA_DIR: DATA_DIR, ...env },
+    env: { ...process.env, PORT: String(port), FAUCET_BUILD_COMMIT: RUN_NONCE, FAUCET_OPS_TOKEN: OPS_TOKEN, FAUCET_DATA_DIR: DATA_DIR, ...env },
     stdio: ["ignore", fd, fd],
   });
 };
@@ -505,6 +508,16 @@ try {
   ok("A status: mode is zallet+pow", s.sender === "zallet" && s.challenge === "pow", JSON.stringify({ sender: s.sender, challenge: s.challenge }));
   ok("A status: core shape", typeof s.dripTaz === "number" && typeof s.cooldownSeconds === "number" && typeof s.balanceTaz === "number" && s.empty === false && typeof s.queueDepth === "number");
   ok("A status: backend + miner blocks", typeof s.backend?.reachable === "boolean" && typeof s.miner?.active === "boolean");
+  // THE PUBLIC VIEW NAMES NO FAULT AND NO COMMIT (risk register II, R-24). Server A has
+  // no box report, so the detailed shape would say "unknown" with counts; the public
+  // shape says one word and carries no buildCommit. The token buys the rest.
+  ok("A status (public): box is one word, no counts, no watchdog or pager state", s.box && ["ok", "attention", "unknown"].includes(s.box.state) && !("expected" in s.box) && !("watchdogUnit" in s.box) && !("alertBridge" in s.box), JSON.stringify(s.box));
+  ok("A status (public): no buildCommit", !("buildCommit" in s), JSON.stringify(Object.keys(s)));
+  const opsStatus = await req(BASE_A, "/api/status", { headers: { "x-faucet-ops": OPS_TOKEN } });
+  ok("A status (operator token): buildCommit is this run's nonce", opsStatus.body.buildCommit === RUN_NONCE, JSON.stringify(opsStatus.body.buildCommit));
+  ok("A status (operator token): the detailed box, with its counts", "expected" in (opsStatus.body.box ?? {}) && "watchdogUnit" in opsStatus.body.box, JSON.stringify(opsStatus.body.box));
+  const wrongTok = await req(BASE_A, "/api/status", { headers: { "x-faucet-ops": OPS_TOKEN + "x" } });
+  ok("A status (wrong token): the public view, not an error that says a token exists", wrongTok.status === 200 && !("buildCommit" in wrongTok.body) && !("expected" in wrongTok.body.box), JSON.stringify(Object.keys(wrongTok.body)));
   ok("A status: reserve block shape", typeof s.reserve?.targetTaz === "number" && typeof s.reserve?.lowTaz === "number" && typeof s.reserve?.refilling === "boolean" && "spendableTaz" in (s.reserve ?? {}));
 
   /* ── A: /api/ready 200 ───────────────────────────────────────────────── */
