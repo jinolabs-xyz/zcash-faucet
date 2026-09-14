@@ -115,6 +115,14 @@ case "${1:-}" in
       *" up -d --no-deps --no-build caddy ")
         [ "${STUB_CADDY_UP_FAIL:-0}" = "1" ] && { echo "caddy up failed (stub)" >&2; exit 1; }
         echo "caddy up"; exit 0 ;;
+      # A changed Caddyfile (R-36): validated in a throwaway container from the pinned
+      # image, then recreated on purpose. Both exact, both with their own failure knob.
+      *" run --rm --no-deps -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile ")
+        [ "${STUB_CADDY_VALIDATE_FAIL:-0}" = "1" ] && { echo "Error: adapting config using caddyfile: (stub) unrecognized directive" >&2; exit 1; }
+        echo "Valid configuration"; exit 0 ;;
+      *" up -d --no-deps --no-build --force-recreate caddy ")
+        [ "${STUB_CADDY_UP_FAIL:-0}" = "1" ] && { echo "caddy up failed (stub)" >&2; exit 1; }
+        echo "caddy recreated"; exit 0 ;;
     esac
     if printf '%s\n' "$@" | grep -qx "caddy"; then
       echo "stub: unsupported compose op with caddy: $*" >&2; exit 64

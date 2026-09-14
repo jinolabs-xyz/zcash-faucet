@@ -24,6 +24,25 @@
 	# and says so. Nothing on the box can see this: the watchdog
 	# and the metrics timer both ask the app over loopback, where TLS is not in
 	# play (risk register #18).
+	#
+	# THE PROCESS LOG GETS THE SAME FILTER AS THE ACCESS LOG (below). Caddy's error
+	# logger writes the whole request, client IP and query string included, for every
+	# upstream failure: a deploy's 502s would put the record the access log withholds
+	# straight back into `docker logs`. Measured with the pinned image before this
+	# block existed. Same fields, same reasons; see the site block for them.
+	log default {
+		output stderr
+		format filter {
+			wrap console
+			fields {
+				request>remote_ip delete
+				request>client_ip delete
+				request>uri regexp \?.*$ ""
+				request>headers delete
+				resp_headers>Location regexp \?.*$ ""
+			}
+		}
+	}
 }
 
 {$FAUCET_DOMAIN} {
@@ -75,10 +94,34 @@
 	# Access logs to stdout so they land in the same docker logging pipeline
 	# as the rest of the stack. The health and readiness probes are most of
 	# the traffic and say nothing, so they stay out of it.
+	#
+	# WHAT THE LOG MAY NOT HOLD (risk register II, R-36). PRIVACY.md promises no raw
+	# IPs and no addresses in any log, and the ledger keys everything on salted
+	# hashes for that reason. An unfiltered access line is exactly the record the
+	# ledger refuses to build: the client IP beside `/api/tx?txid=…` polled every
+	# ten seconds while a drip confirms, and beside `/api/balance?address=…`. So the
+	# client and remote IPs are dropped, the query string is dropped whole (the
+	# path is enough to read traffic shape), and so are ALL request headers: a
+	# named list (User-Agent, X-Forwarded-For, Referer) let Sec-CH-UA*, X-Real-IP
+	# and Forwarded: through, and nothing in an access line needs a request header.
+	# A 3xx carries the full URL in Location, query included; the HTTP->HTTPS
+	# redirect server answers every plain-HTTP request that way and Next's
+	# trailing-slash 308 does the same, so Location loses its query too (review of
+	# #540, measured on the pinned image). The daemon keeps three 10 MB files per
+	# container (deploy/cloud-init.yaml), which is what PRIVACY.md says about retention.
 	@health path /api/health /api/ready
 	log_skip @health
 	log {
 		output stdout
-		format console
+		format filter {
+			wrap console
+			fields {
+				request>remote_ip delete
+				request>client_ip delete
+				request>uri regexp \?.*$ ""
+				request>headers delete
+				resp_headers>Location regexp \?.*$ ""
+			}
+		}
 	}
 }

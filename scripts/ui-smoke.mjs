@@ -836,6 +836,31 @@ try {
     ok("the income sentence follows the miner state (no heartbeat here: not mining, topped up by hand)", /The faucet is not mining right now, so what it hands out is donated or topped up by hand\./.test(text), text.match(/The faucet (mines|is not mining|has had)[^.]*\./)?.[0] ?? "no income sentence found");
     ok("and none of the old fixed sentences remain", !/does not currently earn from mining|income rounds to zero|refilled by hand at the moment|mining and shielding its own coins/.test(text));
   }
+  {
+    // THE BALANCE LOOKUP LEAVES THE BROWSER AS A POST WITH NOTHING IN THE URL (risk
+    // register II, R-36). The address used to travel as ?address=, which is the one
+    // part of a request every hop keeps: the proxy's access line, a browser history.
+    // Driving the button and reading the request the page makes, not the API.
+    const seen = [];
+    const onReq = (r) => { if (r.url().includes("/api/balance")) seen.push({ method: r.method(), url: r.url(), body: r.postData() ?? "" }); };
+    page.on("request", onReq);
+    await page.getByRole("button", { name: "Balance lookup" }).click();
+    // A real shielded address from the app's own account API: the answer is
+    // "private, not queryable", made with no external call and no 400 in the console.
+    const lookupAddr = await freshAddress();
+    await page.locator("#lk").fill(lookupAddr);
+    await page.getByRole("button", { name: "Look up" }).click();
+    // Settle on the answer, not on "Looking up…": that interim text is set before
+    // the request is even sent.
+    await page.waitForFunction(() => /Shielded balances are private|TAZ ·|Couldn't|No balance|nothing to look up/.test(document.querySelector("#tool-lookup")?.textContent ?? ""), null, { timeout: 5000 }).catch(() => {});
+    page.off("request", onReq);
+    ok("the lookup button makes exactly one /api/balance request", seen.length === 1, JSON.stringify(seen));
+    const req = seen[0] ?? { method: "", url: "", body: "" };
+    ok("and it is a POST whose URL carries no address", req.method === "POST" && !/[?&]address=/.test(req.url) && !req.url.includes(lookupAddr.slice(0, 24)), `${req.method} ${req.url}`);
+    ok("and the address is in the body", req.body.includes(`"address":"${lookupAddr}"`), req.body.slice(0, 60));
+    ok("and the page answers that a shielded balance is private", /Shielded balances are private/.test(await page.locator("#tool-lookup").innerText()));
+    await page.getByRole("button", { name: "Balance lookup" }).click();
+  }
   await checkMinerPanel(page);
 
   // Generate-then-claim, the flow #31 broke for every visitor: the button read

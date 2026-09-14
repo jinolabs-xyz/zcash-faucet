@@ -318,14 +318,50 @@ probe_usable() {
 # commit on both: a dependabot caddy bump that landed through the unverified path
 # would otherwise be marked processed with caddy still on the old image, and nothing
 # would ever come back for it (review of #524). Never on a rollback path.
+#
+# AND THE CADDYFILE MOVES WITH THE REPO (risk register II, R-15 third clause, R-36).
+# The Caddyfile is a bind mount, and `up -d` recreates nothing for a file whose
+# CONTENTS changed: compose compares its own config, not the bytes behind a mount,
+# and caddy neither watches the file nor accepts a reload with `admin off`. So a merged
+# Caddyfile sat inert until something else restarted caddy. Now: when the file is not
+# the one last applied (a hash stamp, written only after a successful recreate), it is
+# validated with the pinned image first and caddy is recreated on purpose. A file that
+# does not validate is a WARNING and the running caddy keeps its last good config.
+CADDYFILE="$OVERLAY_DIR/Caddyfile"
+# Outside the checkout on purpose: an untracked file under deploy/ enters the image
+# build context (R-5), and auto-deploy already owns this state directory.
+CADDY_STAMP="${REDEPLOY_CADDY_STAMP:-/var/lib/faucet-autodeploy/caddyfile.applied}"
+caddyfile_hash() { sha256sum "$CADDYFILE" 2>/dev/null | cut -c1-64; }
+
 refresh_caddy() {
   log "caddy: pulling the pinned image"
   if ! compose pull caddy 2>&1 | tail -n 3 | sed 's/^/    /'; then
     log "WARNING: caddy: could not pull the pinned image; the running caddy keeps serving and may be behind its pin"
     return 0
   fi
-  if ! compose up -d --no-deps --no-build caddy 2>&1 | sed 's/^/    /'; then
+  local want="" have="" recreate=""
+  if [ -f "$CADDYFILE" ]; then
+    want="$(caddyfile_hash)"; have="$(cat "$CADDY_STAMP" 2>/dev/null || true)"
+    if [ "$want" != "$have" ]; then
+      log "caddy: the Caddyfile is not the one last applied, validating it with the pinned image"
+      if ! compose run --rm --no-deps -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile 2>&1 | tail -n 5 | sed 's/^/    /'; then
+        log "WARNING: caddy: the Caddyfile does not validate, the running caddy keeps its last good config; fix the file and redeploy"
+        return 0
+      fi
+      recreate="--force-recreate"
+    fi
+  fi
+  if ! compose up -d --no-deps --no-build ${recreate:+"$recreate"} caddy 2>&1 | sed 's/^/    /'; then
     log "WARNING: caddy: pulled but could not be recreated, the running caddy keeps serving"
+    return 0
+  fi
+  if [ -n "$recreate" ]; then
+    mkdir -p "$(dirname "$CADDY_STAMP")" 2>/dev/null || true
+    if printf '%s\n' "$want" > "$CADDY_STAMP"; then
+      log "caddy: recreated with the new Caddyfile (${want:0:12})"
+    else
+      log "WARNING: caddy: recreated with the new Caddyfile but could not stamp it at $CADDY_STAMP; the next deploy will recreate caddy once more"
+    fi
   fi
   return 0
 }

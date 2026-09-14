@@ -18,7 +18,9 @@ nothing longer than needed.
 - **No accounts, emails, cookies, analytics, or trackers.** Nothing to log in to,
   nothing following you.
 - **No logging of PII.** Addresses, IPs, and the faucet key are never written to
-  logs.
+  logs. That includes the reverse proxy: Caddy's access and error logs are filtered
+  before they are written ([`Caddyfile`](deploy/z3/Caddyfile)), and the section
+  below says exactly what a line holds.
 
 ## What it keeps, and for how long
 
@@ -28,6 +30,30 @@ once they're older than the retention window (`max(cooldown, 24h, pending lease)
 the pending lease is about 109 minutes on stock settings and scales with the send
 queue and the wallet's timeouts), after which they can no longer affect a cooldown,
 the daily cap or an in-flight claim, so they're deleted.
+
+### The proxy's log, because it is the one record the ledger does not control
+
+The reverse proxy in front of the app writes one line per request. Left alone it
+would hold the client IP beside the full URL, and two of this site's URLs carry
+something worth protecting: the receipt page asks `/api/tx?txid=…` every ten seconds
+while a drip confirms, and a balance lookup names an address. Together those are the
+IP-to-transaction link the ledger refuses to build. So the proxy's log is filtered
+before it is written, for both the access log and the error log:
+
+- **Kept:** timestamp, method, host, protocol and TLS version, path (`/api/tx`, never
+  `/api/tx?txid=…`), status code, response size, duration, the client's port, and the
+  response headers the proxy sent (with the query removed from `Location`, which a
+  redirect otherwise fills with the full URL).
+- **Dropped:** the client IP and the remote IP, the whole query string, and every
+  request header: not a named list, because `Sec-CH-UA`, `X-Real-IP`, `Forwarded:`
+  and whatever a browser sends next would walk past one.
+- **Retention:** the container log driver keeps at most three 10 MB files per
+  container ([`cloud-init.yaml`](deploy/cloud-init.yaml)); older lines are gone.
+
+The app's own request log line carries the path, the status and a salted hash of the
+IP, never the IP, and no query string. The balance lookup itself sends the address in
+a POST body rather than the URL, so it is not in a proxy line, a browser history or a
+referrer either.
 
 ### About `subnet_hash`, because it is not the same kind of thing as `ip_hash`
 
@@ -94,8 +120,12 @@ Two limits, since the point of this page is not to flatter us:
   `TURNSTILE_SECRET_KEY` is ignored with a warning (it used to flip the gate on its
   own). No request from this faucet reaches Cloudflare. If a client half is ever
   wired, this section is where the third-party trade gets written down first.
-- **Explorer links** (transparent sends only) point at a third-party explorer,
-  and clicking one discloses the txid to them. Shielded sends show no external link.
+- **Explorer links** on a receipt point at a third-party explorer, for shielded and
+  transparent sends alike, and clicking one discloses that txid to them. For a
+  shielded send the explorer sees a transaction with no recipient and no amount; for
+  a transparent one it sees the address and the amount, as anyone reading the chain
+  can. The link is the visitor's choice and the faucet never follows it: confirmation
+  on the receipt comes from asking our own node (`/api/tx`), not an explorer.
   **The faucet itself never tells an explorer about a payout.** It has the code to ask
   one, and that code is deliberately never called: it is a tool an operator runs by
   hand against a single transaction during an incident. Confirming payouts

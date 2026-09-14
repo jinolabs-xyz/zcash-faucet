@@ -1098,5 +1098,27 @@ check "the probe watches the certificate, which nothing on the box can see" \
   "grep -q 'the TLS certificate has more than' '$REPO/scripts/live-probe.mjs' && grep -q 'SMOKE_TLS_MIN_DAYS' '$REPO/scripts/live-probe.mjs'"
 check "and the Caddyfile says where certificate expiry is watched from" \
   "grep -q 'SMOKE_TLS_MIN_DAYS' '$REPO/deploy/z3/Caddyfile'"
+
+# THE PROXY LOG HOLDS NO IP AND NO QUERY STRING (risk register II, R-36). Two log
+# blocks, the site's access log and the global default that the error logger
+# writes through, each filtered the same way: a line that kept either half would be
+# the IP-to-txid record PRIVACY.md says nobody keeps. Counted, not grepped once, so
+# dropping the filter from one block cannot pass on the other. Measured with the
+# pinned image: the error logger writes the full request on every upstream 502.
+CF="$REPO/deploy/z3/Caddyfile"
+check "the Caddyfile's access log and its default (error) log both drop the client and remote IP" \
+  "[ \"\$(grep -c 'request>remote_ip delete' '$CF')\" = 2 ] && [ \"\$(grep -c 'request>client_ip delete' '$CF')\" = 2 ]"
+check "and both drop the whole query string from the URI, not named keys that a new route could miss" \
+  "[ \"\$(grep -cF 'request>uri regexp \\?.*\$ \"\"' '$CF')\" = 2 ]"
+check "and both drop every request header, not a named list that Sec-CH-UA or X-Real-IP would walk past" \
+  "[ \"\$(grep -c 'request>headers delete' '$CF')\" = 2 ] && ! grep -q 'request>headers>' '$CF'"
+check "and both strip the query from Location, which a redirect fills with the full URL" \
+  "[ \"\$(grep -cF 'resp_headers>Location regexp \\?.*\$ \"\"' '$CF')\" = 2 ]"
+check "and the default logger is actually declared, so the filter reaches the error log" \
+  "grep -qE '^\s*log default \{' '$CF'"
+check "and PRIVACY.md says what a proxy line keeps, what it drops, and for how long" \
+  "grep -q 'Dropped:' '$REPO/PRIVACY.md' && grep -q 'three 10 MB files' '$REPO/PRIVACY.md' && grep -q 'max-size\": \"10m\"' '$REPO/deploy/cloud-init.yaml' && grep -q 'max-file\": \"3\"' '$REPO/deploy/cloud-init.yaml'"
+check "the balance lookup takes the address in a POST body, and the page sends it that way" \
+  "grep -q 'export const POST = withApi(\"balance\"' '$REPO/src/app/api/balance/route.ts' && ! grep -qE 'searchParams|URLSearchParams' '$REPO/src/app/api/balance/route.ts' && ! grep -qE '/api/balance\\?|URLSearchParams' '$REPO/src/app/page.tsx'"
 check "the probe has tests, and npm test runs them" \
   "[ -f '$REPO/scripts/live-probe.test.mjs' ] && grep -q 'scripts/\*\*/\*.test.mjs' '$REPO/package.json'"
