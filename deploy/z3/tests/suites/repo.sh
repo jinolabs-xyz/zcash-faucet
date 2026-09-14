@@ -654,6 +654,11 @@ rc=$?
 check "a suite that overwrites the harness's counter fails the run" "[ $rc -ne 0 ]"
 check "and says which variable, not 'integer expression expected'" \
   "grep -q 'overwrote the harness.s check counter' '$T/clobber.log' && ! grep -q 'integer expression expected' '$T/clobber.log'"
+printf '# shellcheck shell=bash\nunset harness_checks_before\n' > "$T/tests2/suites/prune.sh"
+( cd "$REPO" && SUITES="prune" TEST_SCRATCH="$T/tests2" bash "$T/tests2/run-tests.sh" > "$T/unset.log" 2>&1 )
+rc=$?
+check "a suite that unsets the counter is named, not an unbound-variable abort with no tally" \
+  "[ $rc -ne 0 ] && grep -q 'overwrote the harness.s check counter' '$T/unset.log' && grep -q 'passed, .* failed' '$T/unset.log' && ! grep -q 'unbound variable' '$T/unset.log'"
 printf '# shellcheck shell=bash\nbefore=deadbeef\n' > "$T/tests2/suites/prune.sh"
 ( cd "$REPO" && SUITES="prune" TEST_SCRATCH="$T/tests2" bash "$T/tests2/run-tests.sh" > "$T/before.log" 2>&1 )
 rc=$?

@@ -432,17 +432,19 @@ for suite in $SELECTED; do
     bad "suite $suite does not parse, so none of its checks ran: $(printf '%s' "$parse_err" | head -n1)"
     continue
   fi
-  # The snapshot lives in a name no suite has a reason to use. It was `before`, and
-  # autodeploy.sh assigns `before="$(cat "$T/last-processed")"` for its own purposes, so
-  # by the time this guard ran the snapshot was a commit SHA: `[` printed "integer
-  # expression expected", the `if` was false, and the guard passed every suite that did
-  # that (#519). A clobbered snapshot is now a failure of its own, not a bypass.
+  # The snapshot lives in a name no suite has a reason to use. It was `before`, which
+  # four suites assign for their own purposes (autodeploy.sh a commit SHA, zsnap.sh a
+  # snapshot filename, drift.sh a sha256sum line, access.sh a ufw line), so by the time
+  # this guard ran the snapshot was a string: `[` printed "integer expression expected",
+  # the `if` was false, and the guard passed those four suites whatever they ran (#519).
+  # A clobbered snapshot is now a failure of its own, not a bypass. `${var-}` so that a
+  # suite which unsets it is named here too, rather than killing the run under set -u.
   # shellcheck disable=SC2154 # pass and fail are assigned in lib.sh, sourced above
   harness_checks_before=$(( pass + fail ))
   # shellcheck source=/dev/null
   . "$file"
-  case "$harness_checks_before" in
-    ''|*[!0-9]*) bad "suite $suite overwrote the harness's check counter (harness_checks_before='$harness_checks_before'), so whether it ran any checks cannot be told"; continue ;;
+  case "${harness_checks_before-}" in
+    ''|*[!0-9]*) bad "suite $suite overwrote the harness's check counter (harness_checks_before='${harness_checks_before-}'), so whether it ran any checks cannot be told"; continue ;;
   esac
   # shellcheck disable=SC2154
   if [ "$(( pass + fail ))" -eq "$harness_checks_before" ]; then
