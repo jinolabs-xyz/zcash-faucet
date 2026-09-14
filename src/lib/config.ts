@@ -564,4 +564,14 @@ export function assertServingConfig(): void {
   if (config.challenge === "none" && process.env.NODE_ENV === "production") {
     console.warn("[config] THE ANTI-ABUSE GATE IS OFF (FAUCET_CHALLENGE=none) in production: every claim is accepted without proof of work. If this is not a decision you made, set FAUCET_CHALLENGE=pow.");
   }
+  // NO TRUSTED PROXY MEANS NO CLIENT IP, and every limit keyed on one is silently
+  // skipped: the per-connection allowance, the per-subnet cap, the proof-of-work
+  // escalation, the /api/tx lookup limit (risk register II, R-30). What is left is the
+  // per-address cooldown, which addresses are free to dodge, and the global cap. A
+  // self-hoster behind their own proxy who leaves the default 0 is serving exactly
+  // that, and nothing said so. Said here, where the operator is reading, in production
+  // only: the integration stacks set it on purpose per server.
+  if (config.trustedProxyCount === 0 && process.env.NODE_ENV === "production") {
+    console.warn("[config] TRUSTED_PROXY_COUNT is 0, so no request has a client IP: the per-connection, per-subnet, proof-of-work escalation and /api/tx limits are all SKIPPED. Behind a proxy, set it to the number of proxy hops you run (1 under the shipped Caddy).");
+  }
 }
