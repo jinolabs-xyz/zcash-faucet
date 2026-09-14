@@ -644,6 +644,21 @@ printf '# shellcheck shell=bash\n: nothing to see here\n' > "$T/tests2/suites/pr
 rc=$?
 check "a suite that runs NO checks fails the run rather than reporting a clean zero" "[ $rc -ne 0 ]"
 check "and says so in those terms" "grep -q 'ran no checks at all' '$T/nochecks.log'"
+# #519: the snapshot the guard compares against was a plain `before`, and the autodeploy
+# suite assigns `before=<sha>` for its own purposes. `[ ... -eq <sha> ]` errored, the if
+# was false, and a suite that ran nothing passed. A suite that clobbers the counter is a
+# failure in its own words, and one that only uses `before` is left alone.
+printf '# shellcheck shell=bash\nharness_checks_before=deadbeef\n' > "$T/tests2/suites/prune.sh"
+( cd "$REPO" && SUITES="prune" TEST_SCRATCH="$T/tests2" bash "$T/tests2/run-tests.sh" > "$T/clobber.log" 2>&1 )
+rc=$?
+check "a suite that overwrites the harness's counter fails the run" "[ $rc -ne 0 ]"
+check "and says which variable, not 'integer expression expected'" \
+  "grep -q 'overwrote the harness.s check counter' '$T/clobber.log' && ! grep -q 'integer expression expected' '$T/clobber.log'"
+printf '# shellcheck shell=bash\nbefore=deadbeef\n' > "$T/tests2/suites/prune.sh"
+( cd "$REPO" && SUITES="prune" TEST_SCRATCH="$T/tests2" bash "$T/tests2/run-tests.sh" > "$T/before.log" 2>&1 )
+rc=$?
+check "a suite that sets a plain \`before\` and runs no checks is still caught" \
+  "[ $rc -ne 0 ] && grep -q 'ran no checks at all' '$T/before.log' && ! grep -q 'integer expression expected' '$T/before.log'"
 rm -rf "$T/tests2"
 
 # THE INSTALL LINE IS GENERATED, so it cannot omit a command the guard demands. The three
