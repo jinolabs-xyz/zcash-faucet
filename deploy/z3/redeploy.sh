@@ -301,9 +301,7 @@ probe_usable() {
   compose exec -T faucet node -e 'process.exit(0)' >/dev/null 2>&1
 }
 
-# Liveness is required. Readiness is required only when it held before, so a
-# deploy cannot silently downgrade a serving faucet, and is not blocked by a
-# node that is still syncing.
+
 # ── CADDY MOVES WITH ITS PIN (R-7) ──────────────────────────────────────────────
 # The compose file pins caddy by digest and dependabot moves the digest; the compose
 # file is app-affecting, so this script runs on that bump. `pull` fetches the pinned
@@ -315,11 +313,16 @@ probe_usable() {
 #
 # Best effort by design. The faucet's own outcome is decided before this runs, and a
 # registry that cannot be reached must not turn a good app deploy into a failed one;
-# it is a WARNING in the journal, which is where "caddy stayed behind its pin" is read.
+# it is a WARNING in the journal, which is where "caddy may be behind its pin" is read.
+#
+# ON EVERY EXIT THAT SHIPPED, exit 0 and exit 3 alike, because auto-deploy records the
+# commit on both: a dependabot caddy bump that landed through the unverified path
+# would otherwise be marked processed with caddy still on the old image, and nothing
+# would ever come back for it (review of #524). Never on a rollback path.
 refresh_caddy() {
   log "caddy: pulling the pinned image"
   if ! compose pull caddy 2>&1 | tail -n 3 | sed 's/^/    /'; then
-    log "WARNING: caddy: could not pull the pinned image, the running caddy keeps serving behind its pin"
+    log "WARNING: caddy: could not pull the pinned image; the running caddy keeps serving and may be behind its pin"
     return 0
   fi
   if ! compose up -d --no-deps --no-build caddy 2>&1 | sed 's/^/    /'; then
@@ -328,6 +331,9 @@ refresh_caddy() {
   return 0
 }
 
+# Liveness is required. Readiness is required only when it held before, so a
+# deploy cannot silently downgrade a serving faucet, and is not blocked by a
+# node that is still syncing.
 wait_healthy() { # $1 = 1 when readiness is also required
   local want_ready="$1" deadline=$((SECONDS + HEALTH_TIMEOUT)) live=0
   while [ "$SECONDS" -lt "$deadline" ]; do
@@ -420,11 +426,13 @@ fi
 
 # A build failure is the cheapest failure: nothing has been swapped yet.
 log "building the new image"
-# --pull: the Dockerfile pins its base by digest and dependabot moves the digest, so a
-# build that never asked the registry again would keep the first-ever pull for the
-# life of the box (R-7). A registry that cannot be reached fails the build, which is
-# not_shipped: the running faucet stays, and the next tick retries.
-if ! compose build --pull faucet 2>&1 | tail -n 20 | sed 's/^/    /'; then
+# No --pull, and not by omission. The Dockerfile pins its base by digest (R-7), and
+# BuildKit resolves a digest-pinned FROM from its local store when it has it and
+# fetches when it does not, whatever --pull says: measured with the registry
+# unreachable, a pinned build with --pull still completed from local content. A
+# changed digest is a changed line, and that alone fetches the new base. The flag
+# would only claim a behaviour it does not have.
+if ! compose build faucet 2>&1 | tail -n 20 | sed 's/^/    /'; then
   not_shipped "build failed, the running faucet was left alone"
 fi
 
@@ -507,7 +515,8 @@ if wait_healthy "$want_ready"; then
          exit 3
        fi
        log "deployed and healthy: $new" ; exit 0 ;;
-    2) log "the build is healthy but unverified (its image could not be read), treat this deploy as incomplete" ; exit 3 ;;
+    2) refresh_caddy
+       log "the build is healthy but unverified (its image could not be read), treat this deploy as incomplete" ; exit 3 ;;
     *) log "the health gate passed on code that is not this build, so this deploy shipped nothing"
        exit 1 ;;
   esac
@@ -536,6 +545,7 @@ if ! probe_usable; then
     log "the running container is $running_id, not the build $new_id: compose did not recreate it, the old build is still serving"
     not_shipped "the new image was built but the running container is still the old one"
   fi
+  refresh_caddy
   log "NOT VERIFIED: could not probe the app at all (no REDEPLOY_FAUCET_URL and docker compose exec failed)"
   log "The new build is running (docker says so, and it is the image we built) and may be fine. Nothing was rolled back."
   log "Set REDEPLOY_FAUCET_URL to something reachable and re-run to get a real verdict."
@@ -554,6 +564,7 @@ final_reason="$PROBE_REASON"
 if [ "$final_state" = "ready" ]; then
   log "the gate timed out, but the faucet IS ready now, so nothing is being rolled back"
   log "  It became ready after ${HEALTH_TIMEOUT}s. Raise REDEPLOY_HEALTH_TIMEOUT if this recurs."
+  refresh_caddy
   exit 0
 fi
 

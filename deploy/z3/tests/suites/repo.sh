@@ -61,8 +61,6 @@ check "every FROM node in the Dockerfile is pinned by digest" \
 check "and both stages carry one and the same digest" "[ \"\$(printf '%s\n' \"\$NODE_DIGESTS\" | grep -c .)\" -eq 1 ]"
 check "caddy in the compose file is pinned by digest" \
   "grep -qE '^ +image: caddy:[^ ]+@sha256:[0-9a-f]{64}\$' '$REPO/deploy/z3/docker-compose.faucet.yml'"
-check "and redeploy builds with --pull, so a moved digest is fetched" \
-  "grep -qE '^ *if ! compose build --pull faucet' '$REPO/deploy/z3/redeploy.sh'"
 check "every node-version pin matches the Dockerfile's node $PROD_MAJOR" \
   "[ -z '$WF_BAD' ] || { echo '   mismatched:$WF_BAD'; false; }"
 
