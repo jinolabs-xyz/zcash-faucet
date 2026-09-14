@@ -102,6 +102,26 @@ WD_LAG="$(sed -nE 's/^NODE_LAG_LIMIT="\$\{WATCHDOG_NODE_LAG_LIMIT:-([0-9]+)\}".*
 check "both defaults could be read" "[ -n '$MINER_LAG' ] && [ -n '$WD_LAG' ]"
 check "and the watchdog's default equals the miner's DEFAULT_MAX_LAG ($WD_LAG vs $MINER_LAG)" "[ '$WD_LAG' = '$MINER_LAG' ]"
 
+echo "== repo: the box's CI gate requires every job ci.yml defines, by name"
+# auto-deploy.sh refuses a commit unless every job in its list completed green
+# (risk register II, R-1). The list is a default in the script; ci.yml is where jobs
+# are added and renamed. If they drift apart the gate is wrong in one of two ways:
+# a job the list names that ci.yml no longer defines is "absent" for ever, and no
+# commit ships; a job ci.yml added that the list does not name is never asked about,
+# and a red one ships. Both are silent, so the two lists are held equal here.
+# A job id may be [A-Za-z_][A-Za-z0-9_-]*; the first cut admitted lowercase only, so an
+# extra_job: escaped the comparison and a red one would have shipped. A trailing comment
+# on the job line is tolerated. And a job-level `name:` renames the check-run GitHub
+# reports, so the gate would see the id as absent for ever: refused below by name.
+CI_JOBS="$(awk '/^jobs:/{injobs=1; next} injobs && /^  [A-Za-z_][A-Za-z0-9_-]*:[[:space:]]*(#.*)?$/ {sub(/^  /, ""); sub(/:.*$/, ""); print}' "$REPO/.github/workflows/ci.yml" | sort | tr '\n' ' ')"
+CI_JOB_NAMES="$(awk '/^jobs:/{injobs=1; next} injobs && /^    name:/ {print}' "$REPO/.github/workflows/ci.yml")"
+check "no job in ci.yml sets a display name, which would rename its check-run away from its id" \
+  "[ -z '$CI_JOB_NAMES' ] || { echo '   job-level name: lines:'; printf '%s\n' '$CI_JOB_NAMES'; false; }"
+GATE_JOBS="$(sed -nE 's/^CI_REQUIRED="\$\{AUTODEPLOY_REQUIRED_CHECKS:-([^}]+)\}"$/\1/p' "$REPO/deploy/z3/auto-deploy.sh" | tr ' ' '\n' | sort | tr '\n' ' ')"
+check "ci.yml defines jobs and the gate's default list could be read" "[ -n '$CI_JOBS' ] && [ -n '$GATE_JOBS' ]"
+check "and the gate requires exactly the jobs ci.yml defines: '$GATE_JOBS' vs '$CI_JOBS'" \
+  "[ '$GATE_JOBS' = '$CI_JOBS' ]"
+
 echo "== repo: CI lints EVERY tracked shell script, not a glob's worth of them"
 # WHY THIS IS A RULE AND NOT A ONE-TIME FIX. CI ran `shellcheck -S warning deploy/deploy.sh
 # deploy/z3/*.sh`, which is 22 of this repo's 41 tracked .sh files. The 19 it missed are the
