@@ -1294,7 +1294,7 @@ export default function Home() {
               {genErr && <span style={{ fontSize: 12.5, lineHeight: 1.45, color: "var(--color-accent-800)", fontWeight: 500, maxWidth: "52ch" }}>{genErr}</span>}
               {!addr.trim() && <button className="btn btn-ghost btn-sm" onClick={generate} style={{ padding: 0 }}>Make a throwaway address and key</button>}
             </div>
-            {genKey && genKey.address === addr && (
+            {genKey && genKey.address === addr.trim() && (
               <div data-testid="generated-key" style={{ display: "flex", flexDirection: "column", gap: 8, padding: "12px 14px", border: "1px solid var(--color-divider)", borderRadius: 6 }}>
                 <span style={{ ...kicker, color: muted(60) }}>{genKey.label}</span>
                 <code aria-label={keyShown ? undefined : "Spending key, hidden"} style={{ fontFamily: "var(--mono)", fontSize: 11.5, lineHeight: 1.5, wordBreak: "break-all", color: keyShown ? "inherit" : muted(55) }}>
@@ -1310,8 +1310,8 @@ export default function Home() {
                 <p aria-live="polite" className="sr-only">{copied === "key" ? "Spending key copied." : ""}</p>
               </div>
             )}
-            <button className="btn btn-primary" onClick={() => void submit()} disabled={phase === "empty" || (!!genKey && genKey.address === addr && !keyCopied && !keyShown)} style={{ width: "100%", justifyContent: "space-between" }}>
-              <span>{genKey && genKey.address === addr && !keyCopied && !keyShown ? "Copy the key first" : phase === "checking" ? "Checking status…" : phase === "syncing" ? "Queue it, sends when the node is ready" : phase === "empty" ? (refilling ? "Topping up, back in a moment" : "Waiting for a refill") : "Request " + dripText}</span>
+            <button className="btn btn-primary" onClick={() => void submit()} disabled={phase === "empty" || (!!genKey && genKey.address === addr.trim() && !keyCopied && !keyShown)} style={{ width: "100%", justifyContent: "space-between" }}>
+              <span>{genKey && genKey.address === addr.trim() && !keyCopied && !keyShown ? "Copy the key first" : phase === "checking" ? "Checking status…" : phase === "syncing" ? "Queue it, sends when the node is ready" : phase === "empty" ? (refilling ? "Topping up, back in a moment" : "Waiting for a refill") : "Request " + dripText}</span>
               <span aria-hidden="true">→</span>
             </button>
             <p style={{ margin: 0, fontSize: 11.5, letterSpacing: ".02em", color: muted(55), fontFamily: "var(--mono)" }}>{dripText} · once per address / 24h · shielded z→z</p>
