@@ -24,12 +24,12 @@ const COOLDOWN = 86_400;
 const DRIP = 100n;
 const CAP = 3n * DRIP; // three drips a day, so the fourth is the one refused
 
-async function claim(addr: string, at: number, finalize: boolean, network: "taz" | "ctaz" = "taz") {
+async function claim(addr: string, at: number, finalize: boolean, network: "taz" | "ctaz" = "taz", amountZat = DRIP) {
   const r = await reserveClaim({
     address: addr,
     ipHash: `ip-${addr}`, // one IP per claim, so only the cap can refuse
     subnetHash: null,
-    amountZat: DRIP,
+    amountZat,
     now: at,
     cooldownSeconds: COOLDOWN,
     dailyCapZat: CAP,
@@ -45,8 +45,10 @@ test("a full cap says when the EARLIEST counted drip leaves the window", async (
   for (let i = 0; i < 3; i++) assert.equal((await claim(`s-${i}`, NOW + i * 3600, true)).ok, true, `drip ${i} should be paid`);
   // A PENDING row on the OTHER network, younger than every TAZ row and on the short
   // lease: a cap query that forgot `network = ?` would report its lease end as TAZ's
-  // answer, hours early. It must be invisible here (review of #523).
-  assert.equal((await claim("other-net", NOW + 3 * 3600 - 10, false, "ctaz")).ok, true);
+  // answer, hours early. It must be invisible here (review of #523). Zero amount, so
+  // it counts as a row for MIN() without spending the cTAZ cap the test below fills
+  // for itself; the gate has no minimum amount, only a sum.
+  assert.equal((await claim("other-net", NOW + 3 * 3600 - 10, false, "ctaz", 0n)).ok, true);
   const at = NOW + 3 * 3600;
   const refused = await claim("s-late", at, true);
   assert.equal(refused.ok, false);
@@ -56,11 +58,10 @@ test("a full cap says when the EARLIEST counted drip leaves the window", async (
 });
 
 test("a PENDING drip frees cap room at the end of its lease, not a day later", async () => {
-  // Cap is per network, so cTAZ is its own window. The test above already left one
-  // cTAZ pending row (dated three hours on), so two more fill the cap and the third is
-  // refused: the room opens when the EARLIEST lease ends, which is p-0's, not the
-  // future-dated one's.
-  for (let i = 0; i < 2; i++) assert.equal((await claim(`p-${i}`, NOW + i, false, "ctaz")).ok, true);
+  // Cap is per network, so cTAZ is its own window (the zero-amount row the test above
+  // left here is inside it and spends nothing). Three pending rows (a slow wallet),
+  // a fourth refused: the room opens when the EARLIEST lease ends, which is p-0's.
+  for (let i = 0; i < 3; i++) assert.equal((await claim(`p-${i}`, NOW + i, false, "ctaz")).ok, true);
   const at = NOW + 30;
   const refused = await claim("p-late", at, false, "ctaz");
   assert.equal(refused.ok, false);
