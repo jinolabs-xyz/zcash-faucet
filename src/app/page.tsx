@@ -873,7 +873,9 @@ export default function Home() {
     if (detect(a).kind !== "ok") { setLookupRes("Not a testnet address, nothing to look up."); return; }
     setLookupRes("Looking up…");
     try {
-      const r = await fetch("/api/balance?address=" + encodeURIComponent(a));
+      // POST, so the address is not in a URL that a proxy log or a browser history
+      // keeps (R-36); the ledger will not store it in the clear either.
+      const r = await fetch("/api/balance", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ address: a }) });
       const d = await r.json();
       if (d?.ok === false) setLookupRes(d.error || "Couldn't look that up.");
       else if (d?.shielded && d?.queryable === false) setLookupRes(d.note || "Shielded balances are private. Provide a viewing key in a wallet to see this.");

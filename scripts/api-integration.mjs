@@ -600,10 +600,16 @@ try {
   ok("A claim with forged pow sig is 403", forgedRes.status === 403, `status ${forgedRes.status}`);
 
   /* ── A: /api/balance ─────────────────────────────────────────────────── */
-  const balShielded = await get(BASE_A, "/api/balance?address=" + encodeURIComponent(UNIFIED_B));
+  const balShielded = await post(BASE_A, "/api/balance", { address: UNIFIED_B });
   ok("A balance for shielded address: 200, private, not queryable", balShielded.status === 200 && balShielded.body.shielded === true && balShielded.body.queryable === false);
-  const balBad = await get(BASE_A, "/api/balance?address=" + encodeURIComponent(UNIFIED_BAD));
+  const balBad = await post(BASE_A, "/api/balance", { address: UNIFIED_BAD });
   ok("A balance for broken address is 400", balBad.status === 400, `status ${balBad.status}`);
+  // The address is not accepted in the URL (R-36): a GET with it is refused and
+  // told where to put it, so nothing looked up lands in a proxy log line.
+  const balGet = await get(BASE_A, "/api/balance?address=" + encodeURIComponent(UNIFIED_B));
+  ok("A balance by GET is 405 and says to POST", balGet.status === 405 && /POST body/.test(balGet.body.error ?? ""), `status ${balGet.status} ${JSON.stringify(balGet.body)}`);
+  const balNoBody = await post(BASE_A, "/api/balance", {});
+  ok("A balance with no address in the body is 400", balNoBody.status === 400, `status ${balNoBody.status}`);
   // Transparent lookups hit the public lightwalletd, deliberately not asserted
   // here: CI must not depend on an external chain endpoint.
 

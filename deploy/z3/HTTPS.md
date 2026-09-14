@@ -98,7 +98,21 @@ a repository variable; see OBSERVABILITY.md.
 - **Access logs to stdout**, so they land in the same docker logging pipeline
   as everything else, with `/api/health` and `/api/ready` skipped. Those two
   are most of the traffic (the watchdog polls them constantly) and say
-  nothing worth keeping.
+  nothing worth keeping. **Both the access log and the process log are
+  filtered before they are written:** no client or remote IP, no query string,
+  no `User-Agent`, `X-Forwarded-For` or `Referer`. The receipt page polls
+  `/api/tx?txid=…` while a drip confirms, and an unfiltered line would be the
+  IP-to-transaction record the ledger refuses to keep (PRIVACY.md says what a
+  line holds). The error logger is covered by the global `log default` block;
+  it writes the whole request on every upstream 502, through a path the site's
+  `log` block does not touch.
+- **A merged Caddyfile is applied by the next deploy.** The file is a bind
+  mount, so `compose up -d` alone recreates nothing when its bytes change, and
+  with the admin API off there is no reload. `redeploy.sh` hashes the file,
+  validates a changed one with the pinned image (`compose run --rm caddy caddy
+  validate`), and recreates caddy on purpose; the hash of what was applied is
+  stamped in `/var/lib/faucet-autodeploy/caddyfile.applied`. A file that does not validate is a
+  warning in the journal and the running caddy keeps its last good config.
 - **No ACME contact email** by default. Let's Encrypt accepts an account with
   no contact, and a fake address is worse than none. For expiry notices, add
   `email you@example.org` to the global block in the Caddyfile.

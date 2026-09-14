@@ -22,12 +22,13 @@ redeploy_env() {
   chmod +x "$T/bin/verify-manifest"
   export REDEPLOY_VERIFY_MANIFEST="$T/bin/verify-manifest"
   export REDEPLOY_OVERLAY_DIR="$T/overlay" REDEPLOY_REPO_DIR="$T"
+  export REDEPLOY_CADDY_STAMP="$T/state/caddyfile.applied"
   export REDEPLOY_HEALTH_TIMEOUT=6 REDEPLOY_HEALTH_INTERVAL=1
   # These tests drive the URL probe path. The container-exec default is
   # covered separately below.
   export REDEPLOY_FAUCET_URL="http://127.0.0.1:9"
   export STUB_HEALTH="$T/healthy" STUB_READY="$T/ready"
-  unset STUB_BUILD_FAIL STUB_UP_FAIL STUB_PULL_FAIL STUB_CADDY_PULL_FAIL STUB_CADDY_UP_FAIL 2>/dev/null
+  unset STUB_BUILD_FAIL STUB_UP_FAIL STUB_PULL_FAIL STUB_CADDY_PULL_FAIL STUB_CADDY_UP_FAIL STUB_CADDY_VALIDATE_FAIL 2>/dev/null
   echo "sha256:old" > "$STUB_IMAGES/zcash-faucet_latest"   # something is running
 }
 img() { cat "$STUB_IMAGES/$(printf '%s' "$1" | tr '/:' '__')" 2>/dev/null; }
@@ -46,6 +47,43 @@ check "tag happens before build" "[ \"\$(grep -n 'docker tag' '$STUB_LOG' | head
 check "caddy is pulled" "grep -qE 'compose .*pull caddy' '$STUB_LOG'"
 check "and brought up alone, without its dependencies" "grep -qE 'compose .*up -d --no-deps --no-build caddy' '$STUB_LOG'"
 check "after the faucet was started, not before" "[ \"\$(grep -n 'compose.*up -d faucet' '$STUB_LOG' | head -1 | cut -d: -f1)\" -lt \"\$(grep -n 'compose.*pull caddy' '$STUB_LOG' | head -1 | cut -d: -f1)\" ]"
+
+echo "== redeploy: a changed Caddyfile is validated and applied, not left inert behind a bind mount (R-36)"
+# `up -d` recreates nothing for a bind-mounted file whose bytes changed, and caddy has
+# no admin API to reload through. The stamp is what was last APPLIED, written only after
+# a successful recreate; the overlay in these tests has no Caddyfile, so every case
+# above ran the pin-only path and none of this could fire there.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+printf ':80 {\n\treverse_proxy faucet:3000\n}\n' > "$T/overlay/Caddyfile"
+bash "$REDEPLOY" > "$T/caddyfile-new.log" 2>&1
+check "a Caddyfile with no stamp ships at exit 0" "[ $? -eq 0 ]"
+check "it is validated with the pinned image first" "grep -qE 'compose .*run --rm --no-deps -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile' '$STUB_LOG'"
+check "then caddy is recreated ON PURPOSE, not left to compose's up-to-date verdict" "grep -qE 'compose .*up -d --no-deps --no-build --force-recreate caddy' '$STUB_LOG'"
+check "validation comes before the recreate" "[ \"\$(grep -n 'caddy validate' '$STUB_LOG' | head -1 | cut -d: -f1)\" -lt \"\$(grep -n 'force-recreate caddy' '$STUB_LOG' | head -1 | cut -d: -f1)\" ]"
+check "and the stamp lives OUTSIDE the overlay, where the image build context cannot pick it up" "[ ! -e '$T/overlay/.caddyfile.applied' ] && [ -f '$T/state/caddyfile.applied' ]"
+check "and the stamp now holds the applied file's hash" "[ \"\$(cat '$T/state/caddyfile.applied')\" = \"\$(sha256sum '$T/overlay/Caddyfile' | cut -c1-64)\" ]"
+check "and it says so in the journal" "grep -q 'caddy: recreated with the new Caddyfile' '$T/caddyfile-new.log'"
+# Same file again: nothing to apply, so no validate, no forced recreate, only the pin.
+: > "$STUB_LOG"
+bash "$REDEPLOY" > "$T/caddyfile-same.log" 2>&1
+check "an unchanged Caddyfile is not validated again" "! grep -q 'caddy validate' '$STUB_LOG'"
+check "and caddy is not force-recreated for it, only refreshed to its pin" "! grep -q 'force-recreate' '$STUB_LOG' && grep -qE 'compose .*up -d --no-deps --no-build caddy' '$STUB_LOG'"
+# A file that does not validate: warning, the running caddy keeps its config, the stamp
+# still names the last GOOD file so the next deploy tries again.
+printf ':80 {\n\tnot_a_directive\n}\n' > "$T/overlay/Caddyfile"
+: > "$STUB_LOG"
+STUB_CADDY_VALIDATE_FAIL=1 bash "$REDEPLOY" > "$T/caddyfile-bad.log" 2>&1
+check "a Caddyfile that fails validation leaves the deploy at exit 0" "[ $? -eq 0 ]"
+check "and warns in those words" "grep -q 'WARNING: caddy: the Caddyfile does not validate' '$T/caddyfile-bad.log'"
+check "and caddy is not touched at all after a failed validation" "! grep -qE 'compose .*up -d --no-deps --no-build( --force-recreate)? caddy' '$STUB_LOG'"
+check "and the stamp still names the last good file, not the bad one" "[ \"\$(cat '$T/state/caddyfile.applied')\" != \"\$(sha256sum '$T/overlay/Caddyfile' | cut -c1-64)\" ]"
+# A recreate that fails must not stamp the file as applied.
+printf ':80 {\n\treverse_proxy faucet:3000\n\tencode zstd\n}\n' > "$T/overlay/Caddyfile"
+STUB_CADDY_UP_FAIL=1 bash "$REDEPLOY" > "$T/caddyfile-upfail.log" 2>&1
+check "a failed recreate after a valid Caddyfile still exits 0" "[ $? -eq 0 ]"
+check "and is the same warning as any other caddy recreate failure" "grep -q 'WARNING: caddy: pulled but could not be recreated' '$T/caddyfile-upfail.log'"
+check "and the stamp is NOT written, so the next deploy applies it" "[ \"\$(cat '$T/state/caddyfile.applied')\" != \"\$(sha256sum '$T/overlay/Caddyfile' | cut -c1-64)\" ]"
 
 echo "== redeploy: caddy staying behind its pin is a warning, never a failed app deploy"
 # A registry that cannot be reached for caddy must not turn a good app deploy into a
