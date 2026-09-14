@@ -23,6 +23,10 @@ import { join } from "node:path";
 // into a runtime TypeError inside fingerprintAddress: the cast hid exactly what the type
 // was there to tell me.
 process.chdir(mkdtempSync(join(tmpdir(), "faucet-finalize-")));
+// This file opens data/faucet.db by hand, so the driver must put it there: an
+// ambient FAUCET_DATA_DIR (the integration suite's knob) would move it and read as a
+// broken migration.
+delete process.env.FAUCET_DATA_DIR;
 process.env.DB_BACKEND = "sqlite";
 
 const { reserveClaim, finalizeClaim } = await import("./index.ts");

@@ -24,6 +24,8 @@ const require_ = createRequire(import.meta.url);
 const Database = require_("better-sqlite3");
 
 process.env.RATE_LIMIT_SALT = "migrations-test-salt";
+// Reads data/faucet.db by hand: an ambient FAUCET_DATA_DIR would move the ledger away.
+delete process.env.FAUCET_DATA_DIR;
 const { SqliteDriver } = await import("./driver.ts");
 const { MIGRATIONS, SCHEMA, INDEXES } = await import("./sql.ts");
 

@@ -16,6 +16,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 process.env.RATE_LIMIT_SALT = "probe-test-salt";
+// Plants data/faucet.db by hand: an ambient FAUCET_DATA_DIR would make the driver look elsewhere.
+delete process.env.FAUCET_DATA_DIR;
 const { probeLedger, ledgerBlocksServing, verdictFor, MAX_AGE_MS, PROBE_EVERY_MS } = await import("./probe.ts");
 const { LEDGER_PROBE_SQL } = await import("./sql.ts");
 
