@@ -345,7 +345,9 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     // only because that sentence happens to end "...from a different connection" - reword
     // the copy and the card would have offered "Try a different address" to someone whose
     // whole network is over quota, the exact wrong advice this change exists to stop.
-    const measured = reservation.kind === "cooldown";
+    // The cap's retryAfter is measured too (risk register II, R-34): the earliest
+    // expiry among the rows it counts, the same arithmetic as the connection refusal.
+    const measured = reservation.kind === "cooldown" || reservation.kind === "cap";
     const nextAt =
       measured && reservation.retryAfterSeconds != null
         ? new Date((now + reservation.retryAfterSeconds) * 1000).toISOString()
@@ -440,7 +442,7 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
       // for the whole window. Twelve IPs could hold it open without one drip failing.
       // The wallet was never asked. Not recorded: queue depth is on /api/status and
       // says what this is.
-      return apiError(503, err.message, api);
+      return apiError(503, err.message, api, { kind: "busy" });
     }
     // Counted, because this is the only place in the app that knows a drip failed. A
     // 502 to one caller and a log line is not a signal anything can act on, which is

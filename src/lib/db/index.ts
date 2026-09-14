@@ -16,6 +16,7 @@ import {
   RESERVE_SQL,
   SUBNET_COUNT_SQL,
   IP_WINDOW_SQL,
+  CAP_WINDOW_SQL,
   reserveParams,
   LIVE_BLOCK_SQL,
   FINALIZE_SQL,
@@ -160,8 +161,23 @@ async function whyBlocked(
       };
     }
   }
-  // No live cooldown row and no subnet overage → it was the global daily cap.
-  return { ok: false, kind: "cap", reason: "Faucet daily cap reached. Please come back tomorrow." };
+  // No live cooldown row and no subnet overage → it was the global daily cap. WHEN it
+  // has room again is measured the way the per-IP refusal measures it: the earliest
+  // expiry among the rows the cap counts. "Come back tomorrow" at 23:50 on a cap that
+  // frees at 00:10 sends someone away for a day (risk register II, R-34); a page that
+  // has the time can say the time, and a page that has nothing can say nothing.
+  const cap = await driver().get<{ frees_at: number | null }>(CAP_WINDOW_SQL, [
+    PENDING_LEASE_SECONDS,
+    network,
+    now - 86_400,
+    now - PENDING_LEASE_SECONDS,
+  ]);
+  return {
+    ok: false,
+    kind: "cap",
+    reason: "Faucet daily cap reached. Please come back tomorrow.",
+    ...(cap?.frees_at != null ? { retryAfterSeconds: Math.max(1, cap.frees_at - now) } : {}),
+  };
 }
 
 /** Rows older than this can't affect a cooldown, the 24h cap OR a pending lease - safe
