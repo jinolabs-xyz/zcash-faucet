@@ -27,7 +27,7 @@ redeploy_env() {
   # covered separately below.
   export REDEPLOY_FAUCET_URL="http://127.0.0.1:9"
   export STUB_HEALTH="$T/healthy" STUB_READY="$T/ready"
-  unset STUB_BUILD_FAIL STUB_UP_FAIL STUB_PULL_FAIL 2>/dev/null
+  unset STUB_BUILD_FAIL STUB_UP_FAIL STUB_PULL_FAIL STUB_CADDY_PULL_FAIL STUB_CADDY_UP_FAIL 2>/dev/null
   echo "sha256:old" > "$STUB_IMAGES/zcash-faucet_latest"   # something is running
 }
 img() { cat "$STUB_IMAGES/$(printf '%s' "$1" | tr '/:' '__')" 2>/dev/null; }
@@ -41,6 +41,26 @@ check "previous image tagged before the build" "[ \"\$(img zcash-faucet:previous
 check "live tag now points at the new build" "[ \"\$(img zcash-faucet:latest)\" != 'sha256:old' ]"
 check "readiness was required (was ready before)" "grep -q 'must be ready too' '$T/ok.log'"
 check "tag happens before build" "[ \"\$(grep -n 'docker tag' '$STUB_LOG' | head -1 | cut -d: -f1)\" -lt \"\$(grep -n 'compose.*build' '$STUB_LOG' | head -1 | cut -d: -f1)\" ]"
+# CADDY MOVES WITH ITS PIN (R-7): pulled and recreated only after the faucet's own outcome is decided,
+# and only caddy (--no-deps), so the faucet just brought up is not touched again.
+check "caddy is pulled" "grep -qE 'compose .*pull caddy' '$STUB_LOG'"
+check "and brought up alone, without its dependencies" "grep -qE 'compose .*up -d --no-deps --no-build caddy' '$STUB_LOG'"
+check "after the faucet was started, not before" "[ \"\$(grep -n 'compose.*up -d faucet' '$STUB_LOG' | head -1 | cut -d: -f1)\" -lt \"\$(grep -n 'compose.*pull caddy' '$STUB_LOG' | head -1 | cut -d: -f1)\" ]"
+
+echo "== redeploy: caddy staying behind its pin is a warning, never a failed app deploy"
+# A registry that cannot be reached for caddy must not turn a good app deploy into a
+# failed one (exit 0 still; auto-deploy records the commit) and must say so in the journal.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_CADDY_PULL_FAIL=1 bash "$REDEPLOY" > "$T/caddy-pull.log" 2>&1
+check "a caddy pull failure leaves the deploy at exit 0" "[ $? -eq 0 ]"
+check "and warns in those words" "grep -q 'WARNING: caddy: could not pull' '$T/caddy-pull.log'"
+check "and does not try to recreate caddy from a pull that failed" "! grep -qE 'compose .*up -d --no-deps --no-build caddy' '$STUB_LOG'"
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_CADDY_UP_FAIL=1 bash "$REDEPLOY" > "$T/caddy-up.log" 2>&1
+check "a caddy recreate failure leaves the deploy at exit 0" "[ $? -eq 0 ]"
+check "and warns in those words" "grep -q 'WARNING: caddy: pulled but could not be recreated' '$T/caddy-up.log'"
 
 echo "== redeploy: a build failure never touches the running faucet"
 redeploy_env
@@ -53,6 +73,7 @@ check "exits 2, the non-paging code" "[ $rc_bf -eq 2 ]"
 check "says the running faucet was left alone" "grep -q 'left alone' '$T/bf.log'"
 check "live image unchanged" "[ \"\$(img zcash-faucet:latest)\" = 'sha256:old' ]"
 check "nothing was started" "! grep -q 'compose.*up' '$STUB_LOG'"
+check "and caddy was not pulled either: the faucet's outcome comes first" "! grep -q 'pull caddy' '$STUB_LOG'"
 
 echo "== redeploy: a build that will not start rolls back automatically"
 redeploy_env
@@ -63,6 +84,7 @@ STUB_UP_FAIL_ONCE="$T/up-failed-once" bash "$REDEPLOY" > "$T/uf.log" 2>&1
 rc_uf=$?
 check "exits 2 (rolled back, did not ship)" "[ $rc_uf -eq 2 ]"
 check "rollback was attempted" "grep -q 'rolling back' '$T/uf.log'"
+check "and caddy was left alone" "! grep -qE 'compose .*(pull|up -d --no-deps --no-build) caddy' '$STUB_LOG'"
 check "live tag restored to the previous image" "[ \"\$(img zcash-faucet:latest)\" = 'sha256:old' ]"
 
 echo "== redeploy: when the rollback cannot start either, exit 1 for a human"
@@ -72,6 +94,7 @@ STUB_UP_FAIL=1 bash "$REDEPLOY" > "$T/uf2.log" 2>&1
 rc_uf2=$?
 check "exits 1, not 2" "[ $rc_uf2 -eq 1 ]"
 check "says it needs a human" "grep -qi 'could not start the rolled-back image' '$T/uf2.log'"
+check "and caddy was left alone there too" "! grep -qE 'compose .*(pull|up -d --no-deps --no-build) caddy' '$STUB_LOG'"
 
 echo "== redeploy: passes the health gate but never becomes ready -> rollback"
 redeploy_env
@@ -87,6 +110,10 @@ check "exits 2 (rolled back, did not ship)" "[ $rc -eq 2 ]"
 check "says the change did not ship" "grep -q 'did NOT ship' '$T/nr.log'"
 check "says live but never ready" "grep -q 'never became ready' '$T/nr.log'"
 check "rolled back to the previous image" "[ \"\$(img zcash-faucet:latest)\" = 'sha256:old' ]"
+# A ROLLBACK NEVER TOUCHES CADDY. Nothing shipped, so there is no pin to follow, and
+# the TLS terminator must not be bounced in the middle of a failed deploy (review of
+# #524: the only negative was on the build-failure path).
+check "and caddy was not pulled or recreated on the way" "! grep -qE 'compose .*(pull|up -d --no-deps --no-build) caddy' '$STUB_LOG'"
 # The positive control for the two cases below: a build that is genuinely not ready,
 # for a reason a rollback CAN address, must still roll back. Without this, making the
 # two new cases pass by never rolling back at all would look like a fix.
@@ -439,6 +466,11 @@ check "and is reported as UNVERIFIED rather than as a failed deploy" \
   "grep -q 'POST-CONDITION UNVERIFIED' '$T/unverified.log'"
 check "and does not claim deployed and healthy" \
   "! grep -q 'deployed and healthy' '$T/unverified.log'"
+# SHIPPED IS SHIPPED. auto-deploy records the commit on exit 3 as on exit 0, so a caddy
+# digest bump that landed through this path would otherwise be marked processed with
+# caddy still on the old image, and nothing would come back for it (review of #524).
+check "and caddy still follows its pin on the unverified-but-shipped path" \
+  "grep -qE 'compose .*pull caddy' '$STUB_LOG'"
 
 echo "== redeploy: a rollback that did not take effect is not reported as rolled back"
 # In an incident "rolled back" is the sentence people act on. Liveness proves something

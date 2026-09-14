@@ -25,6 +25,11 @@ cp /opt/zcash-faucet/deploy/z3/redeploy.sh /opt/faucet/ && chmod +x /opt/faucet/
 4. Start the new image and wait for it to answer.
 5. On any failure: retag `previous` back to `latest`, restart, wait for it to
    answer.
+6. Once the faucet's outcome is decided and it shipped, pull caddy's pinned image
+   and recreate the caddy container only if that pin moved (dependabot bumps the
+   digest in the compose file). A caddy that could not be pulled or recreated is a
+   `WARNING: caddy:` line in the journal, never a failed deploy. A rollback never
+   touches caddy.
 
 Volumes are never touched. The rate-limit ledger and the wallet survive every
 deploy, and a rollback rolls back code, not data.

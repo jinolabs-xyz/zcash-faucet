@@ -49,6 +49,18 @@ done
 # and the check would pass having compared nothing. That is the exact shape of the
 # false pass this suite is here to prevent.
 check "workflows were actually found and read" "[ '$WF_COUNT' -gt 0 ]"
+# THE BASE IMAGES ARE PINNED BY DIGEST (risk register II, R-7). A tag-only FROM never
+# moved on the box: nothing pulled it again and dependabot preserves tag precision, so
+# a node 24.x or caddy 2.x security release produced no PR and no fetch. With a digest,
+# dependabot bumps the line and `compose build --pull` fetches it. Both stages must
+# carry the SAME digest, or build and run differ in a way `docker images` will not show.
+# shellcheck disable=SC2034 # read inside check's eval
+NODE_DIGESTS="$(grep -oE '^FROM node:[^ ]+@sha256:[0-9a-f]{64}' "$REPO/Dockerfile" | sed 's/^FROM //' | sort -u)"
+check "every FROM node in the Dockerfile is pinned by digest" \
+  "[ \"\$(grep -cE '^FROM node:' '$REPO/Dockerfile')\" -eq \"\$(grep -cE '^FROM node:[^ ]+@sha256:[0-9a-f]{64}' '$REPO/Dockerfile')\" ]"
+check "and both stages carry one and the same digest" "[ \"\$(printf '%s\n' \"\$NODE_DIGESTS\" | grep -c .)\" -eq 1 ]"
+check "caddy in the compose file is pinned by digest" \
+  "grep -qE '^ +image: caddy:[^ ]+@sha256:[0-9a-f]{64}\$' '$REPO/deploy/z3/docker-compose.faucet.yml'"
 check "every node-version pin matches the Dockerfile's node $PROD_MAJOR" \
   "[ -z '$WF_BAD' ] || { echo '   mismatched:$WF_BAD'; false; }"
 
