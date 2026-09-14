@@ -776,11 +776,16 @@ try {
   const j4 = await fromJ(null);
   ok("J a claim with no proof is refused by the send-health gate, 503, before the challenge is asked for", j4.status === 503 && j4.body.kind === "sends", `${j4.status} ${JSON.stringify(j4.body)}`);
   ok("J and it says nothing was claimed and no proof was spent, with a retry-after", /no proof-of-work was spent/.test(j4.body.error ?? "") && typeof j4.body.retryAfterSeconds === "number", JSON.stringify(j4.body));
-  // And the challenge difficulty did not climb for the refusal: the next challenge this
-  // client is issued is at the difficulty the three real attempts earned, not one more.
+  // And the challenge difficulty did not climb for the refusal. WITH A SOLVED PROOF on
+  // the refused claim: a bare POST is refused before verifySolution with or without the
+  // gate (403 "proof required"), so it proved nothing about escalation; review deleted
+  // the gate and this stayed green. A solved proof is what the gate must turn away
+  // before it is verified and counted: gate present, 503 and 14 -> 14; gate absent,
+  // verified, recorded, 502 and 14 -> 16.
   const chalBefore = (await req(BASE_J, "/api/pow/challenge", { headers: { "x-forwarded-for": jIp } })).body;
-  await fromJ(null);
+  const j5 = await fromJ(await jPow());
   const chalAfter = (await req(BASE_J, "/api/pow/challenge", { headers: { "x-forwarded-for": jIp } })).body;
+  ok("J a claim WITH a solved proof is still refused by the gate, not by the wallet", j5.status === 503 && j5.body.kind === "sends", `${j5.status} ${j5.body.kind ?? ""}`);
   ok("J a refusal that was ours does not escalate the next challenge", chalBefore.difficulty === chalAfter.difficulty, `${chalBefore.difficulty} -> ${chalAfter.difficulty}`);
 
   const statusE = await get(BASE_E, "/api/status");

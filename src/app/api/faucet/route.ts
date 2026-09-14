@@ -18,7 +18,7 @@ import { getNodeStatus } from "@/lib/zcash/nodeStatus";
 import { mayBuildTransaction, readChainFreshnessAsking, freshnessRefusalText } from "@/lib/zcash/shieldGate";
 import { mayBuildFromWallet, walletLagFreshness } from "@/lib/zcash/walletLagGate";
 import { getSendQueue, getCtazSendQueue, QueueFullError, TaskDeadlineError } from "@/lib/zcash/queue";
-import { readSendHealth, recordSend, sendHealthBlocksServing } from "@/lib/zcash/sendHealth";
+import { readSendHealth, recordSend, sendHealthBlocksServing, WINDOW_MS as SEND_HEALTH_WINDOW_MS } from "@/lib/zcash/sendHealth";
 import { DEFAULT_NETWORK, NETWORKS, parseNetwork } from "@/lib/network";
 import { canServeCtaz } from "@/lib/crosslink/recency";
 import { readCtazNodeState } from "@/lib/crosslink/read";
@@ -32,9 +32,10 @@ export const runtime = "nodejs"; // better-sqlite3 needs Node, not Edge.
 // Roughly one testnet block. Long enough that a retry is not a hot loop, short
 // enough that a lag of a few blocks clears within one or two retries.
 const FRESHNESS_RETRY_SECONDS = 75;
-// Send health is judged over a 15-minute window, so a verdict clears when the window
-// does; a shorter promise would send people back to the same refusal.
-const SENDS_RETRY_SECONDS = 15 * 60;
+// Send health is judged over a window, so a verdict clears when the window does and
+// not before; a shorter promise would send people back to the same refusal. THE
+// VERDICT'S OWN WINDOW, not a copy of its default: it widens with the send deadline.
+const SENDS_RETRY_SECONDS = Math.ceil(SEND_HEALTH_WINDOW_MS / 1000);
 
 const BodySchema = z.object({
   address: z.string().min(1).max(512),

@@ -547,11 +547,15 @@ export default function Home() {
     const c = check(address);
     if (!c.ok) { setTouched(true); return; }
     if (!target && keyUnseen(address)) return;
-    // Held phases are held for the keyboard too: the button is disabled, but Enter in
-    // the address field lands here directly. A degraded or empty faucet is not asked; the
-    // card above the form already says why, and a 503 rendered as "Send failed" under a
-    // card that says "not taking claims" would be two stories on one screen.
-    if (!target && (phase === "degraded" || phase === "empty")) return;
+    // Held phases are held for the keyboard and for the error card's "Try again" too:
+    // the button is disabled, but Enter in the address field and Try again land here
+    // directly. Judged from the LIVE status, not from `phase`: the visitor whose failed
+    // send tipped the verdict is sitting on the 502 card, phase "error", and their Try
+    // again must land on the degraded card rather than solve a proof into the wallet.
+    // A 503 rendered as "Send failed" under a card that says "not taking claims" would
+    // be two stories on one screen, so this also leaves the flow.
+    if (!target && basePhase(status, network) === "degraded") { inFlow.current = false; setPhase("degraded"); return; }
+    if (!target && phase === "empty") return;
     if (sending.current) return;
     // Node still syncing: hold the claim instead of turning the user away.
     // It fires on its own the moment the node is ready (the effect above).
@@ -647,6 +651,12 @@ export default function Home() {
       } else if (res.status === 503 && /empty/i.test(data.error || "")) {
         inFlow.current = false;
         setPhase("empty");
+      } else if (res.status === 503 && data.kind === "sends") {
+        // The wallet was judged between this page's last poll and the POST: the reply
+        // is the verdict, so the page shows it rather than a red card that says the
+        // send failed (it was never attempted) under a badge that says LIVE.
+        inFlow.current = false;
+        setPhase("degraded");
       } else {
         setErrMsg(data.error || "The send didn't go through. Nothing left the wallet.");
         setPhase("error");
