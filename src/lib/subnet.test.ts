@@ -32,14 +32,15 @@ test("the IPv4-mapped IPv6 form some proxies emit lands on the same /24", () => 
   assert.equal(subnetOf("::ffff:203.0.113.45"), subnetOf("203.0.113.45"));
 });
 
-test("IPv6 groups by /64, because a single host owns a whole one", () => {
-  assert.equal(subnetOf("2001:db8:1:2:3:4:5:6"), "2001:db8:1:2::/64");
-  // Anything inside that /64 is the same host as far as abuse goes.
-  assert.equal(subnetOf("2001:db8:1:2:ffff:ffff:ffff:ffff"), "2001:db8:1:2::/64");
+test("IPv6 groups by /48, because one allocation is a whole one (risk register II, R-25)", () => {
+  assert.equal(subnetOf("2001:db8:1:2:3:4:5:6"), "2001:db8:1::/48");
+  // Anything inside that /48 is the same allocation as far as abuse goes: a tunnel
+  // broker hands one out for free, and it holds 65,536 /64s.
+  assert.equal(subnetOf("2001:db8:1:ffff:ffff:ffff:ffff:ffff"), "2001:db8:1::/48");
 });
 
 test("DIFFERENT WRITTEN FORMS of one network agree, which a prefix match would fail", () => {
-  // The whole reason expandIpv6 exists. All four spell the same /64.
+  // The whole reason expandIpv6 exists. All four spell the same /48.
   const forms = [
     "2001:db8::1",
     "2001:0db8:0000:0000:0000:0000:0000:0001",
@@ -48,12 +49,18 @@ test("DIFFERENT WRITTEN FORMS of one network agree, which a prefix match would f
   ];
   const keys = new Set(forms.map((f) => subnetOf(f)));
   assert.equal(keys.size, 1, `these should all be one subnet, got ${[...keys].join(" | ")}`);
-  assert.equal([...keys][0], "2001:db8:0:0::/64");
+  assert.equal([...keys][0], "2001:db8:0::/48");
 });
 
-test("a different /64 in the same /48 is a different key", () => {
-  // If these collided, the /64 choice would be doing nothing.
-  assert.notEqual(subnetOf("2001:db8:1:2::1"), subnetOf("2001:db8:1:3::1"));
+test("two /64s in one /48 are ONE key, which is the whole point of the /48", () => {
+  // At /64 these were two subnets with a 20-drip cap each; an actor with a free /48
+  // had 65,536 of them.
+  assert.equal(subnetOf("2001:db8:1:2::1"), subnetOf("2001:db8:1:3::1"));
+});
+
+test("a different /48 is a different key", () => {
+  // If these collided, the choice would be doing nothing.
+  assert.notEqual(subnetOf("2001:db8:1::1"), subnetOf("2001:db8:2::1"));
 });
 
 test("unparseable input yields null, which SKIPS the rule rather than inventing a bucket", () => {

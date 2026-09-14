@@ -33,7 +33,7 @@ the daily cap or an in-flight claim, so they're deleted.
 
 A single IP is one claimant. A cloud provider hands one person thousands, which is
 why a per-IP cooldown is a speed bump for anyone renting a range. So the ledger
-also stores a salted hash of the client's **network** (`/24` for IPv4, `/64` for
+also stores a salted hash of the client's **network** (`/24` for IPv4, `/48` for
 IPv6) and caps claims per network per day.
 
 Being straight about what that means, because it cuts both ways:
@@ -45,9 +45,10 @@ Being straight about what that means, because it cuts both ways:
   network. We could not link two strangers before and now, if they share a range,
   we can see that much.
 - It is why a **shared network can be limited by someone else's** claims. An office,
-  a university or a NAT looks like one network from outside. The per-network cap is
-  set well above what one person needs so this is rare, and it is a real cost we
-  chose rather than an accident.
+  a university or a NAT looks like one network from outside, and on IPv6 a /48 can be
+  a whole carrier region or tens of thousands of homes. The per-network cap is set well above
+  what one person needs so this is rare, and it is a real cost we chose rather than
+  an accident.
 - An IP we cannot parse gets **no** subnet hash and is simply exempt from that rule,
   rather than being put in a shared bucket with every other unparseable address.
 
