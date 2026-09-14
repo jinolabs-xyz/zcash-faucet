@@ -227,8 +227,8 @@ silently mute the box.
 
 ### The watchdog has to be able to see the faucet, or its clock is wrong
 
-The watchdog's 30-minute "not ready" page and its hung-app restart both probe
-`WATCHDOG_FAUCET_URL`, default `http://127.0.0.1:3000`, and look for a container
+The watchdog's 30-minute "not ready" page probes `WATCHDOG_FAUCET_URL`, default
+`http://127.0.0.1:3000`, and both it and the hung-app restart look for a container
 whose name contains `WATCHDOG_FAUCET_MATCH`, default `faucet-web`. Under the compose
 overlay **neither default holds**: the app publishes no host port, so the probe
 answers nothing forever, and the container is `zcash-faucet-faucet-1`, so the match
@@ -241,8 +241,19 @@ WATCHDOG_FAUCET_URL=https://zcashfaucet.jinolabs.xyz   # through caddy, what use
 WATCHDOG_FAUCET_MATCH=zcash-faucet-faucet
 ```
 
-Probing the public URL from the box is deliberate: it exercises the same path a
-user does, so "ready" means ready for them, not just for localhost.
+Probing the public URL from the box is deliberate for READINESS: it exercises the
+same path a user does, so "ready" means ready for them, not just for localhost, and
+a transport failure on it is named by class in the page (DNS, refused, timed out, TLS
+handshake, certificate), which is how you tell caddy from the app.
+
+LIVENESS is not probed through the URL. The image carries a healthcheck that fetches
+`/api/health` on loopback, and the hung-app restart reads docker's verdict on it
+(`healthy` / `unhealthy` / `starting`); the URL probe is only the fallback for a
+container with no healthcheck. Before this, an edge fault (caddy down, an expired
+certificate, DNS) read as a hung app, and the watchdog restarted a healthy faucet
+every 90 seconds for as long as the edge was down, wiping its in-memory send log
+each time. Caddy itself is on the recovery list now (`WATCHDOG_CADDY_MATCH`, default
+`caddy`; empty disables), so an exited caddy is started like any other container.
 
 **Rotate the webhook if you ran a self-test before this fix.** An earlier
 version logged the full URL, so the token may be sitting in the journal.

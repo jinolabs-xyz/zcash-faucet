@@ -100,6 +100,10 @@ case "${1:-}" in
       esac
     fi
     case "$fmt" in
+      # The template the watchdog uses: empty when the container has no healthcheck, which
+      # is line 3 of the state file absent. Every pre-existing case has no line 3, so they
+      # keep the URL probe they were written against.
+      *State.Health*)    sed -n 3p "$f" ;;
       *State.Status*)    head -n1 "$f" ;;
       *State.StartedAt*) st="$(sed -n 2p "$f")"; echo "${st:-2000-01-01T00:00:00.000000000Z}" ;;
       *) echo "stub docker inspect: unsupported fmt $fmt" >&2; exit 64 ;;

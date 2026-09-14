@@ -311,6 +311,70 @@ check "restarted twice" "[ \"\$(grep -c 'docker restart faucet-web' '$STUB_LOG')
 check "never claims a fix it has not seen" "! grep -q 'FIXED: faucet app' '$T/alerts.log'"
 check "pages on the second restart" "grep -q 'NEEDS YOU: faucet app not answering /api/health after 2 restart' '$T/alerts.log'"
 
+# --- step 3, in the container (risk register II, R-15) ---------------------------
+# The image has a healthcheck; docker's verdict is the liveness verdict when it is
+# there. The URL probe used to be the only one, and OBSERVABILITY.md points it through
+# caddy, so an edge fault restarted a healthy app every 90 s. State file line 3 is the
+# health status; absent means no healthcheck (every case above), which keeps the URL.
+echo "== watchdog: a HEALTHY container is not restarted when the public URL is dead (the edge fault)"
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+printf 'running\n\nhealthy\n' > "$STUB_CONTAINERS/faucet-web"
+export WATCHDOG_FAUCET_URL="http://127.0.0.1:9"   # nothing listens: caddy/TLS/DNS is down, the app is not
+wd_run 4
+check "no restart of an app docker says is healthy" "! grep -q 'docker restart faucet-web' '$STUB_LOG'"
+check "and no liveness miss was counted" "! grep -q 'faucet liveness miss' '$T/run.log'"
+check "and the URL was not the probe (nothing asked it for health)" "! grep -q 'api/health' '$T/stub.log'"
+
+echo "== watchdog: an UNHEALTHY container is restarted on docker's verdict, no URL needed"
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+printf 'running\n\nunhealthy\n' > "$STUB_CONTAINERS/faucet-web"
+export WATCHDOG_FAUCET_URL="http://127.0.0.1:9"
+wd_run 3
+check "three misses, each saying they came from docker health" "[ \"\$(grep -c 'faucet liveness miss .* (via docker health)' '$T/run.log')\" = 3 ]"
+check "then the restart" "grep -q 'docker restart faucet-web' '$STUB_LOG'"
+
+echo "== watchdog: 'starting' is neither a miss nor an answer"
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+printf 'running\n\nstarting\n' > "$STUB_CONTAINERS/faucet-web"
+export WATCHDOG_FAUCET_URL="http://127.0.0.1:9"
+wd_run 4
+check "no miss counted while docker says starting" "! grep -q 'faucet liveness miss' '$T/run.log' && grep -q \"health is 'starting'\" '$T/run.log'"
+check "and no restart" "! grep -q 'docker restart faucet-web' '$STUB_LOG'"
+
+echo "== watchdog: no healthcheck on the container keeps the URL probe (the cases above this block)"
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+export WATCHDOG_FAUCET_URL="http://127.0.0.1:9"
+wd_run 3
+check "misses are counted via the URL" "[ \"\$(grep -c 'faucet liveness miss .* (via http://127.0.0.1:9/api/health)' '$T/run.log')\" = 3 ]"
+check "and the restart follows" "grep -q 'docker restart faucet-web' '$STUB_LOG'"
+
+echo "== watchdog: caddy is on the recovery list"
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+echo exited > "$STUB_CONTAINERS/z3-testnet-caddy-1"
+wd_run 1
+check "an exited caddy is started like any other container in the list" "grep -q 'docker start z3-testnet-caddy-1' '$STUB_LOG'"
+check "and the log says which container and why" "grep -q \"container z3-testnet-caddy-1 is 'exited' - starting it\" '$T/run.log'"
+
+echo "== watchdog: a readiness transport failure is named by class"
+wd_env
+export WATCHDOG_READY_GRACE_SECS=0 STUB_CURL_RC=35
+echo running > "$STUB_CONTAINERS/faucet-web"
+wd_run 1
+check "a TLS handshake failure says so in the page, not only a curl number" "grep -q 'Reason: no answer from /api/ready (curl 35: TLS handshake failed)' '$T/alerts.log'"
+unset STUB_CURL_RC
+
 # --- step 6: miner stall recovery ------------------------------------------------
 # The miner holds ONE persistent RPC connection to zebra and does not reconnect when
 # zebra restarts: it loops "getblocktemplate: Peer disconnected" while its heartbeat

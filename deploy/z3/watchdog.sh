@@ -126,6 +126,10 @@ ZALLET_MATCH="${WATCHDOG_ZALLET_MATCH:-zallet}"
 # while I re-link it", and must not fall back to the default. find_container refuses an
 # empty match rather than asking docker for every container.
 SIGNAL_MATCH="${WATCHDOG_SIGNAL_MATCH-signal-api}"
+# Caddy is the edge every page and every visitor goes through, and it was on no
+# recovery list (risk register II, R-15): an exited caddy stayed exited until a person
+# noticed the site was gone. Empty disables, like the bridge above.
+CADDY_MATCH="${WATCHDOG_CADDY_MATCH-caddy}"
 
 log() { echo "$(date -u +%FT%TZ) watchdog: $*"; }
 
@@ -701,18 +705,42 @@ while true; do
   zallet="$(find_container "$ZALLET_MATCH")"
   faucet="$(find_container "$FAUCET_MATCH")"
   signal="$(find_container "$SIGNAL_MATCH")"
+  caddy="$(find_container "$CADDY_MATCH")"
 
   # 1 + 2: keep restart policy set and bring back anything that fell over. The bridge is
-  # in this list because it is the thing the FIXED for its own recovery travels through.
-  for c in "$zebra" "$zallet" "$faucet" "$signal"; do
+  # in this list because it is the thing the FIXED for its own recovery travels through;
+  # caddy because it is the thing every visitor travels through.
+  for c in "$zebra" "$zallet" "$faucet" "$signal" "$caddy"; do
     ensure_restart_policy "$c"
     recover_if_down "$c"
   done
 
   # 3: web-app liveness. Only restart when the container claims to be running
-  # but /api/health has stopped answering - a genuine hang, not a cold start.
+  # but the app has stopped answering - a genuine hang, not a cold start.
+  #
+  # ASKED IN THE CONTAINER, NOT THROUGH THE EDGE (risk register II, R-15). The image
+  # carries a healthcheck that fetches /api/health on loopback, and docker runs it
+  # every 30 s with three retries. When it is there, its verdict is the liveness verdict:
+  # `unhealthy` is the app not answering its own port, which a restart addresses.
+  # The public URL used to be the probe, and OBSERVABILITY.md tells the operator to
+  # point it through caddy, so a caddy, TLS or DNS fault read as a hung app and the
+  # watchdog restarted a healthy faucet every 90 s for as long as the edge was down,
+  # wiping the in-memory send log, the tip cache and the chain-identity cache each time,
+  # and paging about the wrong thing. A container with no healthcheck (an older image,
+  # or a dev box) keeps the URL probe, and `starting` (inside docker's start_period)
+  # counts as neither, since a cold start is not a hang.
   if [ -n "$faucet" ] && [ "$(docker inspect -f '{{.State.Status}}' "$faucet" 2>/dev/null)" = "running" ]; then
-    if curl -fsS --max-time 5 "$FAUCET_URL/api/health" >/dev/null 2>&1; then
+    health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$faucet" 2>/dev/null)"
+    case "$health" in
+      healthy)   answering=1; liveness_via="docker health" ;;
+      unhealthy) answering=0; liveness_via="docker health" ;;
+      starting)  answering=2; liveness_via="docker health" ;;
+      *)         liveness_via="$FAUCET_URL/api/health"
+                 if curl -fsS --max-time 5 "$FAUCET_URL/api/health" >/dev/null 2>&1; then answering=1; else answering=0; fi ;;
+    esac
+    if [ "$answering" = "2" ]; then
+      log "faucet liveness: container health is 'starting', not counted either way"
+    elif [ "$answering" = "1" ]; then
       # The one report, and only now: it has been SEEN answering again after a restart.
       if [ "$faucet_restarts" -gt 0 ]; then
         fixed "faucet app hung. Restarted it ($faucet_restarts time(s)); answering again."
@@ -720,7 +748,7 @@ while true; do
       faucet_misses=0; faucet_restarts=0
     else
       faucet_misses=$((faucet_misses + 1))
-      log "faucet liveness miss $faucet_misses/$FAUCET_FAIL_LIMIT"
+      log "faucet liveness miss $faucet_misses/$FAUCET_FAIL_LIMIT (via $liveness_via)"
       if [ "$faucet_misses" -ge "$FAUCET_FAIL_LIMIT" ]; then
         faucet_restarts=$((faucet_restarts + 1))
         log "restarting hung $faucet (restart $faucet_restarts this episode); report follows once it answers"
@@ -752,7 +780,21 @@ while true; do
   reason="$(printf '%s' "$ready_body" | grep -o '"reason":"[^"]*"' | head -n1 | cut -d'"' -f4)"
   # A transport failure is not an answer. Say so, rather than reporting an empty reason
   # that reads as though the app declined to explain itself.
-  if [ "$ready_rc" -ne 0 ]; then reason="no answer from /api/ready (curl $ready_rc)"; fi
+  # Named by class, not only by number: the readiness page is the one place the edge is
+  # probed through now (liveness is in-container, above), so "TLS handshake failed" or
+  # "DNS lookup failed" is what tells the operator this is caddy or the certificate and
+  # not the app (R-15).
+  if [ "$ready_rc" -ne 0 ]; then
+    case "$ready_rc" in
+      6)  klass="DNS lookup failed" ;;
+      7)  klass="connection refused, nothing is listening" ;;
+      28) klass="timed out" ;;
+      35) klass="TLS handshake failed" ;;
+      51|60) klass="certificate rejected" ;;
+      *)  klass="transport error" ;;
+    esac
+    reason="no answer from /api/ready (curl $ready_rc: $klass)"
+  fi
   case "$ready_code" in 2*) ready_ok=1 ;; *) ready_ok=0 ;; esac
   # A 200 whose body says canBuildTx:false is a faucet that is serving and refusing every
   # drip: the send gate cannot verify the chain tip, so it fails closed, and /api/ready
