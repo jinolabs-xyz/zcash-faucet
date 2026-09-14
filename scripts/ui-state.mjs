@@ -57,6 +57,7 @@ const DIMENSIONS = {
   node: {
     "node-synced": "our node at the network tip, the indexer answering",
     "node-frozen": "our node thousands of blocks behind an independent tip and not moving (the 2026-09-07 fourteen hours)",
+    "node-lagging": "our node 40 blocks behind: not frozen, but the freshness gate refuses to build (the #172 born-expired shape)",
     "indexer-down": "the public lightwalletd we probe is unreachable; the node itself is fine",
   },
 };
@@ -202,6 +203,7 @@ const run = (label, cmd, argv, env) => {
 const node = {
   "node-synced": { hosh: {}, faucet: {} },
   "node-frozen": { hosh: { HEIGHT: "3655000" }, faucet: {} },
+  "node-lagging": { hosh: { HEIGHT: "3650040" }, faucet: {} },
   "indexer-down": { hosh: {}, faucet: { LIGHTWALLETD_ENDPOINT: "http://127.0.0.1:9/" } },
 }[chosen.node];
 

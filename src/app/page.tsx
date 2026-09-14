@@ -49,9 +49,9 @@ interface Status {
      * tip stalled. Reported since #170; the page never read it, so a frozen node was
      * "syncing, ready shortly" for fourteen hours on 2026-09-07 (risk register II, R-33). */
     frozen?: boolean;
-    tipStalledMs?: number | null;
+    behind?: boolean;
     externalHeight?: number | null;
-    shield?: { state: string; reason?: string | null };
+    shield?: { state: string; reason?: string | null; lag?: number | null };
   };
   // `active` is derived from the heartbeat now, not from an env flag, so it can
   // finally be false while the miner is broken. `state` is optional because an older
@@ -249,6 +249,57 @@ const TX_POLL_MS = 10_000;
 const CONFIRMATIONS_ENOUGH = 6;
 
 /* ── Component ─────────────────────────────────────────────────────────── */
+// Pure functions of a status reply, outside the component so basePhase's useCallback
+// closes over nothing that can go stale.
+// How far the NODE is behind the independent tip, or null when either is unknown.
+const nodeGap = (s: Status): number | null =>
+  s.node?.externalHeight != null && s.node.nodeHeight != null && s.node.externalHeight > s.node.nodeHeight
+    ? s.node.externalHeight - s.node.nodeHeight
+    : null;
+// What is wrong, in one sentence a visitor can act on (nothing, mostly), or null when
+// nothing is. Each line names the component so the sentence is never "the node" when
+// it is the wallet, and never "first sync" when it is a fault.
+const faultReason = (s: Status): string | null => {
+  if (!s.backend?.reachable) return "a public indexer we use for balance lookups is unreachable right now";
+  // THE WALLET NOT ANSWERING is the most frequent real outage (the zallet crash-loops),
+  // and it arrives as node: null AND balanceTaz: null, so every node-guarded line
+  // below is silent about it. Readiness calls this "node status unknown"; the page
+  // said "first sync takes a while, one time" (review of #522).
+  if (s.sender === "zallet" && !s.node) return "our wallet is not answering";
+  if (s.node?.frozen) {
+    // The distance, not a duration. tipStalledMs is how long THIS PROCESS has seen
+    // our tip unchanged; it resets on every deploy and every tip move, so "stopped
+    // about 3 minutes ago" after a restart of a node frozen for fourteen hours would
+    // be a made-up number. The height gap is measured, from the NODE's tip (the
+    // server judges `behind` on nodeHeight; `height` is what the wallet has scanned,
+    // which can trail it by more than the network does), and only when distance is
+    // what tripped it: a motion stall three blocks from the tip is stuck, not "3
+    // blocks behind". The strip shows the same number.
+    const gap = nodeGap(s);
+    return s.node.behind && gap != null
+      ? `our node is ${num(gap)} blocks behind the network`
+      : "our node has stopped following the network";
+  }
+  // Our chain view is too stale to build a drip that could confirm, so hold rather
+  // than send one that expires before it is mined (#187). canBuildTx is computed
+  // server-side by the gate itself: the browser must not carry a second copy of a
+  // money rule, or it diverges the day the rule changes.
+  //
+  // `=== false` on purpose. A missing field (older server, or a sender the gate
+  // does not apply to) must not block a claim, so only an explicit no holds.
+  // shield.reason is operator prose (a log line with a semicolon in it) and stays in
+  // the panel. Two states: "unsafe" is a measured lag (the #172 born-expired shape)
+  // and "unverifiable" is an oracle we could not ask; only the second is "cannot
+  // verify".
+  if (s.node && s.node.canBuildTx === false) {
+    return s.node.shield?.state === "unsafe"
+      ? `our node is ${s.node.shield.lag != null ? `${num(s.node.shield.lag)} blocks` : "too far"} behind the network, so a drip sent now would expire before it confirms`
+      : "we cannot verify that our node is current, so we are not building transactions";
+  }
+  if (s.node && s.node.ready !== false && s.balanceTaz == null) return "we cannot read our wallet's balance";
+  return null;
+};
+
 export default function Home() {
   const [status, setStatus] = useState<Status | null>(null);
   const [phase, setPhase] = useState<Phase>("checking");
@@ -290,7 +341,7 @@ export default function Home() {
   // non-empty 503, the 504 and the 4xx: the daily cap, the 75 s freshness hold, a full
   // queue, a bad address, and the 504 whose own sentence says do not retry. For the 504
   // the kicker was false and Try again re-solved a proof into a 429 with no receipt.
-  //   failed   502, and a hold we gave up on: the sentence is true, Try again is right
+  //   failed   502: the sentence is true, Try again is right
   //   pow      403: the human check did not verify; nothing was claimed; try again
   //   offline  the POST never got an answer
   //   held     503 with a retryAfter (freshness, wallet lag, cTAZ recency): our side,
@@ -301,6 +352,12 @@ export default function Home() {
   //   bad      400: the request itself; back to the form with the address kept
   type FailKind = "failed" | "pow" | "offline" | "held" | "busy" | "cap" | "unknown" | "bad";
   const [fail, setFail] = useState<{ kind: FailKind; retryAt?: number | null; address?: string }>({ kind: "failed" });
+  // A held claim we stopped holding (the 15-minute give-up behind a fault). Shown on
+  // the fault card, NOT as an error phase: the phase effect re-derives the phase from
+  // status whenever queuedAddr changes, and it ran in the same commit as the give-up's
+  // setPhase("error"), so the old give-up dropped the claim and its message together
+  // (review of #522). Cleared when a claim is made or the visitor starts over.
+  const [holdDropped, setHoldDropped] = useState(false);
   const [tool, setTool] = useState<"lookup" | "about" | null>(null);
   const [lookupAddr, setLookupAddr] = useState("");
   const [lookupRes, setLookupRes] = useState("");
@@ -345,39 +402,6 @@ export default function Home() {
     if (network === "ctaz" && status && !status.ctaz?.enabled) setNetwork("taz");
   }, [status, network]);
 
-  // What is wrong, in one sentence a visitor can act on (nothing, mostly), or null when
-  // nothing is. Each line names the component so the sentence is never "the node" when
-  // it is the wallet, and never "first sync" when it is a fault.
-  const faultReason = (s: Status): string | null => {
-    if (!s.backend?.reachable) return "a public indexer we use for balance lookups is unreachable right now";
-    // THE WALLET NOT ANSWERING is the most frequent real outage (the zallet crash-loops),
-    // and it arrives as node: null AND balanceTaz: null, so every node-guarded line
-    // below is silent about it. Readiness calls this "node status unknown"; the page
-    // said "first sync takes a while, one time" (review of #522).
-    if (s.sender === "zallet" && !s.node) return "our wallet is not answering";
-    if (s.node?.frozen) {
-      // The distance, not a duration. tipStalledMs is how long THIS PROCESS has seen
-      // our tip unchanged; it resets on every deploy and every tip move, so "stopped
-      // about 3 minutes ago" after a restart of a node frozen for fourteen hours would
-      // be a made-up number. The height gap is measured, and the strip shows the same.
-      const gap = s.node.externalHeight != null && s.node.height != null ? s.node.externalHeight - s.node.height : null;
-      return gap != null && gap > 0
-        ? `our node is ${num(gap)} blocks behind the network`
-        : "our node has stopped following the network";
-    }
-    // Our chain view is too stale to build a drip that could confirm, so hold rather
-    // than send one that expires before it is mined (#187). canBuildTx is computed
-    // server-side by the gate itself: the browser must not carry a second copy of a
-    // money rule, or it diverges the day the rule changes.
-    //
-    // `=== false` on purpose. A missing field (older server, or a sender the gate
-    // does not apply to) must not block a claim, so only an explicit no holds.
-    // shield.reason is operator prose (a log line with a semicolon in it) and stays in
-    // the panel; the visitor gets the one sentence that is true of every case.
-    if (s.node && s.node.canBuildTx === false) return "we cannot verify that our node is current, so we are not building transactions";
-    if (s.node && s.node.ready !== false && s.balanceTaz == null) return "we cannot read our wallet's balance";
-    return null;
-  };
   const basePhase = useCallback((s: Status | null, net: FaucetNetwork = "taz"): Phase => {
     // Null means we have not asked. Unreachable means we asked and got nothing, which
     // is a real finding about the backend and keeps reading as syncing.
@@ -495,12 +519,7 @@ export default function Home() {
     if (now - queuedAt < HOLD_MAX_MS) return;
     setQueuedAddr(null);
     setQueuedAt(null);
-    setFail({ kind: "failed" });
-    setErrMsg(
-      "The faucet did not recover while we held your claim, so we stopped holding it rather than " +
-        "keep you waiting on it. Nothing was claimed and your cooldown is untouched. Try again later.",
-    );
-    setPhase("error");
+    setHoldDropped(true);
   }, [now, queuedAddr, queuedAt, status, basePhase, network]);
 
   // The moment the node is ready, a held claim fires through the normal
@@ -629,7 +648,7 @@ export default function Home() {
     }
     sending.current = true;
     inFlow.current = true;
-    setElapsed(0); setErrMsg(""); setTouched(false);
+    setElapsed(0); setErrMsg(""); setTouched(false); setHoldDropped(false);
     setPhase("submitting");
 
     // Anti-abuse gate: solve the browser proof-of-work before we ask for coins.
@@ -746,7 +765,7 @@ export default function Home() {
   const again = () => {
     inFlow.current = false;
     setAddr(""); setTouched(false); setTx(null); setCopied(null); setErrMsg(""); setRefusal(null); setFail({ kind: "failed" });
-    setQueuedAddr(null);
+    setQueuedAddr(null); setHoldDropped(false);
     setGenKey(null); setKeyCopied(false); setKeyShown(false);
     setPhase(basePhase(status, network));
   };
@@ -866,13 +885,14 @@ export default function Home() {
   // tip over an external tip that the node stopped following, and it was the strip's
   // reading for the whole of 2026-09-07. Frozen says frozen, and the sync cell says how
   // far behind rather than how close.
-  const nodeWord = status == null ? "–" : node?.ready ? "ready" : node?.frozen ? "frozen" : "syncing";
+  const walletDown = status != null && status.sender === "zallet" && !node;
+  const nodeWord = status == null ? "–" : walletDown ? "no answer" : node?.ready ? "ready" : node?.frozen ? "frozen" : "syncing";
   const behindText =
     node?.frozen
-      ? node.externalHeight != null && node.height != null && node.externalHeight > node.height
-        ? `${num(node.externalHeight - node.height)} behind`
+      ? node.behind && status && nodeGap(status) != null
+        ? `${num(nodeGap(status))} behind`
         : "stalled"
-      : null;
+      : walletDown ? "–" : null;
   const syncCell = behindText ?? syncText;
   const height = node?.height ?? null;
   const nodeHeight = node?.nodeHeight ?? null;
@@ -1121,7 +1141,7 @@ export default function Home() {
               // "both" is for facts about the BOX rather than either chain - the integrity
               // count and the lightwalletd backend serve whichever asset you are looking at,
               // so hiding them behind a toggle would just make them harder to find.
-              { net: "taz", k: "node", v: nodeWord + (nodeWord !== "ready" && syncCell ? " (" + syncCell + ")" : ""), bad: status != null && node?.ready === false },
+              { net: "taz", k: "node", v: nodeWord + (nodeWord !== "ready" && syncCell && syncCell !== "–" ? " (" + syncCell + ")" : ""), bad: status != null && (walletDown || node?.ready === false) },
               { net: "taz", k: "block height", v: num(height) + (nodeHeight ? " / " + num(nodeHeight) : "") },
               { net: "taz", k: "wallet balance", v: status?.balanceTaz != null ? status.balanceTaz.toFixed(2) + " TAZ" : "–", bad: status?.empty === true },
               // The detail belongs here, per the user: he asked that the miner's real
@@ -1260,6 +1280,13 @@ export default function Home() {
               this page re-checks every few seconds. You can queue your address and it sends when the faucet is back,
               or check back in a while.
             </p>
+            {holdDropped && (
+              <p data-testid="hold-dropped" style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: "var(--color-text)" }}>
+                We held your claim for {Math.round(HOLD_MAX_MS / 60_000)} minutes and the faucet did not recover, so we stopped
+                holding it rather than keep you waiting on it. Nothing was claimed and your cooldown is untouched; queue it
+                again if you like.
+              </p>
+            )}
           </div>
         )}
 

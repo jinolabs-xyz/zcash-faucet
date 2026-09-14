@@ -19,6 +19,10 @@ export interface NodeStatus {
   nodeHeight: number | null; // node tip (OUR node's self-report)
   externalHeight: number | null; // network tip per an independent source (null = couldn't verify)
   frozen: boolean; // our node has fallen far behind the real network (#170)
+  /** The distance half of `frozen`: measurably more than FREEZE_BLOCKS behind an
+   * independent tip. False for a motion stall, so a reader can say "N blocks behind"
+   * only when N is what tripped it (R-33). */
+  behind: boolean;
   /** How long our tip has sat unchanged, or null when we cannot say yet. */
   tipStalledMs: number | null;
   /** The network is not producing blocks either, so a static tip is expected. */
@@ -119,6 +123,7 @@ export async function getNodeStatus(): Promise<NodeStatus | null> {
       nodeHeight: n,
       externalHeight,
       frozen,
+      behind,
       tipStalledMs: progress.stalledMs,
       networkQuiet: progress.networkQuiet,
       shield,
