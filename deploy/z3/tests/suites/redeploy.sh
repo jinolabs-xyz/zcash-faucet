@@ -27,7 +27,7 @@ redeploy_env() {
   # covered separately below.
   export REDEPLOY_FAUCET_URL="http://127.0.0.1:9"
   export STUB_HEALTH="$T/healthy" STUB_READY="$T/ready"
-  unset STUB_BUILD_FAIL STUB_UP_FAIL STUB_PULL_FAIL 2>/dev/null
+  unset STUB_BUILD_FAIL STUB_UP_FAIL STUB_PULL_FAIL STUB_CADDY_PULL_FAIL STUB_CADDY_UP_FAIL 2>/dev/null
   echo "sha256:old" > "$STUB_IMAGES/zcash-faucet_latest"   # something is running
 }
 img() { cat "$STUB_IMAGES/$(printf '%s' "$1" | tr '/:' '__')" 2>/dev/null; }
@@ -41,6 +41,30 @@ check "previous image tagged before the build" "[ \"\$(img zcash-faucet:previous
 check "live tag now points at the new build" "[ \"\$(img zcash-faucet:latest)\" != 'sha256:old' ]"
 check "readiness was required (was ready before)" "grep -q 'must be ready too' '$T/ok.log'"
 check "tag happens before build" "[ \"\$(grep -n 'docker tag' '$STUB_LOG' | head -1 | cut -d: -f1)\" -lt \"\$(grep -n 'compose.*build' '$STUB_LOG' | head -1 | cut -d: -f1)\" ]"
+# THE BASE IMAGE MOVES WITH ITS PIN (R-7). Without --pull, docker builds from whatever
+# it pulled first for the life of the box, and dependabot's digest bump changes a line
+# nothing fetches.
+check "the build asks the registry again: compose build --pull" "grep -qE 'compose .*build --pull faucet' '$STUB_LOG'"
+# AND SO DOES CADDY: pulled and recreated only after the faucet's own outcome is decided,
+# and only caddy (--no-deps), so the faucet just brought up is not touched again.
+check "caddy is pulled" "grep -qE 'compose .*pull caddy' '$STUB_LOG'"
+check "and brought up alone, without its dependencies" "grep -qE 'compose .*up -d --no-deps --no-build caddy' '$STUB_LOG'"
+check "after the faucet was started, not before" "[ \"\$(grep -n 'compose.*up -d faucet' '$STUB_LOG' | head -1 | cut -d: -f1)\" -lt \"\$(grep -n 'compose.*pull caddy' '$STUB_LOG' | head -1 | cut -d: -f1)\" ]"
+
+echo "== redeploy: caddy staying behind its pin is a warning, never a failed app deploy"
+# A registry that cannot be reached for caddy must not turn a good app deploy into a
+# failed one (exit 0 still; auto-deploy records the commit) and must say so in the journal.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_CADDY_PULL_FAIL=1 bash "$REDEPLOY" > "$T/caddy-pull.log" 2>&1
+check "a caddy pull failure leaves the deploy at exit 0" "[ $? -eq 0 ]"
+check "and warns in those words" "grep -q 'WARNING: caddy: could not pull' '$T/caddy-pull.log'"
+check "and does not try to recreate caddy from a pull that failed" "! grep -qE 'compose .*up -d --no-deps --no-build caddy' '$STUB_LOG'"
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_CADDY_UP_FAIL=1 bash "$REDEPLOY" > "$T/caddy-up.log" 2>&1
+check "a caddy recreate failure leaves the deploy at exit 0" "[ $? -eq 0 ]"
+check "and warns in those words" "grep -q 'WARNING: caddy: pulled but could not be recreated' '$T/caddy-up.log'"
 
 echo "== redeploy: a build failure never touches the running faucet"
 redeploy_env
@@ -53,6 +77,7 @@ check "exits 2, the non-paging code" "[ $rc_bf -eq 2 ]"
 check "says the running faucet was left alone" "grep -q 'left alone' '$T/bf.log'"
 check "live image unchanged" "[ \"\$(img zcash-faucet:latest)\" = 'sha256:old' ]"
 check "nothing was started" "! grep -q 'compose.*up' '$STUB_LOG'"
+check "and caddy was not pulled either: the faucet's outcome comes first" "! grep -q 'pull caddy' '$STUB_LOG'"
 
 echo "== redeploy: a build that will not start rolls back automatically"
 redeploy_env

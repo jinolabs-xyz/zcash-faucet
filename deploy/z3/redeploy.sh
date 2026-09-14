@@ -304,6 +304,30 @@ probe_usable() {
 # Liveness is required. Readiness is required only when it held before, so a
 # deploy cannot silently downgrade a serving faucet, and is not blocked by a
 # node that is still syncing.
+# ── CADDY MOVES WITH ITS PIN (R-7) ──────────────────────────────────────────────
+# The compose file pins caddy by digest and dependabot moves the digest; the compose
+# file is app-affecting, so this script runs on that bump. `pull` fetches the pinned
+# image (a no-op when it is already here) and `up -d caddy` recreates the container
+# only when its image or config differs from what is running, so a caddy already at
+# its pin is left alone and the TLS terminator is not bounced on every app deploy.
+# --no-deps: the faucet was recreated above by this same config and must not be
+# touched again from here.
+#
+# Best effort by design. The faucet's own outcome is decided before this runs, and a
+# registry that cannot be reached must not turn a good app deploy into a failed one;
+# it is a WARNING in the journal, which is where "caddy stayed behind its pin" is read.
+refresh_caddy() {
+  log "caddy: pulling the pinned image"
+  if ! compose pull caddy 2>&1 | tail -n 3 | sed 's/^/    /'; then
+    log "WARNING: caddy: could not pull the pinned image, the running caddy keeps serving behind its pin"
+    return 0
+  fi
+  if ! compose up -d --no-deps --no-build caddy 2>&1 | sed 's/^/    /'; then
+    log "WARNING: caddy: pulled but could not be recreated, the running caddy keeps serving"
+  fi
+  return 0
+}
+
 wait_healthy() { # $1 = 1 when readiness is also required
   local want_ready="$1" deadline=$((SECONDS + HEALTH_TIMEOUT)) live=0
   while [ "$SECONDS" -lt "$deadline" ]; do
@@ -396,7 +420,11 @@ fi
 
 # A build failure is the cheapest failure: nothing has been swapped yet.
 log "building the new image"
-if ! compose build faucet 2>&1 | tail -n 20 | sed 's/^/    /'; then
+# --pull: the Dockerfile pins its base by digest and dependabot moves the digest, so a
+# build that never asked the registry again would keep the first-ever pull for the
+# life of the box (R-7). A registry that cannot be reached fails the build, which is
+# not_shipped: the running faucet stays, and the next tick retries.
+if ! compose build --pull faucet 2>&1 | tail -n 20 | sed 's/^/    /'; then
   not_shipped "build failed, the running faucet was left alone"
 fi
 
@@ -464,7 +492,8 @@ if wait_healthy "$want_ready"; then
   # explanation is captured and discarded is only half a check.
   assert_running_is "$new" "the image we just built"
   case $? in
-    0) if [ "$manifest_unverified" = "1" ]; then
+    0) refresh_caddy
+       if [ "$manifest_unverified" = "1" ]; then
          # Healthy, and running an image nobody could compare to the commit. It must
          # not collapse into success: the whole failure this check was added for looked
          # exactly like a healthy deploy. And it is NOT a 2 either: 2 means "did not

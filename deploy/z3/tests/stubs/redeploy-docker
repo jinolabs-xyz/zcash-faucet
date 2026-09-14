@@ -103,6 +103,16 @@ case "${1:-}" in
       [ -f "$IMG/.running" ] && echo "stub-faucet-container"
       exit 0
     fi
+    # caddy's pull/up (R-7) never touch the faucet's image state: they are recorded
+    # (the docker line above) and answer from their own knobs.
+    if printf '%s\n' "$@" | grep -qx "caddy"; then
+      if printf '%s\n' "$@" | grep -qx "pull"; then
+        [ "${STUB_CADDY_PULL_FAIL:-0}" = "1" ] && { echo "pull failed (stub)" >&2; exit 1; }
+        echo "caddy pulled"; exit 0
+      fi
+      [ "${STUB_CADDY_UP_FAIL:-0}" = "1" ] && { echo "caddy up failed (stub)" >&2; exit 1; }
+      echo "caddy up"; exit 0
+    fi
     sub=""
     for a in "$@"; do case "$a" in build|up) sub="$a"; break ;; esac; done
     case "$sub" in
