@@ -148,7 +148,19 @@ if [ "$DRY" = "1" ]; then
   exit 0
 fi
 
-report="${SPEC_REPORT:-/var/lib/docker/volumes/z3_faucet_data/_data/box-integrity.json}"
+# WHERE THE REPORT IS. The default named a volume that has never existed on the box
+# (a "z3_" prefix; the compose project is zcash-faucet, so the volume is
+# zcash-faucet_faucet_data), and box-report.sh writes under the real one. So on
+# production this post-condition read "no integrity report" and exited 2 on every run,
+# the script's own cannot-verify path, for as long as it has existed (risk register II,
+# R-42). Ask docker where the volume is mounted; fall back to the path that name has
+# under a stock daemon. SPEC_REPORT still wins for the suite.
+spec_report_default() {
+  local vol="${SPEC_FAUCET_VOLUME:-zcash-faucet_faucet_data}" mp=""
+  mp="$(docker volume inspect -f '{{.Mountpoint}}' "$vol" 2>/dev/null)" || mp=""
+  printf '%s/box-integrity.json\n' "${mp:-/var/lib/docker/volumes/$vol/_data}"
+}
+report="${SPEC_REPORT:-$(spec_report_default)}"
 if [ ! -f "$report" ]; then
   log "POST-CONDITION UNVERIFIED: no integrity report at $report."
   log "  The box may well be at spec; this run cannot say so, and saying so anyway is the"

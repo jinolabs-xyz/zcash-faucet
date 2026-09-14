@@ -41,7 +41,12 @@ BACKUP_DIR="${BACKUP_DIR:-/var/lib/faucet-backups}"
 BACKUP_IDENTITY_FILE="${BACKUP_IDENTITY_FILE:-identity.txt}"
 BACKUP_KEEP="${BACKUP_KEEP:-14}"              # archives kept after a new one lands
 BACKUP_PASSPHRASE="${BACKUP_PASSPHRASE:-}"    # required, see header
-BACKUP_UPLOAD_CMD="${BACKUP_UPLOAD_CMD:-}"    # optional: run <cmd> <archive> after backup
+BACKUP_UPLOAD_CMD="${BACKUP_UPLOAD_CMD:-}"    # run <cmd> <archive> after backup; see BACKUP_LOCAL_ONLY
+# An archive that only exists on the box it backs up does not survive the box. Without an
+# upload hook every run says so in the journal, in a WARNING line, unless the operator has
+# written down that on-box is the intent (risk register II, R-42). The run still succeeds:
+# a nightly page for a backup that worked would train the on-call to ignore the pager.
+BACKUP_LOCAL_ONLY="${BACKUP_LOCAL_ONLY:-0}"
 
 log() { echo "$(date -u +%FT%TZ) faucet-backup: $*"; }
 die() { log "ERROR: $*"; exit 1; }
@@ -250,4 +255,6 @@ log "done: $(basename "$archive"), $(du -h "$archive" | cut -f1)${verified_note}
 if [ -n "$BACKUP_UPLOAD_CMD" ]; then
   log "running upload hook"
   $BACKUP_UPLOAD_CMD "$archive" || log "upload hook failed (backup is still good locally)"
+elif [ "$BACKUP_LOCAL_ONLY" != "1" ]; then
+  log "WARNING: no BACKUP_UPLOAD_CMD: this archive exists only on this box and will not survive it. Set an upload hook in /etc/faucet/backup.env, or BACKUP_LOCAL_ONLY=1 to record that on-box is intended (deploy/z3/BACKUPS.md)."
 fi

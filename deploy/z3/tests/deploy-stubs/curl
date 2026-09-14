@@ -15,14 +15,27 @@
 # credential, checked against a loaded pwhash. Not zallet, and not the wire.
 set -uo pipefail
 
+# Every argv is recorded so a suite can assert what is NOT on it: the credential must
+# arrive through `-K -` on stdin (a curl config line `user = "faucet:pw"`), never as
+# `-u` (risk register II, R-42). `-u` is still parsed so that regression fails by name
+# in the suite rather than as a stub that cannot answer.
+[ -n "${STUB_CURL_ARGV:-}" ] && printf '%s\n' "curl $*" >> "$STUB_CURL_ARGV"
 user_pass=""
 want_code=0
 for arg in "$@"; do
   case "$arg" in
     -u) next=user ;;
+    -K) next=config ;;
     '%{http_code}') want_code=1 ;;
     *)
-      if [ "${next:-}" = "user" ]; then user_pass="$arg"; next=""; fi ;;
+      if [ "${next:-}" = "user" ]; then user_pass="$arg"; next="";
+      elif [ "${next:-}" = "config" ]; then
+        next=""
+        if [ "$arg" = "-" ]; then
+          # curl config syntax: user = "faucet:pw". Read only what stdin holds.
+          user_pass="$(sed -n 's/^user *= *"\(.*\)"$/\1/p' | head -1)"
+        fi
+      fi ;;
   esac
 done
 

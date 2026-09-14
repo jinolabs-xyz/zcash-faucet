@@ -41,11 +41,11 @@ spec_env() {
 if [ "${STUB_REPORT_NOMINER:-0}" = "1" ]; then
   printf '{"expected":%s,"present":%s,"notEnabled":%s,"readable":true}\n' \
     "${STUB_REPORT_EXPECTED:-3}" "${STUB_REPORT_PRESENT:-3}" \
-    "${STUB_REPORT_NOTENABLED:-0}" > "${SPEC_REPORT:?}"
+    "${STUB_REPORT_NOTENABLED:-0}" > "${STUB_REPORT_PATH:-${SPEC_REPORT:?}}"
 else
   printf '{"expected":%s,"present":%s,"notEnabled":%s,"minerBinary":"%s","readable":true}\n' \
     "${STUB_REPORT_EXPECTED:-3}" "${STUB_REPORT_PRESENT:-3}" \
-    "${STUB_REPORT_NOTENABLED:-0}" "${STUB_REPORT_MINER:-current}" > "${SPEC_REPORT:?}"
+    "${STUB_REPORT_NOTENABLED:-0}" "${STUB_REPORT_MINER:-current}" > "${STUB_REPORT_PATH:-${SPEC_REPORT:?}}"
 fi
 RPT
   chmod +x "$T/src/box-report.sh"
@@ -248,3 +248,31 @@ check "no binary was built" "[ ! -f '$T/install/zcash-testnet-miner' ]"
 check "and it does not claim the box is at spec" "! grep -q 'box is at spec' '$T/dry.log'"
 check "and says why there is no post-condition" \
   "grep -q 'no post-condition, because nothing was changed' '$T/dry.log'"
+
+echo "== bring-to-spec: the report is read from the volume docker names, not a path that never existed (R-42)"
+# SPEC_REPORT unset is what production runs with. The old default pointed at
+# z3_faucet_data, a volume no compose project here ever created, so every prod run ended
+# "could not verify" with exit 2 while box-report wrote its file under
+# zcash-faucet_faucet_data. Now docker is asked for the mountpoint.
+spec_env
+unset SPEC_REPORT
+export STUB_LOG="$T/stub.log"; : > "$STUB_LOG"
+export STUB_VOLROOT="$T/vols"
+mkdir -p "$T/vols/zcash-faucet_faucet_data"
+export STUB_REPORT_PATH="$T/vols/zcash-faucet_faucet_data/box-integrity.json"
+bash "$SPEC" > "$T/volume.log" 2>&1
+check "with the report where box-report writes it, the post-condition is verified and exits 0" "[ $? -eq 0 ]"
+check "docker was asked for the volume's mountpoint" "grep -q 'docker volume inspect -f {{.Mountpoint}} zcash-faucet_faucet_data' '$STUB_LOG'"
+check "and the box is declared at spec" "grep -q 'box is at spec' '$T/volume.log'"
+check "and the dead volume name is gone from the script" "! grep -q 'z3_faucet_data' '$REPO/deploy/z3/bring-to-spec.sh'"
+# No such volume: the fallback path is the stock daemon's for that name, and the run says
+# cannot-verify at THAT path, so an operator reads a path that could exist.
+spec_env
+unset SPEC_REPORT
+export STUB_LOG="$T/stub.log"; : > "$STUB_LOG"
+export STUB_VOLROOT="$T/vols"; mkdir -p "$T/vols"
+export STUB_REPORT_PATH="$T/report/elsewhere.json"
+bash "$SPEC" > "$T/novolume.log" 2>&1
+check "with no such volume the post-condition is unverified, exit 2" "[ $? -eq 2 ]"
+check "and it names the stock path for the real volume name, not z3_faucet_data" \
+  "grep -q 'no integrity report at /var/lib/docker/volumes/zcash-faucet_faucet_data/_data/box-integrity.json' '$T/novolume.log'"
