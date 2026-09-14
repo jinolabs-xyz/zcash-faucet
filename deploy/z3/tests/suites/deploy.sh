@@ -417,7 +417,7 @@ check "a rotating deploy exits 0 once the wallet really has the new credential" 
 # THE PASSWORD IS NOT ON CURL'S COMMAND LINE (risk register II, R-42). argv is readable
 # by every process on the box for as long as curl runs. The probe ran (the stub answered
 # by the credential it was given), so the credential travelled, and it travelled on stdin.
-check "the auth probe ran, more than once (both directions are checked)" "[ \"\$(grep -c 'http_code' '$STUB_CURL_ARGV')\" -ge 2 ]"
+check "the auth probe ran, more than once (both directions are checked)" "[ \"\$(grep -c -- '-K -' '$STUB_CURL_ARGV')\" -ge 2 ]"
 check "and the RPC password never appears on curl's argv" "! grep -q \"\$(cat '$D/.zallet-rpc-password')\" '$STUB_CURL_ARGV' && ! grep -q -- '-u faucet:' '$STUB_CURL_ARGV'"
 check "and it travels as a curl config on stdin instead" "grep -q -- '-K -' '$STUB_CURL_ARGV'"
 unset STUB_CURL_ARGV

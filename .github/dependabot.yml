@@ -4,7 +4,8 @@
 #
 # Weekly, not daily: five ecosystems on a small team is a review load, and for npm and
 # cargo the audit gate catches the urgent case between runs. The two image ecosystems
-# have no such net - CI runs no image scanner - which is said again beside them.
+# have a thinner one: the image job scans the built app image for fixable CRITICALs
+# (R-42), which covers the app image's base and nothing else, said again beside them.
 version: 2
 updates:
   - package-ecosystem: npm
@@ -76,10 +77,10 @@ updates:
   # claim here is worse than none: it is what stops the next person checking. The repo
   # suite pins that exception list at exactly those two.
   #
-  # AND THERE IS NO SAFETY NET HERE. The audit gate covers npm and cargo advisories; CI
-  # runs no image scanner at all, so unlike the other three ecosystems there is nothing
-  # catching the urgent case between weekly runs. That makes it matter more, not less,
-  # that these entries actually work.
+  # AND THE SAFETY NET HERE IS THIN. The audit gate covers npm and cargo advisories; the
+  # image job's trivy step (R-42) covers the APP image only, at fixable CRITICAL, so the
+  # caddy and z3 images have nothing catching the urgent case between weekly runs. That
+  # makes it matter more, not less, that these entries actually work.
   #
   # TWO ECOSYSTEMS, NOT ONE. `docker` reads Dockerfiles (and Kubernetes manifests); Compose
   # files need `docker-compose`, which is a separate ecosystem name. Pointing `docker` at a

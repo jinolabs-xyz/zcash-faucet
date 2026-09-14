@@ -18,7 +18,8 @@ on:
     branches: [main]
 
 # LEAST PRIVILEGE FOR THE JOB TOKEN (risk register #27). Nothing in this workflow
-# calls the GitHub API: no gh, no GITHUB_TOKEN, no actions/github-script. Without a
+# writes through the GitHub API: no gh, no actions/github-script; the one action that
+# takes the token (trivy-action, to fetch its own release) needs contents: read. Without a
 # permissions block every job here ran with whatever the repository default grants,
 # which on an older default is write to contents, issues, packages and more, handed
 # to code from a pull request branch. Declared read-only at the top, and the repo suite

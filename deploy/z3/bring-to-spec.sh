@@ -157,7 +157,8 @@ fi
 # under a stock daemon. SPEC_REPORT still wins for the suite.
 spec_report_default() {
   local vol="${SPEC_FAUCET_VOLUME:-zcash-faucet_faucet_data}" mp=""
-  mp="$(docker volume inspect -f '{{.Mountpoint}}' "$vol" 2>/dev/null)" || mp=""
+  # A bounded ask: a wedged dockerd must not hang a post-condition somebody runs by hand.
+  mp="$(timeout 10 docker volume inspect -f '{{.Mountpoint}}' "$vol" 2>/dev/null)" || mp=""
   printf '%s/box-integrity.json\n' "${mp:-/var/lib/docker/volumes/$vol/_data}"
 }
 report="${SPEC_REPORT:-$(spec_report_default)}"

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Stands in for Zallet's RPC auth, and ONLY for that. deploy.sh's single real curl call
-# is the credential probe; the other two mentions are inside help text it echoes.
+# is the credential probe (a `-K -` config on stdin since R-42; `-u` is still parsed so
+# a regression to argv fails by name); the other two mentions are inside help text.
 #
 # THIS STUB EXISTS TO MAKE ONE BUG EXPRESSIBLE. The wallet reads its config into memory
 # when it starts, so rewriting the config on disk changes nothing until it restarts. On
