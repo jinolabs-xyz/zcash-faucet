@@ -790,16 +790,36 @@ try {
   // and the button no longer exists: that is the failure, named, not a locator timeout.
   const stillHeld = await primary.isDisabled({ timeout: 2_000 }).catch(() => false);
   ok("Enter in the address field does not slip past the key gate", stillHeld, (await primary.textContent({ timeout: 1_000 }).catch(() => "form gone: the claim went ahead"))?.trim());
+  // Review typed one character and deleted it: the first cut cleared the key on any
+  // edit, so the exact generated address came back with no panel and a normal button.
+  // The panel and the gate are keyed on the address; a round trip must change nothing.
+  const field = page.locator("input.input").first();
+  await field.press("End");
+  await field.type("x");
+  ok("editing the address hides the key panel", !(await keyPanel.isVisible()), "panel visible with a different address");
+  await field.press("Backspace");
+  const backHeld = await primary.isDisabled({ timeout: 2_000 }).catch(() => false);
+  ok("and typing it back re-shows the panel with the gate still closed", (await keyPanel.isVisible()) && backHeld, (await primary.textContent({ timeout: 1_000 }).catch(() => "form gone"))?.trim());
+  // Masked BEFORE reveal: the secret must not be in the page until asked for.
+  const masked = (await keyPanel.locator("code").textContent()) ?? "";
+  ok("the key is masked until revealed", /^•+$/.test(masked), `${masked.length} chars`);
   await keyPanel.getByRole("button", { name: "Copy key" }).click();
   await page.waitForFunction(() => !document.querySelector("button.btn-primary")?.disabled, null, { timeout: 5_000 }).catch(() => {});
   ok("copying the key releases the request button", await primary.isEnabled(), (await primary.textContent())?.trim());
   await keyPanel.getByRole("button", { name: "Reveal" }).click();
   const shown = (await keyPanel.locator("code").textContent()) ?? "";
   ok("revealed, the key is a real secret and not the mask", shown.length > 40 && !/^•+$/.test(shown), `${shown.length} chars`);
+  // The clipboard holds the KEY, not the address: a copy button that copied the wrong
+  // field would pass every visibility check above and leave the person with nothing.
+  const clipKey = await page.evaluate(() => navigator.clipboard.readText()).catch(() => "");
+  ok("what Copy key put on the clipboard is the revealed key", clipKey === shown, `${clipKey.length} chars, ${clipKey === generated ? "the ADDRESS" : "not the address"}`);
   await primary.click();
   await page.getByText("Sent ✓").waitFor({ timeout: 120_000 });
   ok("a generated address is accepted by the faucet (#31)", true);
   ok("the receipt offers the spending key again", await page.getByRole("button", { name: "Copy spending key" }).isVisible());
+  await page.getByRole("button", { name: "Copy spending key" }).click();
+  const clipAgain = await page.evaluate(() => navigator.clipboard.readText()).catch(() => "");
+  ok("and it copies the same key", clipAgain === shown, `${clipAgain.length} chars`);
   await page.getByRole("button", { name: /Another address/ }).click();
 
   const address = await freshAddress();

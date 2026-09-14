@@ -252,7 +252,11 @@ export default function Home() {
   // spend from: the coins gone, the address's 24 h cooldown spent, and nothing in the
   // ledger to tell it from a real drip. Held here until the person has copied it, and
   // the request button waits for that: a drip to an address whose key is on nobody's
-  // clipboard is a drip to nobody.
+  // clipboard is a drip to nobody. Never cleared on an edit: the panel and both gates
+  // are keyed on the address, so an edit hides them and un-gates the pasted address
+  // (theirs), and returning to the generated string brings them back. The first cut
+  // nulled this on any edit, and review typed one character and deleted it: the exact
+  // address, no panel, a normal Request button, paid with the key nowhere.
   const [genKey, setGenKey] = useState<{ address: string; secret: string; label: string; warning: string } | null>(null);
   const [keyCopied, setKeyCopied] = useState(false);
   const [keyShown, setKeyShown] = useState(false);
@@ -1282,7 +1286,7 @@ export default function Home() {
         {(phase === "ready" || phase === "checking" || phase === "syncing" || phase === "empty") && (
           <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
             <label htmlFor="zaddr" style={{ ...kicker, color: muted(60) }}>Your testnet address</label>
-            <input id="zaddr" className="input" type="text" spellCheck={false} autoComplete="off" autoCapitalize="off" placeholder="utest1… / ztestsapling… / tm…" value={addr} onChange={(e) => { setAddr(e.target.value); setTouched(false); if (genKey && e.target.value !== genKey.address) { setGenKey(null); setKeyCopied(false); } }} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} aria-describedby="addrmsg" />
+            <input id="zaddr" className="input" type="text" spellCheck={false} autoComplete="off" autoCapitalize="off" placeholder="utest1… / ztestsapling… / tm…" value={addr} onChange={(e) => { setAddr(e.target.value); setTouched(false); }} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} aria-describedby="addrmsg" />
             <div id="addrmsg" aria-live="polite" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 9, minHeight: 24 }}>
               {badgeShow && "label" in c && <span className="tag tag-outline">{c.label}</span>}
               {"priv" in c && c.priv === false && <span style={{ fontSize: 12, lineHeight: 1.45, color: muted(62) }}>Transparent address, so this drip will be visible on-chain.</span>}
@@ -1293,12 +1297,12 @@ export default function Home() {
             {genKey && genKey.address === addr && (
               <div data-testid="generated-key" style={{ display: "flex", flexDirection: "column", gap: 8, padding: "12px 14px", border: "1px solid var(--color-divider)", borderRadius: 6 }}>
                 <span style={{ ...kicker, color: muted(60) }}>{genKey.label}</span>
-                <code style={{ fontFamily: "var(--mono)", fontSize: 11.5, lineHeight: 1.5, wordBreak: "break-all", color: keyShown ? "inherit" : muted(55) }}>
+                <code aria-label={keyShown ? undefined : "Spending key, hidden"} style={{ fontFamily: "var(--mono)", fontSize: 11.5, lineHeight: 1.5, wordBreak: "break-all", color: keyShown ? "inherit" : muted(55) }}>
                   {keyShown ? genKey.secret : "•".repeat(Math.min(genKey.secret.length, 48))}
                 </code>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
                   <button className="btn btn-secondary btn-sm" onClick={() => void copy("key", genKey.secret).then((okCopy) => { if (okCopy) setKeyCopied(true); })}>{copied === "key" ? "Copied ✓" : keyCopied ? "Copy key again" : "Copy key"}</button>
-                  <button className="btn btn-ghost btn-sm" onClick={() => setKeyShown((v) => !v)} style={{ padding: 0 }}>{keyShown ? "Hide" : "Reveal"}</button>
+                  <button className="btn btn-ghost btn-sm" aria-pressed={keyShown} onClick={() => setKeyShown((v) => !v)} style={{ padding: 0 }}>{keyShown ? "Hide" : "Reveal"}</button>
                 </div>
                 <p style={{ margin: 0, fontSize: 12, lineHeight: 1.5, color: muted(62), maxWidth: "52ch" }}>
                   {genKey.warning} {keyCopied ? "Keep it somewhere: it is the only way to spend what arrives." : keyShown ? "Copy it from the screen before you request: it is the only way to spend what arrives." : "The request button waits until you have copied or revealed it: a drip to an address whose key is nowhere is a drip to nobody."}
@@ -1416,7 +1420,7 @@ export default function Home() {
                     button not being there (#323 ruling). Both keyed off the data. */}
                 {tx.txid && <button className="btn btn-secondary btn-sm" onClick={() => void copy("txid", tx.txid!)}>{copied === "txid" ? "Copied ✓" : "Copy txid"}</button>}
                 <button className="btn btn-secondary btn-sm" onClick={() => void copy("receipt", receiptText(tx))}>{copied === "receipt" ? "Copied ✓" : "Copy receipt"}</button>
-                {genKey && <button className="btn btn-secondary btn-sm" aria-label="Copy spending key" onClick={() => void copy("key", genKey.secret)}>{copied === "key" ? "Copied ✓" : "Copy spending key"}</button>}
+                {genKey && genKey.address === tx.to && <button className="btn btn-secondary btn-sm" aria-label="Copy spending key" onClick={() => void copy("key", genKey.secret)}>{copied === "key" ? "Copied ✓" : "Copy spending key"}</button>}
                 {tx.explorerUrl && <a className="btn btn-secondary btn-sm" href={tx.explorerUrl} target="_blank" rel="noreferrer">Open in explorer ↗</a>}
                 <button className="btn btn-ghost btn-sm" onClick={again} style={{ padding: 0 }}>Another address</button>
               </div>
