@@ -803,6 +803,8 @@ while true; do
             if docker restart -t 30 "$zallet" >/dev/null 2>&1; then
               flap_set "sends.zallet_restart_at" "$now"
             else
+              # Not stamped, so a daemon that refuses the restart is asked again next
+              # sweep, one log line each, rather than the episode losing its one try.
               log "docker restart failed for $zallet (budget not spent)"
             fi
           fi

@@ -466,7 +466,11 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
       // form and the address kept, nothing recorded against the wallet. Their
       // reservation was released above, so the cooldown is untouched.
       api.logError(err, "recipient refused by the wallet");
-      return apiError(400, `The wallet could not pay that address: ${err.message}. Nothing left the wallet and your cooldown is untouched. Check the address, or use a different one.`, api, { kind: "recipient" });
+      // Reported, never counted (a run of these is visible on /api/status). The
+      // wallet's own sentence stays in the log under the request id: it can carry
+      // note values and internals, and the visitor needs only the fact.
+      recordSend("refused");
+      return apiError(400, "The wallet could not pay that address. Nothing left the wallet and your cooldown is untouched. Check the address, or use a different one.", api, { kind: "recipient" });
     }
     // Counted, because this is the only place in the app that knows a drip failed. A
     // 502 to one caller and a log line is not a signal anything can act on, which is

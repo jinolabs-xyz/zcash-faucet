@@ -162,15 +162,37 @@ function describe(err: unknown): string {
 }
 
 /**
- * Is a definite wallet failure about the recipient rather than the wallet? zcashd's
- * conventions, which zallet keeps: -5 is "invalid address or key", -8 "invalid
- * parameter"; and an operation that failed on the address, the privacy policy or the
- * pool (the two 2026-09-10 deaths were policy refusals for a Sapling recipient) says so
- * in its message. Anything else stays a wallet failure and counts toward send health.
+ * Is a definite z_sendmany refusal about the RECIPIENT rather than the wallet?
+ *
+ * By zallet's own productions, not by keywords (review of #531, round 2, read out of
+ * zcash/wallet `payments.rs` and `zallet_core.ftl`). zallet rejects every recipient
+ * problem synchronously in z_sendmany with code -8 and one of these openings. Nothing
+ * else qualifies:
+ *   -5 is only ever the FROM address or the spending key ("Invalid from address…"), which
+ *      is our configuration, and reading it as the visitor's would answer every claim
+ *      "check your address" for ever after a bad ZALLET_ADDRESS;
+ *   -8 also carries our own parameter mistakes (the fee field, an unknown policy);
+ *   -4 wraps librustzcash proposal errors that mention pools and addresses while being
+ *      about our notes ("…from the Orchard pool may not return…"), and a keyword scan
+ *      turned that, the shape this stack is likeliest to meet, into a 400;
+ *   an operation that fails after the opid exists has already passed recipient
+ *      validation, so its failure is never the recipient's.
+ * A recipient problem this list does not name counts against the wallet, which is the
+ * direction that was true before #531 and the one that keeps the money path visible.
  */
+const RECIPIENT_REFUSALS = [
+  "Invalid parameter, unknown address format",
+  "Invalid parameter, duplicated recipient address",
+  "Cannot send memo to transparent recipient",
+  "Cannot send zero-valued output to transparent recipient",
+  "This transaction would have transparent recipients",
+  "This transaction would send to a transparent receiver of a unified address",
+  "Could not send to the ",
+  "Could not send to a shielded receiver of a unified address",
+];
 export function isRecipientRefusal(code: number | null | undefined, message: string): boolean {
-  if (code === -5 || code === -8) return true;
-  return /\b(address|recipient|privacy policy|policy|pool|decod)/i.test(message);
+  if (code !== -8) return false;
+  return RECIPIENT_REFUSALS.some((p) => message.startsWith(p));
 }
 
 export class ZalletSender implements Sender {
@@ -355,11 +377,9 @@ export class ZalletSender implements Sender {
       throw new SendOutcomeUnknownError(opid, `result unreadable: ${err instanceof Error ? err.message : err}`);
     }
     if (done?.status === "failed" || done?.status === "cancelled") {
-      // The wallet is telling us it did not send. This one is definite. A refusal that
-      // names the recipient (address, policy, pool) is theirs, not the wallet's.
-      const message = done.error?.message ?? done.status;
-      if (done.status === "failed" && isRecipientRefusal(done.error?.code, message)) throw new RecipientRefusedError(message);
-      throw new Error(`zallet send failed: ${message}`);
+      // The wallet is telling us it did not send. This one is definite, and it is the
+      // wallet's: the recipient was validated before the opid existed.
+      throw new Error(`zallet send failed: ${done.error?.message ?? done.status}`);
     }
     if (!done || done.status !== "success") {
       throw new SendOutcomeUnknownError(opid, `unexpected final status ${done?.status ?? "missing"}`);

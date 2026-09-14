@@ -43,7 +43,7 @@
 import { config } from "../config.ts";
 
 /** Outcomes we can honestly classify. `unknown` is counted and never held against us. */
-export type SendOutcome = "ok" | "failed" | "unknown";
+export type SendOutcome = "ok" | "failed" | "unknown" | "refused";
 
 export interface SendRecord {
   outcome: SendOutcome;
@@ -124,6 +124,9 @@ export interface SendHealth {
   failed: number;
   /** Submitted but unresolved. Reported so an operator can see them, never counted against. */
   unknown: number;
+  /** The wallet refused the recipient (the visitor's 400). Reported so a run of them is
+   * visible, never counted: they say nothing about the wallet. */
+  refused: number;
   reason: string;
 }
 
@@ -154,6 +157,7 @@ export function readSendHealth(now: number = Date.now(), records: SendRecord[] =
   const ok = live.filter((r) => r.outcome === "ok").length;
   const failed = live.filter((r) => r.outcome === "failed").length;
   const unknown = live.filter((r) => r.outcome === "unknown").length;
+  const refused = live.filter((r) => r.outcome === "refused").length;
 
   // Unknowns are excluded from the denominator as well as the numerator. Including them
   // would let a run of slow sends dilute a real failure rate below the threshold, which
@@ -172,6 +176,7 @@ export function readSendHealth(now: number = Date.now(), records: SendRecord[] =
         ok,
         failed,
         unknown,
+        refused,
         reason: `${unknown} of the last ${unknown + failed} sends never resolved and none succeeded, the wallet is not finishing sends`,
       };
     }
@@ -184,6 +189,7 @@ export function readSendHealth(now: number = Date.now(), records: SendRecord[] =
         ok,
         failed,
         unknown,
+        refused,
         reason: `${failed} of the last ${failed} sends failed and none succeeded`,
       };
     }
@@ -192,6 +198,7 @@ export function readSendHealth(now: number = Date.now(), records: SendRecord[] =
       ok,
       failed,
       unknown,
+      refused,
       reason: `only ${decided} decided send(s) in the last ${windowMinutes(WINDOW_MS)} min, too few to judge`,
     };
   }
@@ -202,11 +209,12 @@ export function readSendHealth(now: number = Date.now(), records: SendRecord[] =
       ok,
       failed,
       unknown,
+      refused,
       reason: `${failed} of the last ${decided} sends failed`,
     };
   }
 
-  return { state: "ok", ok, failed, unknown, reason: `${ok} of the last ${decided} sends succeeded` };
+  return { state: "ok", ok, failed, unknown, refused, reason: `${ok} of the last ${decided} sends succeeded` };
 }
 
 /**
