@@ -727,4 +727,4 @@ ad_advance src/page.tsx
 rm -f "$STUB_CHECKS_JSON"
 bash "$AD" > "$T/ci-why.log" 2>&1
 check "the refusal carries curl's own words, not only 'could not read'" \
-  "grep -q 'could not read check-runs from' '$T/ci-why.log' && grep -qE 'could not read check-runs from [^(]+\((.+)\)' '$T/ci-why.log'"
+  "grep -q 'could not read check-runs from' '$T/ci-why.log' && grep -q 'The requested URL returned error: 503' '$T/ci-why.log'"
