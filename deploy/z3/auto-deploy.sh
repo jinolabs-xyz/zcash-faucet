@@ -109,9 +109,12 @@ clear_failures() { rm -f "$FAIL_FILE"; }
 # (API down, no jq): refuse and say so. A failed git fetch would have stopped us two
 # lines up, so an unreachable API with a reachable git host is worth a human's look.
 #
-# The hatch is DATED, like live-smoke's: set AUTODEPLOY_CI_GATE_OFF_UNTIL=YYYY-MM-DD to
-# ship without a verdict until that day, never after. A hatch with no expiry becomes
-# the permanent configuration by the second week; this one turns itself back on.
+# The hatch is DATED: set AUTODEPLOY_CI_GATE_OFF_UNTIL=YYYY-MM-DD (a systemd drop-in on
+# faucet-autodeploy.service, see CONTRIBUTING.md) to ship without a verdict until that
+# day, never after. A hatch with no expiry becomes the permanent configuration by the
+# second week; this one turns itself back on. Only that exact shape opens it: the
+# comparison below is a string compare, and review showed "tomorrow", "forever" and an
+# unpadded 2026-9-5 all sort above today and would have been a permanent, silent hatch.
 CI_API="${AUTODEPLOY_CHECKS_API:-https://api.github.com}"
 CI_REQUIRED="${AUTODEPLOY_REQUIRED_CHECKS:-app smoke ui api-tests audit shell miner image}"
 CI_PENDING_MAX="${AUTODEPLOY_CI_PENDING_MAX:-2700}"
@@ -123,6 +126,10 @@ ci_repo() {
 ci_gate() {
   local until="${AUTODEPLOY_CI_GATE_OFF_UNTIL:-}" today
   if [ -n "$until" ]; then
+    case "$until" in
+      [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
+      *) log "REFUSING $(git rev-parse --short "$REMOTE"): AUTODEPLOY_CI_GATE_OFF_UNTIL='$until' is not a YYYY-MM-DD date, so the hatch is not open and the gate is not asked"; return 2 ;;
+    esac
     today="$(date -u +%F)"
     if [[ "$until" > "$today" || "$until" == "$today" ]]; then
       log "CI GATE OFF by AUTODEPLOY_CI_GATE_OFF_UNTIL=$until: shipping $(git rev-parse --short "$REMOTE") with no CI verdict"
@@ -133,10 +140,12 @@ ci_gate() {
   local repo; repo="$(ci_repo)"
   if [ -z "$repo" ]; then log "REFUSING $(git rev-parse --short "$REMOTE"): cannot tell which GitHub repo origin is, so cannot ask CI"; return 2; fi
   command -v jq >/dev/null 2>&1 || { log "REFUSING $(git rev-parse --short "$REMOTE"): jq is missing, cannot read CI's verdict"; return 2; }
-  local body
+  local body err
+  err="$(mktemp)"
   body="$(curl -fsS --max-time 20 -H 'Accept: application/vnd.github+json' \
-          "$CI_API/repos/$repo/commits/$REMOTE/check-runs?per_page=100" 2>/dev/null)" \
-    || { log "REFUSING $(git rev-parse --short "$REMOTE"): could not read check-runs from $CI_API"; return 2; }
+          "$CI_API/repos/$repo/commits/$REMOTE/check-runs?per_page=100" 2>"$err")" \
+    || { log "REFUSING $(git rev-parse --short "$REMOTE"): could not read check-runs from $CI_API ($(tr '\n' ' ' < "$err" | cut -c1-200))"; rm -f "$err"; return 2; }
+  rm -f "$err"
   # One line per required job: "<name> <status> <conclusion>" for its NEWEST run
   # (a rerun supersedes the run it replaced), or "<name> absent -" when it has no run.
   local verdicts
@@ -147,6 +156,15 @@ ci_gate() {
       | ([$runs[] | select(.name == $n)] | sort_by(.id) | last) as $r
       | if $r == null then "\($n) absent -" else "\($n) \($r.status) \($r.conclusion // "-")" end' 2>/dev/null)" \
     || { log "REFUSING $(git rev-parse --short "$REMOTE"): check-runs response did not parse"; return 2; }
+  # ONE LINE PER REQUIRED NAME, or the answer is not an answer. A 200 with an empty body
+  # (a captive portal, a proxy, a wrong AUTODEPLOY_CHECKS_API) parses to nothing, and
+  # nothing is neither red nor pending: review showed it shipping the commit.
+  local want_n; want_n="$(printf '%s\n' "$CI_REQUIRED" | wc -w | tr -d ' ')"
+  local got_n; got_n="$(printf '%s\n' "$verdicts" | grep -c '[^[:space:]]' || true)"
+  if [ "${got_n:-0}" -ne "$want_n" ]; then
+    log "REFUSING $(git rev-parse --short "$REMOTE"): expected a verdict line for each of $want_n required jobs and got ${got_n:-0}; the check-runs answer is not one this gate understands"
+    return 2
+  fi
   local red="" pending=""
   while read -r name status conclusion; do
     [ -n "$name" ] || continue

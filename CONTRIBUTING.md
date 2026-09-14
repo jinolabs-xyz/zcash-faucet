@@ -103,7 +103,12 @@ Every branch goes through the same pipeline, and nothing skips a step:
    commit and ships it only when every job in ci.yml has completed green. A red
    main is refused and pages; a still-running one waits; a commit with no run
    at all waits up to 45 minutes and is then refused too. Branch protection on
-   GitHub is a courtesy in front of that, not the gate.
+   GitHub is a courtesy in front of that, not the gate. The hatch, for the day
+   CI itself is broken: `AUTODEPLOY_CI_GATE_OFF_UNTIL=YYYY-MM-DD` in a drop-in
+   (`systemctl edit faucet-autodeploy.service`, `[Service]` /
+   `Environment=AUTODEPLOY_CI_GATE_OFF_UNTIL=2026-09-15`), which ships without a
+   verdict until that date and then closes on its own; anything that is not a
+   date in that exact shape refuses and pages instead of opening.
 
 The separation is the point: the author writes and fixes, the non-author finds,
 the CTO audits and merges. Nobody reviews their own work and nobody fixes

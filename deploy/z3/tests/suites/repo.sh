@@ -109,7 +109,14 @@ echo "== repo: the box's CI gate requires every job ci.yml defines, by name"
 # a job the list names that ci.yml no longer defines is "absent" for ever, and no
 # commit ships; a job ci.yml added that the list does not name is never asked about,
 # and a red one ships. Both are silent, so the two lists are held equal here.
-CI_JOBS="$(awk '/^jobs:/{injobs=1; next} injobs && /^  [a-z][a-z0-9-]*:$/ {sub(/^  /, ""); sub(/:$/, ""); print}' "$REPO/.github/workflows/ci.yml" | sort | tr '\n' ' ')"
+# A job id may be [A-Za-z_][A-Za-z0-9_-]*; the first cut admitted lowercase only, so an
+# extra_job: escaped the comparison and a red one would have shipped. A trailing comment
+# on the job line is tolerated. And a job-level `name:` renames the check-run GitHub
+# reports, so the gate would see the id as absent for ever: refused below by name.
+CI_JOBS="$(awk '/^jobs:/{injobs=1; next} injobs && /^  [A-Za-z_][A-Za-z0-9_-]*:[[:space:]]*(#.*)?$/ {sub(/^  /, ""); sub(/:.*$/, ""); print}' "$REPO/.github/workflows/ci.yml" | sort | tr '\n' ' ')"
+CI_JOB_NAMES="$(awk '/^jobs:/{injobs=1; next} injobs && /^    name:/ {print}' "$REPO/.github/workflows/ci.yml")"
+check "no job in ci.yml sets a display name, which would rename its check-run away from its id" \
+  "[ -z '$CI_JOB_NAMES' ] || { echo '   job-level name: lines:'; printf '%s\n' '$CI_JOB_NAMES'; false; }"
 GATE_JOBS="$(sed -nE 's/^CI_REQUIRED="\$\{AUTODEPLOY_REQUIRED_CHECKS:-([^}]+)\}"$/\1/p' "$REPO/deploy/z3/auto-deploy.sh" | tr ' ' '\n' | sort | tr '\n' ' ')"
 check "ci.yml defines jobs and the gate's default list could be read" "[ -n '$CI_JOBS' ] && [ -n '$GATE_JOBS' ]"
 check "and the gate requires exactly the jobs ci.yml defines: '$GATE_JOBS' vs '$CI_JOBS'" \

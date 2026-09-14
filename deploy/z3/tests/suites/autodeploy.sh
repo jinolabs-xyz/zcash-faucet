@@ -43,7 +43,7 @@ ad_env() {
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${STUB_CURL_LOG:?}"
 case "$*" in
-  *check-runs*) [ -f "${STUB_CHECKS_JSON:?}" ] || exit 22; cat "$STUB_CHECKS_JSON" ;;
+  *check-runs*) [ -f "${STUB_CHECKS_JSON:?}" ] || { echo "curl: (22) The requested URL returned error: 503" >&2; exit 22; }; cat "$STUB_CHECKS_JSON" ;;
   *) exit 7 ;;
 esac
 CURL
@@ -688,3 +688,43 @@ ad_env
 : > "$STUB_CURL_LOG"
 bash "$AD" > /dev/null 2>&1
 check "nothing to do means no API call, so the hourly budget is spent only on movement" "[ ! -s '$STUB_CURL_LOG' ]"
+
+echo "== auto-deploy: an EMPTY 200 body is not a verdict"
+# curl -f is happy with a 200 that carries nothing (a captive portal, a proxy, a wrong
+# AUTODEPLOY_CHECKS_API), jq emits nothing for nothing, and nothing is neither red nor
+# pending: review showed the commit shipping. One verdict line per required job, or refuse.
+ad_env
+export AUTODEPLOY_STATE_FILE="$T/last-processed"
+ad_advance src/page.tsx
+: > "$STUB_CHECKS_JSON"
+bash "$AD" > "$T/ci-empty.log" 2>&1
+check "an empty body refuses, exit 1, and says the answer was not understood" \
+  "[ $? -eq 1 ] && grep -q 'expected a verdict line for each of 8 required jobs and got 0' '$T/ci-empty.log' && [ ! -s '$REDEPLOY_LOG' ]"
+printf '{"total_count":0,"check_runs":[]}\n' > "$STUB_CHECKS_JSON"
+bash "$AD" > "$T/ci-none.log" 2>&1
+check "an honest empty list is still pending, not a refusal: the jobs are absent, not unknown" \
+  "[ $? -eq 0 ] && grep -q 'waiting for CI' '$T/ci-none.log'"
+
+echo "== auto-deploy: a hatch that is not a date is not a hatch"
+# The comparison is a string compare; 'tomorrow', 'forever', 'true' and an unpadded
+# 2026-9-5 all sort above today's date and would have been a permanent, silent hatch.
+ad_env
+export AUTODEPLOY_STATE_FILE="$T/last-processed"
+ad_advance src/page.tsx
+ci_fixture app:completed:failure
+for bad in tomorrow forever true 2026-9-5 '2027-01-01 ' ; do
+  : > "$REDEPLOY_LOG"; rm -f "$T/last-processed.failures"   # each refusal counts; the backoff is not what is under test here
+  AUTODEPLOY_CI_GATE_OFF_UNTIL="$bad" bash "$AD" > "$T/hatch-bad.log" 2>&1
+  rc=$?
+  check "AUTODEPLOY_CI_GATE_OFF_UNTIL='$bad' refuses, exit 1, and does not ship" \
+    "[ $rc -eq 1 ] && grep -q 'is not a YYYY-MM-DD date' '$T/hatch-bad.log' && [ ! -s '$REDEPLOY_LOG' ]"
+done
+
+echo "== auto-deploy: a curl failure says why"
+ad_env
+export AUTODEPLOY_STATE_FILE="$T/last-processed"
+ad_advance src/page.tsx
+rm -f "$STUB_CHECKS_JSON"
+bash "$AD" > "$T/ci-why.log" 2>&1
+check "the refusal carries curl's own words, not only 'could not read'" \
+  "grep -q 'could not read check-runs from' '$T/ci-why.log' && grep -qE 'could not read check-runs from [^(]+\((.+)\)' '$T/ci-why.log'"
