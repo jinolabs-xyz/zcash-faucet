@@ -325,13 +325,25 @@ for wf in "$REPO"/.github/workflows/*.yml "$REPO"/.github/workflows/*.yaml; do
   check "$name declares a permissions block" "grep -q '^permissions:' '$wf'"
   check "$name grants contents no more than read" "grep -A 4 '^permissions:' '$wf' | grep -q 'contents: read'"
   check "$name grants nothing write at the top level" "! grep -A 6 '^permissions:' '$wf' | grep -qE ': *write'"
-  check "$name has no job-level permissions block that could widen the top-level one" "! grep -qE '^ +permissions:' '$wf'"
-  check "$name never runs on pull_request_target" "! grep -qE '^ *pull_request_target *:|^ *- *pull_request_target' '$wf'"
+  # Any job-level block, the empty map included: one place to reason about the token.
+  check "$name has no job-level permissions block (the top-level one is the only grant)" "! grep -qE '^ +permissions:' '$wf'"
+  # The WORD, anywhere outside a comment: `on: pull_request_target`, `on: [push,
+  # pull_request_target]`, a block key and a list item all parse to the trigger, and the
+  # first version matched only the last two (review of #534).
+  # COUNTED, NOT -q: under pipefail a `sed | grep -q` that matches early returns sed's
+  # SIGPIPE status, and `!` turned that into a pass on the exact file it should have
+  # refused (measured: `on: pull_request_target` read green). -c drains the stream.
+  check "$name never runs on pull_request_target" \
+    "[ \"\$(sed 's/#.*//' '$wf' | grep -cE '(^|[^A-Za-z_])pull_request_target([^A-Za-z_]|$)')\" = 0 ]"
   # EVERY ACTION IS PINNED TO A COMMIT, not a tag. A tag can be moved by whoever holds
   # the action's repository; a SHA cannot. dependabot's github-actions ecosystem keeps
-  # the SHA current and carries the version in the trailing comment.
+  # the SHA current and rewrites the trailing version comment; the comment's presence is
+  # required here and its value trusted, since the suite cannot resolve a SHA offline.
+  # THE COMPLEMENT, not an enumeration: every line carrying `uses:` outside a comment
+  # must be the pinned form, so a spelling the enumerator did not foresee (`-   uses:`,
+  # a flow mapping) is refused rather than skipped (review of #534).
   check "$name pins every uses: to a 40-hex commit with the version beside it" \
-    "! grep -E '^ *(- )?uses:' '$wf' | grep -vqE 'uses: [A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(/[A-Za-z0-9_./-]+)?@[0-9a-f]{40} # v[0-9]'"
+    "[ \"\$(grep -E 'uses:' '$wf' | grep -vE '^ *#' | grep -vcE '^ *(- *)?uses: [A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(/[A-Za-z0-9_./-]+)?@[0-9a-f]{40} # v[0-9]')\" = 0 ]"
 done
 
 echo "== repo: /api/ready's key ORDER is load-bearing, in two readers (risk register #19)"
