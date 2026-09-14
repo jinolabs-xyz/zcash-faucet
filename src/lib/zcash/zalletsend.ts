@@ -18,7 +18,7 @@
  * are ZIP-317, set by the wallet. See the Zallet book:
  *   https://zcash.github.io/wallet/guide/first-wallet.html
  */
-import { SendOutcomeUnknownError, type Sender, type SendRequest, type SendResult } from "./send.ts";
+import { RecipientRefusedError, SendOutcomeUnknownError, type Sender, type SendRequest, type SendResult } from "./send.ts";
 // .ts extension for node --test resolution, same pattern as pow.ts.
 import { config, ZATOSHI_PER_TAZ } from "../config.ts";
 import { explorerTxUrl } from "./explorer.ts";
@@ -161,6 +161,18 @@ function describe(err: unknown): string {
   return `${name}${code ? ` ${code}` : ""}: ${msg}`;
 }
 
+/**
+ * Is a definite wallet failure about the recipient rather than the wallet? zcashd's
+ * conventions, which zallet keeps: -5 is "invalid address or key", -8 "invalid
+ * parameter"; and an operation that failed on the address, the privacy policy or the
+ * pool (the two 2026-09-10 deaths were policy refusals for a Sapling recipient) says so
+ * in its message. Anything else stays a wallet failure and counts toward send health.
+ */
+export function isRecipientRefusal(code: number | null | undefined, message: string): boolean {
+  if (code === -5 || code === -8) return true;
+  return /\b(address|recipient|privacy policy|policy|pool|decod)/i.test(message);
+}
+
 export class ZalletSender implements Sender {
   readonly name = "zallet";
 
@@ -295,7 +307,14 @@ export class ZalletSender implements Sender {
     try {
       opid = await this.rpc<string>("z_sendmany", params);
     } catch (err) {
-      if (sendmanyFailureIsDefinite(err)) throw err;
+      if (sendmanyFailureIsDefinite(err)) {
+        // The wallet said no before spawning anything. If it said no to the RECIPIENT,
+        // that is the visitor's to fix and not a wallet failure (review of #531).
+        const msg = err instanceof Error ? err.message : String(err);
+        const m = /^zallet RPC z_sendmany: (.*) \(code (-?\d+)\)$/.exec(msg);
+        if (m && isRecipientRefusal(Number(m[2]), m[1])) throw new RecipientRefusedError(m[1]);
+        throw err;
+      }
       throw new SendOutcomeUnknownError("no-opid", `z_sendmany reply lost: ${describe(err)}`);
     }
     const txid = await this.awaitOperation(opid);
@@ -336,8 +355,11 @@ export class ZalletSender implements Sender {
       throw new SendOutcomeUnknownError(opid, `result unreadable: ${err instanceof Error ? err.message : err}`);
     }
     if (done?.status === "failed" || done?.status === "cancelled") {
-      // The wallet is telling us it did not send. This one is definite.
-      throw new Error(`zallet send failed: ${done.error?.message ?? done.status}`);
+      // The wallet is telling us it did not send. This one is definite. A refusal that
+      // names the recipient (address, policy, pool) is theirs, not the wallet's.
+      const message = done.error?.message ?? done.status;
+      if (done.status === "failed" && isRecipientRefusal(done.error?.code, message)) throw new RecipientRefusedError(message);
+      throw new Error(`zallet send failed: ${message}`);
     }
     if (!done || done.status !== "success") {
       throw new SendOutcomeUnknownError(opid, `unexpected final status ${done?.status ?? "missing"}`);

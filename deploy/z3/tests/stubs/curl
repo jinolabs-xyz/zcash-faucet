@@ -20,6 +20,16 @@ case "$*" in
     # Same gap that made redeploy-curl unable to express any of this (#229).
     want_code=200
     [ "${STUB_READY:-1}" = "1" ] || want_code=503
+    # STUB_READY_SEQUENCE="0 0 1 0": readiness per CALL, one value each, the last one
+    # repeating, counted in a file beside the log. For an episode that recovers and
+    # relapses inside one watchdog process.
+    if [ -n "${STUB_READY_SEQUENCE:-}" ]; then
+      cf="${STUB_LOG}.ready-count"
+      n=$(( $(cat "$cf" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$cf"
+      v=1; i=0
+      for x in $STUB_READY_SEQUENCE; do i=$((i + 1)); v="$x"; [ "$i" -ge "$n" ] && break; done
+      if [ "$v" = "1" ]; then want_code=200; else want_code=503; fi
+    fi
     # STUB_READY_CANBUILD=0: a 200 whose send gate refuses (canBuildTx:false, tip
     # unverifiable), the shape the watchdog must page on. STUB_READY_CANBUILD_ONCE names
     # a marker: refuse on the first call only, so a recovery can be observed.

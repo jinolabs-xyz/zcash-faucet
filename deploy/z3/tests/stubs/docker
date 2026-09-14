@@ -125,6 +125,8 @@ case "${1:-}" in
     ;;
   restart)
     shift
+    # `-t N` (stop grace) is accepted and dropped: the log line above keeps it.
+    [ "${1:-}" = "-t" ] && shift 2
     [ -f "${STUB_CONTAINERS:?}/$1" ] || { echo "no such container: $1" >&2; exit 1; }
     echo running > "${STUB_CONTAINERS:?}/$1"
     echo "$1"

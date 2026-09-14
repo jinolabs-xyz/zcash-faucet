@@ -26,12 +26,15 @@ INTERVAL="${WATCHDOG_INTERVAL:-30}"                 # seconds between sweeps
 FAUCET_URL="${WATCHDOG_FAUCET_URL:-http://127.0.0.1:3000}"
 FAUCET_FAIL_LIMIT="${WATCHDOG_FAUCET_FAIL_LIMIT:-3}" # consecutive liveness misses before restart
 READY_GRACE_SECS="${WATCHDOG_READY_GRACE_SECS:-1800}" # 30 min un-ready before we page
-# SENDS FAILING gets one self-heal before the page (risk register II, R-18): a wallet
-# that answers balances and refuses every send is the zallet shape a restart has fixed
-# every time so far, and the readiness page alone left it to a human at 30 minutes.
-# After this long of "sends failing", restart zallet once; not again for the budget;
-# the 30-minute page above still fires if that did not help.
-SENDS_RESTART_AFTER="${WATCHDOG_SENDS_RESTART_AFTER:-600}"   # 10 min of sends failing
+# SENDS FAILING gets one self-heal (risk register II, R-18): a wallet that answers
+# balances and refuses every send is the zallet shape a restart has fixed every time so
+# far. The verdict is in-memory and ages out with its window (15 min from the older
+# failure), and while it holds no new send can land to refresh it, so the 30-minute
+# readiness page above CANNOT fire on this reason alone: the verdict is gone before
+# the grace is up. This restart is the reaction; the reason is visible on /api/status
+# and to live-smoke meanwhile. Three minutes of it, not ten, or two failures would
+# have to land within five minutes of each other for this to ever run.
+SENDS_RESTART_AFTER="${WATCHDOG_SENDS_RESTART_AFTER:-180}"    # 3 min of sends failing
 SENDS_RESTART_BUDGET="${WATCHDOG_SENDS_RESTART_BUDGET:-3600}" # one zallet restart per hour
 ALERT_URL="${WATCHDOG_ALERT_URL:-}"                 # optional webhook for alerts
 ALERT_FORMAT="${WATCHDOG_ALERT_FORMAT:-slack}"      # slack (default) or discord
@@ -783,12 +786,13 @@ while true; do
       danger "faucet NOT READY for $((elapsed / 60)) min. Reason: ${reason:-unknown}."; rc=$?
       paged "$rc" && alerted_unready=1
     fi
-    # 4b: SENDS FAILING → one zallet restart, then the page above (R-18). Keyed on the
-    # app's own readiness reason, the way the rollback guard in redeploy.sh reads it:
-    # "sends failing: N of the last N sends failed". Any other reason resets the clock,
-    # because a restart is only the right move for this one shape. The restart time is
-    # on disk with the flap counts, so a watchdog restart cannot hand out a second one
-    # inside the budget.
+    # 4b: SENDS FAILING → one zallet restart (R-18). Keyed on the app's own readiness
+    # reason, "sends failing: ..." (readiness.ts); since #531 a recipient the wallet
+    # refuses is the visitor's 400 and never counts toward it, so this reason is the
+    # wallet itself. Any other reason resets the clock, because a restart is only the
+    # right move for this one shape. The restart time is on disk with the flap counts,
+    # so a watchdog restart cannot hand out a second one inside the budget. -t 30: the
+    # wallet is sqlite-backed and docker's default is 10 s before SIGKILL.
     case "$reason" in
       "sends failing"*)
         [ "$sends_failing_since" = "0" ] && sends_failing_since="$now"
@@ -796,8 +800,11 @@ while true; do
           last_restart="$(flap_get "sends.zallet_restart_at")"
           if [ $((now - last_restart)) -ge "$SENDS_RESTART_BUDGET" ]; then
             log "sends failing for $(( (now - sends_failing_since) / 60 )) min ($reason): restarting $zallet once (next allowed in $((SENDS_RESTART_BUDGET / 60)) min)"
-            docker restart "$zallet" >/dev/null 2>&1 || log "docker restart failed for $zallet"
-            flap_set "sends.zallet_restart_at" "$now"
+            if docker restart -t 30 "$zallet" >/dev/null 2>&1; then
+              flap_set "sends.zallet_restart_at" "$now"
+            else
+              log "docker restart failed for $zallet (budget not spent)"
+            fi
           fi
         fi ;;
       *) sends_failing_since=0 ;;

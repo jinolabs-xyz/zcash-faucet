@@ -1358,7 +1358,7 @@ export default function Home() {
             <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>Sends are failing on our side right now.</h2>
             <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
               {status?.sends?.reason ? `${status.sends.reason.charAt(0).toUpperCase()}${status.sends.reason.slice(1)}. ` : ""}
-              The operator has been paged. Nothing you do here will change it, and no proof-of-work is asked for
+              This is watched on our side and usually clears within minutes. Nothing you do here will change it, and no proof-of-work is asked for
               while it lasts; this page re-checks on its own, and the button comes back when sends land again.
             </p>
           </div>

@@ -298,3 +298,44 @@ test("the classifier defaults to unknown for a shape it has not met", () => {
   // method must not be read as one.
   assert.equal(sendmanyFailureIsDefinite(new Error("zallet RPC z_getoperationstatus: boom (code 1)")), false);
 });
+
+/* ------------------------------------------- a refused recipient is not a wallet failure (R-18) */
+
+const { RecipientRefusedError } = await import("./send.ts");
+const { isRecipientRefusal } = await import("./zalletsend.ts");
+
+test("z_sendmany: the wallet refusing the RECIPIENT is RecipientRefusedError, not a wallet failure", async () => {
+  for (const [code, message] of [[-5, "Invalid address or key"], [-8, "Invalid parameter, recipient pool not allowed by privacy policy"], [-4, "Transaction to address utest1x would violate the privacy policy"]] as const) {
+    failingSendmany(() => new Response(JSON.stringify({ error: { code, message } }), { status: 200 }));
+    await assert.rejects(sendOnce, (err: unknown) => err instanceof RecipientRefusedError && (err as Error).message === message, `code ${code}: ${message}`);
+  }
+});
+
+test("z_sendmany: a wallet refusal that is not about the recipient stays a plain failure", async () => {
+  failingSendmany(() => new Response(JSON.stringify({ error: { code: -6, message: "Insufficient funds" } }), { status: 200 }));
+  await assert.rejects(sendOnce, (err: unknown) => !(err instanceof RecipientRefusedError) && !(err instanceof SendOutcomeUnknownError) && /Insufficient funds/.test(String(err)));
+});
+
+test("an operation that FAILED on the recipient is a refusal; one that failed on the wallet is not", async () => {
+  mockRpc({
+    z_sendmany: () => "opid-recipient",
+    z_getoperationstatus: () => [{ id: "opid-recipient", status: "failed" }],
+    z_getoperationresult: () => [{ id: "opid-recipient", status: "failed", error: { code: -4, message: "Invalid recipient address" } }],
+  });
+  await assert.rejects(sendOnce, (err: unknown) => err instanceof RecipientRefusedError);
+  mockRpc({
+    z_sendmany: () => "opid-wallet",
+    z_getoperationstatus: () => [{ id: "opid-wallet", status: "failed" }],
+    z_getoperationresult: () => [{ id: "opid-wallet", status: "failed", error: { code: -6, message: "Insufficient funds" } }],
+  });
+  await assert.rejects(sendOnce, (err: unknown) => !(err instanceof RecipientRefusedError) && /Insufficient funds/.test(String(err)));
+});
+
+test("isRecipientRefusal: the codes and the words", () => {
+  assert.equal(isRecipientRefusal(-5, "anything"), true);
+  assert.equal(isRecipientRefusal(-8, "anything"), true);
+  assert.equal(isRecipientRefusal(-4, "could not decode address"), true);
+  assert.equal(isRecipientRefusal(-4, "Insufficient funds"), false);
+  assert.equal(isRecipientRefusal(undefined, "wallet locked"), false);
+  assert.equal(isRecipientRefusal(null, "Sapling pool not permitted by the privacy policy"), true);
+});

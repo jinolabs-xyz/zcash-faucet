@@ -55,6 +55,21 @@ export interface SendResult {
  * claim nothing moved and must not release the claimant's cooldown, or the
  * faucet can pay twice for one entitlement.
  */
+/**
+ * The wallet refused THIS recipient: the address does not decode, is not payable
+ * from our pool under the privacy policy, or is otherwise the visitor's to fix. A
+ * definite failure, nothing left the wallet, and NOT a statement about the wallet:
+ * counting it as one let a single visitor retrying a bad address, or one stranger
+ * with two claims, trip the send-health verdict and close the faucet for everyone
+ * (review of #531). The route answers 400 and records no send.
+ */
+export class RecipientRefusedError extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = "RecipientRefusedError";
+  }
+}
+
 export class SendOutcomeUnknownError extends Error {
   readonly opid: string;
 
