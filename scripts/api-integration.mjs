@@ -12,7 +12,7 @@
 // construction and cannot drift from the validator.
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { openSync, readFileSync, mkdtempSync } from "node:fs";
+import { openSync, readFileSync, mkdtempSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bech32m } from "@scure/base";
@@ -191,8 +191,11 @@ async function waitReady(base, ms = 90_000) {
   for (;;) {
     try {
       // /api/status, not /api/health: the answer has to carry THIS run's nonce, or it is
-      // some other process on the port and the run must not proceed against it.
-      const res = await fetch(base + "/api/status", { signal: AbortSignal.timeout(2000) });
+      // some other process on the port and the run must not proceed against it. Eight
+      // seconds, because status probes the read-side backend with its own 4 s budget:
+      // with egress blackholed a 200 takes 4.03 s (review of #537), and a 2 s abort here
+      // read a healthy server as one that never came up.
+      const res = await fetch(base + "/api/status", { signal: AbortSignal.timeout(8000) });
       if (res.ok) {
         const body = await res.json().catch(() => ({}));
         if (body.buildCommit === RUN_NONCE) return;
@@ -428,11 +431,16 @@ const serverK = boot(PORT_K, {
 // `npm run start` puts npm and, on Linux, a non-exec'ing sh above node, and a SIGTERM
 // to npm never reached node there; the first version of this test found the listener
 // with lsof and signalled it directly, which proved a path docker does not take.
-const bootDirect = (port, env) =>
-  spawn("node", ["node_modules/next/dist/bin/next", "start", "-H", "0.0.0.0", "-p", String(port)], {
+const bootDirect = (port, env) => {
+  // ONE fd for both streams, as boot() does: two fds on one file ("w" and "a") let a
+  // stdout write land at its own offset over bytes stderr had appended, and Next's own
+  // errors go to stderr, which is the text a dead boot needs to keep (review of #537).
+  const fd = openSync(join(LOG_DIR, `server-${port}.log`), "w");
+  return spawn("node", ["node_modules/next/dist/bin/next", "start", "-H", "0.0.0.0", "-p", String(port)], {
     env: { ...process.env, PORT: String(port), FAUCET_BUILD_COMMIT: RUN_NONCE, FAUCET_DATA_DIR: DATA_DIR, ...env },
-    stdio: ["ignore", openSync(join(LOG_DIR, `server-${port}.log`), "w"), openSync(join(LOG_DIR, `server-${port}.log`), "a")],
+    stdio: ["ignore", fd, fd],
   });
+};
 const WALLET_L = 28333;
 const walletL = spawn("node", ["scripts/fake-zallet.mjs"], {
   env: { ...process.env, PORT: String(WALLET_L), BALANCE_TAZ: "10", SEND_HANGS: "true" },
@@ -485,6 +493,10 @@ try {
   // hang and then throw. Responding at all is the whole requirement.
   await waitHosh(false, 15_000, HOSH_EMPTY_PORT);
   await Promise.all([waitReady(BASE_A), waitReady(BASE_B), waitReady(BASE_C), waitReady(BASE_D), waitReady(BASE_E), waitReady(BASE_H), waitReady(BASE_I), waitReady(BASE_J), waitReady(BASE_K), waitReady(BASE_L), waitReady(BASE_M)]);
+  // THE LEDGER IS WHERE THIS RUN PUT IT. A driver that ignored FAUCET_DATA_DIR kept every
+  // other assertion green while the claims went back to cwd/data (review of #537), which
+  // is the shape this suite exists to refuse: a green that proves nothing.
+  ok("the run's ledger is under its own data dir, not cwd/data", existsSync(join(DATA_DIR, "faucet.db")), DATA_DIR);
 
   /* ── A: /api/status shape ────────────────────────────────────────────── */
   const status = await get(BASE_A, "/api/status");
@@ -891,7 +903,7 @@ try {
     return req(BASE_K, "/api/faucet", { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": kIp }, body: JSON.stringify({ address }) });
   };
   let capped = await fromK();
-  if (capped.status === 200) capped = await fromK(); // the ledger is fresh per run, so the first claim usually pays
+  if (capped.status === 200) capped = await fromK(); // the cap is per network over the run's shared ledger, and the servers before K have usually filled it
   const capNextMs = capped.body.nextAt ? Date.parse(capped.body.nextAt) : NaN;
   ok("K a claim over the daily cap is 503 kind cap", capped.status === 503 && capped.body.kind === "cap", `${capped.status} ${capped.body.kind ?? ""}`);
   // Bounded, not measured: a fresh drip frees in ~86,400 s either way, so this cannot

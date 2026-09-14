@@ -246,9 +246,11 @@ Every correction came from the same few habits, so the habits are rules.
     the unknown-outcome path it exercises holds the full cooldown on purpose,
     so the first green run poisoned its own fixture and every run after it got
     a cooldown 429. The failure read as broken deadline logic, so it pointed at
-    innocent code. The ledger is `$cwd/data/faucet.db` with no override, shared
-    by every app instance a test boots and surviving between runs, so anything
-    that writes a claim needs a fresh address per run. Run a suite twice before
+    innocent code. The integration suite's ledger is per run now (a
+    `FAUCET_DATA_DIR` under the run's log directory, thrown away with it), but it
+    is still shared by every app instance one run boots, so anything that writes
+    a claim still needs a fresh address per server; the unit tests that `chdir`
+    into a temp dir still read `data/faucet.db` there. Run a suite twice before
     you believe it once.
 
 15. Assert against the shipped code path, never a copy of its logic. Rule 4
