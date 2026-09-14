@@ -834,7 +834,7 @@ try {
     const text = await page.locator("#tool-about").innerText();
     await page.getByRole("button", { name: "How it works" }).click();
     ok("the income sentence follows the miner state (no heartbeat here: not mining, topped up by hand)", /The faucet is not mining right now, so what it hands out is donated or topped up by hand\./.test(text), text.match(/The faucet (mines|is not mining|has had)[^.]*\./)?.[0] ?? "no income sentence found");
-    ok("and none of the old fixed sentences remain", !/does not currently earn from mining|income rounds to zero|refilled by hand at the moment/.test(text));
+    ok("and none of the old fixed sentences remain", !/does not currently earn from mining|income rounds to zero|refilled by hand at the moment|mining and shielding its own coins/.test(text));
   }
   await checkMinerPanel(page);
 

@@ -254,9 +254,11 @@ const CONFIRMATIONS_ENOUGH = 6;
 // closes over nothing that can go stale.
 // Where the TAZ comes from, from the same facts the panel shows (R-39). Null until the
 // first status lands, so no sentence is rendered on a guess.
+const harvestFailing = (s: Status): boolean =>
+  s.reserve?.lastFailure?.outcome === "error" && (s.reserve.failedSteps ?? 0) > 0;
 const incomeFrom = (s: Status | null): string | null =>
   s?.miner && s.reserve
-    ? incomeSentence({ minerActive: s.miner.active, accepted: s.miner.submittedAccepted ?? null, shieldCoinbase: s.reserve.shieldCoinbase === true })
+    ? incomeSentence({ minerActive: s.miner.active, accepted: s.miner.submittedAccepted ?? null, shieldCoinbase: s.reserve.shieldCoinbase === true, harvestFailing: harvestFailing(s) })
     : null;
 // How far the NODE is behind the independent tip, or null when either is unknown.
 const nodeGap = (s: Status): number | null =>
@@ -943,6 +945,9 @@ export default function Home() {
     reserve && reserve.spendableTaz != null && reserve.targetTaz > 0
       ? Math.min(100, Math.round((reserve.spendableTaz / reserve.targetTaz) * 100))
       : null;
+  // Something is actually putting coins in: the miner is running and the shielding
+  // step is not failing. Only then may the card promise that drips resume.
+  const refillHealthy = !!status?.miner?.active && !!reserve?.shieldCoinbase && !(status && harvestFailing(status));
   const c = check(addr);
   const badgeShow = c.ok || ("label" in c && !!c.label);
   const remain = Math.max(0, cooldownEnd - now);
@@ -1005,7 +1010,7 @@ export default function Home() {
     : phase === "queued" ? `Your claim is queued. It sends on its own when the ${queuedBehindFault ? "faucet is back" : "node is ready"}.`
     : phase === "syncing" ? "Node is syncing. The faucet will be ready shortly."
     : phase === "fault" ? "The faucet is having a problem and is not taking claims right now. Nothing to do on your side."
-    : phase === "empty" ? (refilling ? "Topping up the reserve. Drips resume in a moment." : "The faucet is out of TAZ right now.")
+    : phase === "empty" ? (refilling ? (refillHealthy ? "Topping up the reserve. Drips resume in a moment." : "The faucet's reserve is low.") : "The faucet is out of TAZ right now.")
     : phase === "degraded" ? "Sends are failing right now, so the faucet is not taking claims. Nothing to do on your side."
     : phase === "submitting" ? (powState ? "Checking you are human. Nothing to do, it runs on its own." : "Sending your testnet ZEC. Keep this tab open.")
     : phase === "success" ? "Sent. Your testnet ZEC is on its way."
@@ -1352,13 +1357,25 @@ export default function Home() {
                 </span>
               )}
             </div>
-            <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>Topping up the reserve. Drips resume in a moment.</h2>
+            {/* "Drips resume in a moment" is only true when something is putting coins
+                in: a running miner and a shielding step that is not failing. With the
+                miner parked this card still renders (the loop is armed by the balance,
+                not the miner), and then it is just a low balance being watched. */}
+            <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>{refillHealthy ? "Topping up the reserve. Drips resume in a moment." : "The reserve is low."}</h2>
             {refillPct != null && (
               <div role="progressbar" aria-label="Reserve refill progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={refillPct} style={{ height: 10, border: "2px solid var(--color-divider)", position: "relative", overflow: "hidden" }}>
                 <i aria-hidden="true" style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: refillPct + "%", background: "repeating-linear-gradient(135deg,var(--color-accent) 0 3px,transparent 3px 7px)", backgroundSize: "26px 26px", animation: "hatch 1.1s linear infinite" }} />
               </div>
             )}
-            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>The faucet is mining and shielding its own coins right now. Nothing is broken. The balance dipped below the reserve line and it is being restored automatically.</p>
+            {/* Read off status, not asserted (R-39): this line was fixed text saying
+                "mining and shielding its own coins right now. Nothing is broken." and it
+                rendered beside a strip reading "miner no signal". */}
+            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
+              {incomeFrom(status) ?? "The balance is below the reserve line."}{" "}
+              {refillHealthy
+                ? "Nothing is broken: the balance dipped below the reserve line and it is being restored automatically."
+                : "The balance dipped below the reserve line, and until something puts coins in it stays there."}
+            </p>
           </div>
         )}
 
@@ -1383,7 +1400,7 @@ export default function Home() {
                 either way; a refill by mining takes a block win, a refill by hand takes
                 a person. */}
             <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
-              {incomeFrom(status) ?? "It gets refilled when funds arrive"} This can take a while. Nothing you did caused
+              {incomeFrom(status) ?? "It gets refilled when funds arrive."} This can take a while. Nothing you did caused
               it{donation ? ", and if you have spare TAZ the address below puts the faucet back up for everyone" : ""}.
             </p>
             {donation && (

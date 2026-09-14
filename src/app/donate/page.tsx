@@ -1,9 +1,9 @@
 /**
  * /donate: the long-form version of the empty-state prompt.
  *
- * Deliberately plain about why this page exists: the faucet mines, mining
- * income is currently zero (#42), so donations are what keep it serving. No
- * begging, no urgency theatre, just the situation and an address.
+ * Deliberately plain about why this page exists: where the faucet's TAZ comes from
+ * today, read off the miner and the reserve loop (R-39), and an address for anyone
+ * who wants to add to it. No begging, no urgency theatre.
  *
  * Server rendered on purpose. The addresses and the story are readable with no
  * JavaScript, which is the right call for a page whose job is handing over an
@@ -20,6 +20,7 @@ import { safeBalance } from "@/lib/zcash/send";
 import { readMinerHeartbeat } from "@/lib/miner/read";
 import { isActive } from "@/lib/miner/heartbeat";
 import { incomeSentence } from "@/lib/incomeSentence";
+import { getReserveReconciler } from "@/lib/reserve/reconciler";
 import { CopyAddress } from "./CopyAddress";
 import { BrandMark } from "../BrandMark";
 
@@ -55,7 +56,13 @@ export default async function Donate() {
   // The same sentence the home page renders, from the same facts (R-39): this page
   // said "the income rounds to zero" beside a balance the miner had filled.
   const miner = readMinerHeartbeat(config.miner.heartbeatPath);
-  const income = incomeSentence({ minerActive: isActive(miner.state), accepted: miner.submittedAccepted ?? null, shieldCoinbase: config.reserve.shieldCoinbase });
+  const reserveState = getReserveReconciler().status;
+  const income = incomeSentence({
+    minerActive: isActive(miner.state),
+    accepted: miner.submittedAccepted ?? null,
+    shieldCoinbase: config.reserve.shieldCoinbase,
+    harvestFailing: reserveState.lastFailure?.outcome === "error" && reserveState.failedSteps > 0,
+  });
   const spendable = balanceZat === null ? null : Number(balanceZat) / Number(ZATOSHI_PER_TAZ);
   const target = Number(config.reserve.targetZatoshi) / Number(ZATOSHI_PER_TAZ);
   const fillPct = spendable != null && target > 0 ? Math.min(100, Math.round((spendable / target) * 100)) : null;
