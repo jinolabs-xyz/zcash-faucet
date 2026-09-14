@@ -82,7 +82,7 @@ test("A TURNSTILE SECRET ALONE CHANGES NOTHING: the default is pow, full stop", 
   assert.equal(challengeUnder({ TURNSTILE_SECRET_KEY: "a-real-secret", NEXT_PUBLIC_TURNSTILE_SITE_KEY: "site" }), "pow");
 });
 
-test("TRUSTED_PROXY_COUNT=0 in production is warned about, because it silently drops every IP-keyed limit (R-30)", () => {
+test("TRUSTED_PROXY_COUNT=0 in production is warned about: three IP-keyed limits are dropped and escalation is pooled (R-30)", () => {
   const base = { NODE_ENV: "production", RATE_LIMIT_SALT: "a-real-salt-of-adequate-length-00000000" };
   const warned = challengeUnder({ ...base }, "serving-stderr");
   assert.match(warned, /TRUSTED_PROXY_COUNT is 0/, "the default must not pass in silence");
