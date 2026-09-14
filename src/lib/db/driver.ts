@@ -39,7 +39,11 @@ export class SqliteDriver implements DbDriver {
     // bare require() does not exist.
     const req = createRequire(import.meta.url);
     const Database = req("better-sqlite3");
-    const dir = join(process.cwd(), "data");
+    // FAUCET_DATA_DIR: where the ledger lives. Default is cwd/data, which is the
+    // compose volume in production. The integration suite sets a per-run directory
+    // so a run can never read a ledger a previous run left behind (risk register II,
+    // R-40); nothing else should need to set it.
+    const dir = process.env.FAUCET_DATA_DIR || join(process.cwd(), "data");
     mkdirSync(dir, { recursive: true });
     this.db = new Database(join(dir, "faucet.db"));
     this.db.pragma("journal_mode = WAL");

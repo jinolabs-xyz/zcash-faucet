@@ -32,6 +32,15 @@ const PORT_M = 3221; // M for the drain with an empty queue: exits at once
 // Somewhere to keep the output of the server that is supposed to die, so the
 // assertion can check WHY it died rather than only that it did.
 const LOG_DIR = mkdtempSync(join(tmpdir(), "faucet-api-integration-"));
+// THIS RUN OWNS ITS SERVERS (risk register II, R-40). Fixed ports and a readiness poll
+// that accepted any 200 meant a server left behind by an aborted run answered for the
+// new one, and the suite passed against code it did not start. Three things close it:
+// a per-run nonce every server carries as FAUCET_BUILD_COMMIT and waitReady REQUIRES
+// on /api/status; a per-run ledger directory, so no run reads another's claims; and
+// each server's output in a file under LOG_DIR rather than discarded, so a boot that
+// dies says why.
+const RUN_NONCE = `api-integration-${process.pid}-${Date.now().toString(36)}`;
+const DATA_DIR = join(LOG_DIR, "data");
 const BASE_A = `http://localhost:${PORT_A}`;
 const BASE_B = `http://localhost:${PORT_B}`;
 const BASE_C = `http://localhost:${PORT_C}`;
@@ -105,9 +114,10 @@ async function solvedChallenge(base) {
 
 /* ── server lifecycle ──────────────────────────────────────────────────── */
 function boot(port, env) {
+  const fd = openSync(join(LOG_DIR, `server-${port}.log`), "w");
   const child = spawn("npm", ["run", "start"], {
-    env: { ...process.env, PORT: String(port), ...env },
-    stdio: "ignore",
+    env: { ...process.env, PORT: String(port), FAUCET_BUILD_COMMIT: RUN_NONCE, FAUCET_DATA_DIR: DATA_DIR, ...env },
+    stdio: ["ignore", fd, fd],
     detached: true, // own process group, so kill(-pid) reaps next too
   });
   return child;
@@ -177,12 +187,23 @@ async function waitHosh(expectTestnetRow = true, ms = 15_000, port = HOSH_PORT) 
 
 async function waitReady(base, ms = 90_000) {
   const deadline = Date.now() + ms;
+  let stranger = null;
   for (;;) {
     try {
-      const res = await fetch(base + "/api/health", { signal: AbortSignal.timeout(2000) });
-      if (res.ok) return;
+      // /api/status, not /api/health: the answer has to carry THIS run's nonce, or it is
+      // some other process on the port and the run must not proceed against it.
+      const res = await fetch(base + "/api/status", { signal: AbortSignal.timeout(2000) });
+      if (res.ok) {
+        const body = await res.json().catch(() => ({}));
+        if (body.buildCommit === RUN_NONCE) return;
+        stranger = body.buildCommit ?? "no buildCommit";
+      }
     } catch { /* not up yet */ }
-    if (Date.now() > deadline) throw new Error(`server at ${base} did not come up`);
+    if (Date.now() > deadline) {
+      throw new Error(stranger != null
+        ? `a server at ${base} answers with buildCommit ${JSON.stringify(stranger)}, not this run's ${RUN_NONCE}: something else is on the port, stop it before running the suite`
+        : `server at ${base} did not come up (its output is in ${LOG_DIR})`);
+    }
     await new Promise((r) => setTimeout(r, 500));
   }
 }
@@ -409,8 +430,8 @@ const serverK = boot(PORT_K, {
 // with lsof and signalled it directly, which proved a path docker does not take.
 const bootDirect = (port, env) =>
   spawn("node", ["node_modules/next/dist/bin/next", "start", "-H", "0.0.0.0", "-p", String(port)], {
-    env: { ...process.env, PORT: String(port), ...env },
-    stdio: "ignore",
+    env: { ...process.env, PORT: String(port), FAUCET_BUILD_COMMIT: RUN_NONCE, FAUCET_DATA_DIR: DATA_DIR, ...env },
+    stdio: ["ignore", openSync(join(LOG_DIR, `server-${port}.log`), "w"), openSync(join(LOG_DIR, `server-${port}.log`), "a")],
   });
 const WALLET_L = 28333;
 const walletL = spawn("node", ["scripts/fake-zallet.mjs"], {
@@ -613,8 +634,8 @@ try {
   // unknown-outcome path this exercises records the claim as sent and holds the
   // FULL cooldown by design (#88), so a fixed address makes this test pass
   // exactly once per day and then fail with a 429 that looks like a real bug.
-  // The ledger is $cwd/data/faucet.db with no override, shared by all three apps
-  // and surviving between runs.
+  // The ledger is this run's FAUCET_DATA_DIR, shared by every server in the run and
+  // thrown away with it (R-40); the fresh address is still the right shape.
   const genC = await post(BASE_C, "/api/account", { type: "shielded" });
   const addrC = genC.body?.account?.address;
   ok("C generated a fresh address to claim with", typeof addrC === "string" && addrC.startsWith("utest1"), String(addrC).slice(0, 12));
@@ -741,11 +762,11 @@ try {
   // The household case, end to end through the shipped route. Three devices, three
   // addresses, one router. The allowance on H is 2, so the first two pay and the third
   // is refused BY THE CONNECTION, with the fields the page now reads.
-  // UNIQUE PER RUN. Every server here shares one ledger at cwd/data/faucet.db and it
-  // survives between runs; the other servers get away with that because their addresses
-  // are minted fresh and their IP rule never fires. H's whole point is the IP rule, so a
-  // fixed address here found its two slots already spent on the second local run - a
-  // red that CI (a clean checkout) would never show and a reviewer re-running would.
+  // UNIQUE PER RUN, still. The ledger is per run now (R-40), so a second local run no
+  // longer finds H's two slots spent; the per-run octet stays because it also keeps
+  // H, I, J, K and L apart from each other inside one run, and because it costs
+  // nothing. (Before R-40 a fixed address here went red on the second local run, a
+  // red that CI, a clean checkout, never showed.)
   // 203.0.113.0/24 is TEST-NET-3, reserved for documentation, never routed.
   const runByte = 1 + (Date.now() % 250);
   const HOME = `203.0.113.${runByte}`;
@@ -870,7 +891,7 @@ try {
     return req(BASE_K, "/api/faucet", { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": kIp }, body: JSON.stringify({ address }) });
   };
   let capped = await fromK();
-  if (capped.status === 200) capped = await fromK(); // the shared ledger had room for one
+  if (capped.status === 200) capped = await fromK(); // the ledger is fresh per run, so the first claim usually pays
   const capNextMs = capped.body.nextAt ? Date.parse(capped.body.nextAt) : NaN;
   ok("K a claim over the daily cap is 503 kind cap", capped.status === 503 && capped.body.kind === "cap", `${capped.status} ${capped.body.kind ?? ""}`);
   // Bounded, not measured: a fresh drip frees in ~86,400 s either way, so this cannot
