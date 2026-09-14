@@ -208,7 +208,12 @@ changed="$(git diff --name-only "$LOCAL" "$REMOTE")"
 # rebuild", and treated a no as "nothing to do".
 app=0
 ops=0
-printf '%s\n' "$changed" | grep -qE '^(src/|public/|package|Dockerfile|next\.config|tsconfig|deploy/z3/(docker-compose|Caddyfile))' && app=1
+# .dockerignore is an app file. The Dockerfile does COPY . ., so the ignore list decides
+# what the image contains just as much as the Dockerfile does; #513 changed only the
+# ignore list (to keep deploy.sh's secret sidecars out of the image) and the box
+# classified it app=0, installed a script and kept serving the old image, sidecars
+# included, until the next unrelated src/ change.
+printf '%s\n' "$changed" | grep -qE '^(src/|public/|package|Dockerfile|\.dockerignore|next\.config|tsconfig|deploy/z3/(docker-compose|Caddyfile))' && app=1
 printf '%s\n' "$changed" | grep -qE '^deploy/z3/.*\.(sh|service|timer|socket)$' && ops=1
 # THE MINER IS A COMPILED BINARY AND NOTHING REBUILT IT (#412).
 #

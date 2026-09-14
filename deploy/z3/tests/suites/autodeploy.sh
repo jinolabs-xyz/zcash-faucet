@@ -178,6 +178,17 @@ check "an app-only commit exits 0" "[ $? -eq 0 ]"
 check "and redeploy ran" "[ -s '$REDEPLOY_LOG' ]"
 check "and the installer did not" "[ ! -s '$INSTALLOPS_LOG' ]"
 
+echo "== auto-deploy: THE IGNORE LIST IS PART OF THE IMAGE"
+# #513 shipped a .dockerignore-only change to keep secret sidecars out of the image. The
+# filter named Dockerfile and not .dockerignore, so the box logged app=0, installed a
+# script and kept running the image that still had the sidecars in it.
+ad_env
+ad_advance .dockerignore
+bash "$AD" > "$T/ignore.log" 2>&1
+check "a .dockerignore-only commit exits 0" "[ $? -eq 0 ]"
+check "and rebuilds the app" "[ -s '$REDEPLOY_LOG' ]"
+check "and the log says app=1" "grep -q 'app=1 ops=0' '$T/ignore.log'"
+
 echo "== auto-deploy: a commit touching BOTH does both"
 ad_env
 ad_advance src/page.tsx deploy/z3/watchdog.sh
