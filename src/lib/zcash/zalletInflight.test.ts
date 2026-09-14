@@ -118,12 +118,17 @@ test("a success with no txid is UNKNOWN rather than a silent empty result", asyn
 });
 
 test("a failure BEFORE the opid exists is a clean failure, nothing was submitted", async () => {
-  mockRpc({
-    z_sendmany: () => {
-      throw new Error("wallet locked");
-    },
-  });
+  // The wallet's refusal the way the wire delivers it: a JSON-RPC error object in a
+  // 200. The first version of this fixture had fetch ITSELF throw a bare Error, which
+  // real fetch never does, and since R-26 an unexplained transport failure is exactly
+  // the case that is NOT clean (the body may have reached a wallet that acted on it).
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    const { method } = JSON.parse(String(init?.body)) as { method: string };
+    if (method === "z_sendmany") return new Response(JSON.stringify({ error: { code: -13, message: "wallet locked" } }), { status: 200 });
+    return new Response(JSON.stringify({ result: null }), { status: 200 });
+  }) as typeof fetch;
 
   const err = await new ZalletSender().send(req).then(() => null, (e) => e);
   assert.ok(!(err instanceof SendOutcomeUnknownError), "nothing was submitted, so this is not ambiguous");
+  assert.match(String(err), /wallet locked/);
 });
