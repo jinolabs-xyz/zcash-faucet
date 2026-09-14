@@ -442,8 +442,10 @@ WHERE ip_hash = ? AND network = ?
 /** When the daily cap next has room: the EARLIEST expiry among the rows it counts,
  * each on its own window (a sent row leaves the 24 h sum at created_at + 86 400, a
  * pending one at the end of its lease). The cap's own predicate in RESERVE_SQL, so the
- * two cannot disagree about which rows count. Params: lease seconds, network, the
- * 24 h cut, the lease cut. */
+ * two cannot disagree about which rows count. Exact while every counted row is one
+ * drip; if the drip size changed inside the window the earliest row may free less than
+ * a drip, and the visitor gets a second refusal with a later time. Params: lease
+ * seconds, network, the 24 h cut, the lease cut. */
 export const CAP_WINDOW_SQL = `
 SELECT MIN(created_at + CASE status WHEN 'sent' THEN 86400 ELSE ? END) AS frees_at
 FROM claims

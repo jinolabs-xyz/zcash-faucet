@@ -450,6 +450,72 @@ async function checkFirstPaint(page, base, address) {
   }
 }
 
+// EACH REFUSAL GETS THE CARD THAT IS TRUE OF IT (risk register II, R-34). The page
+// branches on the reply's status and fields; the wallet double cannot produce most of
+// these replies (a full cap, a 75 s freshness hold, a 504) so they are injected at the
+// network layer with the bodies the route really sends, and the page's own switch is
+// what is under test. Its own context: routes must not leak into the claim flow.
+async function checkRefusalCards(browser, base, address) {
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  const norm = (t) => t.toLowerCase().replace(/[\u2018\u2019]/g, "'");
+  const card = async () => {
+    const alerts = page.locator("[role=alert]").filter({ hasText: /\S/ });
+    return {
+      text: norm((await alerts.first().innerText().catch(() => "")) ?? ""),
+      buttons: (await alerts.locator("button").allInnerTexts().catch(() => [])).map(norm),
+    };
+  };
+  const shapes = [
+    { name: "a freshness hold", status: 503, body: { error: "Our chain view is not fresh enough to send safely. Nothing was claimed, your cooldown is untouched. Try again shortly.", retryAfterSeconds: 3 },
+      expect: async (c) => {
+        ok("a 503 with a retryAfter is 'our side, not yours'", /our side, not yours/.test(c.text), c.text.split("\n")[0]);
+        ok("and its button counts down, disabled", c.buttons.some((b) => /try again in \d+s/.test(b)) && await page.locator("[role=alert] button.btn-primary").isDisabled(), c.buttons.join("|"));
+        await page.waitForFunction(() => { const b = document.querySelector("[role=alert] button.btn-primary"); return b && !b.disabled; }, null, { timeout: 8000 }).catch(() => {});
+        ok("and enables when the wait is over", (await card()).buttons.includes("try again"));
+      } },
+    { name: "a full queue", status: 503, body: { error: "Faucet is busy: too many sends queued. Try again in a moment.", kind: "busy" },
+      expect: async (c) => ok("kind busy is busy, with Try again", /busy, nothing left the wallet/.test(c.text) && c.buttons.includes("try again"), c.text.split("\n")[0]) },
+    { name: "the daily cap", status: 503, body: { error: "Faucet daily cap reached. Please come back tomorrow.", kind: "cap", retryAfterSeconds: 5400, nextAt: new Date(Date.now() + 5_400_000).toISOString() },
+      expect: async (c) => {
+        ok("kind cap says the budget is spent, with the time it resets", /today's taz budget is spent/.test(c.text) && /room again around .*\d{1,2}:\d{2}/.test(c.text), c.text.split("\n")[0]);
+        ok("and offers no Try again", !c.buttons.some((b) => /try again/.test(b)), c.buttons.join("|"));
+      } },
+    { name: "an unknown outcome", status: 504, body: { error: "Your drip was submitted but we lost track of it before it confirmed. Do not retry yet: if it went through, the coins are on their way. Check the address in a few minutes." },
+      expect: async (c) => {
+        ok("a 504 is 'submitted, outcome unknown' with the address and no Try again", /submitted, outcome unknown/.test(c.text) && c.text.includes(address.toLowerCase()) && !c.buttons.some((b) => /try again/.test(b)), c.buttons.join("|"));
+      } },
+    { name: "a bad request", status: 400, body: { error: "Invalid address." },
+      expect: async (c) => {
+        ok("a 400 offers Edit the address and no Try again", c.buttons.includes("edit the address") && !c.buttons.includes("try again"), c.buttons.join("|"));
+        await page.locator("[role=alert] button", { hasText: /edit the address/i }).click();
+        await page.waitForTimeout(300);
+        ok("and Edit the address returns to the form with the address kept", (await page.locator("input.input").first().inputValue()) === address && !(await page.locator("[role=alert]").filter({ hasText: /\S/ }).count()));
+      } },
+    { name: "a failed send", status: 502, body: { error: "The send failed on our side. Nothing left the wallet. Try again in a moment." },
+      expect: async (c) => ok("a 502 keeps the red card: send failed, nothing left the wallet, Try again", /send failed, nothing left the wallet/.test(c.text) && c.buttons.includes("try again"), c.text.split("\n")[0]) },
+  ];
+  try {
+    for (const s of shapes) {
+      await page.route("**/api/faucet", (route) => route.fulfill({ status: s.status, contentType: "application/json", body: JSON.stringify({ ...s.body, requestId: "ui-smoke" }) }));
+      await page.goto(base, { waitUntil: "networkidle" });
+      await page.waitForFunction(() => /\bLIVE\b/.test(document.body.innerText), null, { timeout: 30_000 });
+      await page.locator("input.input").first().fill(address);
+      await page.locator("button.btn-primary").first().click();
+      // An EMPTY [role=alert] is always in the DOM; wait for one with text.
+      await page.waitForFunction(() => [...document.querySelectorAll("[role=alert]")].some((e) => (e.textContent || "").trim()), null, { timeout: 60_000 }).catch(() => {});
+      const c = await card();
+      if (!c.text) ok(`${s.name}: a card rendered`, false, (await page.innerText("body")).slice(0, 160));
+      else await s.expect(c);
+      await page.unroute("**/api/faucet");
+    }
+  } catch (err) {
+    ok("refusal cards ran to completion", false, err instanceof Error ? err.message : String(err));
+  } finally {
+    await ctx.close();
+  }
+}
+
 // The miner readout, in the state CI actually runs in: no heartbeat path configured.
 //
 // That is the important case rather than a limitation. The old field was an env flag,
@@ -846,6 +912,9 @@ try {
   // Assert the clean-console guarantee on the whole claim flow BEFORE the 404
   // check, which deliberately loads a 404 and would otherwise pollute this.
   ok("no page errors, console errors or failed requests", problems.length === 0, problems.slice(0, 3).join(" | "));
+
+  // The refusal cards, in their own context with the claim route intercepted.
+  await checkRefusalCards(browser, BASE, await freshAddress());
 
   // The phone. Its own browser context, so it cannot disturb the desktop page above
   // it, and after the desktop claim so a mobile failure is never the first thing to

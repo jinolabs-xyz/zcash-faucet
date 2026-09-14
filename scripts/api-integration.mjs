@@ -823,7 +823,9 @@ try {
   if (capped.status === 200) capped = await fromK(); // the shared ledger had room for one
   const capNextMs = capped.body.nextAt ? Date.parse(capped.body.nextAt) : NaN;
   ok("K a claim over the daily cap is 503 kind cap", capped.status === 503 && capped.body.kind === "cap", `${capped.status} ${capped.body.kind ?? ""}`);
-  ok("K and it says how long, measured: within the day, not a fixed day", typeof capped.body.retryAfterSeconds === "number" && capped.body.retryAfterSeconds > 0 && capped.body.retryAfterSeconds <= 86_400, JSON.stringify(capped.body.retryAfterSeconds));
+  // Bounded, not measured: a fresh drip frees in ~86,400 s either way, so this cannot
+  // tell measured from fixed. The unit test (dailyCapRetry.test.ts) is what does.
+  ok("K and it carries a retryAfterSeconds inside the day", typeof capped.body.retryAfterSeconds === "number" && capped.body.retryAfterSeconds > 0 && capped.body.retryAfterSeconds <= 86_400, JSON.stringify(capped.body.retryAfterSeconds));
   ok("K and when, as a clock time that agrees with the duration", Number.isFinite(capNextMs) && Math.abs(capNextMs - Date.now() - (capped.body.retryAfterSeconds ?? 0) * 1000) < 5_000, `${capped.body.nextAt} vs +${capped.body.retryAfterSeconds}s`);
 
   const statusE = await get(BASE_E, "/api/status");

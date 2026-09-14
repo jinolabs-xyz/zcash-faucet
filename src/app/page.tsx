@@ -1599,7 +1599,7 @@ export default function Home() {
           const kick =
             k === "held" ? "Our side, not yours"
             : k === "busy" ? "Busy, nothing left the wallet"
-            : k === "cap" ? "Today\u2019s budget is spent"
+            : k === "cap" ? `Today\u2019s ${networkFacts(network).ticker} budget is spent`
             : k === "unknown" ? "Submitted, outcome unknown"
             : k === "bad" ? "Couldn\u2019t take that request"
             : k === "pow" ? "Human check failed, nothing was claimed"
@@ -1607,8 +1607,8 @@ export default function Home() {
             : "Send failed, nothing left the wallet";
           const head =
             k === "held" ? "Not right now."
-            : k === "busy" ? "Too many sends queued."
-            : k === "cap" ? "The faucet has paid out its daily amount."
+            : k === "busy" ? "Every send slot is taken."
+            : k === "cap" ? `The faucet has paid out its daily ${networkFacts(network).ticker}.`
             : k === "unknown" ? "We lost track of your drip."
             : k === "bad" ? "Something in the request needs fixing."
             : "That didn\u2019t go through.";
@@ -1619,7 +1619,7 @@ export default function Home() {
             k === "cap" && when ? ` It should have room again around ${when}.`
             : k === "held" && waitS > 0 ? ` You can try again in ${waitS}s.`
             : k === "held" ? " You can try again now."
-            : k === "unknown" ? " Watch that address for a few minutes. Its cooldown was spent on this claim, so a retry would be refused either way."
+            : k === "unknown" ? " Its cooldown was spent on this claim, so a retry would be refused either way."
             : "";
           const tryAgain = k === "failed" || k === "pow" || k === "offline" || k === "busy" || k === "held";
           return (
