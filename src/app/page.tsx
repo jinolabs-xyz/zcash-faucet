@@ -1156,7 +1156,9 @@ export default function Home() {
               // "both" is for facts about the BOX rather than either chain - the integrity
               // count and the lightwalletd backend serve whichever asset you are looking at,
               // so hiding them behind a toggle would just make them harder to find.
-              { net: "taz", k: "node", v: nodeWord + (nodeWord !== "ready" && syncCell && syncCell !== "–" ? " (" + syncCell + ")" : ""), bad: status != null && (walletDown || node?.ready === false || node?.canBuildTx === false) },
+              // The parenthetical is the sync cell; skipped when it would only repeat the word
+              // ("unverified (unverified)") and trimmed when it ends with it ("behind (40)").
+              { net: "taz", k: "node", v: nodeWord + (nodeWord !== "ready" && syncCell && syncCell !== "–" && syncCell !== nodeWord ? " (" + syncCell.replace(new RegExp(` ${nodeWord}$`), "") + ")" : ""), bad: status != null && (walletDown || node?.ready === false || node?.canBuildTx === false) },
               { net: "taz", k: "block height", v: num(height) + (nodeHeight ? " / " + num(nodeHeight) : "") },
               { net: "taz", k: "wallet balance", v: status?.balanceTaz != null ? status.balanceTaz.toFixed(2) + " TAZ" : "–", bad: status?.empty === true },
               // The detail belongs here, per the user: he asked that the miner's real
