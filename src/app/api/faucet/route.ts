@@ -13,7 +13,7 @@ import { z } from "zod";
 import { config } from "@/lib/config";
 import { validateTestnetAddress } from "@/lib/zcash/address";
 import { verifySolution } from "@/lib/pow";
-import { getSenderFor, safeBalance, SendOutcomeUnknownError, type SendResult } from "@/lib/zcash/send";
+import { getSenderFor, safeBalance, RecipientRefusedError, SendOutcomeUnknownError, type SendResult } from "@/lib/zcash/send";
 import { getNodeStatus } from "@/lib/zcash/nodeStatus";
 import { mayBuildTransaction, readChainFreshnessAsking, freshnessRefusalText } from "@/lib/zcash/shieldGate";
 import { mayBuildFromWallet, walletLagFreshness } from "@/lib/zcash/walletLagGate";
@@ -136,7 +136,7 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     return apiError(
       503,
       "Sends are failing on our side right now, so we are not taking claims: " +
-        "nothing was claimed and no proof-of-work was spent. The operator has been paged. " +
+        "nothing was claimed and no proof-of-work was spent. This is watched on our side and usually clears within minutes. " +
         "Try again in a few minutes.",
       api,
       { kind: "sends", retryAfterSeconds: SENDS_RETRY_SECONDS },
@@ -455,6 +455,22 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
       // The wallet was never asked. Not recorded: queue depth is on /api/status and
       // says what this is.
       return apiError(503, err.message, api, { kind: "busy" });
+    }
+    if (err instanceof RecipientRefusedError) {
+      // THE WALLET REFUSED THIS RECIPIENT, NOT THE SEND (review of #531). Our validator
+      // checks the checksum and the shape and leaves payability to the wallet, so an
+      // address that decodes but cannot be paid from our pool arrives here. Counting it
+      // as a wallet failure let one visitor retrying a bad address trip the send-health
+      // verdict for everyone, and, with the watchdog's restart on that verdict, cycle
+      // the wallet on a schedule. It is theirs to fix: a 400 the page renders with the
+      // form and the address kept, nothing recorded against the wallet. Their
+      // reservation was released above, so the cooldown is untouched.
+      api.logError(err, "recipient refused by the wallet");
+      // Reported, never counted (a run of these is visible on /api/status). The
+      // wallet's own sentence stays in the log under the request id: it can carry
+      // note values and internals, and the visitor needs only the fact.
+      recordSend("refused");
+      return apiError(400, "The wallet could not pay that address. Nothing left the wallet and your cooldown is untouched. Check the address, or use a different one.", api, { kind: "recipient" });
     }
     // Counted, because this is the only place in the app that knows a drip failed. A
     // 502 to one caller and a log line is not a signal anything can act on, which is

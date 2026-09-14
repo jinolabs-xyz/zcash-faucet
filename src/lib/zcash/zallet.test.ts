@@ -298,3 +298,70 @@ test("the classifier defaults to unknown for a shape it has not met", () => {
   // method must not be read as one.
   assert.equal(sendmanyFailureIsDefinite(new Error("zallet RPC z_getoperationstatus: boom (code 1)")), false);
 });
+
+/* ------------------------------------------- a refused recipient is not a wallet failure (R-18) */
+
+const { RecipientRefusedError } = await import("./send.ts");
+const { isRecipientRefusal } = await import("./zalletsend.ts");
+
+// zallet's own productions (zcash/wallet payments.rs and zallet_core.ftl), which is the
+// only list this classifier trusts. Every recipient problem is a synchronous -8.
+const RECIPIENT = [
+  "Invalid parameter, unknown address format: utest1nope",
+  "Invalid parameter, duplicated recipient address: utest1x",
+  "Cannot send memo to transparent recipient",
+  "Cannot send zero-valued output to transparent recipient",
+  "This transaction would have transparent recipients, which is not enabled by default because it will publicly reveal transaction recipients and amounts.",
+  "This transaction would send to a transparent receiver of a unified address, which is not enabled by default because it will publicly reveal transaction recipients and amounts.",
+  "Could not send to the Sapling shielded pool without spending non-Sapling funds, which would reveal transaction amounts.",
+  "Could not send to a shielded receiver of a unified address without spending funds from a different pool, which would reveal transaction amounts.",
+  // try_from_zcash_address's errors, librustzcash's own Display strings.
+  "Address is for Regtest but we expected Test",
+  "Invalid Sapling payment address",
+  "Invalid Orchard receiver in Unified Address",
+  "Invalid Sapling receiver in Unified Address",
+];
+// Wallet-side sentences that mention pools, addresses or policies and MUST keep counting
+// against the wallet (review of #531, round 2: a keyword scan sent all of these to the
+// visitor as "check your address", and the money path went invisible).
+const WALLET_SIDE: Array<[number, string]> = [
+  [-5, "Invalid from address: should be a taddr, zaddr, UA, or the string 'ANY_TADDR'"],
+  [-5, "Invalid from address, no payment source found for address."],
+  [-8, "Zallet always calculates fees internally; the fee field must be null."],
+  [-8, "Unknown privacy policy NoSuchPolicy"],
+  [-8, "This transaction would spend transparent funds, which is not enabled by default because it will publicly reveal transaction senders and amounts."],
+  [-4, "Failed to propose transaction: After Ironwood activation, a step that spends 100000000 zatoshis from the Orchard pool may not return 50000000 zatoshis to it."],
+  [-4, "Failed to propose transaction: Attempted to send change to an unsupported pool type: Transparent"],
+  [-4, "The built transaction pays a transparent output that is neither a requested payment nor an address derived from the account's own key. The wallet database is corrupted or has been tampered with."],
+  [-6, "Insufficient funds"],
+];
+
+test("z_sendmany: zallet's recipient refusals (-8, its own sentences) are RecipientRefusedError", async () => {
+  for (const message of RECIPIENT) {
+    failingSendmany(() => new Response(JSON.stringify({ error: { code: -8, message } }), { status: 200 }));
+    await assert.rejects(sendOnce, (err: unknown) => err instanceof RecipientRefusedError && (err as Error).message === message, message.slice(0, 40));
+  }
+});
+
+test("z_sendmany: wallet-side sentences that mention pools, addresses or policies stay wallet failures", async () => {
+  for (const [code, message] of WALLET_SIDE) {
+    failingSendmany(() => new Response(JSON.stringify({ error: { code, message } }), { status: 200 }));
+    await assert.rejects(sendOnce, (err: unknown) => !(err instanceof RecipientRefusedError) && !(err instanceof SendOutcomeUnknownError) && String(err).includes(message.slice(0, 30)), `${code}: ${message.slice(0, 40)}`);
+  }
+});
+
+test("an operation that FAILED after the opid is never the recipient's: validation happened before the opid", async () => {
+  mockRpc({
+    z_sendmany: () => "opid-late",
+    z_getoperationstatus: () => [{ id: "opid-late", status: "failed" }],
+    z_getoperationresult: () => [{ id: "opid-late", status: "failed", error: { code: -8, message: "Invalid parameter, unknown address format: utest1x" } }],
+  });
+  await assert.rejects(sendOnce, (err: unknown) => !(err instanceof RecipientRefusedError) && /unknown address format/.test(String(err)));
+});
+
+test("isRecipientRefusal: the code AND the opening, never a keyword", () => {
+  for (const m of RECIPIENT) assert.equal(isRecipientRefusal(-8, m), true, m.slice(0, 40));
+  for (const [c, m] of WALLET_SIDE) assert.equal(isRecipientRefusal(c, m), false, `${c}: ${m.slice(0, 40)}`);
+  assert.equal(isRecipientRefusal(-5, RECIPIENT[0]), false, "the right sentence under the wrong code is not trusted");
+  assert.equal(isRecipientRefusal(-8, "something about a recipient address and the pool"), false, "words alone prove nothing");
+});

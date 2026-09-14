@@ -49,7 +49,7 @@ const DIMENSIONS = {
     ready: "balance well above the low mark",
     empty: "no balance at all",
     "topping-up": "balance inside the hysteresis band with shielding permitted",
-    "sends-failing": "balance reads fine, every send fails; three claims judge it and the page goes DEGRADED",
+    "sends-failing": "balance reads fine, every send fails; two claims judge it and the page goes DEGRADED",
     "send-hangs": "every send hangs past the deadline; a claim is a 504, submitted with the outcome unknown",
     "cap-one-drip": "the daily cap is one drip, so a claim is refused with the time the cap has room again (the local ledger is shared across runs, so usually the first claim)",
     "wallet-down": "no wallet double at all: node and balance both read null (the zallet crash-loop shape, the most frequent real outage)",
@@ -173,8 +173,8 @@ const wallet = {
   // Inside the band, and shielding permitted, so the reserve loop actually engages
   // rather than reporting that it is forbidden to act.
   "topping-up": { BALANCE_TAZ: "15", FAUCET_RESERVE_LOW_TAZ: "5", FAUCET_RESERVE_TARGET_TAZ: "30", FAUCET_SHIELD_COINBASE: "true", FAUCET_MINER_ACTIVE: "true" },
-  // The verdict needs three decided sends inside fifteen minutes, so this state starts
-  // LIVE: make three claims (each fails with a 502) and the badge turns DEGRADED, the
+  // The verdict needs two failures with no success inside fifteen minutes, so this state
+  // starts LIVE: make two claims (each fails with a 502) and the badge turns DEGRADED, the
   // button is held, and a further claim is refused before any proof-of-work is asked.
   "sends-failing": { BALANCE_TAZ: "15", SEND_FAILS: "true" },
   // The 504 and the cap, for the cards that must NOT offer Try again (R-34). The

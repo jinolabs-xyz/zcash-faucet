@@ -119,7 +119,7 @@ Two endpoints, two different questions. Source of truth is
 | `node syncing` | zebra is not at tip yet, normal on first sync or after a restore |
 | `node N blocks behind the network, drips would expire` | the send gate: our node is measurably behind an independent tip, so every claim is refused; redeploy will not roll back on it. A tip that merely cannot be verified keeps readiness but sets `node.canBuildTx:false`, which the watchdog and the live probe page on |
 | `wallet balance unknown` | zallet did not return a balance, usually zallet itself is down |
-| `sends failing: ...` | the last sends actually failed, or none resolved and none succeeded, even though every probe above passed; the wallet is the fault |
+| `sends failing: ...` | the last sends actually failed (two in a row with nothing landing between them is enough on a quiet faucet; a recipient the wallet refuses is the visitor's 400 and never counts), or none resolved and none succeeded, even though every probe above passed; the wallet is the fault. The watchdog restarts zallet once after 3 minutes of this reason (one restart an hour). The verdict is in-memory and ages out with its 15-minute window, and no new send can land while it holds, so the 30-minute readiness page cannot fire on this reason alone: the restart is the reaction, and the reason shows on `/api/status` and in live-smoke meanwhile |
 | `below reserve, refilling` | funds are under drip + reserve, faucet needs a refill |
 
 Un-ready is not an outage by itself. First sync and refills are un-ready on

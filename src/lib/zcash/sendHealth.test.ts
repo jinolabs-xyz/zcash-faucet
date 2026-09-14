@@ -17,6 +17,7 @@ import {
   windowFor,
   windowMinutes,
   MIN_SAMPLE,
+  FAIL_ALONE,
   FAIL_RATIO,
   type SendRecord,
 } from "./sendHealth.ts";
@@ -44,12 +45,15 @@ test("a healthy run says so, so the signal is not permanently alarmed", () => {
 test("TOO FEW SENDS IS UNKNOWN, NEVER OK, and never blocks", () => {
   // Both halves matter. Answering `ok` on a quiet faucet would have it vouch for a
   // wallet nobody has exercised. Blocking would take the faucet down for being quiet.
-  for (let n = 0; n < MIN_SAMPLE; n++) {
+  // "Too few" is fewer than FAIL_ALONE failures with nothing else (R-18): two failures
+  // and no success are a verdict now, so the quiet range is 0 and 1.
+  for (let n = 0; n < FAIL_ALONE; n++) {
     const h = readSendHealth(NOW, many("failed", n));
     assert.equal(h.state, "unknown", `${n} sends should be unjudgeable`);
     assert.equal(sendHealthBlocksServing(h), false, `${n} sends must not block`);
   }
-  // And one more decided send tips it into a real verdict.
+  // A single success beside a single failure is the ratio rule's, and it needs its sample.
+  assert.equal(readSendHealth(NOW, [...many("ok", 1), ...many("failed", 1)]).state, "unknown");
   assert.equal(readSendHealth(NOW, many("failed", MIN_SAMPLE)).state, "degraded");
 });
 
@@ -165,10 +169,10 @@ test("THE MIXED CRASH LOOP: unresolved PLUS failed with no success is degraded, 
   const ratio = readSendHealth(NOW, [...many("unknown", 1), ...many("failed", 5)]);
   assert.equal(ratio.state, "degraded");
   assert.match(ratio.reason, /5 of the last 5 sends failed/);
-  // Failures alone with no unknown are the ratio rule's: three refusals read degraded
-  // through it, two read too few to judge, unchanged.
-  assert.match(readSendHealth(NOW, many("failed", 3)).reason, /3 of the last 3 sends failed/);
-  assert.equal(readSendHealth(NOW, many("failed", 2)).state, "unknown");
+  // Failures alone with no unknown: three refusals are the ratio rule's, with its
+  // sentence; two are FAIL_ALONE's (R-18), with theirs.
+  assert.match(readSendHealth(NOW, many("failed", 3)).reason, /3 of the last 3 sends failed$/);
+  assert.match(readSendHealth(NOW, many("failed", 2)).reason, /2 of the last 2 sends failed and none succeeded/);
 });
 
 test("THE WINDOW HOLDS A SAMPLE OF DEADLINE-SPACED UNKNOWNS, so the deadline class can trip the rule at all", async () => {
@@ -202,4 +206,44 @@ test("an unresolved send AGES OUT of the window like the others, so a fixed wall
   const stale = many("unknown", 5).map((r) => ({ ...r, at: NOW - WINDOW_MS - 1 }));
   assert.equal(readSendHealth(NOW, stale).state, "unknown");
   assert.match(readSendHealth(NOW, stale).reason, /too few to judge/);
+});
+
+/* ------------------------------------------ the quiet faucet (risk register II, R-18) */
+
+test("TWO FAILURES AND NO SUCCESS IS A VERDICT, not 'too few to judge'", () => {
+  // Production does about nine drips a day. Under the sample rule alone a wallet that
+  // refused every send was never judged: the third failure arrived after the first
+  // had aged out. Two strangers failing in a row with nothing landing in between is
+  // the wallet, not the claims.
+  const now = 1_000_000;
+  const h = readSendHealth(now, [{ outcome: "failed", at: now - 60_000 }, { outcome: "failed", at: now - 1_000 }]);
+  assert.equal(h.state, "degraded");
+  assert.match(h.reason, /2 of the last 2 sends failed and none succeeded/);
+  assert.equal(sendHealthBlocksServing(h), true);
+});
+
+test("but ONE failure alone is still a blip, and one failure beside one success is still too few", () => {
+  const now = 1_000_000;
+  assert.equal(readSendHealth(now, [{ outcome: "failed", at: now - 1_000 }]).state, "unknown");
+  const mixed = readSendHealth(now, [{ outcome: "ok", at: now - 60_000 }, { outcome: "failed", at: now - 1_000 }]);
+  assert.equal(mixed.state, "unknown", "a success in the window means the ratio rule decides, and it needs its sample");
+});
+
+test("a success AFTER two failures clears it: the rule is about a wallet that lands nothing", () => {
+  const now = 1_000_000;
+  const h = readSendHealth(now, [
+    { outcome: "failed", at: now - 120_000 },
+    { outcome: "failed", at: now - 60_000 },
+    { outcome: "ok", at: now - 1_000 },
+  ]);
+  // Three decided: the ratio rule, 2/3 failed, is still degraded on its own terms.
+  assert.equal(h.state, "degraded");
+  const recovered = readSendHealth(now, [
+    { outcome: "failed", at: now - 180_000 },
+    { outcome: "failed", at: now - 120_000 },
+    { outcome: "ok", at: now - 60_000 },
+    { outcome: "ok", at: now - 30_000 },
+    { outcome: "ok", at: now - 1_000 },
+  ]);
+  assert.equal(recovered.state, "ok");
 });

@@ -18,7 +18,7 @@
  * are ZIP-317, set by the wallet. See the Zallet book:
  *   https://zcash.github.io/wallet/guide/first-wallet.html
  */
-import { SendOutcomeUnknownError, type Sender, type SendRequest, type SendResult } from "./send.ts";
+import { RecipientRefusedError, SendOutcomeUnknownError, type Sender, type SendRequest, type SendResult } from "./send.ts";
 // .ts extension for node --test resolution, same pattern as pow.ts.
 import { config, ZATOSHI_PER_TAZ } from "../config.ts";
 import { explorerTxUrl } from "./explorer.ts";
@@ -161,6 +161,48 @@ function describe(err: unknown): string {
   return `${name}${code ? ` ${code}` : ""}: ${msg}`;
 }
 
+/**
+ * Is a definite z_sendmany refusal about the RECIPIENT rather than the wallet?
+ *
+ * By zallet's own productions, not by keywords (review of #531, round 2, read out of
+ * zcash/wallet `payments.rs` and `zallet_core.ftl`). zallet rejects every recipient
+ * problem synchronously in z_sendmany with code -8 and one of these openings. Nothing
+ * else qualifies:
+ *   -5 is only ever the FROM address or the spending key ("Invalid from address…"), which
+ *      is our configuration, and reading it as the visitor's would answer every claim
+ *      "check your address" for ever after a bad ZALLET_ADDRESS;
+ *   -8 also carries our own parameter mistakes (the fee field, an unknown policy);
+ *   -4 wraps librustzcash proposal errors that mention pools and addresses while being
+ *      about our notes ("…from the Orchard pool may not return…"), and a keyword scan
+ *      turned that, the shape this stack is likeliest to meet, into a 400;
+ *   an operation that fails after the opid exists has already passed recipient
+ *      validation, so its failure is never the recipient's.
+ * A recipient problem this list does not name counts against the wallet, which is the
+ * direction that was true before #531 and the one that keeps the money path visible.
+ */
+const RECIPIENT_REFUSALS = [
+  "Invalid parameter, unknown address format",
+  "Invalid parameter, duplicated recipient address",
+  "Cannot send memo to transparent recipient",
+  "Cannot send zero-valued output to transparent recipient",
+  "This transaction would have transparent recipients",
+  "This transaction would send to a transparent receiver of a unified address",
+  "Could not send to the ",
+  "Could not send to a shielded receiver of a unified address",
+  // propose_and_check's third path: Address::try_from_zcash_address, whose errors are
+  // librustzcash's (zcash_address convert.rs, zcash_keys address.rs). A regtest paste,
+  // a Sapling address whose payload is not a valid point, a UA with a garbage receiver.
+  // All -8, all about the recipient alone (round 3 of the #531 review).
+  "Address is for ",
+  "Invalid Sapling payment address",
+  "Invalid Orchard receiver in Unified Address",
+  "Invalid Sapling receiver in Unified Address",
+];
+export function isRecipientRefusal(code: number | null | undefined, message: string): boolean {
+  if (code !== -8) return false;
+  return RECIPIENT_REFUSALS.some((p) => message.startsWith(p));
+}
+
 export class ZalletSender implements Sender {
   readonly name = "zallet";
 
@@ -295,7 +337,14 @@ export class ZalletSender implements Sender {
     try {
       opid = await this.rpc<string>("z_sendmany", params);
     } catch (err) {
-      if (sendmanyFailureIsDefinite(err)) throw err;
+      if (sendmanyFailureIsDefinite(err)) {
+        // The wallet said no before spawning anything. If it said no to the RECIPIENT,
+        // that is the visitor's to fix and not a wallet failure (review of #531).
+        const msg = err instanceof Error ? err.message : String(err);
+        const m = /^zallet RPC z_sendmany: (.*) \(code (-?\d+)\)$/.exec(msg);
+        if (m && isRecipientRefusal(Number(m[2]), m[1])) throw new RecipientRefusedError(m[1]);
+        throw err;
+      }
       throw new SendOutcomeUnknownError("no-opid", `z_sendmany reply lost: ${describe(err)}`);
     }
     const txid = await this.awaitOperation(opid);
@@ -336,7 +385,8 @@ export class ZalletSender implements Sender {
       throw new SendOutcomeUnknownError(opid, `result unreadable: ${err instanceof Error ? err.message : err}`);
     }
     if (done?.status === "failed" || done?.status === "cancelled") {
-      // The wallet is telling us it did not send. This one is definite.
+      // The wallet is telling us it did not send. This one is definite, and it is the
+      // wallet's: the recipient was validated before the opid existed.
       throw new Error(`zallet send failed: ${done.error?.message ?? done.status}`);
     }
     if (!done || done.status !== "success") {

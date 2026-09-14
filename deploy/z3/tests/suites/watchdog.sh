@@ -986,3 +986,74 @@ wd_run 3   # refused (page), open (fixed), open (quiet)
 check "paged once" "[ \"\$(grep -c 'NOT READY' '$T/alerts.log')\" = 1 ]"
 check "reported the recovery once" "[ \"\$(grep -c 'FIXED: faucet is READY again' '$T/alerts.log')\" = 1 ]"
 unset STUB_READY_CANBUILD_ONCE
+
+# ── SENDS FAILING: ONE ZALLET RESTART, THEN THE PAGE (risk register II, R-18) ────────
+# A wallet that answers balances and refuses every send is the zallet shape a restart
+# has fixed every time so far; the page alone left it to a human at 30 minutes. After
+# WATCHDOG_SENDS_RESTART_AFTER of the app's own "sends failing" reason, zallet is
+# restarted once, and not again inside the budget. Other reasons never trigger it.
+echo "== watchdog: 'sends failing' for the restart delay restarts zallet ONCE"
+wd_env
+export WATCHDOG_READY_GRACE_SECS=999999 STUB_READY=0 STUB_READY_REASON="sends failing: 2 of the last 2 sends failed and none succeeded"
+export WATCHDOG_SENDS_RESTART_AFTER=0 WATCHDOG_SENDS_RESTART_BUDGET=999999
+echo running > "$STUB_CONTAINERS/faucet-web"; echo running > "$STUB_CONTAINERS/zallet"
+wd_run 3
+check "zallet was restarted exactly once across three failing sweeps, with a stop grace" "[ \"\$(grep -c 'docker restart -t 30 zallet' '$T/stub.log')\" = 1 ]"
+check "and the log says why, with the app's reason" "grep -q 'sends failing for .* min (sends failing: 2 of the last 2 sends failed and none succeeded): restarting zallet once' '$T/run.log'"
+check "and no page went out (this is the reaction; the readiness page cannot fire on a verdict that ages out first)" "! grep -q 'NOT READY' '$T/alerts.log'"
+check "and the restart time is on disk, so a watchdog restart cannot hand out another" "[ -s '$T/state/sends.zallet_restart_at.flaps' ]"
+
+echo "== watchdog: the restart delay is honoured: no restart before it"
+wd_env
+export WATCHDOG_READY_GRACE_SECS=999999 STUB_READY=0 STUB_READY_REASON="sends failing: 2 of the last 2 sends failed and none succeeded"
+export WATCHDOG_SENDS_RESTART_AFTER=999999
+echo running > "$STUB_CONTAINERS/faucet-web"; echo running > "$STUB_CONTAINERS/zallet"
+wd_run 3
+check "no restart inside the delay" "! grep -q 'docker restart -t 30 zallet' '$T/stub.log'"
+
+echo "== watchdog: a DIFFERENT readiness reason never restarts zallet"
+wd_env
+export WATCHDOG_READY_GRACE_SECS=999999 STUB_READY=0 STUB_READY_REASON="node syncing"
+export WATCHDOG_SENDS_RESTART_AFTER=0
+echo running > "$STUB_CONTAINERS/faucet-web"; echo running > "$STUB_CONTAINERS/zallet"
+wd_run 3
+check "node syncing is not a wallet fault: no restart" "! grep -q 'docker restart -t 30 zallet' '$T/stub.log'"
+
+echo "== watchdog: the budget survives a watchdog restart: a fresh process sees the disk and waits"
+wd_env
+export WATCHDOG_READY_GRACE_SECS=999999 STUB_READY=0 STUB_READY_REASON="sends failing: 3 of the last 3 sends failed"
+export WATCHDOG_SENDS_RESTART_AFTER=0 WATCHDOG_SENDS_RESTART_BUDGET=999999
+echo running > "$STUB_CONTAINERS/faucet-web"; echo running > "$STUB_CONTAINERS/zallet"
+wd_run 1
+check "first process restarted zallet" "[ \"\$(grep -c 'docker restart -t 30 zallet' '$T/stub.log')\" = 1 ]"
+wd_run 2   # a new process, same state dir
+check "the second process did NOT restart again inside the budget" "[ \"\$(grep -c 'docker restart -t 30 zallet' '$T/stub.log')\" = 1 ]"
+
+echo "== watchdog: a recovered episode resets the clock: failing, then ready, then failing again starts from zero"
+# Without the reset on ready, a three-minute episode followed by hours of ready and then
+# a fresh 'sends failing' would restart zallet on the first sweep (review of #531).
+wd_env
+export WATCHDOG_READY_GRACE_SECS=999999 STUB_READY_REASON="sends failing: 2 of the last 2 sends failed and none succeeded"
+# One process, two seconds between sweeps, a 7 s delay: failing at t0 and t2, ready at
+# t4 (the clock resets), failing at t6, t8, t10 (elapsed reaches ~4, never 7). Without
+# the reset the clock runs from t0 and the sweep at t8 restarts zallet. Three seconds
+# of margin below and one above, since a sweep costs stub calls on top of the interval;
+# a runner slow enough to spend three seconds a sweep would still stay under 7 on
+# the fixed side (reset at ~t9, sweeps at t12/t15/t18 give at most 6).
+export WATCHDOG_SENDS_RESTART_AFTER=7 WATCHDOG_SENDS_RESTART_BUDGET=999999 WATCHDOG_INTERVAL=2
+export STUB_READY_SEQUENCE="0 0 1 0 0 0"
+echo running > "$STUB_CONTAINERS/faucet-web"; echo running > "$STUB_CONTAINERS/zallet"
+wd_run 6
+check "no zallet restart: the clock restarted with the second episode and never reached the delay" "! grep -q 'docker restart -t 30 zallet' '$T/stub.log'"
+check "and all six sweeps read readiness, so the sequence was consumed in full" "[ \"\$(cat '$T/stub.log.ready-count' 2>/dev/null)\" = 6 ]"
+unset STUB_READY_SEQUENCE WATCHDOG_INTERVAL
+
+echo "== watchdog: no zallet container found: no restart, and the budget is NOT spent"
+wd_env
+export WATCHDOG_READY_GRACE_SECS=999999 STUB_READY=0 STUB_READY_REASON="sends failing: 2 of the last 2 sends failed and none succeeded"
+export WATCHDOG_SENDS_RESTART_AFTER=0 WATCHDOG_SENDS_RESTART_BUDGET=999999 WATCHDOG_ZALLET_MATCH=no-such-container
+echo running > "$STUB_CONTAINERS/faucet-web"
+wd_run 2
+check "no zallet restart was attempted" "! grep -q 'docker restart -t 30' '$T/stub.log' && ! grep -q 'restarting .* once' '$T/run.log'"
+check "and no restart time was written, so the real restart is not withheld once zallet appears" "[ ! -e '$T/state/sends.zallet_restart_at.flaps' ]"
+unset WATCHDOG_SENDS_RESTART_AFTER WATCHDOG_SENDS_RESTART_BUDGET STUB_READY_REASON WATCHDOG_ZALLET_MATCH

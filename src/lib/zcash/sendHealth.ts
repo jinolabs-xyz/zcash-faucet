@@ -43,7 +43,7 @@
 import { config } from "../config.ts";
 
 /** Outcomes we can honestly classify. `unknown` is counted and never held against us. */
-export type SendOutcome = "ok" | "failed" | "unknown";
+export type SendOutcome = "ok" | "failed" | "unknown" | "refused";
 
 export interface SendRecord {
   outcome: SendOutcome;
@@ -63,6 +63,17 @@ export interface SendRecord {
  * nobody has exercised.
  */
 export const MIN_SAMPLE = 3;
+
+/**
+ * Failures alone, with nothing succeeding, that are a verdict on their own (risk
+ * register II, R-18). The sample rule above needs three DECIDED sends in the window
+ * and production does about nine drips a day, so a wallet that answered balances and
+ * refused every send kept readiness 200, live-smoke green and the watchdog quiet for
+ * hours: one stranger failed, then a second an hour later, and by the time a third
+ * arrived the first had aged out. Two strangers failing in a row with no success in
+ * between is not a blip about individual claims; one failure still is.
+ */
+export const FAIL_ALONE = 2;
 
 /**
  * How far back we look. Long enough that a handful of claims accumulate on a quiet
@@ -113,6 +124,9 @@ export interface SendHealth {
   failed: number;
   /** Submitted but unresolved. Reported so an operator can see them, never counted against. */
   unknown: number;
+  /** The wallet refused the recipient (the visitor's 400). Reported so a run of them is
+   * visible, never counted: they say nothing about the wallet. */
+  refused: number;
   reason: string;
 }
 
@@ -143,6 +157,7 @@ export function readSendHealth(now: number = Date.now(), records: SendRecord[] =
   const ok = live.filter((r) => r.outcome === "ok").length;
   const failed = live.filter((r) => r.outcome === "failed").length;
   const unknown = live.filter((r) => r.outcome === "unknown").length;
+  const refused = live.filter((r) => r.outcome === "refused").length;
 
   // Unknowns are excluded from the denominator as well as the numerator. Including them
   // would let a run of slow sends dilute a real failure rate below the threshold, which
@@ -161,7 +176,21 @@ export function readSendHealth(now: number = Date.now(), records: SendRecord[] =
         ok,
         failed,
         unknown,
+        refused,
         reason: `${unknown} of the last ${unknown + failed} sends never resolved and none succeeded, the wallet is not finishing sends`,
+      };
+    }
+    // Two failures and no success (R-18): judged here too, since two decided sends
+    // never reach the ratio rule. The ratio rule still owns anything with a success in
+    // it, so one failure beside one success stays "too few to judge".
+    if (ok === 0 && failed >= FAIL_ALONE) {
+      return {
+        state: "degraded",
+        ok,
+        failed,
+        unknown,
+        refused,
+        reason: `${failed} of the last ${failed} sends failed and none succeeded`,
       };
     }
     return {
@@ -169,6 +198,7 @@ export function readSendHealth(now: number = Date.now(), records: SendRecord[] =
       ok,
       failed,
       unknown,
+      refused,
       reason: `only ${decided} decided send(s) in the last ${windowMinutes(WINDOW_MS)} min, too few to judge`,
     };
   }
@@ -179,11 +209,12 @@ export function readSendHealth(now: number = Date.now(), records: SendRecord[] =
       ok,
       failed,
       unknown,
+      refused,
       reason: `${failed} of the last ${decided} sends failed`,
     };
   }
 
-  return { state: "ok", ok, failed, unknown, reason: `${ok} of the last ${decided} sends succeeded` };
+  return { state: "ok", ok, failed, unknown, refused, reason: `${ok} of the last ${decided} sends succeeded` };
 }
 
 /**
