@@ -53,9 +53,14 @@ const DIMENSIONS = {
     "send-hangs": "every send hangs past the deadline; a claim is a 504, submitted with the outcome unknown",
     "cap-one-drip": "the daily cap is one drip, so a claim is refused with the time the cap has room again (the local ledger is shared across runs, so usually the first claim)",
   },
+  node: {
+    "node-synced": "our node at the network tip, the indexer answering",
+    "node-frozen": "our node thousands of blocks behind an independent tip and not moving (the 2026-09-07 fourteen hours)",
+    "indexer-down": "the public lightwalletd we probe is unreachable; the node itself is fine",
+  },
 };
 
-const DEFAULTS = { miner: "miner-running", box: "box-complete", wallet: "ready" };
+const DEFAULTS = { miner: "miner-running", box: "box-complete", wallet: "ready", node: "node-synced" };
 
 function usage() {
   console.log("Put the local UI into a named state. Dimensions are independent and compose.\n");
@@ -186,11 +191,22 @@ const run = (label, cmd, argv, env) => {
   return c;
 };
 
+// The fault states the page used to narrate as "syncing the node, first sync takes a
+// while" (R-33). Frozen is the independent tip far above the wallet double's fixed
+// 3_650_000 (FREEZE_BLOCKS is 200); the page must say the node stopped following the
+// network, not that it is catching up. Indexer-down points the lightwalletd probe at a
+// closed port: readiness 503s on it, and the page must name the indexer, not the node.
+const node = {
+  "node-synced": { hosh: {}, faucet: {} },
+  "node-frozen": { hosh: { HEIGHT: "3655000" }, faucet: {} },
+  "indexer-down": { hosh: {}, faucet: { LIGHTWALLETD_ENDPOINT: "http://127.0.0.1:9/" } },
+}[chosen.node];
+
 run("zallet", "node", ["scripts/fake-zallet.mjs"], { PORT: ZALLET_PORT, ...wallet });
 // Must be answering BEFORE the app starts. If the app's first tip refresh misses it,
 // the oracle caches the real network tip, decides our node is half a million blocks
 // behind and refuses every claim for the rest of the run.
-run("hosh", "node", ["scripts/fake-hosh.mjs"], { PORT: HOSH_PORT });
+run("hosh", "node", ["scripts/fake-hosh.mjs"], { PORT: HOSH_PORT, ...node.hosh });
 
 const waitFor = async (url, tries = 60) => {
   for (let i = 0; i < tries; i++) {
@@ -224,6 +240,7 @@ run("faucet", "npm", ["start"], {
   FAUCET_BOX_REPORT_PATH: BOX,
   FAUCET_RESERVE_CHECK_SECONDS: "5",
   ...wallet,
+  ...node.faucet,
 });
 
 if (await waitFor(`http://127.0.0.1:${PORT}/api/status`)) {

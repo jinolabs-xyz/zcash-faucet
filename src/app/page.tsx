@@ -17,7 +17,7 @@ import type { MinerReading } from "@/lib/miner/heartbeat";
 // state is on screen for over half a second on localhost and longer over a network.
 // It used to render as "syncing", which told a first-time visitor that a healthy
 // faucet was busy coming up.
-type Phase = "checking" | "syncing" | "queued" | "empty" | "degraded" | "ready" | "submitting" | "success" | "cooldown" | "error";
+type Phase = "checking" | "syncing" | "fault" | "queued" | "empty" | "degraded" | "ready" | "submitting" | "success" | "cooldown" | "error";
 
 // The two states where we cannot send yet, for different reasons: we have not asked,
 // or we asked and the node is not ready. They differ in what the page SAYS and agree
@@ -25,7 +25,7 @@ type Phase = "checking" | "syncing" | "queued" | "empty" | "degraded" | "ready" 
 // without this took the queue path away from anyone who typed inside the first half
 // second: basePhase stopped returning "syncing", so the claim fell through to a live
 // POST with no proof of work attached, and a hold became an error.
-const holding = (p: Phase) => p === "checking" || p === "syncing";
+const holding = (p: Phase) => p === "checking" || p === "syncing" || p === "fault";
 
 interface Status {
   network: string;
@@ -43,7 +43,16 @@ interface Status {
    * deploy) means the ledger would not answer, which is unknown, never zero. */
   drips?: { allTime: number; last7d: number; last30d: number } | null;
   backend: { reachable: boolean; endpoint: string };
-  node?: { ready: boolean; syncPercent: number | null; height: number | null; nodeHeight: number | null; canBuildTx?: boolean };
+  node?: {
+    ready: boolean; syncPercent: number | null; height: number | null; nodeHeight: number | null; canBuildTx?: boolean;
+    /** Our node stopped following the network: behind an independent tip, or its own
+     * tip stalled. Reported since #170; the page never read it, so a frozen node was
+     * "syncing, ready shortly" for fourteen hours on 2026-09-07 (risk register II, R-33). */
+    frozen?: boolean;
+    tipStalledMs?: number | null;
+    externalHeight?: number | null;
+    shield?: { state: string; reason?: string | null };
+  };
   // `active` is derived from the heartbeat now, not from an env flag, so it can
   // finally be false while the miner is broken. `state` is optional because an older
   // deploy answering this shape has no heartbeat to report, and treating a missing
@@ -336,6 +345,28 @@ export default function Home() {
     if (network === "ctaz" && status && !status.ctaz?.enabled) setNetwork("taz");
   }, [status, network]);
 
+  // What is wrong, in one sentence a visitor can act on (nothing, mostly), or null when
+  // nothing is. Each line names the component so the sentence is never "the node" when
+  // it is the wallet, and never "first sync" when it is a fault.
+  const faultReason = (s: Status): string | null => {
+    if (!s.backend?.reachable) return "a public indexer we use for balance lookups is unreachable right now";
+    if (s.node?.frozen) {
+      const m = s.node.tipStalledMs != null ? Math.round(s.node.tipStalledMs / 60_000) : null;
+      return m != null && m > 0
+        ? `our node stopped following the network about ${m} minute${m === 1 ? "" : "s"} ago`
+        : "our node is behind the network and not catching up";
+    }
+    // Our chain view is too stale to build a drip that could confirm, so hold rather
+    // than send one that expires before it is mined (#187). canBuildTx is computed
+    // server-side by the gate itself: the browser must not carry a second copy of a
+    // money rule, or it diverges the day the rule changes.
+    //
+    // `=== false` on purpose. A missing field (older server, or a sender the gate
+    // does not apply to) must not block a claim, so only an explicit no holds.
+    if (s.node && s.node.canBuildTx === false) return s.node.shield?.reason ? `we cannot safely build a transaction: ${s.node.shield.reason}` : "we cannot verify the network tip, so we are not building transactions";
+    if (s.node && s.node.ready !== false && s.balanceTaz == null) return "we cannot read our wallet's balance";
+    return null;
+  };
   const basePhase = useCallback((s: Status | null, net: FaucetNetwork = "taz"): Phase => {
     // Null means we have not asked. Unreachable means we asked and got nothing, which
     // is a real finding about the backend and keeps reading as syncing.
@@ -357,16 +388,16 @@ export default function Home() {
       return s.ctaz.servable ? "ready" : "syncing";
     }
 
-    if (!s.backend?.reachable) return "syncing";
+    // A FAULT IS NOT A SYNC (risk register II, R-33). Every one of these used to render
+    // as "Syncing the node. The faucet will be ready shortly... first sync takes a
+    // while, one time", with a progress bar near 100%: the frozen node of 2026-09-07 did
+    // for fourteen hours, and a public indexer's bad hour was narrated as our node's
+    // first sync. The server already tells them apart; the page now does too. Only a
+    // node that is genuinely catching up (not ready, not frozen) is "syncing".
+    if (faultReason(s)) return "fault";
     if (s.node && s.node.ready === false) return "syncing";
-    // Our chain view is too stale to build a drip that could confirm, so hold rather
-    // than send one that expires before it is mined (#187). canBuildTx is computed
-    // server-side by the gate itself: the browser must not carry a second copy of a
-    // money rule, or it diverges the day the rule changes.
-    //
-    // `=== false` on purpose. A missing field (older server, or a sender the gate
-    // does not apply to) must not block a claim, so only an explicit no holds.
-    if (s.node && s.node.canBuildTx === false) return "syncing";
+    // No node block at all (a sender the node status does not apply to) and no balance
+    // yet: the old reading, a wallet still coming up.
     if (s.balanceTaz == null) return "syncing";
     if (s.balanceTaz <= 0 || s.empty) return "empty";
     // The wallet answers balances and fails sends. Readiness has refused on this since
@@ -447,17 +478,19 @@ export default function Home() {
   // them plainly. Nothing was ever claimed, so there is no cooldown to release.
   useEffect(() => {
     if (!queuedAddr || queuedAt == null) return;
-    if (status?.node?.canBuildTx !== false) return;
+    // Any fault, not only the freshness gate: a hold through a frozen node or an
+    // unreadable wallet was indefinite, and "ready shortly" for the duration.
+    if (!status || basePhase(status, network) !== "fault") return;
     if (now - queuedAt < HOLD_MAX_MS) return;
     setQueuedAddr(null);
     setQueuedAt(null);
     setFail({ kind: "failed" });
     setErrMsg(
-      "Our node has not caught up with the network, so we stopped holding your claim rather than " +
-        "send one that would expire. Nothing was claimed and your cooldown is untouched. Try again later.",
+      "The faucet did not recover while we held your claim, so we stopped holding it rather than " +
+        "keep you waiting on it. Nothing was claimed and your cooldown is untouched. Try again later.",
     );
     setPhase("error");
-  }, [now, queuedAddr, queuedAt, status]);
+  }, [now, queuedAddr, queuedAt, status, basePhase, network]);
 
   // The moment the node is ready, a held claim fires through the normal
   // submit path (pow solved fresh here, a solution from queue time would
@@ -814,6 +847,22 @@ export default function Home() {
   // Never rounds up to 100 while the node is unready: 99.994 printed as "100%" beside
   // a "Syncing" headline during the 2026-08-03 incident, which reads as a stuck page.
   const syncText = syncLabel(syncPct, node?.ready === true);
+  // What the queued card is waiting on. A claim queued behind a fault is waiting for
+  // the faucet, not for a sync, and "syncing… / the moment the node is ready" over a
+  // frozen node is the R-33 story again with a different kicker.
+  const queuedBehindFault = !!status && faultReason(status) !== null;
+  // The two stat strips. A frozen node is not "syncing (99.99%)": that number is our
+  // tip over an external tip that the node stopped following, and it was the strip's
+  // reading for the whole of 2026-09-07. Frozen says frozen, and the sync cell says how
+  // far behind rather than how close.
+  const nodeWord = status == null ? "–" : node?.ready ? "ready" : node?.frozen ? "frozen" : "syncing";
+  const behindText =
+    node?.frozen
+      ? node.externalHeight != null && node.height != null && node.externalHeight > node.height
+        ? `${num(node.externalHeight - node.height)} behind`
+        : "stalled"
+      : null;
+  const syncCell = behindText ?? syncText;
   const height = node?.height ?? null;
   const nodeHeight = node?.nodeHeight ?? null;
   // Keeps null rather than ?? 0. The default erased the difference between "the
@@ -871,6 +920,8 @@ export default function Home() {
       ? "CHECKING"
       : phase === "syncing" || phase === "queued"
       ? "PREPARING"
+      : phase === "fault"
+        ? "NOT READY"
       : phase === "empty"
         ? (refilling ? "TOPPING UP" : "EMPTY")
         : phase === "degraded"
@@ -883,7 +934,7 @@ export default function Home() {
       ? refilling
         ? { fill: "var(--color-accent)", ring: "var(--color-accent)" } // topping up, calm
         : { fill: "var(--color-empty)", ring: "var(--color-empty)" } // genuinely empty
-      : phase === "degraded"
+      : phase === "degraded" || phase === "fault"
         ? { fill: "var(--color-empty)", ring: "var(--color-empty)" } // a fault, and red means what red means
       : live
         ? { fill: "var(--color-live)", ring: "var(--color-live)" }
@@ -895,8 +946,9 @@ export default function Home() {
   // no percentages.
   const announce =
     phase === "checking" ? "Checking the faucet's status."
-    : phase === "queued" ? "Your claim is queued. It sends on its own when the node is ready."
+    : phase === "queued" ? `Your claim is queued. It sends on its own when the ${queuedBehindFault ? "faucet is back" : "node is ready"}.`
     : phase === "syncing" ? "Node is syncing. The faucet will be ready shortly."
+    : phase === "fault" ? "The faucet is having a problem and is not taking claims right now. Nothing to do on your side."
     : phase === "empty" ? (refilling ? "Topping up the reserve. Drips resume in a moment." : "The faucet is out of TAZ right now.")
     : phase === "degraded" ? "Sends are failing right now, so the faucet is not taking claims. Nothing to do on your side."
     : phase === "submitting" ? (powState ? "Checking you are human. Nothing to do, it runs on its own." : "Sending your testnet ZEC. Keep this tab open.")
@@ -987,8 +1039,8 @@ export default function Home() {
 
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "4px 18px", padding: `9px ${pad}`, borderBottom: "1px solid var(--color-divider)", fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".05em", color: muted(55) }}>
         {[
-          { k: "node", v: status == null ? "–" : node?.ready ? "ready" : "syncing" },
-          { k: "sync", v: syncText ?? "–" },
+          { k: "node", v: nodeWord },
+          { k: "sync", v: syncCell ?? "–" },
           { k: "height", v: num(height) },
           { k: "balance", v: balance != null ? balance.toFixed(1) + " TAZ" : status == null ? "–" : "0 TAZ" },
           // Terse here, per the user. "off" is only available when the heartbeat has
@@ -1058,7 +1110,7 @@ export default function Home() {
               // "both" is for facts about the BOX rather than either chain - the integrity
               // count and the lightwalletd backend serve whichever asset you are looking at,
               // so hiding them behind a toggle would just make them harder to find.
-              { net: "taz", k: "node", v: status == null ? "–" : node?.ready ? "ready" : "syncing" + (syncText ? " (" + syncText + ")" : ""), bad: status != null && node?.ready === false },
+              { net: "taz", k: "node", v: nodeWord + (nodeWord !== "ready" && syncCell ? " (" + syncCell + ")" : ""), bad: status != null && node?.ready === false },
               { net: "taz", k: "block height", v: num(height) + (nodeHeight ? " / " + num(nodeHeight) : "") },
               { net: "taz", k: "wallet balance", v: status?.balanceTaz != null ? status.balanceTaz.toFixed(2) + " TAZ" : "–", bad: status?.empty === true },
               // The detail belongs here, per the user: he asked that the miner's real
@@ -1159,7 +1211,7 @@ export default function Home() {
 
       <main style={{ flex: 1, width: "100%", maxWidth: 760, margin: "0 auto", padding: `clamp(22px,5vw,46px) ${pad} 60px`, display: "flex", flexDirection: "column", gap: 20 }}>
         <p className="sr-only" role="status">{announce}</p>
-        {(phase === "ready" || phase === "checking" || phase === "syncing" || phase === "empty" || phase === "degraded") && (
+        {(phase === "ready" || phase === "checking" || phase === "syncing" || phase === "fault" || phase === "empty" || phase === "degraded") && (
           <div>
             <h1 style={{ fontSize: "clamp(27px,7.4vw,40px)", lineHeight: 1.08, letterSpacing: "-.025em", margin: "0 0 10px" }}>Get free testnet ZEC, sent privately.</h1>
             <p style={{ margin: 0, fontSize: 14.5, lineHeight: 1.55, color: muted(62), maxWidth: "46ch" }}>Paste a testnet address. The drip is shielded, so the amount and the recipient stay off the public ledger.</p>
@@ -1187,15 +1239,28 @@ export default function Home() {
           </div>
         )}
 
+        {phase === "fault" && network === "taz" && (
+          <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 9 }}>
+            <span style={kicker}>Not ready</span>
+            <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>The faucet is having a problem.</h2>
+            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
+              {status ? `${(faultReason(status) ?? "something is not right").replace(/^./, (c) => c.toUpperCase())}. ` : ""}
+              Nothing to do on your side. It usually recovers on its own and the box pages a person if it does not;
+              this page re-checks every few seconds. You can queue your address and it sends when the faucet is back,
+              or check back in a while.
+            </p>
+          </div>
+        )}
+
         {phase === "queued" && queuedAddr && (
           <div style={{ border: "2px solid var(--color-text)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 11 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
               <span style={kicker}>Queued</span>
-              <span style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700 }}>{syncText ?? "syncing…"}</span>
+              <span style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700 }}>{queuedBehindFault ? "not ready" : (syncText ?? "syncing…")}</span>
             </div>
             <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>You&apos;re in line. It sends on its own.</h2>
             <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
-              The moment the node is ready, {dripText} goes to <span style={{ fontFamily: "var(--mono)", fontSize: 11.5 }}>{short(queuedAddr, 12, 6)}</span>. Keep this tab open or come back later, your place survives a reload.
+              The moment the {queuedBehindFault ? "faucet is back" : "node is ready"}, {dripText} goes to <span style={{ fontFamily: "var(--mono)", fontSize: 11.5 }}>{short(queuedAddr, 12, 6)}</span>. Keep this tab open or come back later, your place survives a reload.
             </p>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
               <button className="btn btn-secondary btn-sm" onClick={() => { setQueuedAddr(null); setQueuedAt(null); setPhase(basePhase(status, network)); }}>Cancel and change address</button>
@@ -1276,7 +1341,7 @@ export default function Home() {
             Brutalist like everything else: 2px borders, square corners, the selected
             tab inverted. The selection is carried by the border weight, the inversion
             AND aria-selected, never by colour alone. */}
-        {showToggle && (phase === "ready" || phase === "checking" || phase === "syncing" || phase === "empty" || phase === "queued") && (
+        {showToggle && (phase === "ready" || phase === "checking" || phase === "syncing" || phase === "fault" || phase === "empty" || phase === "queued") && (
           <div>
             <div role="tablist" aria-label="Which network to claim on" style={{ display: "flex", flexWrap: "wrap", gap: 0, border: "2px solid var(--color-text)" }}>
               {(["taz", "ctaz"] as const).map((n) => {
@@ -1363,7 +1428,7 @@ export default function Home() {
           </div>
         )}
 
-        {(phase === "ready" || phase === "checking" || phase === "syncing" || phase === "empty" || phase === "degraded") && (
+        {(phase === "ready" || phase === "checking" || phase === "syncing" || phase === "fault" || phase === "empty" || phase === "degraded") && (
           <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
             <label htmlFor="zaddr" style={{ ...kicker, color: muted(60) }}>Your testnet address</label>
             <input id="zaddr" className="input" type="text" spellCheck={false} autoComplete="off" autoCapitalize="off" placeholder="utest1… / ztestsapling… / tm…" value={addr} onChange={(e) => { setAddr(e.target.value); setTouched(false); }} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} aria-describedby="addrmsg" />
@@ -1391,7 +1456,7 @@ export default function Home() {
               </div>
             )}
             <button className="btn btn-primary" onClick={() => void submit()} disabled={phase === "empty" || phase === "degraded" || (!!genKey && genKey.address === addr.trim() && !keyCopied && !keyShown)} style={{ width: "100%", justifyContent: "space-between" }}>
-              <span>{genKey && genKey.address === addr.trim() && !keyCopied && !keyShown ? "Copy the key first" : phase === "checking" ? "Checking status…" : phase === "syncing" ? "Queue it, sends when the node is ready" : phase === "empty" ? (refilling ? "Topping up, back in a moment" : "Waiting for a refill") : phase === "degraded" ? "Not taking claims right now" : "Request " + dripText}</span>
+              <span>{genKey && genKey.address === addr.trim() && !keyCopied && !keyShown ? "Copy the key first" : phase === "checking" ? "Checking status…" : phase === "syncing" ? "Queue it, sends when the node is ready" : phase === "fault" ? "Queue it, sends when the faucet is back" : phase === "empty" ? (refilling ? "Topping up, back in a moment" : "Waiting for a refill") : phase === "degraded" ? "Not taking claims right now" : "Request " + dripText}</span>
               <span aria-hidden="true">→</span>
             </button>
             <p style={{ margin: 0, fontSize: 11.5, letterSpacing: ".02em", color: muted(55), fontFamily: "var(--mono)" }}>{dripText} · once per address / 24h · shielded z→z</p>
