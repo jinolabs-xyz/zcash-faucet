@@ -1539,7 +1539,7 @@ export default function Home() {
               </div>
             )}
             <button className="btn btn-primary" onClick={() => void submit()} disabled={phase === "empty" || phase === "degraded" || (!!genKey && genKey.address === addr.trim() && !keyCopied && !keyShown)} style={{ width: "100%", justifyContent: "space-between" }}>
-              <span>{genKey && genKey.address === addr.trim() && !keyCopied && !keyShown ? "Copy the key first" : phase === "checking" ? "Checking status…" : phase === "syncing" ? "Queue it, sends when the node is ready" : phase === "fault" ? "Queue it, sends when the faucet is back" : phase === "empty" ? (refilling ? "Topping up, back in a moment" : "Waiting for a refill") : phase === "degraded" ? "Not taking claims right now" : "Request " + dripText}</span>
+              <span>{genKey && genKey.address === addr.trim() && !keyCopied && !keyShown ? "Copy the key first" : phase === "checking" ? "Checking status…" : phase === "syncing" ? "Queue it, sends when the node is ready" : phase === "fault" ? "Queue it, sends when the faucet is back" : phase === "empty" ? (refilling && refillHealthy ? "Topping up, back in a moment" : "Waiting for a refill") : phase === "degraded" ? "Not taking claims right now" : "Request " + dripText}</span>
               <span aria-hidden="true">→</span>
             </button>
             <p style={{ margin: 0, fontSize: 11.5, letterSpacing: ".02em", color: muted(55), fontFamily: "var(--mono)" }}>{dripText} · once per address / 24h · shielded z→z</p>
