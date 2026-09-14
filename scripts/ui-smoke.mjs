@@ -707,10 +707,11 @@ async function checkMobile(browser, base) {
     // a phone because it is the state a claimant is actually looking at, and it is
     // the longest card on the page.
     await page.getByRole("button", { name: /Hide details/ }).click();
-    await page.getByRole("button", { name: "Generate a test address" }).first().click();
+    await page.getByRole("button", { name: "Make a throwaway address and key" }).first().click();
     await page
       .waitForFunction(() => (document.querySelector("input.input")?.value ?? "").length > 100, null, { timeout: 20_000 })
       .catch(() => {});
+    await page.getByRole("button", { name: "Copy key" }).first().click();
     await page.locator("button.btn-primary").first().click();
     await page.getByText("Sent ✓").waitFor({ timeout: 120_000 });
     await audit("/ receipt");
@@ -758,7 +759,7 @@ try {
   // the address from the wrong field and substituted a synthesized one that
   // checksum validation refuses. Driving the button, not the API, is what
   // catches it.
-  await page.getByRole("button", { name: "Generate a test address" }).first().click();
+  await page.getByRole("button", { name: "Make a throwaway address and key" }).first().click();
   // Settle on a filled field OR a visible error, then assert. Both #31 shapes
   // then fail by name rather than timing out: reading the wrong response field
   // leaves the box empty today, and the older synthesized fallback filled it
@@ -773,9 +774,52 @@ try {
   const generated = await page.locator("input.input").first().inputValue();
   ok("the generate button yields a full unified address", generated.length > 100, `${generated.length} chars`);
   if (generated.length <= 100) throw new Error("generate did not produce a usable address, skipping the claim it feeds");
-  await page.locator("button.btn-primary").first().click();
+  // THE KEY COMES WITH IT, AND THE REQUEST WAITS FOR IT (risk register II, R-31). For
+  // seven weeks this exact flow paid an address whose key the page had thrown away, and
+  // this script clicked straight through it green. The key is shown masked, the request
+  // button is held until it has been copied, and the receipt offers it again.
+  const keyPanel = page.getByTestId("generated-key");
+  ok("the generated address comes with its spending key on screen", await keyPanel.isVisible());
+  const primary = page.locator("button.btn-primary").first();
+  ok("and the request button waits until the key has been copied", (await primary.isDisabled()) && /Copy the key first/.test((await primary.textContent()) ?? ""), (await primary.textContent())?.trim());
+  // A disabled button is no gate against a keyboard: Enter in the address field calls
+  // submit() directly. The gate lives in submit() too, so Enter must change nothing.
+  await page.locator("input.input").first().press("Enter");
+  await page.waitForTimeout(400);
+  // If the gate let Enter through, the form is gone (the page is solving or sending)
+  // and the button no longer exists: that is the failure, named, not a locator timeout.
+  const stillHeld = await primary.isDisabled({ timeout: 2_000 }).catch(() => false);
+  ok("Enter in the address field does not slip past the key gate", stillHeld, (await primary.textContent({ timeout: 1_000 }).catch(() => "form gone: the claim went ahead"))?.trim());
+  // Review typed one character and deleted it: the first cut cleared the key on any
+  // edit, so the exact generated address came back with no panel and a normal button.
+  // The panel and the gate are keyed on the address; a round trip must change nothing.
+  const field = page.locator("input.input").first();
+  await field.press("End");
+  await field.type("x");
+  ok("editing the address hides the key panel", !(await keyPanel.isVisible()), "panel visible with a different address");
+  await field.press("Backspace");
+  const backHeld = await primary.isDisabled({ timeout: 2_000 }).catch(() => false);
+  ok("and typing it back re-shows the panel with the gate still closed", (await keyPanel.isVisible()) && backHeld, (await primary.textContent({ timeout: 1_000 }).catch(() => "form gone"))?.trim());
+  // Masked BEFORE reveal: the secret must not be in the page until asked for.
+  const masked = (await keyPanel.locator("code").textContent()) ?? "";
+  ok("the key is masked until revealed", /^•+$/.test(masked), `${masked.length} chars`);
+  await keyPanel.getByRole("button", { name: "Copy key" }).click();
+  await page.waitForFunction(() => !document.querySelector("button.btn-primary")?.disabled, null, { timeout: 5_000 }).catch(() => {});
+  ok("copying the key releases the request button", await primary.isEnabled(), (await primary.textContent())?.trim());
+  await keyPanel.getByRole("button", { name: "Reveal" }).click();
+  const shown = (await keyPanel.locator("code").textContent()) ?? "";
+  ok("revealed, the key is a real secret and not the mask", shown.length > 40 && !/^•+$/.test(shown), `${shown.length} chars`);
+  // The clipboard holds the KEY, not the address: a copy button that copied the wrong
+  // field would pass every visibility check above and leave the person with nothing.
+  const clipKey = await page.evaluate(() => navigator.clipboard.readText()).catch(() => "");
+  ok("what Copy key put on the clipboard is the revealed key", clipKey === shown, `${clipKey.length} chars, ${clipKey === generated ? "the ADDRESS" : "not the address"}`);
+  await primary.click();
   await page.getByText("Sent ✓").waitFor({ timeout: 120_000 });
   ok("a generated address is accepted by the faucet (#31)", true);
+  ok("the receipt offers the spending key again", await page.getByRole("button", { name: "Copy spending key" }).isVisible());
+  await page.getByRole("button", { name: "Copy spending key" }).click();
+  const clipAgain = await page.evaluate(() => navigator.clipboard.readText()).catch(() => "");
+  ok("and it copies the same key", clipAgain === shown, `${clipAgain.length} chars`);
   await page.getByRole("button", { name: /Another address/ }).click();
 
   const address = await freshAddress();
