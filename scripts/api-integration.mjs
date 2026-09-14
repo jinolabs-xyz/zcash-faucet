@@ -29,6 +29,8 @@ const PORT_J = 3218; // J for a wallet that answers balances and FAILS every sen
 const PORT_K = 3219; // K for the daily CAP: one drip a day, so the refusal's clock can be read
 const PORT_L = 3220; // L for the DRAIN with a send stuck in the queue (R-27)
 const PORT_M = 3221; // M for the drain with an empty queue: exits at once
+const PORT_N = 3222; // N for the wrong wallet credential: a 401 is a definite no, not an unknown outcome (R-41)
+const PORT_O = 3223; // O for a z_sendmany reply that never arrives: the no-opid unknown (R-26), which C's hanging op is not
 // Somewhere to keep the output of the server that is supposed to die, so the
 // assertion can check WHY it died rather than only that it did.
 const LOG_DIR = mkdtempSync(join(tmpdir(), "faucet-api-integration-"));
@@ -55,6 +57,8 @@ const BASE_J = `http://localhost:${PORT_J}`;
 const BASE_K = `http://localhost:${PORT_K}`;
 const BASE_L = `http://localhost:${PORT_L}`;
 const BASE_M = `http://localhost:${PORT_M}`;
+const BASE_N = `http://localhost:${PORT_N}`;
+const BASE_O = `http://localhost:${PORT_O}`;
 
 let failures = 0;
 const ok = (name, cond, detail = "") => {
@@ -221,9 +225,13 @@ function stop(child) {
 // fake wallet, so the path under test is the shipped one.
 const WALLET_A = 28321;
 const WALLET_B = 28322;
-const wallet = (port, balanceTaz) =>
+// THE DOUBLES DEMAND CREDENTIALS (risk register II, R-41). The real wallet always does,
+// and a double that did not could never have caught an app that forgot the header.
+// One password per run; the app is given the same one, except server N below.
+const RPC_PASSWORD = `pw-${RUN_NONCE}`;
+const wallet = (port, balanceTaz, extra = {}) =>
   spawn("node", ["scripts/fake-zallet.mjs"], {
-    env: { ...process.env, PORT: String(port), BALANCE_TAZ: String(balanceTaz) },
+    env: { ...process.env, PORT: String(port), BALANCE_TAZ: String(balanceTaz), RPC_USER: "faucet", RPC_PASSWORD, ...extra },
     stdio: "ignore",
     detached: true,
   });
@@ -233,7 +241,7 @@ const WALLET_C = 28323;
 const walletA = wallet(WALLET_A, 10);
 const walletB = wallet(WALLET_B, 0);
 const walletC = spawn("node", ["scripts/fake-zallet.mjs"], {
-  env: { ...process.env, PORT: String(WALLET_C), BALANCE_TAZ: "10", SEND_HANGS: "true" },
+  env: { ...process.env, PORT: String(WALLET_C), BALANCE_TAZ: "10", SEND_HANGS: "true", RPC_USER: "faucet", RPC_PASSWORD },
   stdio: "ignore",
   detached: true,
 });
@@ -251,7 +259,7 @@ const walletI = wallet(WALLET_I, 10);
 // throws" state the send-health verdict exists for.
 const WALLET_J = 28331;
 const walletJ = spawn("node", ["scripts/fake-zallet.mjs"], {
-  env: { ...process.env, PORT: String(WALLET_J), BALANCE_TAZ: "10", SEND_FAILS: "true" },
+  env: { ...process.env, PORT: String(WALLET_J), BALANCE_TAZ: "10", SEND_FAILS: "true", RPC_USER: "faucet", RPC_PASSWORD },
   stdio: "ignore",
   detached: true,
 });
@@ -314,6 +322,8 @@ const chainView = {
 const zallet = (rpcPort) => ({
   FAUCET_SENDER: "zallet",
   ZALLET_RPC_URL: `http://127.0.0.1:${rpcPort}/`,
+  ZALLET_RPC_USER: "faucet",
+  ZALLET_RPC_PASSWORD: RPC_PASSWORD,
   ZALLET_ACCOUNT: "test-account",
   ZALLET_ADDRESS: "utest1testfaucet",
   ZALLET_MIN_CONF: "0",
@@ -446,7 +456,7 @@ const bootDirect = (port, env) => {
 };
 const WALLET_L = 28333;
 const walletL = spawn("node", ["scripts/fake-zallet.mjs"], {
-  env: { ...process.env, PORT: String(WALLET_L), BALANCE_TAZ: "10", SEND_HANGS: "true" },
+  env: { ...process.env, PORT: String(WALLET_L), BALANCE_TAZ: "10", SEND_HANGS: "true", RPC_USER: "faucet", RPC_PASSWORD },
   stdio: "ignore",
   detached: true,
 });
@@ -469,6 +479,30 @@ const serverM = bootDirect(PORT_M, {
   NEXT_MANUAL_SIG_HANDLE: "true",
   FAUCET_DRAIN_MAX_MS: "10000",
   RATE_LIMIT_SALT: "integration-test-salt-m",
+});
+// N: the app has the WRONG wallet password. The wallet answers 401 to everything, so
+// the balance reads null, readiness says the wallet is not answering, and a claim is a
+// definite failure: never "your coins may be on their way".
+const WALLET_N = 28335;
+const walletN = wallet(WALLET_N, 10);
+const serverN = boot(PORT_N, {
+  ...zallet(WALLET_N),
+  ...chainView,
+  ZALLET_RPC_PASSWORD: "not-the-password",
+  FAUCET_CHALLENGE: "none",
+  RATE_LIMIT_SALT: "integration-test-salt-n",
+});
+// O: the wallet swallows z_sendmany past the app's RPC timeout. The app cannot know
+// whether the wallet spawned the operation before the socket died, so the answer must
+// be the 504 "may be on their way", never a release that pays twice (R-26).
+const WALLET_O = 28336;
+const walletO = wallet(WALLET_O, 10, { STALL_METHOD: "z_sendmany", STALL_MS: "6000" });
+const serverO = boot(PORT_O, {
+  ...zallet(WALLET_O),
+  ...chainView,
+  ZALLET_RPC_TIMEOUT_MS: "1500",
+  FAUCET_CHALLENGE: "none",
+  RATE_LIMIT_SALT: "integration-test-salt-o",
 });
 const serverJ = boot(PORT_J, {
   ...zallet(WALLET_J),
@@ -495,7 +529,7 @@ try {
   // false: this fixture serves no testnet row BY DESIGN, so requiring one would
   // hang and then throw. Responding at all is the whole requirement.
   await waitHosh(false, 15_000, HOSH_EMPTY_PORT);
-  await Promise.all([waitReady(BASE_A), waitReady(BASE_B), waitReady(BASE_C), waitReady(BASE_D), waitReady(BASE_E), waitReady(BASE_H), waitReady(BASE_I), waitReady(BASE_J), waitReady(BASE_K), waitReady(BASE_L), waitReady(BASE_M)]);
+  await Promise.all([waitReady(BASE_A), waitReady(BASE_B), waitReady(BASE_C), waitReady(BASE_D), waitReady(BASE_E), waitReady(BASE_H), waitReady(BASE_I), waitReady(BASE_J), waitReady(BASE_K), waitReady(BASE_L), waitReady(BASE_M), waitReady(BASE_N), waitReady(BASE_O)]);
   // THE LEDGER IS WHERE THIS RUN PUT IT. A driver that ignored FAUCET_DATA_DIR kept every
   // other assertion green while the claims went back to cwd/data (review of #537), which
   // is the shape this suite exists to refuse: a green that proves nothing.
@@ -1015,6 +1049,52 @@ try {
   const secondE = await claim(BASE_E, addrE, null);
   ok("E the cannot-verify refusal also leaves the cooldown alone", secondE.status === 503, `status ${secondE.status}`);
 
+  /* ── N and the doubles: what the wallet double refuses (R-41) ──────────── */
+  // THE DOUBLE BOUNDS WHAT A TEST CAN PROVE. Until now it answered anyone (so an app
+  // that forgot the Authorization header passed every case here), said "success" for an
+  // opid it never issued, paid a transparent address under any privacy policy, and had
+  // no getblockchaininfo. One assertion per rule, against the double directly where the
+  // rule is the double's, and through the app where the app's handling is the point.
+  const rpcRaw = async (port, method, params = [], auth = { user: "faucet", password: RPC_PASSWORD }) => {
+    const headers = { "content-type": "application/json" };
+    if (auth) headers.authorization = "Basic " + Buffer.from(`${auth.user}:${auth.password}`).toString("base64");
+    const res = await fetch(`http://127.0.0.1:${port}/`, { method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) });
+    return { status: res.status, body: await res.json().catch(() => null) };
+  };
+  const noAuth = await rpcRaw(WALLET_A, "getwalletstatus", [], null);
+  ok("double: no credentials is 401 with no JSON-RPC envelope, as the real wallet answers", noAuth.status === 401 && noAuth.body === null, `status ${noAuth.status}`);
+  const badAuth = await rpcRaw(WALLET_A, "getwalletstatus", [], { user: "faucet", password: "wrong" });
+  ok("double: the wrong password is 401 too", badAuth.status === 401, `status ${badAuth.status}`);
+  // Every claim above went through this wallet with the run's credential, which is
+  // the proof the app attaches the header; the direct call is the proof the double
+  // would have noticed if it had not.
+  const unknownOp = await rpcRaw(WALLET_A, "z_getoperationstatus", [["opid-never-issued"]]);
+  ok("double: an opid it never issued is an empty list, not success", Array.isArray(unknownOp.body?.result) && unknownOp.body.result.length === 0, JSON.stringify(unknownOp.body));
+  const unknownRes = await rpcRaw(WALLET_A, "z_getoperationresult", [["opid-never-issued"]]);
+  ok("double: and its result is empty as well", Array.isArray(unknownRes.body?.result) && unknownRes.body.result.length === 0, JSON.stringify(unknownRes.body));
+  const noPolicy = await rpcRaw(WALLET_A, "z_sendmany", ["utest1testfaucet", [{ address: MINING_TADDR, amount: 0.1 }], 0, null, "FullPrivacy"]);
+  ok("double: a transparent recipient under FullPrivacy is refused with -4, as zallet refuses it", noPolicy.body?.error?.code === -4 && /privacy policy AllowRevealedRecipients/.test(noPolicy.body.error.message), JSON.stringify(noPolicy.body));
+  const chainInfo = await rpcRaw(WALLET_A, "getblockchaininfo");
+  ok("double: getblockchaininfo answers zebra's shape, so the chain-identity oracle's own side is no longer a -32601", chainInfo.body?.result?.chain === "test" && typeof chainInfo.body.result.consensus?.chaintip === "string", JSON.stringify(chainInfo.body));
+  // N: the app with the WRONG password against a wallet that demands one.
+  const nStatus = await get(BASE_N, "/api/status");
+  ok("N with the wrong wallet credential, the balance reads null: unknown, not zero", nStatus.status === 200 && nStatus.body.balanceTaz === null, JSON.stringify({ balanceTaz: nStatus.body.balanceTaz }));
+  const nReady = await get(BASE_N, "/api/ready");
+  ok("N and readiness refuses", nReady.status === 503, `status ${nReady.status} ${JSON.stringify(nReady.body.reason ?? "")}`);
+  const nAddr = (await post(BASE_N, "/api/account", { type: "shielded" })).body.account?.address ?? "";
+  const nClaim = await post(BASE_N, "/api/faucet", { address: nAddr });
+  ok("N and a claim is a definite refusal, never 'your coins may be on their way'", (nClaim.status === 502 || nClaim.status === 503) && !/on their way|do not retry/i.test(nClaim.body.error ?? ""), `${nClaim.status} ${JSON.stringify(nClaim.body)}`);
+  // O: the reply to z_sendmany is lost. Not C's shape (C's wallet returns an opid and
+  // the operation hangs): here there is no opid at all, and the app must still hold
+  // the claim rather than release it, because the wallet may have broadcast anyway.
+  const oAddr = (await post(BASE_O, "/api/account", { type: "shielded" })).body.account?.address ?? "";
+  const oClaim = await post(BASE_O, "/api/faucet", { address: oAddr });
+  ok("O a z_sendmany reply lost past the RPC timeout is the 504 unknown outcome, not a failure", oClaim.status === 504 && /on their way/.test(oClaim.body.error ?? ""), `${oClaim.status} ${JSON.stringify(oClaim.body)}`);
+  const oAgain = await post(BASE_O, "/api/faucet", { address: oAddr });
+  ok("O and the same address is HELD, not released for a second payment", oAgain.status === 429 && oAgain.body.kind === "cooldown", `${oAgain.status} ${JSON.stringify(oAgain.body)}`);
+  const oSends = (await get(BASE_O, "/api/status")).body.sends;
+  ok("O and it is counted as unresolved, not failed", oSends && oSends.unknown >= 1 && oSends.failed === 0, JSON.stringify(oSends));
+
   /* ── F: the salt guard is WIRED, not merely correct ───────────────────── */
 
   // This exists because the proof it replaces was accidental. While the guard ran
@@ -1064,6 +1144,10 @@ try {
   try { serverM.kill("SIGKILL"); } catch { /* already gone */ }
   stop(walletM);
   stop(walletK);
+  stop(serverN);
+  stop(walletN);
+  stop(serverO);
+  stop(walletO);
   stop(serverA);
   stop(serverB);
   stop(serverC);

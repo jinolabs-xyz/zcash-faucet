@@ -19,6 +19,18 @@
 // | SEND_HANGS   | unset   | Operations never finish, for unknown outcome    |
 // | SHIELD_TAZ   | 0       | TAZ each shield sweep adds, for refill tests    |
 // | SHIELD_ERROR |         | make z_shieldcoinbase THROW this message        |
+// | RPC_USER     | unset   | With RPC_PASSWORD: require HTTP Basic auth, 401 otherwise |
+// | RPC_PASSWORD | unset   |   (the real wallet always does; an app that forgot the header passed here) |
+// | WALLET_LAG   | 0       | Blocks the wallet stays behind the node, for the lag gate |
+// | STALL_METHOD | unset   | With STALL_MS: this method never answers within STALL_MS |
+// | STALL_MS     | 0       |   (the transport-timeout path: a reply lost, not an op that hangs) |
+// | BRANCH_ID    | c8e71055| consensus.chaintip from getblockchaininfo (NU5 testnet) |
+//
+// WHAT IT ANSWERS THAT THE REAL WALLET WOULD NOT (risk register II, R-41). A double
+// bounds what a test can prove, so it should say no where zallet says no: without
+// credentials (401), to an opid it never issued (an empty list, not "success"), and to a
+// shielded-to-transparent send with no privacy policy (-4). Each is a knob or a rule
+// here, and the integration suite has one assertion per handler.
 import { createServer } from "node:http";
 import { randomBytes } from "node:crypto";
 
@@ -30,6 +42,12 @@ const SHIELD_ZAT = BigInt(Math.round(Number(process.env.SHIELD_TAZ ?? 0) * 1e8))
 const SHIELD_ERROR = process.env.SHIELD_ERROR ?? "";
 const SEND_FAILS = process.env.SEND_FAILS === "true";
 const SEND_HANGS = process.env.SEND_HANGS === "true";
+const RPC_USER = process.env.RPC_USER ?? "";
+const RPC_PASSWORD = process.env.RPC_PASSWORD ?? "";
+const WALLET_LAG = Number(process.env.WALLET_LAG ?? 0);
+const STALL_METHOD = process.env.STALL_METHOD ?? "";
+const STALL_MS = Number(process.env.STALL_MS ?? 0);
+const BRANCH_ID = process.env.BRANCH_ID ?? "c8e71055";
 const NODE_TIP = 3_650_000;
 const started = Date.now();
 
@@ -40,10 +58,14 @@ let balanceZat = BigInt(Math.round(Number(process.env.BALANCE_TAZ ?? 15) * 1e8))
 const ops = new Map(); // opid -> { txid, failed }
 
 function walletTip() {
-  if (SYNC_SECONDS <= 0) return NODE_TIP;
+  if (SYNC_SECONDS <= 0) return NODE_TIP - WALLET_LAG;
   const frac = Math.min(1, (Date.now() - started) / (SYNC_SECONDS * 1000));
-  return NODE_TIP - Math.round(5000 * (1 - frac));
+  return NODE_TIP - Math.round(5000 * (1 - frac)) - WALLET_LAG;
 }
+
+// The only privacy policies that let a shielded pool pay a transparent address. zallet
+// refuses the rest with -4, and an app that forgot to send one used to pay here.
+const REVEALING_POLICIES = new Set(["AllowRevealedRecipients", "AllowRevealedAmounts", "AllowFullyTransparent", "NoPrivacy"]);
 
 // Amounts arrive as exact ZEC decimal literals, so parse rather than float.
 function zecToZat(amount) {
@@ -58,6 +80,11 @@ const handlers = {
 
   z_sendmany: (params) => {
     const amountZat = zecToZat(params[1]?.[0]?.amount ?? 0);
+    const to = String(params[1]?.[0]?.address ?? "");
+    const policy = params[4];
+    if (/^t[m2]/i.test(to) && !REVEALING_POLICIES.has(policy)) {
+      throw Object.assign(new Error("Insufficient privacy: sending to a transparent address requires privacy policy AllowRevealedRecipients or higher"), { code: -4 });
+    }
     if (!SEND_FAILS && amountZat > balanceZat) throw new Error("Insufficient funds");
     const opid = "opid-" + randomBytes(4).toString("hex");
     if (!SEND_FAILS) balanceZat -= amountZat; // debit at submit, as a real wallet reserves the note
@@ -90,29 +117,60 @@ const handlers = {
     return { txid, confirmations: Number(process.env.TX_CONFIRMATIONS ?? 1), height: NODE_TIP };
   },
 
+  // An opid this wallet never issued is an EMPTY list, as zcashd and zallet answer it.
+  // The double used to say "success", so a client that lost track of which opid was
+  // whose would have been told its money went out.
   z_getoperationstatus: (params) => {
     const id = params[0][0];
+    if (!ops.has(id)) return [];
     if (SEND_HANGS) return [{ id, status: "executing" }];
-    return [{ id, status: ops.get(id)?.failed ? "failed" : "success" }];
+    return [{ id, status: ops.get(id).failed ? "failed" : "success" }];
   },
 
   z_getoperationresult: (params) => {
     const id = params[0][0];
     const op = ops.get(id);
-    if (!op || op.failed) {
-      return [{ id, status: "failed", error: { code: -6, message: "fake-zallet: send refused" } }];
-    }
+    if (!op) return [];
+    if (op.failed) return [{ id, status: "failed", error: { code: -6, message: "fake-zallet: send refused" } }];
     return [{ id, status: "success", result: { txid: op.txid } }];
   },
+
+  // The chain-identity oracle's first question. Zebra's shape (consensus.chaintip); the
+  // real wallet proxies it. Without this the oracle's "our side" was a -32601 forever.
+  getblockchaininfo: () => ({
+    chain: "test",
+    blocks: NODE_TIP,
+    headers: NODE_TIP,
+    consensus: { chaintip: BRANCH_ID, nextblock: BRANCH_ID },
+  }),
 };
+
+function authorized(req) {
+  if (!RPC_USER) return true;
+  const want = "Basic " + Buffer.from(`${RPC_USER}:${RPC_PASSWORD}`).toString("base64");
+  return req.headers.authorization === want;
+}
 
 createServer((req, res) => {
   let body = "";
   req.on("data", (c) => (body += c));
   req.on("end", () => {
+    if (!authorized(req)) {
+      // The real wallet: 401 and no JSON-RPC envelope. The app must read that as a
+      // definite failure, never as an ambiguous send.
+      res.writeHead(401, { "content-type": "text/plain", "www-authenticate": "Basic realm=\"jsonrpc\"" });
+      res.end("Unauthorized");
+      return;
+    }
     let out;
     try {
       const { method, params } = JSON.parse(body);
+      if (STALL_METHOD && method === STALL_METHOD && STALL_MS > 0) {
+        // Never answers inside the caller's timeout: the reply-lost path, which is not
+        // the same as an operation that hangs (SEND_HANGS answers "executing" at once).
+        setTimeout(() => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ jsonrpc: "2.0", result: null })); }, STALL_MS);
+        return;
+      }
       const handler = handlers[method];
       if (!handler) {
         out = { jsonrpc: "2.0", error: { code: -32601, message: `fake-zallet: no handler for ${method}` } };
