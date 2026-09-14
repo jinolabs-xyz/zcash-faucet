@@ -43,8 +43,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           # Matches the Dockerfile (node:24-slim). Tests must run on the runtime we
           # ship: this was pinned to 23 while production ran 22, so every green
@@ -97,8 +97,8 @@ jobs:
       # path care, so the environment has to stop lying to it (#171).
       HOSH_URL: http://127.0.0.1:28324/
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: npm
@@ -178,8 +178,8 @@ jobs:
       # this case, a node that is directly reachable.
       FAUCET_CTAZ_RPC_SOCKET: ""
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: npm
@@ -251,8 +251,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: npm
@@ -273,8 +273,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: npm
@@ -298,7 +298,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: shellcheck every tracked shell script
         # NOT A GLOB, AND THAT IS THE WHOLE POINT. `deploy/z3/*.sh` matched 22 of the 41
         # tracked .sh files in this repo and silently excluded 19: the entire test harness,
@@ -344,7 +344,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Guarded the same way as the harness suites: green before the miner
       # lands, active the moment it merges. Plain `cargo test` only, the
       # ignored solve test needs a release build and ~144MB, it stays a
@@ -381,7 +381,7 @@ jobs:
     steps:
       # v7 like every other job here. v4 was an inconsistency, and CI version skew is
       # what later produces works-in-one-job-not-the-other with no diff to explain it.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # No cache, no buildx layer reuse. A cold build is the whole point: it is the only
       # way this job can tell us the commit stands on its own.
