@@ -188,6 +188,14 @@ bash "$AD" > "$T/ignore.log" 2>&1
 check "a .dockerignore-only commit exits 0" "[ $? -eq 0 ]"
 check "and rebuilds the app" "[ -s '$REDEPLOY_LOG' ]"
 check "and the log says app=1" "grep -q 'app=1 ops=0' '$T/ignore.log'"
+# Same shape, different files: the image reads these from disk at run time, and
+# `next build` not consuming them is exactly why (review of #520).
+for p in proto/service.proto workers/t2z-worker.mjs; do
+  ad_env
+  ad_advance "$p"
+  bash "$AD" > "$T/runtime.log" 2>&1
+  check "a commit touching only $p rebuilds the app" "[ -s '$REDEPLOY_LOG' ] && grep -q 'app=1 ops=0' '$T/runtime.log'"
+done
 
 echo "== auto-deploy: a commit touching BOTH does both"
 ad_env
