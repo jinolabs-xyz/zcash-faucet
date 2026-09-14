@@ -189,6 +189,14 @@ const RECIPIENT_REFUSALS = [
   "This transaction would send to a transparent receiver of a unified address",
   "Could not send to the ",
   "Could not send to a shielded receiver of a unified address",
+  // propose_and_check's third path: Address::try_from_zcash_address, whose errors are
+  // librustzcash's (zcash_address convert.rs, zcash_keys address.rs). A regtest paste,
+  // a Sapling address whose payload is not a valid point, a UA with a garbage receiver.
+  // All -8, all about the recipient alone (round 3 of the #531 review).
+  "Address is for ",
+  "Invalid Sapling payment address",
+  "Invalid Orchard receiver in Unified Address",
+  "Invalid Sapling receiver in Unified Address",
 ];
 export function isRecipientRefusal(code: number | null | undefined, message: string): boolean {
   if (code !== -8) return false;

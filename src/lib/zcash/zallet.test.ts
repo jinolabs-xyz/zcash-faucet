@@ -315,6 +315,11 @@ const RECIPIENT = [
   "This transaction would send to a transparent receiver of a unified address, which is not enabled by default because it will publicly reveal transaction recipients and amounts.",
   "Could not send to the Sapling shielded pool without spending non-Sapling funds, which would reveal transaction amounts.",
   "Could not send to a shielded receiver of a unified address without spending funds from a different pool, which would reveal transaction amounts.",
+  // try_from_zcash_address's errors, librustzcash's own Display strings.
+  "Address is for Regtest but we expected Test",
+  "Invalid Sapling payment address",
+  "Invalid Orchard receiver in Unified Address",
+  "Invalid Sapling receiver in Unified Address",
 ];
 // Wallet-side sentences that mention pools, addresses or policies and MUST keep counting
 // against the wallet (review of #531, round 2: a keyword scan sent all of these to the
