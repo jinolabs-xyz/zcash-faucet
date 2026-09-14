@@ -61,7 +61,7 @@ check "a Caddyfile with no stamp ships at exit 0" "[ $? -eq 0 ]"
 check "it is validated with the pinned image first" "grep -qE 'compose .*run --rm --no-deps -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile' '$STUB_LOG'"
 check "then caddy is recreated ON PURPOSE, not left to compose's up-to-date verdict" "grep -qE 'compose .*up -d --no-deps --no-build --force-recreate caddy' '$STUB_LOG'"
 check "validation comes before the recreate" "[ \"\$(grep -n 'caddy validate' '$STUB_LOG' | head -1 | cut -d: -f1)\" -lt \"\$(grep -n 'force-recreate caddy' '$STUB_LOG' | head -1 | cut -d: -f1)\" ]"
-check "and the stamp lives OUTSIDE the overlay, where the image build context cannot pick it up" "[ ! -e '$T/overlay/.caddyfile.applied' ] && [ -f '$T/state/caddyfile.applied' ]"
+check "and the stamp lives OUTSIDE the overlay, where the image build context cannot pick it up" "[ -f '$T/state/caddyfile.applied' ] && [ -z \"\$(find '$T/overlay' -newer '$T/overlay/Caddyfile' -type f)\" ]"
 check "and the stamp now holds the applied file's hash" "[ \"\$(cat '$T/state/caddyfile.applied')\" = \"\$(sha256sum '$T/overlay/Caddyfile' | cut -c1-64)\" ]"
 check "and it says so in the journal" "grep -q 'caddy: recreated with the new Caddyfile' '$T/caddyfile-new.log'"
 # Same file again: nothing to apply, so no validate, no forced recreate, only the pin.

@@ -38,9 +38,8 @@
 				request>remote_ip delete
 				request>client_ip delete
 				request>uri regexp \?.*$ ""
-				request>headers>User-Agent delete
-				request>headers>X-Forwarded-For delete
-				request>headers>Referer delete
+				request>headers delete
+				resp_headers>Location regexp \?.*$ ""
 			}
 		}
 	}
@@ -102,9 +101,14 @@
 	# ledger refuses to build: the client IP beside `/api/tx?txid=…` polled every
 	# ten seconds while a drip confirms, and beside `/api/balance?address=…`. So the
 	# client and remote IPs are dropped, the query string is dropped whole (the
-	# path is enough to read traffic shape), and the headers that identify a
-	# browser go with them. The daemon keeps three 10 MB files per container
-	# (deploy/cloud-init.yaml), which is what PRIVACY.md says about retention.
+	# path is enough to read traffic shape), and so are ALL request headers: a
+	# named list (User-Agent, X-Forwarded-For, Referer) let Sec-CH-UA*, X-Real-IP
+	# and Forwarded: through, and nothing in an access line needs a request header.
+	# A 3xx carries the full URL in Location, query included; the HTTP->HTTPS
+	# redirect server answers every plain-HTTP request that way and Next's
+	# trailing-slash 308 does the same, so Location loses its query too (review of
+	# #540, measured on the pinned image). The daemon keeps three 10 MB files per
+	# container (deploy/cloud-init.yaml), which is what PRIVACY.md says about retention.
 	@health path /api/health /api/ready
 	log_skip @health
 	log {
@@ -115,9 +119,8 @@
 				request>remote_ip delete
 				request>client_ip delete
 				request>uri regexp \?.*$ ""
-				request>headers>User-Agent delete
-				request>headers>X-Forwarded-For delete
-				request>headers>Referer delete
+				request>headers delete
+				resp_headers>Location regexp \?.*$ ""
 			}
 		}
 	}

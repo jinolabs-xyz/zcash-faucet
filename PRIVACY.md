@@ -40,10 +40,13 @@ while a drip confirms, and a balance lookup names an address. Together those are
 IP-to-transaction link the ledger refuses to build. So the proxy's log is filtered
 before it is written, for both the access log and the error log:
 
-- **Kept:** timestamp, method, path (`/api/tx`, never `/api/tx?txid=…`), status code,
-  response size, duration, and the client's port.
-- **Dropped:** the client IP and the remote IP, the whole query string, `User-Agent`,
-  `X-Forwarded-For` and `Referer`.
+- **Kept:** timestamp, method, host, protocol and TLS version, path (`/api/tx`, never
+  `/api/tx?txid=…`), status code, response size, duration, the client's port, and the
+  response headers the proxy sent (with the query removed from `Location`, which a
+  redirect otherwise fills with the full URL).
+- **Dropped:** the client IP and the remote IP, the whole query string, and every
+  request header: not a named list, because `Sec-CH-UA`, `X-Real-IP`, `Forwarded:`
+  and whatever a browser sends next would walk past one.
 - **Retention:** the container log driver keeps at most three 10 MB files per
   container ([`cloud-init.yaml`](deploy/cloud-init.yaml)); older lines are gone.
 
