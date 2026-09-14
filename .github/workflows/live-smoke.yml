@@ -33,9 +33,19 @@ name: live-smoke
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    # Off the quarter-hours on purpose. GitHub drops :00/:15/:30/:45 far more often than
+    # other minutes, and this schedule was measured firing every four to five hours on
+    # "*/15" (risk register II, R-21). Still best-effort; the page rule below no longer
+    # depends on the next run arriving at all.
+    - cron: "4,19,34,49 * * * *"
   workflow_dispatch:
 
+# No concurrency group on purpose. With a punctual cron, a run sleeping through its
+# re-probe can overlap the next scheduled run; that run reads the run BEFORE the sleeper
+# as its previous (an in-progress run has no conclusion and is filtered out), so it
+# re-probes too and both page. A queued group would not change that: the queued run
+# would start after the first has paged, read it as a 25-minute-old failure, and
+# re-probe and page again. Over-paging an outage that is real is the cheaper error.
 permissions:
   contents: read
   actions: read   # the page step reads the previous run's conclusion for the 30-minute rule
@@ -49,7 +59,9 @@ jobs:
     # as a failure when the next run asks what the previous one did (#503). So a probe
     # that hung would have been cut off silently, every run, and never paged. A step
     # that hits its budget FAILS, which is the shape the paging below understands.
-    timeout-minutes: 15
+    # 45, not 15: the page step re-probes after a 25-minute wait (below), and a job cut
+    # off mid-wait concludes CANCELLED, which pages nothing.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -101,38 +113,58 @@ jobs:
                echo "Point it at the https origin. The faucet checks would still pass through the redirect, which is exactly why this refuses." >&2
                exit 1 ;;
           esac
+          # Past every configuration check above. The page step re-probes only when this
+          # was written: a probe that failed on its own checks (no URL, an http URL, a
+          # missing checkout) has nothing to probe again, and re-running node bare would
+          # skip the checks and turn an http URL into "a blip, not paging".
+          echo "guards=ok" >> "$GITHUB_OUTPUT"
           node scripts/live-probe.mjs
       # PAGE A HUMAN, AND ONLY ON A REAL OUTAGE. The on-box watchdog pages after 30
       # minutes of not-ready, but it cannot page when the box itself is dead, so this is
       # the off-box backstop. The rule is 30 minutes of WALL CLOCK covered by consecutive
-      # failures, read from the previous scheduled run's timestamp: counting runs assumed
-      # a 15-minute cron this repository does not get (measured: about five hours between
-      # scheduled runs), which made "two failures" mean ten hours, not thirty minutes.
-      # A single red run already emails and is often a blip the probe's own retry did not
-      # quite cover. If the previous run cannot be read, page anyway: under-alerting is
-      # the failure this exists to fix.
+      # failures. A single red run already emails and is often a blip the probe's own
+      # retry did not quite cover. If the previous run cannot be read, page anyway:
+      # under-alerting is the failure this exists to fix.
+      #
+      # THE FIRST FAILURE RE-PROBES FROM INSIDE THE JOB (risk register II, R-21). The rule
+      # used to leave the second look to the next scheduled run, and GitHub delivers this
+      # cron every four to five hours: measured over 100 scheduled runs, the page for a
+      # dead box came a median 212 minutes after the first red, p90 336, worst 704. A
+      # box that dies at 02:00 was paged at breakfast. Now a run whose previous run was
+      # green waits 25 minutes HERE and probes again; if the faucet is still down it
+      # pages from this run, so the 30-minute rule is clock, not cron. The wait is a
+      # constant in this file, not a variable, so nobody can widen it from Settings.
       #
       # Setup: repository secret FAUCET_ALERT_URL (a Slack or Discord webhook) and,
       # for Discord, the repository variable FAUCET_ALERT_FORMAT=discord. Without the
       # secret this step says so and exits 0, so email stays the only channel.
-      - name: page on the second consecutive failure (30 minutes down)
+      - name: page on 30 minutes of failure (re-probe first, then page)
         # `cancelled()` too: with the step budget above a hung probe fails rather than
         # cancels, so this branch is for the job budget or a person cancelling the run.
         # Both still evaluate the 30-minute rule; a person who wants silence has the
         # FAUCET_LIVE_SMOKE_DISABLED switch, and the message says the probe was cut off
         # rather than claiming a failure it did not observe.
         if: failure() || cancelled()
+        # 25 minutes of wait, a probe bounded like the first (~3.5 min at the defaults),
+        # and slack; below the job's 45 so a hung re-probe still fails this step rather
+        # than cancelling the job.
+        timeout-minutes: 33
         env:
           PROBE_OUTCOME: ${{ steps.probe.outcome }}
+          PROBE_GUARDS: ${{ steps.probe.outputs.guards }}
           ALERT_URL: ${{ secrets.FAUCET_ALERT_URL }}
           ALERT_FORMAT: ${{ vars.FAUCET_ALERT_FORMAT }}
           GH_TOKEN: ${{ github.token }}
           SMOKE_URL: ${{ vars.FAUCET_LIVE_URL }}
+          # The re-probe is the same probe: it needs the same hatch, or a planned
+          # not-ready window that the first probe honoured would page from the second.
+          SMOKE_ALLOW_UNREADY: ${{ vars.FAUCET_LIVE_ALLOW_UNREADY }}
         run: |
           if [ -z "$ALERT_URL" ]; then
             echo "FAUCET_ALERT_URL secret is not set, cannot page (email only)"
             exit 0
           fi
+          REPROBE_WAIT_MIN=25
           # A run that SUCCEEDED or FAILED, nothing else. A sibling scheduled run queued a
           # minute ago has a null conclusion and a fresh timestamp, and taking it as "the
           # previous run" made the gap look like one minute and suppressed the page. So does
@@ -156,24 +188,47 @@ jobs:
             # exists to notice.
             [ "$gap_min" -gt 45 ] && echo "NOTE: the schedule is running every ${gap_min} minutes, not the 15 the cron asks for"
           else
-            echo "previous scheduled run: $prev (no readable timestamp: ${prev_at:-none}; treating as a page)"
+            echo "previous scheduled run: $prev (no readable timestamp: ${prev_at:-none})"
           fi
-          if [ "$prev" = "success" ]; then
-            echo "first failure: not paging yet, the next scheduled run decides once 30 minutes are covered"
-            exit 0
+          # A green probe with this step still running means the run was cancelled in
+          # the moment between the two. Nothing to page about, and the `if:` above is
+          # the only other thing keeping a recovery run from paging under `always()`.
+          if [ "$PROBE_OUTCOME" = "success" ]; then echo "the probe passed, nothing to page"; exit 0; fi
+          if [ "$prev" = "success" ] || { [ -n "$prev_epoch" ] && [ "$gap_min" -lt 30 ]; }; then
+            # The first red (or a second one too soon after the first): the 30 minutes
+            # are covered from HERE, not by whenever GitHub next runs the cron.
+            if [ "$PROBE_GUARDS" != "ok" ]; then
+              # The probe step never got past its own checks (no URL, an http URL, a
+              # runner that could not check out), so there is nothing to probe again and
+              # the failed step has already emailed with the reason.
+              echo "the probe step did not reach the probe (its configuration checks failed, or the runner did): nothing to re-probe, not paging yet"
+              exit 0
+            fi
+            if [ "$prev" = "success" ]; then
+              echo "first failure: re-probing in ${REPROBE_WAIT_MIN} minutes rather than waiting for the next scheduled run"
+            else
+              echo "two failures only ${gap_min} minutes apart: re-probing in ${REPROBE_WAIT_MIN} minutes to cover the 30-minute rule"
+            fi
+            sleep $(( REPROBE_WAIT_MIN * 60 ))
+            # The same probe under the same checks: the guard above proved they passed
+            # in this run, so the script can run bare here with the step's own env.
+            if node scripts/live-probe.mjs; then
+              echo "the re-probe passed after ${REPROBE_WAIT_MIN} minutes: a blip, not paging"
+              exit 0
+            fi
+            # The span the page reports: this wait, plus the earlier failure's age when
+            # there was one.
+            if [ "$prev" = "success" ]; then gap_min=$REPROBE_WAIT_MIN; else gap_min=$(( gap_min + REPROBE_WAIT_MIN )); fi
+            case "$PROBE_OUTCOME" in
+              failure) what="has failed two probes ${REPROBE_WAIT_MIN} minutes apart" ;;
+              *)       what="was not probed to a verdict (probe step outcome: ${PROBE_OUTCOME:-unknown}), then failed a re-probe ${REPROBE_WAIT_MIN} minutes later" ;;
+            esac
+          else
+            case "$PROBE_OUTCOME" in
+              failure) what="has failed consecutive probes" ;;
+              *)       what="was not probed to a verdict (probe step outcome: ${PROBE_OUTCOME:-unknown}) after a failure" ;;
+            esac
           fi
-          if [ -n "$prev_epoch" ] && [ "$gap_min" -lt 30 ]; then
-            echo "two failures, but only ${gap_min} minutes apart: under the 30-minute rule, not paging yet"
-            exit 0
-          fi
-          case "$PROBE_OUTCOME" in
-            # A green probe with this step still running means the run was cancelled in
-            # the moment between the two. Nothing to page about, and the `if:` above is
-            # the only other thing keeping a recovery run from paging under `always()`.
-            success) echo "the probe passed, nothing to page"; exit 0 ;;
-            failure) what="has failed consecutive probes" ;;
-            *)       what="was not probed to a verdict (probe step outcome: ${PROBE_OUTCOME:-unknown}) after a failure" ;;
-          esac
           msg="[zcash-faucet live-smoke] the faucet $what spanning ${gap_min}+ minutes: $SMOKE_URL - $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           case "$ALERT_FORMAT" in
             discord) body="{\"content\":\"$msg\"}" ;;
