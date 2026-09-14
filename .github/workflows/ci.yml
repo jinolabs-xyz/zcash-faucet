@@ -514,3 +514,17 @@ jobs:
           severity: CRITICAL
           ignore-unfixed: true
           exit-code: "1"
+      # AND IT RUNS AS NOBODY MUCH (risk register II, R-10): through its own entrypoint,
+      # under the compose file's flags, the process is uid 1000 with no effective
+      # capabilities on a read-only root, and it can still open the ledger volume even
+      # when the volume arrived root-owned, which is what every existing box has.
+      - name: the image drops root, keeps no capability, and can still write its ledger
+        run: |
+          set -uo pipefail
+          docker volume create r10 >/dev/null
+          docker run --rm -v r10:/app/data --entrypoint sh faucet-ci-check:${{ github.sha }} -c 'touch /app/data/faucet.db && chown 0:0 /app/data/faucet.db'
+          out="$(docker run --rm --read-only --tmpfs /tmp --tmpfs /app/.next/cache --cap-drop ALL --cap-add CHOWN --cap-add FOWNER --cap-add SETUID --cap-add SETGID \
+                 -v r10:/app/data faucet-ci-check:${{ github.sha }} sh -c 'echo "uid=$(id -u) caps=$(grep ^CapEff /proc/self/status | cut -f2) owner=$(stat -c %u /app/data/faucet.db)"; touch /app/data/w && echo write-ok; touch /app/probe 2>/dev/null && echo ROOTFS-WRITABLE || echo rootfs-ro')"
+          docker volume rm r10 >/dev/null
+          printf '%s\n' "$out"
+          [ "$out" = "$(printf 'uid=1000 caps=0000000000000000 owner=1000\nwrite-ok\nrootfs-ro')" ] || { echo "the runtime is not the one the compose file promises"; exit 1; }

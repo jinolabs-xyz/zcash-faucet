@@ -84,3 +84,16 @@ deploy/**/.*
 # Negation last: .dockerignore takes the LAST matching rule, so this has to follow the
 # patterns it is exempting itself from.
 !**/faucet.env.example
+# NOT IN THE RUNTIME IMAGE (risk register II, R-10): the box's ops scripts, the local
+# doubles and harnesses, the tests, the docs, the miner and the legacy worker. The
+# build needs none of them, an attacker who lands in the container would like all of
+# them, and verify-image-manifest.sh reads this file so its expected set shrinks with it.
+deploy
+scripts
+docs
+design
+.github
+.team
+**/*.test.ts
+**/*.test.tsx
+**/*.test.mjs

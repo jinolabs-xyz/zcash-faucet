@@ -113,6 +113,27 @@ check "and the scan is a gate: exit-code 1, on CRITICAL, fixable only" \
   "awk '/uses: aquasecurity\\/trivy-action@/{f=1} f&&/exit-code: \"1\"/{e=1} f&&/severity: CRITICAL/{s=1} f&&/ignore-unfixed: true/{u=1} END{exit !(e&&s&&u)}' '$CIWF'"
 check "and it scans the image this job built, not a registry tag" \
   "grep -qE '^ *image-ref: faucet-ci-check:' '$CIWF'"
+# THE RUNTIME IS NOT ROOT IN A WRITABLE CONTAINER (R-10). The compose file, the
+# Dockerfile and the CI image job each carry half the promise; these keep them saying
+# the same thing, because a compose line quietly dropped would run the app as root
+# again with nothing red anywhere.
+CIWF="$REPO/.github/workflows/ci.yml"
+COMPOSE_F="$REPO/deploy/z3/docker-compose.faucet.yml"
+faucet_svc() { awk '/^  faucet:/{f=1} /^  caddy:/{f=0} f' "$COMPOSE_F"; }
+check "the compose faucet service is read-only with every capability dropped" \
+  "faucet_svc | grep -q '^    read_only: true' && faucet_svc | grep -q 'cap_drop: \\[ALL\\]'"
+check "and adds back only the four the root-to-node hand-off needs" \
+  "[ \"\$(faucet_svc | grep -oE 'cap_add: \\[[A-Z, ]+\\]')\" = 'cap_add: [CHOWN, FOWNER, SETUID, SETGID]' ]"
+check "and mounts a tmpfs where Next and node write, so read-only is not a boot failure" \
+  "faucet_svc | grep -q '^      - /app/.next/cache' && faucet_svc | grep -q '^      - /tmp'"
+check "the Dockerfile's entrypoint is the script that drops root, and node is still the command" \
+  "grep -q '^ENTRYPOINT \\[\"/app/docker-entrypoint.sh\"\\]' '$REPO/Dockerfile' && grep -q '^CMD \\[\"node\"' '$REPO/Dockerfile' && grep -q 'exec setpriv --reuid=node --regid=node' '$REPO/docker-entrypoint.sh'"
+check "and the build stage prunes devDependencies before the run stage copies it" \
+  "grep -q 'npm prune --omit=dev' '$REPO/Dockerfile'"
+check "the build context leaves out the ops scripts, the harnesses, the tests and the docs" \
+  "( for p in deploy scripts docs design .github '**/*.test.ts' '**/*.test.mjs'; do grep -qxF \"\$p\" '$REPO/.dockerignore' || exit 1; done )"
+check "and the CI image job proves the runtime shape rather than assuming it" \
+  "grep -q 'uid=1000 caps=0000000000000000 owner=1000' '$CIWF'"
 
 echo "== repo: the watchdog's node-lag limit is the miner's, for the miner's reason"
 # Both read zebra's clock-based estimatedheight. The miner's guard (sync.rs) explains why
