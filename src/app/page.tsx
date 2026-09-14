@@ -350,11 +350,20 @@ export default function Home() {
   // it is the wallet, and never "first sync" when it is a fault.
   const faultReason = (s: Status): string | null => {
     if (!s.backend?.reachable) return "a public indexer we use for balance lookups is unreachable right now";
+    // THE WALLET NOT ANSWERING is the most frequent real outage (the zallet crash-loops),
+    // and it arrives as node: null AND balanceTaz: null, so every node-guarded line
+    // below is silent about it. Readiness calls this "node status unknown"; the page
+    // said "first sync takes a while, one time" (review of #522).
+    if (s.sender === "zallet" && !s.node) return "our wallet is not answering";
     if (s.node?.frozen) {
-      const m = s.node.tipStalledMs != null ? Math.round(s.node.tipStalledMs / 60_000) : null;
-      return m != null && m > 0
-        ? `our node stopped following the network about ${m} minute${m === 1 ? "" : "s"} ago`
-        : "our node is behind the network and not catching up";
+      // The distance, not a duration. tipStalledMs is how long THIS PROCESS has seen
+      // our tip unchanged; it resets on every deploy and every tip move, so "stopped
+      // about 3 minutes ago" after a restart of a node frozen for fourteen hours would
+      // be a made-up number. The height gap is measured, and the strip shows the same.
+      const gap = s.node.externalHeight != null && s.node.height != null ? s.node.externalHeight - s.node.height : null;
+      return gap != null && gap > 0
+        ? `our node is ${num(gap)} blocks behind the network`
+        : "our node has stopped following the network";
     }
     // Our chain view is too stale to build a drip that could confirm, so hold rather
     // than send one that expires before it is mined (#187). canBuildTx is computed
@@ -363,7 +372,9 @@ export default function Home() {
     //
     // `=== false` on purpose. A missing field (older server, or a sender the gate
     // does not apply to) must not block a claim, so only an explicit no holds.
-    if (s.node && s.node.canBuildTx === false) return s.node.shield?.reason ? `we cannot safely build a transaction: ${s.node.shield.reason}` : "we cannot verify the network tip, so we are not building transactions";
+    // shield.reason is operator prose (a log line with a semicolon in it) and stays in
+    // the panel; the visitor gets the one sentence that is true of every case.
+    if (s.node && s.node.canBuildTx === false) return "we cannot verify that our node is current, so we are not building transactions";
     if (s.node && s.node.ready !== false && s.balanceTaz == null) return "we cannot read our wallet's balance";
     return null;
   };
@@ -468,14 +479,14 @@ export default function Home() {
     else localStorage.removeItem("zfaucet_queued");
   }, [queuedAddr, queuedAt]);
 
-  // Give up on a hold the chain never got fresh enough to serve, and say so.
+  // Give up on a hold behind a fault, and say so.
   //
-  // Scoped to the freshness hold on purpose. A hold through a first sync stays
-  // indefinite, which is existing and deliberate ("come back later, your place
-  // survives a reload"): a sync finishes on a schedule we can see. A node that
-  // cannot build a valid transaction for a quarter of an hour is a different
-  // situation, and leaving someone waiting on it with no end is worse than telling
-  // them plainly. Nothing was ever claimed, so there is no cooldown to release.
+  // A hold through a plain sync (node not ready, not frozen) stays indefinite, which
+  // is existing and deliberate ("come back later, your place survives a reload"): a
+  // sync finishes on a schedule we can see. A fault has no schedule. This was scoped
+  // to the freshness gate alone; a hold behind a frozen node or a silent wallet ran
+  // with no end, under a card that said "ready shortly". Nothing was ever claimed, so
+  // there is no cooldown to release.
   useEffect(() => {
     if (!queuedAddr || queuedAt == null) return;
     // Any fault, not only the freshness gate: a hold through a frozen node or an
@@ -918,10 +929,10 @@ export default function Home() {
   const statusText =
     phase === "checking"
       ? "CHECKING"
+      : phase === "fault" || (phase === "queued" && queuedBehindFault)
+        ? "NOT READY"
       : phase === "syncing" || phase === "queued"
       ? "PREPARING"
-      : phase === "fault"
-        ? "NOT READY"
       : phase === "empty"
         ? (refilling ? "TOPPING UP" : "EMPTY")
         : phase === "degraded"
@@ -934,7 +945,7 @@ export default function Home() {
       ? refilling
         ? { fill: "var(--color-accent)", ring: "var(--color-accent)" } // topping up, calm
         : { fill: "var(--color-empty)", ring: "var(--color-empty)" } // genuinely empty
-      : phase === "degraded" || phase === "fault"
+      : phase === "degraded" || phase === "fault" || (phase === "queued" && queuedBehindFault)
         ? { fill: "var(--color-empty)", ring: "var(--color-empty)" } // a fault, and red means what red means
       : live
         ? { fill: "var(--color-live)", ring: "var(--color-live)" }
@@ -1260,6 +1271,7 @@ export default function Home() {
             </div>
             <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>You&apos;re in line. It sends on its own.</h2>
             <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
+              {queuedBehindFault && status ? `The faucet is having a problem: ${faultReason(status)}. ` : ""}
               The moment the {queuedBehindFault ? "faucet is back" : "node is ready"}, {dripText} goes to <span style={{ fontFamily: "var(--mono)", fontSize: 11.5 }}>{short(queuedAddr, 12, 6)}</span>. Keep this tab open or come back later, your place survives a reload.
             </p>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>

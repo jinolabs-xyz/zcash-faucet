@@ -52,6 +52,7 @@ const DIMENSIONS = {
     "sends-failing": "balance reads fine, every send fails; three claims judge it and the page goes DEGRADED",
     "send-hangs": "every send hangs past the deadline; a claim is a 504, submitted with the outcome unknown",
     "cap-one-drip": "the daily cap is one drip, so a claim is refused with the time the cap has room again (the local ledger is shared across runs, so usually the first claim)",
+    "wallet-down": "no wallet double at all: node and balance both read null (the zallet crash-loop shape, the most frequent real outage)",
   },
   node: {
     "node-synced": "our node at the network tip, the indexer answering",
@@ -180,6 +181,8 @@ const wallet = {
   // one that gives up first, or the claim is a 502 and a different card.
   "send-hangs": { BALANCE_TAZ: "15", SEND_HANGS: "true", SEND_TASK_DEADLINE_MS: "2500", ZALLET_OP_TIMEOUT_MS: "600000" },
   "cap-one-drip": { BALANCE_TAZ: "15", FAUCET_DAILY_CAP_TAZ: "0.1" },
+  // null: no double is started, and the app is pointed at a port nothing listens on.
+  "wallet-down": null,
 }[chosen.wallet];
 
 const children = [];
@@ -202,7 +205,7 @@ const node = {
   "indexer-down": { hosh: {}, faucet: { LIGHTWALLETD_ENDPOINT: "http://127.0.0.1:9/" } },
 }[chosen.node];
 
-run("zallet", "node", ["scripts/fake-zallet.mjs"], { PORT: ZALLET_PORT, ...wallet });
+if (wallet) run("zallet", "node", ["scripts/fake-zallet.mjs"], { PORT: ZALLET_PORT, ...wallet });
 // Must be answering BEFORE the app starts. If the app's first tip refresh misses it,
 // the oracle caches the real network tip, decides our node is half a million blocks
 // behind and refuses every claim for the rest of the run.
@@ -239,7 +242,7 @@ run("faucet", "npm", ["start"], {
   FAUCET_MINER_HEARTBEAT_PATH: HEARTBEAT,
   FAUCET_BOX_REPORT_PATH: BOX,
   FAUCET_RESERVE_CHECK_SECONDS: "5",
-  ...wallet,
+  ...(wallet ?? {}),
   ...node.faucet,
 });
 
