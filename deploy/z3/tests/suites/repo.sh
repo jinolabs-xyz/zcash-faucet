@@ -791,7 +791,7 @@ check "the workflow's two steps could be extracted, so what follows is the shipp
 # And they are the RIGHT two: a boundary bug that returned the same block twice would
 # otherwise be reported as a pile of failures about the step it never found.
 check "the probe step is the probe step, and the page step is the page step" \
-  "grep -q 'live-probe.mjs' '$T/probe-step.sh' && ! grep -q 'live-probe.mjs' '$T/page-step.sh' && grep -q 'gh run list' '$T/page-step.sh'"
+  "grep -q 'live-probe.mjs' '$T/probe-step.sh' && ! grep -q 'gh run list' '$T/probe-step.sh' && grep -q 'gh run list' '$T/page-step.sh'"
 
 # THE ENV BLOCK IS PART OF THE STEP. Extracting only `run:` left the mapping invisible:
 # renaming the secret to FAUCET_ALERT_URL_TYPO turned every outage into "cannot page
@@ -816,6 +816,19 @@ step_budget="$(grep -oE '^ *timeout-minutes: *[0-9]+' "$T/probe-step.yml" | grep
 check "the probe step has a budget of its own" "[ -n '$step_budget' ]"
 check "and it is below the job's, so a hung probe FAILS before the job is cancelled" \
   "[ -n '$step_budget' ] && [ -n '$job_budget' ] && [ '$step_budget' -lt '$job_budget' ]"
+# The page step's own budget has to hold the wait AND a probe, and probe + page have to
+# fit under the job's, or a re-probe that hangs cancels the job and pages nothing.
+page_budget="$(grep -oE '^ *timeout-minutes: *[0-9]+' "$T/page-step.yml" | grep -oE '[0-9]+$' || true)"
+check "the page step has a budget of its own that holds the 25-minute wait and a probe" \
+  "[ -n '$page_budget' ] && [ '$page_budget' -ge 30 ]"
+check "and probe + page budgets fit under the job's" \
+  "[ -n '$page_budget' ] && [ -n '$step_budget' ] && [ -n '$job_budget' ] && [ \$(( page_budget + step_budget )) -lt '$job_budget' ]"
+check "the wait is a constant in the workflow, not a Settings variable" \
+  "grep -q 'REPROBE_WAIT_MIN=25' '$T/page-step.sh' && ! grep -qi 'vars\..*REPROBE' '$LS'"
+check "the re-probe is handed the same un-ready hatch as the first probe" \
+  "grep -q 'SMOKE_ALLOW_UNREADY: ..{ vars.FAUCET_LIVE_ALLOW_UNREADY }' '$T/page-step.yml'"
+check "the cron keeps off the quarter-hours GitHub drops most" \
+  "grep -qE 'cron: \"4,19,34,49 \\* \\* \\* \\*\"' '$LS'"
 check "the page step is told how the probe ended, from the probe step by id" \
   "grep -q 'id: probe' '$T/probe-step.yml' && grep -q 'PROBE_OUTCOME: ..{ steps.probe.outcome }' '$T/page-step.yml'"
 check "the cap knob is NOT settable from the workflow, so a variable cannot widen it" \
@@ -916,7 +929,20 @@ cat > "$T/bin/curl" <<'CURL'
 echo "curl $*" >> "${STUB_CURL_LOG:?}"
 exit 0
 CURL
-chmod +x "$T/bin/gh" "$T/bin/curl"
+# THE RE-PROBE (R-21): the page step sleeps and runs the probe again. Both are stubbed
+# so the case takes no 25 minutes, and both are logged so a case can say the wait was
+# asked for in full and the probe was the shipped one.
+cat > "$T/bin/sleep" <<'SLEEP'
+#!/usr/bin/env bash
+echo "sleep $*" >> "${STUB_CURL_LOG:?}"
+exit 0
+SLEEP
+cat > "$T/bin/node" <<'NODE'
+#!/usr/bin/env bash
+echo "node $*" >> "${STUB_CURL_LOG:?}"
+exit "${STUB_REPROBE_RC:-1}"
+NODE
+chmod +x "$T/bin/gh" "$T/bin/curl" "$T/bin/sleep" "$T/bin/node"
 export STUB_CURL_LOG="$T/curl.log" STUB_GH_LOG="$T/gh.log"
 # $1 = the run LIST the API would return, newest first; the workflow's own --jq picks
 # from it, so the selection itself is under test.
@@ -934,12 +960,24 @@ recent="$(date -u -d '-10 minutes' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v
 # The negatives need a control: "no curl" is also what a step that never ran looks like,
 # and this suite has been bitten by exactly that (a missing python3 made three checks
 # pass while nothing executed). Each asserts the step ran AND said why it held back.
-page_run "[{\"conclusion\":\"success\",\"databaseId\":1,\"createdAt\":\"$old\"}]"
-check "a previous SUCCESS does not page: one red run is a blip" \
-  "! grep -q 'curl ' '$STUB_CURL_LOG' && grep -q 'first failure: not paging yet' '$T/page.log'"
-page_run "[{\"conclusion\":\"failure\",\"databaseId\":1,\"createdAt\":\"$recent\"}]"
-check "two failures only 10 minutes apart do not page: the rule is 30 MINUTES, not two runs" \
-  "! grep -q 'curl ' '$STUB_CURL_LOG' && grep -q 'only 10 minutes apart' '$T/page.log'"
+# THE FIRST FAILURE RE-PROBES FROM INSIDE THE JOB (R-21). Measured over 100 scheduled
+# runs, leaving the second look to the next cron paged a dead box a median 212 minutes
+# after the first red. The 30 minutes are covered by a wait in this step, not by GitHub.
+STUB_REPROBE_RC=0 page_run "[{\"conclusion\":\"success\",\"databaseId\":1,\"createdAt\":\"$old\"}]"
+check "a previous SUCCESS waits 25 minutes IN THE JOB and probes again" \
+  "grep -q 'first failure: re-probing in 25 minutes' '$T/page.log' && grep -qx 'sleep 1500' '$STUB_CURL_LOG' && grep -q 'node scripts/live-probe.mjs' '$STUB_CURL_LOG'"
+check "and a re-probe that passes is a blip: no page" \
+  "! grep -q 'curl ' '$STUB_CURL_LOG' && grep -q 'a blip, not paging' '$T/page.log'"
+check "and the wait comes after the previous run was read, not before" \
+  "[ \"\$(grep -n 'gh run list' '$STUB_GH_LOG' | head -1 | cut -d: -f1)\" -ge 1 ] && grep -q 'previous scheduled run: success' '$T/page.log'"
+STUB_REPROBE_RC=1 page_run "[{\"conclusion\":\"success\",\"databaseId\":1,\"createdAt\":\"$old\"}]"
+check "and a re-probe that FAILS pages from this run, 25 minutes after the first red" \
+  "grep -q 'curl ' '$STUB_CURL_LOG' && grep -q 'has failed two probes 25 minutes apart spanning 25+ minutes' '$STUB_CURL_LOG'"
+check "and the re-probe ran AFTER the full wait, not alongside it" \
+  "[ \"\$(grep -n 'sleep 1500' '$STUB_CURL_LOG' | head -1 | cut -d: -f1)\" -lt \"\$(grep -n 'node scripts/live-probe.mjs' '$STUB_CURL_LOG' | head -1 | cut -d: -f1)\" ]"
+STUB_REPROBE_RC=1 page_run "[{\"conclusion\":\"failure\",\"databaseId\":1,\"createdAt\":\"$recent\"}]"
+check "two failures only 10 minutes apart re-probe to cover the 30-minute rule, and page on a third red" \
+  "grep -q 'only 10 minutes apart: re-probing' '$T/page.log' && grep -q 'curl ' '$STUB_CURL_LOG' && grep -qE 'spanning 3[5-6]\+ minutes' '$STUB_CURL_LOG'"
 page_run "[{\"conclusion\":\"cancelled\",\"databaseId\":1,\"createdAt\":\"$recent\"},{\"conclusion\":\"failure\",\"databaseId\":2,\"createdAt\":\"$old\"}]"
 check "a CANCELLED run is not the previous run: the older real failure is, and it pages" \
   "grep -q 'curl ' '$STUB_CURL_LOG'"
@@ -961,9 +999,9 @@ check "and the message says the probe reached no verdict, not that it failed" \
 PAGE_PROBE_OUTCOME=success page_run "[{\"conclusion\":\"failure\",\"databaseId\":1,\"createdAt\":\"$old\"}]"
 check "a run cut off AFTER a green probe does not page: the probe passed" \
   "! grep -q 'curl ' '$STUB_CURL_LOG' && grep -q 'the probe passed, nothing to page' '$T/page.log'"
-PAGE_PROBE_OUTCOME=cancelled page_run "[{\"conclusion\":\"success\",\"databaseId\":1,\"createdAt\":\"$old\"}]"
-check "a run cut off after a SUCCESS does not page: a person cancelling one run is not an outage" \
-  "! grep -q 'curl ' '$STUB_CURL_LOG' && grep -q 'first failure: not paging yet' '$T/page.log'"
+STUB_REPROBE_RC=0 PAGE_PROBE_OUTCOME=cancelled page_run "[{\"conclusion\":\"success\",\"databaseId\":1,\"createdAt\":\"$old\"}]"
+check "a run cut off after a SUCCESS re-probes like a first failure, and does not page when the faucet answers" \
+  "! grep -q 'curl ' '$STUB_CURL_LOG' && grep -q 'first failure: re-probing' '$T/page.log' && grep -q 'a blip, not paging' '$T/page.log'"
 check "and it says the schedule is not keeping its cron" "grep -q 'not the 15 the cron asks for' '$T/page.log'"
 page_run "[]"
 check "an unreadable previous run PAGES rather than exiting quietly" "grep -q 'curl ' '$STUB_CURL_LOG'"
