@@ -515,7 +515,12 @@ try {
   const donateHtml = await donatePage.text();
   ok("A GET /donate is 200", donatePage.status === 200, `status ${donatePage.status}`);
   ok("A /donate is the donate page, not a 404 shell", /Keep the tank full/.test(donateHtml));
-  ok("A /donate says plainly that mining income is zero", /rounds to zero|orphaned/i.test(donateHtml));
+  // The income sentence follows the miner and the reserve loop (R-39). This server
+  // has no heartbeat file, so it is the not-mining shape; the old fixed "rounds to
+  // zero" must be gone.
+  ok("A /donate says where the TAZ comes from, from the miner state, and the old fixed sentence is gone",
+    /The faucet is not mining right now, so what it hands out is donated or topped up by hand\./.test(donateHtml) && !/rounds to zero/i.test(donateHtml),
+    donateHtml.match(/The faucet (mines|is not mining)[^<]{0,120}/)?.[0] ?? "no income sentence");
 
   // The assertion that actually protects donations: the address a human SEES
   // must be the env value character for character.
