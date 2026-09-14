@@ -16,10 +16,18 @@ vim_env() {
   T="$(mktemp -d)"
   R="$T/repo"
   mkdir -p "$R/src" "$R/deploy/z3"
-  printf '.git\nnode_modules\n*.md\n**/*.env\n' > "$R/.dockerignore"
+  # The REAL repo's shapes, because the fixture that had none of them passed a verifier
+  # that failed every real build: a root-only *.md beside a nested README (docker's *
+  # does not cross a /, so the nested one IS in the image and IS expected), the secret
+  # beside its re-admitted .example (a prefix of the secret's name), and a deployment/
+  # sibling of deploy/ (a prefix of the directory's name).
+  printf '.git\nnode_modules\n*.md\n**/*.env\n**/faucet.env.*\n!**/faucet.env.example\n' > "$R/.dockerignore"
   printf 'export const A = 1;\n' > "$R/src/a.ts"
   printf 'export const B = 2;\n' > "$R/src/b.ts"
   printf 'secret=1\n'            > "$R/deploy/z3/faucet.env"
+  printf 'SALT=change-me\n'      > "$R/deploy/z3/faucet.env.example"
+  printf '# nested doc\n'        > "$R/deploy/z3/README.md"
+  mkdir -p "$R/deployment"; printf 'x\n' > "$R/deployment/notes.txt"
   printf '# doc\n'               > "$R/README.md"
   ( cd "$R" && git init -q . && git add -A \
       && git -c user.email=t@t -c user.name=t commit -q -m fixture )
@@ -28,9 +36,13 @@ vim_env() {
 # Build a fixture "image" filesystem. Faithful by default: it contains what a real COPY . .
 # would put there, including .dockerignore itself, which Docker does copy.
 vim_image() {
-  rm -rf "$T/img"; mkdir -p "$T/img/app/src"
+  rm -rf "$T/img"; mkdir -p "$T/img/app/src" "$T/img/app/deploy/z3" "$T/img/app/deployment"
   cp "$R/src/a.ts" "$R/src/b.ts" "$T/img/app/src/"
   cp "$R/.dockerignore" "$T/img/app/"
+  # What docker really puts there from that .dockerignore: the nested README and the
+  # example (both tracked, both admitted), and the deployment/ sibling's file.
+  cp "$R/deploy/z3/README.md" "$R/deploy/z3/faucet.env.example" "$T/img/app/deploy/z3/"
+  cp "$R/deployment/notes.txt" "$T/img/app/deployment/"
   case "${1:-clean}" in
     stale)   printf 'export const A = 999;\n' > "$T/img/app/src/a.ts" ;;
     missing) rm -f "$T/img/app/src/b.ts" ;;
@@ -48,6 +60,9 @@ vim_image() {
 vim_run() { VERIFY_REPO_DIR="$R" VERIFY_TAR="$T/img.tar" bash "$VIM" > "$T/out" 2>&1; echo $?; }
 
 echo "== verify-image-manifest: an image that matches the commit passes"
+# And it passes WITH a nested README, the example, and a deployment/ sibling in the image:
+# the first FORBIDDEN cut failed every real build on twelve tracked READMEs under deploy/,
+# because its emulation of .dockerignore let a root-only *.md cross a / (review, R-5).
 vim_env; vim_image clean
 check "a matching image exits 0" "[ \"\$(vim_run)\" = '0' ]"
 check "and says so" "grep -q 'MATCHES' '$T/out'"
@@ -89,7 +104,9 @@ echo "== verify-image-manifest: dockerignored files are not expected, and * does
 # FORBIDDEN by name (next block). README.md at the root is still not this check's business.
 vim_env; vim_image secret
 check "an excluded file under deploy/ that reached the image FAILS, and is named" \
-  "[ \"\$(vim_run)\" = '1' ] && grep -q 'FORBIDDEN' '$T/out' && grep -q 'deploy/z3/faucet.env' '$T/out'"
+  "[ \"\$(vim_run)\" = '1' ] && grep -q 'FORBIDDEN' '$T/out' && grep -qE 'FORBIDDEN.*|^.*  deploy/z3/faucet.env$' '$T/out' && grep -q '    deploy/z3/faucet.env$' '$T/out'"
+check "and the example beside it, a tracked file the secret's name is a prefix of, is NOT forbidden" \
+  "! grep -q 'faucet.env.example' '$T/out'"
 check "and the excluded paths were never demanded as MISSING" \
   "! grep -q 'MISSING' '$T/out' && ! grep -q 'README.md' '$T/out'"
 
@@ -161,9 +178,12 @@ printf '# drop me\n' > "$R/NOTES.md"
 # in here: replacing .dockerignore with *.md plus !README.md means the env file is no
 # longer excluded and so IS expected, which is the fixture's own premise and the thing my
 # first attempt at this test got wrong.
-rm -rf "$T/img"; mkdir -p "$T/img/app/src" "$T/img/app/deploy/z3"
+rm -rf "$T/img"; mkdir -p "$T/img/app/src" "$T/img/app/deploy/z3" "$T/img/app/deployment"
 cp "$R/src/a.ts" "$R/src/b.ts" "$T/img/app/src/"
-cp "$R/deploy/z3/faucet.env" "$T/img/app/deploy/z3/"
+# Under *.md the nested README is NOT excluded (root-only pattern), so docker copies it
+# and it is expected; so are the example, now un-ignored, and the deployment/ file.
+cp "$R/deploy/z3/faucet.env" "$R/deploy/z3/faucet.env.example" "$R/deploy/z3/README.md" "$T/img/app/deploy/z3/"
+cp "$R/deployment/notes.txt" "$T/img/app/deployment/"
 cp "$R/.dockerignore" "$R/README.md" "$T/img/app/"
 ( cd "$T/img" && tar -cf "$T/img.tar" app )
 check "a negated file is EXPECTED and matches, so it is verified rather than skipped" \
