@@ -87,10 +87,14 @@ test("TRUSTED_PROXY_COUNT=0 in production is warned about, because it silently d
   const warned = challengeUnder({ ...base }, "serving-stderr");
   assert.match(warned, /TRUSTED_PROXY_COUNT is 0/, "the default must not pass in silence");
   assert.match(warned, /SKIPPED/);
+  assert.match(warned, /proof-of-work escalation is POOLED/, "escalation is not skipped at 0, it is one bucket for everyone, and the warning must say that");
+  assert.doesNotMatch(warned, /escalation[^.]*SKIPPED/, "and must not list it among the skipped limits");
   const quiet = challengeUnder({ ...base, TRUSTED_PROXY_COUNT: "1" }, "serving-stderr");
   assert.doesNotMatch(quiet, /TRUSTED_PROXY_COUNT is 0/, "a configured proxy count is not warned about");
+  assert.equal(challengeUnder({ ...base, TRUSTED_PROXY_COUNT: "1" }, "serving"), "OK", "and the boot itself succeeded, so the silence is not a throw");
   const dev = challengeUnder({ RATE_LIMIT_SALT: "x" }, "serving-stderr");
   assert.doesNotMatch(dev, /TRUSTED_PROXY_COUNT/, "development stacks set it per server and are not nagged");
+  assert.equal(challengeUnder({ RATE_LIMIT_SALT: "x" }, "serving"), "OK");
 });
 
 test("IMPORTING config in production does NOT throw, which is what lets a build work", () => {
