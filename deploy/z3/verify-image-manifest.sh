@@ -19,9 +19,16 @@
 # one of them:
 #   STALE    the path is present with content that is not the commit's
 #   MISSING  the commit has it and the image does not
-#   EXTRA    is deliberately NOT an error here. The image legitimately contains things the
-#            commit does not (node_modules, .next, the runtime). Secret-pattern scanning
-#            is a separate, weaker check; this one is the equality half.
+#   EXTRA    is deliberately NOT an error here in general. The image legitimately contains
+#            things the commit does not (node_modules, .next, the runtime). Secret-pattern
+#            scanning is a separate, weaker check; this one is the equality half.
+#   FORBIDDEN, the one exception (risk register II, R-5): a file under deploy/ that the
+#            commit does not put in the image. deploy/ is where deploy.sh writes the
+#            wallet RPC password and the account id and clones the z3 stack, all
+#            gitignored, and docker's matcher put every one of them into a build while
+#            this check reported MATCHES because "extra is not an error". Nothing under
+#            deploy/ has a legitimate reason to be in the image unless the commit tracks
+#            it and .dockerignore admits it, so there the rule inverts.
 #
 # EXIT CODES, the same 0/1/2 vocabulary as bring-to-spec.sh (redeploy.sh adds a 3 of its
 # own for shipped-but-unverified, and turns this script's 2 into that):
@@ -81,10 +88,52 @@ expected_manifest() {
 # Docker's matching rules, and the one that already cost us a shipped fix: `*` DOES NOT
 # CROSS A `/`. So `*.env` matches `foo.env` at the context root and never
 # `deploy/z3/faucet.env`. #369 added six patterns on the wrong assumption and excluded
-# nothing; #376 caught it. Implemented with bash pattern matching per path SEGMENT so the
-# same mistake cannot be made here.
+# nothing; #376 caught it. THE SAME MISTAKE WAS MADE HERE AGAIN, one layer down: the
+# first emulation used `case "$path" in $pat)`, and in a bash case a `*` crosses `/`
+# just as happily, so `*.md` hid every nested README from the expected set while docker
+# put them in the image. Extras were tolerated then, so nobody noticed; the moment a
+# file under deploy/ that is not expected became FORBIDDEN, twelve tracked READMEs
+# failed every real build (risk register II, R-5 review). So this matches the way
+# docker does: segment by segment, `*` and `?` inside one segment, `**` for any run of
+# segments including none, and a pattern that matches a parent directory matches
+# everything under it.
+seg_match() { # $1 pattern segments (space-joined), $2 path segments; both arrays via globals
+  local pi="$1" xi="$2"
+  while :; do
+    if [ "$pi" -ge "$PN" ]; then [ "$xi" -ge "$XN" ]; return; fi
+    if [ "${P[$pi]}" = "**" ]; then
+      # Zero or more path segments: try every split point.
+      local k="$xi"
+      while :; do
+        if seg_match "$((pi + 1))" "$k"; then return 0; fi
+        [ "$k" -lt "$XN" ] || return 1
+        k=$((k + 1))
+      done
+    fi
+    [ "$xi" -lt "$XN" ] || return 1
+    # An EMPTY pattern segment (`a//b`, which docker cleans to `a/b`) matches nothing
+    # here: unquoted, an empty word in a case pattern matched everything. A trailing
+    # slash is dropped by the split (`**/` reads as the single segment `**` and matches
+    # everything, as it does for docker); what keeps `**/#*.env#` from becoming that is
+    # the comment rule in dockerignored(), not this line.
+    [ -n "${P[$pi]}" ] || return 1
+    # shellcheck disable=SC2254
+    case "${X[$xi]}" in ${P[$pi]}) ;; *) return 1 ;; esac
+    pi=$((pi + 1)); xi=$((xi + 1))
+  done
+}
+docker_pattern_matches() { # $1 pattern, $2 path: docker's rule, a parent match counts
+  local pat="$1" path="$2" k
+  IFS=/ read -r -a P <<< "$pat"; PN=${#P[@]}
+  IFS=/ read -r -a X <<< "$path"; XN=${#X[@]}
+  for ((k = XN; k >= 1; k--)); do
+    XN=$k
+    if seg_match 0 0; then return 0; fi
+  done
+  return 1
+}
 dockerignored() {
-  local path="$1" pat base ig=1 negate matched
+  local path="$1" pat ig=1 negate matched
   [ -f "$REPO_DIR/.dockerignore" ] || return 1
   # LAST MATCH WINS, which is why this cannot return on the first hit. Docker evaluates
   # every pattern in order and a later `!` line un-ignores what an earlier one excluded,
@@ -95,23 +144,17 @@ dockerignored() {
   # rereading my own code - I had looked at this function three times and never asked
   # what it does with a bang.
   while IFS= read -r pat; do
-    pat="${pat%%#*}"; pat="${pat#"${pat%%[![:space:]]*}"}"; pat="${pat%"${pat##*[![:space:]]}"}"
+    # A comment is a line that STARTS with #. A # inside a pattern is a character:
+    # `**/#*.env#` is emacs's autosave spelling, and stripping from the first # made it
+    # `**/`, an empty segment that matched every file in the tree.
+    pat="${pat#"${pat%%[![:space:]]*}"}"; pat="${pat%"${pat##*[![:space:]]}"}"
+    case "$pat" in "#"*) continue ;; esac
     [ -z "$pat" ] && continue
     negate=0
     case "$pat" in "!"*) negate=1; pat="${pat#!}" ;; esac
     [ -z "$pat" ] && continue
     matched=0
-    # shellcheck disable=SC2254
-    case "$pat" in
-      # A leading **/ means "at any depth", the form #376 had to introduce.
-      "**/"*) base="${pat#**/}"
-              # shellcheck disable=SC2254
-              case "${path##*/}" in $base) matched=1 ;; esac ;;
-      # Anything else is anchored at the context root and its * stops at a /.
-      *) case "$path" in $pat) matched=1 ;; esac
-         # A bare directory name excludes everything under it.
-         case "$path" in "$pat"/*) matched=1 ;; esac ;;
-    esac
+    docker_pattern_matches "$pat" "$path" && matched=1
     [ "$matched" = 1 ] && { [ "$negate" = 1 ] && ig=1 || ig=0; }
   done < "$REPO_DIR/.dockerignore"
   return "$ig"
@@ -189,13 +232,33 @@ while read -r want path; do
   fi
 done <<< "$EXPECTED"
 
+# FORBIDDEN: every regular file the image carries under deploy/ that is not one the commit
+# expects there. Membership is against the expected set (tracked AND admitted by
+# .dockerignore), so a tracked-but-ignored file that reached the image is named too: a
+# rule that stopped matching is exactly what this exists to notice.
+# EXACT membership, and no pipe. The first cut did `printf "$EXPECTED" | grep -qF "  $rel"`:
+# under pipefail, grep -q exits on the first match and printf takes SIGPIPE on its next
+# write, so a tracked file was FORBIDDEN at random (137 of 200 tries in the harness); and
+# the open-ended -F match let deploy/z3/faucet.env pass as a prefix of the tracked
+# faucet.env.example. A set, keyed on the whole path.
+declare -A EXPECTED_SET=()
+while read -r _sha epath; do [ -n "$epath" ] && EXPECTED_SET["$epath"]=1; done <<< "$EXPECTED"
+FORBIDDEN=""
+while IFS= read -r member; do
+  [ -n "$member" ] || continue
+  rel="${member#"$APP_DIR"/}"
+  [ -n "${EXPECTED_SET[$rel]+x}" ] && continue
+  FORBIDDEN="$FORBIDDEN $rel"
+done < <(tar -tvf "$TARBALL" 2>/dev/null | awk -v p="$APP_DIR/deploy/" 'substr($0,1,1)=="-" { f=$NF; if (index(f, p)==1) print f }')
+
 log "compared $EXPECTED_N tracked file(s) from $(git -C "$REPO_DIR" rev-parse --short HEAD) against $IMAGE"
 
-if [ -n "$STALE" ] || [ -n "$MISSING" ]; then
+if [ -n "$STALE" ] || [ -n "$MISSING" ] || [ -n "$FORBIDDEN" ]; then
   log "IMAGE DOES NOT MATCH THE COMMIT."
   [ -n "$STALE" ]   && { log "  STALE, present with the wrong content (a cached layer looks exactly like this):"; for p in $STALE; do log "    $p"; done; }
   [ -n "$MISSING" ] && { log "  MISSING, in the commit and not in the image:"; for p in $MISSING; do log "    $p"; done; }
-  log "  $SAME file(s) did match. A rebuild with --no-cache is the usual fix."
+  [ -n "$FORBIDDEN" ] && { log "  FORBIDDEN, under deploy/ and not something the commit puts in the image (deploy.sh writes secrets here; check .dockerignore):"; for p in $FORBIDDEN; do log "    $p"; done; }
+  log "  $SAME file(s) did match. A rebuild with --no-cache is the usual fix for STALE; a .dockerignore rule for FORBIDDEN."
   exit 1
 fi
 
