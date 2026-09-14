@@ -153,9 +153,10 @@ async function whyBlocked(
       return {
         ok: false,
         kind: "subnet",
-        // Deliberately does not say "your network", which would confirm to a farmer
-        // exactly which limit they hit and how it is keyed. It says enough to be
-        // actionable for a real person and no more.
+        // Says "your network", not which network or how it is keyed: enough for a real
+        // person to act on ("a different connection"), and no more. An earlier comment
+        // here claimed the sentence avoided the word; it never did, and the page's card
+        // and the integration suite pin this wording.
         reason: "Too many claims from your network today. Try again tomorrow, or from a different connection.",
         retryAfterSeconds: 3600,
       };

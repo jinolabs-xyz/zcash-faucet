@@ -493,7 +493,12 @@ async function checkRefusalCards(browser, base, address) {
         ok("and Edit the address returns to the form with the address kept", (await page.locator("input.input").first().inputValue()) === address && !(await page.locator("[role=alert]").filter({ hasText: /\S/ }).count()));
       } },
     { name: "a failed send", status: 502, body: { error: "The send failed on our side. Nothing left the wallet. Try again in a moment." },
-      expect: async (c) => ok("a 502 keeps the red card: send failed, nothing left the wallet, Try again", /send failed, nothing left the wallet/.test(c.text) && c.buttons.includes("try again"), c.text.split("\n")[0]) },
+      expect: async (c) => {
+        ok("a 502 keeps the red card: send failed, nothing left the wallet, Try again", /send failed, nothing left the wallet/.test(c.text) && c.buttons.includes("try again"), c.text.split("\n")[0]);
+        // The request id every API error carries, on the card, so a person writing in
+        // has something to quote (R-39). "ui-smoke" is the id the route stub sends.
+        ok("and the card shows the request id with a way to write in", /ref ui-smoke/.test(c.text) && (await page.locator("[data-testid=request-id] a[href='/terms']").count()) === 1);
+      } },
   ];
   try {
     for (const s of shapes) {
@@ -819,6 +824,18 @@ try {
 
   // Visual + a11y checks before the claim flow, while the home page is loaded.
   await checkAppearance(page);
+  // WHERE THE TAZ COMES FROM follows the status (R-39). Under this stack there is no
+  // miner heartbeat, so the sentence has to be the not-mining one; the three
+  // contradictory fixed sentences must be gone from the rendered page.
+  {
+    // The sentence lives in the "How it works" view; open it the way a visitor does.
+    await page.getByRole("button", { name: "How it works" }).click();
+    await page.locator("#tool-about").waitFor({ timeout: 5000 });
+    const text = await page.locator("#tool-about").innerText();
+    await page.getByRole("button", { name: "How it works" }).click();
+    ok("the income sentence follows the miner state (no heartbeat here: not mining, topped up by hand)", /The faucet is not mining right now, so what it hands out is donated or topped up by hand\./.test(text), text.match(/The faucet (mines|is not mining|has had)[^.]*\./)?.[0] ?? "no income sentence found");
+    ok("and none of the old fixed sentences remain", !/does not currently earn from mining|income rounds to zero|refilled by hand at the moment|mining and shielding its own coins/.test(text));
+  }
   await checkMinerPanel(page);
 
   // Generate-then-claim, the flow #31 broke for every visitor: the button read

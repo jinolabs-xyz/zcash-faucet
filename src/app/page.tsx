@@ -7,6 +7,7 @@ import { minerChip, minerRow, minerErrorRow, minerIsBad, readingFromStatus } fro
 import { boxRow, boxChip, boxIsBad } from "@/lib/boxLabel";
 import { syncLabel, syncBarWidth } from "@/lib/syncLabel";
 import { networkFacts, formatAmount, type FaucetNetwork } from "@/lib/network";
+import { incomeSentence } from "@/lib/incomeSentence";
 import type { CtazState } from "@/lib/crosslink/recency";
 import type { IntegrityStatus } from "@/lib/boxIntegrity";
 import type { MinerReading } from "@/lib/miner/heartbeat";
@@ -61,7 +62,7 @@ interface Status {
   /** The box's own integrity, measured by a unit on the host. Optional: a deploy
    * older than #287 does not send it, and absent must not read as complete. */
   box?: IntegrityStatus;
-  reserve?: { targetTaz: number; lowTaz: number; refilling: boolean; spendableTaz: number | null; harvesting?: boolean; failedSteps?: number; lastFailure?: { outcome: "waiting" | "resyncing" | "error"; reason: string } | null };
+  reserve?: { targetTaz: number; lowTaz: number; refilling: boolean; spendableTaz: number | null; shieldCoinbase?: boolean; harvesting?: boolean; failedSteps?: number; lastFailure?: { outcome: "waiting" | "resyncing" | "error"; reason: string } | null };
   donationAddress?: string;
   /** Mainnet, for project upkeep. Empty when unset OR rejected by config validation. */
   maintenanceAddress?: string;
@@ -251,6 +252,14 @@ const CONFIRMATIONS_ENOUGH = 6;
 /* ── Component ─────────────────────────────────────────────────────────── */
 // Pure functions of a status reply, outside the component so basePhase's useCallback
 // closes over nothing that can go stale.
+// Where the TAZ comes from, from the same facts the panel shows (R-39). Null until the
+// first status lands, so no sentence is rendered on a guess.
+const harvestFailing = (s: Status): boolean =>
+  s.reserve?.lastFailure?.outcome === "error" && (s.reserve.failedSteps ?? 0) > 0;
+const incomeFrom = (s: Status | null): string | null =>
+  s?.miner && s.reserve
+    ? incomeSentence({ minerActive: s.miner.active, accepted: s.miner.submittedAccepted ?? null, shieldCoinbase: s.reserve.shieldCoinbase === true, harvestFailing: harvestFailing(s) })
+    : null;
 // How far the NODE is behind the independent tip, or null when either is unknown.
 const nodeGap = (s: Status): number | null =>
   s.node?.externalHeight != null && s.node.nodeHeight != null && s.node.externalHeight > s.node.nodeHeight
@@ -351,7 +360,9 @@ export default function Home() {
   //   unknown  504: submitted, outcome unknown; no Try again, the address to watch
   //   bad      400: the request itself; back to the form with the address kept
   type FailKind = "failed" | "pow" | "offline" | "held" | "busy" | "cap" | "unknown" | "bad";
-  const [fail, setFail] = useState<{ kind: FailKind; retryAt?: number | null; address?: string }>({ kind: "failed" });
+  // requestId: every API error carries one (src/lib/api.ts) and the card dropped it, so
+  // a visitor writing to the contact on /terms had nothing to point at (R-39).
+  const [fail, setFail] = useState<{ kind: FailKind; retryAt?: number | null; address?: string; requestId?: string }>({ kind: "failed" });
   // A held claim we stopped holding (the 15-minute give-up behind a fault). Shown on
   // the fault card, NOT as an error phase: the phase effect re-derives the phase from
   // status whenever queuedAddr changes, and it ran in the same commit as the give-up's
@@ -747,13 +758,14 @@ export default function Home() {
         const retry = typeof data.retryAfterSeconds === "number" && data.retryAfterSeconds > 0 ? data.retryAfterSeconds : null;
         const nextAtMs = data.nextAt ? Date.parse(data.nextAt) : NaN;
         const retryAt = Number.isFinite(nextAtMs) ? nextAtMs : retry != null ? Date.now() + retry * 1000 : null;
-        if (res.status === 504) setFail({ kind: "unknown", address });
-        else if (res.status === 503 && data.kind === "cap") setFail({ kind: "cap", retryAt });
-        else if (res.status === 503 && data.kind === "busy") setFail({ kind: "busy" });
-        else if (res.status === 503 && retryAt != null) setFail({ kind: "held", retryAt });
-        else if (res.status === 403) setFail({ kind: "pow" });
-        else if (res.status === 400) setFail({ kind: "bad" });
-        else setFail({ kind: "failed" });
+        const requestId = typeof data.requestId === "string" ? data.requestId : undefined;
+        if (res.status === 504) setFail({ kind: "unknown", address, requestId });
+        else if (res.status === 503 && data.kind === "cap") setFail({ kind: "cap", retryAt, requestId });
+        else if (res.status === 503 && data.kind === "busy") setFail({ kind: "busy", requestId });
+        else if (res.status === 503 && retryAt != null) setFail({ kind: "held", retryAt, requestId });
+        else if (res.status === 403) setFail({ kind: "pow", requestId });
+        else if (res.status === 400) setFail({ kind: "bad", requestId });
+        else setFail({ kind: "failed", requestId });
         setErrMsg(data.error || "The send didn't go through. Nothing left the wallet.");
         setPhase("error");
       }
@@ -933,6 +945,9 @@ export default function Home() {
     reserve && reserve.spendableTaz != null && reserve.targetTaz > 0
       ? Math.min(100, Math.round((reserve.spendableTaz / reserve.targetTaz) * 100))
       : null;
+  // Something is actually putting coins in: the miner is running and the shielding
+  // step is not failing. Only then may the card promise that drips resume.
+  const refillHealthy = !!status?.miner?.active && !!reserve?.shieldCoinbase && !(status && harvestFailing(status));
   const c = check(addr);
   const badgeShow = c.ok || ("label" in c && !!c.label);
   const remain = Math.max(0, cooldownEnd - now);
@@ -995,7 +1010,7 @@ export default function Home() {
     : phase === "queued" ? `Your claim is queued. It sends on its own when the ${queuedBehindFault ? "faucet is back" : "node is ready"}.`
     : phase === "syncing" ? "Node is syncing. The faucet will be ready shortly."
     : phase === "fault" ? "The faucet is having a problem and is not taking claims right now. Nothing to do on your side."
-    : phase === "empty" ? (refilling ? "Topping up the reserve. Drips resume in a moment." : "The faucet is out of TAZ right now.")
+    : phase === "empty" ? (refilling ? (refillHealthy ? "Topping up the reserve. Drips resume in a moment." : "The faucet's reserve is low.") : "The faucet is out of TAZ right now.")
     : phase === "degraded" ? "Sends are failing right now, so the faucet is not taking claims. Nothing to do on your side."
     : phase === "submitting" ? (powState ? "Checking you are human. Nothing to do, it runs on its own." : "Sending your testnet ZEC. Keep this tab open.")
     : phase === "success" ? "Sent. Your testnet ZEC is on its way."
@@ -1342,13 +1357,25 @@ export default function Home() {
                 </span>
               )}
             </div>
-            <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>Topping up the reserve. Drips resume in a moment.</h2>
+            {/* "Drips resume in a moment" is only true when something is putting coins
+                in: a running miner and a shielding step that is not failing. With the
+                miner parked this card still renders (the loop is armed by the balance,
+                not the miner), and then it is just a low balance being watched. */}
+            <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>{refillHealthy ? "Topping up the reserve. Drips resume in a moment." : "The reserve is low."}</h2>
             {refillPct != null && (
               <div role="progressbar" aria-label="Reserve refill progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={refillPct} style={{ height: 10, border: "2px solid var(--color-divider)", position: "relative", overflow: "hidden" }}>
                 <i aria-hidden="true" style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: refillPct + "%", background: "repeating-linear-gradient(135deg,var(--color-accent) 0 3px,transparent 3px 7px)", backgroundSize: "26px 26px", animation: "hatch 1.1s linear infinite" }} />
               </div>
             )}
-            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>The faucet is mining and shielding its own coins right now. Nothing is broken. The balance dipped below the reserve line and it is being restored automatically.</p>
+            {/* Read off status, not asserted (R-39): this line was fixed text saying
+                "mining and shielding its own coins right now. Nothing is broken." and it
+                rendered beside a strip reading "miner no signal". */}
+            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
+              {incomeFrom(status) ?? "The balance is below the reserve line."}{" "}
+              {refillHealthy
+                ? "Nothing is broken: the balance dipped below the reserve line and it is being restored automatically."
+                : "The balance dipped below the reserve line, and until something puts coins in it stays there."}
+            </p>
           </div>
         )}
 
@@ -1367,13 +1394,13 @@ export default function Home() {
           <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 9 }}>
             <span style={kicker}>Empty</span>
             <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>The faucet is out of TAZ right now.</h2>
-            {/* Do not promise this fixes itself. The miner runs, but on public
-                testnet a dominant miner orphans every block we win, so mining
-                income is zero (#42) and the wallet is refilled by hand. Saying
-                otherwise sends people away expecting a recovery that is not
-                coming. */}
+            {/* Where the refill comes from is read off status, not asserted (R-39): this
+                card used to say "refilled by hand" beside a panel showing coinbase
+                shielding on and hundreds of accepted blocks. Do not promise a schedule
+                either way; a refill by mining takes a block win, a refill by hand takes
+                a person. */}
             <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
-              It gets refilled by hand at the moment, so this can take a while. Nothing you did caused
+              {incomeFrom(status) ?? "It gets refilled when funds arrive."} This can take a while. Nothing you did caused
               it{donation ? ", and if you have spare TAZ the address below puts the faucet back up for everyone" : ""}.
             </p>
             {donation && (
@@ -1512,7 +1539,7 @@ export default function Home() {
               </div>
             )}
             <button className="btn btn-primary" onClick={() => void submit()} disabled={phase === "empty" || phase === "degraded" || (!!genKey && genKey.address === addr.trim() && !keyCopied && !keyShown)} style={{ width: "100%", justifyContent: "space-between" }}>
-              <span>{genKey && genKey.address === addr.trim() && !keyCopied && !keyShown ? "Copy the key first" : phase === "checking" ? "Checking status…" : phase === "syncing" ? "Queue it, sends when the node is ready" : phase === "fault" ? "Queue it, sends when the faucet is back" : phase === "empty" ? (refilling ? "Topping up, back in a moment" : "Waiting for a refill") : phase === "degraded" ? "Not taking claims right now" : "Request " + dripText}</span>
+              <span>{genKey && genKey.address === addr.trim() && !keyCopied && !keyShown ? "Copy the key first" : phase === "checking" ? "Checking status…" : phase === "syncing" ? "Queue it, sends when the node is ready" : phase === "fault" ? "Queue it, sends when the faucet is back" : phase === "empty" ? (refilling && refillHealthy ? "Topping up, back in a moment" : "Waiting for a refill") : phase === "degraded" ? "Not taking claims right now" : "Request " + dripText}</span>
               <span aria-hidden="true">→</span>
             </button>
             <p style={{ margin: 0, fontSize: 11.5, letterSpacing: ".02em", color: muted(55), fontFamily: "var(--mono)" }}>{dripText} · once per address / 24h · shielded z→z</p>
@@ -1762,6 +1789,12 @@ export default function Home() {
                 )}
                 <button className="btn btn-ghost btn-sm" onClick={again} style={{ padding: 0 }}>Start over</button>
               </div>
+              {fail.requestId && (
+                <p data-testid="request-id" style={{ margin: 0, fontFamily: "var(--mono)", fontSize: 11, color: muted(55) }}>
+                  ref {fail.requestId}{" "}
+                  <span style={{ fontFamily: "inherit" }}>· quote it if you <a href="/terms" style={{ color: "inherit" }}>write to us</a></span>
+                </p>
+              )}
             </div>
           );
         })()}
@@ -1792,7 +1825,7 @@ export default function Home() {
               instead of advertising a nought. */}
           {status?.drips && status.drips.allTime > 0 ? (
             <p className="about-strip-line drips-line">
-              <strong>{num(status.drips.allTime)}</strong> drips served
+              <strong>{num(status.drips.allTime)}</strong> {status.drips.allTime === 1 ? "drip" : "drips"} served
               {status.drips.last7d > 0 ? <> · <strong>{num(status.drips.last7d)}</strong> in the last 7 days</> : null}
             </p>
           ) : null}
@@ -1817,7 +1850,7 @@ export default function Home() {
         {tool === "about" && (
           <div id="tool-about" style={{ border: "2px solid var(--color-divider)", padding: 14, display: "flex", flexDirection: "column", gap: 9 }}>
             <span style={{ ...kicker, color: muted(60) }}>How it works</span>
-            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: muted(72) }}>This faucet runs its own node and wallet, and it mines testnet blocks. It does not currently earn from mining: a dominant miner wins every block race on public testnet, so the blocks it wins are orphaned. The TAZ it hands out is donated or topped up by hand, which is why it can run empty and why it says so plainly when it does.</p>
+            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: muted(72) }}>This faucet runs its own node and wallet. {incomeFrom(status) ?? "It mines testnet blocks; what it hands out is mined, donated, or topped up by hand."} It can run empty, and it says so plainly when it does.</p>
             <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: muted(72) }}>Drips leave as shielded (z→z) transactions. The amount and the recipient never touch the public ledger, which is also why a send takes about ten seconds: it is building the zero-knowledge proof that makes that possible.</p>
           </div>
         )}
