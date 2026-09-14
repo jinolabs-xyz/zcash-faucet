@@ -81,6 +81,10 @@ export const GET = withApi("status", async (req: NextRequest) => {
   // commit. See src/lib/opsToken.ts.
   const ops = opsTokenMatches(req.headers.get(OPS_HEADER), process.env.FAUCET_OPS_TOKEN);
   const box = classifyIntegrity(readBoxIntegrity(), Date.now());
+  // Two bodies on one URL, chosen by a header: say so to any cache that ever sits in
+  // front, or the operator's body could be handed to the public. Caddy caches nothing
+  // today; this is for the day something does.
+  const headers = { "cache-control": "private, no-store", vary: OPS_HEADER };
   const [backend, balanceZat, node] = await Promise.all([pingBackend(), safeBalance(), getNodeStatus()]);
   // Synchronous and off the await chain: a few hundred bytes from a bind mount, so it
   // does not belong in the Promise.all with three network calls.
@@ -155,5 +159,5 @@ export const GET = withApi("status", async (req: NextRequest) => {
     // than the reconciler's last tick); refilling is the reconciler's decision.
     reserve: { ...getReserveReconciler().status, spendableTaz: balanceTaz },
     ctaz: await ctazBlock(),
-  });
+  }, { headers });
 });

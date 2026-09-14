@@ -474,14 +474,21 @@ async function runFaucetChecks() {
     // asserting against a server that cannot answer would fail for the wrong reason.
     ok("box integrity reported", true, "server does not send `box` yet, cannot verify");
   } else if (!("expected" in box)) {
-    // THE ONE-WORD SHAPE (R-24): this run has no token, or the wrong one, so the server
-    // answered as it answers the public. The verdict is the same one the detail would
-    // fold into, so a fault is red here too; what is lost is the sentence naming it.
-    // "ok" is affirmative: the server says complete, watchdog running, pager working.
-    const hint = OPS_TOKEN ? "the token was refused: FAUCET_OPS_TOKEN on the box and SMOKE_OPS_TOKEN here differ" : "set SMOKE_OPS_TOKEN (GitHub secret FAUCET_OPS_TOKEN) to see which";
-    ok("box has everything the repo requires", box.state === "ok", box.state === "ok" ? "the box reports ok (one-word view)" : `the box reports ${JSON.stringify(box.state)}; ${hint}`);
-    ok("the watchdog is running", box.state === "ok", box.state === "ok" ? "folded into the box's ok" : `not affirmed: box is ${JSON.stringify(box.state)}`);
-    ok("the box can page someone", box.state === "ok", box.state === "ok" ? "folded into the box's ok" : `not affirmed: box is ${JSON.stringify(box.state)}`);
+    // THE ONE-WORD SHAPE (R-24): the server answered as it answers the public. Its "ok"
+    // is affirmative by construction (src/lib/boxLabel.ts: complete, watchdog active,
+    // pager probed and working; anything the box could not tell is "unknown"), so it may
+    // stand in for the three detail checks. What is lost is the sentence naming a fault.
+    //
+    // A token that was SENT and not honoured is its own failure, whatever the word: the
+    // operator configured one and it does not work, and a run that read "ok" through it
+    // would hide that for as long as the box stayed healthy (review of #543).
+    const refused = Boolean(OPS_TOKEN);
+    const detail = box.state === "ok" ? "the box reports ok (one-word view)" : `the box reports ${JSON.stringify(box.state)}`;
+    ok("the operator token, when sent, is honoured", !refused, refused ? "the server answered the public shape to a request carrying SMOKE_OPS_TOKEN: FAUCET_OPS_TOKEN on the box and the secret here differ" : "no token sent; the one-word view is expected");
+    const hint = refused ? "" : "; set SMOKE_OPS_TOKEN (GitHub secret FAUCET_OPS_TOKEN) to see which";
+    ok("box has everything the repo requires", box.state === "ok", box.state === "ok" ? detail : `${detail}${hint}`);
+    ok("the watchdog is running", box.state === "ok", box.state === "ok" ? "affirmed by the box's ok" : `not affirmed: box is ${JSON.stringify(box.state)}`);
+    ok("the box can page someone", box.state === "ok", box.state === "ok" ? "affirmed by the box's ok" : `not affirmed: box is ${JSON.stringify(box.state)}`);
   } else {
     ok(
       "box has everything the repo requires",

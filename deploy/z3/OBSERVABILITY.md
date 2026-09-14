@@ -203,10 +203,12 @@ publishes `alertBridge`: `ok` (up and the configured number linked), `unlinked`,
 `down`, `misconfigured` (a state `alert.sh` refuses to send in: Signal without
 a usable E.164 number or recipient, or, for any format, a box with neither `jq`
 nor `python3` to encode a body), `webhook` (Slack or Discord, nothing to
-probe), `none` (no alert URL at all), `unknown` (could not ask). The panel's box
-row names `down`, `unlinked`, `misconfigured` and `none` (`... pages go
-nowhere`) and the strip shows `CANNOT PAGE` for them, the way it shows a looping
-watchdog; the off-box live probe fails on those and on `unknown`. That probe is the one channel that does not depend on the bridge,
+probe), `none` (no alert URL at all), `unknown` (could not ask). The public page
+folds all of that into one word (`OPS ATTENTION` on the strip for any fault,
+`unknown` when the box could not tell); the named state reaches the operator
+through Signal, the box's own report, and `/api/status` with the operator token
+(R-24). The off-box live probe fails on every state but `ok` and `webhook`,
+whether it reads the word or the name. That probe is the one channel that does not depend on the bridge,
 and it depends on the repository variable `FAUCET_LIVE_URL` being set and on
 someone reading the red-run email; it is the last line, not a second bridge.
 

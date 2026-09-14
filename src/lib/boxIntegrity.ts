@@ -92,8 +92,8 @@ export interface IntegrityReport {
    *  ask), or null from a report that predates the field. The bridge cannot report its
    *  own death through itself, so this is where a dead one shows, and the off-box probe
    *  reads it. A STATE WORD, and the one exception to "no names, only counts" below: it
-   *  tells a reader whether pages are arriving, and the off-box probe needs exactly
-   *  that, unauthenticated. */
+   *  tells a reader whether pages are arriving. Since R-24 it reaches the off-box probe
+   *  only with the operator token; the public gets it folded into one word. */
   alertBridge: string | null;
   /** When the box wrote this, epoch ms. */
   at: number | null;
@@ -139,8 +139,8 @@ export interface IntegrityStatus {
    *  ask), or null from a report that predates the field. The bridge cannot report its
    *  own death through itself, so this is where a dead one shows, and the off-box probe
    *  reads it. A STATE WORD, and the one exception to "no names, only counts" below: it
-   *  tells a reader whether pages are arriving, and the off-box probe needs exactly
-   *  that, unauthenticated. */
+   *  tells a reader whether pages are arriving. Since R-24 it reaches the off-box probe
+   *  only with the operator token; the public gets it folded into one word. */
   alertBridge: string | null;
   ageSeconds: number | null;
   reason: string;

@@ -132,6 +132,16 @@ alerts_env; export FAUCET_ALERT_FORMAT=signal FAUCET_ALERT_SIGNAL_NUMBER="+15550
 check "signal with a number describes as signal" "[ \"\$(bash '$ALERT' --describe)\" = 'signal' ]"
 alerts_env; export FAUCET_ALERT_FORMAT=signal
 check "signal WITHOUT a number is misconfigured, because send() would refuse it" "[ \"\$(bash '$ALERT' --describe)\" = 'misconfigured/signal-no-number' ]"
+# send()'s second gate, both numbers E.164. The first cut tested only for a non-empty
+# number and said "signal" for a number send() refuses (review of #543).
+alerts_env; export FAUCET_ALERT_FORMAT=signal FAUCET_ALERT_SIGNAL_NUMBER="15551234567"
+check "signal with a number that is not E.164 is misconfigured too, as send() refuses it" "[ \"\$(bash '$ALERT' --describe)\" = 'misconfigured/signal-not-e164' ]"
+alerts_env; export FAUCET_ALERT_FORMAT=signal FAUCET_ALERT_SIGNAL_NUMBER="+15551234567" FAUCET_ALERT_SIGNAL_RECIPIENT="bob"
+check "and a recipient that is not E.164 as well" "[ \"\$(bash '$ALERT' --describe)\" = 'misconfigured/signal-not-e164' ]"
+# The answer is ONE line whatever else alert.sh would log: the watchdog captures stdout
+# for its start line, and the cooldown warning used to arrive in front of the word.
+alerts_env; export FAUCET_ALERT_COOLDOWN_SECONDS=abc
+check "a bad cooldown value does not put a warning in front of the answer" "[ \"\$(bash '$ALERT' --describe 2>/dev/null)\" = 'webhook/slack' ]"
 alerts_env; unset FAUCET_ALERT_URL
 check "no URL is none" "[ \"\$(bash '$ALERT' --describe)\" = 'none' ]"
 alerts_env

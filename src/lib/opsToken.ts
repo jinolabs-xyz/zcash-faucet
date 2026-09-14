@@ -16,8 +16,13 @@ export const OPS_HEADER = "x-faucet-ops";
 
 /** Constant-time on the bytes; a wrong length is a plain no, the way pow.ts does it. */
 export function opsTokenMatches(presented: string | null, configured: string | undefined): boolean {
-  if (!configured || configured.length < 16 || !presented) return false;
-  const a = Buffer.from(presented, "utf8");
-  const b = Buffer.from(configured, "utf8");
+  // Trimmed on both sides: the HTTP layer already strips the header's whitespace, and a
+  // trailing space after the value in a hand-edited faucet.env must not make the token
+  // permanently unmatchable with nothing to say so.
+  const want = (configured ?? "").trim();
+  const got = (presented ?? "").trim();
+  if (want.length < 16 || !got) return false;
+  const a = Buffer.from(got, "utf8");
+  const b = Buffer.from(want, "utf8");
   return a.length === b.length && timingSafeEqual(a, b);
 }

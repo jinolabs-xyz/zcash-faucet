@@ -121,7 +121,16 @@ test("without the token, an ok box passes: the word is affirmative, not a shrug"
 test("a WRONG token is refused and the probe says so, rather than passing on the public word", async () => {
   const r = await runProbe({ SMOKE_OPS_TOKEN: "wrong-wrong-wrong-wrong" }, READY, { token: "t0ken-t0ken-t0ken-t0ken", publicBox: { state: "unknown", minerUnit: null } });
   assert.notEqual(r.code, 0);
-  assert.match(r.out, /the token was refused/);
+  assert.match(r.out, /FAIL: the operator token, when sent, is honoured/);
+});
+
+test("a WRONG token over an ok box is STILL red: a configured token that does not work is a fault of its own", async () => {
+  // Review of #543: the first cut folded this into the public "ok" and printed healthy,
+  // so a rotated or mistyped secret would have hidden itself for as long as the box was fine.
+  const r = await runProbe({ SMOKE_OPS_TOKEN: "wrong-wrong-wrong-wrong" }, READY, { token: "t0ken-t0ken-t0ken-t0ken" });
+  assert.notEqual(r.code, 0, r.out);
+  assert.match(r.out, /FAIL: the operator token, when sent, is honoured/);
+  assert.match(r.out, /ok: box has everything the repo requires/, "the box itself still reads ok; it is the token that failed");
 });
 
 test("a faucet that cannot drip FAILS, which is the whole point of the probe", async () => {

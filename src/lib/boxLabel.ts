@@ -67,10 +67,14 @@ export function boxIsBad(s: IntegrityStatus): boolean {
   return s.state !== "complete" || watchdogLooping(s) || watchdogStopped(s) || alertBridgeDown(s);
 }
 
-/** What the public page is told about the box: one word (R-24). "unknown" is a report
- *  that is missing or stale, which the off-box probe fails on and the page must not
- *  read as fine; "attention" is any fault the detail-bearing predicates above would
- *  name; "ok" is a complete box with a running watchdog and a working pager. */
+/** What the public page is told about the box: one word (R-24). "attention" is any
+ *  fault the detail-bearing predicates above would name. "ok" is AFFIRMATIVE: a complete
+ *  box whose watchdog systemd calls active and whose pager the box probed and found
+ *  working; it is what the off-box probe accepts in place of the detail, so it may never
+ *  cover a "could not tell". Everything else, a missing or stale report, a watchdog or
+ *  pager state of unknown, or a server too old to send those fields, is "unknown", which
+ *  the probe fails on (review of #543: the first cut folded unknown-either-way into ok,
+ *  and a tokenless probe affirmed a pager the box had said it could not see). */
 export type PublicBoxState = "ok" | "attention" | "unknown";
 export interface PublicBox {
   state: PublicBoxState;
@@ -80,10 +84,16 @@ export interface PublicBox {
 }
 
 export function publicBox(s: IntegrityStatus): PublicBox {
-  return {
-    state: s.state === "unknown" ? "unknown" : boxIsBad(s) ? "attention" : "ok",
-    minerUnit: s.minerUnit,
-  };
+  const watchdogAffirmed = s.watchdogUnit === "active" || s.watchdogUnit === "activating";
+  const pagerAffirmed = s.alertBridge === "ok" || s.alertBridge === "webhook";
+  // A missing or stale report is unknown before it is anything else: boxIsBad is true
+  // of it too, but "attention" would claim a fault the box never reported.
+  const state: PublicBoxState =
+    s.state === "unknown" ? "unknown"
+    : boxIsBad(s) ? "attention"
+    : s.state === "complete" && watchdogAffirmed && pagerAffirmed ? "ok"
+    : "unknown";
+  return { state, minerUnit: s.minerUnit };
 }
 
 /** The strip's one slot. Nothing for ok: a permanent "box ok" would spend the slot on

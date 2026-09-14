@@ -23,7 +23,9 @@ import {
 import { classifyIntegrity } from "./boxIntegrity.ts";
 
 const NOW = Date.parse("2026-07-31T12:00:00Z");
-const report = (over = {}) => ({ expected: 14, present: 14, notEnabled: 0, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, platform: null, minerBinary: null, minerUnit: null, watchdogUnit: null, alertBridge: null, at: NOW - 30_000, readable: true, ...over });
+// The baseline is a box that has AFFIRMED both halves: watchdog active, pager probed
+// ok. A null in either field is a server too old to say, and reads unknown below.
+const report = (over = {}) => ({ expected: 14, present: 14, notEnabled: 0, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, platform: null, minerBinary: null, minerUnit: null, watchdogUnit: "active", alertBridge: "ok", at: NOW - 30_000, readable: true, ...over });
 const pub = (over = {}) => publicBox(classifyIntegrity(report(over), NOW));
 
 // ── THE PUBLIC WORDS NAME NO FAULT ─────────────────────────────────────────────────────
@@ -63,6 +65,28 @@ test("EVERY FAULT IS ONE WORD ON THE PUBLIC PAGE: attention, never which fault",
     assert.equal(publicBoxIsBad(b), true, tag);
     const words = `${publicBoxChip(b)} ${publicBoxRow(b)}`;
     assert.doesNotMatch(words, /WATCHDOG|PAGE|BRIDGE|ALERT|MISSING|ENABLED|heal|nowhere|\d/, `${tag}: ${words}`);
+  }
+});
+
+test("OK IS AFFIRMATIVE: a watchdog or pager the box could not read is unknown, never ok", () => {
+  // Review of #543. watchdogUnit "unknown" and alertBridge "unknown" are deliberately
+  // not faults (the detail-bearing predicates leave them to the probe), so the first cut
+  // read them as ok and a tokenless probe affirmed "the box can page someone" from a
+  // word that said the box could not tell. Every combination that is not both affirmed
+  // is unknown; only active/activating plus ok/webhook is ok.
+  for (const over of [
+    { watchdogUnit: "unknown" },
+    { alertBridge: "unknown" },
+    { watchdogUnit: "unknown", alertBridge: "unknown" },
+    { watchdogUnit: null },
+    { alertBridge: null },
+  ]) {
+    const b = pub(over);
+    assert.equal(b.state, "unknown", JSON.stringify(over));
+    assert.equal(publicBoxIsBad(b), true, JSON.stringify(over));
+  }
+  for (const over of [{ watchdogUnit: "active", alertBridge: "ok" }, { watchdogUnit: "activating", alertBridge: "webhook" }]) {
+    assert.equal(pub(over).state, "ok", JSON.stringify(over));
   }
 });
 

@@ -17,3 +17,9 @@ test("no token configured, or a short one, refuses everyone: the safe default is
   assert.equal(opsTokenMatches("short", "short"), false, "a token under 16 chars is a placeholder, not a secret");
   assert.equal(opsTokenMatches(null, TOKEN), false);
 });
+
+test("whitespace around the configured value is not part of it: a trailing space in faucet.env still matches", () => {
+  assert.equal(opsTokenMatches(TOKEN, `${TOKEN} `), true);
+  assert.equal(opsTokenMatches(TOKEN, `${TOKEN}\n`), true);
+  assert.equal(opsTokenMatches(` ${TOKEN}`, TOKEN), true);
+});
