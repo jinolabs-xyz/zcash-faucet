@@ -547,6 +547,11 @@ export default function Home() {
     const c = check(address);
     if (!c.ok) { setTouched(true); return; }
     if (!target && keyUnseen(address)) return;
+    // Held phases are held for the keyboard too: the button is disabled, but Enter in
+    // the address field lands here directly. A degraded or empty faucet is not asked; the
+    // card above the form already says why, and a 503 rendered as "Send failed" under a
+    // card that says "not taking claims" would be two stories on one screen.
+    if (!target && (phase === "degraded" || phase === "empty")) return;
     if (sending.current) return;
     // Node still syncing: hold the claim instead of turning the user away.
     // It fires on its own the moment the node is ready (the effect above).
