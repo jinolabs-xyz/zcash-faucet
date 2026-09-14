@@ -35,7 +35,7 @@ wd_env() {
   # syncing". Nothing noticed for as long as the grace window was 999999, because a
   # faucet that is never ready and never paged looks exactly like one that is fine.
   # The first case that set the grace to 0 failed in CI and passed alone.
-  unset STUB_READY_EXTERNAL
+  unset STUB_READY_EXTERNAL STUB_CURL_RC
   unset STUB_SLOWLOOP STUB_ALERT_FAIL_N STUB_ALERT_FAIL_RC WATCHDOG_RECOVERY_MIN_UPTIME
   unset STUB_CRASHLOOP STUB_HEAL_FIXES STUB_ZEBRA_BLOCKS STUB_ZEBRA_EST STUB_ZEBRA_ADVANCE STUB_ZEBRA_STUCK_CALLS \
         WATCHDOG_NODE_HEAL_ENABLED WATCHDOG_NODE_STOPS_MINER WATCHDOG_MINER_HEARTBEAT WATCHDOG_MINER_UNIT STUB_START_FAIL \
@@ -312,8 +312,8 @@ check "never claims a fix it has not seen" "! grep -q 'FIXED: faucet app' '$T/al
 check "pages on the second restart" "grep -q 'NEEDS YOU: faucet app not answering /api/health after 2 restart' '$T/alerts.log'"
 
 # --- step 3, in the container (risk register II, R-15) ---------------------------
-# The image has a healthcheck; docker's verdict is the liveness verdict when it is
-# there. The URL probe used to be the only one, and OBSERVABILITY.md points it through
+# The compose file gives the faucet a healthcheck; docker's verdict is the liveness
+# verdict when it is there. The URL probe used to be the only one, and OBSERVABILITY.md points it through
 # caddy, so an edge fault restarted a healthy app every 90 s. State file line 3 is the
 # health status; absent means no healthcheck (every case above), which keeps the URL.
 echo "== watchdog: a HEALTHY container is not restarted when the public URL is dead (the edge fault)"
@@ -346,6 +346,23 @@ export WATCHDOG_FAUCET_URL="http://127.0.0.1:9"
 wd_run 4
 check "no miss counted while docker says starting" "! grep -q 'faucet liveness miss' '$T/run.log' && grep -q \"health is 'starting'\" '$T/run.log'"
 check "and no restart" "! grep -q 'docker restart faucet-web' '$STUB_LOG'"
+
+echo "== watchdog: after a restart, 'starting' does not count as answering: no FIXED, the episode stays open"
+# The hazard: the watchdog restarts an unhealthy app, the next sweep sees docker's
+# 'starting', and if that read as an answer the episode would reset, a FIXED would go
+# out before the app answered anything, and a permanently hung app would never reach
+# the second-restart page. Line 3 flips to 'starting' on restart (the stub does this
+# when a healthcheck exists), then back to unhealthy: the second restart pages.
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+printf 'running\n\nunhealthy\n' > "$STUB_CONTAINERS/faucet-web"
+export WATCHDOG_FAUCET_URL="http://127.0.0.1:9" STUB_HEALTH_AFTER_RESTART=unhealthy STUB_HEALTH_STARTING_SWEEPS=2
+wd_run 9   # 3 unhealthy -> restart; 2 starting; 3 unhealthy -> restart 2 -> page; 1 more
+check "two restarts" "[ \"\$(grep -c 'docker restart faucet-web' '$STUB_LOG')\" = 2 ]"
+check "no FIXED went out on 'starting'" "! grep -q 'FIXED: faucet app' '$T/alerts.log'"
+check "and the second restart paged, because the episode never closed" "grep -q 'NEEDS YOU: faucet app not answering /api/health after 2 restart' '$T/alerts.log'"
+unset STUB_HEALTH_AFTER_RESTART STUB_HEALTH_STARTING_SWEEPS
 
 echo "== watchdog: no healthcheck on the container keeps the URL probe (the cases above this block)"
 wd_env

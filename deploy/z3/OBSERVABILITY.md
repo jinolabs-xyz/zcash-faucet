@@ -228,8 +228,8 @@ silently mute the box.
 ### The watchdog has to be able to see the faucet, or its clock is wrong
 
 The watchdog's 30-minute "not ready" page probes `WATCHDOG_FAUCET_URL`, default
-`http://127.0.0.1:3000`, and both it and the hung-app restart look for a container
-whose name contains `WATCHDOG_FAUCET_MATCH`, default `faucet-web`. Under the compose
+`http://127.0.0.1:3000`, and the hung-app restart looks for a container whose name
+contains `WATCHDOG_FAUCET_MATCH`, default `faucet-web`. Under the compose
 overlay **neither default holds**: the app publishes no host port, so the probe
 answers nothing forever, and the container is `zcash-faucet-faucet-1`, so the match
 finds nothing. 2026-09-07 the faucet was down for over an hour, twice, and the
@@ -246,13 +246,18 @@ same path a user does, so "ready" means ready for them, not just for localhost, 
 a transport failure on it is named by class in the page (DNS, refused, timed out, TLS
 handshake, certificate), which is how you tell caddy from the app.
 
-LIVENESS is not probed through the URL. The image carries a healthcheck that fetches
-`/api/health` on loopback, and the hung-app restart reads docker's verdict on it
-(`healthy` / `unhealthy` / `starting`); the URL probe is only the fallback for a
-container with no healthcheck. Before this, an edge fault (caddy down, an expired
-certificate, DNS) read as a hung app, and the watchdog restarted a healthy faucet
-every 90 seconds for as long as the edge was down, wiping its in-memory send log
-each time. Caddy itself is on the recovery list now (`WATCHDOG_CADDY_MATCH`, default
+LIVENESS is not probed through the URL. The compose file gives the faucet a
+healthcheck that fetches `/api/health` on loopback, and the hung-app restart reads
+docker's verdict on it (`healthy` / `unhealthy` / `starting`); the URL probe is only
+the fallback for a container with no healthcheck (one run by hand outside compose).
+Before this, an edge fault (caddy down, an expired certificate, DNS) read as a hung
+app, and the watchdog restarted a healthy faucet every 90 seconds for as long as the
+edge was down, wiping its in-memory send log each time, and paged "not answering
+after 2 restarts" at about three minutes with the wrong diagnosis. Now an edge fault
+is paged by readiness at the 30-minute grace with its transport class named, and a
+genuinely hung app is restarted about three minutes in (docker's three retries, then
+three sweeps) rather than 90 seconds; a persistently hung one pages at roughly six to
+seven minutes. Caddy itself is on the recovery list (`WATCHDOG_CADDY_MATCH`, default
 `caddy`; empty disables), so an exited caddy is started like any other container.
 
 **Rotate the webhook if you ran a self-test before this fix.** An earlier

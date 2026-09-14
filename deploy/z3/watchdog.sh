@@ -718,17 +718,20 @@ while true; do
   # 3: web-app liveness. Only restart when the container claims to be running
   # but the app has stopped answering - a genuine hang, not a cold start.
   #
-  # ASKED IN THE CONTAINER, NOT THROUGH THE EDGE (risk register II, R-15). The image
-  # carries a healthcheck that fetches /api/health on loopback, and docker runs it
-  # every 30 s with three retries. When it is there, its verdict is the liveness verdict:
+  # ASKED IN THE CONTAINER, NOT THROUGH THE EDGE (risk register II, R-15). The compose
+  # file gives the faucet a healthcheck that fetches /api/health on loopback, and docker
+  # runs it every 30 s with three retries. When it is there, its verdict is the liveness verdict:
   # `unhealthy` is the app not answering its own port, which a restart addresses.
   # The public URL used to be the probe, and OBSERVABILITY.md tells the operator to
   # point it through caddy, so a caddy, TLS or DNS fault read as a hung app and the
   # watchdog restarted a healthy faucet every 90 s for as long as the edge was down,
   # wiping the in-memory send log, the tip cache and the chain-identity cache each time,
-  # and paging about the wrong thing. A container with no healthcheck (an older image,
-  # or a dev box) keeps the URL probe, and `starting` (inside docker's start_period)
-  # counts as neither, since a cold start is not a hang.
+  # and paging about the wrong thing. A container with no healthcheck (one run by hand
+  # outside compose, or a dev box) keeps the URL probe, and `starting` (inside docker's
+  # start_period) counts as neither, since a cold start is not a hang. The cost: a
+  # genuinely hung app is restarted about three minutes in (docker's three retries,
+  # then three sweeps here) rather than 90 s, and an edge fault is paged by readiness
+  # at the 30-minute grace with its transport class, rather than mis-paged at 3 min.
   if [ -n "$faucet" ] && [ "$(docker inspect -f '{{.State.Status}}' "$faucet" 2>/dev/null)" = "running" ]; then
     health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$faucet" 2>/dev/null)"
     case "$health" in
