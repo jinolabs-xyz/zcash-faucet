@@ -838,6 +838,47 @@ try {
   }
   await checkMinerPanel(page);
 
+  // THE PROOF OF WORK IS EXPLAINED BEFORE IT RUNS, ESTIMATED WHILE IT RUNS, AND CAN BE
+  // ABANDONED; A BAD CHECKSUM COSTS NO SOLVE (risk register II, R-38).
+  {
+    ok("the puzzle is explained under the button before anyone presses it", /solves a short puzzle instead of a CAPTCHA/.test(await page.textContent("body")));
+    // An address one character off. The server would say the same at 400, but only after
+    // the browser had solved a proof of work for nothing; now it never asks for one.
+    const good = await freshAddress();
+    const last = good.at(-1);
+    const bad = good.slice(0, -1) + (last === "q" ? "p" : "q");
+    const asked = [];
+    const onReq = (r) => { if (/\/api\/(pow\/challenge|faucet)$/.test(r.url())) asked.push(`${r.method()} ${new URL(r.url()).pathname}`); };
+    page.on("request", onReq);
+    await page.locator("input.input").first().fill(bad);
+    await page.locator("button.btn-primary").first().click();
+    await page.waitForFunction(() => /bad bech32m checksum/.test(document.querySelector("#addrmsg")?.textContent ?? ""), null, { timeout: 5000 }).catch(() => {});
+    // Short timeouts with a fallback: with the check missing the page is on the error
+    // card by now and #addrmsg is gone, and that must read as THIS failing, not a hang.
+    const addrmsg = (await page.locator("#addrmsg").textContent({ timeout: 3000 }).catch(() => "")) ?? "";
+    ok("a bad checksum is refused on the page, in the route's own words", /Malformed unified address \(bad bech32m checksum\)/.test(addrmsg), addrmsg.slice(0, 120) || "no #addrmsg on the page");
+    if (!/bad bech32m checksum/.test(addrmsg)) { await page.getByRole("button", { name: "Try again" }).click({ timeout: 3000 }).catch(() => {}); }
+    ok("and no challenge was fetched and no claim was posted for it", asked.length === 0, asked.join("|"));
+    // Cancel, mid-solve: the worker is replaced by one that reports progress and never
+    // finds, so the card is on screen long enough to read and to leave. 8192 hashes in
+    // 8 ms at the stack's 12 bits is "under a second", and the estimate must say so.
+    await page.route("**/pow-worker.js", (route) => route.fulfill({ status: 200, contentType: "application/javascript", body: 'self.onmessage=function(){setInterval(function(){self.postMessage({type:"progress",hashes:8192,ms:8})},40)};' }));
+    await page.locator("input.input").first().fill(good);
+    await page.locator("button.btn-primary").first().click();
+    await page.getByRole("button", { name: "Cancel" }).waitFor({ timeout: 5000 }).catch(() => {});
+    const card = (await page.textContent("body")) ?? "";
+    ok("the solving card carries an estimate in time, not only bits and hashes", /Usually under a second on this device/.test(card) || /Measuring how fast this device hashes/.test(card), card.match(/(Usually|Measuring)[^.]*\./)?.[0] ?? "no estimate sentence");
+    await page.waitForFunction(() => /Usually under a second/.test(document.body.innerText), null, { timeout: 5000 }).catch(() => {});
+    ok("and once the worker has reported, the estimate is measured", /Usually under a second on this device/.test((await page.textContent("body")) ?? ""));
+    await page.getByRole("button", { name: "Cancel" }).click({ timeout: 3000 }).catch(() => {});
+    await page.locator("button.btn-primary").waitFor({ timeout: 5000 }).catch(() => {});
+    ok("Cancel returns to the form with the address still in it", (await page.locator("input.input").first().inputValue({ timeout: 3000 }).catch(() => "")) === good);
+    ok("and the abandoned solve posted nothing", !asked.some((a) => a.startsWith("POST /api/faucet")), asked.join("|"));
+    page.off("request", onReq);
+    await page.unroute("**/pow-worker.js");
+    await page.locator("input.input").first().fill("", { timeout: 3000 }).catch(() => {});
+  }
+
   // Generate-then-claim, the flow #31 broke for every visitor: the button read
   // the address from the wrong field and substituted a synthesized one that
   // checksum validation refuses. Driving the button, not the API, is what
