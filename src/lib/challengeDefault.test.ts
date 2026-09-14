@@ -82,6 +82,21 @@ test("A TURNSTILE SECRET ALONE CHANGES NOTHING: the default is pow, full stop", 
   assert.equal(challengeUnder({ TURNSTILE_SECRET_KEY: "a-real-secret", NEXT_PUBLIC_TURNSTILE_SITE_KEY: "site" }), "pow");
 });
 
+test("TRUSTED_PROXY_COUNT=0 in production is warned about: three IP-keyed limits are dropped and escalation is pooled (R-30)", () => {
+  const base = { NODE_ENV: "production", RATE_LIMIT_SALT: "a-real-salt-of-adequate-length-00000000" };
+  const warned = challengeUnder({ ...base }, "serving-stderr");
+  assert.match(warned, /TRUSTED_PROXY_COUNT is 0/, "the default must not pass in silence");
+  assert.match(warned, /SKIPPED/);
+  assert.match(warned, /proof-of-work escalation is POOLED/, "escalation is not skipped at 0, it is one bucket for everyone, and the warning must say that");
+  assert.doesNotMatch(warned, /escalation[^.]*SKIPPED/, "and must not list it among the skipped limits");
+  const quiet = challengeUnder({ ...base, TRUSTED_PROXY_COUNT: "1" }, "serving-stderr");
+  assert.doesNotMatch(quiet, /TRUSTED_PROXY_COUNT is 0/, "a configured proxy count is not warned about");
+  assert.equal(challengeUnder({ ...base, TRUSTED_PROXY_COUNT: "1" }, "serving"), "OK", "and the boot itself succeeded, so the silence is not a throw");
+  const dev = challengeUnder({ RATE_LIMIT_SALT: "x" }, "serving-stderr");
+  assert.doesNotMatch(dev, /TRUSTED_PROXY_COUNT/, "development stacks set it per server and are not nagged");
+  assert.equal(challengeUnder({ RATE_LIMIT_SALT: "x" }, "serving"), "OK");
+});
+
 test("IMPORTING config in production does NOT throw, which is what lets a build work", () => {
   // The regression that took CI red. `next build` sets NODE_ENV=production and
   // imports every route module to collect page data, so a guard at import time made

@@ -33,7 +33,10 @@ policy itself as well, so a directly reached :3000 is not naked. HSTS stays
 proxy-only on purpose: the app cannot know whether TLS actually fronts it.
 
 **Secrets and logs.** `RATE_LIMIT_SALT` signs PoW challenges and fingerprints
-IPs, and is never logged or returned. Generated throwaway accounts return
+IPs, and is never logged or returned. If it leaks, rotate it, knowing the cost:
+every stored address, IP and subnet hash becomes unmatchable, so every cooldown
+and allowance except the global cap restarts from zero for a day, and every
+challenge issued under the old salt is refused (CONFIGURATION.md has the detail). Generated throwaway accounts return
 their secret to the requester once and are neither stored nor logged, by
 design. The zallet RPC password lives in `faucet.env` (root, 600) and reaches
 the app via environment. The backup passphrase is passed to gpg on a file
