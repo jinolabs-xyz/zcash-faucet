@@ -276,6 +276,22 @@ export default function Home() {
   // and until it does `remain` is max(0, 0 - 0) = 0, which is the correct first paint.
   const [now, setNow] = useState(0);
   const [errMsg, setErrMsg] = useState("");
+  // WHICH failure, from the reply's status and fields (risk register II, R-34). One red
+  // card, "Send failed, nothing left the wallet / Try again", used to wear every
+  // non-empty 503, the 504 and the 4xx: the daily cap, the 75 s freshness hold, a full
+  // queue, a bad address, and the 504 whose own sentence says do not retry. For the 504
+  // the kicker was false and Try again re-solved a proof into a 429 with no receipt.
+  //   failed   502, and a hold we gave up on: the sentence is true, Try again is right
+  //   pow      403: the human check did not verify; nothing was claimed; try again
+  //   offline  the POST never got an answer
+  //   held     503 with a retryAfter (freshness, wallet lag, cTAZ recency): our side,
+  //            not theirs, a countdown, and the button waits for it
+  //   busy     503 kind busy: the queue is full; nothing was asked of the wallet
+  //   cap      503 kind cap: today's budget; no Try again, the time it resets if known
+  //   unknown  504: submitted, outcome unknown; no Try again, the address to watch
+  //   bad      400: the request itself; back to the form with the address kept
+  type FailKind = "failed" | "pow" | "offline" | "held" | "busy" | "cap" | "unknown" | "bad";
+  const [fail, setFail] = useState<{ kind: FailKind; retryAt?: number | null; address?: string }>({ kind: "failed" });
   const [tool, setTool] = useState<"lookup" | "about" | null>(null);
   const [lookupAddr, setLookupAddr] = useState("");
   const [lookupRes, setLookupRes] = useState("");
@@ -435,6 +451,7 @@ export default function Home() {
     if (now - queuedAt < HOLD_MAX_MS) return;
     setQueuedAddr(null);
     setQueuedAt(null);
+    setFail({ kind: "failed" });
     setErrMsg(
       "Our node has not caught up with the network, so we stopped holding your claim rather than " +
         "send one that would expire. Nothing was claimed and your cooldown is untouched. Try again later.",
@@ -578,6 +595,7 @@ export default function Home() {
         pow = await solvePow();
       } catch {
         setPowState(null);
+        setFail({ kind: "pow" });
         setErrMsg("Couldn't finish the human check. Refresh the page and try again.");
         setPhase("error");
         sending.current = false;
@@ -658,10 +676,22 @@ export default function Home() {
         inFlow.current = false;
         setPhase("degraded");
       } else {
+        // The rest of the refusals, sorted by what is true about them, not by colour.
+        const retry = typeof data.retryAfterSeconds === "number" && data.retryAfterSeconds > 0 ? data.retryAfterSeconds : null;
+        const nextAtMs = data.nextAt ? Date.parse(data.nextAt) : NaN;
+        const retryAt = Number.isFinite(nextAtMs) ? nextAtMs : retry != null ? Date.now() + retry * 1000 : null;
+        if (res.status === 504) setFail({ kind: "unknown", address });
+        else if (res.status === 503 && data.kind === "cap") setFail({ kind: "cap", retryAt });
+        else if (res.status === 503 && data.kind === "busy") setFail({ kind: "busy" });
+        else if (res.status === 503 && retryAt != null) setFail({ kind: "held", retryAt });
+        else if (res.status === 403) setFail({ kind: "pow" });
+        else if (res.status === 400) setFail({ kind: "bad" });
+        else setFail({ kind: "failed" });
         setErrMsg(data.error || "The send didn't go through. Nothing left the wallet.");
         setPhase("error");
       }
     } catch {
+      setFail({ kind: "offline" });
       setErrMsg("Couldn't reach the faucet. Check your connection and try again.");
       setPhase("error");
     } finally {
@@ -671,7 +701,7 @@ export default function Home() {
 
   const again = () => {
     inFlow.current = false;
-    setAddr(""); setTouched(false); setTx(null); setCopied(null); setErrMsg(""); setRefusal(null);
+    setAddr(""); setTouched(false); setTx(null); setCopied(null); setErrMsg(""); setRefusal(null); setFail({ kind: "failed" });
     setQueuedAddr(null);
     setGenKey(null); setKeyCopied(false); setKeyShown(false);
     setPhase(basePhase(status, network));
@@ -872,7 +902,16 @@ export default function Home() {
     : phase === "submitting" ? (powState ? "Checking you are human. Nothing to do, it runs on its own." : "Sending your testnet ZEC. Keep this tab open.")
     : phase === "success" ? "Sent. Your testnet ZEC is on its way."
     : phase === "cooldown" ? "Already claimed. A drip went out on this address or this connection in the last 24 hours."
-    : phase === "error" ? "The send failed. Nothing left the wallet."
+    : phase === "error" ? (
+        fail.kind === "held" ? "Not right now, on our side. " + errMsg
+        : fail.kind === "busy" ? "The faucet is busy. Nothing left the wallet. " + errMsg
+        : fail.kind === "cap" ? "The faucet has paid out its daily amount. " + errMsg
+        : fail.kind === "unknown" ? "Your drip was submitted and its outcome is unknown. " + errMsg
+        : fail.kind === "bad" ? "That request could not be taken. " + errMsg
+        : fail.kind === "pow" ? "The human check did not pass. Nothing was claimed. " + errMsg
+        : fail.kind === "offline" ? errMsg
+        : "The send failed. Nothing left the wallet."
+      )
     : "Faucet ready.";
 
   const pad = "clamp(16px,4vw,26px)";
@@ -1547,17 +1586,64 @@ export default function Home() {
           );
         })()}
 
-        {phase === "error" && (
-          <div role="alert" style={{ border: "2px solid var(--color-accent)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 11 }}>
-            <span style={kicker}>Send failed, nothing left the wallet</span>
-            <h2 style={{ margin: 0, fontSize: 19, lineHeight: 1.25 }}>That didn&apos;t go through.</h2>
-            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(70), maxWidth: "52ch" }}>{errMsg}</p>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-              <button className="btn btn-primary btn-sm" onClick={() => void submit()}>Try again</button>
-              <button className="btn btn-ghost btn-sm" onClick={again} style={{ padding: 0 }}>Start over</button>
+        {phase === "error" && (() => {
+          // Each card says only what is true of its refusal. The button set follows: a
+          // Try again that would re-solve a proof-of-work into the same refusal is not
+          // offered, and the 504's is the one that would land on a 429 with no receipt.
+          const k = fail.kind;
+          const waitMs = fail.retryAt != null ? fail.retryAt - now : 0;
+          const waitS = Math.max(0, Math.ceil(waitMs / 1000));
+          const when = fail.retryAt != null
+            ? new Date(fail.retryAt).toLocaleString(undefined, { hour: "2-digit", minute: "2-digit", weekday: "short", timeZoneName: "short" })
+            : null;
+          const kick =
+            k === "held" ? "Our side, not yours"
+            : k === "busy" ? "Busy, nothing left the wallet"
+            : k === "cap" ? "Today\u2019s budget is spent"
+            : k === "unknown" ? "Submitted, outcome unknown"
+            : k === "bad" ? "Couldn\u2019t take that request"
+            : k === "pow" ? "Human check failed, nothing was claimed"
+            : k === "offline" ? "No answer from the faucet"
+            : "Send failed, nothing left the wallet";
+          const head =
+            k === "held" ? "Not right now."
+            : k === "busy" ? "Too many sends queued."
+            : k === "cap" ? "The faucet has paid out its daily amount."
+            : k === "unknown" ? "We lost track of your drip."
+            : k === "bad" ? "Something in the request needs fixing."
+            : "That didn\u2019t go through.";
+          // Which sentence follows theirs. The server's own is shown as sent; the
+          // page adds only what it knows and the server does not: the clock, the
+          // address to watch, and that the address's cooldown is spent either way.
+          const tail =
+            k === "cap" && when ? ` It should have room again around ${when}.`
+            : k === "held" && waitS > 0 ? ` You can try again in ${waitS}s.`
+            : k === "held" ? " You can try again now."
+            : k === "unknown" ? " Watch that address for a few minutes. Its cooldown was spent on this claim, so a retry would be refused either way."
+            : "";
+          const tryAgain = k === "failed" || k === "pow" || k === "offline" || k === "busy" || k === "held";
+          return (
+            <div role="alert" style={{ border: "2px solid var(--color-accent)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 11 }}>
+              <span style={kicker}>{kick}</span>
+              <h2 style={{ margin: 0, fontSize: 19, lineHeight: 1.25 }}>{head}</h2>
+              <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(70), maxWidth: "52ch" }}>{errMsg}{tail}</p>
+              {k === "unknown" && fail.address && (
+                <code data-testid="unknown-address" style={{ fontFamily: "var(--mono)", fontSize: 12, wordBreak: "break-all", color: "var(--color-text)" }}>{fail.address}</code>
+              )}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                {tryAgain && (
+                  <button className="btn btn-primary btn-sm" onClick={() => void submit()} disabled={k === "held" && waitS > 0}>
+                    {k === "held" && waitS > 0 ? `Try again in ${waitS}s` : "Try again"}
+                  </button>
+                )}
+                {k === "bad" && (
+                  <button className="btn btn-primary btn-sm" onClick={() => { setErrMsg(""); setPhase(basePhase(status, network)); }}>Edit the address</button>
+                )}
+                <button className="btn btn-ghost btn-sm" onClick={again} style={{ padding: 0 }}>Start over</button>
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         <div className="hr" style={{ margin: "6px 0 0" }} />
 

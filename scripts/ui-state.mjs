@@ -50,6 +50,8 @@ const DIMENSIONS = {
     empty: "no balance at all",
     "topping-up": "balance inside the hysteresis band with shielding permitted",
     "sends-failing": "balance reads fine, every send fails; three claims judge it and the page goes DEGRADED",
+    "send-hangs": "every send hangs past the deadline; a claim is a 504, submitted with the outcome unknown",
+    "cap-one-drip": "the daily cap is one drip, so a claim is refused with the time the cap has room again (the local ledger is shared across runs, so usually the first claim)",
   },
 };
 
@@ -168,6 +170,11 @@ const wallet = {
   // LIVE: make three claims (each fails with a 502) and the badge turns DEGRADED, the
   // button is held, and a further claim is refused before any proof-of-work is asked.
   "sends-failing": { BALANCE_TAZ: "15", SEND_FAILS: "true" },
+  // The 504 and the cap, for the cards that must NOT offer Try again (R-34). The
+  // deadline is short so the 504 arrives in seconds; the wallet double must not be the
+  // one that gives up first, or the claim is a 502 and a different card.
+  "send-hangs": { BALANCE_TAZ: "15", SEND_HANGS: "true", SEND_TASK_DEADLINE_MS: "2500", ZALLET_OP_TIMEOUT_MS: "600000" },
+  "cap-one-drip": { BALANCE_TAZ: "15", FAUCET_DAILY_CAP_TAZ: "0.1" },
 }[chosen.wallet];
 
 const children = [];

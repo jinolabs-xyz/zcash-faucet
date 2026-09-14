@@ -439,6 +439,18 @@ WHERE ip_hash = ? AND network = ?
   AND ((status='sent' AND created_at > ?) OR (status='pending' AND created_at > ?))
 `;
 
+/** When the daily cap next has room: the EARLIEST expiry among the rows it counts,
+ * each on its own window (a sent row leaves the 24 h sum at created_at + 86 400, a
+ * pending one at the end of its lease). The cap's own predicate in RESERVE_SQL, so the
+ * two cannot disagree about which rows count. Params: lease seconds, network, the
+ * 24 h cut, the lease cut. */
+export const CAP_WINDOW_SQL = `
+SELECT MIN(created_at + CASE status WHEN 'sent' THEN 86400 ELSE ? END) AS frees_at
+FROM claims
+WHERE network = ?
+  AND ((status='sent' AND created_at >= ?) OR (status='pending' AND created_at >= ?))
+`;
+
 export const FINALIZE_SQL = `UPDATE claims SET status = ?, txid = ? WHERE id = ?`;
 
 /** One more drip served today. The day arrives as a param: SQL date functions differ

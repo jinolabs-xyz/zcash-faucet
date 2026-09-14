@@ -26,6 +26,7 @@ const PORT_F = 3215; // boots only to prove it dies
 const PORT_H = 3216; // H for HOUSEHOLD: several addresses behind one forwarded IP
 const PORT_I = 3217; // I for the /24: the subnet cap, the one refusal that must NOT carry a clock time
 const PORT_J = 3218; // J for a wallet that answers balances and FAILS every send
+const PORT_K = 3219; // K for the daily CAP: one drip a day, so the refusal's clock can be read
 // Somewhere to keep the output of the server that is supposed to die, so the
 // assertion can check WHY it died rather than only that it did.
 const LOG_DIR = mkdtempSync(join(tmpdir(), "faucet-api-integration-"));
@@ -37,6 +38,7 @@ const BASE_E = `http://localhost:${PORT_E}`;
 const BASE_H = `http://localhost:${PORT_H}`;
 const BASE_I = `http://localhost:${PORT_I}`;
 const BASE_J = `http://localhost:${PORT_J}`;
+const BASE_K = `http://localhost:${PORT_K}`;
 
 let failures = 0;
 const ok = (name, cond, detail = "") => {
@@ -376,6 +378,22 @@ const serverI = boot(PORT_I, {
 // J: sends fail, the verdict must reach the endpoint the page polls and the claim route
 // must refuse before proof-of-work (risk register II, R-32). Challenge ON here, because
 // the point is that no proof is asked for or counted once the wallet is judged.
+// K: a healthy wallet under a daily cap of exactly one drip. The cap is per network and
+// the ledger is shared with every server here, so K's first claim may already be the
+// refused one; the assertions are about the refusal's shape, not which claim it lands on.
+const WALLET_K = 28332;
+const walletK = wallet(WALLET_K, 10);
+const serverK = boot(PORT_K, {
+  ...zallet(WALLET_K),
+  ...chainView,
+  FAUCET_CHALLENGE: "none",
+  FAUCET_DAILY_CAP_TAZ: "0.1",
+  FAUCET_DRIP_TAZ: "0.1",
+  RATE_LIMIT_SALT: "integration-test-salt-k",
+  TRUSTED_PROXY_COUNT: "1",
+  FAUCET_IP_DAILY_MAX: "10",
+  FAUCET_SUBNET_DAILY_MAX: "100000",
+});
 const serverJ = boot(PORT_J, {
   ...zallet(WALLET_J),
   ...chainView,
@@ -401,7 +419,7 @@ try {
   // false: this fixture serves no testnet row BY DESIGN, so requiring one would
   // hang and then throw. Responding at all is the whole requirement.
   await waitHosh(false, 15_000, HOSH_EMPTY_PORT);
-  await Promise.all([waitReady(BASE_A), waitReady(BASE_B), waitReady(BASE_C), waitReady(BASE_D), waitReady(BASE_E), waitReady(BASE_H), waitReady(BASE_I), waitReady(BASE_J)]);
+  await Promise.all([waitReady(BASE_A), waitReady(BASE_B), waitReady(BASE_C), waitReady(BASE_D), waitReady(BASE_E), waitReady(BASE_H), waitReady(BASE_I), waitReady(BASE_J), waitReady(BASE_K)]);
 
   /* ── A: /api/status shape ────────────────────────────────────────────── */
   const status = await get(BASE_A, "/api/status");
@@ -588,6 +606,9 @@ try {
   const genC2 = await post(BASE_C, "/api/account", { type: "shielded" });
   const busy = await claim(BASE_C, genC2.body?.account?.address, null);
   ok("C with the queue full, a fresh claim is 503 busy", busy.status === 503 && /busy/i.test(busy.body.error ?? ""), `status ${busy.status} ${busy.body.error ?? ""}`);
+  // A FIELD, so the page can tell "busy" from the other 503s without a regex over the
+  // sentence (risk register II, R-34: they all wore one "Send failed" card).
+  ok("C and the busy refusal carries kind: busy", busy.body.kind === "busy", JSON.stringify(busy.body.kind));
   const readyC = await get(BASE_C, "/api/ready");
   ok("C and a busy refusal is NOT counted as a failed send", readyC.body.sends && readyC.body.sends.failed === 0, JSON.stringify(readyC.body.sends));
   ok("C while the hung send IS still counted as unresolved", readyC.body.sends && readyC.body.sends.unknown >= 1, JSON.stringify(readyC.body.sends));
@@ -788,6 +809,23 @@ try {
   ok("J a claim WITH a solved proof is still refused by the gate, not by the wallet", j5.status === 503 && j5.body.kind === "sends", `${j5.status} ${j5.body.kind ?? ""}`);
   ok("J a refusal that was ours does not escalate the next challenge", chalBefore.difficulty === chalAfter.difficulty, `${chalBefore.difficulty} -> ${chalAfter.difficulty}`);
 
+  // ── K: THE DAILY CAP SAYS WHEN (risk register II, R-34) ────────────────────────
+  // "Come back tomorrow" was the whole answer. The cap is a rolling 24 h sum, so the
+  // refusal now carries the earliest expiry among the drips it counts, as a duration
+  // and as a clock time, the same two fields the connection refusal has sent since the
+  // per-IP window landed. The page renders the time and offers no Try again.
+  const kIp = `192.0.3.${runByte}`; // TEST-NET-2, its own /24
+  const fromK = async () => {
+    const address = (await post(BASE_K, "/api/account", { type: "transparent" })).body.account?.address ?? "";
+    return req(BASE_K, "/api/faucet", { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": kIp }, body: JSON.stringify({ address }) });
+  };
+  let capped = await fromK();
+  if (capped.status === 200) capped = await fromK(); // the shared ledger had room for one
+  const capNextMs = capped.body.nextAt ? Date.parse(capped.body.nextAt) : NaN;
+  ok("K a claim over the daily cap is 503 kind cap", capped.status === 503 && capped.body.kind === "cap", `${capped.status} ${capped.body.kind ?? ""}`);
+  ok("K and it says how long, measured: within the day, not a fixed day", typeof capped.body.retryAfterSeconds === "number" && capped.body.retryAfterSeconds > 0 && capped.body.retryAfterSeconds <= 86_400, JSON.stringify(capped.body.retryAfterSeconds));
+  ok("K and when, as a clock time that agrees with the duration", Number.isFinite(capNextMs) && Math.abs(capNextMs - Date.now() - (capped.body.retryAfterSeconds ?? 0) * 1000) < 5_000, `${capped.body.nextAt} vs +${capped.body.retryAfterSeconds}s`);
+
   const statusE = await get(BASE_E, "/api/status");
   ok(
     "E the tip is genuinely unknown, not merely stale",
@@ -884,6 +922,8 @@ try {
   stop(walletI);
   stop(serverJ);
   stop(walletJ);
+  stop(serverK);
+  stop(walletK);
   stop(serverA);
   stop(serverB);
   stop(serverC);
