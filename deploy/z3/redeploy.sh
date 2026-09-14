@@ -301,7 +301,6 @@ probe_usable() {
   compose exec -T faucet node -e 'process.exit(0)' >/dev/null 2>&1
 }
 
-
 # ── CADDY MOVES WITH ITS PIN (R-7) ──────────────────────────────────────────────
 # The compose file pins caddy by digest and dependabot moves the digest; the compose
 # file is app-affecting, so this script runs on that bump. `pull` fetches the pinned

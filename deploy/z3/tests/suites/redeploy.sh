@@ -85,6 +85,20 @@ STUB_QUEUE_DEPTHS="none" bash "$REDEPLOY" > "$T/drain-none.log" 2>&1
 check "a status body with no queue depth (an older build) is not waited on" \
   "[ $? -eq 0 ] && grep -q 'could not read the send queue depth' '$T/drain-none.log' && ! grep -q 'waiting for' '$T/drain-none.log'"
 
+echo "== redeploy: a build that becomes ready just after the deadline ships, and caddy follows"
+# The late-ready exit 0: not rolled back, and it is a shipped exit, so the pin is
+# followed there too (review of #524, round 2). No liveness file, so the gate fails on
+# liveness every poll and never asks readiness; STUB_READY_MAX=2 is therefore spent by
+# the pre-deploy read and the FINAL read, which is what lands this on "IS ready now".
+# Touching STUB_HEALTH here would make the gate pass and the case land on the healthy
+# exit 0 instead, and its check would go red for the wrong reason.
+redeploy_env
+touch "$STUB_READY"
+STUB_READY_MAX=2 REDEPLOY_HEALTH_TIMEOUT=2 bash "$REDEPLOY" > "$T/late.log" 2>&1
+rc_late=$?
+check "the gate timing out on a faucet that IS ready by the final read exits 0" "[ $rc_late -eq 0 ] && grep -q 'IS ready now' '$T/late.log'"
+check "and caddy follows its pin on that exit too" "grep -q 'pull caddy' '$STUB_LOG'"
+
 echo "== redeploy: a build failure never touches the running faucet"
 redeploy_env
 touch "$STUB_HEALTH" "$STUB_READY"
@@ -407,6 +421,9 @@ rc_unprobe=$?
 check "exits 3: shipped but unverified, not 1 and not the did-not-ship 2" "[ $rc_unprobe -eq 3 ]"
 check "and said docker confirms the container is running, and that it is the built image" "grep -q 'is running (docker says so, and it is the image we built)' '$T/unprobe.log'"
 check "and the headline names the variable, not an empty string" "grep -q 'no REDEPLOY_FAUCET_URL and' '$T/unprobe.log'"
+# Shipped is shipped: this exit 3 records the commit too, so caddy follows its pin here
+# as on the healthy exit (review of #524, round 2: the call was there, the check was not).
+check "and caddy follows its pin on this shipped-but-unverified exit as well" "grep -q 'pull caddy' '$STUB_LOG'"
 
 echo "== redeploy: probe unusable, a container running, but it is NOT the new build: did not ship, no rollback"
 # compose declined to recreate (the #278/#279 shape): the old build is serving fine and
