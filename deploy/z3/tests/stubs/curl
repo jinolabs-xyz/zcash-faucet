@@ -4,6 +4,10 @@
 echo "curl $*" >> "${STUB_LOG:?}"
 case "$*" in
   *"/ready"*)
+    # STUB_CURL_RC: the transport failed with this curl status (6 DNS, 7 refused, 28
+    # timeout, 35 TLS handshake...), no body, no HTTP status. Only the readiness fetch,
+    # so the alert and health probes in the same sweep are untouched.
+    [ -n "${STUB_CURL_RC:-}" ] && exit "$STUB_CURL_RC"
     # STUB_READY_FAIL_UNTIL names a marker: fail once, then pass, which is how
     # a node lagging a couple of blocks behaves.
     if [ -n "${STUB_READY_FAIL_UNTIL:-}" ] && [ ! -e "$STUB_READY_FAIL_UNTIL" ]; then

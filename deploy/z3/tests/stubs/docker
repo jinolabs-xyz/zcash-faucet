@@ -100,6 +100,18 @@ case "${1:-}" in
       esac
     fi
     case "$fmt" in
+      # The template the watchdog uses: empty when the container has no healthcheck, which
+      # is line 3 of the state file absent. Every pre-existing case has no line 3, so they
+      # keep the URL probe they were written against.
+      *State.Health*)
+        # After a restart a real container reports 'starting' for its start_period.
+        # STUB_HEALTH_STARTING_SWEEPS=N: answer 'starting' for the first N health reads
+        # after a restart (a counter file beside the state), then what the restart wrote.
+        if [ -n "${STUB_HEALTH_STARTING_SWEEPS:-}" ] && [ -f "$f.restarted" ]; then
+          k=$(( $(cat "$f.restarted") + 1 )); echo "$k" > "$f.restarted"
+          if [ "$k" -le "$STUB_HEALTH_STARTING_SWEEPS" ]; then echo starting; exit 0; fi
+        fi
+        sed -n 3p "$f" ;;
       *State.Status*)    head -n1 "$f" ;;
       *State.StartedAt*) st="$(sed -n 2p "$f")"; echo "${st:-2000-01-01T00:00:00.000000000Z}" ;;
       *) echo "stub docker inspect: unsupported fmt $fmt" >&2; exit 64 ;;
@@ -125,7 +137,18 @@ case "${1:-}" in
     ;;
   restart)
     shift
+    # `-t N` (stop grace) is accepted and dropped: the log line above keeps it.
+    [ "${1:-}" = "-t" ] && shift 2
     [ -f "${STUB_CONTAINERS:?}/$1" ] || { echo "no such container: $1" >&2; exit 1; }
+    # A container with a healthcheck (line 3) keeps one after a restart: what it reads
+    # next is STUB_HEALTH_AFTER_RESTART (default: what it read before), after any
+    # 'starting' sweeps the inspect branch hands out first.
+    h3="$(sed -n 3p "${STUB_CONTAINERS:?}/$1")"
+    if [ -n "$h3" ]; then
+      printf 'running\n\n%s\n' "${STUB_HEALTH_AFTER_RESTART:-$h3}" > "${STUB_CONTAINERS:?}/$1"
+      echo 0 > "${STUB_CONTAINERS:?}/$1.restarted"
+      echo "$1"; exit 0
+    fi
     echo running > "${STUB_CONTAINERS:?}/$1"
     echo "$1"
     ;;
