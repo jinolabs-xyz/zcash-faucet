@@ -303,6 +303,9 @@ const serverC = boot(PORT_C, {
   FAUCET_CHALLENGE: "none",
   SEND_TASK_DEADLINE_MS: "2500",
   ZALLET_OP_TIMEOUT_MS: "600000", // the sender must NOT be what gives up first
+  // One slot, so the hung send below fills the queue and the next claim is refused
+  // "busy": the shape risk register II R-19 is about.
+  SEND_QUEUE_MAX_PENDING: "1",
 });
 
 // D: a healthy wallet behind a stale chain view. Challenge off so a claim is one
@@ -547,6 +550,18 @@ try {
   // flight inside the wallet.
   const statusC = await get(BASE_C, "/api/status");
   ok("C the stuck send still counts against queue depth", statusC.body.queueDepth >= 1, `depth ${statusC.body.queueDepth}`);
+
+  // A FULL QUEUE IS NOT A FAILED SEND (risk register II, R-19). The hung send holds C's
+  // one slot, so a fresh claim is refused "busy" before the wallet is asked. That used
+  // to be recorded as a failed send, and three of them inside fifteen minutes read as
+  // "sends failing" on /api/ready: the watchdog pages on that and redeploy rolls back
+  // on it, for a wallet that was never touched.
+  const genC2 = await post(BASE_C, "/api/account", { type: "shielded" });
+  const busy = await claim(BASE_C, genC2.body?.account?.address, null);
+  ok("C with the queue full, a fresh claim is 503 busy", busy.status === 503 && /busy/i.test(busy.body.error ?? ""), `status ${busy.status} ${busy.body.error ?? ""}`);
+  const readyC = await get(BASE_C, "/api/ready");
+  ok("C and a busy refusal is NOT counted as a failed send", readyC.body.sends && readyC.body.sends.failed === 0, JSON.stringify(readyC.body.sends));
+  ok("C while the hung send IS still counted as unresolved", readyC.body.sends && readyC.body.sends.unknown >= 1, JSON.stringify(readyC.body.sends));
 
   /* ── D: a stale chain view must not pay out (#187) ────────────────────── */
 
