@@ -65,6 +65,17 @@ export interface SendRecord {
 export const MIN_SAMPLE = 3;
 
 /**
+ * Failures alone, with nothing succeeding, that are a verdict on their own (risk
+ * register II, R-18). The sample rule above needs three DECIDED sends in the window
+ * and production does about nine drips a day, so a wallet that answered balances and
+ * refused every send kept readiness 200, live-smoke green and the watchdog quiet for
+ * hours: one stranger failed, then a second an hour later, and by the time a third
+ * arrived the first had aged out. Two strangers failing in a row with no success in
+ * between is not a blip about individual claims; one failure still is.
+ */
+export const FAIL_ALONE = 2;
+
+/**
  * How far back we look. Long enough that a handful of claims accumulate on a quiet
  * faucet; long enough to hold MIN_SAMPLE unresolved sends spaced by the send deadline
  * (the queue is serial and a send that blew its deadline is still running, so
@@ -162,6 +173,18 @@ export function readSendHealth(now: number = Date.now(), records: SendRecord[] =
         failed,
         unknown,
         reason: `${unknown} of the last ${unknown + failed} sends never resolved and none succeeded, the wallet is not finishing sends`,
+      };
+    }
+    // Two failures and no success (R-18): judged here too, since two decided sends
+    // never reach the ratio rule. The ratio rule still owns anything with a success in
+    // it, so one failure beside one success stays "too few to judge".
+    if (ok === 0 && failed >= FAIL_ALONE) {
+      return {
+        state: "degraded",
+        ok,
+        failed,
+        unknown,
+        reason: `${failed} of the last ${failed} sends failed and none succeeded`,
       };
     }
     return {

@@ -830,13 +830,19 @@ try {
   const jPow = () => solvedChallengeFrom(BASE_J, jIp);
   const j1 = await fromJ(await jPow());
   const j2 = await fromJ(await jPow());
+  ok("J two sends fail as 502, each after a solved proof", j1.status === 502 && j2.status === 502, `${j1.status} ${j2.status}`);
+  // TWO IS THE VERDICT on a wallet that lands nothing (R-18): the third visitor is
+  // refused before the proof is verified, so their solved proof is not spent. Under
+  // the three-sample rule alone this third claim was a third 502 and a third burnt
+  // proof, and on a nine-drips-a-day faucet the third often arrived after the first
+  // had aged out, so the verdict never came at all.
   const j3 = await fromJ(await jPow());
-  ok("J three sends fail as 502, each after a solved proof", j1.status === 502 && j2.status === 502 && j3.status === 502, `${j1.status} ${j2.status} ${j3.status}`);
+  ok("J the third, with a solved proof, is refused by the gate: two strangers failing in a row is the wallet", j3.status === 503 && j3.body.kind === "sends", `${j3.status} ${j3.body.kind ?? ""}`);
   const statusJ = await get(BASE_J, "/api/status");
-  ok("J /api/status now carries the send-health verdict the page can read", statusJ.body.sends?.state === "degraded" && statusJ.body.sends.failed >= 3, JSON.stringify(statusJ.body.sends));
+  ok("J /api/status now carries the send-health verdict the page can read", statusJ.body.sends?.state === "degraded" && statusJ.body.sends.failed === 2 && statusJ.body.sends.ok === 0, JSON.stringify(statusJ.body.sends));
   const readyJ = await get(BASE_J, "/api/ready");
   ok("J and /api/ready agrees", readyJ.status === 503 && /sends failing/.test(readyJ.body.reason ?? ""), `${readyJ.status} ${readyJ.body.reason ?? ""}`);
-  // The fourth visitor: no proof solved, a bare POST. Refused by the send-health gate
+  // The next visitor: no proof solved, a bare POST. Refused by the send-health gate
   // BEFORE the challenge step, so the answer is 503 with the sends kind, not 403.
   const j4 = await fromJ(null);
   ok("J a claim with no proof is refused by the send-health gate, 503, before the challenge is asked for", j4.status === 503 && j4.body.kind === "sends", `${j4.status} ${JSON.stringify(j4.body)}`);
