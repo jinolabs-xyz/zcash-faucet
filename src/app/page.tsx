@@ -6,6 +6,7 @@ import { CSSProperties, useCallback, useEffect, useRef, useState } from "react";
 import "./redesign-tokens.css";
 import "./redesign-shell.css";
 import { BrandMark } from "./BrandMark";
+import Link from "next/link";
 import { Sparkline, type DripDay } from "./Sparkline";
 import { reserveRows } from "@/lib/reserveLabel";
 import { minerChip, minerRow, minerErrorRow, minerIsBad, readingFromStatus } from "@/lib/minerLabel";
@@ -1088,31 +1089,22 @@ export default function Home() {
           measure, which is why it is a grid and not a flex row. */}
       <header className="hdr">
         <div className="brand">
-          {/* The LOGO hyperlinks to z.cash, which is the trademark policy's condition for
-              showing it. The site NAME beside it is ours and stays site navigation, so the
-              two are separate links rather than one. Nested anchors would be invalid
-              markup anyway.
+          {/* ONE LINK HOME, mark and wordmark together, on the orange-soft disc (owner
+              ruling, 2026-09-16, preview line 378).
 
-              New tab, deliberately: people expect a masthead mark to go home, and sending
-              someone off-site mid-claim would lose whatever they had typed. The aria-label
-              says where it goes so the surprise is announced. */}
-          <a
-            href="https://z.cash/"
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label="Zcash, opens z.cash in a new tab"
-            title="Zcash"
-            style={{ display: "inline-flex", flex: "none", color: "inherit" }}
-          >
-            <BrandMark />
-          </a>
-          <span className="name">Zcash Testnet Faucet</span>
-          {/* Not a live region: the sr-only status region inside the claim view owns phase
-              announcements, and a live badge here would say everything twice.
-
-              The word is the PHASE MACHINE's, not the preview's three-way badgeWord. Ours
-              separates CHECKING from PREPARING from DEGRADED, and a redesign is no reason
-              to give a visitor a coarser answer than the one the page already knows. */}
+              THIS DROPS THE z.cash HYPERLINK AND THAT IS AN OPEN QUESTION, not an
+              oversight. The mark linked to z.cash because the comment it replaced called
+              that "the trademark policy's condition for showing it", with the wordmark a
+              separate link because nested anchors are invalid markup. One anchor around
+              both cannot also point at z.cash, so the ruling and the condition cannot both
+              be satisfied as drawn. Implemented as ruled, raised with the CTO at 18:57Z and
+              carried at the top of the PR body: if the answer is that the condition needs
+              the hyperlink, this becomes two anchors on the same disc layout. The footer's
+              "not an official Zcash service" is unchanged either way. */}
+          <Link className="home" href="/" aria-label="Zcash Testnet Faucet, home">
+            <span className="mark"><BrandMark /></span>
+            <span className="name">Zcash Testnet Faucet</span>
+          </Link>
           <span className="badge" data-state={statusText} data-testid="status-badge">
             <span className="ring">
               <span
