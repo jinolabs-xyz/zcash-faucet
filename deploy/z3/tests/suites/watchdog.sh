@@ -1175,7 +1175,7 @@ check "and does NOT claim our miner did it" "! grep -q 'most likely ours' '$T/al
 # nothing while the real instruction sits below it. My own mutation of the active case proved
 # the sentence appears when it should; only this proves it stays away when it should not.
 check "and does not tell anyone to stop a miner that is already stopped" \
-  "! grep -q 'still ACTIVE and extending' '$T/alerts.log'"
+  "! grep -q 'still running (systemd says' '$T/alerts.log'"
 
 echo "== watchdog: a park marker that cannot be written is said plainly, not papered over"
 wd_fork_env
@@ -1249,7 +1249,7 @@ check "and the page that did fire is the one past the limit, 151" "grep -q '151 
 # FINDING 2: the rung never stops the miner, so over an ACTIVE unit "parked" described a state
 # nobody was in while the box kept extending the chain at ~10 blocks a minute.
 check "the page leads with the stop, because the unit is still running" \
-  "grep -q 'still ACTIVE and extending this chain: stop it by hand FIRST' '$T/alerts.log'"
+  "grep -q 'still running (systemd says active) and extending this chain: stop it by hand FIRST' '$T/alerts.log'"
 check "and says what the marker actually does, which is gate STARTS" \
   "grep -q 'no deploy and no watchdog heal will START the miner' '$T/alerts.log'"
 
@@ -1265,6 +1265,11 @@ check "pages, because the fork is established by the heights either way" "grep -
 check "but calls it unexplained rather than blaming a two-minute-old miner" \
   "grep -q 'cannot show it has been running long' '$T/alerts.log' && ! grep -q 'most likely ours' '$T/alerts.log'"
 check "and reads the age as seconds, not as 'unreadables'" "! grep -q 'unreadables' '$T/alerts.log'"
+# THE FIX FOR THAT BUG HAD A BUG (CTO red-team, review of round 3): ${v:+${v}s}${v:-unreadable}
+# is not an if/else, it is two expansions, so a readable age rendered "120s120". Asserted by
+# SHAPE rather than by the literal, because the heartbeat ages a second between sweeps.
+check "and renders it once rather than twice" \
+  "grep -qE 'startedAt age: [0-9]+s\\)' '$T/alerts.log' && ! grep -qE 'startedAt age: [0-9]+s[0-9]' '$T/alerts.log'"
 
 echo "== watchdog: and the same miner IS blamed once the bound says it is old enough"
 wd_fork_env
@@ -1275,6 +1280,19 @@ export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4350000
 wd_run 2
 check "the bound is READ rather than hardcoded, so the attribution follows it" \
   "grep -q 'most likely ours' '$T/alerts.log'"
+
+echo "== watchdog: a miner that is ACTIVATING is still a miner that will extend the chain"
+# CTO red-team, review of round 3: the stop instruction keyed on the unit word being exactly
+# "active", so a unit mid-start got a fork page with no stop line at all - and "activating" is a
+# miner that is seconds from submitting on top of the private chain.
+wd_fork_env
+echo activating > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4350000
+wd_run 2
+check "pages" "grep -q '200 blocks AHEAD' '$T/alerts.log'"
+check "and still leads with the stop, carrying systemd's own word" \
+  "grep -q 'still running (systemd says activating) and extending this chain: stop it by hand FIRST' '$T/alerts.log'"
 
 echo "== watchdog: turning the NODE heal off does not turn fork detection off with it"
 # CTO red-team, finding 3 (R3). The PR body claims this and nothing tested it; the heights are

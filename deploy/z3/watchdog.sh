@@ -843,11 +843,19 @@ heal_self_mined_fork() {
   # a unit can be active with a wedged process that has templated nothing for hours.
   miner_word="$(systemctl is-active "$MINER_UNIT" 2>/dev/null)" || true
   started_age="$(ts_age "$(hb_field startedAt)")"
-  if [ "$miner_word" = "active" ] && [ -n "$started_age" ] && [ "$started_age" -gt "$FORK_MINER_MIN_SECS" ]; then
+  local age_said="unreadable"; [ -n "$started_age" ] && age_said="${started_age}s"
+  # "activating" IS a unit that is about to extend this chain (red-team, same review): keying the
+  # stop line on the word being exactly "active" left a starting miner with no instruction at all.
+  local miner_running=0
+  case "$miner_word" in active|activating|reloading) miner_running=1 ;; esac
+  if [ "$miner_running" = "1" ] && [ -n "$started_age" ] && [ "$started_age" -gt "$FORK_MINER_MIN_SECS" ]; then
     mins=$(( started_age / 60 ))
     who="our miner is active and its heartbeat says it started ${mins} min ago, so this chain is most likely ours"
-  elif [ "$miner_word" = "active" ]; then
-    who="our miner is active but its heartbeat cannot show it has been running long (startedAt age: ${started_age:+${started_age}s}${started_age:-unreadable}), so what built $ahead blocks is unexplained"
+  elif [ "$miner_running" = "1" ]; then
+    # ONE SUBSTITUTION, NOT TWO GLUED TOGETHER (CTO red-team, review of #560 r3). My fix for
+    # "unreadables" emitted BOTH halves when the variable was set - ${v:+...}${v:-...} is not an
+    # if/else, it is two expansions, and 120 rendered as "120s120". Computed once, above.
+    who="our miner is active but its heartbeat cannot show it has been running long (startedAt age: ${age_said}), so what built $ahead blocks is unexplained"
   else
     who="our miner is ${miner_word:-not running}, so what built $ahead blocks is unexplained"
   fi
@@ -877,7 +885,7 @@ heal_self_mined_fork() {
   # the one command the 2026-09-15 record puts first was missing from the list. The active
   # case now leads with the stop.
   local park stop_first=""
-  [ "$miner_word" = "active" ] && stop_first="The miner unit is still ACTIVE and extending this chain: stop it by hand FIRST (systemctl stop $MINER_UNIT). "
+  [ "$miner_running" = "1" ] && stop_first="The miner unit is still running (systemd says ${miner_word}) and extending this chain: stop it by hand FIRST (systemctl stop $MINER_UNIT). "
   if [ -f "$FORK_PARK_MARKER" ]; then
     park="${stop_first}A park marker is written ($FORK_PARK_MARKER): no deploy and no watchdog heal will START the miner while that file exists."
   else
