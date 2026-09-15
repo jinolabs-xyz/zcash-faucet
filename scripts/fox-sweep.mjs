@@ -26,6 +26,18 @@ const BASE = process.argv[3] || process.env.UI_SMOKE_URL || "http://localhost:31
 const VIEWPORTS = [[1440, 900], [768, 1024], [390, 844]];
 const THEMES = ["paper", "ink"];
 const EXPECTED = VIEWPORTS.length * THEMES.length * 9;
+// THE RULING'S NUMBER, CHECKED AGAINST THIS FILE'S ARITHMETIC (SDE-App, review of #563).
+// EXPECTED derives from the arrays that drive the loops, so cutting a viewport recomputes it
+// and the sweep still takes "what it planned" - 18 shots, nothing red, two thirds of the
+// coverage gone. What the owner approved is 54: three viewports, two themes, nine pointer
+// stops. So the plan is held to the promise rather than trusted as one, and this runs BEFORE
+// the applicability check, because a tree whose dimensions are wrong is wrong whether or not
+// the mascot has shipped yet.
+const RULING_SHOTS = 54;
+if (EXPECTED !== RULING_SHOTS) {
+  console.error(`fox-sweep: this file plans ${EXPECTED} shots (${VIEWPORTS.length} viewports x ${THEMES.length} themes x 9 stops) but the acceptance test the owner approved is ${RULING_SHOTS}. Change the arrays and this number together, deliberately, or neither.`);
+  process.exit(1);
+}
 
 if (!existsSync(FOX_MARKER)) {
   console.log(`fox-sweep: no ${FOX_MARKER} in this tree, so the mascot has not shipped yet. NOT APPLICABLE, not passed.`);

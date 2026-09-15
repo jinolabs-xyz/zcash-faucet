@@ -1282,6 +1282,21 @@ check "the fox checker refuses a sweep shorter than the one that was intended" \
   "grep -q 'but the sweep intended' '$REPO/scripts/fox-check.py' && grep -q 'carries no expected count' '$REPO/scripts/fox-check.py'"
 check "and the sweep writes the count it intended, so there is something to refuse against" \
   "grep -qF 'expected: EXPECTED' '$REPO/scripts/fox-sweep.mjs'"
+# AND WHAT IT INTENDED IS HELD TO THE RULING, not to its own arrays (SDE-App, review of #563).
+# EXPECTED is computed FROM the loops' arrays, so cutting VIEWPORTS from three to one
+# recomputed it to 18 and every check above stayed green while two thirds of the coverage
+# vanished: the pair enforced "took what it planned" and nothing enforced "planned what the
+# ruling names". The only 54 in the tree was a comment. Two holds now - the scripts refuse to
+# run at the wrong size, and these pin the dimensions the owner approved so a shrunk array is
+# red in the harness too, without waiting for a browser job.
+check "the fox sweep plans the 54 the ruling names, and refuses to run at any other size" \
+  "grep -qF 'const RULING_SHOTS = 54;' '$REPO/scripts/fox-sweep.mjs' && grep -qF 'EXPECTED !== RULING_SHOTS' '$REPO/scripts/fox-sweep.mjs'"
+check "and its dimensions are the approved three viewports and two themes" \
+  "grep -qF 'const VIEWPORTS = [[1440, 900], [768, 1024], [390, 844]];' '$REPO/scripts/fox-sweep.mjs' && grep -qF 'const THEMES = [\"paper\", \"ink\"];' '$REPO/scripts/fox-sweep.mjs'"
+check "the fit check plans its 42 the same way" \
+  "grep -qF 'const RULING_COMBOS = 42;' '$REPO/scripts/fit-check.mjs' && grep -qF 'PLANNED !== RULING_COMBOS' '$REPO/scripts/fit-check.mjs'"
+check "and its dimensions are the three desktop sizes, two themes, four views and three pages" \
+  "grep -qF 'const SIZES = [[1440, 900], [1280, 800], [1920, 1080]];' '$REPO/scripts/fit-check.mjs' && grep -qF 'const VIEWS = [\"claim\", \"status\", \"analytics\", \"tools\"];' '$REPO/scripts/fit-check.mjs' && grep -qF 'const PAGES = [\"/terms\", \"/donate\", \"/fund\"];' '$REPO/scripts/fit-check.mjs'"
 # THE ARTWORK AND WHAT IS SERVED FROM IT. The sources are committed so the served files are
 # reproducible (the argument scripts/build-icons.mjs makes for the icons), which only means
 # anything if a source edited without a rebuild goes red.

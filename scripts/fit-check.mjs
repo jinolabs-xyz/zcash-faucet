@@ -31,6 +31,15 @@ const THEMES = ["paper", "ink"];
 const VIEWS = ["claim", "status", "analytics", "tools"];
 const PAGES = ["/terms", "/donate", "/fund"];
 
+// THE SAME HOLD, for the same reason: the combination count comes out of the arrays below,
+// so shrinking one of them would leave a run that "measured everything it meant to".
+const RULING_COMBOS = 42;
+const PLANNED = SIZES.length * THEMES.length * (VIEWS.length + PAGES.length);
+if (PLANNED !== RULING_COMBOS) {
+  console.error(`fit-check: this file plans ${PLANNED} combinations (${SIZES.length} sizes x ${THEMES.length} themes x ${VIEWS.length + PAGES.length} views and pages) but the ruling is ${RULING_COMBOS}. Change the arrays and this number together, deliberately, or neither.`);
+  process.exit(1);
+}
+
 if (!existsSync(SHELL_MARKER)) {
   console.log(`fit-check: no ${SHELL_MARKER} in this tree, so the redesign shell is not here yet and there is nothing to fit. NOT APPLICABLE, not passed.`);
   process.exit(0);
@@ -92,9 +101,8 @@ for (const o of rows) {
 console.log("errors:", errors.length ? errors : "none");
 // A RUN THAT CHECKED NOTHING IS NOT A PASS. Without this an early `break`, a bad base URL
 // or an empty size list would print "errors: none" and exit 0 on zero measurements.
-const expected = SIZES.length * THEMES.length * (VIEWS.length + PAGES.length);
-if (rows.length !== expected) {
-  console.error(`fit-check: FAIL - measured ${rows.length} of ${expected} expected combinations, so this run proves nothing`);
+if (rows.length !== RULING_COMBOS) {
+  console.error(`fit-check: FAIL - measured ${rows.length} of ${RULING_COMBOS} expected combinations, so this run proves nothing`);
   process.exit(1);
 }
 const bad = rows.filter((o) => !o.fits || o.themeKept === false);
