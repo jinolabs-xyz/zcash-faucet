@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 
 /**
  * THE TRANSITIONAL MEASURE MUST NOT OUTLIVE THE SLICE THAT NEEDED IT.
@@ -12,43 +12,68 @@ import { readFileSync, existsSync } from "node:fs";
  *
  * ui-smoke holds the other direction (the class removed early, content back to full width,
  * measured). This holds the direction a browser cannot see: the class still there after the
- * slice that was supposed to remove it landed. Each slice is keyed to a REPO FACT that only
- * becomes true when that slice lands - SDE-Infra's repo-fact-plus-page-fact shape, the one
- * the CTO approved for I1.
+ * slice that was supposed to remove it landed.
  *
- * S3 to S5 add their own marker here as they are specified. An unkeyed slice is worse than
- * a missing test, so do not guess a marker before the slice has one.
+ * THE MARKER IS A WIRING FACT, NOT A FILE. This first keyed S2 to `src/components/Mascot.tsx`
+ * existing, and SDE-UI's plan to ship components before wiring them is what exposed that as
+ * wrong: a component file lands in one PR and the view is wired in another, so a file-existence
+ * marker goes true while the view is still the old markup - red on a tree that is correct.
+ * Worse for S2 specifically, the mascot is on hold pending the owner's evaluation, so S2 may
+ * land its claim card with no mascot at all and a `<Mascot` marker would never fire.
+ *
+ * So each slice is keyed to something in the RENDERED SECTION that is only true once that
+ * view has actually been transcribed. For the claim view that is the design's claim card,
+ * `id="claim"`, which is also what the S2 acceptance test drives (phase-test.mjs measures
+ * `#claim`'s height), so the marker and the contract are the same fact.
+ *
+ * S3 to S5 add their own rows. Pick a wiring fact, not a filename, and assert BOTH directions
+ * or the control can never fire.
  */
 
 const PAGE = "src/app/page.tsx";
 
-/** The `<section>` opening tag for one view, so the class can be read off it. */
-function sectionTag(view: string): string {
-  const src = readFileSync(PAGE, "utf8");
+/** One view's `<section ...>` opening tag, so its classes can be read. */
+function sectionTag(src: string, view: string): string {
   const i = src.indexOf(`data-view="${view}"`);
   assert.notEqual(i, -1, `no section for the ${view} view in ${PAGE}`);
-  const start = src.lastIndexOf("<section", i);
-  return src.slice(start, src.indexOf(">", i) + 1);
+  return src.slice(src.lastIndexOf("<section", i), src.indexOf(">", i) + 1);
 }
 
-test("every view still carrying the transitional measure is one that has not been transcribed", () => {
-  // S2 lands the claim view, and the owner's ruling names its component path, so that file
-  // existing IS the slice having landed. Nothing else about S2 is as unambiguous.
-  const s2Landed = existsSync("src/components/Mascot.tsx");
-  const claim = sectionTag("claim");
-  if (s2Landed) {
-    assert.ok(
-      !claim.includes("legacy-measure"),
-      "S2 has landed (src/components/Mascot.tsx exists) but the claim view still caps its " +
-        "content at 760px, so the transcribed hero is squeezed into two thirds of the page",
-    );
-  } else {
-    // The control: while S2 has NOT landed the class must still be there, or the content it
-    // was protecting is already at full width and the assertion above would never fire.
-    assert.ok(
-      claim.includes("legacy-measure"),
-      "the claim view is not transcribed yet (no src/components/Mascot.tsx) but has lost " +
-        "its transitional measure, so its content is at full width",
-    );
+/** The body of one view's section, which is where a wiring fact would appear. */
+function sectionBody(src: string, view: string): string {
+  const i = src.indexOf(`data-view="${view}"`);
+  assert.notEqual(i, -1, `no section for the ${view} view in ${PAGE}`);
+  const open = src.indexOf(">", i) + 1;
+  const close = src.indexOf("</section>", open);
+  assert.notEqual(close, -1, `the ${view} section is not closed`);
+  return src.slice(open, close);
+}
+
+/** view -> the marker that is true once that view has been transcribed and wired. */
+const WIRED: Record<string, { marker: RegExp; what: string }> = {
+  claim: { marker: /id="claim"/, what: "the design's claim card (phase-test.mjs drives #claim)" },
+  // status / analytics / tools: SDE-UI adds a row per slice, keyed to a wiring fact.
+};
+
+test("no view keeps the transitional measure after its slice has wired the real thing", () => {
+  const src = readFileSync(PAGE, "utf8");
+  for (const [view, { marker, what }] of Object.entries(WIRED)) {
+    const wired = marker.test(sectionBody(src, view));
+    const capped = sectionTag(src, view).includes("legacy-measure");
+    if (wired) {
+      assert.ok(
+        !capped,
+        `the ${view} view is wired (${what}) but still carries legacy-measure, so the ` +
+          "transcribed design is squeezed into 760px of a full-width view",
+      );
+    } else {
+      // The control. Without it this passes for ever on a tree where the class was dropped
+      // early, and would never be in a position to fire.
+      assert.ok(
+        capped,
+        `the ${view} view is not wired yet (no ${what}) but has lost its transitional ` +
+          "measure, so its untranscribed content is at full width",
+      );
+    }
   }
 });
