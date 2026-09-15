@@ -44,6 +44,14 @@
 import { chromium, devices } from "playwright";
 
 const BASE = (process.env.UI_SMOKE_URL ?? "http://localhost:3120").replace(/\/$/, "");
+// THE DESKTOP SIZE THIS SUITE SPEAKS FOR, declared rather than inherited. The contexts below
+// passed no viewport, so the desktop pass ran at whatever Playwright defaults to - 1280x720
+// today - and the suite reported a clean run while the footer sat 64px below the fold with its
+// links unreachable by a pointer. A size nobody chose is a size nobody is testing. Naming it
+// changes nothing today and stops it changing silently tomorrow.
+const DESKTOP = { width: 1280, height: 720 };
+// The second desktop size the footer is checked at, because one size proves one size.
+const DESKTOP_ALT = { width: 1366, height: 768 };
 let failures = 0;
 const ok = (name, cond, detail = "") => {
   console.log(`${cond ? "ok" : "FAIL"}: ${name}${detail ? ` (${detail})` : ""}`);
@@ -111,6 +119,74 @@ const COLOUR_LIB = `
       return (hi + 0.05) / (lo + 0.05);
     };
   `;
+
+/**
+ * THE FOOTER IS REACHABLE BY A POINTER, at two desktop sizes.
+ *
+ * The design clamps the page to one screen (`.stage` height:100dvh, and above 56rem
+ * `overflow:hidden`). Over the pre-redesign content, which is taller than a screen, that cut
+ * the footer by 30 to 93px and left Donate TAZ, Terms and GitHub unreachable - six wheel
+ * events moved scrollTop from 0 to 0 - while this suite reported a clean run. It reported
+ * clean because everything here asked whether text was PRESENT, and `textContent` reads a
+ * clipped element exactly like a visible one.
+ *
+ * WHAT IS ASSERTED, AND WHY IT IS NOT "the document fits the viewport". The ruling that
+ * dropped the clamp makes the document TALLER than the viewport over this content - measured
+ * 787px in 720px and 803px in 768px - so "fits" and "clamp dropped" cannot both be true in
+ * this slice. Fitting is the FINISHED design's property and arrives with the content designed
+ * for it, enforced per slice by I1's fit check. The property that was actually broken, and
+ * the one a visitor feels, is REACHABILITY: the page scrolls, and every footer link can be
+ * clicked once you get there. Clipped-and-unscrollable fails this; tall-and-scrollable passes.
+ *
+ * `elementFromPoint` at the link's centre is what makes it real - a link that is present, in
+ * the box model, and covered or clipped fails, which is what "pointer-unreachable" meant to
+ * whoever wanted /terms. Production has `maintenanceAddress` set and carries a fourth link,
+ * so whatever links the footer holds are the ones checked and the count is not hard-coded.
+ */
+async function checkFooterReachable(browser) {
+  for (const vp of [DESKTOP, DESKTOP_ALT]) {
+    const c = await browser.newContext({ viewport: vp });
+    const p = await c.newPage();
+    await p.goto(BASE, { waitUntil: "networkidle" });
+    await p.waitForTimeout(400);
+    const label = `${vp.width}x${vp.height}`;
+
+    // Can the page be scrolled to its own bottom? This is the half the clamp broke: with
+    // overflow:hidden the content was taller AND scrollTop could not move off zero.
+    const scroll = await p.evaluate(async () => {
+      const d = document.documentElement;
+      const over = d.scrollHeight - innerHeight;
+      if (over <= 0) return { over, reached: true, scrollTop: 0 };
+      window.scrollTo(0, d.scrollHeight);
+      await new Promise((r) => setTimeout(r, 150));
+      return { over, reached: d.scrollTop >= over - 2, scrollTop: d.scrollTop };
+    });
+    ok(`${label}: the page can be scrolled to its own bottom, not clipped at it`,
+      scroll.reached,
+      scroll.over <= 0 ? "the page fits, so there was nothing to scroll"
+        : `${scroll.over}px past the fold and scrollTop stopped at ${scroll.scrollTop}`);
+
+    const r = await p.evaluate(() => {
+      document.querySelector(".ftr")?.scrollIntoView({ block: "end" });
+      const links = [...document.querySelectorAll(".ftr nav a")].map((a) => {
+        const b = a.getBoundingClientRect();
+        const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+        return {
+          t: a.textContent.trim(),
+          inView: b.top >= 0 && b.bottom <= innerHeight && b.width > 0,
+          hit: !!(hit && (hit === a || a.contains(hit))),
+        };
+      });
+      return { links };
+    });
+    const bad = r.links.filter((l) => !l.inView || !l.hit);
+    ok(`${label}: every footer link can be reached and clicked`,
+      r.links.length > 0 && bad.length === 0,
+      r.links.length === 0 ? "no footer links found, so nothing was measured"
+        : r.links.map((l) => `${l.t}:${l.inView ? "in" : "OUT"}/${l.hit ? "hit" : "BLOCKED"}`).join("  "));
+    await c.close();
+  }
+}
 
 async function checkAppearance(page) {
   // The masthead mark, same identity as the favicon. aria-hidden by design, so
@@ -522,7 +598,7 @@ async function checkFirstPaint(page, base, address) {
 // network layer with the bodies the route really sends, and the page's own switch is
 // what is under test. Its own context: routes must not leak into the claim flow.
 async function checkRefusalCards(browser, base, address) {
-  const ctx = await browser.newContext();
+  const ctx = await browser.newContext({ viewport: DESKTOP });
   const page = await ctx.newPage();
   const norm = (t) => t.toLowerCase().replace(/[\u2018\u2019]/g, "'");
   const card = async () => {
@@ -913,7 +989,7 @@ async function check404(page, base) {
 }
 
 const browser = await chromium.launch();
-const ctx = await browser.newContext({ permissions: ["clipboard-read", "clipboard-write"] });
+const ctx = await browser.newContext({ viewport: DESKTOP, permissions: ["clipboard-read", "clipboard-write"] });
 const page = await ctx.newPage();
 
 // Anything the page logs as an error, or any uncaught exception, fails the run.
@@ -933,6 +1009,7 @@ try {
 
   // Visual + a11y checks before the claim flow, while the home page is loaded.
   await checkAppearance(page);
+  await checkFooterReachable(browser);
   // WHERE THE TAZ COMES FROM follows the status (R-39). Under this stack there is no
   // miner heartbeat, so the sentence has to be the not-mining one; the three
   // contradictory fixed sentences must be gone from the rendered page.

@@ -230,3 +230,27 @@ canvas.g{width:calc(1.3*var(--u));height:calc(1.3*var(--u));display:inline-block
  * `.brand .home canvas.g` sizing rule does not reach it. Same numbers, our selector. The
  * orange-soft disc this used to sit in was removed from the design at 00:40Z. */
 .brand .home .brand-mark{width:calc(1.45*var(--u));height:calc(1.45*var(--u));color:var(--ink-3)}
+
+/* ===== NOT YET: the one-screen clamp =====
+ * The design clamps the whole page to one screen: `.stage` is `height:100dvh` and, above
+ * 56rem, `overflow:hidden` with `.comp` at `height:100dvh`. That is right for the FINISHED
+ * design and wrong for this slice, because the views still hold the pre-redesign content,
+ * which is taller. The CTO's red-team measured the result at 1024x768, 1280x720, 1366x768
+ * and 1440x810: the footer cut by 30 to 93px, six wheel events moving scrollTop from 0 to 0,
+ * and Donate TAZ / Terms / GitHub not reachable by a pointer at all. Production has
+ * `maintenanceAddress` set, so it would have shipped four dead links - including the link to
+ * /terms, which is where the trademark attribution was moved to three hours ago. The page's
+ * own comment answers this: "A terms page nobody can reach protects nobody."
+ *
+ * So the clamp is OVERRIDDEN rather than edited out of the transcription above, and it comes
+ * back with the content it was designed for (S2 to S5), enforced per slice by I1's fit check.
+ * `min-height` is kept, so `.comp > .ftr{margin-top:auto}` still pins the footer to the
+ * bottom of a short page - which is the half of the design this slice can honour.
+ *
+ * CONTAINMENT CHANGES WITH IT, and it has to. `container: stage / size` is size containment,
+ * which needs a definite height in BOTH axes; with an auto height it does not resolve, and
+ * `--u`'s `1cqw` goes with it. `inline-size` is the correct pairing for an auto height and is
+ * what the phone breakpoint already switches to.
+ */
+.stage{container-type:inline-size;height:auto;min-height:100dvh;overflow:visible}
+@media (min-width:56rem){.stage{overflow:visible}.comp{height:auto;min-height:100dvh}}
