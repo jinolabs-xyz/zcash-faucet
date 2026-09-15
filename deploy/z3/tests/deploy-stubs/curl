@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Stands in for Zallet's RPC auth, and ONLY for that. deploy.sh's single real curl call
-# is the credential probe; the other two mentions are inside help text it echoes.
+# is the credential probe (a `-K -` config on stdin since R-42; `-u` is still parsed so
+# a regression to argv fails by name); the other two mentions are inside help text.
 #
 # THIS STUB EXISTS TO MAKE ONE BUG EXPRESSIBLE. The wallet reads its config into memory
 # when it starts, so rewriting the config on disk changes nothing until it restarts. On
@@ -15,14 +16,27 @@
 # credential, checked against a loaded pwhash. Not zallet, and not the wire.
 set -uo pipefail
 
+# Every argv is recorded so a suite can assert what is NOT on it: the credential must
+# arrive through `-K -` on stdin (a curl config line `user = "faucet:pw"`), never as
+# `-u` (risk register II, R-42). `-u` is still parsed so that regression fails by name
+# in the suite rather than as a stub that cannot answer.
+[ -n "${STUB_CURL_ARGV:-}" ] && printf '%s\n' "curl $*" >> "$STUB_CURL_ARGV"
 user_pass=""
 want_code=0
 for arg in "$@"; do
   case "$arg" in
     -u) next=user ;;
+    -K) next=config ;;
     '%{http_code}') want_code=1 ;;
     *)
-      if [ "${next:-}" = "user" ]; then user_pass="$arg"; next=""; fi ;;
+      if [ "${next:-}" = "user" ]; then user_pass="$arg"; next="";
+      elif [ "${next:-}" = "config" ]; then
+        next=""
+        if [ "$arg" = "-" ]; then
+          # curl config syntax: user = "faucet:pw". Read only what stdin holds.
+          user_pass="$(sed -n 's/^user *= *"\(.*\)"$/\1/p' | head -1)"
+        fi
+      fi ;;
   esac
 done
 

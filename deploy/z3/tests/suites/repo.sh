@@ -103,6 +103,17 @@ done
 check "every job in every workflow has a numeric timeout-minutes" \
   "[ -z '$WF_NO_TIMEOUT' ] || { echo '   without:$WF_NO_TIMEOUT'; false; }"
 
+# THE IMAGE SCANNER IS A GATE, NOT A REPORT (R-42, review). trivy's default exit code is
+# 0, so a step without `exit-code: "1"` prints findings and blocks nothing, and a
+# deleted step blocks nothing either; both read green to every other check here.
+CIWF="$REPO/.github/workflows/ci.yml"
+check "the image job scans the built image with trivy-action, pinned" \
+  "grep -qE '^ *uses: aquasecurity/trivy-action@[0-9a-f]{40} # v' '$CIWF'"
+check "and the scan is a gate: exit-code 1, on CRITICAL, fixable only" \
+  "awk '/uses: aquasecurity\\/trivy-action@/{f=1} f&&/exit-code: \"1\"/{e=1} f&&/severity: CRITICAL/{s=1} f&&/ignore-unfixed: true/{u=1} END{exit !(e&&s&&u)}' '$CIWF'"
+check "and it scans the image this job built, not a registry tag" \
+  "grep -qE '^ *image-ref: faucet-ci-check:' '$CIWF'"
+
 echo "== repo: the watchdog's node-lag limit is the miner's, for the miner's reason"
 # Both read zebra's clock-based estimatedheight. The miner's guard (sync.rs) explains why
 # 100 and not less: hour-long testnet gaps push the estimate ~50 "behind" with nobody

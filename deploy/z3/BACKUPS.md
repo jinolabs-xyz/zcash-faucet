@@ -118,6 +118,11 @@ in `/etc/faucet/backup.env` and every run ships the fresh archive off-box
 The blob is already encrypted, any dumb storage is fine. Remember the
 passphrase rule above.
 
+With no hook set, every run logs a `WARNING: no BACKUP_UPLOAD_CMD` line: the
+archive exists only on the box it backs up. If on-box really is the intent
+(a throwaway test box, say), set `BACKUP_LOCAL_ONLY=1` in the same file and
+the warning stops; that is a written decision, not a default.
+
 ## Restore
 
 On the box (or a replacement box with docker up):

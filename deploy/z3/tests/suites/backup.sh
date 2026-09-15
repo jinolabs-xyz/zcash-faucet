@@ -82,6 +82,17 @@ n="$(find "$BACKUP_DIR/archives" -name '*.tar.gz.gpg' | wc -l | tr -d ' ')"
 check "rotation keeps 2 (got $n)" "[ '$n' = '2' ]"
 check "sidecars rotated with archives" "[ \"\$(find '$BACKUP_DIR/archives' -name '*.sha256' | wc -l | tr -d ' ')\" = '2' ]"
 check "upload hook called every run" "[ \"\$(wc -l < '$hook' | tr -d ' ')\" = '3' ]"
+check "and with a hook there is no on-box-only warning" "! grep -q 'WARNING: no BACKUP_UPLOAD_CMD' '$T/rot-3.log'"
+
+echo "== backup: an archive that only exists on the box says so, unless that is written down (R-42)"
+fresh_env; backup_env; seed_wallet
+unset BACKUP_UPLOAD_CMD
+bash "$BACKUP" > "$T/nohook.log" 2>&1
+check "a run with no upload hook still succeeds: a nightly page for a good backup trains nobody" "[ $? -eq 0 ]"
+check "and warns that the archive will not survive the box" "grep -q 'WARNING: no BACKUP_UPLOAD_CMD: this archive exists only on this box' '$T/nohook.log'"
+check "and names both ways out" "grep -q 'BACKUP_LOCAL_ONLY=1' '$T/nohook.log' && grep -q 'BACKUPS.md' '$T/nohook.log'"
+BACKUP_LOCAL_ONLY=1 bash "$BACKUP" > "$T/localonly.log" 2>&1
+check "BACKUP_LOCAL_ONLY=1 is the written decision, and the warning stops" "[ $? -eq 0 ] && ! grep -q 'WARNING: no BACKUP_UPLOAD_CMD' '$T/localonly.log'"
 
 echo "== restore: roundtrip into empty volumes"
 fresh_env; backup_env; seed_wallet

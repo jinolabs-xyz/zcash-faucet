@@ -717,9 +717,17 @@ ZALLET_HOST_URL="http://127.0.0.1:$([ "$NETWORK" = testnet ] && echo 40232 || ec
 # Only the HTTP status is read. 401 is the server refusing the credential; 200 means
 # the credential was accepted, even if the JSON body carries a method-level error. That
 # keeps this a pure auth probe and stops it depending on which RPCs this build has.
+#
+# The credential goes to curl through a config file on stdin (`-K -`), never as `-u`
+# on the command line: argv is world-readable in /proc for the life of the process and
+# lands in any process listing or audit log taken while it runs (risk register II, R-42).
+# curl's config parser unescapes inside the quotes, so a backslash or a double quote
+# in the credential has to be escaped or it arrives changed (review of #542; the
+# rotated credential is hex, a hand-written one may not be).
 zallet_auth_status() { # $1 password -> 200 | 401 | 000 when unreachable
-  curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
-    -u "faucet:$1" -H 'content-type: application/json' \
+  local pw=${1//\\/\\\\}; pw=${pw//\"/\\\"}
+  printf 'user = "faucet:%s"\n' "$pw" | curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+    -K - -H 'content-type: application/json' \
     -d '{"jsonrpc":"2.0","id":1,"method":"getinfo","params":[]}' \
     "$ZALLET_HOST_URL" 2>/dev/null || echo 000
 }

@@ -18,7 +18,8 @@ on:
     branches: [main]
 
 # LEAST PRIVILEGE FOR THE JOB TOKEN (risk register #27). Nothing in this workflow
-# calls the GitHub API: no gh, no GITHUB_TOKEN, no actions/github-script. Without a
+# writes through the GitHub API: no gh, no actions/github-script; the one action that
+# takes the token (trivy-action, to fetch its own release) needs contents: read. Without a
 # permissions block every job here ran with whatever the repository default grants,
 # which on an older default is write to contents, issues, packages and more, handed
 # to code from a pull request branch. Declared read-only at the top, and the repo suite
@@ -497,3 +498,19 @@ jobs:
             echo "the built image could not run node:"; printf '%s\n' "$out"; exit 1; }
           [ "$out" = "node-ok" ] || { echo "unexpected: $out"; exit 1; }
           echo "image runs"
+
+      # THE IMAGE SCANNER (risk register II, R-42). Every dependency ecosystem here has a
+      # gate except the runtime image itself: node:24-slim is digest-pinned (R-7), which
+      # means a CVE in its Debian layer stays until someone bumps the digest, and nothing
+      # said when that was due. Trivy reads the OS packages and the app's node_modules in
+      # the image this job built. CRITICAL only, and only where a fix exists: an
+      # unfixable finding is a fact to know, not a red to chase, and HIGH on a slim base
+      # would page on Debian's backlog. Pinned to a commit like every other action (R-8).
+      - name: no fixable CRITICAL vulnerability in the image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: faucet-ci-check:${{ github.sha }}
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
