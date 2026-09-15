@@ -593,9 +593,9 @@ unset BOX_REPORT_OUT
 export STUB_LOG="$T/stub.log"; : > "$STUB_LOG"
 # A NON-STOCK data-root, which is the whole point: under the stock one the bug is invisible.
 export STUB_VOLROOT="$T/dockerroot/volumes"
-export BOX_REPORT_VOLUME_ROOT="$T/stockroot"
+BOX_REPORT_VOLUME_ROOT="$T/stockroot"   # NOT exported: one shell for every suite (#550 review)
 mkdir -p "$STUB_VOLROOT/zcash-faucet_faucet_data" "$BOX_REPORT_VOLUME_ROOT"
-bash "$BOX_REPORT" > /dev/null 2>"$T/writer.err"
+BOX_REPORT_VOLUME_ROOT="$BOX_REPORT_VOLUME_ROOT" bash "$BOX_REPORT" > /dev/null 2>"$T/writer.err"
 check "docker was asked where the volume is mounted" \
   "grep -q 'docker volume inspect -f {{.Mountpoint}} zcash-faucet_faucet_data' '$STUB_LOG'"
 check "and the report is in the volume docker named" \
@@ -621,10 +621,10 @@ box_env
 unset BOX_REPORT_OUT
 export STUB_LOG="$T/stub.log"; : > "$STUB_LOG"
 export STUB_VOLROOT="$T/dockerroot/volumes"
-export BOX_REPORT_VOLUME_ROOT="$T/stockroot"
+BOX_REPORT_VOLUME_ROOT="$T/stockroot"   # NOT exported: one shell for every suite (#550 review)
 mkdir -p "$STUB_VOLROOT/zcash-faucet_faucet_data" "$BOX_REPORT_VOLUME_ROOT"
 started=$(date +%s)
-STUB_VOLUME_HANG=30 bash "$BOX_REPORT" > /dev/null 2>"$T/hang.err"
+STUB_VOLUME_HANG=30 BOX_REPORT_VOLUME_ROOT="$BOX_REPORT_VOLUME_ROOT" bash "$BOX_REPORT" > /dev/null 2>"$T/hang.err"
 elapsed=$(( $(date +%s) - started ))
 check "the run returns rather than waiting on the daemon (bounded near 10s, well under the 30s hang)" \
   "[ $elapsed -lt 20 ]"
@@ -643,12 +643,12 @@ box_env
 unset BOX_REPORT_OUT
 export STUB_LOG="$T/stub.log"; : > "$STUB_LOG"
 export STUB_VOLROOT="$T/empty"; mkdir -p "$STUB_VOLROOT"
-export BOX_REPORT_VOLUME_ROOT="$T/shared"
+BOX_REPORT_VOLUME_ROOT="$T/shared"   # NOT exported, same reason
 mkdir -p "$BOX_REPORT_VOLUME_ROOT"
 # INLINE, NOT EXPORTED. Every suite is sourced into ONE shell, so an export here is still
 # set when bringtospec runs next and would send its box-report looking for this made-up
 # volume. That is the STUB_READY leak again; it costs a review round every time.
-BOX_REPORT_FAUCET_VOLUME="no-such-volume" bash "$BOX_REPORT" > /dev/null 2>"$T/fb.err"
+BOX_REPORT_FAUCET_VOLUME="no-such-volume" BOX_REPORT_VOLUME_ROOT="$BOX_REPORT_VOLUME_ROOT" bash "$BOX_REPORT" > /dev/null 2>"$T/fb.err"
 writer_path="$(find "$BOX_REPORT_VOLUME_ROOT" -name box-integrity.json -type f 2>/dev/null | head -1)"
 check "with no such volume the writer still asked docker, then fell back" \
   "grep -q 'docker volume inspect -f {{.Mountpoint}} no-such-volume' '$STUB_LOG' && [ -n '$writer_path' ]"
