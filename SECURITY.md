@@ -74,7 +74,8 @@ enough to make the ledger volume writable by that user (every earlier image left
 it root-owned), then `setpriv`s to `node` and execs, so node is still PID 1 and
 the SIGTERM drain is untouched. The compose service is `read_only` with a tmpfs
 for `/tmp` and `.next/cache`, drops every capability and adds back the four the
-hand-off needs, and the build context leaves out the ops scripts, the test
+hand-off needs (they stay in the bounding set, and `no-new-privileges` on the
+service is what keeps a process from ever getting them back), and the build context leaves out the ops scripts, the test
 doubles, the tests and the docs, with devDependencies pruned before the run
 stage. The CI `image` job runs the built image under those exact flags and
 fails unless the process is uid 1000 with no effective capability on a

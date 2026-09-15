@@ -133,7 +133,7 @@ check "and the build stage prunes devDependencies before the run stage copies it
 check "the build context leaves out the ops scripts, the harnesses, the tests and the docs" \
   "( for p in deploy scripts docs design .github '**/*.test.ts' '**/*.test.mjs'; do grep -qxF \"\$p\" '$REPO/.dockerignore' || exit 1; done )"
 check "and the CI image job proves the runtime shape rather than assuming it" \
-  "grep -q 'uid=1000 caps=0000000000000000 owner=1000' '$CIWF'"
+  "grep -q 'uid=1000 caps=0000000000000000 nnp=1 owner=1000' '$CIWF' && grep -q 'touch /home/node/probe' '$CIWF'"
 
 echo "== repo: the watchdog's node-lag limit is the miner's, for the miner's reason"
 # Both read zebra's clock-based estimatedheight. The miner's guard (sync.rs) explains why

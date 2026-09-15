@@ -394,6 +394,17 @@ do_rollback() {
   [ -n "$prev" ] || { log "ERROR: no $PREVIOUS_TAG image to roll back to"; return 1; }
   log "rolling back to $PREVIOUS_TAG ($prev)"
   docker tag "$PREVIOUS_TAG" "$IMAGE" || { log "ERROR: could not retag $PREVIOUS_TAG"; return 1; }
+  # THE LEDGER VOLUME GOES BACK TO ROOT FIRST (risk register II, R-10, review of #545).
+  # An image since R-10 starts as root only to hand /app/data to `node` and then runs
+  # as node; the image before it ran as root. Rolling back across that line under the
+  # new compose file (every capability dropped, no DAC_OVERRIDE) started a root process
+  # over a node-owned ledger: liveness 200, readiness "ledger ok" (a read), and every
+  # claim SQLITE_READONLY. So the rollback re-owns the volume to root before starting
+  # the previous image; an image with the entrypoint hands it to node again on start,
+  # so this is right in both directions. Best effort: a failure here is logged and the
+  # rollback proceeds, since a stuck rollback is the worse outcome.
+  compose run --rm --no-deps --entrypoint chown faucet -R 0:0 /app/data 2>&1 | sed 's/^/    /' \
+    || log "WARNING: could not re-own the ledger volume for the rolled-back image; if claims fail after this, run: docker run --rm -v zcash-faucet_faucet_data:/app/data $PREVIOUS_TAG chown -R 0:0 /app/data"
   compose up -d --no-build faucet || { log "ERROR: could not start the rolled-back image"; return 1; }
   # Liveness only: the previous build was serving, and if the node has since
   # gone un-ready that is not this image's fault.

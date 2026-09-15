@@ -22,7 +22,10 @@ Accept=yes
 # process on this host is outside the trust boundary this socket defines.
 SocketUser=root
 SocketGroup=root
-SocketMode=0660
+# 0666, not 0660: the connecting side is the app's `node` user (uid 1000, R-10), which
+# has no group on the host. The parent directory is docker's volume root, traversable by
+# root alone, so the wide mode grants nothing to anyone who could not already reach it.
+SocketMode=0666
 
 # A stale socket file from an unclean shutdown would otherwise make the unit fail to
 # start, which turns a reboot into a dark cTAZ.

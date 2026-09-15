@@ -182,6 +182,15 @@ rc=$?
 # Exit 2 specifically: service restored, change did not ship. Exiting 0 here
 # would let `redeploy.sh && echo shipped` lie about a rolled-back deploy.
 check "exits 2 (rolled back, did not ship)" "[ $rc -eq 2 ]"
+# THE ROLLBACK RE-OWNS THE LEDGER VOLUME BEFORE STARTING THE PREVIOUS IMAGE (R-10). An
+# image since R-10 runs as node and hands /app/data to node on start; the image before
+# it ran as root, and under the new compose file (no DAC_OVERRIDE) could not write a
+# node-owned ledger: live, "ready", and every claim SQLITE_READONLY. Measured in review.
+check "the rollback re-owns /app/data to root through the service (its caps, its image, chown as the entrypoint)" \
+  "grep -qE 'compose .*run --rm --no-deps --entrypoint chown faucet -R 0:0 /app/data' '$STUB_LOG'"
+check "and does so BEFORE the rolled-back image is started" \
+  "[ \"\$(grep -n 'entrypoint chown faucet' '$STUB_LOG' | head -1 | cut -d: -f1)\" -lt \"\$(grep -n 'up -d --no-build faucet' '$STUB_LOG' | tail -1 | cut -d: -f1)\" ]"
+
 check "says the change did not ship" "grep -q 'did NOT ship' '$T/nr.log'"
 check "says live but never ready" "grep -q 'never became ready' '$T/nr.log'"
 check "rolled back to the previous image" "[ \"\$(img zcash-faucet:latest)\" = 'sha256:old' ]"

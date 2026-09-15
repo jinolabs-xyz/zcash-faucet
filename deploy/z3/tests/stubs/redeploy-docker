@@ -120,6 +120,11 @@ case "${1:-}" in
       *" run --rm --no-deps -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile ")
         [ "${STUB_CADDY_VALIDATE_FAIL:-0}" = "1" ] && { echo "Error: adapting config using caddyfile: (stub) unrecognized directive" >&2; exit 1; }
         echo "Valid configuration"; exit 0 ;;
+      # A rollback re-owns the ledger volume to root before the previous image starts
+      # (R-10): recorded in the docker log like everything else, answered here.
+      *" run --rm --no-deps --entrypoint chown faucet -R 0:0 /app/data ")
+        [ "${STUB_REOWN_FAIL:-0}" = "1" ] && { echo "chown: cannot access '/app/data' (stub)" >&2; exit 1; }
+        echo "re-owned"; exit 0 ;;
       *" up -d --no-deps --no-build --force-recreate caddy ")
         [ "${STUB_CADDY_UP_FAIL:-0}" = "1" ] && { echo "caddy up failed (stub)" >&2; exit 1; }
         echo "caddy recreated"; exit 0 ;;
