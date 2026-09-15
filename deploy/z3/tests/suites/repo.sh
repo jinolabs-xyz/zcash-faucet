@@ -1306,8 +1306,19 @@ check "and the fit check holds sizes-times-themes from the FIRST slice, not only
 # what is on it is L1 in this file's own words: a proxy for the property.
 check "fits means the footer is on screen and its links are hit-testable, not just the numbers" \
   "grep -qF 'document.elementFromPoint(x, y)' '$REPO/scripts/fit-check.mjs' && grep -qF 'r.links.every((l) => l.inView && l.reachable)' '$REPO/scripts/fit-check.mjs'"
-check "and clipping is named as clipping rather than reported as a scroll" \
-  "grep -q 'CLIPPED, footer cut by' '$REPO/scripts/fit-check.mjs' && grep -qF 'getComputedStyle(st).overflowY !== \"hidden\"' '$REPO/scripts/fit-check.mjs'"
+check "and clipping is named as clipping, attributed to the ancestor that hides it" \
+  "grep -qF 'CLIPPED by an ancestor' '$REPO/scripts/fit-check.mjs' && grep -qF 'cs.overflowY === \"hidden\" || cs.overflowY === \"clip\"' '$REPO/scripts/fit-check.mjs'"
+# THE SCROLLER IS WHICHEVER ELEMENT SCROLLS - my own defect, caught by hand on the shell that
+# is now in production and BEFORE this gate was wired to anything. The first version read
+# `.stage` as the scroller; once the one-screen clamp came off, the DOCUMENT scrolls and
+# `.stage` does not, so the check called the correct shell CLIPPED. A gate that refuses the
+# right answer is worse than no gate - it would have blocked every correct PR behind it. The
+# two halves are held together because either one alone still reads the old way: the page is
+# scrolled by whichever box actually scrolls, AND the row says which box it judged.
+check "the check scrolls whichever box scrolls, the document included" \
+  "grep -qF 'if (st && st.scrollHeight > st.clientHeight) st.scrollTop = st.scrollHeight;' '$REPO/scripts/fit-check.mjs' && grep -qF 'window.scrollTo(0, document.documentElement.scrollHeight);' '$REPO/scripts/fit-check.mjs'"
+check "and every row names the scroller it judged, so a wrong one is readable" \
+  "grep -qF 'scroller: stScrolls ? \".stage\" : \"document\"' '$REPO/scripts/fit-check.mjs' && grep -qF 'via \${o.scroller}' '$REPO/scripts/fit-check.mjs'"
 # THE SHEETS: served, and held at the size the owner ruled.
 # THE BOOP NAMES ITS LAYER (CTO red-team, review of #563): `span span` matches BOTH sprite
 # layers and the directions layer is opacity 1 always, so the old assertion was true before any
