@@ -5,9 +5,11 @@ import { CSSProperties, useCallback, useEffect, useRef, useState } from "react";
 // 2026-09-15. Tokens first: the shell reads them.
 import "./redesign-tokens.css";
 import "./redesign-shell.css";
+import "./redesign-hero.css";
 import { BrandMark } from "./BrandMark";
 import Link from "next/link";
 import { Sparkline, type DripDay } from "./Sparkline";
+import { Mascot } from "@/components/Mascot";
 import { reserveRows } from "@/lib/reserveLabel";
 import { minerChip, minerRow, minerErrorRow, minerIsBad, readingFromStatus } from "@/lib/minerLabel";
 import { publicBoxRow, publicBoxChip, publicBoxIsBad, type PublicBox } from "@/lib/boxLabel";
@@ -1189,15 +1191,41 @@ export default function Home() {
           and does not rewrite it, so a reviewer can see the shell landing without reading
           a thousand lines of diff that say the same words in a different place. */}
       <main className="views">
-        <section className="view legacy-measure" data-view="claim" data-testid="view-claim" aria-label="Claim" hidden={view !== "claim"}>
-        <p className="sr-only" role="status">{announce}</p>
-        {(phase === "ready" || phase === "checking" || phase === "syncing" || phase === "fault" || phase === "empty" || phase === "degraded") && (
-          <div>
-            <h1 style={{ fontSize: "clamp(27px,7.4vw,40px)", lineHeight: 1.08, letterSpacing: "-.025em", margin: "0 0 10px" }}>Get free testnet ZEC, sent privately.</h1>
-            <p style={{ margin: 0, fontSize: 14.5, lineHeight: 1.55, color: muted(62), maxWidth: "46ch" }}>Paste a testnet address. The drip is shielded, so the amount and the recipient stay off the public ledger.</p>
+        {/* THE HERO (S2a). `legacy-measure` is gone from this view because the view is
+            transcribed now: the design's hero is a three-column grid of its own and capping
+            it at 760px would squeeze exactly what this slice landed. The other three views
+            keep the cap until their slices land, held by ui-smoke's count and by
+            src/app/legacyMeasure.test.ts, which keys this view to the `id="claim"` below. */}
+        <section className="view hero" data-view="claim" data-testid="view-claim" aria-label="Claim" hidden={view !== "claim"}>
+          <p className="sr-only" role="status">{announce}</p>
+          <div className="hero-grid">
+            <div className="hero-copy">
+              <p className="eyebrow mono">Zcash testnet faucet</p>
+              <h1 id="h1">Get free testnet ZEC</h1>
+              <p className="lede"><b>{dripText}</b> per address, every 24 hours.</p>
+              {/* THE PUZZLE IS EXPLAINED BEFORE THE BUTTON, which is R-38's property, and now
+                  earlier than before: it used to sit under the claim button and it is the
+                  hero's second line now. It MOVED rather than being duplicated - the
+                  snapshot's hero carries this sentence and the card already had its own copy,
+                  so transcribing the hero literally would have said it twice on one page.
 
-          </div>
-        )}
+                  STILL CONDITIONAL ON THE CHALLENGE BEING ON. The snapshot states it flat
+                  because the design assumes proof of work, but a deployment running
+                  FAUCET_CHALLENGE=none would then promise a puzzle that never runs. The
+                  wording is the snapshot's, which is also the post-ruling wording - the
+                  version it replaces used a prose colon, which the owner has banned. */}
+              {status?.challenge === "pow" && (
+                <p className="lede small">Your browser solves a short puzzle instead of a CAPTCHA. A few seconds, longer on a phone, and you can cancel it.</p>
+              )}
+            </div>
+            <figure className="hero-mascot" aria-label="The faucet's fox, turning to follow your pointer">
+              <Mascot />
+              <figcaption className="mascot-cap">He knows you&apos;re here. He can&apos;t see the transaction. Nobody can.</figcaption>
+            </figure>
+            {/* THE CARD SHELL, with the CURRENT claim markup inside it. S2b transcribes the
+                card's own contents and puts the phase changes on `motion`; this slice gives
+                them the shell they will live in, so the hero is real a merge earlier. */}
+            <article className="card claim feature" id="claim" aria-labelledby="h1">
 
         {/* TAZ only. Every number in it (sync percent, our block height, our node
             height) is about OUR Zebra, and rendering it under a cTAZ hold would show
@@ -1460,13 +1488,9 @@ export default function Home() {
               <span aria-hidden="true">→</span>
             </button>
             <p style={{ margin: 0, fontSize: 11.5, letterSpacing: ".02em", color: muted(55), fontFamily: "var(--mono)" }}>{dripText} · once per address / 24h · shielded z→z</p>
-            {/* Said BEFORE the button is pressed (R-38): the puzzle used to be explained only
-                once it was already running, so the first a visitor heard of a wait was the wait. */}
-            {status?.challenge === "pow" && (
-              <p style={{ margin: 0, fontSize: 12, lineHeight: 1.5, color: muted(58) }}>
-                Before it sends, your browser solves a short puzzle instead of a CAPTCHA: a few seconds, longer on a phone or after repeated tries. You can cancel it.
-              </p>
-            )}
+            {/* The puzzle explanation moved UP to the hero's second line (S2a), so it is
+                read before the button rather than under it and the page says it once. R-38's
+                property is kept and strengthened; the copy is in the hero above. */}
           </div>
         )}
 
@@ -1764,6 +1788,8 @@ export default function Home() {
           ) : null}
         </div>
 
+            </article>
+          </div>
         </section>
 
         <section className="view legacy-measure" data-view="status" data-testid="view-status" aria-label="Status" hidden={view !== "status"}>
