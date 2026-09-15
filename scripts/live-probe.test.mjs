@@ -32,7 +32,7 @@ function fakeFaucet(ready, { box, publicBox, token = "" } = {}) {
       network: "testnet", dripTaz: 0.1, balanceTaz: 100, empty: false, queueDepth: 0,
       challenge: "pow", node: { ready: true, syncPercent: 100, height: 10, frozen: false },
       backend: { reachable: true },
-      box: ops ? detailed : (publicBox ?? { state: "ok", minerUnit: null }),
+      box: ops ? { ...detailed, verdict: detailed.verdict ?? "ok" } : (publicBox ?? { state: "ok", minerUnit: null }),
       ...(ops ? { buildCommit: "abc1234" } : {}),
     };
     const body = req.url.startsWith("/api/ready") ? ready : status;
@@ -99,23 +99,28 @@ test("a healthy faucet passes", async () => {
 
 // ── THE OPERATOR'S VIEW IS TOKEN-GATED, AND THE PUBLIC WORD STILL CARRIES THE VERDICT (R-24) ──
 
-test("with the token, the probe reads the detailed box and names the fault", async () => {
-  const r = await runProbe({ SMOKE_OPS_TOKEN: "t0ken-t0ken-t0ken-t0ken" }, READY, { token: "t0ken-t0ken-t0ken-t0ken", box: { state: "complete", expected: 1, present: 1, notEnabled: 0, watchdogUnit: "inactive", alertBridge: "ok", minerBinary: "current", ageSeconds: 5 } });
+test("with the token, the probe judges the detailed box by its one-word verdict and NEVER prints the fault's name", async () => {
+  // This repository is public and a run log is readable by anyone with a GitHub account:
+  // "faucet-watchdog.service is STOPPED" printed here would be R-24's leak, moved
+  // (review of #543, round 2).
+  const r = await runProbe({ SMOKE_OPS_TOKEN: "t0ken-t0ken-t0ken-t0ken" }, READY, { token: "t0ken-t0ken-t0ken-t0ken", box: { state: "complete", expected: 1, present: 1, notEnabled: 0, watchdogUnit: "inactive", alertBridge: "ok", minerBinary: "current", ageSeconds: 5, verdict: "attention" } });
   assert.notEqual(r.code, 0);
-  assert.match(r.out, /faucet-watchdog\.service is STOPPED/, "the sentence naming the fault is what the token buys");
+  assert.match(r.out, /FAIL: the box is ok.*the box reports "attention"/);
+  assert.doesNotMatch(r.out, /watchdog\.service|STOPPED|inactive|alertBridge|bridge/i, "no unit or bridge name in a public run log");
+  assert.match(r.out, /ok: the operator token, when sent, is honoured/);
 });
 
 test("without the token, a box that reports attention is STILL RED: the one word is the same verdict", async () => {
   const r = await runProbe({}, READY, { token: "t0ken-t0ken-t0ken-t0ken", publicBox: { state: "attention", minerUnit: null } });
   assert.notEqual(r.code, 0);
-  assert.match(r.out, /the box reports "attention"; set SMOKE_OPS_TOKEN/);
-  assert.doesNotMatch(r.out, /STOPPED|alertBridge/, "and it cannot name the fault, because the server did not");
+  assert.match(r.out, /the box reports "attention"; which fault is on the box's own report/);
+  assert.doesNotMatch(r.out, /STOPPED|alertBridge/, "and it names no fault");
 });
 
 test("without the token, an ok box passes: the word is affirmative, not a shrug", async () => {
   const r = await runProbe({}, READY, { token: "t0ken-t0ken-t0ken-t0ken" });
   assert.equal(r.code, 0, r.out);
-  assert.match(r.out, /the box reports ok \(one-word view\)/);
+  assert.match(r.out, /ok: the box is ok/);
 });
 
 test("a WRONG token is refused and the probe says so, rather than passing on the public word", async () => {
@@ -130,7 +135,7 @@ test("a WRONG token over an ok box is STILL red: a configured token that does no
   const r = await runProbe({ SMOKE_OPS_TOKEN: "wrong-wrong-wrong-wrong" }, READY, { token: "t0ken-t0ken-t0ken-t0ken" });
   assert.notEqual(r.code, 0, r.out);
   assert.match(r.out, /FAIL: the operator token, when sent, is honoured/);
-  assert.match(r.out, /ok: box has everything the repo requires/, "the box itself still reads ok; it is the token that failed");
+  assert.match(r.out, /ok: the box is ok/, "the box itself still reads ok; it is the token that failed");
 });
 
 test("a faucet that cannot drip FAILS, which is the whole point of the probe", async () => {

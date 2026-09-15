@@ -473,61 +473,38 @@ async function runFaucetChecks() {
     // An older deployment that predates the field. Not a pass and not a failure:
     // asserting against a server that cannot answer would fail for the wrong reason.
     ok("box integrity reported", true, "server does not send `box` yet, cannot verify");
-  } else if (!("expected" in box)) {
-    // THE ONE-WORD SHAPE (R-24): the server answered as it answers the public. Its "ok"
-    // is affirmative by construction (src/lib/boxLabel.ts: complete, watchdog active,
-    // pager probed and working; anything the box could not tell is "unknown"), so it may
-    // stand in for the three detail checks. What is lost is the sentence naming a fault.
-    //
+  } else {
+    // ONE WORD, WHICHEVER SHAPE CAME BACK (R-24). The public shape is {state, minerUnit};
+    // the operator's shape (with the token) is the counted one plus the same word as
+    // `verdict`. This probe judges by the word and prints the word, never a unit or a
+    // bridge name: this repository is public, so a run log is readable by anyone with a
+    // GitHub account, and a unit's name and state printed here would move
+    // R-24's leak from the status page to the Actions tab (review of #543). The name of
+    // the fault reaches the operator through the Signal page and the box's own report.
+    // "ok" is affirmative by construction (src/lib/boxLabel.ts): complete, watchdog
+    // active, pager probed and working. "unknown" FAILS, deliberately: a box that cannot
+    // say what it has is exactly the box we had all week, and counting silence as
+    // success is the bug itself.
+    const detailed = "expected" in box;
+    // A detailed shape from a server older than `verdict` is judged the way
+    // src/lib/boxLabel.ts judges it, with one allowance the newer server does not need:
+    // a field it does not send at all is cannot-verify, not a fault of the box.
+    const affirmedOrAbsent = (v, yes) => v == null || yes.includes(v);
+    const word = "verdict" in box ? box.verdict
+      : !detailed ? box.state
+      : box.state === "complete" && affirmedOrAbsent(box.watchdogUnit, ["active", "activating"]) && affirmedOrAbsent(box.alertBridge, ["ok", "webhook"]) ? "ok"
+      : box.state === "incomplete" || box.watchdogUnit === "inactive" || box.watchdogUnit === "failed" || box.watchdogUnit === "deactivating" || ["down", "unlinked", "none", "misconfigured"].includes(box.alertBridge) ? "attention"
+      : "unknown";
     // A token that was SENT and not honoured is its own failure, whatever the word: the
     // operator configured one and it does not work, and a run that read "ok" through it
-    // would hide that for as long as the box stayed healthy (review of #543).
-    const refused = Boolean(OPS_TOKEN);
-    const detail = box.state === "ok" ? "the box reports ok (one-word view)" : `the box reports ${JSON.stringify(box.state)}`;
-    ok("the operator token, when sent, is honoured", !refused, refused ? "the server answered the public shape to a request carrying SMOKE_OPS_TOKEN: FAUCET_OPS_TOKEN on the box and the secret here differ" : "no token sent; the one-word view is expected");
-    const hint = refused ? "" : "; set SMOKE_OPS_TOKEN (GitHub secret FAUCET_OPS_TOKEN) to see which";
-    ok("box has everything the repo requires", box.state === "ok", box.state === "ok" ? detail : `${detail}${hint}`);
-    ok("the watchdog is running", box.state === "ok", box.state === "ok" ? "affirmed by the box's ok" : `not affirmed: box is ${JSON.stringify(box.state)}`);
-    ok("the box can page someone", box.state === "ok", box.state === "ok" ? "affirmed by the box's ok" : `not affirmed: box is ${JSON.stringify(box.state)}`);
-  } else {
+    // would hide that for as long as the box stayed healthy.
+    const refused = Boolean(OPS_TOKEN) && !detailed;
+    ok("the operator token, when sent, is honoured", !refused, refused ? "the server answered the public shape to a request carrying SMOKE_OPS_TOKEN: FAUCET_OPS_TOKEN on the box and the secret here differ" : OPS_TOKEN ? "the operator shape came back" : "no token sent; the one-word view is expected");
     ok(
-      "box has everything the repo requires",
-      box.state === "complete",
-      box.reason ?? `state ${box.state}`,
+      "the box is ok: everything the repo requires installed, the watchdog running, the pager working",
+      word === "ok",
+      word === "ok" ? "the box reports ok" : `the box reports ${JSON.stringify(word)}; which fault is on the box's own report and the Signal page, not here`,
     );
-    // THE WATCHDOG ITSELF. A stopped watchdog heals nothing and pages nothing, and the
-    // box read complete with it down (register #16). "inactive" and "failed" fail;
-    // "unknown" fails like the box state above; "activating" is seconds from running and
-    // passes with a note; an older server that sends nothing is cannot-verify.
-    switch (box.watchdogUnit) {
-      case "active": ok("the watchdog is running", true, "faucet-watchdog.service active"); break;
-      case "activating": ok("the watchdog is running", true, "faucet-watchdog.service is starting"); break;
-      case "inactive": ok("the watchdog is running", false, "faucet-watchdog.service is STOPPED: nothing on the box heals until `systemctl start faucet-watchdog.service`"); break;
-      case "failed": ok("the watchdog is running", false, "faucet-watchdog.service is FAILED (its start limit is off, so systemd itself gave up or it was reset-failed): `journalctl -u faucet-watchdog`, then `systemctl start faucet-watchdog.service`"); break;
-      case "deactivating": ok("the watchdog is running", false, "faucet-watchdog.service is shutting down: its next state is stopped, and nothing heals from there"); break;
-      case "unknown": ok("the watchdog is running", false, "the box could not say whether the watchdog runs (watchdogUnit unknown); check systemctl on the box"); break;
-      case undefined: case null: ok("the watchdog is running", true, "server does not send box.watchdogUnit yet, cannot verify"); break;
-      default: ok("the watchdog is running", false, `unexpected watchdogUnit ${JSON.stringify(box.watchdogUnit)}`);
-    }
-    // THE ONE FAULT NO ON-BOX ALERT CAN CARRY. Every page travels through the Signal
-    // bridge, so its state is reported by the box and read from outside, here. Only "ok"
-    // and "webhook" are affirmative. "unknown" FAILS, the same rule the box state above
-    // follows: a box that cannot say whether it can page is the box we had all week, and
-    // counting that silence as success is the bug itself. An older server that sends no
-    // field at all passes with a cannot-verify note, the same rule as `box` above: this
-    // probe deploys with the repo, the server deploys after, and the window between them
-    // is not a fault of the box. It closes on its own the moment the field arrives.
-    switch (box.alertBridge) {
-      case "ok": ok("the box can page someone", true, "Signal bridge up, account linked"); break;
-      case "webhook": ok("the box can page someone", true, "a Slack/Discord webhook, not probed from the box"); break;
-      case "down": ok("the box can page someone", false, "its Signal bridge is not answering: every watchdog alert is a journal line until `docker start signal-api` (the watchdog tries that itself)"); break;
-      case "unlinked": ok("the box can page someone", false, "the Signal bridge is up but the configured number is not linked on it; re-link per OBSERVABILITY.md"); break;
-      case "none": ok("the box can page someone", false, "no alert URL is configured on the box (/etc/faucet/alerts.env)"); break;
-      case "misconfigured": ok("the box can page someone", false, "alert.sh refuses to send in this state: Signal without a usable E.164 number or recipient, or a box with neither jq nor python3 to encode a body; fix /etc/faucet/alerts.env or install one"); break;
-      case "unknown": ok("the box can page someone", false, "the box could not tell: an unrecognised alert format, a URL without a scheme, or no curl; check /etc/faucet/alerts.env"); break;
-      case undefined: case null: ok("the box can page someone", true, "server does not send box.alertBridge yet, cannot verify"); break;
-      default: ok("the box can page someone", false, `unexpected alertBridge ${JSON.stringify(box.alertBridge)}`);
-    }
   }
   // THE COMPOSITION CHECK cTAZ NEVER HAD, and the reason this file grew it. Every
   // pre-merge layer was green while prod could not serve cTAZ, twice in one day: the

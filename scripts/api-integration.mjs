@@ -515,7 +515,7 @@ try {
   ok("A status (public): no buildCommit", !("buildCommit" in s), JSON.stringify(Object.keys(s)));
   const opsStatus = await req(BASE_A, "/api/status", { headers: { "x-faucet-ops": OPS_TOKEN } });
   ok("A status (operator token): buildCommit is this run's nonce", opsStatus.body.buildCommit === RUN_NONCE, JSON.stringify(opsStatus.body.buildCommit));
-  ok("A status (operator token): the detailed box, with its counts", "expected" in (opsStatus.body.box ?? {}) && "watchdogUnit" in opsStatus.body.box, JSON.stringify(opsStatus.body.box));
+  ok("A status (operator token): the detailed box, with its counts and the same one-word verdict", "expected" in (opsStatus.body.box ?? {}) && "watchdogUnit" in opsStatus.body.box && ["ok", "attention", "unknown"].includes(opsStatus.body.box.verdict), JSON.stringify(opsStatus.body.box));
   const wrongTok = await req(BASE_A, "/api/status", { headers: { "x-faucet-ops": OPS_TOKEN + "x" } });
   ok("A status (wrong token): the public view, not an error that says a token exists", wrongTok.status === 200 && !("buildCommit" in wrongTok.body) && !("expected" in wrongTok.body.box), JSON.stringify(Object.keys(wrongTok.body)));
   ok("A status: reserve block shape", typeof s.reserve?.targetTaz === "number" && typeof s.reserve?.lowTaz === "number" && typeof s.reserve?.refilling === "boolean" && "spendableTaz" in (s.reserve ?? {}));

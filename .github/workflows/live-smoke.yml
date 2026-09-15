@@ -86,9 +86,10 @@ jobs:
           SMOKE_DISABLED: ${{ vars.FAUCET_LIVE_SMOKE_DISABLED }}
           # The operator's view of /api/status (R-24): with it the probe names which box
           # fault it found; without it the verdict is the same one word the public gets.
-          # A DECISION, stated: with the token the fault's NAME lands in this run's log,
-          # which repository collaborators can read and the public cannot (anonymous API
-          # reads are 403). That is the operator's channel, and narrower than the page.
+          # This repository is public and a run log is readable by anyone with a GitHub
+          # account, so the probe prints the box's one-word verdict and never a unit or
+          # bridge name, token or not. The token buys the operator's shape (buildCommit
+          # and the counts) for checks that print nothing sensitive.
           SMOKE_OPS_TOKEN: ${{ secrets.FAUCET_OPS_TOKEN }}
         run: |
           # The off switch is checked FIRST, so it works during a maintenance window with

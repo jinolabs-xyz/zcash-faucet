@@ -133,7 +133,10 @@ export const GET = withApi("status", async (req: NextRequest) => {
     // word (R-24), because "the watchdog is stopped" and "pages go nowhere" on a public
     // page is reconnaissance. live-smoke asserts this from outside on a schedule with
     // the token, and it is the only signal that has ever reached us unprompted.
-    box: ops ? box : publicBox(box),
+    // The operator's shape carries the same one-word verdict the public gets, so the
+    // off-box probe judges both shapes by that word alone and never prints a unit or
+    // bridge name into a run log that, on a public repository, anyone can read.
+    box: ops ? { ...box, verdict: publicBox(box).state } : publicBox(box),
     node, // { ready, syncPercent, height, nodeHeight } or null while the wallet is down
     // OBSERVED, not configured. `active` used to be config.miner.active straight from
     // an env flag, so it could not be false while the miner was broken, and it said

@@ -25,7 +25,8 @@ JOURNAL_LINES="${FAUCET_ALERT_JOURNAL_LINES:-15}"
 # URL, which is a credential. It answers HERE, before the cooldown validation and every
 # log() line below, because those print to stdout and the watchdog captures stdout: a
 # bad FAUCET_ALERT_COOLDOWN_SECONDS turned the answer into two lines (review of #543).
-# The gates are send()'s own, in the same order and with the same E.164 test on both
+# The gates are send()'s own (the encoder gate is checked first here, at body time
+# there; the verdict is misconfigured either way) with the same E.164 test on both
 # numbers, so "signal" means a page would actually be attempted, not that a URL is set.
 if [ "${1:-}" = "--describe" ]; then
   if [ -z "$ALERT_URL" ]; then echo none
