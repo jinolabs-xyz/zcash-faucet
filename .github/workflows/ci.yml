@@ -600,12 +600,22 @@ jobs:
           mode="$(sed -n 's/^SocketMode=//p' "$unit" | tail -1)"
           usr="$(sed -n 's/^SocketUser=//p' "$unit" | tail -1)"
           echo "the unit declares ${usr}:${grp} ${mode}"
-          [ -n "$grp" ] && [ -n "$mode" ] && [ "$usr" = root ] || { echo "could not read SocketUser/Group/Mode from $unit"; exit 1; }
+          # NUMERIC gid only, and that is the intent rather than a limitation: the repo
+          # suite pins SocketGroup=1000, and a NAME here would make Number(gid) NaN in the
+          # listener below, so chownSync would throw and the step would fail as "the
+          # listener never came up" instead of as the ACL regression it is (review of #553).
+          case "$grp" in ''|*[!0-9]*) echo "SocketGroup must be a numeric gid for this probe, got '$grp'"; exit 1 ;; esac
+          [ -n "$mode" ] && [ "$usr" = root ] || { echo "could not read SocketUser/Mode from $unit"; exit 1; }
           cat > /tmp/listener.js <<'JS'
           const net = require("net"), fs = require("fs");
           const [, , path, gid, mode] = process.argv;
           try { fs.unlinkSync(path); } catch {}
-          const s = net.createServer((c) => c.end("{}\n"));
+          // The probe ends the moment it connects, so this write can land on a socket the
+          // peer has already closed. Without a handler that ECONNRESET is an unhandled
+          // error event, the listener dies after ONE accepted connection, and the second
+          // uid then measures a missing listener rather than the ACL (review of #553).
+          const s = net.createServer((c) => { c.on("error", () => {}); c.end("{}\n"); });
+          s.on("error", (e) => { console.error("listener error:", e.code); process.exit(1); });
           s.listen(path, () => { fs.chownSync(path, 0, Number(gid)); fs.chmodSync(path, parseInt(mode, 8)); console.log("listening"); });
           setTimeout(() => process.exit(0), 60000);
           JS

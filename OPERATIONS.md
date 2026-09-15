@@ -102,10 +102,24 @@ docker exec zcash-faucet-faucet-1 stat -c '%u:%g %a' /app/data/ctaz-rpc.sock
 # expected: 0:1000 660
 ```
 
-If (b) shows `666` the unit on the box predates this change and `install-ops.sh` has not
-run; if it shows `root:root`, `SocketGroup=` did not take and cTAZ will be dark, because
-the app cannot connect. Either way the panel reads cannot-verify rather than lying, which
-is the behaviour the five-state gate is for.
+Reading the answers, and the middle one is the trap:
+
+- **`root:<gid-1000 group> 660`** is the shipped state.
+- **`666`** means the live socket was created before this change and has not been
+  recreated since. `install-ops.sh` restarts `ctaz-rpc.socket` when the unit file changes,
+  so this is what you would see if that restart failed, or if the socket was recreated
+  from an older unit afterwards. It does **not** mean install-ops never ran: the mode is
+  applied when systemd CREATES the socket, not on `daemon-reload`, so the unit text on
+  disk can be correct while the live socket is not. Check the install-ops log for the
+  restart line before re-running anything, and `systemctl restart ctaz-rpc.socket` is the
+  direct fix.
+- **`root:root`** means `SocketGroup=` did not take, and cTAZ will be dark because the app
+  cannot connect.
+
+In every wrong case the panel reads cannot-verify rather than lying, which is what the
+five-state gate is for. Nothing monitors socket-file permissions, so this check is the
+only thing that reads them: cTAZ is parked today and the app reads the status *file*
+(`source: file`), so a wrong ACL here shows up only when cTAZ is un-parked.
 
 ## Logs
 
