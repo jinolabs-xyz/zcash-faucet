@@ -45,9 +45,28 @@ const PAGES = ["/terms", "/donate", "/fund"];
 // S1 merged. Whether a page is in the shell is a REPO fact (its own source names the shell),
 // which keeps this out of the "absent, so skip" shape: a page whose source says stage MUST
 // render one, and one whose source does not is not yet in this contract.
+// AND "IN THE SHELL" IS TWO FACTS, NOT ONE STRING (SDE-UI, reviewing the same line in #572's
+// parity checker, where it was going to ship twice). The first spelling asked whether the page
+// file itself names the stage. True when written, and the Shell extraction moved it: S5 puts a
+// page in the shell by rendering <Shell>, and the shell OWNS the stage, so the page file
+// contains that string zero times. Measured against S5's own branch - each of the three pages
+// has `"stage"` 0 times and `<Shell` once, and Shell.tsx has it once - so this filter would
+// have stayed EMPTY for ever on exactly the tree it exists to detect: still planning 40, the
+// ruling's 70 never reached, and the line below still calling three redesigned pages
+// "pre-redesign". Green, and blind to a third of what this check covers.
+//
+// The round-5 defect turned inside out: that gate was switched off DURING the window it guards
+// and would start working at S5; this one STOPS working at S5. Either fact alone is a string
+// that can move again, so it is both: the page renders the shell, AND the shell is the thing
+// carrying the stage. A page that inlines the stage itself still counts, because it genuinely
+// is in the shell.
+const SHELL_COMPONENT = "src/components/Shell.tsx";
+const SHELL_OWNS_STAGE = existsSync(SHELL_COMPONENT) && readFileSync(SHELL_COMPONENT, "utf8").includes('"stage"');
 const PAGES_IN_SHELL = PAGES.filter((route) => {
   const src = `src/app${route}/page.tsx`;
-  return existsSync(src) && readFileSync(src, "utf8").includes('"stage"');
+  if (!existsSync(src)) return false;
+  const text = readFileSync(src, "utf8");
+  return text.includes('"stage"') || (SHELL_OWNS_STAGE && /<Shell[\s/>]/.test(text));
 });
 const RULING_COMBOS = 70;   // 5 sizes x 2 themes x (4 views + 3 pages), once every page is in the shell
 // THE PART THAT DOES NOT DEPEND ON WHICH SLICES HAVE LANDED (SDE-App, review of #563). The

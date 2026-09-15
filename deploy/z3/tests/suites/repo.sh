@@ -1273,6 +1273,16 @@ check "the mascot check gates on page.tsx rendering <Mascot>, not on a file exis
   "grep -qF 'const wired = existsSync(PAGE) && /<Mascot' '$REPO/scripts/mascot-check.mjs' && ! grep -q 'existsSync(\"src/components' '$REPO/scripts/mascot-check.mjs'"
 check "and the image job's size gate reads the SAME wiring fact, so neither can skip alone" \
   "grep -qF 'grep -qE '\\''<Mascot[[:space:]/>]'\\'' src/app/page.tsx' '$CIWF'"
+# AND A PAGE IS IN THE SHELL BY TWO FACTS, so the Shell extraction cannot switch this gate off
+# (SDE-UI, found on the same line in #572's checker, where it was going to ship twice). One
+# string in the page file was true when it was written and S5 moved it: a page joins the shell
+# by rendering <Shell>, and the shell OWNS the stage, so the page file has that string zero
+# times. Measured on S5's own branch: the old spelling reads 0 of 3 pages and plans 40 for ever
+# while calling three redesigned pages pre-redesign; this one reads 3 of 3 and plans the
+# ruling's 70. Round 5's defect inside out - that gate was off DURING the window it guards,
+# this one STOPS working at the slice it exists for.
+check "a page is in the shell by two facts, not by one string the extraction can move" \
+  "grep -qF 'SHELL_OWNS_STAGE = existsSync(SHELL_COMPONENT)' '$REPO/scripts/fit-check.mjs' && grep -qF 'SHELL_OWNS_STAGE && /<Shell' '$REPO/scripts/fit-check.mjs'"
 check "the fit check gates on the shell file S1 adds" \
   "grep -qF 'const SHELL_MARKER = \"src/app/redesign-tokens.css\"' '$REPO/scripts/fit-check.mjs'"
 check "a wired page with no matching selector FAILS rather than passing quietly" \
