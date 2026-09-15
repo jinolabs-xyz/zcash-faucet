@@ -26,6 +26,12 @@ export interface RunResult {
 export interface DbDriver {
   run(sql: string, params: SqlParam[]): Promise<RunResult>;
   get<T = Row>(sql: string, params: SqlParam[]): Promise<T | undefined>;
+  /**
+   * Every matching row. `get` cannot answer a question whose answer is a series: the
+   * 30-day drip histogram is one row per day, and without this the choices were 30
+   * round-trips (30 HTTPS calls on D1) or packing the series into a single cell.
+   */
+  all<T = Row>(sql: string, params: SqlParam[]): Promise<T[]>;
 }
 
 /** Local file SQLite - dev and single-box deploys. */
@@ -87,6 +93,10 @@ export class SqliteDriver implements DbDriver {
   async get<T = Row>(sql: string, params: SqlParam[]): Promise<T | undefined> {
     return this.db.prepare(sql).get(...params) as T | undefined;
   }
+
+  async all<T = Row>(sql: string, params: SqlParam[]): Promise<T[]> {
+    return this.db.prepare(sql).all(...params) as T[];
+  }
 }
 
 /** Cloudflare D1 via the proxy Worker (see worker/). Survives ephemeral disks. */
@@ -124,5 +134,12 @@ export class D1Driver implements DbDriver {
   async get<T = Row>(sql: string, params: SqlParam[]): Promise<T | undefined> {
     const { results } = await this.query(sql, params);
     return (results?.[0] as T) ?? undefined;
+  }
+
+  async all<T = Row>(sql: string, params: SqlParam[]): Promise<T[]> {
+    const { results } = await this.query(sql, params);
+    // No rows and a proxy that returned no `results` key are the same answer here: an
+    // empty series. A missing day is already zero-filled by the caller.
+    return (results as T[] | undefined) ?? [];
   }
 }

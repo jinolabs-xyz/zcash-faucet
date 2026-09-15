@@ -604,6 +604,28 @@ try {
   const genClaim = await claim(BASE_A, uaAddr, await solvedChallenge(BASE_A));
   ok("A generated UA is accepted by the claim endpoint", genClaim.status === 200 && genClaim.body.ok === true, `status ${genClaim.status} ${JSON.stringify(genClaim.body.error ?? "")}`);
 
+  // THE 30-DAY SERIES THE PAGE DRAWS. Shape and invariant rather than numbers: the
+  // window is a fixed 30 UTC days oldest-first with the quiet days zero-filled, every
+  // entry is a day and a count and NOTHING ELSE (there is no per-visitor field for it to
+  // grow, and this is where that stays true), and the series sums to the last30d figure
+  // printed beside it - a chart disagreeing with its own headline is the failure this
+  // catches. Read AFTER a drip has gone out, because thirty zeros satisfy every
+  // structural check while proving nothing about the counting. `today` is read either
+  // side of the request so a run crossing UTC midnight compares against both candidates
+  // rather than going red at 00:00Z.
+  const dayBefore = new Date().toISOString().slice(0, 10);
+  const dripStatus = (await get(BASE_A, "/api/status")).body.drips;
+  const dayAfter = new Date().toISOString().slice(0, 10);
+  const byDay = dripStatus?.byDay ?? [];
+  ok("A status: drips.byDay carries today's drip and is 30 zero-filled UTC days, oldest first, summing to last30d",
+    Array.isArray(byDay) && byDay.length === 30 &&
+      byDay.every((d) => JSON.stringify(Object.keys(d).sort()) === '["day","sent"]' && /^\d{4}-\d{2}-\d{2}$/.test(d.day) && Number.isInteger(d.sent) && d.sent >= 0) &&
+      byDay.every((d, i) => i === 0 || Date.parse(`${d.day}T00:00:00Z`) - Date.parse(`${byDay[i - 1].day}T00:00:00Z`) === 86_400_000) &&
+      [dayBefore, dayAfter].includes(byDay[29].day) &&
+      byDay[29].sent >= 1 &&
+      byDay.reduce((n, d) => n + d.sent, 0) === dripStatus.last30d,
+    JSON.stringify({ len: byDay.length, first: byDay[0], last: byDay[29], last30d: dripStatus?.last30d }));
+
   /* ── donate page wiring (#55) ────────────────────────────────────────── */
   // The page renders entirely from /api/status, so pinning these fields is
   // what stops the donate page silently going blank on a status change.
