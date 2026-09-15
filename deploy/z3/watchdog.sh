@@ -850,12 +850,12 @@ heal_self_mined_fork() {
   case "$miner_word" in active|activating|reloading) miner_running=1 ;; esac
   if [ "$miner_running" = "1" ] && [ -n "$started_age" ] && [ "$started_age" -gt "$FORK_MINER_MIN_SECS" ]; then
     mins=$(( started_age / 60 ))
-    who="our miner is active and its heartbeat says it started ${mins} min ago, so this chain is most likely ours"
+    who="our miner is ${miner_word} and its heartbeat says it started ${mins} min ago, so this chain is most likely ours"
   elif [ "$miner_running" = "1" ]; then
     # ONE SUBSTITUTION, NOT TWO GLUED TOGETHER (CTO red-team, review of #560 r3). My fix for
     # "unreadables" emitted BOTH halves when the variable was set - ${v:+...}${v:-...} is not an
     # if/else, it is two expansions, and 120 rendered as "120s120". Computed once, above.
-    who="our miner is active but its heartbeat cannot show it has been running long (startedAt age: ${age_said}), so what built $ahead blocks is unexplained"
+    who="our miner is ${miner_word} but its heartbeat cannot show it has been running long (startedAt age: ${age_said}), so what built $ahead blocks is unexplained"
   else
     who="our miner is ${miner_word:-not running}, so what built $ahead blocks is unexplained"
   fi
@@ -863,7 +863,6 @@ heal_self_mined_fork() {
   # THE MARKER BEFORE THE PAGE, and a failure to write it is its own sentence: without the
   # file, auto-deploy does NOT refuse, and a human reading a page that says "parked" while
   # nothing is parked is worse off than one who knows the park failed.
-  local park
   if [ ! -f "$FORK_PARK_MARKER" ]; then
     mkdir -p "$FORK_PARK_DIR" 2>/dev/null
     if printf '%s fork: ours %s, highest corroborated reference %s, ahead %s. %s\n' \
