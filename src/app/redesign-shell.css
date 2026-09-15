@@ -217,7 +217,14 @@ canvas.g{width:calc(1.3*var(--u));height:calc(1.3*var(--u));display:inline-block
  *    The design's own more specific hover rules still win: `.ftr nav a:hover` and
  *    `.hdr-right nav a:hover` are (0,2,1) against this (0,1,1), so the footer and the nav keep
  *    going to `--ink`. Measured, not assumed. */
-a:hover{color:var(--accent-text)}
+/*    SPECIFICITY, NOT SOURCE ORDER. globals' rule and a bare `a:hover` are both (0,1,1), so
+ *    this won only because Next links this sheet second - and the build emits TWO css files, so
+ *    it was never offsets inside one file, it was link order in the HTML. Measured: the served
+ *    page links globals' chunk first and this one second, which Next does not promise.
+ *    `.stage a:hover` is (0,2,1) and beats globals whatever the order. The design's own nav and
+ *    footer hovers are restated one level up so they stay AHEAD of it rather than tying. */
+.stage a:hover{color:var(--accent-text)}
+.stage .ftr nav a:hover,.stage .hdr-right nav a:hover,.stage .seg a:hover{color:var(--ink)}
 
 /* 3. WCAG 2.5.5 target size, on the two controls the phone breakpoint leaves short. The
  *    segmented nav is calc(2.2*var(--u)) tall, which is 26px at --u:12px, and the drips

@@ -129,14 +129,18 @@ button.tag:hover,a.tag:hover{border-color:var(--muted)}
  * my rules style, list the properties globals.css sets on the same class that my rule never
  * names. `text-transform` on `.tag` was the only real hit across both files.
  */
-.tag{text-transform:none}
+/* (0,2,0) against globals' (0,1,0), so it no longer depends on which sheet loads second. */
+.stage .tag{text-transform:none}
 
 /* The same shape one selector over, and the reason the detector is worth running rather than
  * reading: globals.css:72 paints `html` with the OLD palette's --color-bg. Nothing in the
  * transcription names `html`'s background, so the overscroll and rubber-band area behind the
  * page keeps the pre-redesign colour while the page itself is on --page. Only visible on a
  * bounce, which is why nobody would find it by looking. */
-html{background:var(--page)}
+/* `html` cannot sit under .stage, so the attribute the shell always writes carries the
+ * specificity instead: (0,1,1) against globals' (0,0,1). layout.tsx sets data-theme on the
+ * root and the pre-paint boot script keeps it there, so this always matches. */
+html[data-theme]{background:var(--page)}
 
 /* ===== The hero's own breakpoints, moved here from the shell sheet =====
  * These four lived in redesign-shell.css, which is imported BEFORE this file, so the hero's

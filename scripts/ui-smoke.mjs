@@ -121,6 +121,104 @@ const COLOUR_LIB = `
   `;
 
 /**
+ * NO LEGACY RULE STILL PAINTS THE REDESIGNED PAGE, read off the BUILT app in both themes.
+ *
+ * globals.css still ships beside the transcription and styles some of the same selectors. A
+ * transcription replaces only what it NAMES (L19), so every property the old rule set and the
+ * new one is silent about survives - three of them did: `.tag` kept `text-transform:uppercase`
+ * so the design's lower-case status words rendered OK PARKED UNWATCHED, `html` kept the old
+ * palette behind the overscroll, and `a:hover` painted every link `--color-accent-800` the
+ * moment a pointer touched it.
+ *
+ * THE FIXES USED TO DEPEND ON LINK ORDER AND NOW DEPEND ON SPECIFICITY, which is the reason
+ * this check exists rather than being a nicety. The build emits two CSS chunks; globals landed
+ * in one and the transcription in the other, and the fix won because the served page happened
+ * to link them in that order. Next does not promise it. Swapping that for specificity alone
+ * would trade a fix that depends on link order for one that depends on nobody reintroducing
+ * the old rule - so the VALUES are asserted here, and an order flip or a reintroduced rule is
+ * red rather than silent.
+ *
+ * Compared against the retired token RESOLVED ON THE PAGE, not against a hard-coded hex, so
+ * this keeps working if the old palette's value is ever edited.
+ */
+async function checkLegacyPalette(browser) {
+  for (const theme of ["paper", "ink"]) {
+    const c = await browser.newContext({ viewport: DESKTOP });
+    const p = await c.newPage();
+    await p.goto(BASE, { waitUntil: "networkidle" });
+    await p.evaluate((t) => {
+      try { localStorage.setItem("zfaucet_theme", t); } catch {}
+      document.documentElement.dataset.theme = t;
+    }, theme);
+    await p.waitForTimeout(300);
+
+    // The retired accent, resolved through the page so the comparison is rgb against rgb.
+    const retired = await p.evaluate(() => {
+      const probe = document.createElement("span");
+      probe.style.color = "var(--color-accent-800)";
+      document.body.appendChild(probe);
+      const v = getComputedStyle(probe).color;
+      probe.remove();
+      return v;
+    });
+
+    // Hover a real link of each kind and read what a visitor would actually see.
+    const kinds = [
+      [".ftr nav a", "footer link"],
+      [".seg button", "nav item"],
+      ["main a", "body link"],
+    ];
+    const seen = [];
+    for (const [sel, name] of kinds) {
+      if ((await p.locator(sel).count()) === 0) continue;
+      await p.locator(sel).first().hover().catch(() => {});
+      await p.waitForTimeout(80);
+      const colour = await p.locator(sel).first().evaluate((el) => getComputedStyle(el).color);
+      seen.push({ name, colour });
+    }
+    ok(`${theme}: no link hovers to the retired palette`,
+      seen.length > 0 && seen.every((s) => s.colour !== retired),
+      seen.length === 0 ? "no links found, so nothing was measured"
+        : `retired ${retired}; ${seen.map((s) => `${s.name} ${s.colour}`).join(", ")}`);
+
+    // The other two need no pointer.
+    //
+    // THE TAG IS MEASURED ON AN ELEMENT THIS CHECK INSERTS, and the first version of it was
+    // vacuous for exactly the reason worth recording. It read the first `.tag` on the page and
+    // passed when there was none - and on a fresh landing page there IS none, because every
+    // `.tag` in the claim card is behind a phase or a receipt. So it reported
+    // "text-transform no tag" and went green having measured nothing, which is the shape I
+    // have blocked other people's checks for twice tonight.
+    //
+    // Inserting one into the stage measures the CASCADE, which is the property: does any rule
+    // still upper-case `.tag` inside this page. It is true or false whether or not the current
+    // phase happens to render one, and it cannot pass by absence.
+    const rest = await p.evaluate(() => {
+      const stage = document.querySelector(".stage") ?? document.body;
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = "probe";
+      stage.appendChild(tag);
+      const tagCase = getComputedStyle(tag).textTransform;
+      tag.remove();
+      const htmlBg = getComputedStyle(document.documentElement).backgroundColor;
+      const probe = document.createElement("span");
+      probe.style.color = "var(--page)";
+      document.body.appendChild(probe);
+      const page = getComputedStyle(probe).color;
+      probe.remove();
+      return { tagCase, htmlBg, page };
+    });
+    ok(`${theme}: the design's tags are not upper-cased by the legacy sheet`,
+      rest.tagCase === "none",
+      `text-transform ${rest.tagCase}`);
+    ok(`${theme}: the page's root paints the design's background, not the old one`,
+      rest.htmlBg === rest.page, `html ${rest.htmlBg} against --page ${rest.page}`);
+    await c.close();
+  }
+}
+
+/**
  * THE FOOTER IS REACHABLE BY A POINTER, at two desktop sizes.
  *
  * The design clamps the page to one screen (`.stage` height:100dvh, and above 56rem
@@ -1116,6 +1214,7 @@ try {
   await checkAppearance(page);
   await checkFooterReachable(browser);
   await checkCardInnerPadding(browser);
+  await checkLegacyPalette(browser);
   // WHERE THE TAZ COMES FROM follows the status (R-39). Under this stack there is no
   // miner heartbeat, so the sentence has to be the not-mining one; the three
   // contradictory fixed sentences must be gone from the rendered page.
