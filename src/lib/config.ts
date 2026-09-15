@@ -122,6 +122,29 @@ function endpointList(): string[] {
 }
 
 /**
+ * Where the TIP ORACLE's direct leg may look, which is not the same question as where the
+ * app reads balances.
+ *
+ * One variable used to answer both, and the roles genuinely differ: an operator's own
+ * Zaino is a perfectly good read-side backend and is never an independent view of the
+ * chain (externalTip.ts, isIndependentTipEndpoint). Splitting them also lets a test stand
+ * the oracle down without breaking the backend ping - which the api-integration suite
+ * needed, because with both references fetched every run the suite's fixture tip would
+ * have lost to the real network's and every server would have read as frozen.
+ *
+ * DEFAULTS TO THE READ-SIDE LIST, so an operator who sets nothing gets exactly today's
+ * behaviour. Set explicitly to empty to run the oracle on the aggregate alone.
+ */
+function tipEndpointList(): string[] {
+  const raw = process.env.TIP_ORACLE_ENDPOINT;
+  if (raw === undefined) return endpointList();
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/**
  * Zallet's own send timings, hoisted out of the config literal because the send
  * queue's backstop deadline is DERIVED from them (#88). The backstop has to sit
  * above whatever the sender's own bounds already allow, and a literal would
@@ -220,6 +243,7 @@ export const config = {
 
   // Ordered list of lightwalletd/Zaino testnet endpoints; tried in order.
   lightwalletdEndpoints: endpointList(),
+  tipOracleEndpoints: tipEndpointList(),
   get lightwalletdEndpoint() {
     return this.lightwalletdEndpoints[0]!;
   },

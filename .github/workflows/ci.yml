@@ -98,6 +98,12 @@ jobs:
       # of 3,650,000, and nothing on the drip path cared. #187 makes the drip
       # path care, so the environment has to stop lying to it (#171).
       HOSH_URL: http://127.0.0.1:28324/
+      # EMPTY, and it travels with HOSH_URL from here on. The oracle fetches BOTH
+      # references every refresh now, so pinning only the aggregate leaves the direct leg
+      # dialling the real network: it would learn a tip ~700,000 blocks above this
+      # fixture's, judge our node against the higher one and read frozen. Anything that
+      # pins the chain view has to stand the direct leg down as well.
+      TIP_ORACLE_ENDPOINT: ""
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -159,6 +165,12 @@ jobs:
       # smoke test waits out its 120s timeout for a "Sent ✓" that can never
       # appear. Same root cause as the api-tests job (#171).
       HOSH_URL: http://127.0.0.1:28324/
+      # EMPTY, and it travels with HOSH_URL from here on. The oracle fetches BOTH
+      # references every refresh now, so pinning only the aggregate leaves the direct leg
+      # dialling the real network: it would learn a tip ~700,000 blocks above this
+      # fixture's, judge our node against the higher one and read frozen. Anything that
+      # pins the chain view has to stand the direct leg down as well.
+      TIP_ORACLE_ENDPOINT: ""
       # cTAZ ON for this job, against the crosslink double (#326). Without it the
       # toggle does not render and ui-smoke reports its cTAZ checks as SKIPPED, which
       # is honest but covers nothing: the toggle, the no-txid receipt and the unknown

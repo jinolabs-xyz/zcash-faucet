@@ -23,7 +23,7 @@ node scripts/fake-hosh.mjs &          # a tip oracle on :28324, agreeing with it
 FAUCET_SENDER=zallet ZALLET_RPC_URL=http://127.0.0.1:28299/ \
   ZALLET_ACCOUNT=fake-account ZALLET_ADDRESS=utest1fake ZALLET_MIN_CONF=0 \
   FAUCET_CHALLENGE=none RATE_LIMIT_SALT=dev-salt \
-  HOSH_URL=http://127.0.0.1:28324/ \
+  HOSH_URL=http://127.0.0.1:28324/ TIP_ORACLE_ENDPOINT= \
   npm start
 ```
 

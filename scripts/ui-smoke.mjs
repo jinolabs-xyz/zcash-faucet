@@ -9,8 +9,19 @@
 //   PORT=28611 node scripts/fake-crosslink.mjs &   # cTAZ node double (#326)
 //   FAUCET_SENDER=zallet ZALLET_RPC_URL=http://127.0.0.1:28299/ ZALLET_ACCOUNT=fake-account \
 //   ZALLET_ADDRESS=utest1fake ZALLET_MIN_CONF=0 FAUCET_CHALLENGE=pow FAUCET_POW_BITS=12 \
-//   RATE_LIMIT_SALT=ui-smoke HOSH_URL=http://127.0.0.1:28324/ \
-//   FAUCET_CTAZ_ENABLED=true CROSSLINK_RPC_URL=http://127.0.0.1:28611/ PORT=3120 npm start
+//   RATE_LIMIT_SALT=ui-smoke HOSH_URL=http://127.0.0.1:28324/ TIP_ORACLE_ENDPOINT= \
+//   FAUCET_CTAZ_ENABLED=true CROSSLINK_RPC_URL=http://127.0.0.1:28611/ \
+//   FAUCET_CTAZ_RPC_SOCKET= PORT=3120 npm start
+//
+// TWO OF THOSE ARE EMPTY ON PURPOSE AND BOTH COST SOMEBODY AN AFTERNOON.
+// TIP_ORACLE_ENDPOINT= stands the oracle's direct leg down: it fetches both references
+// every refresh, so left unset it dials the real network, learns a tip ~700,000 blocks
+// above this fixture's and reads our node as frozen. FAUCET_CTAZ_RPC_SOCKET= is the
+// documented escape hatch for a node reachable over HTTP: the app defaults to the
+// production unix socket and deliberately does NOT fall back, so without it the crosslink
+// double on 28611 is never reached and every cTAZ assertion fails against a double that is
+// answering perfectly. CI sets both (.github/workflows/ci.yml, the ui job); this recipe
+// omitted the second one until 2026-09-15, which is exactly the shape of the note below.
 //
 // The crosslink double is optional: without it the toggle does not render and the cTAZ
 // checks announce themselves as SKIPPED rather than passing quietly. A skipped check

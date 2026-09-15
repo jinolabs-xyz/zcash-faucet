@@ -9,7 +9,10 @@
  * on whether externalTip's first background refresh lands before the assertion
  * runs - which is why the same commit passed locally and failed in CI, twice.
  *
- * Pointing HOSH_URL here makes the external tip a value the test chooses. Set
+ * Pointing HOSH_URL here makes the external tip a value the test chooses, AND
+ * TIP_ORACLE_ENDPOINT must be set empty alongside it: the oracle fetches both references
+ * every refresh, so the direct leg otherwise dials the real network and out-votes this
+ * fixture by ~700,000 blocks. Set
  * HEIGHT to match the wallet double for a healthy stack, or far above it to
  * exercise the frozen path on purpose rather than by accident.
  *

@@ -26,7 +26,7 @@ let silentHoshRequests = 0;
 silentHosh.on("request", () => { silentHoshRequests += 1; });
 const {
   heightFromBlockID, getExternalTipReading, getExternalTip, readingFor, MAX_AGE_MS_FOR_TESTS,
-  fetchNetworkTipWithin, isIndependentTipEndpoint, dialLatestBlock, warmExternalTip, warmExternalTipNowForTests,
+  fetchBothReferencesWithin, isIndependentTipEndpoint, dialLatestBlock, warmExternalTip, warmExternalTipNowForTests,
   resetExternalTipForTests,
 } = await import("./externalTip.ts");
 
@@ -42,7 +42,10 @@ test("with no independent endpoint configured, the first warm says so ONCE, at b
   } finally {
     console.warn = realWarn;
   }
-  const boot = warned.filter((w) => w.includes("no configured LIGHTWALLETD_ENDPOINT is a public third party"));
+  // The wording moved with the endpoints: the oracle reads its own list now
+  // (TIP_ORACLE_ENDPOINT, defaulting to the read-side one), so the warning names the tip
+  // endpoint rather than the backend variable. The rule it is testing is unchanged.
+  const boot = warned.filter((w) => w.includes("no configured tip endpoint is a public third party"));
   assert.equal(boot.length, 1, `expected exactly one boot warning, got ${boot.length}: ${warned.join(" | ")}`);
   assert.match(boot[0], /https:\/\/127\.0\.0\.1:9/);
   assert.match(boot[0], /cached tip to age out \(5 min\)/);
@@ -167,7 +170,7 @@ test("an attempt with a HANGING primary and hanging fallbacks ends at hosh + the
   const hanging = (_endpoint: string, timeoutMs: number) =>
     new Promise<number | null>((resolve) => { given.push(timeoutMs); setTimeout(() => resolve(null), timeoutMs); });
   const t0 = Date.now();
-  const r = await fetchNetworkTipWithin(
+  const r = await fetchBothReferencesWithin(
     { hoshTimeoutMs: 200, fallbackTotalMs: 300 },
     ["https://a.example:443", "https://b.example:443", "https://c.example:443"],
     hanging,
@@ -176,9 +179,14 @@ test("an attempt with a HANGING primary and hanging fallbacks ends at hosh + the
   // At least one: a background refresh from an earlier test may still be parked on the
   // same server. Zero is the bug this guards against (the module read the real URL).
   assert.ok(silentHoshRequests >= before + 1, "the primary that hung must be OUR silent server, not the real hosh");
-  assert.equal(r.source, "none");
-  assert.equal(r.height, null);
-  assert.ok(took >= 450 && took < 900, `hosh 200 + legs sharing 300 must end near 500 ms, took ${took} ms`);
+  assert.equal(r.hosh, null);
+  assert.equal(r.direct, null);
+  // PARALLEL, so the whole attempt is the LONGER of the two budgets rather than their sum:
+  // hosh hanging to 200 ms alongside three legs sharing 300 ms ends near 300, not near 500.
+  // The money path's wait is still sized on the sum (REFRESH_ATTEMPT_MS), which is now
+  // longer than it needs to be - the safe direction, and said out loud so the next person
+  // to read that constant knows why it has room.
+  assert.ok(took >= 280 && took < 700, `hosh 200 alongside legs sharing 300 must end near 300 ms, took ${took} ms`);
   assert.equal(given.length, 3, `every leg gets a turn on a shared budget, yet ${given.length} were tried`);
   assert.ok(given.every((g) => g <= 300), `a leg was given more than the whole budget: ${given.join(",")}`);
   assert.ok(given[0] <= 100 + 5, `three legs share 300 ms, the first was given ${given[0]}`);
@@ -196,28 +204,26 @@ test("a first endpoint that accepts and never answers does NOT hide the second: 
     if (endpoint.startsWith("https://dead")) return new Promise<number | null>((resolve) => setTimeout(() => resolve(null), timeoutMs));
     return Promise.resolve(4_336_000);
   };
-  const r = await fetchNetworkTipWithin(
+  const r = await fetchBothReferencesWithin(
     { hoshTimeoutMs: 100, fallbackTotalMs: 300 },
     ["https://dead.example", "https://alive.example"],
     blackholeThenAnswer,
   );
   assert.deepEqual(legs, ["https://dead.example", "https://alive.example"]);
-  assert.equal(r.source, "direct");
-  assert.equal(r.height, 4_336_000);
+  assert.equal(r.direct?.height, 4_336_000);
 });
 
 test("a fallback that answers is USED, with its gRPC target as the host, after the primary fails", async () => {
   // The host is what grpc-js dialled, port included: "alive.example:443" for an https
   // URL with no port, "a.example:9067" for an explicit port.
   const answering = async (endpoint: string) => (endpoint === "https://alive.example" ? 4_336_000 : null);
-  const r = await fetchNetworkTipWithin(
+  const r = await fetchBothReferencesWithin(
     { hoshTimeoutMs: 100, fallbackTotalMs: 500 },
     ["https://a.example:9067", "https://alive.example"],
     answering,
   );
-  assert.equal(r.source, "direct");
-  assert.equal(r.host, "alive.example:443");
-  assert.equal(r.height, 4_336_000);
+  assert.equal(r.direct?.host, "alive.example:443");
+  assert.equal(r.direct?.height, 4_336_000);
 });
 
 /* ------------------------------------------------- our own Zaino is not an oracle (#6, round 7) */
@@ -244,19 +250,19 @@ test("OUR OWN ZAINO IS NEVER THE TIP ORACLE: plaintext, private and local endpoi
 test("the fallback loop dials ONLY the independent endpoints, and reports the one that answered", async () => {
   const dialled: string[] = [];
   const spy = async (endpoint: string) => { dialled.push(endpoint); return endpoint === "https://alive.example" ? 4_336_000 : null; };
-  const r = await fetchNetworkTipWithin(
+  const r = await fetchBothReferencesWithin(
     { hoshTimeoutMs: 100, fallbackTotalMs: 500 },
     ["http://zaino:8137", "https://10.0.0.5:443", "https://alive.example"],
     spy,
   );
   assert.deepEqual(dialled, ["https://alive.example"], "a private or plaintext endpoint must never be asked for the tip");
-  assert.equal(r.source, "direct");
-  assert.equal(r.host, "alive.example:443");
+  assert.equal(r.direct?.host, "alive.example:443");
   // Only our own endpoints: the gate runs on hosh alone, and here hosh is silent.
   dialled.length = 0;
-  const none = await fetchNetworkTipWithin({ hoshTimeoutMs: 100, fallbackTotalMs: 300 }, ["http://zaino:8137"], spy);
+  const none = await fetchBothReferencesWithin({ hoshTimeoutMs: 100, fallbackTotalMs: 300 }, ["http://zaino:8137"], spy);
   assert.deepEqual(dialled, []);
-  assert.equal(none.source, "none");
+  assert.equal(none.direct, null);
+  assert.equal(none.hosh, null);
 });
 
 test("THE DIAL HONOURS THE SCHEME: a plaintext gRPC server answers http://, and https:// against it fails", async () => {

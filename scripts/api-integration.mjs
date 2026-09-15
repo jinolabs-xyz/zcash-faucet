@@ -313,15 +313,21 @@ const fakeHoshEmpty = spawn("node", ["scripts/fake-hosh.mjs"], {
 
 // Every app gets the same deterministic chain view.
 //
-// Only HOSH_URL is overridden. externalTip does degrade to a direct lightwalletd
-// call when hosh yields nothing, which is a second route to the real network - but
-// the fixture always answers, so that route is never taken. Pinning
-// LIGHTWALLETD_ENDPOINT at a closed port to block it is NOT safe: the same
-// variable is also the app's read-side backend, so breaking it makes readiness
-// report "backend unreachable" and fails a different assertion. Verified by doing
-// exactly that and watching it fail.
+// HOSH_URL is the fixture, and TIP_ORACLE_ENDPOINT is EMPTY so the oracle's direct leg
+// never runs. That second line used to be unnecessary and is now load-bearing: the oracle
+// fetches both references every refresh, so without it every server here would dial the
+// real testnet.zec.rocks, learn a tip ~700,000 blocks above the fixture's, judge its own
+// node against the higher one and read as frozen. The comment this replaces said the
+// direct route "is never taken because the fixture always answers", which stopped being
+// true the moment both references were fetched in parallel.
+//
+// Pinning LIGHTWALLETD_ENDPOINT at a closed port instead is still NOT safe, and that is
+// why the oracle now has its own variable: the backend one is also the app's read side,
+// so breaking it makes readiness report "backend unreachable" and fails a different
+// assertion. Verified by doing exactly that and watching it fail.
 const chainView = {
   HOSH_URL: `http://127.0.0.1:${HOSH_PORT}/`,
+  TIP_ORACLE_ENDPOINT: "",
 };
 
 const zallet = (rpcPort) => ({
@@ -376,16 +382,27 @@ const serverC = boot(PORT_C, {
 const serverD = boot(PORT_D, {
   ...zallet(WALLET_D),
   HOSH_URL: `http://127.0.0.1:${HOSH_STALE_PORT}/`,
+  // EMPTY, for the reason the chainView comment gives, and this server is where it bites
+  // hardest: D's whole scenario is "the fixture says we are 40 blocks behind". With the
+  // direct leg live it dialled the real network, learned a tip 700,000 blocks higher,
+  // judged D against THAT and read frozen - correct behaviour from the new rule, and the
+  // wrong chain view for this test. Measured: externalHeight 4,350,247 against a fixture
+  // of 3,650,000.
+  TIP_ORACLE_ENDPOINT: "",
   FAUCET_CHALLENGE: "none",
 });
 
-// E: a healthy wallet whose chain view cannot be established at all. The
-// lightwalletd fallback is pinned at a closed port so the oracle has NO second
-// route to a real tip, which is the only way "unknown" stays unknown.
+// E: a healthy wallet whose chain view cannot be established at all. The oracle must have
+// NO second route to a real tip, which is the only way "unknown" stays unknown.
 const serverE = boot(PORT_E, {
   ...zallet(WALLET_E),
   HOSH_URL: `http://127.0.0.1:${HOSH_EMPTY_PORT}/`,
+  // The closed loopback port stays as the READ-SIDE backend, which is what makes this
+  // server's backend unreachable; the oracle is stood down by its own variable now rather
+  // than by relying on the independence filter to reject a loopback address. Same result
+  // today, said out loud instead of inferred.
   LIGHTWALLETD_ENDPOINT: "https://127.0.0.1:28399",
+  TIP_ORACLE_ENDPOINT: "",
   FAUCET_CHALLENGE: "none",
 });
 
@@ -576,6 +593,28 @@ try {
   /* ── A: /api/ready 200 ───────────────────────────────────────────────── */
   const readyA = await get(BASE_A, "/api/ready");
   ok("A GET /api/ready is 200 with reason null", readyA.status === 200 && readyA.body.ready === true && readyA.body.reason === null, JSON.stringify(readyA.body.reason ?? null));
+
+  // EVERY REFERENCE NAMED, WITH ITS AGE AND WHETHER THEY AGREE (#548). One number with no
+  // provenance is what let a resyncing node pass as current against a reference that was
+  // 113 blocks stale. This run has exactly one source by construction - the hosh fixture,
+  // with TIP_ORACLE_ENDPOINT empty so the direct leg cannot dial the real network - so it
+  // pins the one-source shape: a named source with a fetch age, no spread to report, and
+  // `corroborated` NULL rather than false, because one source is not disagreement. The
+  // two-source and stale-source rules are unit-tested (src/lib/zcash/tipReferences.test.ts);
+  // what only this layer can show is that the block survives the trip over the wire.
+  const refs = readyA.body.tipReferences;
+  ok("A /api/ready names each tip reference, its age and whether they agree",
+    !!refs && typeof refs.sources?.hosh?.height === "number" && refs.sources.hosh.height > 0 &&
+      Number.isInteger(refs.sources.hosh.ageSeconds) && refs.sources.hosh.ageSeconds >= 0 &&
+      refs.sources.hosh.stale === false &&
+      refs.sources.lightwalletd === undefined &&
+      refs.spreadBlocks === null && refs.corroborated === null && refs.used === "hosh",
+    JSON.stringify(refs));
+  // And the node is judged against that reference rather than against a number with no
+  // source: same height, arrived at through the max-over-non-stale rule.
+  ok("A and node.externalHeight is the reference it says it used",
+    readyA.body.node?.externalHeight === refs?.sources?.hosh?.height,
+    `${readyA.body.node?.externalHeight} vs ${refs?.sources?.hosh?.height}`);
 
   /* ── A: /api/pow/challenge shape ─────────────────────────────────────── */
   const ch = await get(BASE_A, "/api/pow/challenge");
