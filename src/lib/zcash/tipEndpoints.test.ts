@@ -22,9 +22,12 @@ test("the oracle looks where TIP_ORACLE_ENDPOINT says, not at the read-side back
 });
 
 test("an explicitly empty list means the aggregate alone, and is not the default", () => {
-  // Read through the same parser rather than re-implementing it here: the point is that
-  // "" and unset are different answers, which is what lets the suite stand the direct leg
-  // down without breaking the backend ping.
+  // THIS RE-IMPLEMENTS THE PARSER, and the comment here used to claim the opposite -
+  // SDE-Infra's note on review. What it can honestly show is the DISTINCTION the split
+  // rests on: "" and unset are different answers, which is what lets a suite stand the
+  // direct leg down without breaking the backend ping. The unset branch against the real
+  // module is covered where a test imports config with the variable absent
+  // (externalTip.test.ts), not here.
   const parse = (raw: string | undefined) =>
     raw === undefined
       ? config.lightwalletdEndpoints

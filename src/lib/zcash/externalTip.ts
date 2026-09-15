@@ -59,7 +59,7 @@
  * whole .proto into the Next build.
  */
 import * as grpc from "@grpc/grpc-js";
-import { config } from "../config.ts";
+import { config, num } from "../config.ts";
 import { targetFor } from "./grpcTarget.ts";
 
 /**
@@ -418,8 +418,18 @@ export const REFERENCE_MAX_AGE_MS = MAX_AGE_MS;
  * The watchdog's fork rung uses its own, larger threshold for a different question (how
  * far ABOVE the network our node may read before it is a fork); this one is only about
  * whether two references tell the same story.
+ *
+ * THROUGH num(), NOT Number(), and SDE-Infra measured why on review of this PR. A bare
+ * Number("") is 0, which would make `corroborated` false for any spread at all; Number of
+ * a typo is NaN, and `spread <= NaN` is false, so it would be false FOREVER. Either one
+ * reaches the R-12 rung as "the references disagree", which is page-and-heal-nothing, on
+ * a loop, with nothing saying why - and it bypasses the null-never-false property that
+ * block was designed around, because a computed false is not an absent one. The empty
+ * spelling is especially live here: this very change teaches CI and the suites to set
+ * variables to empty on purpose. num() returns the fallback for empty and refuses to boot
+ * on a value it cannot parse.
  */
-export const AGREE_BLOCKS = Number(process.env.TIP_AGREE_BLOCKS ?? 20);
+export const AGREE_BLOCKS = num("TIP_AGREE_BLOCKS", 20);
 
 function cacheRef(): TipCache {
   return (g.__faucetTipCache ??= { height: null, at: 0, source: "none", host: null });
