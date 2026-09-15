@@ -462,12 +462,24 @@ export const DRIP_BUMP_SQL = `
 INSERT INTO drip_days (network, day, sent) VALUES (?, ?, 1)
 ON CONFLICT(network, day) DO UPDATE SET sent = sent + 1`;
 
-/** All three windows in one read. ISO days compare lexicographically, so >= on
- * strings is a correct date comparison and works on both backends. */
+/**
+ * All three windows in one read. ISO days compare lexicographically, so a string
+ * comparison is a correct date comparison and works on both backends.
+ *
+ * THE TWO WINDOWS ARE CLOSED AT BOTH ENDS. "The last 30 days" ends today, and with only a
+ * lower bound a row dated in the future was inside it - so a clock that ran ahead when a
+ * drip was recorded put that drip in `last30d` while the series beside it, which is built
+ * from the window rather than from the rows, correctly left it out. The page would have
+ * shown a chart that did not add up to the figure printed next to it, with nothing wrong
+ * on either side. `allTime` stays unbounded on purpose: it means ever, and a row whose
+ * label is wrong is still a drip that went out.
+ *
+ * Params: 30-day first day, today, 7-day first day, today, network.
+ */
 export const DRIP_TOTALS_SQL = `
-SELECT COALESCE(SUM(sent), 0)                              AS allTime,
-       COALESCE(SUM(CASE WHEN day >= ? THEN sent END), 0)  AS last30d,
-       COALESCE(SUM(CASE WHEN day >= ? THEN sent END), 0)  AS last7d
+SELECT COALESCE(SUM(sent), 0)                                                AS allTime,
+       COALESCE(SUM(CASE WHEN day >= ? AND day <= ? THEN sent END), 0)       AS last30d,
+       COALESCE(SUM(CASE WHEN day >= ? AND day <= ? THEN sent END), 0)       AS last7d
   FROM drip_days
  WHERE network = ?`;
 

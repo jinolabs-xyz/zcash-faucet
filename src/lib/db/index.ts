@@ -389,14 +389,17 @@ export async function countDrips(nowMs: number, network: DripNetwork = "taz"): P
     });
     await seedOnce;
     const window30 = utcDayWindow(nowMs, 30);
+    const today = window30[window30.length - 1];
     const [row, days] = await Promise.all([
       driver().get<{ allTime: number; last30d: number; last7d: number }>(
         DRIP_TOTALS_SQL,
-        [window30[0], utcDayWindow(nowMs, 7)[0], network],
+        // Both windows end on the same day the series does, which is what keeps the
+        // chart and the figure beside it in agreement.
+        [window30[0], today, utcDayWindow(nowMs, 7)[0], today, network],
       ),
       driver().all<{ day: string; sent: number }>(
         DRIP_BY_DAY_SQL,
-        [network, window30[0], window30[window30.length - 1]],
+        [network, window30[0], today],
       ),
     ]);
     if (!row) return null;
