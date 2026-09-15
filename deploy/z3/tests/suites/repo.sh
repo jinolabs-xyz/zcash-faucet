@@ -179,6 +179,8 @@ check "OPERATIONS.md says the dial is gated on the app's flag, and the code stil
   "grep -qF 'FAUCET_CTAZ_ENABLED' '$REPO/OPERATIONS.md' && grep -qF 'config.crosslink.enabled' '$REPO/OPERATIONS.md' && grep -qF 'if (!config.crosslink.enabled)' '$REPO/src/lib/crosslink/read.ts'"
 check "and its 20-second figure is the interval the refresher actually uses" \
   "grep -qF 'REFRESH_INTERVAL_MS' '$REPO/OPERATIONS.md' && grep -qE 'REFRESH_INTERVAL_MS = 20_000' '$REPO/src/lib/crosslink/cache.ts'"
+check "and the socket probe reaps its listener and volume on EVERY exit path, not just the happy one" \
+  "grep -qF \"trap 'docker rm -f ctaz-listener\" '$CIWF' && [ \"\$(grep -c 'docker volume rm ctazsock' '$CIWF')\" = 1 ]"
 
 echo "== repo: the watchdog's node-lag limit is the miner's, for the miner's reason"
 # Both read zebra's clock-based estimatedheight. The miner's guard (sync.rs) explains why

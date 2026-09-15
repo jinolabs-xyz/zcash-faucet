@@ -128,8 +128,13 @@ Reading the answers, and the middle one is the trap:
   `systemctl is-active ctaz-rpc.socket`. The installer will not start it for you: it
   restarts a changed unit only when that unit is already active, because starting a stopped
   socket is an arming decision that belongs to `enabled-units` and to the operator.
-- **`root:root`** means `SocketGroup=` did not take, and cTAZ will be dark because the app
-  cannot connect.
+- **`root:root`** has to be read together with the mode, because two different states
+  wear it. With **`0666`** it is the pre-#553 live socket — the unit narrowed it, systemd
+  has not recreated it, and `systemctl restart ctaz-rpc.socket` is the fix. With **`0660`**
+  it is either a socket that predates #545 or a `SocketGroup=` that did not take, and
+  `systemctl show -p SocketGroup ctaz-rpc.socket` separates them: a loaded `SocketGroup=1000`
+  beside a live `root:root` means the live socket is old, not that the setting failed.
+  Either way the app cannot connect while it reads `root:root`, so cTAZ is dark.
 
 In every wrong case the panel reads cannot-verify rather than lying, which is what the
 five-state gate is for. Nothing monitors socket-file permissions, so this check is the only

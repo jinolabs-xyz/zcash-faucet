@@ -626,10 +626,16 @@ jobs:
           c.on("error", (e) => { console.log(e.code); process.exit(0); });
           JS
           docker volume create ctazsock >/dev/null
+          # ONE CLEANUP, ON EVERY EXIT PATH (CTO, review of #553). The gid refusal below
+          # exits before any of the inline removals, so that path used to leave the
+          # listener container and the named volume behind - the same shape as the leak I
+          # filed on #558 the same afternoon, and a trap is the only form of this that
+          # cannot be missed by a new early exit.
+          trap 'docker rm -f ctaz-listener >/dev/null 2>&1 || true; docker volume rm ctazsock >/dev/null 2>&1 || true' EXIT
           docker run -d --name ctaz-listener -v ctazsock:/d -v /tmp/listener.js:/l.js:ro \
             --entrypoint node faucet-ci-check:${{ github.sha }} /l.js /d/ctaz-rpc.sock "$grp" "$mode" >/dev/null
           for _ in $(seq 1 20); do docker logs ctaz-listener 2>&1 | grep -q listening && break; sleep 1; done
-          docker logs ctaz-listener 2>&1 | grep -q listening || { echo "the listener never came up"; docker rm -f ctaz-listener >/dev/null; docker volume rm ctazsock >/dev/null; exit 1; }
+          docker logs ctaz-listener 2>&1 | grep -q listening || { echo "the listener never came up"; exit 1; }
           # DERIVED FROM THE IMAGE, NOT TYPED (SDE-App, review of #553). The unit declares a
           # NUMERIC SocketGroup and the entrypoint drops to `node` BY NAME, so the two halves
           # are pinned in different places and nothing compared them. They agree at the
@@ -644,7 +650,6 @@ jobs:
           other_uid=$((imguid + 2))
           as() { docker run --rm -u "$1:$1" -v ctazsock:/d -v /tmp/probe.js:/p.js:ro --entrypoint node faucet-ci-check:${{ github.sha }} /p.js /d/ctaz-rpc.sock; }
           app="$(as "$imguid")"; other="$(as "$other_uid")"; again="$(as "$imguid")"
-          docker rm -f ctaz-listener >/dev/null; docker volume rm ctazsock >/dev/null
           echo "uid $imguid (the app): $app"
           echo "uid $other_uid (anyone else): $other"
           echo "uid $imguid again (the listener survived): $again"
