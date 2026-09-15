@@ -544,7 +544,22 @@ async function checkRefusalCards(browser, base, address) {
 // so an unconfigured or broken miner still rendered "on", and a run with no heartbeat
 // at all is exactly the shape that used to lie. What it must say now is that it cannot
 // tell, which is neither healthy nor "off".
+/**
+ * Opens one of the four views the redesign's segmented nav switches between.
+ *
+ * The content did not go away, it went behind a nav, and a hidden section is not
+ * clickable. Driving the nav is also what a visitor does, so this asserts the nav works on
+ * the way to asserting what is inside: a broken nav fails here, by name, rather than fifty
+ * lines later as a mystery timeout on something unrelated.
+ */
+async function showView(page, v) {
+  await page.getByTestId(`nav-${v}`).click();
+  await page.locator(`[data-testid="view-${v}"]`).waitFor({ state: "visible", timeout: 5000 });
+}
+
 async function checkMinerPanel(page) {
+  // The panel and its disclosure live in the status view now.
+  await showView(page, "status");
   // The control was reached by its label until this change, so the label needs its own
   // assertion. DRIVEN BY TESTID, ASSERTED BY ROLE AND NAME - SDE-Infra's finding, and it is
   // the right one: getByRole(name:) asserts the COMPUTED ACCESSIBLE NAME, which is what a
@@ -642,6 +657,7 @@ async function checkCtazToggle(page, base) {
         ])),
     );
 
+  await showView(page, "status");
   await page.getByTestId("panel-toggle").click();
   const rows = await panelRows();
   ok("the panel gains a cTAZ readiness row", /ready|behind|stale|not-activated|cannot-verify/.test(rows["node"] ?? ""), rows["node"]);
@@ -658,6 +674,10 @@ async function checkCtazToggle(page, base) {
     rows["box"] !== undefined && rows["backend"] !== undefined);
 
   // And the mirror, so neither assertion can pass by the panel simply being empty.
+  // The network tabs are the CLAIM view's, the panel is the STATUS view's, so the tab
+  // click needs the claim view back. Reading the rows does not: panelRows() reads the DOM
+  // rather than the screen, and the panel stays mounted once it is open.
+  await showView(page, "claim");
   await page.getByRole("tab", { name: /^TAZ/ }).click();
   await page.waitForTimeout(300);
   const tazRows = await panelRows();
@@ -665,7 +685,10 @@ async function checkCtazToggle(page, base) {
   ok("and the cTAZ-only rows are gone from it", tazRows["reserve"] === undefined, Object.keys(tazRows).join(", "));
   await ctazTab.click();
   await page.waitForTimeout(300);
+  await showView(page, "status");
   await page.getByTestId("panel-toggle").click();
+  // The claim below is driven through the claim view's own controls.
+  await showView(page, "claim");
 
   // A real claim on the feature net, through the button and the proof of work.
   const address = await freshAddress();
@@ -767,25 +790,26 @@ async function checkMobile(browser, base) {
     ok(`mobile ${label}: no horizontal overflow`, r.docW <= r.vw, `${r.docW} vs ${r.vw}${r.wide.length ? " :: " + r.wide.join(", ") : ""}`);
     ok(`mobile ${label}: nothing pinned covers a control`, r.covered.length === 0, r.covered.join(", "));
     ok(`mobile ${label}: tap targets reach 44px`, r.small.length === 0, r.small.join(", "));
-    // The contribute link is icon-only ONLY at this width (its label shows from
-    // 560px up, where the text-contrast check owns it). So its icon-contrast home
-    // is here: the named guard moved with the state, rather than being deleted
-    // when the desktop check lost the subject. Landing page only, both themes
-    // arrive via the caller's sweep.
+    // THE ICON-ONLY CONTROL'S 1.4.11 GUARD, AND ITS SUBJECT MOVED (the redesign's shell).
+    // This measured `a.contribute`, which was icon-only at this width and labelled above
+    // 560px. The approved design has no contribute link in the header at all: the source
+    // is a text link in the footer now, where the text-contrast check owns it. That leaves
+    // the THEME TOGGLE as the only icon-only control on the page, which is precisely what
+    // this guard is for, so it follows the state rather than being deleted with the old
+    // markup. Note what is NOT carried over: there is no `labelled` case any more, because
+    // this control is icon-only at every width by design.
     if (label.startsWith("/ ") || label === "/ ink" || label === "/ paper") {
       const icon = await page.evaluate(`(() => {
         ${COLOUR_LIB}
-        const el = [...document.querySelectorAll("a.contribute")].find((e) => e.getBoundingClientRect().width > 0);
+        const el = [...document.querySelectorAll("[data-testid=theme-toggle]")].find((e) => e.getBoundingClientRect().width > 0);
         if (!el) return { missing: true };
-        const lbl = el.querySelector(".contribute-label");
-        if (lbl && getComputedStyle(lbl).display !== "none") return { labelled: true };
         const ratio = ratioOf(getComputedStyle(el).color, el);
         return { ratio };
       })()`);
       ok(
-        `mobile ${label}: the contribute icon keeps 1.4.11 contrast`,
-        !icon.missing && !icon.labelled && icon.ratio != null && icon.ratio >= 3,
-        icon.missing ? "contribute link not found, so nothing was measured" : icon.labelled ? "label visible at mobile width, state contract broken" : `glyph ${icon.ratio?.toFixed(2)}:1`,
+        `mobile ${label}: the icon-only control keeps 1.4.11 contrast`,
+        !icon.missing && icon.ratio != null && icon.ratio >= 3,
+        icon.missing ? "theme toggle not found, so nothing was measured" : `glyph ${icon.ratio?.toFixed(2)}:1`,
       );
     }
   };
@@ -805,6 +829,7 @@ async function checkMobile(browser, base) {
 
     // The panel open, which is the tallest the home page gets before a claim.
     await page.goto(base, { waitUntil: "networkidle", timeout: 60_000 });
+    await showView(page, "status");
     await page.getByTestId("panel-toggle").click();
     await audit("/ panel open");
 
@@ -812,6 +837,7 @@ async function checkMobile(browser, base) {
     // a phone because it is the state a claimant is actually looking at, and it is
     // the longest card on the page.
     await page.getByTestId("panel-toggle").click();
+    await showView(page, "claim");
     await page.getByRole("button", { name: "Make a throwaway address and key" }).first().click();
     await page
       .waitForFunction(() => (document.querySelector("[data-testid=address-input]")?.value ?? "").length > 100, null, { timeout: 20_000 })
@@ -862,6 +888,8 @@ try {
   // miner heartbeat, so the sentence has to be the not-mining one; the three
   // contradictory fixed sentences must be gone from the rendered page.
   {
+    // Both tools sit behind the Tools view now, so open that before driving them.
+    await showView(page, "tools");
     // The sentence lives in the "How it works" view; open it the way a visitor does.
     await page.getByRole("button", { name: "How it works" }).click();
     await page.locator("#tool-about").waitFor({ timeout: 5000 });
@@ -896,6 +924,9 @@ try {
     await page.getByRole("button", { name: "Balance lookup" }).click();
   }
   await checkMinerPanel(page);
+  // The claim flow below drives input.input and button.btn-primary, which belong to the
+  // claim view. Leave the nav where the rest of this file expects to find things.
+  await showView(page, "claim");
 
   // THE PROOF OF WORK IS EXPLAINED BEFORE IT RUNS, ESTIMATED WHILE IT RUNS, AND CAN BE
   // ABANDONED; A BAD CHECKSUM COSTS NO SOLVE (risk register II, R-38).

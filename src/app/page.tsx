@@ -1,7 +1,12 @@
 "use client";
 
 import { CSSProperties, useCallback, useEffect, useRef, useState } from "react";
+// The redesign's tokens and shell, transcribed from the preview the owner approved on
+// 2026-09-15. Tokens first: the shell reads them.
+import "./redesign-tokens.css";
+import "./redesign-shell.css";
 import { BrandMark } from "./BrandMark";
+import { Sparkline, type DripDay } from "./Sparkline";
 import { reserveRows } from "@/lib/reserveLabel";
 import { minerChip, minerRow, minerErrorRow, minerIsBad, readingFromStatus } from "@/lib/minerLabel";
 import { publicBoxRow, publicBoxChip, publicBoxIsBad, type PublicBox } from "@/lib/boxLabel";
@@ -19,6 +24,12 @@ import type { MinerReading } from "@/lib/miner/heartbeat";
 // state is on screen for over half a second on localhost and longer over a network.
 // It used to render as "syncing", which told a first-time visitor that a healthy
 // faucet was busy coming up.
+// The four sections behind the segmented nav. One is visible at a time and the rest
+// carry `hidden`, which the shell turns into display:none. The hash mirrors it so a
+// view survives a reload and can be linked to.
+type View = "claim" | "status" | "analytics" | "tools";
+const VIEWS: View[] = ["claim", "status", "analytics", "tools"];
+
 type Phase = "checking" | "syncing" | "fault" | "queued" | "empty" | "degraded" | "ready" | "submitting" | "success" | "cooldown" | "error";
 
 // The two states where we cannot send yet, for different reasons: we have not asked,
@@ -43,7 +54,9 @@ interface Status {
   sends?: { state: "ok" | "degraded" | "unknown"; ok: number; failed: number; unknown: number; reason: string };
   /** Drips served: ever, last 7 UTC days, last 30. Null (or absent, from an older
    * deploy) means the ledger would not answer, which is unknown, never zero. */
-  drips?: { allTime: number; last7d: number; last30d: number } | null;
+  // `byDay` is the thirty-day series #549 added: counts only, zero-filled, oldest
+  // first. The header sparkline is its first reader on the page.
+  drips?: { allTime: number; last7d: number; last30d: number; byDay?: DripDay[] } | null;
   backend: { reachable: boolean; endpoint: string };
   node?: {
     ready: boolean; syncPercent: number | null; height: number | null; nodeHeight: number | null; canBuildTx?: boolean;
@@ -92,7 +105,7 @@ interface Status {
         ageSeconds: number | null;
         /** Their fixed payout, as a decimal string: a bigint does not survive JSON. */
         dripZat: string;
-        drips?: { allTime: number; last7d: number; last30d: number } | null;
+        drips?: { allTime: number; last7d: number; last30d: number; byDay?: DripDay[] } | null;
         /** The literal string. Their surface has no balance method, so this is an
          *  answer rather than a gap, and it must not be rendered as a number. */
         reserve: "unknown";
@@ -229,18 +242,6 @@ function SunIcon() {
     </svg>
   );
 }
-/**
- * GitHub's mark, from their brand guidance, inline for the same reason the sun and
- * moon are: one path does not justify a dependency and `currentColor` gets the
- * hover state for free.
- */
-function RepoIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-      <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
-    </svg>
-  );
-}
 function MoonIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -327,7 +328,11 @@ export default function Home() {
   const [addr, setAddr] = useState("");
   const [touched, setTouched] = useState(false);
   const [panel, setPanel] = useState(false);
-  const [theme, setTheme] = useState<"paper" | "ink">("ink");
+  // PAPER IS THE DEFAULT NOW (the approved redesign is a light design). A visitor who
+  // has chosen a theme keeps it: the stored key is unchanged, so only people who never
+  // toggled see the new default.
+  const [theme, setTheme] = useState<"paper" | "ink">("paper");
+  const [view, setView] = useState<View>("claim");
   const [tx, setTx] = useState<Tx | null>(null);
   const [copied, setCopied] = useState<CopyTarget | null>(null);
   // THE KEY THAT COMES WITH A GENERATED ADDRESS (risk register II, R-31). /api/account
@@ -619,7 +624,7 @@ export default function Home() {
     document.documentElement.dataset.theme = theme;
     document
       .querySelector('meta[name="theme-color"]')
-      ?.setAttribute("content", theme === "ink" ? "#171615" : "#f3f2f2");
+      ?.setAttribute("content", theme === "ink" ? "#171615" : "#f0f0f0");
   }, [theme]);
 
   // Solve the server's proof-of-work challenge in a worker so the tab never
@@ -1068,20 +1073,29 @@ export default function Home() {
   const rowLine: CSSProperties = { display: "flex", justifyContent: "space-between", gap: 12, padding: "8px 0", borderBottom: "1px solid var(--color-divider)", fontFamily: "var(--mono)", fontSize: 11.5 };
 
   return (
-    <div
-      className={"app " + (theme === "ink" ? "ink" : "")}
-      style={{ minHeight: "100vh", display: "flex", flexDirection: "column", background: "var(--color-bg)", color: "var(--color-text)", fontFamily: "var(--font-body)" }}
-    >
-      <header className="nav" style={{ padding: `14px ${pad}`, gap: 14, flexWrap: "wrap" }}>
-        <div className="nav-brand" style={{ fontSize: "clamp(15px,4vw,18px)", letterSpacing: "-.01em", marginRight: "auto", display: "flex", alignItems: "center", gap: ".44em" }}>
-          {/* The LOGO hyperlinks to z.cash, which is the trademark policy's
-              condition for showing it. The site NAME beside it is ours and stays
-              site navigation, so the two are separate links rather than one. Nested
-              anchors would be invalid markup anyway.
+    // `app` stays on the outer element: it is what the smoke's theme and contrast checks
+    // find, and the redesign has no reason to rename it.
+    <div className={"app " + (theme === "ink" ? "ink" : "")}>
+      {/* The stage owns the container query and defines --u, so every calc() in the shell
+          resolves inside here and nowhere else. The composition is the centred column the
+          design is laid out in, and the footer is its last flex child, which is what pins
+          the footer to the bottom on a short page (preview lines 364-366). */}
+      <div className="stage">
+        <div className="comp">
+      {/* THE REDESIGN'S HEADER (preview lines 367-388): brand, the phase word, the
+          segmented nav, the thirty-day strip and the theme toggle. Three grid columns so
+          the nav is centred on the page rather than on whatever the brand happens to
+          measure, which is why it is a grid and not a flex row. */}
+      <header className="hdr">
+        <div className="brand">
+          {/* The LOGO hyperlinks to z.cash, which is the trademark policy's condition for
+              showing it. The site NAME beside it is ours and stays site navigation, so the
+              two are separate links rather than one. Nested anchors would be invalid
+              markup anyway.
 
-              New tab, deliberately: people expect a masthead mark to go home, and
-              sending someone off-site mid-claim would lose whatever they had typed.
-              The aria-label says where it goes so the surprise is announced. */}
+              New tab, deliberately: people expect a masthead mark to go home, and sending
+              someone off-site mid-claim would lose whatever they had typed. The aria-label
+              says where it goes so the surprise is announced. */}
           <a
             href="https://z.cash/"
             target="_blank"
@@ -1092,225 +1106,100 @@ export default function Home() {
           >
             <BrandMark />
           </a>
-          <span>Zcash Testnet Faucet</span>
+          <span className="name">Zcash Testnet Faucet</span>
+          {/* Not a live region: the sr-only status region inside the claim view owns phase
+              announcements, and a live badge here would say everything twice.
+
+              The word is the PHASE MACHINE's, not the preview's three-way badgeWord. Ours
+              separates CHECKING from PREPARING from DEGRADED, and a redesign is no reason
+              to give a visitor a coarser answer than the one the page already knows. */}
+          <span className="badge" data-state={statusText} data-testid="status-badge">
+            <span className="ring">
+              <span
+                data-testid="status-dot"
+                className="dot"
+                aria-hidden="true"
+                // The pulse is INLINE and that is load-bearing: the reduced-motion rule is a
+                // global `* { animation: none !important }`, and only !important beats an
+                // inline declaration. A class here would keep animating for people who asked
+                // it not to, which the smoke checks both ways.
+                style={{ background: dot.fill, boxShadow: `0 0 0 2px ${dot.ring}`, animation: "pulse 2.6s ease-in-out infinite" }}
+              />
+            </span>
+            <span className="txt" data-testid="status-word">{statusText}</span>
+          </span>
         </div>
-        {/* The source, linked from the page every visitor lands on. An open source
-            project whose repo is only findable by guessing the org name is open
-            source in licence rather than in practice. Same box as the theme toggle
-            so the two utility controls read as a pair. */}
-        {/* Labelled on wide screens, icon-only on narrow ones: the masthead's
-            no-wrap behaviour at phone widths was measured and pinned in #337, and
-            a permanent label would re-break exactly what that fixed. The word is
-            CONTRIBUTE rather than SOURCE because the owner wants the link to read
-            as an invitation, not a citation. */}
-        <a
-          className="theme-toggle contribute"
-          href="https://github.com/jinolabs-xyz/zcash-faucet"
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label="Contribute on GitHub, opens in a new tab"
-          title="Contribute on GitHub, opens in a new tab"
-        >
-          <span className="contribute-label">Contribute</span>
-          <RepoIcon />
-        </a>
-        {/* Left of the status badge, which is where every site puts this and so
-            where people look for it. It borrows the badge's box exactly, so the
-            two read as one pair rather than a control bolted on beside a label. */}
-        <button
-          type="button"
-          data-testid="theme-toggle"
-          className="theme-toggle"
-          onClick={() => setTheme((t) => (t === "ink" ? "paper" : "ink"))}
-          aria-label={theme === "ink" ? "Switch to light theme" : "Switch to dark theme"}
-          title={theme === "ink" ? "Light theme" : "Dark theme"}
-        >
-          {theme === "ink" ? <SunIcon /> : <MoonIcon />}
-        </button>
-        {/* Not a live region: the sr-only status region in <main> owns phase
-            announcements, a live badge here would say everything twice. */}
-        <div style={{ display: "flex", alignItems: "center", gap: 7, border: "2px solid var(--color-divider)", padding: "5px 9px", fontFamily: "var(--mono)", fontSize: 10, fontWeight: 700, letterSpacing: ".1em" }}>
-          <span data-testid="status-dot" aria-hidden="true" style={{ width: 9, height: 9, flex: "none", background: dot.fill, border: `2px solid ${dot.ring}`, animation: "pulse 2.6s ease-in-out infinite" }} />
-          <span data-testid="status-word">{statusText}</span>
+
+        {/* Buttons rather than links: the views are client state on one page, so an anchor
+            would promise a navigation that does not happen. The hash is written by the
+            handler, which keeps a view linkable without making the nav lie about what it
+            is. */}
+        <nav className="seg" aria-label="Sections">
+          {VIEWS.map((v) => (
+            <button
+              key={v}
+              type="button"
+              data-view={v}
+              data-testid={`nav-${v}`}
+              onClick={() => setView(v)}
+              {...(view === v ? { "aria-current": "page" as const } : {})}
+            >
+              {v === "claim" ? "Claim" : v === "status" ? "Status" : v === "analytics" ? "Analytics" : "Tools"}
+            </button>
+          ))}
+        </nav>
+
+        <div className="hdr-right">
+          {/* The strip is a shortcut INTO the analytics view, so it is a button that
+              switches views rather than a decoration that happens to show numbers. */}
+          <button
+            className="strip"
+            type="button"
+            data-testid="drips-strip"
+            onClick={() => setView("analytics")}
+            aria-label="Open usage analytics"
+          >
+            <Sparkline
+              byDay={status?.drips?.byDay ?? []}
+              last7d={status?.drips?.last7d ?? null}
+              allTime={status?.drips?.allTime ?? null}
+              theme={theme}
+            />
+            <span className="kv week">
+              <b className="num" data-testid="drips-7d">{status?.drips ? num(status.drips.last7d) : "–"}</b>
+              <span>this week</span>
+            </span>
+            <span className="kv all">
+              <b className="num" data-testid="drips-all">{status?.drips ? num(status.drips.allTime) : "–"}</b>
+              <span>all time</span>
+            </span>
+          </button>
+          {/* Keeps `theme-toggle` beside the design's `iconbtn`: the class is what the
+              smoke's 1.4.11 contrast guard finds, and losing it would retire a live
+              accessibility check by accident rather than on purpose. */}
+          <button
+            type="button"
+            data-testid="theme-toggle"
+            className="iconbtn theme-toggle"
+            onClick={() => setTheme((t) => (t === "ink" ? "paper" : "ink"))}
+            aria-pressed={theme === "ink"}
+            aria-label={theme === "ink" ? "Switch to light theme" : "Switch to dark theme"}
+            title={theme === "ink" ? "Light theme" : "Dark theme"}
+          >
+            {theme === "ink" ? <SunIcon /> : <MoonIcon />}
+          </button>
         </div>
       </header>
+      {/* THE FOUR VIEWS (preview lines 389-712). One is shown at a time and the rest
+          carry `hidden`, which the shell turns into display:none !important. They stay
+          inside <main> so the landmark survives the redesign: the preview drops it, and a
+          screen reader losing "main" is not a trade the design was asking for.
 
-      <div data-testid="status-strip" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "4px 18px", padding: `9px ${pad}`, borderBottom: "1px solid var(--color-divider)", fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".05em", color: muted(55) }}>
-        {[
-          { k: "node", v: nodeWord },
-          { k: "sync", v: syncCell ?? "–" },
-          { k: "height", v: num(height) },
-          { k: "balance", v: balance != null ? balance.toFixed(1) + " TAZ" : status == null ? "–" : "0 TAZ" },
-          // Terse here, per the user. "off" is only available when the heartbeat has
-          // stopped AND systemd says the unit is inactive, i.e. someone stopped it; a
-          // stalled miner is running and failing and must never read as off.
-          { k: "miner", v: status == null ? "–" : minerChip(miner, minerUnit) },
-          // Only when it is NOT complete. A permanent "box ok" would spend a slot on
-          // the terse strip telling an operator what they already assume, but a box
-          // that is missing units has to be visible without opening the panel,
-          // because the panel is a click nobody makes when they think all is well.
-          ...(box && publicBoxChip(box) ? [{ k: "box", v: publicBoxChip(box)! }] : []),
-          // "indexer", never "node". This is the lightwalletd we query, not the
-          // Zcash node behind it, and calling it the node version would be wrong
-          // in front of the people who asked for it. Our own zebra version is not
-          // reachable from the app at all: everything goes via zallet or
-          // lightwalletd, so it needs a data path we do not have (#193).
-          ...(indexer ? [{ k: "indexer", v: `${indexer.vendor} ${indexer.version}` }] : []),
-          // Only while it is NOT servable, same rule as the box chip. A permanent
-          // "ctaz ready" would spend a slot on the terse strip saying nothing, but a
-          // feature net that cannot pay has to be visible without opening the panel.
-          ...(ctaz && !ctaz.servable ? [{ k: "ctaz", v: ctaz.readiness }] : []),
-          ...(reserve
-            ? [
-                {
-                  k: "reserve",
-                  // "ok" would be a lie under the low mark with no refill running
-                  // (miner off), so that case reads "low" instead.
-                  v: refilling
-                    ? "topping up"
-                    : reserve.spendableTaz != null && reserve.spendableTaz < reserve.lowTaz
-                      ? "low"
-                      : "ok",
-                },
-              ]
-            : []),
-        ].map((it) => (
-          <span key={it.k} data-strip-key={it.k}>{it.k} <b data-testid="strip-value" style={{ color: "var(--color-text)", fontWeight: 700 }}>{it.v}</b></span>
-        ))}
-        {/* A bordered box, not bare text. With `padding: 0` this was a ghost button
-            with every visual cue removed, so it read as a label and nobody knew the
-            panel opened. The chevron alone was not enough: it is 8px of glyph doing
-            the work a control's whole shape should do. */}
-        <button
-          data-testid="panel-toggle"
-          className="btn btn-secondary btn-sm disclosure"
-          onClick={() => setPanel((p) => !p)}
-          aria-expanded={panel}
-          aria-controls="live-panel"
-          style={{ marginLeft: "auto" }}
-        >
-          {panel ? "Hide details" : "More details"}
-          <span aria-hidden="true" className="disclosure-caret">{panel ? "▲" : "▼"}</span>
-        </button>
-      </div>
-
-      {panel && (
-        <div id="live-panel" style={{ borderBottom: "2px solid var(--color-divider)", background: "var(--color-surface)", padding: `16px ${pad}` }}>
-          <div className="panel-grid">
-            {[
-              // Same rule as the header strip. The panel opens on a click, and nothing
-              // stops that click landing before the first status does.
-              // EVERY ROW DECLARES WHICH ASSET IT IS ABOUT, and the panel then shows only
-              // the selected one. Asked for directly: picking cTAZ and still reading TAZ's
-              // balance, miner and drip counts is how someone concludes the cTAZ wallet
-              // holds 1000 TAZ. Two assets in one grid is a mixing hazard, not a density
-              // win.
-              //
-              // "both" is for facts about the BOX rather than either chain - the integrity
-              // count and the lightwalletd backend serve whichever asset you are looking at,
-              // so hiding them behind a toggle would just make them harder to find.
-              // The parenthetical is the sync cell; skipped when it would only repeat the word
-              // ("unverified (unverified)") and trimmed when it ends with it ("behind (40)").
-              { net: "taz", k: "node", v: nodeWord + (nodeWord !== "ready" && syncCell && syncCell !== "–" && syncCell !== nodeWord ? " (" + syncCell.replace(new RegExp(` ${nodeWord}$`), "") + ")" : ""), bad: status != null && (walletDown || node?.ready === false || node?.canBuildTx === false) },
-              { net: "taz", k: "block height", v: num(height) + (nodeHeight ? " / " + num(nodeHeight) : "") },
-              { net: "taz", k: "wallet balance", v: status?.balanceTaz != null ? status.balanceTaz.toFixed(2) + " TAZ" : "–", bad: status?.empty === true },
-              // The detail belongs here, per the user: he asked that the miner's real
-              // state be knowable from More details.
-              { net: "taz", k: "miner", v: status == null ? "–" : minerRow(miner, minerUnit), bad: status != null && minerIsBad(miner, minerUnit) },
-              ...(status != null && minerError ? [{ net: "taz", k: "miner error", v: minerError, bad: true }] : []),
-              // The box's own integrity. Measured since #287 and never rendered until
-              // now: the endpoint knew two files were missing and the panel said
-              // nothing, so the one place a person looks did not carry it.
-              ...(box ? [{ net: "both", k: "box", v: publicBoxRow(box), bad: publicBoxIsBad(box) }] : []),
-              ...(reserve
-                ? [
-                    // Wording lives in reserveRows and is unit-tested, because
-                    // "257.2 / 1000" beside "idle" made a healthy faucet look broken.
-                    //
-                    // Only the refill line. reserveRows.reserve renders spendableTaz,
-                    // which the status route sets from THIS REQUEST'S balance read, so
-                    // it was the same number as "wallet balance" one row up, printed to
-                    // a different number of decimals. Two rows, one figure, and a
-                    // reader at 3am reasonably assumes two different quantities. If the
-                    // route ever sources them separately, bring the row back.
-                    ...(() => { const rr = reserveRows({ ...reserve, refilling }); return [{ net: "taz", k: "refill", v: rr.refill, bad: rr.refillBad }]; })(),
-                  ]
-                : []),
-              { net: "taz", k: "queue", v: (status?.queueDepth ?? 0) + " pending" },
-              // One line, per the standing rule. The legend lives in the KEY so the
-              // value stays short at any magnitude; "10 all time · 10 in 7d · 10 in
-              // 30d" wrapped the cell on first render. Same slash idiom as the block
-              // height row. An unreadable counter says unknown rather than rendering
-              // a zero that would read as "this faucet has never served anyone".
-              { net: "taz", k: "drips ever/7d/30d", v: status?.drips ? num(status.drips.allTime) + " / " + num(status.drips.last7d) + " / " + num(status.drips.last30d) : "unknown" },
-              { net: "both", k: "backend", v: status?.backend?.reachable ? "reachable" : "unreachable", bad: status != null && !status.backend?.reachable },
-              // The cTAZ dimension, one line per fact and every key naming its network,
-              // so no row here can be mistaken for one of the TAZ rows above it.
-              ...(ctaz
-                ? [
-                    {
-                      net: "ctaz",
-                      k: "node",
-                      // The gate's own word. Five states rather than a boolean, because
-                      // "cannot-verify" is a different instruction from "behind".
-                      v: ctaz.readiness + (ctaz.roundLag != null ? ` (round lag ${ctaz.roundLag})` : ""),
-                      bad: !ctaz.servable,
-                    },
-                    // The percent is its own row, next to the state and not folded into
-                    // it. "23% synced" and "cannot reach the node" must never render the
-                    // same, which is the whole reason the gate has five states and no
-                    // syncing state. Unknown says unknown rather than 0%.
-                    {
-                      net: "ctaz",
-                      k: "sync",
-                      v: ctaz.syncPercent != null
-                        ? ctaz.syncPercent.toFixed(1) + "%" +
-                          (ctaz.blocks != null && ctaz.tip != null ? ` (${num(ctaz.blocks)} of ${num(ctaz.tip)})` : "")
-                        : ctaz.source === "file"
-                          ? "unknown, the box's status file is stale or unreadable"
-                          : "unknown",
-                      // Not a fault. A syncing node is doing what it should, and cTAZ is
-                      // not being served yet either way.
-                      bad: false,
-                    },
-                    { net: "ctaz", k: "block height", v: num(ctaz.blocks ?? ctaz.height) + (ctaz.finalizers != null ? " · " + ctaz.finalizers + " finalizers" : "") },
-                    // The literal string from the response, rendered as given. Their RPC
-                    // surface has no shielded balance method, so this is an answer and
-                    // not a gap, and "0" here would be the balance ?? 0 bug all over
-                    // again on a wallet we have never been able to read.
-                    { net: "ctaz", k: "reserve", v: ctaz.reserve },
-                    { net: "ctaz", k: "drips ever/7d/30d", v: ctaz.drips ? num(ctaz.drips.allTime) + " / " + num(ctaz.drips.last7d) + " / " + num(ctaz.drips.last30d) : "unknown" },
-                  ]
-                : []),
-            ]
-              // The filter. A row survives if it is about the asset in front of you or
-              // about the box itself. The prefixes came off the cTAZ keys in the same
-              // change: "ctaz sync" was disambiguating against a TAZ row that is no
-              // longer on screen, and a redundant prefix on every key is noise.
-              .filter((r) => r.net === "both" || r.net === network)
-              .map((r) => (
-              // A bad row is marked in the VALUE, not with a badge or an icon: the grid
-              // is monospace k/v and anything else would need a column nothing else
-              // uses. Colour alone would fail anyone who cannot see it, so the marker
-              // carries the meaning and the colour only reinforces it.
-              <div key={r.k} data-panel-key={r.k} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, padding: "7px 0", borderBottom: "1px solid var(--color-divider)", fontFamily: "var(--mono)", fontSize: 11 }}>
-                <span style={{ color: muted(55) }}>{r.k}</span>
-                <span data-testid="panel-value" style={{ fontWeight: 700, textAlign: "right", color: r.bad ? "var(--color-empty)" : undefined }}>
-                  {r.bad ? <span aria-hidden="true">! </span> : null}
-                  {r.bad ? <span className="sr-only">needs attention: </span> : null}
-                  {r.v}
-                </span>
-              </div>
-            ))}
-          </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginTop: 14 }}>
-            <span className="tag tag-outline">Own node, own wallet, shielded drips</span>
-            <span style={{ fontSize: 11.5, color: muted(55) }}>Numbers come straight off the node. Refreshes every few seconds.</span>
-          </div>
-        </div>
-      )}
-
-      <main style={{ flex: 1, width: "100%", maxWidth: 760, margin: "0 auto", padding: `clamp(22px,5vw,46px) ${pad} 60px`, display: "flex", flexDirection: "column", gap: 20 }}>
+          THE CONTENT INSIDE IS THIS SLICE'S ONLY UNCHANGED PART, on purpose. S1 moves it
+          and does not rewrite it, so a reviewer can see the shell landing without reading
+          a thousand lines of diff that say the same words in a different place. */}
+      <main className="views">
+        <section className="view" data-view="claim" data-testid="view-claim" aria-label="Claim" hidden={view !== "claim"}>
         <p className="sr-only" role="status">{announce}</p>
         {(phase === "ready" || phase === "checking" || phase === "syncing" || phase === "fault" || phase === "empty" || phase === "degraded") && (
           <div>
@@ -1885,6 +1774,195 @@ export default function Home() {
           ) : null}
         </div>
 
+        </section>
+
+        <section className="view" data-view="status" data-testid="view-status" aria-label="Status" hidden={view !== "status"}>
+
+      <div data-testid="status-strip" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "4px 18px", padding: `9px ${pad}`, borderBottom: "1px solid var(--color-divider)", fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".05em", color: muted(55) }}>
+        {[
+          { k: "node", v: nodeWord },
+          { k: "sync", v: syncCell ?? "–" },
+          { k: "height", v: num(height) },
+          { k: "balance", v: balance != null ? balance.toFixed(1) + " TAZ" : status == null ? "–" : "0 TAZ" },
+          // Terse here, per the user. "off" is only available when the heartbeat has
+          // stopped AND systemd says the unit is inactive, i.e. someone stopped it; a
+          // stalled miner is running and failing and must never read as off.
+          { k: "miner", v: status == null ? "–" : minerChip(miner, minerUnit) },
+          // Only when it is NOT complete. A permanent "box ok" would spend a slot on
+          // the terse strip telling an operator what they already assume, but a box
+          // that is missing units has to be visible without opening the panel,
+          // because the panel is a click nobody makes when they think all is well.
+          ...(box && publicBoxChip(box) ? [{ k: "box", v: publicBoxChip(box)! }] : []),
+          // "indexer", never "node". This is the lightwalletd we query, not the
+          // Zcash node behind it, and calling it the node version would be wrong
+          // in front of the people who asked for it. Our own zebra version is not
+          // reachable from the app at all: everything goes via zallet or
+          // lightwalletd, so it needs a data path we do not have (#193).
+          ...(indexer ? [{ k: "indexer", v: `${indexer.vendor} ${indexer.version}` }] : []),
+          // Only while it is NOT servable, same rule as the box chip. A permanent
+          // "ctaz ready" would spend a slot on the terse strip saying nothing, but a
+          // feature net that cannot pay has to be visible without opening the panel.
+          ...(ctaz && !ctaz.servable ? [{ k: "ctaz", v: ctaz.readiness }] : []),
+          ...(reserve
+            ? [
+                {
+                  k: "reserve",
+                  // "ok" would be a lie under the low mark with no refill running
+                  // (miner off), so that case reads "low" instead.
+                  v: refilling
+                    ? "topping up"
+                    : reserve.spendableTaz != null && reserve.spendableTaz < reserve.lowTaz
+                      ? "low"
+                      : "ok",
+                },
+              ]
+            : []),
+        ].map((it) => (
+          <span key={it.k} data-strip-key={it.k}>{it.k} <b data-testid="strip-value" style={{ color: "var(--color-text)", fontWeight: 700 }}>{it.v}</b></span>
+        ))}
+        {/* A bordered box, not bare text. With `padding: 0` this was a ghost button
+            with every visual cue removed, so it read as a label and nobody knew the
+            panel opened. The chevron alone was not enough: it is 8px of glyph doing
+            the work a control's whole shape should do. */}
+        <button
+          data-testid="panel-toggle"
+          className="btn btn-secondary btn-sm disclosure"
+          onClick={() => setPanel((p) => !p)}
+          aria-expanded={panel}
+          aria-controls="live-panel"
+          style={{ marginLeft: "auto" }}
+        >
+          {panel ? "Hide details" : "More details"}
+          <span aria-hidden="true" className="disclosure-caret">{panel ? "▲" : "▼"}</span>
+        </button>
+      </div>
+
+      {panel && (
+        <div id="live-panel" style={{ borderBottom: "2px solid var(--color-divider)", background: "var(--color-surface)", padding: `16px ${pad}` }}>
+          <div className="panel-grid">
+            {[
+              // Same rule as the header strip. The panel opens on a click, and nothing
+              // stops that click landing before the first status does.
+              // EVERY ROW DECLARES WHICH ASSET IT IS ABOUT, and the panel then shows only
+              // the selected one. Asked for directly: picking cTAZ and still reading TAZ's
+              // balance, miner and drip counts is how someone concludes the cTAZ wallet
+              // holds 1000 TAZ. Two assets in one grid is a mixing hazard, not a density
+              // win.
+              //
+              // "both" is for facts about the BOX rather than either chain - the integrity
+              // count and the lightwalletd backend serve whichever asset you are looking at,
+              // so hiding them behind a toggle would just make them harder to find.
+              // The parenthetical is the sync cell; skipped when it would only repeat the word
+              // ("unverified (unverified)") and trimmed when it ends with it ("behind (40)").
+              { net: "taz", k: "node", v: nodeWord + (nodeWord !== "ready" && syncCell && syncCell !== "–" && syncCell !== nodeWord ? " (" + syncCell.replace(new RegExp(` ${nodeWord}$`), "") + ")" : ""), bad: status != null && (walletDown || node?.ready === false || node?.canBuildTx === false) },
+              { net: "taz", k: "block height", v: num(height) + (nodeHeight ? " / " + num(nodeHeight) : "") },
+              { net: "taz", k: "wallet balance", v: status?.balanceTaz != null ? status.balanceTaz.toFixed(2) + " TAZ" : "–", bad: status?.empty === true },
+              // The detail belongs here, per the user: he asked that the miner's real
+              // state be knowable from More details.
+              { net: "taz", k: "miner", v: status == null ? "–" : minerRow(miner, minerUnit), bad: status != null && minerIsBad(miner, minerUnit) },
+              ...(status != null && minerError ? [{ net: "taz", k: "miner error", v: minerError, bad: true }] : []),
+              // The box's own integrity. Measured since #287 and never rendered until
+              // now: the endpoint knew two files were missing and the panel said
+              // nothing, so the one place a person looks did not carry it.
+              ...(box ? [{ net: "both", k: "box", v: publicBoxRow(box), bad: publicBoxIsBad(box) }] : []),
+              ...(reserve
+                ? [
+                    // Wording lives in reserveRows and is unit-tested, because
+                    // "257.2 / 1000" beside "idle" made a healthy faucet look broken.
+                    //
+                    // Only the refill line. reserveRows.reserve renders spendableTaz,
+                    // which the status route sets from THIS REQUEST'S balance read, so
+                    // it was the same number as "wallet balance" one row up, printed to
+                    // a different number of decimals. Two rows, one figure, and a
+                    // reader at 3am reasonably assumes two different quantities. If the
+                    // route ever sources them separately, bring the row back.
+                    ...(() => { const rr = reserveRows({ ...reserve, refilling }); return [{ net: "taz", k: "refill", v: rr.refill, bad: rr.refillBad }]; })(),
+                  ]
+                : []),
+              { net: "taz", k: "queue", v: (status?.queueDepth ?? 0) + " pending" },
+              // One line, per the standing rule. The legend lives in the KEY so the
+              // value stays short at any magnitude; "10 all time · 10 in 7d · 10 in
+              // 30d" wrapped the cell on first render. Same slash idiom as the block
+              // height row. An unreadable counter says unknown rather than rendering
+              // a zero that would read as "this faucet has never served anyone".
+              { net: "taz", k: "drips ever/7d/30d", v: status?.drips ? num(status.drips.allTime) + " / " + num(status.drips.last7d) + " / " + num(status.drips.last30d) : "unknown" },
+              { net: "both", k: "backend", v: status?.backend?.reachable ? "reachable" : "unreachable", bad: status != null && !status.backend?.reachable },
+              // The cTAZ dimension, one line per fact and every key naming its network,
+              // so no row here can be mistaken for one of the TAZ rows above it.
+              ...(ctaz
+                ? [
+                    {
+                      net: "ctaz",
+                      k: "node",
+                      // The gate's own word. Five states rather than a boolean, because
+                      // "cannot-verify" is a different instruction from "behind".
+                      v: ctaz.readiness + (ctaz.roundLag != null ? ` (round lag ${ctaz.roundLag})` : ""),
+                      bad: !ctaz.servable,
+                    },
+                    // The percent is its own row, next to the state and not folded into
+                    // it. "23% synced" and "cannot reach the node" must never render the
+                    // same, which is the whole reason the gate has five states and no
+                    // syncing state. Unknown says unknown rather than 0%.
+                    {
+                      net: "ctaz",
+                      k: "sync",
+                      v: ctaz.syncPercent != null
+                        ? ctaz.syncPercent.toFixed(1) + "%" +
+                          (ctaz.blocks != null && ctaz.tip != null ? ` (${num(ctaz.blocks)} of ${num(ctaz.tip)})` : "")
+                        : ctaz.source === "file"
+                          ? "unknown, the box's status file is stale or unreadable"
+                          : "unknown",
+                      // Not a fault. A syncing node is doing what it should, and cTAZ is
+                      // not being served yet either way.
+                      bad: false,
+                    },
+                    { net: "ctaz", k: "block height", v: num(ctaz.blocks ?? ctaz.height) + (ctaz.finalizers != null ? " · " + ctaz.finalizers + " finalizers" : "") },
+                    // The literal string from the response, rendered as given. Their RPC
+                    // surface has no shielded balance method, so this is an answer and
+                    // not a gap, and "0" here would be the balance ?? 0 bug all over
+                    // again on a wallet we have never been able to read.
+                    { net: "ctaz", k: "reserve", v: ctaz.reserve },
+                    { net: "ctaz", k: "drips ever/7d/30d", v: ctaz.drips ? num(ctaz.drips.allTime) + " / " + num(ctaz.drips.last7d) + " / " + num(ctaz.drips.last30d) : "unknown" },
+                  ]
+                : []),
+            ]
+              // The filter. A row survives if it is about the asset in front of you or
+              // about the box itself. The prefixes came off the cTAZ keys in the same
+              // change: "ctaz sync" was disambiguating against a TAZ row that is no
+              // longer on screen, and a redundant prefix on every key is noise.
+              .filter((r) => r.net === "both" || r.net === network)
+              .map((r) => (
+              // A bad row is marked in the VALUE, not with a badge or an icon: the grid
+              // is monospace k/v and anything else would need a column nothing else
+              // uses. Colour alone would fail anyone who cannot see it, so the marker
+              // carries the meaning and the colour only reinforces it.
+              <div key={r.k} data-panel-key={r.k} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, padding: "7px 0", borderBottom: "1px solid var(--color-divider)", fontFamily: "var(--mono)", fontSize: 11 }}>
+                <span style={{ color: muted(55) }}>{r.k}</span>
+                <span data-testid="panel-value" style={{ fontWeight: 700, textAlign: "right", color: r.bad ? "var(--color-empty)" : undefined }}>
+                  {r.bad ? <span aria-hidden="true">! </span> : null}
+                  {r.bad ? <span className="sr-only">needs attention: </span> : null}
+                  {r.v}
+                </span>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginTop: 14 }}>
+            <span className="tag tag-outline">Own node, own wallet, shielded drips</span>
+            <span style={{ fontSize: 11.5, color: muted(55) }}>Numbers come straight off the node. Refreshes every few seconds.</span>
+          </div>
+        </div>
+      )}
+
+        </section>
+
+        <section className="view" data-view="analytics" data-testid="view-analytics" aria-label="Usage analytics" hidden={view !== "analytics"}>
+          {/* S4 builds the four canvases here. Until then the view is not empty and
+              not a placeholder: the header strip is already a real reader of the
+              thirty-day series, and this says where the rest is going. */}
+          <p className="lede small">The thirty-day drip series is in the header strip. Charts land in a later slice.</p>
+        </section>
+
+        <section className="view" data-view="tools" data-testid="view-tools" aria-label="Tools" hidden={view !== "tools"}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 16px", alignItems: "center" }}>
           <button className="btn btn-ghost btn-sm" onClick={() => { setTool((t) => (t === "lookup" ? null : "lookup")); setLookupRes(""); }} aria-expanded={tool === "lookup"} aria-controls="tool-lookup" style={{ padding: 0 }}>Balance lookup</button>
           <button className="btn btn-ghost btn-sm" onClick={() => setTool((t) => (t === "about" ? null : "about"))} aria-expanded={tool === "about"} aria-controls="tool-about" style={{ padding: 0 }}>How it works</button>
@@ -1910,63 +1988,66 @@ export default function Home() {
         )}
 
 
+        </section>
+
       </main>
 
-      {/* `position` lives in globals.css, NOT here. An inline style is a normal author
-          declaration and a plain class rule cannot override one, which is the same trap
-          the brand-mark media query hit. Sticking it inline is what would stop the
-          mobile rule below from working, and it would fail silently. */}
-      <div className="site-footer" style={{ borderTop: "2px solid var(--color-divider)", background: "var(--color-surface)", padding: `10px ${pad}`, display: "flex", flexWrap: "wrap", gap: "8px 14px", alignItems: "center" }}>
-        {/* Canonical Jino Labs attribution lockup, committed verbatim from the
-            brand kit. Do not restyle it toward our palette or resize it below
-            native: the kit sets a 16px mark and 11px cap-height minimum, and the
-            badge is supposed to read as Jino Labs rather than as this app.
+      {/* THE FOOTER (preview lines 713-721), pinned to the bottom of every page by
+          `.comp > .ftr{margin-top:auto}` rather than by position, so it sits under the
+          content on a long page and at the bottom on a short one.
 
-            The variant follows OUR theme state, which is client state and not
-            prefers-color-scheme, so <picture> with a media query cannot do it. */}
-        <a className="footer-brand" href="https://jinolabs.xyz" style={{ display: "inline-flex", flex: "none", lineHeight: 0 }}>
-          {/* eslint-disable-next-line @next/next/no-img-element -- a fixed-size
-              SVG from public/ has nothing for next/image to optimise, and Next
-              declines to optimise SVG anyway, so Image would just need
-              unoptimized. The alt text is the accessible name the kit specifies. */}
-          <img
-            src={theme === "ink" ? "/brand/powered-by-dark.svg" : "/brand/powered-by-light.svg"}
-            alt="Powered by Jino Labs"
-            width={218}
-            height={36}
-          />
-        </a>
-        {/* The Zcash mark in the masthead is ECC's trademark, shown under the
-            Foundation's policy for projects that work with Zcash. That policy turns
-            on not looking official, so this says plainly that we are not, and links
-            the mark's owner. Cheap to add, and it is the condition of using it. */}
-        <span className="footer-note" style={{ fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".05em", color: muted(50) }}>not an official Zcash service</span>
-        <a className="btn btn-ghost btn-sm" href="/donate" style={{ padding: 0 }}>Donate TAZ</a>
-        {/* A terms page nobody can reach protects nobody, so it is linked from the
-            footer of the page every visitor lands on. */}
-        <a className="btn btn-ghost btn-sm" href="/terms" style={{ padding: 0 }}>Terms</a>
-        {/* Bottom right, and deliberately a LINK rather than the address itself.
-            Handing over an address correctly is /donate's whole job: it is server
-            rendered, so the address is readable with JavaScript off, and it has
-            the room to say plainly that this one is mainnet. A footer widget has
-            neither property, and this is real money.
+          NOT TRANSCRIBED: the preview's privacy line, "No accounts, no cookies, no
+          trackers. Addresses and IPs are never logged." Nothing here sets a cookie and no
+          raw IP is stored or sent anywhere, so the first half is plainly true, but we do
+          persist a SALTED FINGERPRINT of the address and of the IP for the rate limiter,
+          for as long as the retention window in PURGE_SQL. "Never logged" is defensible
+          about raw values and misleading about derived ones, and that is a call for the
+          owner rather than for the slice that moves the furniture. Raised, not decided. */}
+          <footer className="ftr">
+            <nav>
+              <a href="/donate">Donate TAZ</a>
+              {/* Absent unless config validated a maintenance address, so a rejected or
+                  unset one shows nothing rather than a link to an empty promise. This is
+                  real money, and the preview's unconditional link cannot keep that
+                  property. */}
+              {status?.maintenanceAddress ? <a href="/fund">Fund ZEC</a> : null}
+              {/* A terms page nobody can reach protects nobody, so it is linked from the
+                  page every visitor lands on. */}
+              <a href="/terms">Terms</a>
+              {/* The source, linked from the landing page. An open source project whose
+                  repo is only findable by guessing the org name is open source in licence
+                  rather than in practice. */}
+              <a href="https://github.com/jinolabs-xyz/zcash-faucet" target="_blank" rel="noopener noreferrer">GitHub</a>
+            </nav>
+            <div className="ftr-attrib">
+              {/* Canonical Jino Labs attribution lockup, committed verbatim from the brand
+                  kit. Do not restyle it toward our palette or resize it below native: the
+                  kit sets a 16px mark and an 11px cap-height minimum, and the badge is
+                  supposed to read as Jino Labs rather than as this app.
 
-            Absent unless config validated it, so a rejected or unset address
-            shows nothing at all rather than an empty promise. */}
-        {status?.maintenanceAddress ? (
-          <a
-            className="btn btn-secondary btn-sm fund-cta"
-            href="/fund"
-          >
-            {/* A heart, not a coin or a card. This is upkeep for a free tool, and a
-                payment glyph would read as a price for using the faucet, which is the
-                one thing it must not suggest. */}
-            <span aria-hidden="true" className="fund-cta-icon">♥</span>
-            Fund the project
-            <span aria-hidden="true" className="fund-cta-note">mainnet ZEC</span>
-          </a>
-        ) : null}
-        
+                  The variant follows OUR theme state, which is client state and not
+                  prefers-color-scheme, so <picture> with a media query cannot do it. */}
+              <a className="footer-brand" href="https://jinolabs.xyz">
+                {/* eslint-disable-next-line @next/next/no-img-element -- a fixed-size SVG
+                    from public/ has nothing for next/image to optimise, and Next declines
+                    to optimise SVG anyway, so Image would just need unoptimized. The alt
+                    text is the accessible name the kit specifies. */}
+                <img
+                  className="lockup"
+                  src={theme === "ink" ? "/brand/powered-by-dark.svg" : "/brand/powered-by-light.svg"}
+                  alt="Powered by Jino Labs"
+                  width={218}
+                  height={36}
+                />
+              </a>
+              {/* The Zcash mark in the masthead is ECC's trademark, shown under the
+                  Foundation's policy for projects that work with Zcash. That policy turns
+                  on not looking official, so this says plainly that we are not. Cheap to
+                  add, and it is the condition of using the mark. */}
+              <span className="footer-note">not an official Zcash service</span>
+            </div>
+          </footer>
+        </div>
       </div>
     </div>
   );

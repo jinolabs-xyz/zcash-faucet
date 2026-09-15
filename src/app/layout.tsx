@@ -39,26 +39,44 @@ export const metadata: Metadata = {
 
 /**
  * Paints the browser's own chrome (the iOS status bar, the Android toolbar) so it
- * matches the page instead of sitting light above a dark header. Static ink,
- * because that is the app's default state and the fixed theme of the two
- * server-rendered pages. The home toggle rewrites this tag live, so a paper user
- * does not keep a dark toolbar (#143).
+ * matches the page instead of sitting dark above a light header. Static PAPER now,
+ * because the approved redesign is a light design and paper is the default state.
+ * The home toggle rewrites this tag live, so an ink user does not keep a light
+ * toolbar (#143). The value is the design's --page.
  *
  * Deliberately NOT media-based: our theme is a manual toggle rather than
  * prefers-color-scheme, so keying it to the OS setting would be wrong for anyone
  * whose two disagree.
  */
 export const viewport: Viewport = {
-  themeColor: "#171615",
+  themeColor: "#f0f0f0",
 };
+
+/**
+ * Applies a stored theme BEFORE first paint.
+ *
+ * The page reads localStorage in an effect, which runs after the first paint, so with a
+ * light default an ink visitor used to get a white flash on every single load. This is the
+ * one thing that cannot be done in React: it has to be a blocking script in <head>.
+ *
+ * Wrapped in try/catch because localStorage throws rather than returning null in a private
+ * window and wherever site data is blocked, and a theme preference is not worth a blank
+ * page. Unknown values are ignored, so a corrupted key falls back to the paper default.
+ */
+const THEME_BOOT = `try{var t=localStorage.getItem("zfaucet_theme");if(t==="ink"||t==="paper")document.documentElement.dataset.theme=t}catch(e){}`;
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    // data-theme defaults to ink because that is the app's default state and the
-    // fixed theme of /donate and the 404. The home toggle updates it live. It
-    // exists so the ROOT is theme-painted: the overscroll region is drawn from
-    // html, not from the app shell (#143).
-    <html lang="en" data-theme="ink">
+    // data-theme defaults to PAPER because that is the redesign's default state and the
+    // default of the server-rendered pages. The boot script above upgrades it to a stored
+    // choice before paint, and the home toggle updates it live. It exists so the ROOT is
+    // theme-painted: the overscroll region is drawn from html, not from the app shell
+    // (#143).
+    <html lang="en" data-theme="paper">
+      <head>
+        {/* Before any paint, and before any stylesheet has painted a background. */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOT }} />
+      </head>
       <body>{children}</body>
     </html>
   );
