@@ -595,13 +595,46 @@ heal_node_if_stalled() {
   local name="$1"
   [ -n "$name" ] || return 0
 
-  local heights blocks est prev now lag
+  local heights blocks est prev now lag external
   heights="$2"
   [ -n "$heights" ] || return 0
   blocks="${heights%% *}"; est="${heights##* }"
   prev="$node_last_height"; node_last_height="$blocks"
   now="$(date -u +%s)"
-  lag=$(( est - blocks )); [ "$lag" -lt 0 ] && lag=0
+
+  # WHICH NUMBER "BEHIND" MEANS, and the whole rung turns on it (2026-09-15T20:35Z outage).
+  # `estimatedheight` is zebra's own CLOCK extrapolation from the tip's timestamp at the target
+  # spacing, so while the node is frozen it grows at one block per 75 s no matter what the
+  # network is doing. That night testnet was producing every 9 s: the number this gated on grew
+  # 0.8 blocks a minute while the real gap grew 6.7, the node sat frozen ten minutes 58 blocks
+  # behind, and the watchdog journal has NO ENTRY for the episode. Zebra also reported
+  # syncPercent 100 beside a 44-block lag, so the proxy fails at the source, not in our reading.
+  #
+  # The independent height was already being fetched every sweep and used only to CONFIRM rungs
+  # the trigger never reached. It is the trigger now. Zebra's own estimate stays as the fallback
+  # for a sweep where the app cannot be reached, because a blind watchdog that still restarts a
+  # wedged node is better than one that does nothing - but it is named as the weaker evidence in
+  # the journal, and it does not confirm a rewind.
+  local zebra_lag ext_lag="" lag_src
+  zebra_lag=$(( est - blocks )); [ "$zebra_lag" -lt 0 ] && zebra_lag=0
+  external="$(printf '%s' "${ready_body:-}" | grep -o '"externalHeight":[0-9][0-9]*' | head -n1 | cut -d: -f2)"
+  case "$external" in ''|*[!0-9]*) external="" ;; esac
+  # EITHER NUMBER MAY TRIGGER, and that is the whole change: the independent tip is ADDED as a
+  # trigger rather than substituted for zebra's. Substituting it would have overturned a
+  # deliberate ruling this suite already protects - "a lag only zebra believes in buys restarts,
+  # never a rewind or a parked miner" - and the suite caught me doing exactly that. A restart is
+  # cheap and reversible, so the cheaper evidence is allowed to buy one; a REWIND is not, so it
+  # still needs an independent height, which is what `confirmed` has always meant.
+  if [ -n "$external" ]; then
+    ext_lag=$(( external - blocks )); [ "$ext_lag" -lt 0 ] && ext_lag=0
+  fi
+  if [ -n "$ext_lag" ] && [ "$ext_lag" -ge "$zebra_lag" ]; then
+    lag="$ext_lag"; lag_src="independent tip $external"
+  else
+    lag="$zebra_lag"
+    lag_src="zebra's own clock estimate${external:+, which the independent tip $external does not support}"
+    [ -z "$external" ] && lag_src="zebra's own clock estimate, no independent tip this sweep"
+  fi
 
   # Higher than last sweep: syncing, or at the tip and a block just landed. Healthy, so
   # clear every bit of stall state and the next episode gets a full budget.
@@ -656,10 +689,25 @@ heal_node_if_stalled() {
   # The independent height, from the /api/ready body step 4 fetched this sweep. Empty
   # when the app did not answer or the oracle had nothing; the readers below treat empty
   # as "unconfirmed", never as "at the tip" and never as "behind".
-  local external="" confirmed=0
-  external="$(printf '%s' "${ready_body:-}" | grep -o '"externalHeight":[0-9][0-9]*' | head -n1 | cut -d: -f2)"
-  case "$external" in ''|*[!0-9]*) external="" ;; esac
-  if [ -n "$external" ] && [ $(( external - blocks )) -gt "$NODE_LAG_LIMIT" ]; then confirmed=1; fi
+  # CONFIRMED means an INDEPENDENT height says we are behind, which is now the same number the
+  # trigger used. A sweep that fell back to zebra's own estimate confirms nothing, so the
+  # rewinding rungs stay withheld exactly as before.
+  local confirmed=0
+  [ -n "$ext_lag" ] && [ "$ext_lag" -gt "$NODE_LAG_LIMIT" ] && confirmed=1
+
+  # THE WEDGE THIS FILE ALREADY DESCRIBED AND NEVER LOOKED FOR (line 89, and the 20:35Z outage
+  # proved it verbatim): zebra logs "exhausted prospective tip set" and then "waiting to restart
+  # sync" on a 67 s loop that never recovers, and the comment ends "a human restarted zebra by
+  # hand". That night recovery came from an inbound gossiped block, not from the syncer. Naming
+  # it does two things: the journal and the page say WHICH failure this is rather than "stalled",
+  # and it confirms the peer-cache rung specifically, because a peer set that has stopped serving
+  # is exactly what dropping that cache addresses. It never authorises the non-finalized drop -
+  # that still needs an independent height, because it rewinds the chain rather than the peers.
+  local tipset_note="" tipset=0
+  if docker logs --tail 80 "$name" 2>&1 | grep -q "exhausted prospective tip set"; then
+    tipset=1
+    tipset_note=" - zebra's log says it exhausted its prospective tip set and is waiting to restart sync, which is the peer set having stopped serving blocks"
+  fi
 
   local n=$(( node_heal_attempts + 1 ))
   if [ "$n" -gt "$NODE_HEAL_MAX" ]; then
@@ -705,9 +753,9 @@ heal_node_if_stalled() {
     fi
   fi
 
-  if [ "$n" -ge "$NODE_CLEAR_CACHE_AFTER" ] && [ "$confirmed" != "1" ]; then
+  if [ "$n" -ge "$NODE_CLEAR_CACHE_AFTER" ] && [ "$confirmed" != "1" ] && [ "$tipset" != "1" ]; then
     # The rung that would rewind, withheld: zebra's own estimate is the only evidence.
-    log "zebra stalled ${stalled_for}s at height $blocks (${lag} behind by its own estimate, unconfirmed: external ${external:-unknown}); restarting only, not rewinding state on a clock estimate ($n/$NODE_HEAL_MAX)"
+    log "zebra stalled ${stalled_for}s at height $blocks (${lag} behind per ${lag_src}, unconfirmed); restarting only, not rewinding state on an unconfirmed lag ($n/$NODE_HEAL_MAX)"
     docker restart "$name" >/dev/null 2>&1
     node_heal_what="Restarted it (lag unconfirmed, nothing rewound)"
   elif [ "$n" -ge "$NODE_CLEAR_CACHE_AFTER" ]; then
@@ -716,12 +764,14 @@ heal_node_if_stalled() {
     # on shutdown, so a delete before the stop is undone by the stop.
     local mp what
     mp="$(docker volume inspect "$ZEBRA_CHAIN_VOLUME" -f '{{.Mountpoint}}' 2>/dev/null || echo '')"
-    log "zebra stalled ${stalled_for}s at height $blocks (${lag} behind); clearing state ($n/$NODE_HEAL_MAX)"
+    log "zebra stalled ${stalled_for}s at height $blocks (${lag} behind per ${lag_src})${tipset_note}; clearing state ($n/$NODE_HEAL_MAX)"
     docker stop "$name" >/dev/null 2>&1
     if [ -n "$mp" ]; then
       rm -f "$mp"/network/*.peers 2>/dev/null
       what="cleared the peer cache"
-      if [ "$n" -ge "$NODE_DROP_NONFINAL_AFTER" ]; then
+      # The peers may go on a named wedge; the CHAIN may not. Dropping the non-finalized state
+      # rewinds up to ~100 blocks and only an independent height earns that.
+      if [ "$n" -ge "$NODE_DROP_NONFINAL_AFTER" ] && [ "$confirmed" = "1" ]; then
         # The last resort short of a human. The non-finalized backup is the last ~100
         # blocks and zebra restores it on every boot, so a wedged or forked tip inside it
         # comes straight back with every restart: on 2026-09-07 six plain restarts moved
@@ -739,7 +789,7 @@ heal_node_if_stalled() {
     node_heal_what="${what^} and restarted it"
     log "$what, restarting ($n/$NODE_HEAL_MAX); report follows once the tip moves"
   else
-    log "zebra stalled ${stalled_for}s at height $blocks (${lag} behind); restarting ($n/$NODE_HEAL_MAX); report follows once the tip moves"
+    log "zebra stalled ${stalled_for}s at height $blocks (${lag} behind per ${lag_src})${tipset_note}; restarting ($n/$NODE_HEAL_MAX); report follows once the tip moves"
     docker restart "$name" >/dev/null 2>&1
     node_heal_what="Restarted it"
   fi

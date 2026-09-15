@@ -1099,6 +1099,51 @@ wd_fork_env() {
   echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
 }
 
+echo "== watchdog: THE 2026-09-15T20:35Z OUTAGE - frozen node, flat self-estimate, climbing network"
+# THE EPISODE, AS A TEST. Our node sat frozen for ten minutes 58 blocks behind while testnet
+# produced every 9 s. The watchdog journal has NO entry for it, because the trigger read zebra's
+# own clock extrapolation, which grows one block per 75 s target spacing however fast the
+# network runs. Here the self-estimate is FLAT (est = blocks: zebra believes it is at the tip,
+# and on the night it reported syncPercent 100 beside a 44-block lag) while the independent tip
+# is 150 ahead. The heal must fire on the external number alone.
+wd_node_env
+export STUB_ZEBRA_BLOCKS=4351410 STUB_ZEBRA_EST=4351410   # frozen, and zebra thinks it is at the tip
+export STUB_READY_EXTERNAL=4351560                        # the network, 150 ahead and climbing
+wd_run 2
+check "the heal fires on the independent tip, not on zebra's opinion of itself" \
+  "grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
+check "and the journal says which number decided it" \
+  "grep -q 'zebra stalled.*150 behind per independent tip 4351560' '$T/run.log'"
+check "and the miner is stopped for the heal, as for any other stall" \
+  "grep -q 'systemctl stop zcash-testnet-miner.service' '$STUB_LOG'"
+
+echo "== watchdog: with no independent tip the fallback still acts, and says it is the weaker evidence"
+wd_node_env
+export STUB_ZEBRA_BLOCKS=4351410 STUB_ZEBRA_EST=4351560
+export STUB_READY_EXTERNAL=""                             # app unreachable: no external height
+wd_run 2
+check "still restarts on zebra's own estimate rather than doing nothing" \
+  "grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
+check "and names it as the weaker evidence in the journal" \
+  "grep -q \"behind per zebra's own clock estimate, no independent tip this sweep\" '$T/run.log'"
+check "and withholds the rewind, because nothing independent confirmed the lag" \
+  "[ -f '$STUB_VOLROOT/z3-testnet-chain/non_finalized_state/backup.bin' ]"
+
+echo "== watchdog: the exhausted-tip-set wedge is named, and clears the peers it is about"
+# watchdog.sh:89 has described this failure since August and nothing ever looked for it: zebra
+# logs "exhausted prospective tip set" and loops on a 67 s sync restart that does not recover.
+# On 2026-09-15 recovery came from an inbound gossiped block, not from the syncer.
+wd_node_env
+export STUB_ZEBRA_BLOCKS=4351410 STUB_ZEBRA_EST=4351410
+export STUB_READY_EXTERNAL=4351560
+printf 'exhausted prospective tip set\nwaiting to restart sync timeout=67s\n' > "$STUB_CONTAINERS/z3-testnet-zebra-1.logs"
+wd_run 3
+check "the journal names the wedge rather than saying only stalled" \
+  "grep -q 'exhausted its prospective tip set' '$T/run.log'"
+check "and the peer cache is cleared, which is what a peer set that stopped serving needs" \
+  "[ ! -f '$STUB_VOLROOT/z3-testnet-chain/network/testnet.peers' ]"
+: > "$STUB_CONTAINERS/z3-testnet-zebra-1.logs"
+
 echo "== watchdog: a node AHEAD of two agreeing references is our own chain, and it says so"
 wd_fork_env
 export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200      # our node believes it is at the tip
