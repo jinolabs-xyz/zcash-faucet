@@ -63,7 +63,13 @@ for (const [W, H] of SIZES) {
       await page.close();
       break;
     }
-    await page.evaluate((t) => { localStorage.setItem("faucet-theme", t); document.documentElement.dataset.theme = t; }, theme);
+    // `zfaucet_theme` is the key layout.tsx's boot script reads; `faucet-theme` is the
+    // preview's. Setting the wrong one still switched the theme through the dataset line
+    // here, but every navigation below re-runs that boot script, finds nothing and reverts -
+    // so the pages would have been measured in whatever theme the app defaults to while the
+    // run reported both. The `themeKept` assertion would have failed for a reason that is
+    // mine rather than the page's.
+    await page.evaluate((t) => { localStorage.setItem("zfaucet_theme", t); document.documentElement.dataset.theme = t; }, theme);
     await page.waitForTimeout(3200);
     for (const v of VIEWS) {
       await page.click(`#seg [data-view="${v}"]`);

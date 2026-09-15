@@ -90,10 +90,6 @@ deploy
 scripts
 docs
 design
-# The mascot's SOURCE artwork (1.5 MB of PNG), which public/mascot/*.webp is built from
-# by scripts/build-mascot.mjs. A source, like design/. The SERVED WebP is not excluded and
-# the CI context check asserts both directions.
-assets
 .github
 .team
 **/*.test.ts

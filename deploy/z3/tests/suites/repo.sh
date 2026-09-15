@@ -1260,51 +1260,41 @@ check "and OPERATIONS.md sends the operator to that same path" \
 check "and says plainly that clearing the marker does not start the miner" \
   "grep -qE 'Removing the marker does [*]{0,2}not[*]{0,2} start the miner' '$REPO/OPERATIONS.md'"
 
-echo "== repo: the redesign's browser checks are wired, gated on a repo fact, and the mascot ships as WebP"
-# THE GATE THE CTO APPROVED FOR I1, pinned on both sides. Each script decides whether it
-# APPLIES from a file in the tree; the middle state - marker present, selector missing - is a
-# FAILURE rather than a shrug, because a check that shrugs at a rename passes for ever after
-# one. What can silently drift is the two halves naming different paths, so they are held equal
-# here: the sweep's marker, the CI step's condition and the component path the CTO pinned.
-MASCOT_MARKER='src/components/Mascot.tsx'
-SHELL_MARKER='src/app/redesign-tokens.css'
-check "the fox sweep and the CI step gate on the SAME mascot path" \
-  "grep -qF \"FOX_MARKER = \\\"$MASCOT_MARKER\\\"\" '$REPO/scripts/fox-sweep.mjs' && grep -qF '[ -f $MASCOT_MARKER ]' '$CIWF'"
-check "and the fit check gates on the shell file S1 adds" \
-  "grep -qF \"SHELL_MARKER = \\\"$SHELL_MARKER\\\"\" '$REPO/scripts/fit-check.mjs'"
-check "a marker with no matching selector FAILS rather than passing quietly" \
-  "grep -q 'is in the tree but' '$REPO/scripts/fox-sweep.mjs' && grep -q 'is in the tree but' '$REPO/scripts/fit-check.mjs'"
+echo "== repo: the redesign's browser checks are wired, gated on a WIRING fact, and the sheets are held"
+# THE GATE, pinned on both sides. Each check decides whether it APPLIES from a fact in the
+# tree; the middle state - the fact is true, the selector is missing - is a FAILURE rather
+# than a shrug, because a check that shrugs at a rename passes for ever after one.
+#
+# AND THE FACT IS A WIRING FACT, NOT A FILENAME (SDE-App, review of #562, after my first
+# version keyed on a component file existing). A component lands in one PR and the view is
+# wired in another, so a file marker goes true while the page is still the old markup and a
+# correct tree goes red. What says the mascot is wired is page.tsx rendering it.
+check "the mascot check gates on page.tsx rendering <Mascot>, not on a file existing" \
+  "grep -qF 'const wired = existsSync(PAGE) && /<Mascot' '$REPO/scripts/mascot-check.mjs' && ! grep -q 'existsSync(\"src/components' '$REPO/scripts/mascot-check.mjs'"
+check "and the image job's size gate reads the SAME wiring fact, so neither can skip alone" \
+  "grep -qF 'grep -qE '\\''<Mascot[[:space:]/>]'\\'' src/app/page.tsx' '$CIWF'"
+check "the fit check gates on the shell file S1 adds" \
+  "grep -qF 'const SHELL_MARKER = \"src/app/redesign-tokens.css\"' '$REPO/scripts/fit-check.mjs'"
+check "a wired page with no matching selector FAILS rather than passing quietly" \
+  "grep -q 'has no .mascot-riso at' '$REPO/scripts/mascot-check.mjs' && grep -q 'is in the tree but' '$REPO/scripts/fit-check.mjs'"
 check "both run in the ui job against the URL the smoke server already has" \
-  "grep -qF 'node scripts/fit-check.mjs \"\$UI_SMOKE_URL\"' '$CIWF' && grep -qF 'node scripts/fox-sweep.mjs fox-shots \"\$UI_SMOKE_URL\"' '$CIWF'"
-# A CHECKER THAT ANALYSES SIX SHOTS AND SAYS "failing: 0" IS A GREEN THAT MEANS NOTHING. The
-# preview's own copy had this hole; the port closes it and this holds the port to it.
-check "the fox checker refuses a sweep shorter than the one that was intended" \
-  "grep -q 'but the sweep intended' '$REPO/scripts/fox-check.py' && grep -q 'carries no expected count' '$REPO/scripts/fox-check.py'"
-check "and the sweep writes the count it intended, so there is something to refuse against" \
-  "grep -qF 'expected: EXPECTED' '$REPO/scripts/fox-sweep.mjs'"
-# AND WHAT IT INTENDED IS HELD TO THE RULING, not to its own arrays (SDE-App, review of #563).
-# EXPECTED is computed FROM the loops' arrays, so cutting VIEWPORTS from three to one
-# recomputed it to 18 and every check above stayed green while two thirds of the coverage
-# vanished: the pair enforced "took what it planned" and nothing enforced "planned what the
-# ruling names". The only 54 in the tree was a comment. Two holds now - the scripts refuse to
-# run at the wrong size, and these pin the dimensions the owner approved so a shrunk array is
-# red in the harness too, without waiting for a browser job.
-check "the fox sweep plans the 54 the ruling names, and refuses to run at any other size" \
-  "grep -qF 'const RULING_SHOTS = 54;' '$REPO/scripts/fox-sweep.mjs' && grep -qF 'EXPECTED !== RULING_SHOTS' '$REPO/scripts/fox-sweep.mjs'"
-check "and its dimensions are the approved three viewports and two themes" \
-  "grep -qF 'const VIEWPORTS = [[1440, 900], [768, 1024], [390, 844]];' '$REPO/scripts/fox-sweep.mjs' && grep -qF 'const THEMES = [\"paper\", \"ink\"];' '$REPO/scripts/fox-sweep.mjs'"
+  "grep -qF 'node scripts/fit-check.mjs \"\$UI_SMOKE_URL\"' '$CIWF' && grep -qF 'node scripts/mascot-check.mjs \"\$UI_SMOKE_URL\"' '$CIWF'"
+# WHAT THE RUN PLANS IS HELD TO THE RULING, not to its own arrays (SDE-App, review of #563).
+# Both counts derive FROM the arrays that drive the loops, so shrinking one leaves a run that
+# measured everything it happened to plan - three viewports to one recomputed the total and
+# every check stayed green. The numbers MASCOT.md names live beside the arrays now.
+check "the mascot check plans the combinations and sectors MASCOT.md names" \
+  "grep -qF 'const RULING_COMBOS = 6;' '$REPO/scripts/mascot-check.mjs' && grep -qF 'const RULING_POINTER = 3;' '$REPO/scripts/mascot-check.mjs' && grep -q 'Change the arrays and these numbers together' '$REPO/scripts/mascot-check.mjs'"
+check "and its dimensions are MASCOT.md's three viewports, two themes and three sectors" \
+  "grep -qF 'const VIEWPORTS = [[1440, 900], [1100, 800], [390, 844]];' '$REPO/scripts/mascot-check.mjs' && grep -qF 'want: \"0% 50%\"' '$REPO/scripts/mascot-check.mjs' && grep -qF 'want: \"50% 0%\"' '$REPO/scripts/mascot-check.mjs' && grep -qF 'want: \"100% 100%\"' '$REPO/scripts/mascot-check.mjs'"
 check "the fit check plans its 42 the same way" \
   "grep -qF 'const RULING_COMBOS = 42;' '$REPO/scripts/fit-check.mjs' && grep -qF 'PLANNED !== RULING_COMBOS' '$REPO/scripts/fit-check.mjs'"
 check "and its dimensions are the three desktop sizes, two themes, four views and three pages" \
   "grep -qF 'const SIZES = [[1440, 900], [1280, 800], [1920, 1080]];' '$REPO/scripts/fit-check.mjs' && grep -qF 'const VIEWS = [\"claim\", \"status\", \"analytics\", \"tools\"];' '$REPO/scripts/fit-check.mjs' && grep -qF 'const PAGES = [\"/terms\", \"/donate\", \"/fund\"];' '$REPO/scripts/fit-check.mjs'"
-# THE ARTWORK AND WHAT IS SERVED FROM IT. The sources are committed so the served files are
-# reproducible (the argument scripts/build-icons.mjs makes for the icons), which only means
-# anything if a source edited without a rebuild goes red.
-check "the served WebP is built from the committed sources, and they still hash to the manifest" \
-  "( cd '$REPO' && sha256sum -c public/mascot/SOURCES.sha256 >/dev/null 2>&1 )"
-check "the sources are excluded from the image and the served WebP is not" \
-  "grep -qx 'assets' '$REPO/.dockerignore' && ! grep -q '^public' '$REPO/.dockerignore'"
-check "the CI context probe proves BOTH directions rather than only the exclusion" \
-  "grep -qF '/ctx/public/mascot/fox.webp' '$CIWF' && grep -qF 'assets/mascot/fox.png' '$CIWF'"
-check "the image job measures the served mascot and refuses a PNG served from public" \
-  "grep -q 'total \${total} bytes (limit \${LIMIT})' '$CIWF' && grep -q 'the sources belong in assets/mascot' '$CIWF'"
+# THE SHEETS: served, and held at the size the owner ruled.
+check "the sheets are checked over the wire before the pointer assertions, since a 404 passes them" \
+  "grep -qF '/mascots/fox-riso-directions.webp' '$REPO/scripts/mascot-check.mjs' && grep -qF '/mascots/fox-riso-reactions.webp' '$REPO/scripts/mascot-check.mjs' && grep -q 'is not served' '$REPO/scripts/mascot-check.mjs'"
+check "the image job measures each sheet against MASCOT.md's 300 KB and refuses a served PNG" \
+  "grep -qF 'LIMIT=307200' '$CIWF' && grep -q 'the sheets ship as WebP' '$CIWF'"
+check "and the CI context probe proves the sheets reach the image, both directions" \
+  "grep -qF '/ctx/public/mascots/fox-riso-directions.webp' '$CIWF' && grep -qF 'echo \"html\" > \"\$ctx/design/faucet-architecture.html\"' '$CIWF'"
