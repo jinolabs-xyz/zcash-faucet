@@ -15,7 +15,7 @@ pass=0; fail=0
 # to us. mk_scratch sets the global T directly rather than via $(...), so the
 # exit runs in the real shell instead of a command-substitution subshell.
 _TEST_TMPDIRS=()
-_cleanup_test_tmpdirs() { [ "${#_TEST_TMPDIRS[@]}" -gt 0 ] && rm -rf "${_TEST_TMPDIRS[@]}"; }
+_cleanup_test_tmpdirs() { rm -f "${HARNESS_TIMING:-}"; [ "${#_TEST_TMPDIRS[@]}" -gt 0 ] && rm -rf "${_TEST_TMPDIRS[@]}"; }
 trap _cleanup_test_tmpdirs EXIT
 mk_scratch() {  # sets global T
   T="$(mktemp -d "$1")" || true
@@ -29,8 +29,29 @@ mk_scratch() {  # sets global T
   _TEST_TMPDIRS+=("$T")
 }
 
-ok()   { pass=$((pass+1)); echo "  ok: $1"; }
-bad()  { fail=$((fail+1)); echo "  FAIL: $1"; }
+# PER-CHECK WALL CLOCK, so the next sleeper is found by the harness rather than by
+# hand. What has to be timed is the gap BEFORE a result, not the eval inside check():
+# the 4m32s that zsnap.sh's ready-gate case was spending went on the `bash "$EXPORT"`
+# line ABOVE its three assertions, so timing `eval "$2"` would have reported 0.0s for
+# the slowest case in the whole harness and hidden exactly what this is for.
+#
+# EPOCHREALTIME is a bash builtin, so this is a variable read and not a subprocess per
+# check - at 2200-odd checks a `date` call each would have cost more than the sleep this
+# change removes. It is sliced to microseconds as an integer because bash has no float
+# arithmetic, and the separator is matched as [.,] because EPOCHREALTIME uses the
+# locale's decimal point and CI's runner is not guaranteed to be C.
+HARNESS_TIMING="${HARNESS_TIMING:-${TMPDIR:-/tmp}/harness-timing.$$}"
+: > "$HARNESS_TIMING"
+_hz_prev=$(( ${EPOCHREALTIME/[.,]/} ))
+_hz_mark() {
+  local now=$(( ${EPOCHREALTIME/[.,]/} ))
+  _hz_gap=$(( now - _hz_prev ))
+  _hz_prev=$now
+  printf '%s\t%s\n' "$_hz_gap" "$1" >> "$HARNESS_TIMING"
+}
+
+ok()   { _hz_mark "$1"; pass=$((pass+1)); echo "  ok: $1"; }
+bad()  { _hz_mark "$1"; fail=$((fail+1)); echo "  FAIL: $1"; }
 check(){ if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 
 # Asserts the first log line matching $2 comes before the first matching $3.

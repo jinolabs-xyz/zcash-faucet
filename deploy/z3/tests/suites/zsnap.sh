@@ -108,8 +108,16 @@ bash "$EXPORT" recover > "$T/recover2.log" 2>&1
 check "recover without marker is a quiet no-op" "[ $? -eq 0 ]"
 
 echo "== export: ready gate blocks, ZSNAP_FORCE=1 overrides"
+# THE PROBE KNOBS ARE OVERRIDDEN BECAUSE THIS CASE IS ABOUT ZSNAP_FORCE, NOT ABOUT WAITING.
+# Without them it ran on the shipped defaults - ten probes, 30s apart - and measured 270.0s
+# of the zsnap suite's 295.0s, 91.5% of it, to assert "it refuses" and "the message says not
+# ready". The case ninety lines below asserts that refusal AND the probe count AND that no
+# export was attempted, in two seconds, because it passes exactly these two knobs; so the
+# slow version was asserting strictly LESS than the fast one for four and a half minutes.
+# What is unique here is the line beneath: FORCE overriding a gate that would otherwise
+# refuse. Two probes is still genuinely not-ready, so that precondition is intact.
 fresh_env; with_chain
-STUB_READY=0 bash "$EXPORT" > "$T/gate.log" 2>&1
+STUB_READY=0 ZSNAP_READY_TRIES=2 ZSNAP_READY_WAIT=1 bash "$EXPORT" > "$T/gate.log" 2>&1
 check "not-ready export refuses (exit != 0)" "[ $? -ne 0 ]"
 check "refusal names the gate" "grep -q 'not ready' '$T/gate.log'"
 STUB_READY=0 ZSNAP_FORCE=1 bash "$EXPORT" > "$T/force.log" 2>&1
