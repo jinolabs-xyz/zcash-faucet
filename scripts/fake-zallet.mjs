@@ -82,8 +82,15 @@ function walletTip() {
 // claims dead after their proof-of-work. Both refusals are -8 with zallet's sentence.
 const REVEALS_RECIPIENTS = new Set(["AllowRevealedRecipients", "AllowFullyTransparent", "NoPrivacy"]);
 const REVEALS_AMOUNTS = new Set(["AllowRevealedAmounts", ...REVEALS_RECIPIENTS]);
-const ERR_TRANSPARENT_RECIPIENT = "This transaction would have transparent recipients, which is not enabled by default because it will publicly reveal transaction recipients and amounts.";
-const ERR_REVEALING_AMOUNT = "Could not send to the Sapling shielded pool without spending non-Sapling funds, which would reveal transaction amounts.";
+// THE PRODUCTION STRINGS, byte for byte (review of #544, round 2). zallet's messages are
+// Fluent block text and Fluent keeps the line break where the .ftl wraps, and payments.rs
+// appends the privacy-weakening recommendation after one space. A one-line transcription
+// matched the app's classifier while the real three-line message did not: the app's
+// regex read `(.*)`, which stops at a newline, so a real refusal fell through to "wallet
+// failed" and the suite could not see it. The double says exactly what zallet says.
+const REC = (policy) => `THIS MAY AFFECT YOUR PRIVACY. Resubmit with the 'privacyPolicy' parameter set\nto '${policy}' or weaker if you wish to allow this transaction to proceed\nanyway.`;
+const ERR_TRANSPARENT_RECIPIENT = "This transaction would have transparent recipients, which is not enabled by\ndefault because it will publicly reveal transaction recipients and amounts. " + REC("AllowRevealedRecipients");
+const ERR_REVEALING_AMOUNT = "Could not send to the Sapling shielded pool without spending non-Sapling\nfunds, which would reveal transaction amounts. " + REC("AllowRevealedAmounts");
 
 // Amounts arrive as exact ZEC decimal literals, so parse rather than float.
 function zecToZat(amount) {

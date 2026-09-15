@@ -516,7 +516,7 @@ const serverO = boot(PORT_O, {
 // released (the address can try again at once) and the send counts as failed, not
 // unknown. A wallet whose credential was rotated mid-flight looks exactly like this.
 const WALLET_P = 28337;
-const walletP = wallet(WALLET_P, 10, { AUTH_FAIL_METHODS: "z_sendmany", BRANCH_ID: "c8e71055" });
+const walletP = wallet(WALLET_P, 10, { AUTH_FAIL_METHODS: "z_sendmany" });
 const serverP = boot(PORT_P, {
   ...zallet(WALLET_P),
   ...chainView,
@@ -1095,11 +1095,12 @@ try {
   // the app's recipient-refusal classifier (#531) matches in production. A -4 with an
   // invented sentence sent the app down the "wallet failed" branch instead (review of #544).
   const noPolicy = await rpcRaw(WALLET_A, "z_sendmany", ["utest1testfaucet", [{ address: MINING_TADDR, amount: 0.1 }], 0, null, "FullPrivacy"]);
-  ok("double: a transparent recipient under FullPrivacy is -8 with zallet's sentence", noPolicy.body?.error?.code === -8 && /^This transaction would have transparent recipients/.test(noPolicy.body.error.message), JSON.stringify(noPolicy.body));
+  const REC = (policy) => `THIS MAY AFFECT YOUR PRIVACY. Resubmit with the 'privacyPolicy' parameter set\nto '${policy}' or weaker if you wish to allow this transaction to proceed\nanyway.`;
+  ok("double: a transparent recipient under FullPrivacy is -8 with zallet's PRODUCTION string, line breaks and recommendation included", noPolicy.body?.error?.code === -8 && noPolicy.body.error.message === "This transaction would have transparent recipients, which is not enabled by\ndefault because it will publicly reveal transaction recipients and amounts. " + REC("AllowRevealedRecipients"), JSON.stringify(noPolicy.body));
   const amountsOnly = await rpcRaw(WALLET_A, "z_sendmany", ["utest1testfaucet", [{ address: MINING_TADDR, amount: 0.1 }], 0, null, "AllowRevealedAmounts"]);
   ok("double: AllowRevealedAmounts does NOT pay a transparent address either, as in zallet's lattice", amountsOnly.body?.error?.code === -8, JSON.stringify(amountsOnly.body));
   const saplingFull = await rpcRaw(WALLET_A, "z_sendmany", ["utest1testfaucet", [{ address: SAPLING_A, amount: 0.1 }], 0, null, "FullPrivacy"]);
-  ok("double: a Sapling recipient under FullPrivacy is -8 'Could not send to the Sapling shielded pool', the 2026-09-10 shape", saplingFull.body?.error?.code === -8 && /^Could not send to the Sapling shielded pool/.test(saplingFull.body.error.message), JSON.stringify(saplingFull.body));
+  ok("double: a Sapling recipient under FullPrivacy is -8 with zallet's production string, the 2026-09-10 shape", saplingFull.body?.error?.code === -8 && saplingFull.body.error.message === "Could not send to the Sapling shielded pool without spending non-Sapling\nfunds, which would reveal transaction amounts. " + REC("AllowRevealedAmounts"), JSON.stringify(saplingFull.body));
   // And through the app: the app sends AllowRevealedAmounts for Sapling, which the
   // double accepts, so a Sapling drip lands. A regression to FullPrivacy on that line
   // is now a refusal here rather than two silent 502s on the box.
@@ -1113,8 +1114,9 @@ try {
   ok("double: getblockchaininfo answers zebra's shape with NO branch id by default", chainInfo.body?.result?.chain === "test" && chainInfo.body.result.consensus === undefined, JSON.stringify(chainInfo.body));
   const aChain = (await get(BASE_A, "/api/status")).body.node?.chain;
   ok("A and the app's chain-identity verdict is cannot-verify, not a fixture id compared against the live network", aChain?.state === "cannot-verify", JSON.stringify(aChain));
-  const chainInfoP = await rpcRaw(WALLET_P, "getblockchaininfo");
-  ok("double: with BRANCH_ID set the shape is zebra's, consensus.chaintip", typeof chainInfoP.body?.result?.consensus?.chaintip === "string", JSON.stringify(chainInfoP.body));
+  // BRANCH_ID is a knob for a test that wants the mismatch path, and none does yet:
+  // an app in front of a double carrying one would compare it against the live
+  // lightwalletd on every status refresh (review of #544, round 2).
   // N: the app with the WRONG password against a wallet that demands one.
   const nStatus = await get(BASE_N, "/api/status");
   ok("N with the wrong wallet credential, the balance reads null: unknown, not zero", nStatus.status === 200 && nStatus.body.balanceTaz === null, JSON.stringify({ balanceTaz: nStatus.body.balanceTaz }));
