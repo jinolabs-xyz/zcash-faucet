@@ -1283,8 +1283,14 @@ check "both run in the ui job against the URL the smoke server already has" \
 # Both counts derive FROM the arrays that drive the loops, so shrinking one leaves a run that
 # measured everything it happened to plan - three viewports to one recomputed the total and
 # every check stayed green. The numbers MASCOT.md names live beside the arrays now.
+# AND THE PRODUCT, NOT ONLY ITS FACTORS. Found by re-measuring my own body's mutant rows on the
+# current baseline rather than carrying their old numbers: editing RULING_COMBOS to a literal 4
+# left the repo suite at 202/0, because the three constants below are pinned and the line that
+# MULTIPLIES them was not. The script's own runtime guard still catches it, but the repo suite
+# claimed to and did not, which is the round-6 finding in a second place - the neighbours pinned,
+# the deciding line left out.
 check "the mascot check plans the combinations and sectors MASCOT.md names" \
-  "grep -qF 'const RULING_VIEWPORTS = 3;' '$REPO/scripts/mascot-check.mjs' && grep -qF 'const RULING_THEMES = 2;' '$REPO/scripts/mascot-check.mjs' && grep -qF 'const RULING_POINTER = 3;' '$REPO/scripts/mascot-check.mjs' && grep -q 'Change the arrays and these numbers together' '$REPO/scripts/mascot-check.mjs'"
+  "grep -qF 'const RULING_VIEWPORTS = 3;' '$REPO/scripts/mascot-check.mjs' && grep -qF 'const RULING_THEMES = 2;' '$REPO/scripts/mascot-check.mjs' && grep -qF 'const RULING_POINTER = 3;' '$REPO/scripts/mascot-check.mjs' && grep -qF 'const RULING_COMBOS = RULING_VIEWPORTS * RULING_THEMES;' '$REPO/scripts/mascot-check.mjs' && grep -q 'Change the arrays and these numbers together' '$REPO/scripts/mascot-check.mjs'"
 check "and its dimensions are MASCOT.md's three viewports, two themes and three sectors" \
   "grep -qF 'const VIEWPORTS = [[1440, 900], [1100, 800], [390, 844]];' '$REPO/scripts/mascot-check.mjs' && grep -qF 'want: \"0% 50%\"' '$REPO/scripts/mascot-check.mjs' && grep -qF 'want: \"50% 0%\"' '$REPO/scripts/mascot-check.mjs' && grep -qF 'want: \"100% 100%\"' '$REPO/scripts/mascot-check.mjs'"
 check "the fit check plans its full 70 the same way" \
@@ -1345,8 +1351,13 @@ check "and every row names the scroller it judged, so a wrong one is readable" \
 # click and deleting the handler outright still passed 6/6.
 check "the boop finds the reactions layer by the sheet it paints, and asserts a RISE" \
   "grep -qF '(getComputedStyle(l).backgroundImage || \"\").includes(which)' '$REPO/scripts/mascot-check.mjs' && grep -q 'before any click, so a rise cannot be observed' '$REPO/scripts/mascot-check.mjs'"
+# THE BYTE TEST IS THE CLAUSE THAT DECIDES, so it is pinned and not just the URLs around it.
+# Same re-measurement, same shape: replacing the whole RIFF/WEBP test with `true` left the repo
+# suite at 202/0. The URLs and the error string are the decoration; whether the body IS a WebP
+# is the assertion, and gating that on the content-type header instead of the bytes is the
+# exact mistake this check was rewritten to stop making.
 check "the sheets are checked over the wire before the pointer assertions, since a 404 passes them" \
-  "grep -qF '/mascots/fox-riso-directions.webp' '$REPO/scripts/mascot-check.mjs' && grep -qF '/mascots/fox-riso-reactions.webp' '$REPO/scripts/mascot-check.mjs' && grep -q 'is not served' '$REPO/scripts/mascot-check.mjs'"
+  "grep -qF '/mascots/fox-riso-directions.webp' '$REPO/scripts/mascot-check.mjs' && grep -qF '/mascots/fox-riso-reactions.webp' '$REPO/scripts/mascot-check.mjs' && grep -q 'is not served' '$REPO/scripts/mascot-check.mjs' && grep -qF 'body.subarray(0, 4).toString(\"latin1\") === \"RIFF\"' '$REPO/scripts/mascot-check.mjs' && grep -qF 'body.subarray(8, 12).toString(\"latin1\") === \"WEBP\"' '$REPO/scripts/mascot-check.mjs'"
 check "the image job measures each sheet against MASCOT.md's 300 KB and refuses a served PNG" \
   "grep -qF 'LIMIT=307200' '$CIWF' && grep -q 'the sheets ship as WebP' '$CIWF'"
 check "and the CI context probe proves the sheets reach the image, both directions" \
