@@ -596,8 +596,10 @@ wd_node_env() {
   # otherwise, and it now says so as a corroboration SHAPE rather than as a bare height.
   # That is the axis this rung turns on: step 7 reads the corroborated tip, so a fixture
   # that only carries a number describes a body the rung is right to ignore. Cases that
-  # want no usable tip set STUB_READY_REFS=none; cases about a body from before #559 unset
-  # it, which wd_fork_env does for all of them.
+  # want no usable tip set STUB_READY_REFS=none, and the one case about a body from before
+  # #559 sets STUB_READY_REFS=absent itself. An earlier draft had wd_fork_env unset the shape
+  # for every fork case and this comment still described that; it does not, and it must not -
+  # the fork cases that model a behind-and-stuck node need the corroboration to reach step 7.
   export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=zebra-est
   export WATCHDOG_NODE_HEAL_MAX=3
   export WATCHDOG_NODE_CLEAR_CACHE_AFTER=2
@@ -1128,6 +1130,30 @@ check "and the journal names the corroborated number that decided it" \
 check "and the miner is stopped for the heal, as for any other stall" \
   "grep -q 'systemctl stop zcash-testnet-miner.service' '$STUB_LOG'"
 
+echo "== watchdog: when BOTH numbers are over, the journal names the one that fired"
+# #578, found by the CTO's red-team on #568 round 2 and filed rather than held, because the
+# head already behaves correctly and nothing pinned it. With two limits the LARGER raw lag can
+# be the one still inside its own budget, so "which number fired" and "which number is bigger"
+# are different questions. Here zebra's own clock says 173 behind (over its 100) and a
+# corroborated tip says 150 (over its 25): both are over, zebra's is larger, and the line must
+# still name the corroborated one, because that is what authorised the rung.
+#
+# The mutant is MR6 - check zebra's number first when its raw lag is larger - which survived the
+# whole suite at 287/0 before this case existed. The wording mutant the #568 body credited kills
+# the zebra-FLAT case at :1127 and cannot see this regress at all, which is the same mistake in
+# a body that this file keeps catching: a row attributing a fix to a mutant that cannot fail on
+# the thing the fix changed.
+wd_node_env
+unset WATCHDOG_NODE_CONFIRMED_LAG_LIMIT
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4351410 STUB_ZEBRA_EST=4351583      # zebra's own clock: 173 behind
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4351560   # corroborated: 150 behind
+wd_run 2
+check "the journal names the corroborated number, not the larger raw one" \
+  "grep -q 'zebra stalled.*150 behind per corroborated tip 4351560' '$T/run.log'"
+check "and never says the tip does not support a lag that tip confirmed" \
+  "! grep -q 'does not support' '$T/run.log'"
+
 echo "== watchdog: two references that DISAGREE cannot start the ladder, let alone rewind"
 # THE DEFECT THIS ROUND CLOSES, and it is the one that must not ship. The first cut read
 # `externalHeight`, which the app sets to the highest fresh reference WHETHER OR NOT the
@@ -1150,6 +1176,35 @@ check "and the non-finalized state survives, which is the rewind this forbids" \
   "[ -f '$STUB_VOLROOT/z3-testnet-chain/non_finalized_state/backup.bin' ]"
 check "and the peer cache survives too, because nothing authorised any rung" \
   "[ -f '$STUB_VOLROOT/z3-testnet-chain/network/testnet.peers' ]"
+
+echo "== watchdog: the confirmed limit is a BOUNDARY, and it is measured from both sides"
+# A LIMIT WITH ONE CASE ABOVE IT IS A LIMIT NOBODY HAS MEASURED. The 58-block case proves the
+# rung fires on tonight's episode; it cannot tell 25 from 5 or from 50, so every one of those
+# would pass it. The team learned this on #566 in CSS the same week - a fix that moves a defect
+# by a pixel looks identical to one that removes it if you only sample the ends - and a
+# threshold is the same shape of claim. So: 24 behind a corroborated tip is inside the budget
+# and 26 is outside it, on the SHIPPED default, with nothing else changed between the two.
+wd_node_env
+unset WATCHDOG_NODE_CONFIRMED_LAG_LIMIT   # the shipped 25 is the subject
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4351410 STUB_ZEBRA_EST=4351410     # zebra's own clock: at the tip
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4351434  # 24 behind: inside the budget
+wd_run 3
+check "24 behind a corroborated tip does not start the ladder" \
+  "! grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
+check "and does not stop the miner" \
+  "! grep -q 'systemctl stop zcash-testnet-miner.service' '$STUB_LOG'"
+
+wd_node_env
+unset WATCHDOG_NODE_CONFIRMED_LAG_LIMIT
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4351410 STUB_ZEBRA_EST=4351410
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4351436  # 26 behind: outside it
+wd_run 3
+check "26 behind the same tip does start it, so the edge is where the file says" \
+  "grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
+check "and the journal names the corroborated number at the boundary" \
+  "grep -q 'zebra stalled.*26 behind per corroborated tip 4351436' '$T/run.log'"
 
 echo "== watchdog: ONE reference is not corroboration either, and cannot start the ladder"
 # corroborated is NULL for a single source, not false, and null must read the same as false
