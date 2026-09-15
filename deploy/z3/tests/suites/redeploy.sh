@@ -760,3 +760,27 @@ touch "$STUB_HEALTH" "$STUB_READY"
 STUB_MANIFEST_RC=0 bash "$REDEPLOY" > "$T/match.log" 2>&1
 check "a matching image deploys and exits 0" "[ $? -eq 0 ]"
 check "and says the image matches" "grep -qi 'matches the commit' '$T/match.log'"
+
+echo "== redeploy: a rollback whose RETAG fails stops before the re-own, instead of chowning with the broken build"
+# do_rollback retags PREVIOUS onto IMAGE and then runs `compose run --entrypoint chown` on
+# the faucet service, which uses IMAGE. If the retag failed and the code carried on, that
+# chown would run from the NEW, BROKEN image and `compose up` would start it again: a
+# rollback that rolls nothing back and then reports that it did.
+#
+# The guard is one `|| return 1` and nothing proved it. This is the reachable half of the
+# #545 review's finding 6; the image_id check that finding originally asked for cannot
+# fire, because this retag is what guarantees the tag exists (review of #550 follow-up).
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_READY_MAX=1 STUB_TAG_FAIL=zcash-faucet:previous bash "$REDEPLOY" > "$T/retag.log" 2>&1
+rc_rt=$?
+check "exits 1, the needs-a-human code, not the 2 of a rollback that worked" "[ $rc_rt -eq 1 ]"
+check "and names the retag as what failed" "grep -q 'could not retag' '$T/retag.log'"
+check "the ledger volume was NOT re-owned, so nothing ran from the broken image" \
+  "! grep -q 'entrypoint chown faucet' '$STUB_LOG'"
+check "and no image was started after the failure" \
+  "! grep -q 'up -d --no-build faucet' '$STUB_LOG'"
+check "and the live tag still points at the failed build rather than a half-done rollback" \
+  "[ \"\$(img zcash-faucet:latest)\" != 'sha256:old' ]"
+check "while the previous image is untouched, so a human can finish the rollback by hand" \
+  "[ \"\$(img zcash-faucet:previous)\" = 'sha256:old' ]"
