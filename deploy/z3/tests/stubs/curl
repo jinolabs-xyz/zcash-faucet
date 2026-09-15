@@ -61,7 +61,27 @@ case "$*" in
     #   absent   no tipReferences field at all, as a body from before #559 (the default)
     refs=""
     uh="${STUB_READY_USEDHEIGHT:-}"
-    case "${STUB_READY_REFS:-absent}" in
+    # STUB_READY_REFS_SEQ="agree disagree agree": the reference SHAPE per call, same
+    # one-value-each-last-repeating rule as the other two sequences. A cannot-tell sweep
+    # between two forks is the only way to test WHERE the once-per-episode flag resets.
+    shape="${STUB_READY_REFS:-absent}"
+    if [ -n "${STUB_READY_REFS_SEQ:-}" ]; then
+      rcf="${STUB_LOG}.refs-count"
+      rn=$(( $(cat "$rcf" 2>/dev/null || echo 0) + 1 )); echo "$rn" > "$rcf"
+      ri=0
+      for x in $STUB_READY_REFS_SEQ; do ri=$((ri + 1)); shape="$x"; [ "$ri" -ge "$rn" ] && break; done
+    fi
+    # STUB_READY_USEDHEIGHT_SEQ="4350000 4350300": the reference height per CALL, one value
+    # each with the last repeating, modelled on STUB_READY_SEQUENCE above. For an episode
+    # that ends and begins again inside ONE watchdog process, which is the only way to see
+    # whether a once-per-episode page can ever fire a second time.
+    if [ -n "${STUB_READY_USEDHEIGHT_SEQ:-}" ]; then
+      ucf="${STUB_LOG}.usedheight-count"
+      un=$(( $(cat "$ucf" 2>/dev/null || echo 0) + 1 )); echo "$un" > "$ucf"
+      ui=0
+      for x in $STUB_READY_USEDHEIGHT_SEQ; do ui=$((ui + 1)); uh="$x"; [ "$ui" -ge "$un" ] && break; done
+    fi
+    case "$shape" in
       absent) refs="" ;;
       agree)
         [ -n "$uh" ] || { echo "stub curl: STUB_READY_REFS=agree needs STUB_READY_USEDHEIGHT" >&2; exit 64; }
@@ -74,7 +94,7 @@ case "$*" in
         refs=",\"tipReferences\":{\"sources\":{\"hosh\":{\"height\":${uh},\"ageSeconds\":2,\"stale\":false,\"host\":null}},\"spreadBlocks\":null,\"corroborated\":null,\"used\":\"hosh\",\"usedHeight\":${uh}}" ;;
       none)
         refs=",\"tipReferences\":{\"sources\":{},\"spreadBlocks\":null,\"corroborated\":null,\"used\":null,\"usedHeight\":null}" ;;
-      *) echo "stub curl: unsupported STUB_READY_REFS: ${STUB_READY_REFS}" >&2; exit 64 ;;
+      *) echo "stub curl: unsupported reference shape: $shape" >&2; exit 64 ;;
     esac
     for a in "$@"; do
       case "$a" in *"%{http_code}"*)

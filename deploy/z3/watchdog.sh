@@ -818,7 +818,16 @@ heal_self_mined_fork() {
   fi
 
   ahead=$(( blocks - used_h ))
-  [ "$ahead" -gt "$FORK_AHEAD_BLOCKS" ] || return 0
+  # AND THE WAY BACK TO ZERO (SDE-App, review of #560). Every other alert flag in this script
+  # has one and this did not, so the rung would have paged once per watchdog PROCESS and gone
+  # quiet for ever - a channel that dies after first use, which is the shape that let an
+  # internet-reachable wallet RPC sit through 36 nightly audits.
+  #
+  # Reset here, on a DEFINITE not-a-fork, and not on the cannot-tell branch above: two
+  # sources agreeing that we are NOT ahead is the same standard the rung uses to act, while
+  # resetting on cannot-tell would let a flapping oracle re-page on every swing - exactly
+  # what the corroboration gate exists to stop.
+  if [ "$ahead" -le "$FORK_AHEAD_BLOCKS" ]; then alerted_fork=0; return 0; fi
 
   # ATTRIBUTION, SEPARATELY FROM DETECTION. The fork is established by the heights; who
   # built it is a different question, and the answer changes what the page tells a human to

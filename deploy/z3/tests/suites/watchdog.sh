@@ -15,6 +15,11 @@ WD="$REPO/deploy/z3/watchdog.sh"
 wd_env() {
   mk_scratch "${TMPDIR:-/tmp}/wd-test.XXXXXX"
   export STUB_LOG="$T/stub.log"; : > "$STUB_LOG"
+  # THE PER-CALL COUNTERS GO WITH IT. The log is truncated per case but the sequence knobs'
+  # counters sat beside it untouched, so a case using one would have started wherever the
+  # previous case stopped - the suite-order leak this repo has paid for twice, waiting for a
+  # second case to use a sequence. Cleared here rather than in the one case that noticed.
+  rm -f "$STUB_LOG".*-count
   export STUB_CONTAINERS="$T/containers"; mkdir -p "$STUB_CONTAINERS"
   export PATH="$SCRATCH/stubs:$BASE_PATH"
   export WATCHDOG_STATE_DIR="$T/state"
@@ -45,7 +50,8 @@ wd_env() {
   # an export that outlives its case is a bug I have shipped twice (STUB_ACTIVE into the
   # next install-ops case, BOX_REPORT_FAUCET_VOLUME into bringtospec). A fork shape left
   # set would make a later case's silence mean nothing.
-  unset STUB_READY_REFS STUB_READY_USEDHEIGHT WATCHDOG_FORK_HEAL_ENABLED \
+  unset STUB_READY_REFS STUB_READY_USEDHEIGHT STUB_READY_USEDHEIGHT_SEQ STUB_READY_REFS_SEQ \
+        WATCHDOG_FORK_HEAL_ENABLED \
         WATCHDOG_FORK_AHEAD_BLOCKS WATCHDOG_FORK_MINER_MIN_SECS WATCHDOG_FORK_PARK_DIR
   # Capture what would have been paged, without a webhook.
   # Records EVERY argument, so the suite can see that the watchdog passes --now (its
@@ -1190,6 +1196,38 @@ check "and it is NOT started again while the marker exists" "! grep -q 'systemct
 check "the journal says the marker is why" "grep -q 'NOT starting zcash-testnet-miner.service:.*$FORK_MARKER_REL' '$T/run.log'"
 check "and the report says it is still stopped on purpose" "grep -q 'still stopped ON PURPOSE' '$T/alerts.log'"
 check "so the unit really is inactive at the end" "[ \"\$(cat '$STUB_SYSTEMD/zcash-testnet-miner.service')\" = inactive ]"
+
+echo "== watchdog: a fork that clears and returns pages AGAIN, not once per watchdog process"
+# SDE-App's block on #560, as a test. alerted_fork had no way back to zero, so the rung paged
+# once per PROCESS and went quiet for ever - and this rung exists for a RECURRENCE, where the
+# second page is the one that matters. The reference catches up and passes us mid-run, which
+# is a definite not-a-fork, and then falls behind again: one process, two episodes.
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT_SEQ="4350000 4350000 4350300 4350300 4350000"
+wd_run 5
+check "pages for the first fork and again for the second" "[ \"\$(grep -c 'blocks AHEAD' '$T/alerts.log')\" = 2 ]"
+check "and says nothing on the sweeps where the reference had caught up" \
+  "[ \"\$(grep -c 'fork check: cannot tell' '$T/run.log')\" = 0 ]"
+check "the marker is still there from the first episode, so nothing un-parks in between" \
+  "[ -f '$T/park/$FORK_MARKER_REL' ]"
+
+echo "== watchdog: a cannot-tell sweep between two forks does NOT re-arm the page"
+# THE OTHER HALF OF SDE-App's finding, and the half my first fix left untested: the flag has
+# to come back to zero on a DEFINITE not-a-fork and NOT on cannot-tell. Resetting on
+# cannot-tell would let a flapping oracle - one source dark, two disagreeing - re-page on
+# every swing, which is precisely what the corroboration gate exists to prevent. My own
+# mutation put the reset on that path and the suite stayed green, so this is that mutation's
+# test: one fork, one sweep the rung cannot judge, the same fork again, ONE page.
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_USEDHEIGHT=4350000
+export STUB_READY_REFS_SEQ="agree disagree agree agree"
+wd_run 4
+check "pages once, and a cannot-tell sweep in the middle does not buy a second page" \
+  "[ \"\$(grep -c 'blocks AHEAD' '$T/alerts.log')\" = 1 ]"
+check "and the cannot-tell sweep is in the journal, so the case really passed through it" \
+  "grep -q 'fork check: cannot tell.*corroborated=false' '$T/run.log'"
 
 echo "== watchdog: with no marker, the same heal DOES release the miner (the control)"
 wd_fork_env
