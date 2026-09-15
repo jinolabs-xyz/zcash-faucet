@@ -203,6 +203,13 @@ check "and caddy was not pulled or recreated on the way" "! grep -qE 'compose .*
 # two new cases pass by never rolling back at all would look like a fix.
 check "and the ordinary not-ready case names the app's own reason" \
   "grep -q 'wallet balance unknown' '$T/nr.log'"
+# And a re-own that fails must not stop the rollback: a stuck rollback is the worse outcome.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_READY_MAX=1 STUB_REOWN_FAIL=1 bash "$REDEPLOY" > "$T/nr-reown.log" 2>&1
+check "a failed re-own is a WARNING and the rollback still exits 2" "[ $? -eq 2 ] && grep -q 'WARNING: could not re-own the ledger volume' '$T/nr-reown.log'"
+check "and the previous image was still started" "grep -q 'up -d --no-build faucet' '$STUB_LOG'"
+check "and the warning names the manual command with the image to run it from" "grep -q 'chown -R 0:0 /app/data' '$T/nr-reown.log'"
 
 echo "== redeploy: a probe that never ANSWERS is not evidence against the build (#229)"
 # A timeout is not a negative. better-sqlite3 is synchronous, so a wedged read makes
