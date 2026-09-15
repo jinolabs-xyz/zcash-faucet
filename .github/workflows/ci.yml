@@ -544,25 +544,35 @@ jobs:
       # when it drops uid, so CapEff=0 is true of any drop-privileges entrypoint whether or
       # not cap_drop is in the compose file. The bounding set is what carries cap_drop and
       # cap_add: 0xc9 is exactly CHOWN, FOWNER, SETGID, SETUID and nothing else.
-      - name: under the flags the compose file declares, the image drops root, bounds itself to the four capabilities, and can still write its ledger
+      - name: under the flags the compose file declares, the image drops root, bounds itself to the four capabilities, and can still write its ledger and its tmpfs
         run: |
           set -uo pipefail
           : > deploy/z3/faucet.env   # env_file is required; an empty one resolves the config
           flags="$(docker compose -f deploy/z3/docker-compose.faucet.yml config --format json | python3 -c '
           import json, sys
           s = json.load(sys.stdin)["services"]["faucet"]
+          # Keys that would override the flags below without changing them: privileged
+          # resets the bounding set to everything, pid/ipc/network_mode/devices/userns
+          # hand over host namespaces or nodes, an extra mount is an extra reach. Any of
+          # them present is a failure here, whatever the probe would then measure.
+          for k in ("privileged", "pid", "ipc", "network_mode", "devices", "userns_mode", "cgroup", "sysctls", "device_cgroup_rules", "ports"):
+              if s.get(k): sys.exit("compose service sets %s" % k)
+          if sorted(s.get("cap_add") or []) != ["CHOWN", "FOWNER", "SETGID", "SETUID"]: sys.exit("cap_add is not the four")
+          mounts = sorted((v["source"], v["target"], bool(v.get("read_only"))) for v in s.get("volumes") or [])
+          if mounts != [("/var/lib/faucet-miner", "/var/lib/faucet-miner", True), ("faucet_data", "/app/data", False)]: sys.exit("volumes are not the ledger and the read-only heartbeat: %r" % mounts)
+          if any("unconfined" in o for o in s.get("security_opt") or []): sys.exit("security_opt disables a profile")
           a = ["--read-only"] if s.get("read_only") else []
           for t in s.get("tmpfs") or []: a += ["--tmpfs", t]
           for c in s.get("cap_drop") or []: a += ["--cap-drop", c]
           for c in s.get("cap_add") or []: a += ["--cap-add", c]
           for o in s.get("security_opt") or []: a += ["--security-opt", o]
-          print(" ".join(a))')"
+          print(" ".join(a))')" || { rm -f deploy/z3/faucet.env; echo "the compose service is not the one SECURITY.md describes (see the line above)"; exit 1; }
           rm -f deploy/z3/faucet.env
           [ -n "$flags" ] || { echo "could not resolve the faucet service from the compose file"; exit 1; }
           echo "compose says: $flags"
           docker volume create r10 >/dev/null
           docker run --rm -v r10:/app/data --entrypoint sh faucet-ci-check:${{ github.sha }} -c 'touch /app/data/faucet.db && chown 0:0 /app/data/faucet.db'
-          out="$(docker run --rm $flags -v r10:/app/data faucet-ci-check:${{ github.sha }} sh -c 'echo "uid=$(id -u) caps=$(grep ^CapEff /proc/self/status | cut -f2) bnd=$(grep ^CapBnd /proc/self/status | cut -f2) nnp=$(grep ^NoNewPrivs /proc/self/status | cut -f2) owner=$(stat -c %u /app/data/faucet.db)"; touch /app/data/w && echo write-ok; touch /home/node/probe 2>/dev/null && echo ROOTFS-WRITABLE || echo rootfs-ro')"
+          out="$(docker run --rm $flags -v r10:/app/data faucet-ci-check:${{ github.sha }} sh -c 'echo "uid=$(id -u) caps=$(grep ^CapEff /proc/self/status | cut -f2) bnd=$(grep ^CapBnd /proc/self/status | cut -f2) nnp=$(grep ^NoNewPrivs /proc/self/status | cut -f2) owner=$(stat -c %u /app/data/faucet.db)"; touch /app/data/w && echo write-ok; touch /tmp/w /app/.next/cache/w && echo tmpfs-ok; touch /home/node/probe 2>/dev/null && echo ROOTFS-WRITABLE || echo rootfs-ro')"
           docker volume rm r10 >/dev/null
           printf '%s\n' "$out"
-          [ "$out" = "$(printf 'uid=1000 caps=0000000000000000 bnd=00000000000000c9 nnp=1 owner=1000\nwrite-ok\nrootfs-ro')" ] || { echo "the runtime is not the one the compose file promises"; exit 1; }
+          [ "$out" = "$(printf 'uid=1000 caps=0000000000000000 bnd=00000000000000c9 nnp=1 owner=1000\nwrite-ok\ntmpfs-ok\nrootfs-ro')" ] || { echo "the runtime is not the one the compose file promises"; exit 1; }

@@ -122,7 +122,7 @@ case "${1:-}" in
         echo "Valid configuration"; exit 0 ;;
       # A rollback re-owns the ledger volume to root before the previous image starts
       # (R-10): recorded in the docker log like everything else, answered here.
-      *" run --rm --no-deps --no-build -T --entrypoint chown faucet -R 0:0 /app/data ")
+      *" run --rm --no-deps -T --entrypoint chown faucet -R 0:0 /app/data ")
         [ "${STUB_REOWN_FAIL:-0}" = "1" ] && { echo "chown: cannot access '/app/data' (stub)" >&2; exit 1; }
         echo "re-owned"; exit 0 ;;
       *" up -d --no-deps --no-build --force-recreate caddy ")

@@ -402,8 +402,10 @@ do_rollback() {
   # claim SQLITE_READONLY. So the rollback re-owns the volume to root before starting
   # the previous image; an image with the entrypoint hands it to node again on start,
   # so this is right in both directions. Best effort: a failure here is logged and the
-  # rollback proceeds, since a stuck rollback is the worse outcome.
-  compose run --rm --no-deps --no-build -T --entrypoint chown faucet -R 0:0 /app/data 2>&1 | sed 's/^/    /' \
+  # rollback proceeds, since a stuck rollback is the worse outcome. (`run` has no
+  # --no-build, unlike `up`; it only builds when the image is absent, and the retag
+  # above just made sure it is not.)
+  compose run --rm --no-deps -T --entrypoint chown faucet -R 0:0 /app/data 2>&1 | sed 's/^/    /' \
     || log "WARNING: could not re-own the ledger volume for the rolled-back image; if claims fail after this, run: docker run --rm -v zcash-faucet_faucet_data:/app/data $PREVIOUS_TAG chown -R 0:0 /app/data"
   compose up -d --no-build faucet || { log "ERROR: could not start the rolled-back image"; return 1; }
   # Liveness only: the previous build was serving, and if the node has since
