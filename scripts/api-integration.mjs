@@ -1092,8 +1092,37 @@ try {
   // none. So this is the one server the suite deliberately kills and boots again.
   const bootQ = () => boot(PORT_Q, { ...zallet(WALLET_A), ...chainView, FAUCET_CHALLENGE: "none" });
   let serverQ = bootQ();
-  await waitReady(BASE_Q);
+
+  // THE COUNT IS THE PROCESS'S AGE, NOT THE AGE OF THE MODULE THAT ANSWERED, and this is
+  // the one assertion that can tell those apart (SDE-Infra's finding on review: they
+  // mutated the route to a module-scope `const START = Date.now()` and every other check
+  // here passed, because a module clock also resets when the process is replaced).
+  //
+  // So the readiness poll below is /api/health, DELIBERATELY: it does not load the status
+  // route, which means the read four seconds later is the first request that has ever
+  // loaded that module. A process clock reads about 5 there; a module clock reads 0.
+  // Measured before choosing the margin - health answers at 0.64 s, the first status read
+  // lands at 1.22 s with uptimeSeconds 1, and after this wait it is 5 - so asserting
+  // against the boot duration alone would have left about a second of slack, which npm's
+  // own startup could eat on a loaded runner. Four seconds cannot be eaten.
+  {
+    const deadline = Date.now() + 60_000;
+    for (;;) {
+      const r = await req(BASE_Q, "/api/health", {}).catch(() => ({ status: 0 }));
+      if (r.status === 200) break;
+      if (Date.now() > deadline) throw new Error(`server at ${BASE_Q} never answered /api/health (output in ${LOG_DIR})`);
+      await new Promise((r2) => setTimeout(r2, 200));
+    }
+  }
+  await new Promise((r) => setTimeout(r, 4000));
   const q1 = await get(BASE_Q, "/api/status");
+  ok("Q the first request to the status route reports the PROCESS's age, not the module's",
+    q1.body.uptimeSeconds >= 4,
+    `uptimeSeconds ${q1.body.uptimeSeconds} on the first status request, four seconds after the process answered health`);
+  // The stranger-on-the-port guard waitReady would normally give us, kept by hand because
+  // this server is deliberately not probed through /api/status.
+  const q1ops0 = await req(BASE_Q, "/api/status", { headers: { "x-faucet-ops": OPS_TOKEN } });
+  ok("Q and it is this run's server rather than something else on the port", q1ops0.body.buildCommit === RUN_NONCE, JSON.stringify(q1ops0.body.buildCommit));
   ok("Q uptimeSeconds is a whole-second count the public body carries", Number.isInteger(q1.body.uptimeSeconds) && q1.body.uptimeSeconds >= 0, JSON.stringify(q1.body.uptimeSeconds));
   ok("Q and the exact instant is operator-only, like buildCommit", !("startedAt" in q1.body), JSON.stringify(Object.keys(q1.body).filter((k) => k.startsWith("start"))));
   const q1ops = await req(BASE_Q, "/api/status", { headers: { "x-faucet-ops": OPS_TOKEN } });
@@ -1102,7 +1131,7 @@ try {
       Math.abs(Date.now() - Date.parse(q1ops.body.startedAt) - q1ops.body.uptimeSeconds * 1000) < 2000,
     JSON.stringify({ startedAt: q1ops.body.startedAt, uptimeSeconds: q1ops.body.uptimeSeconds }));
 
-  await new Promise((r) => setTimeout(r, 1500));
+  await new Promise((r) => setTimeout(r, 1200));
   const tBefore = Date.now();
   const q2 = await get(BASE_Q, "/api/status");
   ok("Q it rises while the process runs", q2.body.uptimeSeconds >= q1.body.uptimeSeconds, `${q1.body.uptimeSeconds} then ${q2.body.uptimeSeconds}`);
