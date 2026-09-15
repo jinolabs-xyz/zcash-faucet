@@ -1458,3 +1458,20 @@ check "the image job measures each sheet against MASCOT.md's 300 KB and refuses 
   "grep -qF 'LIMIT=307200' '$CIWF' && grep -q 'the sheets ship as WebP' '$CIWF'"
 check "and the CI context probe proves the sheets reach the image, both directions" \
   "grep -qF '/ctx/public/mascots/fox-riso-directions.webp' '$CIWF' && grep -qF 'echo \"html\" > \"\$ctx/design/faucet-architecture.html\"' '$CIWF'"
+
+echo "== repo: parity with the approved design is a committed check, against a vendored spec"
+# THE SPEC IS IN THE REPO OR THE CHECK IS A STORY. A parity check that reads the live share
+# directory compares against whatever the last edit did - the preview moved three times during
+# one slice - so the snapshot is vendored as a golden file and the check names it.
+check "the spec is vendored, not read from a directory outside the repo" \
+  "[ -s '$REPO/design/spec/S1-20260915T1938Z/shell.css' ] && ! grep -q 'ipc/share' '$REPO/scripts/parity-check.mjs'"
+check "and the CI step names that snapshot rather than a moving path" \
+  "grep -qF 'node scripts/parity-check.mjs design/spec/S1-20260915T1938Z/shell.css' '$CIWF'"
+# A DEPARTURES FILE IS A PLACE TO HIDE A DIVERGENCE unless it is held to describing one, which
+# is the same shape as an override that quietly retires the default it was added to test.
+check "a declaration that no longer describes a divergence fails, so the list cannot rot" \
+  "grep -q 'STALE DEPARTURE, no longer differs' '$REPO/scripts/parity-check.mjs'"
+check "and the check reports what the spec has and we DROPPED, not only what we added" \
+  "grep -qF 'in the spec, not shipped' '$REPO/scripts/parity-check.mjs'"
+check "a rule moved into a media query is not counted as parity" \
+  "grep -qF 'context ?' '$REPO/scripts/parity-check.mjs' && grep -qF 'prelude.startsWith(\"@\")' '$REPO/scripts/parity-check.mjs'"
