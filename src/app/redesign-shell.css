@@ -28,8 +28,8 @@
  */
 *{box-sizing:border-box}
 html,body{margin:0;height:100%}
-body{background:var(--page);color:var(--ink);font:400 15px/1.5 var(--sans);-webkit-font-smoothing:antialiased;text-rendering:geometricPrecision;text-wrap:pretty}
-a{color:var(--accent-text);text-decoration:none}
+html body{background:var(--page);color:var(--ink);font:400 15px/1.5 var(--sans);-webkit-font-smoothing:antialiased;text-rendering:geometricPrecision;text-wrap:pretty}
+html a{color:var(--accent-text);text-decoration:none}
 a:hover{text-decoration:underline}
 button,input,select{font:inherit;color:inherit}
 :focus-visible{outline:calc(.16*var(--u)) solid var(--accent);outline-offset:calc(.2*var(--u));border-radius:calc(.4*var(--u))}
@@ -72,8 +72,8 @@ canvas.g{width:calc(1.3*var(--u));height:calc(1.3*var(--u));display:inline-block
 .hdr-right{display:flex;align-items:center;gap:calc(1.2*var(--u))}
 .hdr-right nav{display:flex;gap:calc(1.2*var(--u));font-size:calc(.95*var(--u));font-weight:500}
 .hdr-right nav a{color:var(--muted)}.hdr-right nav a:hover{color:var(--ink);text-decoration:none}
-.iconbtn{display:inline-grid;place-items:center;width:calc(2.4*var(--u));height:calc(2.4*var(--u));border-radius:calc(.5*var(--u));border:calc(.06*var(--u)) solid var(--hair);background:none;cursor:pointer;color:var(--muted)}
-.iconbtn:hover{color:var(--ink)}
+html .iconbtn{display:inline-grid;place-items:center;width:calc(2.4*var(--u));height:calc(2.4*var(--u));border-radius:calc(.5*var(--u));border:calc(.06*var(--u)) solid var(--hair);background:none;cursor:pointer;color:var(--muted)}
+html .iconbtn:hover{color:var(--ink)}
 
 /* ===== 7. Views and the segmented nav (the .view and .seg rules only) =====
  * The hero grid and the card internals belong to the slices that fill them. .view.hero is

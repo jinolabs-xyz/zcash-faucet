@@ -141,6 +141,82 @@ const COLOUR_LIB = `
  * Compared against the retired token RESOLVED ON THE PAGE, not against a hard-coded hex, so
  * this keeps working if the old palette's value is ever edited.
  */
+/* THE PAGE'S OWN IDENTITY MUST NOT DEPEND ON WHICH CSS CHUNK THE BUNDLER EMITS FIRST.
+ *
+ * This is the guard the redesign has been missing since #562, and it is the finding that
+ * outranked the five leaks it was found alongside. Next emits the legacy sheet and the
+ * transcription as TWO chunks, and the served page happens to link them in the order that
+ * makes the redesign win. Nothing promises that order. Both sheets set `body` background,
+ * colour and font at (0,0,1) - `redesign-shell.css` against `globals.css:73` - and both style
+ * the theme toggle at (0,1,0), `.iconbtn` against `.theme-toggle`, on the same button.
+ *
+ * Measured before the fix, by reordering the <link> tags on the built page: 100 of 118 nodes
+ * repainted, 234 property deltas in paper and 165 in ink. Font family Segoe UI Variable to
+ * Archivo, background, colour, line-height, the toggle's border. The five leaks that #575 is
+ * named for were the VISIBLE part of that; the rest was silent and the suite was 146/0
+ * through all of it.
+ *
+ * So this does not pin a list of values. It asserts the PROPERTY: flip the chunk order on the
+ * real built page and nothing may move. That is true of whatever the design grows next, where
+ * a list of values would go stale the first time a colour changed.
+ *
+ * WHY IT CANNOT PASS VACUOUSLY. A page with one stylesheet, or a flip that did not take, or a
+ * body that rendered nothing, would all report "no deltas" and go green. So the flip is
+ * verified by reading the href order back, and the node count carries a floor. */
+async function checkChunkOrderIdentity(browser) {
+  const PROPS = ["fontFamily", "backgroundColor", "color", "lineHeight", "fontSize", "fontWeight", "borderColor", "borderRadius", "letterSpacing"];
+  for (const theme of ["paper", "ink"]) {
+    const c = await browser.newContext({ viewport: DESKTOP });
+    const p = await c.newPage();
+    await p.goto(BASE, { waitUntil: "networkidle" });
+    await p.evaluate((t) => {
+      try { localStorage.setItem("zfaucet_theme", t); } catch {}
+      document.documentElement.dataset.theme = t;
+    }, theme);
+    await p.waitForTimeout(300);
+
+    const order = () => p.evaluate(() => [...document.querySelectorAll('link[rel="stylesheet"]')].map((l) => l.href));
+    const snap = () => p.evaluate((PROPS) => {
+      const out = [];
+      document.querySelectorAll("body, body *").forEach((el) => {
+        const cs = getComputedStyle(el);
+        out.push({ tag: el.tagName.toLowerCase(), cls: (el.className || "").toString().slice(0, 30), v: PROPS.map((k) => cs[k]) });
+      });
+      return out;
+    }, PROPS);
+
+    const linksBefore = await order();
+    const before = await snap();
+    await p.evaluate(() => {
+      const ls = [...document.querySelectorAll('link[rel="stylesheet"]')];
+      if (ls.length < 2) return;
+      ls[0].parentNode.insertBefore(ls[ls.length - 1], ls[0]);   // last chunk linked first
+    });
+    await p.waitForTimeout(400);
+    const linksAfter = await order();
+    const after = await snap();
+
+    const flipped = linksBefore.length >= 2 && linksBefore.join() !== linksAfter.join();
+    let moved = 0, deltas = 0, first = "";
+    for (let i = 0; i < Math.min(before.length, after.length); i++) {
+      const a = before[i], b2 = after[i];
+      if (a.v.join("|") === b2.v.join("|")) continue;
+      moved++;
+      for (let k = 0; k < a.v.length; k++) {
+        if (a.v[k] === b2.v[k]) continue;
+        deltas++;
+        if (!first) first = `<${a.tag}${a.cls ? " ." + a.cls.split(" ")[0] : ""}> ${PROPS[k]} ${a.v[k]} -> ${b2.v[k]}`;
+      }
+    }
+    ok(`${theme}: the page is identical with the CSS chunks linked in the other order`,
+      flipped && before.length >= 50 && moved === 0,
+      !flipped ? `the flip did not take: ${linksBefore.length} stylesheet(s)`
+        : before.length < 50 ? `only ${before.length} nodes rendered, too few to judge`
+        : `${moved} of ${before.length} nodes moved, ${deltas} deltas; first: ${first}`);
+    await c.close();
+  }
+}
+
 async function checkLegacyPalette(browser) {
   for (const theme of ["paper", "ink"]) {
     const c = await browser.newContext({ viewport: DESKTOP });
@@ -162,24 +238,34 @@ async function checkLegacyPalette(browser) {
       return v;
     });
 
-    // Hover a real link of each kind and read what a visitor would actually see.
-    const kinds = [
-      [".ftr nav a", "footer link"],
-      [".seg button", "nav item"],
-      ["main a", "body link"],
-    ];
-    const seen = [];
-    for (const [sel, name] of kinds) {
-      if ((await p.locator(sel).count()) === 0) continue;
-      await p.locator(sel).first().hover().catch(() => {});
-      await p.waitForTimeout(80);
-      const colour = await p.locator(sel).first().evaluate((el) => getComputedStyle(el).color);
-      seen.push({ name, colour });
-    }
-    ok(`${theme}: no link hovers to the retired palette`,
-      seen.length > 0 && seen.every((s) => s.colour !== retired),
-      seen.length === 0 ? "no links found, so nothing was measured"
-        : `retired ${retired}; ${seen.map((s) => `${s.name} ${s.colour}`).join(", ")}`);
+    // HOVERED ON A LINK THIS CHECK INSERTS, and the first version measured three links that
+    // could not show the defect. It hovered `.ftr nav a`, which the footer's own (0,2,1) hover
+    // rule already protects; `.seg button`, which is a button, so `a:hover` never matched it at
+    // all; and the first `main a`, which sits inside `.about-strip-line` whose (0,1,1) rule in
+    // globals sits AFTER `a:hover` and wins at any order. So a real link-order flip left the
+    // row green, and the 144/2 in the body came from a mutant that appends the retired rule
+    // last - something a flip cannot produce. Found by the CTO's red-team.
+    //
+    // A bare <a> in the stage has nothing protecting it, which is the surface the rule is
+    // about. Fixed-position so it is always reachable by a pointer, and still a DESCENDANT of
+    // .stage, which is what `.stage a:hover` keys on.
+    const probeColour = await (async () => {
+      await p.evaluate(() => {
+        const stage = document.querySelector(".stage") ?? document.body;
+        const a = document.createElement("a");
+        a.id = "hover-probe";
+        a.href = "/terms";
+        a.textContent = "probe";
+        a.style.cssText = "position:fixed;top:8px;left:8px;z-index:99999;padding:4px";
+        stage.appendChild(a);
+      });
+      await p.hover("#hover-probe").catch(() => {});
+      await p.waitForTimeout(120);
+      return p.locator("#hover-probe").evaluate((el) => getComputedStyle(el).color);
+    })();
+    ok(`${theme}: a bare link in the stage does not hover to the retired palette`,
+      !!probeColour && probeColour !== retired,
+      `retired ${retired}; probe hovered to ${probeColour}`);
 
     // The other two need no pointer.
     //
@@ -366,19 +452,49 @@ async function checkFooterReachable(browser) {
     // A clamped `.stage` leaves scrollTop pinned at 0 through any number of wheel events,
     // which is what "six wheel events moved scrollTop from 0 to 0" meant in the original
     // finding.
-    const wheel = await p.evaluate(async () => {
-      const st = document.querySelector(".stage");
-      const before = { doc: document.documentElement.scrollTop, stage: st ? st.scrollTop : null };
-      for (let i = 0; i < 6; i++) window.dispatchEvent(new WheelEvent("wheel", { deltaY: 120, bubbles: true }));
-      window.scrollBy(0, 400);
-      await new Promise((r) => setTimeout(r, 120));
-      const over = document.documentElement.scrollHeight - innerHeight;
-      return { over, moved: document.documentElement.scrollTop - before.doc };
+    // TWO THINGS WENT WRONG HERE AND BOTH WERE MINE.
+    //
+    // The old version escaped on `documentElement.scrollHeight - innerHeight <= 0` and reported
+    // "the page fits, so there was nothing to scroll". Under the clamp the document NEVER
+    // overflows - `.stage` clips the overflow instead of pushing the document taller - so on
+    // the exact defect this check is named for it measured nothing and went green. And it
+    // dispatched synthetic WheelEvents, which are untrusted and scroll nothing at all, so the
+    // "six wheel events" it claimed to perform were six no-ops.
+    //
+    // The property that a clamped page actually breaks is not "the document is taller than the
+    // viewport". It is that `.stage` is HIDING content a pointer cannot reveal: overflow
+    // hidden with more content in it than fits. That is true whether or not the document
+    // overflows, and it is what leaves the footer links unreachable.
+    const stage = await p.evaluate(() => {
+      const el = document.querySelector(".stage");
+      if (!el) return null;
+      const cs = getComputedStyle(el);
+      return {
+        overflowY: cs.overflowY,
+        buried: Math.round(el.scrollHeight - el.clientHeight),
+        docOver: Math.round(document.documentElement.scrollHeight - innerHeight),
+      };
     });
-    ok(`${label}: the page actually scrolls when it is taller than the viewport`,
-      wheel.over <= 0 || wheel.moved > 0,
-      wheel.over <= 0 ? "the page fits, so there was nothing to scroll"
-        : `${wheel.over}px past the fold and scrollTop moved ${wheel.moved}`);
+    const clips = !!stage && /hidden|clip/.test(stage.overflowY);
+    ok(`${label}: the stage is not hiding content a wheel cannot reveal`,
+      !!stage && !(clips && stage.buried > 1),
+      !stage ? "no .stage on the page"
+        : `overflow-y ${stage.overflowY}, ${stage.buried}px past its own box`);
+
+    // And a REAL wheel, through the browser rather than a dispatched event, on the pages that
+    // are taller than the viewport. This one can still be inapplicable - it says so rather
+    // than claiming a pass - because the check above is what carries the clamped case.
+    const beforeTop = await p.evaluate(() => document.documentElement.scrollTop);
+    await p.mouse.move(Math.round(vp.width / 2), Math.round(vp.height / 2));
+    await p.mouse.wheel(0, 600);
+    await p.waitForTimeout(200);
+    const movedBy = await p.evaluate((b) => document.documentElement.scrollTop - b, beforeTop);
+    if (stage && stage.docOver > 0) {
+      ok(`${label}: a real wheel scrolls the page when it is taller than the viewport`,
+        movedBy > 0, `${stage.docOver}px past the fold and scrollTop moved ${movedBy}`);
+    } else {
+      console.log(`  --   ${label}: the document does not overflow, so a wheel has nothing to move (the clip check above is what covers this)`);
+    }
 
     // REACHED THE WAY A VISITOR REACHES IT, not the way a script can. This used
     // `scrollIntoView({block:"end"})`, and the CTO's red-team found that it scrolls an
@@ -1273,6 +1389,7 @@ try {
   await checkFooterReachable(browser);
   await checkCardInnerPadding(browser);
   await checkLegacyPalette(browser);
+  await checkChunkOrderIdentity(browser);
   // WHERE THE TAZ COMES FROM follows the status (R-39). Under this stack there is no
   // miner heartbeat, so the sentence has to be the not-mining one; the three
   // contradictory fixed sentences must be gone from the rendered page.
