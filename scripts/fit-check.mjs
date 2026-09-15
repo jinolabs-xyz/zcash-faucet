@@ -94,9 +94,24 @@ if (!existsSync(SHELL_MARKER)) {
 // a page that scrolls perfectly well - the mirror of the mistake this check was written to
 // catch, one element over. So the scroller is whichever one actually scrolls, and reachability
 // is judged AFTER scrolling rather than from the first paint.
+// AND IT MUST ONLY SCROLL A BOX A PERSON COULD SCROLL. `st.scrollTop = ...` moves an
+// `overflow:hidden` box perfectly well - the browser blocks the USER's wheel and keyboard
+// there, never the script's - so on the #562-shape clamp this reached the footer, found every
+// link hit-testable, and reported reachability a visitor does not have. The verdict on that
+// shape was then carried by the clipping walk alone and the row named no links, which is the
+// opposite of what this function's own commit message claimed.
+//
+// Same defect as #562's ui-smoke `scrollIntoView`, blocked earlier the same night, in a second
+// script by a second author: a programmatic scroll measures what a SCRIPT can reach. The guard
+// is the computed overflow, which is the same test `canScroll` uses twenty lines down.
 const SCROLL_TO_BOTTOM = () => {
   const st = document.querySelector(".stage");
-  if (st && st.scrollHeight > st.clientHeight) st.scrollTop = st.scrollHeight;
+  if (st) {
+    const oy = getComputedStyle(st).overflowY;
+    if (oy !== "hidden" && oy !== "clip" && st.scrollHeight > st.clientHeight) {
+      st.scrollTop = st.scrollHeight;
+    }
+  }
   window.scrollTo(0, document.documentElement.scrollHeight);
 };
 

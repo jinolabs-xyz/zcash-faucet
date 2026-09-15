@@ -1314,6 +1314,16 @@ check "fits means the footer is on screen and its links are hit-testable, not ju
 # lines around it are decoration. Pin the mutant the finding names FIRST, then its neighbours.
 check "the clipping walk DECIDES the verdict, rather than only printing inside it" \
   "grep -A1 'const fitsNow = (r) =>' '$REPO/scripts/fit-check.mjs' | grep -qF '(r.clipping || []).length === 0 &&'"
+# AND THE SCROLL IT JUDGES AFTER MUST BE ONE A PERSON COULD PERFORM. `scrollTop = ...` moves an
+# overflow:hidden box perfectly well; the browser blocks the USER there, never the script. So on
+# the clamp the check reached the footer itself, found every link hit-testable and reported a
+# reachability a visitor does not have - and the row above named no links, because there were
+# none left unreachable. Measured on a clamp fixture: without the guard every row reads
+# "CLIPPED by an ancestor (div.stage hides 215px)" and stops; with it, the same row continues
+# "unreachable after scrolling: Donate TAZ, Terms, GitHub". Same defect as #562's ui-smoke
+# scrollIntoView, blocked earlier the same night in a second script by a second author.
+check "the check only scrolls a box a person could scroll" \
+  "grep -qF 'const oy = getComputedStyle(st).overflowY;' '$REPO/scripts/fit-check.mjs' && grep -qF 'if (oy !== \"hidden\" && oy !== \"clip\" && st.scrollHeight > st.clientHeight)' '$REPO/scripts/fit-check.mjs'"
 check "and a clipped row names the links a person then has to go and look at" \
   "grep -qF 'CLIPPED by an ancestor (\${clipped})\${unreachable.length' '$REPO/scripts/fit-check.mjs'"
 check "and clipping is named as clipping, attributed to the ancestor that hides it" \
@@ -1326,7 +1336,7 @@ check "and clipping is named as clipping, attributed to the ancestor that hides 
 # two halves are held together because either one alone still reads the old way: the page is
 # scrolled by whichever box actually scrolls, AND the row says which box it judged.
 check "the check scrolls whichever box scrolls, the document included" \
-  "grep -qF 'if (st && st.scrollHeight > st.clientHeight) st.scrollTop = st.scrollHeight;' '$REPO/scripts/fit-check.mjs' && grep -qF 'window.scrollTo(0, document.documentElement.scrollHeight);' '$REPO/scripts/fit-check.mjs'"
+  "grep -qF 'st.scrollTop = st.scrollHeight;' '$REPO/scripts/fit-check.mjs' && grep -qF 'window.scrollTo(0, document.documentElement.scrollHeight);' '$REPO/scripts/fit-check.mjs'"
 check "and every row names the scroller it judged, so a wrong one is readable" \
   "grep -qF 'scroller: stScrolls ? \".stage\" : \"document\"' '$REPO/scripts/fit-check.mjs' && grep -qF 'via \${o.scroller}' '$REPO/scripts/fit-check.mjs'"
 # THE SHEETS: served, and held at the size the owner ruled.
