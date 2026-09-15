@@ -8,7 +8,7 @@
  * here, returning numbers, and the draw functions in this file consume them and do
  * nothing else. The tests then assert the decisions rather than the pixels.
  *
- * Ported from the approved preview (redesign-frozen/S2-S5-20260915T1958Z, the `charts`
+ * Ported from the approved preview (redesign-frozen/S2-S5-20260915T2110Z, the `charts`
  * block). The constants are the preview's and are not re-derived: 0.3 for the gap, the
  * log divisor of 4.3, the minimum bar height, the 8px and 4px label paddings. Where a
  * value here disagrees with the preview, one of the two is a typo.

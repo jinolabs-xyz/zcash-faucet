@@ -64,10 +64,22 @@ export type MinerUnit = string | null | undefined;
 
 /** A heartbeat nobody is writing AND a unit systemd calls inactive: stopped on purpose.
  *  Only that pairing. The heartbeat is the primary evidence, so a fresh one is never
- *  overruled by the word, and no word at all proves nothing. */
-function parked(r: MinerReading, unit: MinerUnit): boolean {
+ *  overruled by the word, and no word at all proves nothing.
+ *
+ *  EXPORTED because it has four readers and one of them lives in another file.
+ *  statusView.ts's minerTone needs this exact question and could not ask it while this was
+ *  module-private, so it re-derived the rule inline - character for character the same
+ *  test, in two places, with nothing holding them together. SDE-App found it on #567 and
+ *  measured what it costs: adding a heartbeat condition here left the whole suite at
+ *  877/877 while the tone silently kept the old rule, and a stopped miner with a fresh
+ *  heartbeat came apart three ways - chip "no signal", minerIsBad true, tone calm grey.
+ *  One definition, four readers, one edit. */
+export function minerIsParked(r: MinerReading, unit: MinerUnit): boolean {
   return r.state === "not-writing" && unit === "inactive";
 }
+
+/** The module's own short name for it. */
+const parked = minerIsParked;
 
 /**
  * The short token for the top status strip, which stays terse per the user. Bad states

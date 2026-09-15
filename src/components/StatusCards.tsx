@@ -1,6 +1,6 @@
 /**
  * The Status view: three equal cards, transcribed from the approved preview
- * (redesign-frozen/S2-S5-20260915T1958Z, the `data-view="status"` section).
+ * (redesign-frozen/S2-S5-20260915T2110Z, the `data-view="status"` section).
  *
  * Each card is a panel with one figure over a table of detail, and the split is the
  * point: the figure is what a visitor reads, the table is what an operator reads, and
@@ -172,8 +172,17 @@ export function StatusCards({ status, network }: { status: ViewStatus | null; ne
             <div className="metric-row">
               <strong data-status-key="balance">{balance}</strong>
             </div>
+            {/* SPENDABLE ONLY, NEVER FALLING BACK TO THE TOTAL BALANCE. Two different
+                quantities, and the card shows both: the figure above is everything the
+                wallet holds, this line is how many drips we can actually pay out.
+                Coinbase we have not shielded yet is in the first and not the second. The
+                fallback that used to be here would print a confident "about N drips" off
+                the total whenever the spendable read failed, overstating the faucet's
+                reach at exactly the moment it knows least - the same family as a null
+                balance reading as empty, one line from the comment warning about it.
+                Unknown spendable reads "balance unknown", which is what the preview does. */}
             <span className="delta" data-tone={reserveTone(reserve)}>
-              {dripsLeftText(reserve?.spendableTaz ?? status?.balanceTaz, status?.dripTaz ?? 0)}
+              {dripsLeftText(reserve?.spendableTaz, status?.dripTaz ?? 0)}
             </span>
           </div>
           <ReserveMini status={status} />

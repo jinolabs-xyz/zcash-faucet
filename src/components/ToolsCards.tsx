@@ -1,6 +1,6 @@
 /**
  * The Tools view: the balance lookup and how the faucet is run, transcribed from the
- * approved preview (redesign-frozen/S2-S5-20260915T1958Z, the `data-view="tools"`
+ * approved preview (redesign-frozen/S2-S5-20260915T2110Z, the `data-view="tools"`
  * section).
  *
  * THE LOOKUP IS THE APP'S, NOT THE PREVIEW'S. The preview's form answers "0.3 TAZ across

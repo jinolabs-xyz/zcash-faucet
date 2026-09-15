@@ -29,6 +29,7 @@ import {
   acceptSentence,
   backendHost,
 } from "./statusView.ts";
+import { minerIsBad, readingFromStatus } from "./minerLabel.ts";
 
 const PROD = JSON.parse(readFileSync(new URL("./fixtures/status.prod.json", import.meta.url), "utf8"));
 
@@ -143,6 +144,19 @@ test("production's balance reads as the preview has it", () => {
   );
 });
 
+test("drips-left is computed from SPENDABLE, and an unreadable spendable is not the total", () => {
+  // The two are different quantities and the wallet card shows both: the figure is
+  // everything the wallet holds, this line is what we can actually pay out. Coinbase we
+  // have not shielded is in the first and not the second, so a card that fell back to the
+  // total when the spendable read failed would overstate the faucet's reach at exactly the
+  // moment it knows least. The preview computes it from spendable only; so does this.
+  assert.equal(dripsLeftText(null, 0.1), "balance unknown");
+  assert.equal(dripsLeftText(PROD.reserve.spendableTaz, PROD.dripTaz), "about 45,100 drips at 0.1");
+  // A known total beside an unknown spendable is a legitimate state, not a contradiction
+  // to paper over: the two must not produce the same sentence.
+  assert.notEqual(dripsLeftText(null, 0.1), dripsLeftText(PROD.balanceTaz, PROD.dripTaz));
+});
+
 test("a drip size of zero does not divide", () => {
   // Configuration can be wrong and Infinity must not reach the page.
   assert.equal(dripsLeft(4506, 0), null);
@@ -231,6 +245,28 @@ test("we-are-not-watching and we-cannot-tell each read as themselves, not as a f
   assert.equal(minerWord({ active: true, beatAgoSeconds: 2 }, "active"), "unknown", "no state at all");
   assert.equal(minerTone({ active: true, beatAgoSeconds: 2 }, "active"), "unknown");
   assert.equal(minerWord(null, null), "unknown", "no miner block at all");
+});
+
+test("chip, tone and isBad never disagree about a stopped miner, at any heartbeat age", () => {
+  // THE PROPERTY SDE-APP'S #567 BLOCK IS ABOUT, and it is about coupling rather than about
+  // any one answer. Three readers ask "is this miner parked": minerChip for the word,
+  // minerIsBad for the judgement, and minerTone for the colour. They must never give three
+  // answers for one state - "no signal" beside a calm grey beside a fault is the exact
+  // thing minerTone's own header says it exists to prevent.
+  //
+  // The heartbeat ages straddle the boundary a plausible edit to the predicate would add,
+  // so a rule change moves every reader or this goes red.
+  for (const beatAgoSeconds of [2, 60, 3599, 3601, 52200]) {
+    const r = { state: "not-writing", active: false, beatAgoSeconds } as const;
+    const chip = minerWord(r, "inactive");
+    const tone = minerTone(r, "inactive");
+    const bad = minerIsBad(readingFromStatus(r), "inactive");
+    const calm = chip === "parked";
+    assert.equal(tone === "unknown", calm,
+      `beat ${beatAgoSeconds}s: the word is "${chip}" and the colour is "${tone}"`);
+    assert.equal(bad, !calm,
+      `beat ${beatAgoSeconds}s: the word is "${chip}" and minerIsBad says ${bad}`);
+  }
 });
 
 test("a failed unit keeps its own word and its own colour", () => {
