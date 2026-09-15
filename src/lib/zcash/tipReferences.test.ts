@@ -73,6 +73,28 @@ test("THE 13:06Z CASE: a source 113 blocks behind cannot pass a node the other s
   assert.equal(refs.sources.hosh?.stale, false, "our fetch was seconds old; hosh's number was not");
 });
 
+test("usedHeight is the height of the source `used` names, flat, for a reader that cannot nest", () => {
+  // The watchdog parses with grep, sed and cut by design, so tipReferences.sources[used]
+  // .height is out of reach two levels down and reaching for it with a brace-bounded grep
+  // is the #391 greedy-regex lesson volunteered (SDE-Infra, writing the consumer). The
+  // field is redundant on purpose; what matters is that it cannot disagree with `used`.
+  plant({ hosh: { height: 4_349_918, ageMs: 12_000 }, lightwalletd: { height: 4_349_928, ageMs: 34_000 } });
+  const refs = getTipReferences(NOW);
+  assert.equal(refs.used, "lightwalletd");
+  assert.equal(refs.usedHeight, 4_349_928);
+  assert.equal(refs.usedHeight, refs.sources[refs.used!]!.height, "the two must always tell one story");
+  assert.equal(refs.usedHeight, referenceTipAt(NOW).height, "and the same one referenceTip judges against");
+
+  // Null WITH used, never a stale height left standing beside a null name.
+  plant({ hosh: { height: 4_349_918, ageMs: REFERENCE_MAX_AGE_MS + 1 } });
+  const stale = getTipReferences(NOW);
+  assert.equal(stale.used, null);
+  assert.equal(stale.usedHeight, null, "no usable source means no height, not the stale one");
+
+  resetExternalTipForTests();
+  assert.equal(getTipReferences(NOW).usedHeight, null, "and nothing fetched at all is null too");
+});
+
 test("the staleness bound is a boundary, and it is OUR fetch age", () => {
   plant({ hosh: { height: 4_000_000, ageMs: REFERENCE_MAX_AGE_MS } });
   assert.equal(getTipReferences(NOW).sources.hosh?.stale, false, "exactly at the bound is still usable");
