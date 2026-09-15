@@ -97,7 +97,7 @@ button.tag:hover,a.tag:hover{border-color:var(--muted)}
 .mascot-riso{position:relative;display:block;flex:none;width:100%;max-width:calc(22*var(--u));aspect-ratio:1;padding:0;border:0;background:transparent;appearance:none;cursor:pointer;user-select:none;touch-action:manipulation}
 .mascot-riso:focus-visible{outline:calc(.15*var(--u)) solid var(--accent-text);outline-offset:calc(.4*var(--u));border-radius:50%}
 .mascot-cap{font-size:calc(.9*var(--u));color:var(--muted);text-align:center;max-width:17em;line-height:1.35}
-@media (max-width:56rem){.hero-grid{grid-template-columns:1fr}.mascot-riso{max-width:min(52vw,240px)}}   /* narrow: copy, then the fox, then the claim card, in source order */
+@media (max-width:56rem){.hero-grid{grid-template-columns:1fr}}   /* narrow: copy, then the fox, then the claim card, in source order */
 
 /* ===== NOT IN THE SNAPSHOT: the size override the component needs =====
  * The spec's `.mascot-riso` sets width/max-width and the npm component sets `width: size,
@@ -137,3 +137,39 @@ button.tag:hover,a.tag:hover{border-color:var(--muted)}
  * page keeps the pre-redesign colour while the page itself is on --page. Only visible on a
  * bounce, which is why nobody would find it by looking. */
 html{background:var(--page)}
+
+/* ===== The hero's own breakpoints, moved here from the shell sheet =====
+ * These four lived in redesign-shell.css, which is imported BEFORE this file, so the hero's
+ * BASE rules below them in the built CSS won at equal specificity and the breakpoints did
+ * nothing: at 390 wide the headline rendered 44px against the spec's 28.9, two lines instead
+ * of one, the card 81px lower and the page 112px taller - and a regression against the shell
+ * already on prod. Found by the CTO's red-team.
+ *
+ * They belong with the rules they override. This is the same shape as the three legacy leaks
+ * (L20) turned inward: not a legacy sheet overriding the transcription, but one half of the
+ * transcription overriding the other because of the order the two sheets are imported in.
+ */
+/* The spec has this as `.comp > .view.hero`. Our four views sit inside a <main class="views">
+ * landmark rather than directly in .comp, so the child combinator would match nothing at all -
+ * it computed padding-top 0. Same rule, our structure. */
+.views > .view.hero{flex:1 1 auto;min-height:0;justify-content:flex-start;padding-top:calc(2.5*var(--u))}
+@media (max-width:64rem){
+  .hero-grid{grid-template-columns:1fr;gap:calc(2.5*var(--u))}
+  .view.hero{min-height:0}
+  .hero-copy h1{font-size:calc(3*var(--u))}
+}
+@media (max-width:32rem){
+  .hero-copy h1{font-size:clamp(27px,7.4vw,40px)}
+  .hero-copy{gap:12px}
+  .hero-copy .chips .tag.more{margin-left:0}
+}
+
+/* The narrow fox cap, moved here so it comes AFTER the base size override.
+ * Both rules are `.mascot-riso` at (0,1,0) and both carry !important, so ORDER decides between
+ * them - and the base sat later in the file, which is why a 203px cap still rendered a 264px
+ * fox. The !important that makes the base beat the component's inline width is exactly what
+ * made it beat this too. Third time tonight that one of my own fixes has been defeated by
+ * another of my own rules (L20, turned inward). */
+@media (max-width:56rem){
+  .mascot-riso{max-width:min(52vw,240px) !important}
+}
