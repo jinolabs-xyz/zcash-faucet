@@ -21,7 +21,7 @@
  * Run: node scripts/fit-check.mjs [baseUrl]      (default: $UI_SMOKE_URL)
  */
 import { chromium } from "playwright";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 // S1 adds this file. It is the one fact that says "the redesign shell is in this tree".
 const SHELL_MARKER = "src/app/redesign-tokens.css";
@@ -33,11 +33,24 @@ const PAGES = ["/terms", "/donate", "/fund"];
 
 // THE SAME HOLD, for the same reason: the combination count comes out of the arrays below,
 // so shrinking one of them would leave a run that "measured everything it meant to".
-const RULING_COMBOS = 42;
-const PLANNED = SIZES.length * THEMES.length * (VIEWS.length + PAGES.length);
-if (PLANNED !== RULING_COMBOS) {
-  console.error(`fit-check: this file plans ${PLANNED} combinations (${SIZES.length} sizes x ${THEMES.length} themes x ${VIEWS.length + PAGES.length} views and pages) but the ruling is ${RULING_COMBOS}. Change the arrays and this number together, deliberately, or neither.`);
+// THE PAGES JOIN THE CONTRACT WHEN THEY JOIN THE SHELL, and not before. Measured against S1:
+// /terms, /donate and /fund are still the pre-redesign layout with no .stage at all, because
+// they enter the shell in S5 - so requiring them here would have turned main red the moment
+// S1 merged. Whether a page is in the shell is a REPO fact (its own source names the shell),
+// which keeps this out of the "absent, so skip" shape: a page whose source says stage MUST
+// render one, and one whose source does not is not yet in this contract.
+const PAGES_IN_SHELL = PAGES.filter((route) => {
+  const src = `src/app${route}/page.tsx`;
+  return existsSync(src) && readFileSync(src, "utf8").includes('"stage"');
+});
+const RULING_COMBOS = 42;   // the number once all three pages are in the shell
+const PLANNED = SIZES.length * THEMES.length * (VIEWS.length + PAGES_IN_SHELL.length);
+if (PAGES_IN_SHELL.length === PAGES.length && PLANNED !== RULING_COMBOS) {
+  console.error(`fit-check: every page is in the shell, so this file should plan ${RULING_COMBOS} combinations and it plans ${PLANNED}. Change the arrays and this number together, deliberately, or neither.`);
   process.exit(1);
+}
+if (PAGES_IN_SHELL.length !== PAGES.length) {
+  console.log(`fit-check: ${PAGES_IN_SHELL.length} of ${PAGES.length} pages are in the shell so far (${PAGES.filter((p) => !PAGES_IN_SHELL.includes(p)).join(", ")} still pre-redesign); planning ${PLANNED} combinations, and the ruling's ${RULING_COMBOS} applies once S5 lands.`);
 }
 
 if (!existsSync(SHELL_MARKER)) {
@@ -72,7 +85,19 @@ for (const [W, H] of SIZES) {
     await page.evaluate((t) => { localStorage.setItem("zfaucet_theme", t); document.documentElement.dataset.theme = t; }, theme);
     await page.waitForTimeout(3200);
     for (const v of VIEWS) {
-      await page.click(`#seg [data-view="${v}"]`);
+      // THE APP'S DRIVER, NOT THE PREVIEW'S. The preview's nav is `#seg [data-view="claim"]`;
+      // the app's is a testid, which is also what ui-smoke's showView() clicks. Porting the
+      // preview's selector cost a 30 s Playwright timeout against the real shell - the same
+      // shape as the theme key, and the same lesson: the preview is not the authority on its
+      // own consumer. Reported as a failure rather than left to time out, so a renamed
+      // control says what it is instead of looking like a hung job.
+      const nav = page.getByTestId(`nav-${v}`);
+      if (await nav.count() === 0) {
+        missing = `${SHELL_MARKER} is in the tree but ${BASE}/ has no [data-testid="nav-${v}"] at ${where}`;
+        break;
+      }
+      await nav.click();
+      await page.locator(`[data-testid="view-${v}"]`).waitFor({ state: "visible", timeout: 5000 });
       await page.waitForTimeout(350);
       const r = await page.evaluate(() => {
         const st = document.querySelector(".stage");
@@ -80,7 +105,8 @@ for (const [W, H] of SIZES) {
       });
       rows.push({ size: `${W}x${H}`, theme, page: `/#${v}`, ...r, fits: r.sh <= r.ch + 1 && r.sw <= r.cw, themeKept: true });
     }
-    for (const p of PAGES) {
+    if (missing) { await page.close(); break; }
+    for (const p of PAGES_IN_SHELL) {
       await page.goto(BASE + p, { waitUntil: "networkidle" });
       await page.waitForTimeout(1200);
       const r = await page.evaluate(() => {
@@ -107,8 +133,8 @@ for (const o of rows) {
 console.log("errors:", errors.length ? errors : "none");
 // A RUN THAT CHECKED NOTHING IS NOT A PASS. Without this an early `break`, a bad base URL
 // or an empty size list would print "errors: none" and exit 0 on zero measurements.
-if (rows.length !== RULING_COMBOS) {
-  console.error(`fit-check: FAIL - measured ${rows.length} of ${RULING_COMBOS} expected combinations, so this run proves nothing`);
+if (rows.length !== PLANNED) {
+  console.error(`fit-check: FAIL - measured ${rows.length} of ${PLANNED} planned combinations, so this run proves nothing`);
   process.exit(1);
 }
 const bad = rows.filter((o) => !o.fits || o.themeKept === false);

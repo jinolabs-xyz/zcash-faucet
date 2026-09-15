@@ -1,7 +1,12 @@
 /**
- * The mascot's acceptance test, ported from `mascot-shots.mjs` in the frozen S2-S5 snapshot
- * (MASCOT.md, owner ruling 2026-09-15T19:40Z) and turned from a script that PRINTS into one
- * that FAILS. It replaces the retired fox sweep.
+ * The mascot's acceptance test, ported from `mascot-shots.mjs` in the frozen snapshot
+ * `S2-S5-20260915T1958Z` (MASCOT.md, owner ruling 2026-09-15T19:40Z) and turned from a script
+ * that PRINTS into one that FAILS. It replaces the retired fox sweep.
+ *
+ * That snapshot supersedes 1943Z, which is what this was first written against; the only
+ * changes are MASCOT.md's new theme-key section and mascot-shots.mjs taking a base URL, both
+ * of which came out of this port. The numbers below are unchanged between the two, checked
+ * rather than assumed.
  *
  * What it holds, all from MASCOT.md:
  *   - both sheets are served (200) and each is under the size gate, as WebP
