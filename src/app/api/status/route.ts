@@ -16,6 +16,7 @@ import { readMinerHeartbeat } from "@/lib/miner/read";
 import { isActive } from "@/lib/miner/heartbeat";
 import { cachedCtazNodeStateWarm } from "@/lib/crosslink/cache";
 import { canServeCtaz } from "@/lib/crosslink/recency";
+import { uptimeReading } from "@/lib/uptime";
 import { withApi } from "@/lib/api";
 
 export const runtime = "nodejs";
@@ -94,13 +95,21 @@ export const GET = withApi("status", async (req: NextRequest) => {
   const empty =
     balanceZat !== null && balanceZat < config.dripZatoshi + config.minReserveZatoshi;
 
+  // HOW LONG THIS PROCESS HAS BEEN UP, public. A restart is already inferable from a
+  // health blip and from the merge times in a public repository, so a count of seconds
+  // leaks nothing new - and it answers "did it restart" in one GET, which is the question
+  // that cost an hour on 2026-09-15 when it was answered by reading another field's
+  // counter without knowing its tick rate. The exact instant rides in the operator block.
+  const uptime = uptimeReading(process.uptime(), Date.now());
+
   return NextResponse.json({
     // Which commit this running build came from, so an external check can tell whether a
     // merge actually reached production. The deploy is pull-based, so a stalled timer or a
     // silently failed rebuild otherwise looks identical to being up to date.
     // "unknown" when the deploy did not supply one. OPERATOR ONLY (R-24): to anyone
     // else "three commits behind main" is a list of fixes the box does not have yet.
-    ...(ops ? { buildCommit: process.env.FAUCET_BUILD_COMMIT || "unknown" } : {}),
+    ...(ops ? { buildCommit: process.env.FAUCET_BUILD_COMMIT || "unknown", startedAt: uptime.startedAt } : {}),
+    uptimeSeconds: uptime.uptimeSeconds,
     network: config.network,
     dripTaz: config.dripTaz,
     cooldownSeconds: config.cooldownSeconds,

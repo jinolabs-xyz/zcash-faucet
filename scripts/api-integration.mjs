@@ -32,6 +32,7 @@ const PORT_M = 3221; // M for the drain with an empty queue: exits at once
 const PORT_N = 3222; // N for the wrong wallet credential: a 401 is a definite no, not an unknown outcome (R-41)
 const PORT_O = 3223; // O for a z_sendmany reply that never arrives: the no-opid unknown (R-26), which C's hanging op is not
 const PORT_P = 3224; // P for a 401 on the SEND itself: a definite failure that releases the claim, never a held one (R-41)
+const PORT_Q = 3225; // Q for the one server this suite deliberately RESTARTS, to watch uptimeSeconds fall
 // Somewhere to keep the output of the server that is supposed to die, so the
 // assertion can check WHY it died rather than only that it did.
 const LOG_DIR = mkdtempSync(join(tmpdir(), "faucet-api-integration-"));
@@ -48,6 +49,7 @@ const RUN_NONCE = `api-integration-${process.pid}-${Date.now().toString(36)}`;
 const OPS_TOKEN = `ops-${RUN_NONCE}`;
 const DATA_DIR = join(LOG_DIR, "data");
 const BASE_A = `http://localhost:${PORT_A}`;
+const BASE_Q = `http://localhost:${PORT_Q}`;
 const BASE_B = `http://localhost:${PORT_B}`;
 const BASE_C = `http://localhost:${PORT_C}`;
 const BASE_D = `http://localhost:${PORT_D}`;
@@ -551,6 +553,11 @@ const serverJ = boot(PORT_J, {
   FAUCET_IP_DAILY_MAX: "10",
   FAUCET_SUBNET_DAILY_MAX: "100000",
 });
+
+// The one server this suite restarts, hoisted out of the try so the finally can stop it: a
+// throw between the two boots would otherwise leave PORT_Q bound, and the next run would
+// meet its own stranger-guard (the CTO's red-team, review of #558).
+let serverQ = null;
 
 try {
   // Wait for the oracle double BEFORE the apps are usable. If an app's first
@@ -1085,6 +1092,84 @@ try {
   const mClosedAfter = await untilClosed(BASE_M, 8_000);
   ok("M with an empty queue it exits at once, well inside its 10 s bound", mClosedAfter != null && Date.now() - mSignalled < 3_000, `closed after ${mClosedAfter}ms`);
 
+  /* ── Q: the process says how old it is, and says a SMALLER number after a restart ─── */
+  // THE PROPERTY A MONOTONIC CHECK CANNOT SEE, and the reason this field exists. On
+  // 2026-09-15 a deploy was reported stalled for an hour because `reserve.blindTicks` was
+  // read as a clock: it climbed 3 -> 45 -> 59 across two-minute samples while resetting
+  // three times in the gaps, since it ticks every 30 s and a container swap takes about
+  // ten. A counter that only ever climbs reports the same shape for three restarts and for
+  // none. So this is the one server the suite deliberately kills and boots again.
+  const bootQ = () => boot(PORT_Q, { ...zallet(WALLET_A), ...chainView, FAUCET_CHALLENGE: "none" });
+  serverQ = bootQ();
+
+  // THE COUNT IS THE PROCESS'S AGE, NOT THE AGE OF THE MODULE THAT ANSWERED, and this is
+  // the one assertion that can tell those apart (SDE-Infra's finding on review: they
+  // mutated the route to a module-scope `const START = Date.now()` and every other check
+  // here passed, because a module clock also resets when the process is replaced).
+  //
+  // So the readiness poll below is /api/health, DELIBERATELY: it does not load the status
+  // route, which means the read four seconds later is the first request that has ever
+  // loaded that module. A process clock reads about 5 there; a module clock reads 0.
+  //
+  // THIS ONE DEPENDS ON NEXT EVALUATING ROUTE MODULES LAZILY, on first request. If a future
+  // Next, or an `output` mode that pre-warms every route, loaded them at boot, a module
+  // clock would start at boot too, this check would stop discriminating - and it would go
+  // on passing, which is the worst way for a check to stop working. The other assertions
+  // here do not depend on it. Named rather than guarded: there is nothing to assert about a
+  // framework's internal timing that would not itself be a guess (the CTO's red-team).
+  // Measured before choosing the margin - health answers at 0.64 s, the first status read
+  // lands at 1.22 s with uptimeSeconds 1, and after this wait it is 5 - so asserting
+  // against the boot duration alone would have left about a second of slack, which npm's
+  // own startup could eat on a loaded runner. Four seconds cannot be eaten.
+  {
+    const deadline = Date.now() + 60_000;
+    for (;;) {
+      const r = await req(BASE_Q, "/api/health", {}).catch(() => ({ status: 0 }));
+      if (r.status === 200) break;
+      if (Date.now() > deadline) throw new Error(`server at ${BASE_Q} never answered /api/health (output in ${LOG_DIR})`);
+      await new Promise((r2) => setTimeout(r2, 200));
+    }
+  }
+  await new Promise((r) => setTimeout(r, 4000));
+  const q1 = await get(BASE_Q, "/api/status");
+  ok("Q the first request to the status route reports the PROCESS's age, not the module's",
+    q1.body.uptimeSeconds >= 4,
+    `uptimeSeconds ${q1.body.uptimeSeconds} on the first status request, four seconds after the process answered health`);
+  // The stranger-on-the-port guard waitReady would normally give us, kept by hand because
+  // this server is deliberately not probed through /api/status.
+  const q1ops0 = await req(BASE_Q, "/api/status", { headers: { "x-faucet-ops": OPS_TOKEN } });
+  ok("Q and it is this run's server rather than something else on the port", q1ops0.body.buildCommit === RUN_NONCE, JSON.stringify(q1ops0.body.buildCommit));
+  ok("Q uptimeSeconds is a whole-second count the public body carries", Number.isInteger(q1.body.uptimeSeconds) && q1.body.uptimeSeconds >= 0, JSON.stringify(q1.body.uptimeSeconds));
+  ok("Q and the exact instant is operator-only, like buildCommit", !("startedAt" in q1.body), JSON.stringify(Object.keys(q1.body).filter((k) => k.startsWith("start"))));
+  const q1ops = await req(BASE_Q, "/api/status", { headers: { "x-faucet-ops": OPS_TOKEN } });
+  ok("Q the token buys startedAt, and it parses as the instant the count implies",
+    typeof q1ops.body.startedAt === "string" &&
+      Math.abs(Date.now() - Date.parse(q1ops.body.startedAt) - q1ops.body.uptimeSeconds * 1000) < 2000,
+    JSON.stringify({ startedAt: q1ops.body.startedAt, uptimeSeconds: q1ops.body.uptimeSeconds }));
+
+  await new Promise((r) => setTimeout(r, 1200));
+  const tBefore = Date.now();
+  const q2 = await get(BASE_Q, "/api/status");
+  // STRICT, and the 1200 ms sleep above is what makes it deterministic: with >= a constant
+  // satisfies this AND the falling check below (a fixed 42 is >= 42, and 42 < 42 + elapsed),
+  // so the pair would pass over a field that never moves at all (the CTO's red-team).
+  ok("Q it rises while the process runs", q2.body.uptimeSeconds > q1.body.uptimeSeconds, `${q1.body.uptimeSeconds} then ${q2.body.uptimeSeconds}`);
+
+  // Restart, and assert the count did NOT simply carry on. Comparing the two readings
+  // directly would be a coin flip - both are single digits - so the assertion is against
+  // what an unrestarted process WOULD have reported by now, which the boot's own duration
+  // puts comfortably out of reach.
+  stop(serverQ);
+  await untilClosed(BASE_Q, 10_000);
+  serverQ = bootQ();
+  await waitReady(BASE_Q);
+  const q3 = await get(BASE_Q, "/api/status");
+  const wouldBe = q2.body.uptimeSeconds + Math.round((Date.now() - tBefore) / 1000);
+  ok("Q and it FALLS across a restart rather than carrying on, which is what makes a restart visible",
+    q3.body.uptimeSeconds < wouldBe - 1,
+    `after the restart ${q3.body.uptimeSeconds}, an unrestarted process would read about ${wouldBe}`);
+  stop(serverQ);
+
   const statusE = await get(BASE_E, "/api/status");
   ok(
     "E the tip is genuinely unknown, not merely stale",
@@ -1272,6 +1357,7 @@ try {
   stop(walletO);
   stop(serverP);
   stop(walletP);
+  if (serverQ) stop(serverQ);
   stop(serverA);
   stop(serverB);
   stop(serverC);
