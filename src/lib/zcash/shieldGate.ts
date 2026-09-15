@@ -250,7 +250,10 @@ export function freshnessRefusalText(gate: ChainGate): string {
  * Live reading: the pure decision above, fed the HIGHEST NON-STALE reference.
  *
  * Not "the cached oracle value", which is what this read for as long as there was only one
- * (#548). The lag budget here is five blocks, so the exposure is narrow and specific: it
+ * (#548). referenceTip() also kicks a background refresh when the freshest source is older
+ * than STALE_MS, which is the same thing getExternalTip() did here before: the oracle stays
+ * warm on the money path as well, and that is now a named property with a test rather than
+ * a side effect of which accessor happened to be called. The lag budget here is five blocks, so the exposure is narrow and specific: it
  * needs a stale reference sitting CLOSE to our own height while the real tip is further
  * ahead. Measured from 2026-09-15's 14:01Z flap, where hosh read 4,349,808 and our own
  * endpoint read 4,349,928: a node at 4,349,805 is 3 behind the stale one, inside the

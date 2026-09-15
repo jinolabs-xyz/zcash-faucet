@@ -17,6 +17,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
+// The readers under test KICK a background refresh when the cache is old (that kick is
+// what #555's review found missing), so this file pins the oracle at a closed port and an
+// empty direct list before importing: a unit test must never be able to dial the real one.
+process.env.HOSH_URL = "http://127.0.0.1:9/";
+process.env.TIP_ORACLE_ENDPOINT = "";
 const { readChainFreshness, readChainFreshnessAsking, SHIELD_MAX_LAG_BLOCKS } = await import("./shieldGate.ts");
 const { resetExternalTipForTests, MAX_AGE_MS_FOR_TESTS } = await import("./externalTip.ts");
 
