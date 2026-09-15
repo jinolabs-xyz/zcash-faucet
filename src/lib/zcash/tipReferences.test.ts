@@ -117,11 +117,15 @@ test("a stale reference is still reported, and still cannot be used", () => {
   assert.equal(refs.used, "lightwalletd", "but the fresh lower one is what a node is judged against");
   // AND THE FLAT FIELD SAYS THE SAME, here, where the distinction is most visible: a
   // higher STALE source sits beside a lower fresh one, so a usedHeight taken from the
-  // wrong set reads 4,349,900 next to a `used` that names the other source. The CTO's
-  // red-team asked for this line; their stated reason - that max-over-all-sources
-  // otherwise survives - turned out not to hold (the stale-only case below already fails
-  // it, measured), but the assertion belongs here anyway: coverage that lives in another
-  // test's null branch is coverage that a later edit can remove without noticing.
+  // wrong set reads 4,349,900 next to a `used` that names the other source.
+  //
+  // WITHOUT THIS LINE A RECOMPUTE SURVIVES, and it is worth being exact about which one,
+  // because I got it wrong once. `used ? max(all sources) : null` - GUARDED, so the
+  // ternary short-circuits on the stale-only case below - passed the whole suite until
+  // this assertion existed. The guard-LESS variant does fail below, which is what I
+  // measured when I first disputed the finding; two different mutants, and the one the
+  // CTO's red-team meant was the one that survives. Measured both ways: guarded is green
+  // without this line and red with it.
   assert.equal(refs.usedHeight, 4_349_700, "the flat height follows `used`, not the highest number present");
   assert.equal(refs.spreadBlocks, null, "one usable source is not a spread");
   assert.equal(refs.corroborated, null, "and it is not disagreement either");
