@@ -630,10 +630,30 @@ jobs:
             --entrypoint node faucet-ci-check:${{ github.sha }} /l.js /d/ctaz-rpc.sock "$grp" "$mode" >/dev/null
           for _ in $(seq 1 20); do docker logs ctaz-listener 2>&1 | grep -q listening && break; sleep 1; done
           docker logs ctaz-listener 2>&1 | grep -q listening || { echo "the listener never came up"; docker rm -f ctaz-listener >/dev/null; docker volume rm ctazsock >/dev/null; exit 1; }
+          # DERIVED FROM THE IMAGE, NOT TYPED (SDE-App, review of #553). The unit declares a
+          # NUMERIC SocketGroup and the entrypoint drops to `node` BY NAME, so the two halves
+          # are pinned in different places and nothing compared them. They agree at the
+          # pinned digest, and the realistic way they stop agreeing is a deliberate base
+          # bump - which arrives here as a dependabot PR whose reviewer has no reason to
+          # think about a socket unit. So the probe asks the image who `node` is, and the
+          # unit has to name that gid.
+          imguid="$(docker run --rm --entrypoint id faucet-ci-check:${{ github.sha }} -u node)"
+          imggid="$(docker run --rm --entrypoint id faucet-ci-check:${{ github.sha }} -g node)"
+          echo "the image says node is ${imguid}:${imggid}; the unit declares SocketGroup=${grp}"
+          [ "$imggid" = "$grp" ] || { echo "the unit's SocketGroup ($grp) is not the image's node gid ($imggid), so the app could not connect"; exit 1; }
+          other_uid=$((imguid + 2))
           as() { docker run --rm -u "$1:$1" -v ctazsock:/d -v /tmp/probe.js:/p.js:ro --entrypoint node faucet-ci-check:${{ github.sha }} /p.js /d/ctaz-rpc.sock; }
-          app="$(as 1000)"; other="$(as 1002)"
+          app="$(as "$imguid")"; other="$(as "$other_uid")"; again="$(as "$imguid")"
           docker rm -f ctaz-listener >/dev/null; docker volume rm ctazsock >/dev/null
-          echo "uid 1000 (the app): $app"
-          echo "uid 1002 (anyone else): $other"
+          echo "uid $imguid (the app): $app"
+          echo "uid $other_uid (anyone else): $other"
+          echo "uid $imguid again (the listener survived): $again"
           [ "$app" = CONNECT ] || { echo "the app's own uid cannot reach the socket the unit declares: cTAZ would be dark"; exit 1; }
-          [ "$other" = EACCES ] || { echo "the socket is open to uid 1002, so it is open to the box: expected EACCES, got $other"; exit 1; }
+          [ "$other" = EACCES ] || { echo "the socket is open to uid $other_uid, so it is open to the box: expected EACCES, got $other"; exit 1; }
+          # THE THIRD PROBE IS THE LISTENER'S OWN REGRESSION (review of #553). Without the
+          # connection error handler the listener died on the first accepted connection, and
+          # the uid-1002 EACCES still held because the kernel checks the inode mode before
+          # looking for a listener - so the ACL proof stayed green over a dead server. This
+          # probe is the one that goes red for that, rather than the reader discovering it
+          # the next time a mode regression reports ECONNREFUSED instead of an ACL.
+          [ "$again" = CONNECT ] || { echo "the listener did not survive the first connection, so the uid-1002 result proves nothing: got $again"; exit 1; }

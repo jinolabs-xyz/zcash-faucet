@@ -93,9 +93,18 @@ from the repository:
 # a. what holds gid 1000 here
 getent group 1000
 
-# b. what systemd actually created, which is the half CI cannot prove
-sudo stat -c '%U:%G %a %n' /var/lib/docker/volumes/zcash-faucet_faucet_data/_data/ctaz-rpc.sock
-# expected: root:<the gid-1000 group> 660
+# b. what systemd actually created, which is the half CI cannot prove.
+# NUMERIC: %U:%G prints UNKNOWN when no /etc/group entry holds gid 1000, which reads as a
+# fault and is not one. The unit declares a numeric gid, so compare numerically.
+sudo stat -c '%u:%g %a %n' /var/lib/docker/volumes/zcash-faucet_faucet_data/_data/ctaz-rpc.sock
+# expected: 0:1000 660
+
+# b2. what systemd THINKS it should create, which separates two states (b) cannot:
+systemctl show -p SocketUser,SocketGroup,SocketMode ctaz-rpc.socket
+# unit text not loaded  -> the old values here: install-ops placed the file but the
+#                          daemon-reload did not take, or the file never arrived
+# new values here, old on the socket -> loaded but not APPLIED: the restart did not run
+#                          or failed, which is the case (b) alone cannot distinguish
 
 # c. the app's own view, from inside the container
 docker exec zcash-faucet-faucet-1 stat -c '%u:%g %a' /app/data/ctaz-rpc.sock
@@ -104,15 +113,19 @@ docker exec zcash-faucet-faucet-1 stat -c '%u:%g %a' /app/data/ctaz-rpc.sock
 
 Reading the answers, and the middle one is the trap:
 
-- **`root:<gid-1000 group> 660`** is the shipped state.
+- **`0:1000 660`** is the shipped state: owned by root, grouped to the app's gid, group-writable and not world-writable.
 - **`666`** means the live socket was created before this change and has not been
-  recreated since. `install-ops.sh` restarts `ctaz-rpc.socket` when the unit file changes,
-  so this is what you would see if that restart failed, or if the socket was recreated
-  from an older unit afterwards. It does **not** mean install-ops never ran: the mode is
-  applied when systemd CREATES the socket, not on `daemon-reload`, so the unit text on
-  disk can be correct while the live socket is not. Check the install-ops log for the
-  restart line before re-running anything, and `systemctl restart ctaz-rpc.socket` is the
-  direct fix.
+  recreated since. It does **not by itself** mean install-ops never ran, which is the
+  reading to resist: the mode is applied when systemd CREATES the socket, not on
+  `daemon-reload`, so the unit text on disk can be correct while the live socket is not.
+  A box that never received the unit at all reads `666` too, which is why (b2) is worth
+  running before anything is re-run. `systemctl restart ctaz-rpc.socket` is the direct fix
+  once (b2) says the text is loaded.
+- **`stat: No such file or directory`** means the socket unit is not running. That is a
+  state the installer deliberately leaves alone: it restarts a changed unit only when the
+  unit is already active, because starting a stopped socket is an arming decision that
+  belongs to `enabled-units` and to the operator. cTAZ is parked, so this is the expected
+  reading today, and the ACL below is unobserved until the socket is started.
 - **`root:root`** means `SocketGroup=` did not take, and cTAZ will be dark because the app
   cannot connect.
 

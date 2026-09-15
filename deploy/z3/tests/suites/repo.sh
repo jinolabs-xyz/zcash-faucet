@@ -155,7 +155,19 @@ check "the socket is owned by root and grouped to the app's gid, not to root" \
 check "and its mode is 0660, so it is not open to every uid on the box" \
   "grep -qx 'SocketMode=0660' '$SOCK' && ! grep -q '^SocketMode=0666' '$SOCK'"
 check "and CI proves both uids against it, reading the mode from the unit rather than typing it" \
-  "grep -q \"sed -n 's/^SocketMode=//p\" '$CIWF' && grep -q 'uid 1002 (anyone else)' '$CIWF' && grep -q 'expected EACCES' '$CIWF'"
+  "grep -q \"sed -n 's/^SocketMode=//p\" '$CIWF' && grep -q 'anyone else' '$CIWF' && grep -q 'expected EACCES' '$CIWF'"
+# THE TWO HALVES ARE PINNED IN DIFFERENT PLACES AND SOMETHING HAS TO COMPARE THEM (SDE-App,
+# review of #553). The unit names a NUMERIC gid; the entrypoint drops to `node` BY NAME. They
+# agree at the pinned digest and the realistic way they stop agreeing is a base bump, which
+# arrives as a dependabot PR whose reviewer has no reason to think about a socket unit. So the
+# probe must ASK the image who node is rather than type 1000, and refuse when the unit
+# disagrees with it.
+check "and the probe derives the app's uid and gid from the image instead of typing them" \
+  "grep -q 'imguid=\"\$(docker run --rm --entrypoint id' '$CIWF' && grep -q 'imggid=\"\$(docker run --rm --entrypoint id' '$CIWF' && ! grep -q 'as 1000' '$CIWF'"
+check "and refuses when the unit's SocketGroup is not the image's node gid" \
+  "grep -qF 'is not the image'\''s node gid' '$CIWF'"
+check "and probes a THIRD time as the app, so a listener that died on the first connection is caught" \
+  "grep -q 'the listener survived' '$CIWF' && grep -q 'the listener did not survive the first connection' '$CIWF'"
 
 echo "== repo: the watchdog's node-lag limit is the miner's, for the miner's reason"
 # Both read zebra's clock-based estimatedheight. The miner's guard (sync.rs) explains why
