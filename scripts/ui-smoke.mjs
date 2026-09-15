@@ -143,6 +143,57 @@ const COLOUR_LIB = `
  * whoever wanted /terms. Production has `maintenanceAddress` set and carries a fourth link,
  * so whatever links the footer holds are the ones checked and the count is not hard-coded.
  */
+/* THE CARD'S OWN EDGE, measured against whatever is inside it.
+ *
+ * The claim card shipped to production with the fox carrying NO inner padding: every text node
+ * sat 1px from its left border, inside the rounded corner, and the "1" of "189 drips served"
+ * was clipped by the radius at 1440x900. It survived three review rounds because every parity
+ * probe measured a DESIGN element against the snapshot, and this is CURRENT content inside a
+ * design container - a thing the snapshot never draws, so no probe had any opinion about it.
+ *
+ * So this asserts a property of the CARD rather than of its contents: whatever fills it clears
+ * its own edge. S2b swaps the whole block for the real panels and this check still applies.
+ *
+ * Both edges, not just the left the screenshot showed, because one rule sets both and a fix
+ * that only reached one side would read as green here and clipped on screen.
+ *
+ * THE COUNT FLOOR IS THE POINT. A card that rendered no text - a phase change, a failed status,
+ * a renamed class - would have nothing to measure and would report a clean run, which is the
+ * shape of every vacuous assertion this suite has had to fix. Fewer than six text nodes is a
+ * red line, not a quiet pass. */
+async function checkCardInnerPadding(browser) {
+  for (const vp of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    const c = await browser.newContext({ viewport: vp });
+    const p = await c.newPage();
+    await p.goto(BASE, { waitUntil: "networkidle" });
+    await p.waitForSelector(".card.claim", { timeout: 15_000 }).catch(() => {});
+    const r = await p.evaluate(() => {
+      const card = document.querySelector(".card.claim");
+      if (!card) return { measured: 0, worst: null, missing: true };
+      const cr = card.getBoundingClientRect();
+      const walk = document.createTreeWalker(card, NodeFilter.SHOW_TEXT);
+      let n, measured = 0, worst = null;
+      while ((n = walk.nextNode())) {
+        const t = (n.textContent || "").trim();
+        if (!t) continue;
+        const rg = document.createRange();
+        rg.selectNodeContents(n);
+        const b = rg.getBoundingClientRect();
+        if (!b.width || !b.height) continue;          // not rendered: nothing to clip
+        measured++;
+        const gap = Math.min(b.left - cr.left, cr.right - b.right);
+        if (!worst || gap < worst.gap) worst = { gap: Math.round(gap * 10) / 10, text: t.slice(0, 40) };
+      }
+      return { measured, worst, missing: false };
+    });
+    const detail = r.missing ? "no .card.claim on the page"
+      : `${r.measured} text nodes, worst ${r.worst ? r.worst.gap : "-"}px on "${r.worst ? r.worst.text : "-"}"`;
+    ok(`${vp.width}x${vp.height}: every text node in the claim card clears the card's own edge by 8px`,
+      !r.missing && r.measured >= 6 && !!r.worst && r.worst.gap >= 8, detail);
+    await c.close();
+  }
+}
+
 async function checkFooterReachable(browser) {
   for (const vp of [DESKTOP, DESKTOP_ALT]) {
     const c = await browser.newContext({ viewport: vp });
@@ -1064,6 +1115,7 @@ try {
   // Visual + a11y checks before the claim flow, while the home page is loaded.
   await checkAppearance(page);
   await checkFooterReachable(browser);
+  await checkCardInnerPadding(browser);
   // WHERE THE TAZ COMES FROM follows the status (R-39). Under this stack there is no
   // miner heartbeat, so the sentence has to be the not-mining one; the three
   // contradictory fixed sentences must be gone from the rendered page.
