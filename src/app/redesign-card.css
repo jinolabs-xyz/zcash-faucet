@@ -1,0 +1,56 @@
+/*
+ * The claim card's internals: S2b of the redesign transcription.
+ *
+ * Transcribed from the frozen spec snapshot for this slice,
+ * ~/.claude/ipc/share/redesign-frozen/S2-S5-20260915T2110Z (MANIFEST.sha256, 13 files, all
+ * OK, verified before a line was read). Sliced from the snapshot's own section 7 by RULE
+ * BLOCK rather than by line, because a rule can wrap and a line filter takes half of one -
+ * the first run of this generator did exactly that and came out with 37 braces against 36.
+ *
+ * WHAT IS FILTERED OUT, and neither is an omission:
+ *   - anything redesign-shell.css or redesign-hero.css already defines. S2a brought the card
+ *     SHELL (.card, .panel, .card-copy) and the hero; this brings what goes inside it.
+ *   - .prompt, .prog and .chips, plus the analytics and status internals. Those are SDE-UI's
+ *     in redesign-views.css until a deliberate move, agreed with them directly. Two sheets
+ *     defining one rule and letting the cascade pick by import order is the failure we both
+ *     refused, and it is the same shape as the three leaks this transcription has already
+ *     produced.
+ */
+
+/* ===== 7. The claim card's internals (from the snapshot's views section) ===== */
+.card.claim > .panel{flex:1 1 auto;min-height:0;overflow:auto}
+.card.claim > .card-copy{flex:none}
+.linkbtn{background:none;border:0;padding:0;align-self:flex-start;color:var(--accent-text);font-size:calc(.9*var(--u));font-weight:600;cursor:pointer}
+.linkbtn:hover{text-decoration:underline}
+.assistant-head .ring{width:calc(2.16*var(--u));height:calc(2.16*var(--u));border-radius:50%;background:var(--orange-soft);display:grid;place-items:center;color:var(--orange)}
+.assistant-head .ring canvas.g{width:48%;height:48%}
+.tabs{display:flex;gap:calc(.4*var(--u))}
+.tabs button{white-space:nowrap;border:calc(.06*var(--u)) solid var(--hair);background:none;height:calc(2*var(--u));padding:0 calc(.9*var(--u));border-radius:calc(.5*var(--u));font-size:calc(.85*var(--u));font-weight:600;color:var(--muted);cursor:pointer}
+.tabs button[aria-selected="true"]{background:var(--ink);color:var(--surface);border-color:var(--ink)}
+.tabs button[data-parked] small{font-weight:500;margin-left:calc(.5*var(--u));opacity:.8}
+.fieldwrap{display:flex;flex-direction:column;gap:calc(.45*var(--u))}
+.label{display:flex;justify-content:space-between;align-items:center;font-size:calc(.85*var(--u));color:var(--label);font-weight:500}
+.abadge{font:500 calc(.75*var(--u))/1 var(--mono);color:var(--muted)}
+.abadge:empty{visibility:hidden}
+.abadge[data-kind="shielded"]{color:var(--green-text)}
+.abadge[data-kind="public"]{color:var(--warn-text)}
+.hint{font-size:calc(.85*var(--u));color:var(--muted);min-height:1.4em;margin:0}
+.hint[data-tone="bad"]{color:var(--bad-text)}
+.actions{display:flex;flex-direction:column;gap:calc(.9*var(--u))}
+.actrow{display:flex;justify-content:space-between;align-items:center;gap:calc(.8*var(--u));flex-wrap:wrap}
+.automate{display:flex;align-items:center;justify-content:space-between;gap:calc(.8*var(--u));width:100%;height:calc(3.3*var(--u));padding-inline:calc(1.3*var(--u)) calc(1.1*var(--u));border:0;border-radius:calc(.6*var(--u));background:var(--orange);color:var(--cta-text);
+  font-size:calc(1.05*var(--u));font-weight:600;line-height:1;letter-spacing:calc(-.01*var(--u));cursor:pointer;transition:background .18s}
+.automate:hover{background:#f06200}
+.automate canvas.magic{display:none}
+.automate::after{content:"→";font-size:1.15em;font-weight:400}
+.automate:disabled{background:var(--orange-soft);color:var(--accent-text);cursor:default}
+.automate:disabled::after{content:none}
+.fine{font-size:calc(.9*var(--u));color:var(--muted);margin:0;line-height:1.4;font-weight:500}
+.fine b{font-weight:600;color:var(--ink)}
+.keybox{padding:calc(.9*var(--u)) calc(1.1*var(--u));border:calc(.06*var(--u)) dashed var(--prompt-border);border-radius:calc(.86*var(--u));background:var(--prompt-bg);font-size:calc(.85*var(--u));color:var(--muted)}
+.keybox .mono{display:block;word-break:break-all;margin:calc(.4*var(--u)) 0 calc(.7*var(--u));font-size:calc(.8*var(--u));color:var(--ink)}
+.phase h3{margin:calc(.35*var(--u)) 0 calc(.3*var(--u));color:var(--ink-3);font-size:calc(1.34*var(--u));font-weight:500;line-height:1.1;letter-spacing:calc(-.05*var(--u))}
+.phase p{margin:0;font-size:calc(.95*var(--u));color:var(--muted);font-weight:475;line-height:1.35}
+.phase .row{display:flex;flex-wrap:wrap;gap:calc(.6*var(--u));align-items:center;margin-top:calc(.7*var(--u))}
+.phase .figs{display:flex;gap:calc(1.4*var(--u));margin-top:calc(.8*var(--u));font:calc(.72*var(--u))/1.2 var(--mono);color:var(--muted)}
+.phase .figs b{display:block;font-size:calc(1.1*var(--u));color:var(--display-accent);font-weight:700}
