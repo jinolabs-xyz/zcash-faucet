@@ -22,7 +22,26 @@ REPO_DIR="${BOX_REPORT_REPO:-/opt/zcash-faucet}"
 SRC="$REPO_DIR/deploy/z3"
 INSTALL_DIR="${BOX_REPORT_INSTALL_DIR:-/opt/faucet}"
 UNIT_DIR="${BOX_REPORT_UNIT_DIR:-/etc/systemd/system}"
-OUT="${BOX_REPORT_OUT:-/var/lib/docker/volumes/zcash-faucet_faucet_data/_data/box-integrity.json}"
+# WHERE THE REPORT GOES, ASKED RATHER THAN ASSUMED. bring-to-spec.sh has derived this
+# path from `docker volume inspect` since #542, because the old hard-coded default named a
+# volume that never existed and its post-condition read "no integrity report" on every
+# production run (R-42). This writer kept its own hard-coded copy, so the reader asked
+# docker and the writer guessed. On a stock daemon the two agree and nothing is visible;
+# on a daemon with a non-stock `data-root` they name different directories, the reader
+# finds nothing, and neither half is wrong on its own - which is why nothing would have
+# said so. Same volume name, same call, same bound, same fallback, so they cannot disagree.
+box_report_out_default() {
+  local vol="${BOX_REPORT_FAUCET_VOLUME:-zcash-faucet_faucet_data}" mp=""
+  # Bounded like the reader's: a wedged dockerd must not hang a timer that runs hourly.
+  mp="$(timeout 10 docker volume inspect -f '{{.Mountpoint}}' "$vol" 2>/dev/null)" || mp=""
+  # A daemon that will not answer falls back to the path that name has under a stock
+  # daemon, which is what the reader falls back to as well. Deliberately not cannot-say:
+  # a transient docker hiccup on a box whose path is perfectly correct must not turn the
+  # public panel red, and if the path really is wrong the report simply does not arrive,
+  # which the reader already treats as a gate failure rather than a pass.
+  printf '%s/box-integrity.json\n' "${mp:-/var/lib/docker/volumes/$vol/_data}"
+}
+OUT="${BOX_REPORT_OUT:-$(box_report_out_default)}"
 SYSTEMCTL="${BOX_REPORT_SYSTEMCTL:-systemctl}"
 
 write() {

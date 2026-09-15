@@ -576,3 +576,40 @@ printf 'FAUCET_ALERT_URL=http://127.0.0.1:8081/v2/send\nFAUCET_ALERT_FORMAT=sign
 BOX_REPORT_CURL="$T/no-such-curl" bash "$BOX_REPORT" > /dev/null 2>&1
 check "no curl to ask with is unknown, never a calm ok" "bridge_is unknown"
 check "and the rest of the report is untouched by any of it" "[ \"\$(jqf '$BOX_REPORT_OUT' readable)\" = 'True' ]"
+
+echo "== box-report: the report is written where DOCKER says the volume is, the same way bring-to-spec reads it"
+# THE SEAM, not either half. bring-to-spec.sh has asked docker for the mountpoint since
+# #542 (R-42); this writer kept a hard-coded /var/lib/docker/volumes/... default, so the
+# reader asked and the writer guessed. Both are correct on a stock daemon, which is
+# exactly why nothing said so. Every other case in this suite sets BOX_REPORT_OUT, so the
+# default this is about was the one line here nothing ever ran.
+box_env
+unset BOX_REPORT_OUT
+export STUB_LOG="$T/stub.log"; : > "$STUB_LOG"
+# A NON-STOCK data-root, which is the whole point: under the stock one the bug is invisible.
+export STUB_VOLROOT="$T/dockerroot/volumes"
+mkdir -p "$STUB_VOLROOT/zcash-faucet_faucet_data"
+bash "$BOX_REPORT" > /dev/null 2>&1
+check "docker was asked where the volume is mounted" \
+  "grep -q 'docker volume inspect -f {{.Mountpoint}} zcash-faucet_faucet_data' '$STUB_LOG'"
+check "and the report is in the volume docker named" \
+  "[ -s '$STUB_VOLROOT/zcash-faucet_faucet_data/box-integrity.json' ]"
+check "and nothing was written to the stock-daemon guess" \
+  "[ ! -e '/var/lib/docker/volumes/zcash-faucet_faucet_data/_data/box-integrity.json' ]"
+check "the report it wrote there is the real one, not a cannot-say" \
+  "[ \"\$(jqf '$STUB_VOLROOT/zcash-faucet_faucet_data/box-integrity.json' readable)\" = 'True' ]"
+
+# A daemon that will not answer falls back to the stock path, and it is the SAME fallback
+# the reader uses, so the two still agree when docker is the thing that is broken.
+box_env
+unset BOX_REPORT_OUT
+export STUB_LOG="$T/stub.log"; : > "$STUB_LOG"
+export STUB_VOLROOT="$T/empty"; mkdir -p "$STUB_VOLROOT"
+# INLINE, NOT EXPORTED. Every suite is sourced into ONE shell, so an export here is still
+# set when bringtospec runs next and would send its box-report looking for this made-up
+# volume. That is the STUB_READY leak again; it costs a review round every time.
+BOX_REPORT_FAUCET_VOLUME="no-such-volume-$$" bash "$BOX_REPORT" > /dev/null 2>&1
+check "with no such volume it falls back to the stock path for THAT name, not to silence" \
+  "grep -q \"docker volume inspect -f {{.Mountpoint}} no-such-volume-$$\" '$STUB_LOG'"
+check "and the fallback is the one bring-to-spec.sh prints when it cannot find the report" \
+  "grep -qF '/var/lib/docker/volumes/\$vol/_data' '$REPO/deploy/z3/bring-to-spec.sh' && grep -qF '/var/lib/docker/volumes/\$vol/_data' '$REPO/deploy/z3/box-report.sh'"
