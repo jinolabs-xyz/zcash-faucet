@@ -175,8 +175,22 @@ check "and probes a THIRD time as the app, so a listener that died on the first 
 # state, so the socket is opened every refresh tick today and a wrong ACL reads as the same
 # `cannot-verify` a parked node produces. A doc that gets this backwards sends an operator
 # away from a live fault, so both halves of the claim are pinned rather than trusted.
-check "OPERATIONS.md says the dial is gated on the app's flag, and the code still gates it there" \
-  "grep -qF 'FAUCET_CTAZ_ENABLED' '$REPO/OPERATIONS.md' && grep -qF 'config.crosslink.enabled' '$REPO/OPERATIONS.md' && grep -qF 'if (!config.crosslink.enabled)' '$REPO/src/lib/crosslink/read.ts'"
+# COUNTED, NOT MERELY PRESENT (SDE-App, review of #553, after it merged). grep -qF needs one
+# match and read.ts has TWO gates - readCtazNodeState's and readCtazRecency's. They renamed
+# one, the reader began touching the transport with the flag off, and this check stayed green
+# while the doc still said neither reader does. Two is the number the doc's claim rests on, so
+# two is what the check demands.
+check "OPERATIONS.md says the dial is gated on the app's flag, and BOTH readers still gate it there" \
+  "grep -qF 'FAUCET_CTAZ_ENABLED' '$REPO/OPERATIONS.md' && grep -qF 'config.crosslink.enabled' '$REPO/OPERATIONS.md' && [ \"\$(grep -c 'if (!config.crosslink.enabled)' '$REPO/src/lib/crosslink/read.ts')\" = 2 ]"
+# THE DOC'S ARITHMETIC, held to the code it multiplies: six connections a minute is three
+# ticks times the two RPCs one TICK MAKES. My first spelling of this counted ctazRpc call
+# SITES in the file, and my own mutation showed that up: deleting the `await readCtazInfo()`
+# from the tick leaves the call site sitting unreachable inside that function, so the count
+# stayed 2 and the check stayed green while a tick had dropped to one connection. What the
+# claim rests on is the two awaits the tick REACHES, so those are what this holds - and the
+# two call sites as well, since a third RPC added to either reader changes the figure too.
+check "and its six-a-minute figure is three ticks times the two RPCs a tick actually makes" \
+  "grep -qF 'six times a' '$REPO/OPERATIONS.md' && grep -qF 'await readCtazRecency(' '$REPO/src/lib/crosslink/read.ts' && grep -qF 'await readCtazInfo()' '$REPO/src/lib/crosslink/read.ts' && [ \"\$(grep -c 'ctazRpc(transport()' '$REPO/src/lib/crosslink/read.ts')\" = 2 ]"
 check "and its 20-second figure is the interval the refresher actually uses" \
   "grep -qF 'REFRESH_INTERVAL_MS' '$REPO/OPERATIONS.md' && grep -qE 'REFRESH_INTERVAL_MS = 20_000' '$REPO/src/lib/crosslink/cache.ts'"
 check "and the socket probe reaps its listener and volume on EVERY exit path, not just the happy one" \
