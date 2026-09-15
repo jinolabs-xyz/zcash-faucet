@@ -233,7 +233,11 @@ for (const o of rows) {
   const unreachable = (o.links || []).filter((l) => !l.inView || !l.reachable).map((l) => l.name);
   const clipped = (o.clipping || []).map((c) => `${c.el} hides ${c.hidden}px`).join(", ");
   const why = o.fits ? "fits"
-    : clipped ? `CLIPPED by an ancestor (${clipped})`
+    // THE NAMES BELONG ON THIS BRANCH TOO. A clipped row used to print the ancestor and stop,
+    // so the links a reader has to go and look at were named on every branch except the one
+    // that matters most - and the commit that introduced this line claimed otherwise. The
+    // clipping is the cause and the unreachable links are what a person sees.
+    : clipped ? `CLIPPED by an ancestor (${clipped})${unreachable.length ? `, unreachable after scrolling: ${unreachable.join(", ")}` : ""}`
     : unreachable.length ? `footer links unreachable after scrolling [${unreachable.join(", ")}]`
     : o.sw > o.cw ? "wider than the screen"
     : !o.oneScreen ? `does not fit one screen (${o.docScroll} of ${o.docClient}), and the clamp is not overridden`

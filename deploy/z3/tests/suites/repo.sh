@@ -1306,6 +1306,16 @@ check "and the fit check holds sizes-times-themes from the FIRST slice, not only
 # what is on it is L1 in this file's own words: a proxy for the property.
 check "fits means the footer is on screen and its links are hit-testable, not just the numbers" \
   "grep -qF 'document.elementFromPoint(x, y)' '$REPO/scripts/fit-check.mjs' && grep -qF 'r.links.every((l) => l.inView && l.reachable)' '$REPO/scripts/fit-check.mjs'"
+# THE CLAUSE THAT DECIDES, PINNED BEFORE ITS NEIGHBOURS. My first three pins held that the
+# ancestor walk RUNS and that its message EXISTS, and the CTO's round-5 mutant walked straight
+# between them: drop the clipping clause out of fitsNow and the walk still runs, the string is
+# still in the file, both greps pass, repo.sh stays at 199/0 - and a page hiding 216px of copy
+# is reported as 40 of 40 fitting. A check can only hold the line that makes a decision; the
+# lines around it are decoration. Pin the mutant the finding names FIRST, then its neighbours.
+check "the clipping walk DECIDES the verdict, rather than only printing inside it" \
+  "grep -A1 'const fitsNow = (r) =>' '$REPO/scripts/fit-check.mjs' | grep -qF '(r.clipping || []).length === 0 &&'"
+check "and a clipped row names the links a person then has to go and look at" \
+  "grep -qF 'CLIPPED by an ancestor (\${clipped})\${unreachable.length' '$REPO/scripts/fit-check.mjs'"
 check "and clipping is named as clipping, attributed to the ancestor that hides it" \
   "grep -qF 'CLIPPED by an ancestor' '$REPO/scripts/fit-check.mjs' && grep -qF 'cs.overflowY === \"hidden\" || cs.overflowY === \"clip\"' '$REPO/scripts/fit-check.mjs'"
 # THE SCROLLER IS WHICHEVER ELEMENT SCROLLS - my own defect, caught by hand on the shell that
