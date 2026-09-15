@@ -48,7 +48,13 @@ write() {
   local body="$1" tmp
   mkdir -p "$(dirname "$OUT")" 2>/dev/null || { log "cannot create $(dirname "$OUT")"; exit 1; }
   tmp="$(mktemp "$(dirname "$OUT")/.ctaz-status.XXXXXX")" || exit 1
-  printf '%s\n' "$body" > "$tmp" && mv -f "$tmp" "$OUT" || { rm -f "$tmp"; exit 1; }
+  # mktemp makes 0600 and this runs as root; the reader is the app's `node` user (R-10),
+  # so the file has to be world-readable before it lands or every tick locks it out.
+  # The mode, not ownership, is what makes this hold: the app's entrypoint chowns the
+  # whole volume to node on every container start, so a file that was already there is
+  # readable whatever its mode, and a check that ran after a restart would pass on that
+  # alone (measured in review: a 0600 file written AFTER the app started is EACCES).
+  printf '%s\n' "$body" > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$OUT" || { rm -f "$tmp"; exit 1; }
 }
 
 # `at` is always written, even when nothing else could be read, because the READER needs to

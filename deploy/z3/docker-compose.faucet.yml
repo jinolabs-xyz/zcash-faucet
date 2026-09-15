@@ -40,6 +40,18 @@ services:
     # waits for its send queues (FAUCET_DRAIN_MAX_MS, 40 s); this has to be longer than
     # that or docker's SIGKILL at the default 10 s wins and nothing drains.
     stop_grace_period: 50s
+    # THE CONTAINER IS NOT WORTH MUCH TO WHOEVER GETS INTO IT (risk register II, R-10).
+    # The app runs as `node` (the image's entrypoint drops root after fixing the ledger
+    # volume's ownership), the root filesystem is read-only, the two places Next and node
+    # write are tmpfs, and every capability is dropped but the four the hand-off needs:
+    # CHOWN and FOWNER for the volume, SETUID and SETGID for setpriv. The data volume and
+    # the read-only heartbeat mount below are the only writable and host-visible paths.
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/.next/cache
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, SETUID, SETGID]
     env_file:
       - path: ./faucet.env
         required: true

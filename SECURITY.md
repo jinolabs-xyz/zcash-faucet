@@ -66,6 +66,32 @@ gate. As of this pass that gate is green because:
 Accepted-risk entries above should be re-argued, not inherited, whenever the
 gate next goes red.
 
+## What an RCE in the app gets
+
+Less than it used to (risk register II, R-10). The app container runs as the
+image's `node` user, not root: `docker-entrypoint.sh` starts as root only long
+enough to make the ledger volume writable by that user (every earlier image left
+it root-owned), then `setpriv`s to `node` and execs, so node is still PID 1 and
+the SIGTERM drain is untouched. The compose service is `read_only` with a tmpfs
+for `/tmp` and `.next/cache`, drops every capability and adds back the four the
+hand-off needs (they stay in the bounding set, and `no-new-privileges` on the
+service is what keeps a process from ever getting them back), and the build context leaves out the ops scripts, the test
+doubles, the tests and the docs, with devDependencies pruned before the run
+stage. The CI `image` job runs the built image under the flags it reads back
+from the compose file itself (`docker compose config`, so the anchor counts):
+`read_only`, `tmpfs`, `cap_drop`, `cap_add`, `security_opt`. It refuses the
+service outright if it carries a key that would override those (`privileged`,
+`pid`, `ipc`, `network_mode`, `devices`, `userns_mode`, `ports`, an
+`entrypoint`, `command` or `user` of its own, since those bypass the image's
+root-dropping entrypoint while the probe still runs through it, an
+unconfined profile, a capability beyond the four, a mount beyond the ledger
+volume and the read-only heartbeat), and otherwise fails unless the process is
+uid 1000 with `no_new_privs` set, a bounding set of exactly those four
+capabilities, and a read-only root that can still write its ledger and its
+two tmpfs mounts. What remains reachable from
+inside: the ledger volume, the wallet's RPC over the z3 network with the
+credential in the environment, and the read-only miner heartbeat.
+
 ## Reporting
 
 This is a testnet toy with real lessons, not a bug-bounty target. If you find

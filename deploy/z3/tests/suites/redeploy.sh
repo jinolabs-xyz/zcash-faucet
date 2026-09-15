@@ -182,6 +182,17 @@ rc=$?
 # Exit 2 specifically: service restored, change did not ship. Exiting 0 here
 # would let `redeploy.sh && echo shipped` lie about a rolled-back deploy.
 check "exits 2 (rolled back, did not ship)" "[ $rc -eq 2 ]"
+# THE ROLLBACK RE-OWNS THE LEDGER VOLUME BEFORE STARTING THE PREVIOUS IMAGE (R-10). An
+# image since R-10 runs as node and hands /app/data to node on start; the image before
+# it ran as root, and under the new compose file (no DAC_OVERRIDE) could not write a
+# node-owned ledger: live, "ready", and every claim SQLITE_READONLY. Measured in review.
+check "the rollback re-owns /app/data to root through the service (its caps, its image, chown as the entrypoint)" \
+  "grep -qE 'compose .*run --rm --no-deps -T --entrypoint chown faucet -R 0:0 /app/data' '$STUB_LOG'"
+# The two starts in this log are different lines: the deploy's own `up -d faucet` and the
+# rollback's `up -d --no-build faucet`. The re-own sits between them, first-match on each.
+check_order "and does so after the failed image's start" 'up -d faucet' 'entrypoint chown faucet'
+check_order "and before the rolled-back image's" 'entrypoint chown faucet' 'up -d --no-build faucet'
+
 check "says the change did not ship" "grep -q 'did NOT ship' '$T/nr.log'"
 check "says live but never ready" "grep -q 'never became ready' '$T/nr.log'"
 check "rolled back to the previous image" "[ \"\$(img zcash-faucet:latest)\" = 'sha256:old' ]"
@@ -194,6 +205,13 @@ check "and caddy was not pulled or recreated on the way" "! grep -qE 'compose .*
 # two new cases pass by never rolling back at all would look like a fix.
 check "and the ordinary not-ready case names the app's own reason" \
   "grep -q 'wallet balance unknown' '$T/nr.log'"
+# And a re-own that fails must not stop the rollback: a stuck rollback is the worse outcome.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_READY_MAX=1 STUB_REOWN_FAIL=1 bash "$REDEPLOY" > "$T/nr-reown.log" 2>&1
+check "a failed re-own is a WARNING and the rollback still exits 2" "[ $? -eq 2 ] && grep -q 'WARNING: could not re-own the ledger volume' '$T/nr-reown.log'"
+check "and the previous image was still started" "grep -q 'up -d --no-build faucet' '$STUB_LOG'"
+check "and the warning names the manual command with the image to run it from" "grep -q 'chown -R 0:0 /app/data' '$T/nr-reown.log'"
 
 echo "== redeploy: a probe that never ANSWERS is not evidence against the build (#229)"
 # A timeout is not a negative. better-sqlite3 is synchronous, so a wedged read makes
