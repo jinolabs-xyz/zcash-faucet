@@ -583,33 +583,78 @@ echo "== box-report: the report is written where DOCKER says the volume is, the 
 # reader asked and the writer guessed. Both are correct on a stock daemon, which is
 # exactly why nothing said so. Every other case in this suite sets BOX_REPORT_OUT, so the
 # default this is about was the one line here nothing ever ran.
+#
+# BOX_REPORT_VOLUME_ROOT points the stock-daemon fallback at a directory this uid can
+# actually write. Without it /var/lib/docker is unwritable here, the fallback file is
+# never observed, and the only assertions left are greps of the two scripts' source -
+# two guesses about a format, which is the shape this PR exists to remove (review of #550).
 box_env
 unset BOX_REPORT_OUT
 export STUB_LOG="$T/stub.log"; : > "$STUB_LOG"
 # A NON-STOCK data-root, which is the whole point: under the stock one the bug is invisible.
 export STUB_VOLROOT="$T/dockerroot/volumes"
-mkdir -p "$STUB_VOLROOT/zcash-faucet_faucet_data"
-bash "$BOX_REPORT" > /dev/null 2>&1
+export BOX_REPORT_VOLUME_ROOT="$T/stockroot"
+mkdir -p "$STUB_VOLROOT/zcash-faucet_faucet_data" "$BOX_REPORT_VOLUME_ROOT"
+bash "$BOX_REPORT" > /dev/null 2>"$T/writer.err"
 check "docker was asked where the volume is mounted" \
   "grep -q 'docker volume inspect -f {{.Mountpoint}} zcash-faucet_faucet_data' '$STUB_LOG'"
 check "and the report is in the volume docker named" \
   "[ -s '$STUB_VOLROOT/zcash-faucet_faucet_data/box-integrity.json' ]"
-check "and nothing was written to the stock-daemon guess" \
-  "[ ! -e '/var/lib/docker/volumes/zcash-faucet_faucet_data/_data/box-integrity.json' ]"
+# OBSERVED, not tautological. The first spelling of this asserted the absence of a file
+# under the real /var/lib/docker, which is true as this uid whether or not the writer ever
+# tried - the one new assertion that did not flip when the change was reverted.
+check "and the stock-daemon fallback directory was left untouched" \
+  "[ -z \"\$(find '$BOX_REPORT_VOLUME_ROOT' -type f 2>/dev/null)\" ]"
 check "the report it wrote there is the real one, not a cannot-say" \
   "[ \"\$(jqf '$STUB_VOLROOT/zcash-faucet_faucet_data/box-integrity.json' readable)\" = 'True' ]"
+# And it SAYS which path it chose. Every failure after the derivation ends in cannot_say
+# and exit 0, so an operator reading the journal of a box that publishes nothing needs the
+# directory named somewhere.
+check "and it names the resolved path on stderr, and says it came from docker" \
+  "grep -qF 'report path $STUB_VOLROOT/zcash-faucet_faucet_data/box-integrity.json' '$T/writer.err' && grep -q 'from docker volume inspect' '$T/writer.err'"
 
-# A daemon that will not answer falls back to the stock path, and it is the SAME fallback
-# the reader uses, so the two still agree when docker is the thing that is broken.
+echo "== box-report: a docker that will not ANSWER is bounded, and falls back rather than hanging the timer"
+# faucet-box-report.service has no TimeoutStartSec, so an unbounded call here is a oneshot
+# that sits for as long as the CLI does. Removing `timeout 10` left every other case in
+# this file green, so the bound had nothing keeping it (review of #550).
+box_env
+unset BOX_REPORT_OUT
+export STUB_LOG="$T/stub.log"; : > "$STUB_LOG"
+export STUB_VOLROOT="$T/dockerroot/volumes"
+export BOX_REPORT_VOLUME_ROOT="$T/stockroot"
+mkdir -p "$STUB_VOLROOT/zcash-faucet_faucet_data" "$BOX_REPORT_VOLUME_ROOT"
+started=$(date +%s)
+STUB_VOLUME_HANG=30 bash "$BOX_REPORT" > /dev/null 2>"$T/hang.err"
+elapsed=$(( $(date +%s) - started ))
+check "the run returns rather than waiting on the daemon (bounded near 10s, well under the 30s hang)" \
+  "[ $elapsed -lt 20 ]"
+check "and it fell back to the stock path rather than writing nothing" \
+  "[ -s '$BOX_REPORT_VOLUME_ROOT/zcash-faucet_faucet_data/_data/box-integrity.json' ]"
+check "and it says the fallback was a fallback, and why" \
+  "grep -q 'fallback: docker did not name a mountpoint' '$T/hang.err'"
+check "and nothing was written where the volume actually is, since docker never said" \
+  "[ ! -e '$STUB_VOLROOT/zcash-faucet_faucet_data/box-integrity.json' ]"
+
+echo "== box-report: with no volume to find, the fallback path is OBSERVED, not grepped for"
+# The first spelling of this grepped both scripts for the same literal, which is a text
+# check standing in for behaviour and would pass while the two resolved differently.
+# Now each script is run with no volume to find and the path it actually used is compared.
 box_env
 unset BOX_REPORT_OUT
 export STUB_LOG="$T/stub.log"; : > "$STUB_LOG"
 export STUB_VOLROOT="$T/empty"; mkdir -p "$STUB_VOLROOT"
+export BOX_REPORT_VOLUME_ROOT="$T/shared"
+mkdir -p "$BOX_REPORT_VOLUME_ROOT"
 # INLINE, NOT EXPORTED. Every suite is sourced into ONE shell, so an export here is still
 # set when bringtospec runs next and would send its box-report looking for this made-up
 # volume. That is the STUB_READY leak again; it costs a review round every time.
-BOX_REPORT_FAUCET_VOLUME="no-such-volume-$$" bash "$BOX_REPORT" > /dev/null 2>&1
-check "with no such volume it falls back to the stock path for THAT name, not to silence" \
-  "grep -q \"docker volume inspect -f {{.Mountpoint}} no-such-volume-$$\" '$STUB_LOG'"
-check "and the fallback is the one bring-to-spec.sh prints when it cannot find the report" \
-  "grep -qF '/var/lib/docker/volumes/\$vol/_data' '$REPO/deploy/z3/bring-to-spec.sh' && grep -qF '/var/lib/docker/volumes/\$vol/_data' '$REPO/deploy/z3/box-report.sh'"
+BOX_REPORT_FAUCET_VOLUME="no-such-volume" bash "$BOX_REPORT" > /dev/null 2>"$T/fb.err"
+writer_path="$(find "$BOX_REPORT_VOLUME_ROOT" -name box-integrity.json -type f 2>/dev/null | head -1)"
+check "with no such volume the writer still asked docker, then fell back" \
+  "grep -q 'docker volume inspect -f {{.Mountpoint}} no-such-volume' '$STUB_LOG' && [ -n '$writer_path' ]"
+# The reader half of this equality is asserted in the bringtospec suite, where spec_env
+# can actually run bring-to-spec.sh and read the path out of its own cannot-verify line.
+check "and the writer's fallback is under the shared stock root, keyed by the volume name" \
+  "[ \"$writer_path\" = '$BOX_REPORT_VOLUME_ROOT/no-such-volume/_data/box-integrity.json' ]"
+check "and the writer says so on stderr rather than leaving the operator to guess" \
+  "grep -qF 'report path $BOX_REPORT_VOLUME_ROOT/no-such-volume/_data/box-integrity.json' '$T/fb.err'"

@@ -32,14 +32,32 @@ UNIT_DIR="${BOX_REPORT_UNIT_DIR:-/etc/systemd/system}"
 # said so. Same volume name, same call, same bound, same fallback, so they cannot disagree.
 box_report_out_default() {
   local vol="${BOX_REPORT_FAUCET_VOLUME:-zcash-faucet_faucet_data}" mp=""
-  # Bounded like the reader's: a wedged dockerd must not hang a timer that runs hourly.
+  # The stock daemon's volume root, overridable ONLY so a test can observe the fallback.
+  # /var/lib/docker is unwritable to anyone but root, so a suite that cannot move this
+  # can only ever assert the fallback by reading the source, which is a text check
+  # standing in for behaviour - the thing this PR is about. The default is production's.
+  local root="${BOX_REPORT_VOLUME_ROOT:-/var/lib/docker/volumes}"
+  # Bounded like the reader's: a wedged dockerd must not hang a timer that runs hourly,
+  # and faucet-box-report.service carries no TimeoutStartSec of its own. The 10 is not
+  # overridable on purpose: a bound a test can lower is a bound the test stops proving.
   mp="$(timeout 10 docker volume inspect -f '{{.Mountpoint}}' "$vol" 2>/dev/null)" || mp=""
   # A daemon that will not answer falls back to the path that name has under a stock
   # daemon, which is what the reader falls back to as well. Deliberately not cannot-say:
   # a transient docker hiccup on a box whose path is perfectly correct must not turn the
   # public panel red, and if the path really is wrong the report simply does not arrive,
   # which the reader already treats as a gate failure rather than a pass.
-  printf '%s/box-integrity.json\n' "${mp:-/var/lib/docker/volumes/$vol/_data}"
+  #
+  # SAY WHICH PATH AND WHY, on stderr so it reaches the journal and never the value. Every
+  # failure after this ends in cannot_say and exit 0, so without this line an operator
+  # looking at a box that publishes nothing has a stray mktemp error and no idea which
+  # directory was tried.
+  if [ -n "$mp" ]; then
+    echo "box-report: report path $mp/box-integrity.json (from docker volume inspect $vol)" >&2
+    printf '%s/box-integrity.json\n' "$mp"
+  else
+    echo "box-report: report path $root/$vol/_data/box-integrity.json (fallback: docker did not name a mountpoint for $vol)" >&2
+    printf '%s/%s/_data/box-integrity.json\n' "$root" "$vol"
+  fi
 }
 OUT="${BOX_REPORT_OUT:-$(box_report_out_default)}"
 SYSTEMCTL="${BOX_REPORT_SYSTEMCTL:-systemctl}"

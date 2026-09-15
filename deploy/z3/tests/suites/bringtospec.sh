@@ -317,3 +317,38 @@ check "and the writer, told no path either, wrote to exactly the file the reader
   "[ -s '$reader_path' ]"
 check "and both of them asked docker the same question" \
   "[ \"\$(grep -c 'docker volume inspect -f {{.Mountpoint}} zcash-faucet_faucet_data' '$STUB_LOG')\" -ge 2 ]"
+
+echo "== bring-to-spec and box-report fall back to the SAME path when docker cannot answer"
+# THE OTHER HALF OF THE SEAM. The case above proves the two agree when docker DOES name a
+# mountpoint. This one is the branch that only runs when something is already wrong, which
+# is exactly when a disagreement would be hardest to see - and it was previously asserted
+# by grepping both scripts for the same literal string, two guesses about a format rather
+# than one observation (review of #550).
+#
+# Neither path is spelled out here. The reader NAMES the path it would read in its own
+# cannot-verify line; the writer WRITES to the path it chose; the assertion is that the
+# two are the same string.
+spec_env
+unset SPEC_REPORT
+export STUB_LOG="$T/stub.log"; : > "$STUB_LOG"
+export STUB_VOLROOT="$T/empty"; mkdir -p "$STUB_VOLROOT"   # no volume of that name exists
+# INLINE, NOT EXPORTED, for the reason the boxreport suite gives: one shell for every
+# suite, so an export here is still set for whatever runs next.
+shared_root="$T/shared"; mkdir -p "$shared_root"
+export STUB_REPORT_PATH="$T/report/elsewhere.json"
+SPEC_VOLUME_ROOT="$shared_root" SPEC_FAUCET_VOLUME="no-such-volume" \
+  bash "$SPEC" > "$T/fallback.log" 2>&1
+reader_fb="$(sed -n 's/.*no integrity report at \(.*\)\./\1/p' "$T/fallback.log" | head -1)"
+check "the reader falls back and names the path it would have read" "[ -n '$reader_fb' ]"
+# The same conditions on the writer's side, its own default, its own fallback.
+mkdir -p "$T/repohome/deploy"
+ln -sfn "$T/src" "$T/repohome/deploy/z3"
+( unset BOX_REPORT_OUT
+  BOX_REPORT_REPO="$T/repohome" BOX_REPORT_INSTALL_DIR="$T/install" \
+  BOX_REPORT_UNIT_DIR="$T/units" BOX_REPORT_SYSTEMCTL="$SCRATCH/stubs/audit-systemctl" \
+  BOX_REPORT_VOLUME_ROOT="$shared_root" BOX_REPORT_FAUCET_VOLUME="no-such-volume" \
+  bash "$REPO/deploy/z3/box-report.sh" ) > /dev/null 2>&1
+check "and the writer, falling back on its own, wrote to exactly that path" \
+  "[ -s \"$reader_fb\" ]"
+check "and both of them asked docker first rather than going straight to the guess" \
+  "[ \"\$(grep -c 'docker volume inspect -f {{.Mountpoint}} no-such-volume' '$STUB_LOG')\" -ge 2 ]"
