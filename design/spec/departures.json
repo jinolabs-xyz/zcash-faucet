@@ -1,0 +1,66 @@
+{
+  "_": "Every divergence from the frozen spec, with the reason it exists. scripts/parity-check.mjs fails on a divergence that is not declared here AND on a declaration that no longer describes one, so this file cannot quietly become a list of things the check has stopped looking at. Keys beginning with _ are notes, not declarations. Reasons are the ones the code already carries in src/app/redesign-shell.css; this is where a reviewer reads them all at once.",
+  "_spec": "design/spec/S1-20260915T1938Z/shell.css, the <style> blocks of the frozen S1 snapshot the shell was transcribed from.",
+  "_clamp": "The three below are one departure in three rules: the design's one-screen clamp, overridden while the views still hold pre-redesign content. Shipping it clipped the footer by 30 to 93px at ordinary laptop sizes with three links unreachable. It returns with the content designed for it, S2 to S5, enforced per slice by scripts/fit-check.mjs.",
+  "_form": "Each entry names WHY it differs and WHAT we ship. The body matters: declared by selector alone, a second, different change to an already-declared rule inherits the old label - measured, an added outline on .badge .dot passed. Regenerate the bodies with PARITY_PRINT=1 node scripts/parity-check.mjs <spec> <shipped...> and keep the why.",
+  ".badge .dot": {
+    "why": "The dot's colour is written inline from the phase machine, as it always has been, so a static colour here would be overridden anyway.",
+    "shipped": "background:var(--unknown); border-radius:50%; height:calc(.6*var(--u)); width:calc(.6*var(--u)) || border-radius:50%; height:calc(.6*var(--u)); width:calc(.6*var(--u))"
+  },
+  ".badge[data-state=DEGRADED],.badge[data-state=EMPTY],.badge[data-state=NOT READY]": {
+    "why": "Same: real states the preview has no swatch for.",
+    "shipped": "color:var(--bad-text)"
+  },
+  ".badge[data-state=PREPARING],.badge[data-state=TOPPING UP]": {
+    "why": "The preview's badge knows LIVE and SYNCING. Our phase machine says more, and those words were already carrying meaning on the page before the redesign.",
+    "shipped": "color:var(--warn-text)"
+  },
+  ".brand .home .brand-mark": {
+    "why": "Our mark is an SVG component where the preview's is a canvas, so the preview's canvas rules do not apply to it.",
+    "shipped": "color:var(--ink-3); height:calc(1.45*var(--u)); width:calc(1.45*var(--u))"
+  },
+  ".brand .home:focus-visible": {
+    "why": "The same correction one specificity level up: this rule sets the whole outline shorthand, so correcting the general rule left the masthead link at 2.53:1 until this moved with it.",
+    "shipped": "outline-color:var(--accent-text) || outline-offset:calc(.25*var(--u)); outline:calc(.15*var(--u)) solid var(--accent)"
+  },
+  ".ftr nav a,.hdr-right nav a": {
+    "why": "WCAG 1.4.3 needs 4.5:1 and the preview's --muted is 4.41:1 on --page. --label is 4.96:1, the next token up rather than a new colour.",
+    "shipped": "color:var(--label)"
+  },
+  ".stage": {
+    "why": "The one-screen clamp overridden: height:auto with min-height, and container-type:inline-size, because size containment needs a definite height in both axes and 1cqw goes with it.",
+    "shipped": "--u:clamp(10.5px,calc(1cqw * var(--cards-scale)),14px); container:stage / size; height:100dvh; overflow:auto || container-type:inline-size; height:auto; min-height:100dvh; overflow:visible"
+  },
+  ".view.legacy-measure > *": {
+    "why": "Transitional, one view at a time as S2 to S5 land: the moved pre-redesign content keeps the 760px measure it was written for, inside a full-width view. src/app/legacyMeasure.test.ts fails in both directions on it and ui-smoke measures the width itself.",
+    "shipped": "max-width:760px; width:100%"
+  },
+  ".views": {
+    "why": "Our own <main> landmark around the four sections. The preview puts them straight into .comp; a landmark is an accessibility requirement a static preview does not have to meet.",
+    "shipped": "display:flex; flex-direction:column; flex:1; gap:calc(2.6*var(--u)); min-width:0; width:100%"
+  },
+  ":focus-visible": {
+    "why": "WCAG 1.4.11 needs 3:1 and --accent is 2.53:1 on --page. --accent-text is 6.29:1.",
+    "shipped": "border-radius:calc(.4*var(--u)); outline-offset:calc(.2*var(--u)); outline:calc(.16*var(--u)) solid var(--accent) || outline-color:var(--accent-text)"
+  },
+  "@media (max-width:32rem) | .seg button": {
+    "why": "WCAG 2.5.5 target size at the phone breakpoint: 26px to 44px.",
+    "shipped": "flex:1; padding:0 || min-height:44px"
+  },
+  "@media (max-width:32rem) | .strip": {
+    "why": "WCAG 2.5.5 target size at the phone breakpoint: 32px to 44px.",
+    "shipped": "height:auto; min-height:44px || padding-right:calc(.35*var(--u))"
+  },
+  "@media (min-width:56rem) | .comp": {
+    "why": "The same override: the spec pins .comp to 100dvh here.",
+    "shipped": "height:100dvh || height:auto; min-height:100dvh"
+  },
+  "@media (min-width:56rem) | .stage": {
+    "why": "The same override at the desktop breakpoint, where the spec sets overflow:hidden.",
+    "shipped": "overflow:hidden || overflow:visible"
+  },
+  "a:hover": {
+    "why": "globals.css:98 paints a:hover from the retired palette (#7c1405 in paper, #ffc4b8 in ink) and the design's hover rule names no colour, so there was nothing to overwrite it. This restores the design's intent, underline only. The design's own .ftr nav a:hover and .hdr-right nav a:hover are (0,2,1) against this (0,1,1) and still win.",
+    "shipped": "color:var(--accent-text) || text-decoration:underline"
+  }
+}

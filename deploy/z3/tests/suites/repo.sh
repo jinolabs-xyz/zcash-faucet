@@ -1471,6 +1471,14 @@ check "and the CI step names that snapshot rather than a moving path" \
 # is the same shape as an override that quietly retires the default it was added to test.
 check "a declaration that no longer describes a divergence fails, so the list cannot rot" \
   "grep -q 'STALE DEPARTURE, no longer differs' '$REPO/scripts/parity-check.mjs'"
+# A DECLARATION NAMES WHAT WE SHIP (SDE-App predicted this before the file existed: a departures
+# file is a place to hide a divergence). Declared by SELECTOR alone, a second and different
+# change to an already-declared rule inherits the old label - measured, an added outline on
+# .badge .dot passed with the selector declared.
+check "and a declaration names the body it declares, so a second change cannot inherit its label" \
+  "grep -q 'DECLARED WITH A DIFFERENT BODY' '$REPO/scripts/parity-check.mjs' && grep -qF 'a declaration must name what we ship' '$REPO/scripts/parity-check.mjs'"
+check "every declaration in the file carries both halves" \
+  "python3 -c \"import json,sys; d=json.load(open('$REPO/design/spec/departures.json')); bad=[k for k,v in d.items() if not k.startswith('_') and not (isinstance(v,dict) and v.get('why') and v.get('shipped'))]; sys.exit(1 if bad else 0)\""
 check "and the check reports what the spec has and we DROPPED, not only what we added" \
   "grep -qF 'in the spec, not shipped' '$REPO/scripts/parity-check.mjs'"
 check "a rule moved into a media query is not counted as parity" \
