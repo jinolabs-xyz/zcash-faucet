@@ -143,7 +143,22 @@ NODE_HEAL_ENABLED="${WATCHDOG_NODE_HEAL_ENABLED:-1}"
 # miner that would have ended the lull, then paging for a snapshot reimport. The miner's
 # guard reads the same two fields and documents why it chose 100 (miner/src/sync.rs);
 # the repo suite holds the two defaults equal so they cannot drift apart again.
-NODE_LAG_LIMIT="${WATCHDOG_NODE_LAG_LIMIT:-100}"                # blocks behind before a stuck tip counts as a stall
+NODE_LAG_LIMIT="${WATCHDOG_NODE_LAG_LIMIT:-100}"                # blocks behind ZEBRA'S OWN ESTIMATE before a stuck tip counts as a stall
+# A LIMIT OF ITS OWN FOR THE NUMBER THAT CAN BE TRUSTED, and the first cut of the 20:35Z fix
+# did not have one: it gated the corroborated tip on NODE_LAG_LIMIT too, so the episode this
+# rung exists for - 58 blocks behind a corroborated tip, nine minutes, testnet at 6.4 blocks a
+# minute - never started the stall clock, and the fix "worked" only against the suite's own
+# 150-block case. Measured by the CTO's red-team on #568 before it shipped.
+#
+# WHY 25. This is a NOISE floor, not a timer: nothing on this rung fires until the tip has
+# ALSO been unmoved for NODE_STALL_SECS, so the wait is already five minutes whatever this
+# number is. What it has to clear is the gap the app itself calls agreement - TIP_AGREE_BLOCKS
+# is 20 in src/lib/zcash/externalTip.ts, and two references inside 20 blocks of each other are
+# `corroborated` - so a distance the app would not even call a disagreement must not be called
+# a stall here. 25 is the first number clear of that, and it fires on 58. It sits deliberately
+# far above SHIELD_MAX_LAG_BLOCKS=5, where drips are already refused: the faucet degrades
+# quietly for a while before anything here stops a miner or touches state.
+NODE_CONFIRMED_LAG_LIMIT="${WATCHDOG_NODE_CONFIRMED_LAG_LIMIT:-25}"  # blocks behind a CORROBORATED tip before that counts as a stall
 NODE_STALL_SECS="${WATCHDOG_NODE_STALL_SECS:-300}"              # behind AND tip unmoved this long = wedged
 NODE_HEAL_MAX="${WATCHDOG_NODE_HEAL_MAX:-5}"                    # restarts before paging instead
 NODE_CLEAR_CACHE_AFTER="${WATCHDOG_NODE_CLEAR_CACHE_AFTER:-2}"  # from this attempt on, also drop the peer cache
@@ -534,10 +549,13 @@ zebra_chain_heights() {
 # enough for it (a restart can itself drop the non-finalized tip if the 10 s stop grace
 # runs out before the backup is written, which the miner's own 100-lag guard covers).
 # Rungs 2-3 (wipe peers, drop the non-finalized state) and stopping the miner are
-# deliberate rewinds: those happen only when an INDEPENDENT height confirms the lag. The app already holds one
-# (`node.externalHeight` on /api/ready, from the tip oracle), and step 4 fetched that
-# body this very sweep. No confirmation - app unreachable, oracle dark, or the external
-# tip within the limit - means restarts only, and the give-up page says exactly that
+# deliberate rewinds: those happen only when a CORROBORATED height confirms the lag - two
+# non-stale references that agree, which /api/ready reports as `corroborated` beside
+# `usedHeight`, and step 4 fetched that body this very sweep. NOT `node.externalHeight`,
+# which this comment used to name and which step 7 used to read: that is the same height
+# with the corroboration discarded, so one flaky source could buy a rewind. No
+# confirmation - app unreachable, oracle dark, one source only, two that disagree, or the
+# corroborated tip within its limit - means restarts only, and the give-up page says that
 # instead of prescribing a snapshot reimport for a node that may be at the tip.
 # Starts a miner that a node heal stopped, once the node is fit again. Sets
 # MINER_RELEASE_NOTE (the sentence for the report) on success and empties it otherwise. A
@@ -575,6 +593,31 @@ release_miner_after_heal() {
     danger "the node has recovered but 'systemctl start $MINER_UNIT' FAILED. The miner was stopped for the heal and is still stopped; the watchdog retries every sweep, or start it by hand."; rc=$?
     paged "$rc" && alerted_miner_start_failed=1
   fi
+  return 0
+}
+
+# THE ONE DEFINITION OF "AN INDEPENDENT HEIGHT THIS SCRIPT MAY ACT ON". Two rungs need one
+# and they had drifted, which is how the first cut of this fix came to authorise a chain
+# rewind on a single source. Step 8 has read `corroborated` beside `usedHeight` since #560.
+# Step 7 read `externalHeight`, which is the SAME NUMBER WITH THE CORROBORATION THROWN AWAY:
+# the app sets it to the highest fresh reference whether the references agree or not
+# (src/lib/zcash/externalTip.ts, referenceTip/getTipReferences; nodeStatus.ts assigns
+# `referenceTip().height` to it). So one source, or two that disagree by 400 blocks, read to
+# this rung as an independent tip - and line 83 of this file already forbids exactly that in
+# those words: acting on it "converts an oracle outage into a chain rewind". A proxy for the
+# property, with the property itself sitting one rung down unused. Found by the CTO's
+# red-team on #568.
+#
+# Echoes the height when there is one this script may act on, and NOTHING otherwise. Callers
+# read empty as "unconfirmed" - never as "at the tip", never as "behind", never as 0.
+corroborated_tip_height() {
+  local corr used_h
+  corr="$(printf '%s' "${ready_body:-}" | grep -o '"corroborated":[a-z]*' | head -n1 | cut -d: -f2)"
+  used_h="$(printf '%s' "${ready_body:-}" | grep -o '"usedHeight":[0-9][0-9]*' | head -n1 | cut -d: -f2)"
+  case "$used_h" in ''|*[!0-9]*) used_h="" ;; esac
+  # `true` only. An absent field and a null one read the same, on purpose: a body from before
+  # #559 must never be turned into a height, and `corroborated:null` is a single source.
+  if [ "$corr" = "true" ] && [ -n "$used_h" ]; then printf '%s' "$used_h"; fi
   return 0
 }
 
@@ -617,8 +660,9 @@ heal_node_if_stalled() {
   # the journal, and it does not confirm a rewind.
   local zebra_lag ext_lag="" lag_src
   zebra_lag=$(( est - blocks )); [ "$zebra_lag" -lt 0 ] && zebra_lag=0
-  external="$(printf '%s' "${ready_body:-}" | grep -o '"externalHeight":[0-9][0-9]*' | head -n1 | cut -d: -f2)"
-  case "$external" in ''|*[!0-9]*) external="" ;; esac
+  # THE GATE, not the raw field. `externalHeight` is the same height with the corroboration
+  # discarded, so reading it here made one flaky source sufficient for the rewinding rungs.
+  external="$(corroborated_tip_height)"
   # EITHER NUMBER MAY TRIGGER, and that is the whole change: the independent tip is ADDED as a
   # trigger rather than substituted for zebra's. Substituting it would have overturned a
   # deliberate ruling this suite already protects - "a lag only zebra believes in buys restarts,
@@ -628,12 +672,32 @@ heal_node_if_stalled() {
   if [ -n "$external" ]; then
     ext_lag=$(( external - blocks )); [ "$ext_lag" -lt 0 ] && ext_lag=0
   fi
-  if [ -n "$ext_lag" ] && [ "$ext_lag" -ge "$zebra_lag" ]; then
-    lag="$ext_lag"; lag_src="independent tip $external"
+  # EACH NUMBER AGAINST ITS OWN LIMIT. One threshold cannot serve both, and the first cut of
+  # this fix tried: NODE_LAG_LIMIT=100 is right for a clock extrapolation and the suite pins
+  # 55-by-the-clock as not-a-stall, while the same 100 meant tonight's 58 blocks behind a
+  # CORROBORATED tip never started the stall clock at all. So the corroborated number gets
+  # NODE_CONFIRMED_LAG_LIMIT and zebra's estimate keeps NODE_LAG_LIMIT.
+  local ext_over=0 zebra_over=0
+  [ -n "$ext_lag" ] && [ "$ext_lag" -gt "$NODE_CONFIRMED_LAG_LIMIT" ] && ext_over=1
+  [ "$zebra_lag" -gt "$NODE_LAG_LIMIT" ] && zebra_over=1
+  # THE NUMBER THAT FIRED, NOT THE LARGER ONE. With two limits the bigger raw lag can be the
+  # one still inside its own budget - zebra 90 under its 100, beside 30 behind a corroborated
+  # tip over its 25 - and a journal that named the 90 would send an operator to the evidence
+  # that did not act. That was finding 4 of the same review: the line read "which the
+  # independent tip does not support" about a lag that same tip had confirmed.
+  if [ "$ext_over" = "1" ]; then
+    lag="$ext_lag"; lag_src="corroborated tip $external"
+  elif [ "$zebra_over" = "1" ]; then
+    lag="$zebra_lag"
+    lag_src="zebra's own clock estimate${external:+, which the corroborated tip $external does not support}"
+    [ -z "$external" ] && lag_src="zebra's own clock estimate, no corroborated tip this sweep"
+  elif [ -n "$ext_lag" ] && [ "$ext_lag" -ge "$zebra_lag" ]; then
+    # Neither is over its limit, so nothing fires; the number is only for the idle line.
+    lag="$ext_lag"; lag_src="corroborated tip $external"
   else
     lag="$zebra_lag"
-    lag_src="zebra's own clock estimate${external:+, which the independent tip $external does not support}"
-    [ -z "$external" ] && lag_src="zebra's own clock estimate, no independent tip this sweep"
+    lag_src="zebra's own clock estimate${external:+, which the corroborated tip $external does not support}"
+    [ -z "$external" ] && lag_src="zebra's own clock estimate, no corroborated tip this sweep"
   fi
 
   # Higher than last sweep: syncing, or at the tip and a block just landed. Healthy, so
@@ -667,7 +731,8 @@ heal_node_if_stalled() {
   # advanced across a sweep: a snapshot reimport, or a node that came back already at its
   # tip. Review found the flag stuck for ever here, with step 6 disabled by it and the
   # panel reading a calm "off". At the tip is exactly when mining is safe.
-  if [ "$lag" -le "$NODE_LAG_LIMIT" ]; then
+  # BOTH numbers inside their own budget, not one number under one limit.
+  if [ "$ext_over" = "0" ] && [ "$zebra_over" = "0" ]; then
     node_stall_since=0
     if [ "$prev" -gt 0 ] && [ "$(flap_get "$MINER_STOP_KEY")" = "1" ]; then
       release_miner_after_heal
@@ -692,8 +757,12 @@ heal_node_if_stalled() {
   # CONFIRMED means an INDEPENDENT height says we are behind, which is now the same number the
   # trigger used. A sweep that fell back to zebra's own estimate confirms nothing, so the
   # rewinding rungs stay withheld exactly as before.
-  local confirmed=0
-  [ -n "$ext_lag" ] && [ "$ext_lag" -gt "$NODE_LAG_LIMIT" ] && confirmed=1
+  # CONFIRMED is now exactly one thing: a CORROBORATED height says we are behind by more than
+  # the confirmed limit. `external` is empty unless corroborated_tip_height let it through, so
+  # a single source and two that disagree both land here as unconfirmed and the rewinding
+  # rungs stay withheld - which is what this variable was always documented to mean and, until
+  # the red-team probed it, not what it did.
+  local confirmed="$ext_over"
 
   # THE WEDGE THIS FILE ALREADY DESCRIBED AND NEVER LOOKED FOR (line 89, and the 20:35Z outage
   # proved it verbatim): zebra logs "exhausted prospective tip set" and then "waiting to restart
@@ -857,11 +926,16 @@ heal_self_mined_fork() {
   blocks="${2%% *}"
   case "$blocks" in ''|*[!0-9]*) return 0 ;; esac
 
-  corr="$(printf '%s' "${ready_body:-}" | grep -o '"corroborated":[a-z]*' | head -n1 | cut -d: -f2)"
-  used_h="$(printf '%s' "${ready_body:-}" | grep -o '"usedHeight":[0-9][0-9]*' | head -n1 | cut -d: -f2)"
-  case "$used_h" in ''|*[!0-9]*) used_h="" ;; esac
+  # THE SAME GATE STEP 7 USES, called rather than copied. It was copied, and the copy in
+  # step 7 was a different field; one definition is the fix for that, not two careful ones.
+  used_h="$(corroborated_tip_height)"
 
-  if [ "$corr" != "true" ] || [ -z "$used_h" ]; then
+  if [ -z "$used_h" ]; then
+    # Read again for the MESSAGE only - the decision above has already been made - so the
+    # line can say which of the three cannot-tell shapes this was.
+    corr="$(printf '%s' "${ready_body:-}" | grep -o '"corroborated":[a-z]*' | head -n1 | cut -d: -f2)"
+    used_h="$(printf '%s' "${ready_body:-}" | grep -o '"usedHeight":[0-9][0-9]*' | head -n1 | cut -d: -f2)"
+    case "$used_h" in ''|*[!0-9]*) used_h="" ;; esac
     # An absent field reads the same as a null one here, on purpose: a body that predates
     # #559 must not be turned into a height by this function, and "no number" is never 0.
     # ONCE PER EPISODE, not once per sweep (CTO red-team, finding 7): a single-sourced oracle,

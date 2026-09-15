@@ -207,6 +207,26 @@ WD_LAG="$(sed -nE 's/^NODE_LAG_LIMIT="\$\{WATCHDOG_NODE_LAG_LIMIT:-([0-9]+)\}".*
 check "both defaults could be read" "[ -n '$MINER_LAG' ] && [ -n '$WD_LAG' ]"
 check "and the watchdog's default equals the miner's DEFAULT_MAX_LAG ($WD_LAG vs $MINER_LAG)" "[ '$WD_LAG' = '$MINER_LAG' ]"
 
+echo "== repo: the watchdog's CORROBORATED-lag limit stays clear of the app's agreement budget"
+# A SECOND CROSS-FILE NUMBER, and it is a different relationship from the one above. The
+# watchdog calls a corroborated tip a stall at NODE_CONFIRMED_LAG_LIMIT blocks; the APP calls
+# two references `corroborated` when they are within TIP_AGREE_BLOCKS of each other. If the
+# watchdog's number ever slid to or under the app's, the rung would declare a stall at a
+# distance the app itself calls agreement - a heal fired inside the noise, which is how the
+# first cut of this rung got its threshold wrong in the other direction.
+# Held as an INEQUALITY, not two literals: the right relationship is "clear of it", and
+# pinning them equal would forbid the very change that fixes a future miscalibration.
+WD_CONF="$(sed -nE 's/^NODE_CONFIRMED_LAG_LIMIT="\$\{WATCHDOG_NODE_CONFIRMED_LAG_LIMIT:-([0-9]+)\}".*/\1/p' "$REPO/deploy/z3/watchdog.sh")"
+APP_AGREE="$(sed -nE 's/^export const AGREE_BLOCKS = num\("TIP_AGREE_BLOCKS", ([0-9]+)\);$/\1/p' "$REPO/src/lib/zcash/externalTip.ts")"
+check "both numbers could be read" "[ -n '$WD_CONF' ] && [ -n '$APP_AGREE' ]"
+check "and the watchdog's confirmed-lag limit is clear of it ($WD_CONF vs $APP_AGREE)" \
+  "[ '$WD_CONF' -gt '$APP_AGREE' ]"
+# AND THE TWO RUNGS READ THE SAME GATE. Step 7 read `externalHeight` while step 8 read
+# `corroborated`+`usedHeight`, which is the same height with the corroboration discarded, and
+# one flaky source could buy a chain rewind. One definition now, called twice.
+check "step 7 and step 8 both go through corroborated_tip_height, and nothing greps externalHeight" \
+  "[ \"\$(grep -c 'corroborated_tip_height)\"' '$REPO/deploy/z3/watchdog.sh')\" = '2' ] && ! grep -q 'grep -o .\"externalHeight' '$REPO/deploy/z3/watchdog.sh'"
+
 echo "== repo: the box's CI gate requires every job ci.yml defines, by name"
 # auto-deploy.sh refuses a commit unless every job in its list completed green
 # (risk register II, R-1). The list is a default in the script; ci.yml is where jobs

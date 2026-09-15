@@ -48,8 +48,19 @@ case "$*" in
     # assumed before the watchdog started asking.
     ext="${STUB_READY_EXTERNAL:-}"
     [ "$ext" = "zebra-est" ] && ext="${STUB_ZEBRA_EST:-}"
-    heights=""
-    [ -n "$ext" ] && heights=",\"nodeHeight\":${STUB_ZEBRA_BLOCKS:-0},\"externalHeight\":${ext}"
+    # ONE HEIGHT, TWO FIELDS, AND THE STUB NOW ENFORCES IT. The app computes both from
+    # referenceTip(): `externalHeight` (nodeStatus.ts) and `usedHeight` (externalTip.ts) are
+    # the same number by construction, the highest non-stale reference. This stub could set
+    # them apart, and that is how the watchdog's step 7 came to be tested for a whole round
+    # against an uncorroborated `externalHeight` the app would never publish without also
+    # publishing `corroborated:false` beside it. The same trap the shapes below were written
+    # to close, one field over.
+    # A HEIGHT IS NOT A CORROBORATED HEIGHT, and the stub will not quietly turn one into the
+    # other. An earlier cut of this had STUB_READY_EXTERNAL imply an `agree` shape so the old
+    # step-7 cases kept working unchanged; that put a tipReferences block into the two cases
+    # whose whole subject is a body WITHOUT one, and their premise died silently. A case that
+    # wants step 7 to see an independent tip now says which corroboration shape it means,
+    # which is the axis the rung actually turns on.
     # THE tipReferences BLOCK, for the watchdog's step 8 (R-12). FIVE SHAPES, and only the
     # five the app can actually produce - a stub that can express `corroborated:true` beside
     # a null `usedHeight` lets a test assert behaviour for a body that cannot exist, which
@@ -61,6 +72,13 @@ case "$*" in
     #   absent   no tipReferences field at all, as a body from before #559 (the default)
     refs=""
     uh="${STUB_READY_USEDHEIGHT:-}"
+    # STUB_READY_EXTERNAL ALONE MEANS "THE NETWORK AGREES AND IS AT N", which is what every
+    # case written before the corroboration axis existed meant by it, and what step 7 needs
+    # now that it reads the gate rather than the raw field. A case that wants the other
+    # shapes says so with STUB_READY_REFS.
+    # zebra-est here means the same as it does for STUB_READY_EXTERNAL: the network agrees
+    # with zebra's own estimate, which is what every case assumes unless it says otherwise.
+    [ "$uh" = "zebra-est" ] && uh="${STUB_ZEBRA_EST:-}"
     # STUB_READY_REFS_SEQ="agree disagree agree": the reference SHAPE per call, same
     # one-value-each-last-repeating rule as the other two sequences. A cannot-tell sweep
     # between two forks is the only way to test WHERE the once-per-episode flag resets.
@@ -95,6 +113,16 @@ case "$*" in
       none)
         refs=",\"tipReferences\":{\"sources\":{},\"spreadBlocks\":null,\"corroborated\":null,\"used\":null,\"usedHeight\":null}" ;;
       *) echo "stub curl: unsupported reference shape: $shape" >&2; exit 64 ;;
+    esac
+    # AND THE NODE BLOCK'S externalHeight COMES OFF THE SAME SHAPE, so the two fields cannot
+    # contradict each other. `single` and `disagree` DO carry one - the app publishes the
+    # highest fresh reference whether or not the sources agree, which is the entire reason
+    # step 7 had to stop reading it - while `none` carries nothing to publish.
+    heights=""
+    case "$shape" in
+      agree|disagree|single) [ -n "$uh" ] && heights=",\"nodeHeight\":${STUB_ZEBRA_BLOCKS:-0},\"externalHeight\":${uh}" ;;
+      none) heights="" ;;
+      absent) [ -n "$ext" ] && heights=",\"nodeHeight\":${STUB_ZEBRA_BLOCKS:-0},\"externalHeight\":${ext}" ;;
     esac
     for a in "$@"; do
       case "$a" in *"%{http_code}"*)
