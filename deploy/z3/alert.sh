@@ -20,6 +20,29 @@ SIGNAL_NUMBER="${FAUCET_ALERT_SIGNAL_NUMBER:-}"
 SIGNAL_RECIPIENT="${FAUCET_ALERT_SIGNAL_RECIPIENT:-$SIGNAL_NUMBER}"
 PREFIX="${FAUCET_ALERT_PREFIX:-[zcash-faucet]}"
 JOURNAL_LINES="${FAUCET_ALERT_JOURNAL_LINES:-15}"
+
+# --describe: the channel in one word, for the watchdog's start line (R-24). Never the
+# URL, which is a credential. It answers HERE, before the cooldown validation and every
+# log() line below, because those print to stdout and the watchdog captures stdout: a
+# bad FAUCET_ALERT_COOLDOWN_SECONDS turned the answer into two lines (review of #543).
+# The gates are send()'s own (the encoder gate is checked first here, at body time
+# there; the verdict is misconfigured either way) with the same E.164 test on both
+# numbers, so "signal" means a page would actually be attempted, not that a URL is set.
+if [ "${1:-}" = "--describe" ]; then
+  if [ -z "$ALERT_URL" ]; then echo none
+  elif ! command -v jq >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then echo "misconfigured/no-json-encoder"
+  else
+    case "$ALERT_FORMAT" in
+      signal)
+        if [ -z "$SIGNAL_NUMBER" ]; then echo "misconfigured/signal-no-number"
+        elif ! printf '%s' "$SIGNAL_NUMBER" | grep -qE '^\+[0-9]{6,15}$' || ! printf '%s' "$SIGNAL_RECIPIENT" | grep -qE '^\+[0-9]{6,15}$'; then echo "misconfigured/signal-not-e164"
+        else echo signal; fi ;;
+      slack|discord) echo "webhook/$ALERT_FORMAT" ;;
+      *) echo "unknown-format/$ALERT_FORMAT" ;;
+    esac
+  fi
+  exit 0
+fi
 # Read from the repo checkout, the same place install-ops reads enabled-units, so the
 # tiering is reviewed in a pull request rather than decided by whoever edits the box.
 BEST_EFFORT_FILE="${FAUCET_BEST_EFFORT_UNITS:-/opt/zcash-faucet/deploy/z3/best-effort-units}"

@@ -1,146 +1,123 @@
 /**
- * The box integrity wording.
+ * The box verdict, and the one word the public page gets from it.
  *
- * The bug behind this file is not a wrong sentence, it is a missing one: #287 measured
- * the verdict, put it on /api/status, and never rendered it. So the first test is that
- * a failing box produces something a person can read at all.
+ * The bug behind the original file was a missing sentence: #287 measured the verdict,
+ * put it on /api/status, and never rendered it. The bug behind this version is the
+ * opposite one (risk register II, R-24): the sentences were so good that the public
+ * strip read "WATCHDOG STOPPED, nothing heals" and "CANNOT PAGE" to anyone who looked.
+ * So the verdicts are pinned here on the predicates, and the public words are pinned
+ * to never name a fault.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { boxRow, boxChip, boxIsBad } from "./boxLabel.ts";
+import {
+  alertBridgeDown,
+  boxIsBad,
+  publicBox,
+  publicBoxChip,
+  publicBoxIsBad,
+  publicBoxRow,
+  watchdogLooping,
+  watchdogStopped,
+} from "./boxLabel.ts";
 import { classifyIntegrity } from "./boxIntegrity.ts";
 
 const NOW = Date.parse("2026-07-31T12:00:00Z");
-const report = (over = {}) => ({ expected: 14, present: 14, notEnabled: 0, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, platform: null, minerBinary: null, minerUnit: null, watchdogUnit: null, alertBridge: null, at: NOW - 30_000, readable: true, ...over });
+// The baseline is a box that has AFFIRMED both halves: watchdog active, pager probed
+// ok. A null in either field is a server too old to say, and reads unknown below.
+const report = (over = {}) => ({ expected: 14, present: 14, notEnabled: 0, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, platform: null, minerBinary: null, minerUnit: null, watchdogUnit: "active", alertBridge: "ok", at: NOW - 30_000, readable: true, ...over });
+const pub = (over = {}) => publicBox(classifyIntegrity(report(over), NOW));
 
-test("THE STATE NOTHING RENDERED: two files gone and a unit disabled says so", () => {
-  const s = classifyIntegrity(report({ present: 12, notEnabled: 1 }), NOW);
-  const row = boxRow(s);
-  assert.match(row, /2 of 14 MISSING/);
-  assert.match(row, /1 NOT ENABLED/);
-  assert.equal(boxIsBad(s), true);
-  assert.equal(boxChip(s), "INCOMPLETE");
+// ── THE PUBLIC WORDS NAME NO FAULT ─────────────────────────────────────────────────────
+
+test("a complete box is ok, earns no strip chip, and is not flagged", () => {
+  const b = pub();
+  assert.equal(b.state, "ok");
+  assert.equal(publicBoxChip(b), null, "a permanent 'box ok' would spend the strip's slot on what an operator assumes");
+  assert.equal(publicBoxIsBad(b), false);
+  assert.match(publicBoxRow(b), /^ok/);
 });
 
-test("a complete box says so plainly and is not flagged", () => {
-  const s = classifyIntegrity(report(), NOW);
-  assert.equal(boxRow(s), "14 of 14 files, all enabled");
-  assert.equal(boxIsBad(s), false);
-});
-
-test("complete is the ONLY state with no strip chip", () => {
-  // The strip is terse, so a permanent "box ok" would cost a slot to say what an
-  // operator already assumes. Everything else has to be visible without a click.
-  assert.equal(boxChip(classifyIntegrity(report(), NOW)), null);
-  assert.notEqual(boxChip(classifyIntegrity(report({ present: 13 }), NOW)), null);
-  assert.notEqual(boxChip(classifyIntegrity(null, NOW)), null);
-});
-
-test("no report is 'cannot tell', never 'complete' and never a proven fault", () => {
-  const s = classifyIntegrity(null, NOW);
-  assert.match(boxRow(s), /no box report/);
-  assert.doesNotMatch(boxRow(s), /all enabled|MISSING/);
-  assert.equal(boxIsBad(s), true, "unverified must fail, same as the external gate");
-});
-
-test("never-reported and reported-too-long-ago are different sentences", () => {
-  // They call for different actions: a unit that was never installed, versus one
-  // that has stopped. Collapsing them sends an operator to the wrong place.
-  const never = boxRow(classifyIntegrity(null, NOW));
-  const stale = boxRow(classifyIntegrity(report({ at: NOW - 3 * 3600_000 }), NOW));
-  assert.match(never, /no box report/);
-  assert.match(stale, /report \d+ min old/);
-  assert.notEqual(never, stale);
-});
-
-test("missing alone and not-enabled alone each render on their own", () => {
-  assert.match(boxRow(classifyIntegrity(report({ present: 11 }), NOW)), /3 of 14 MISSING/);
-  const disabled = boxRow(classifyIntegrity(report({ notEnabled: 2 }), NOW));
-  assert.match(disabled, /2 NOT ENABLED/);
-  assert.doesNotMatch(disabled, /MISSING/, "nothing is missing, so do not say it is");
-});
-
-test("no file NAMES reach the panel, only counts", () => {
-  // #287's constraint, and it has to hold at the screen rather than only at the API:
-  // naming what a production box is missing is reconnaissance, and this is public.
-  for (const s of [
-    classifyIntegrity(report({ present: 12, notEnabled: 1 }), NOW),
-    classifyIntegrity(report(), NOW),
-    classifyIntegrity(null, NOW),
-  ]) {
-    assert.doesNotMatch(boxRow(s), /\.(sh|service|timer|json|ts|mjs)\b|\//, `path-shaped text in "${boxRow(s)}"`);
+test("EVERY FAULT IS ONE WORD ON THE PUBLIC PAGE: attention, never which fault", () => {
+  // Each of these used to render its own sentence on a public page. A stopped watchdog
+  // and a pager that reaches nobody are exactly what an attacker wants to know the
+  // timing of; a visitor needs to know only that the operators have something to look at.
+  const faults = [
+    { present: 12, notEnabled: 1 },
+    { present: 13 },
+    { notEnabled: 2 },
+    { watchdogRestarts: 412, watchdogRestartsDelta: 61 },
+    { watchdogUnit: "inactive" },
+    { watchdogUnit: "failed" },
+    { watchdogUnit: "deactivating" },
+    { alertBridge: "down" },
+    { alertBridge: "unlinked" },
+    { alertBridge: "none" },
+    { alertBridge: "misconfigured" },
+    { present: 13, alertBridge: "none" },
+    { watchdogUnit: "inactive", alertBridge: "down", watchdogRestartsDelta: 61 },
+  ];
+  for (const over of faults) {
+    const b = pub(over);
+    const tag = JSON.stringify(over);
+    assert.equal(b.state, "attention", tag);
+    assert.equal(publicBoxChip(b), "OPS ATTENTION", tag);
+    assert.equal(publicBoxIsBad(b), true, tag);
+    const words = `${publicBoxChip(b)} ${publicBoxRow(b)}`;
+    assert.doesNotMatch(words, /WATCHDOG|PAGE|BRIDGE|ALERT|MISSING|ENABLED|heal|nowhere|\d/, `${tag}: ${words}`);
   }
 });
 
-test("every bad state is flagged, so none of them can render as ordinary", () => {
-  assert.equal(boxIsBad(classifyIntegrity(report({ present: 13 }), NOW)), true);
-  assert.equal(boxIsBad(classifyIntegrity(report({ notEnabled: 1 }), NOW)), true);
-  assert.equal(boxIsBad(classifyIntegrity(report({ at: NOW - 3 * 3600_000 }), NOW)), true);
-  assert.equal(boxIsBad(classifyIntegrity(null, NOW)), true);
+test("OK IS AFFIRMATIVE: a watchdog or pager the box could not read is unknown, never ok", () => {
+  // Review of #543. watchdogUnit "unknown" and alertBridge "unknown" are deliberately
+  // not faults (the detail-bearing predicates leave them to the probe), so the first cut
+  // read them as ok and a tokenless probe affirmed "the box can page someone" from a
+  // word that said the box could not tell. Every combination that is not both affirmed
+  // is unknown; only active/activating plus ok/webhook is ok.
+  for (const over of [
+    { watchdogUnit: "unknown" },
+    { alertBridge: "unknown" },
+    { watchdogUnit: "unknown", alertBridge: "unknown" },
+    { watchdogUnit: null },
+    { alertBridge: null },
+  ]) {
+    const b = pub(over);
+    assert.equal(b.state, "unknown", JSON.stringify(over));
+    assert.equal(publicBoxIsBad(b), true, JSON.stringify(over));
+  }
+  for (const over of [{ watchdogUnit: "active", alertBridge: "ok" }, { watchdogUnit: "activating", alertBridge: "webhook" }]) {
+    assert.equal(pub(over).state, "ok", JSON.stringify(over));
+  }
 });
 
-/* ── Undeclared units, which the API has been sending and nothing rendered ──────── */
-
-test("a clean box SAYS when units are enabled that the repo never declared", () => {
-  // /api/status answers enabledUndeclared 2 and the panel row said "34 of 34 files,
-  // all enabled". Three additions were needed to get it here: #338 wrote it on the
-  // box, #341 passed it through to the API, this renders it. My commit claimed the API
-  // had always sent it, which was a live probe of an already-fixed world mistaken for
-  // history. See the corrected note in boxLabel.ts.
-  const row = boxRow(classifyIntegrity(report({ expected: 34, present: 34, enabledUndeclared: 2 }), NOW));
-  assert.match(row, /34 of 34 files, all enabled/, "the existing clause must survive");
-  // "of ours" is asserted deliberately. box-report only walks units this repo ships, so
-  // the bare phrasing claimed a scope the figure does not have: the box had ELEVEN
-  // undeclared units while this said 2, and both were right.
-  assert.match(row, /2 of ours undeclared/);
+test("no report, and a report too old, are unknown: not ok, not a named fault, and flagged", () => {
+  // The off-box probe fails on unknown (a box that cannot say what it has is the box we
+  // had all week); the page must not read it as fine either.
+  for (const b of [publicBox(classifyIntegrity(null, NOW)), pub({ at: NOW - 3 * 3600_000 })]) {
+    assert.equal(b.state, "unknown");
+    assert.equal(publicBoxChip(b), "unknown");
+    assert.equal(publicBoxIsBad(b), true);
+    assert.match(publicBoxRow(b), /^unknown/);
+    assert.doesNotMatch(publicBoxRow(b), /\d/, "no counts, no ages: the row says unknown and nothing more");
+  }
 });
 
-test("and it is NOT a fault, so the chip and the marker stay quiet", () => {
-  // classifyIntegrity's own comment: drift is a fact to surface, not a fault. The two
-  // on production are faucet.service and the autodeploy timer, both meant to be there
-  // and merely undeclared. Marking that red would train an operator to ignore red.
-  const s = classifyIntegrity(report({ expected: 34, present: 34, enabledUndeclared: 2 }), NOW);
-  assert.equal(boxIsBad(s), false, "drift must not turn the row red");
-  assert.equal(boxChip(s), null, "and must not spend a slot on the terse strip");
+test("the miner unit rides along, because the miner panel tells a parked miner from a dead one with it", () => {
+  assert.equal(pub({ minerUnit: "inactive" }).minerUnit, "inactive");
+  assert.equal(pub().minerUnit, null);
 });
 
-test("zero and unknown both render nothing, and they are different facts", () => {
-  // 0 is a box that reported no drift. null is a report too old to carry the field.
-  // Neither earns a clause: "0 undeclared" is noise and "undeclared unknown" would
-  // imply a problem where there is only an older deploy.
-  assert.doesNotMatch(boxRow(classifyIntegrity(report({ expected: 9, present: 9, enabledUndeclared: 0 }), NOW)), /undeclared/);
-  assert.doesNotMatch(boxRow(classifyIntegrity(report({ expected: 9, present: 9, enabledUndeclared: null }), NOW)), /undeclared/);
-});
+// ── THE VERDICTS THEMSELVES, on the predicates the route folds into that word ─────────
 
-test("an INCOMPLETE box reports drift too, without it displacing the real fault", () => {
-  // The fault has to lead. Drift is additional information, never a substitute for
-  // "2 units are missing", and appending it must not push the count out of the row.
-  const row = boxRow(classifyIntegrity(report({ expected: 34, present: 32, notEnabled: 1, enabledUndeclared: 3 }), NOW));
-  assert.match(row, /2 of 34 MISSING/);
-  assert.match(row, /1 NOT ENABLED/);
-  assert.match(row, /3 of ours undeclared/);
-  assert.ok(row.indexOf("MISSING") < row.indexOf("undeclared"), "the fault must come first");
-});
-
-test("DRIFT IS NEVER FOLDED INTO THE COUNTS, or a drifted box outranks a clean one", () => {
-  // The entry this helper exists to avoid. If undeclared units were added to
-  // `present`, a box with 32 of 34 files and 2 stray units would render as 34 of 34.
-  const drifted = boxRow(classifyIntegrity(report({ expected: 34, present: 32, notEnabled: 0, enabledUndeclared: 2 }), NOW));
-  assert.doesNotMatch(drifted, /34 of 34/, "an extra enabled unit is not a present file");
-});
-
-/* ── A crash-looping watchdog, which nothing was watching (#365) ─────────────────── */
-
-test("A WATCHDOG IN A RESTART LOOP IS RED, even on a box with every file in place", () => {
-  // The gap: a unit only reaches systemd's failed state if systemd gives up on it, and
+test("A WATCHDOG IN A RESTART LOOP IS A FAULT, even on a box with every file in place", () => {
+  // A unit only reaches systemd's failed state if systemd gives up on it, and
   // faucet-watchdog is Restart=always with no start limit on purpose. So its own
   // OnFailure= alert can never fire, and the service whose job is noticing that other
   // things are broken was the one thing nothing watched.
   const s = classifyIntegrity(report({ watchdogRestarts: 412, watchdogRestartsDelta: 61 }), NOW);
   assert.equal(s.state, "complete", "every file is present, so the file verdict is clean");
-  assert.match(boxRow(s), /WATCHDOG LOOPING, 61 restarts/);
+  assert.equal(watchdogLooping(s), true);
   assert.equal(boxIsBad(s), true, "a looping supervisor is a fault, not a note");
-  assert.equal(boxChip(s), "WATCHDOG LOOP", "and it must be visible without opening the panel");
 });
 
 test("THE DELTA DECIDES, NOT THE CUMULATIVE COUNT", () => {
@@ -148,153 +125,67 @@ test("THE DELTA DECIDES, NOT THE CUMULATIVE COUNT", () => {
   // looping right now print similar numbers, so classifying on the total would flag a
   // healthy box forever and teach an operator to ignore the flag.
   const old = classifyIntegrity(report({ watchdogRestarts: 412, watchdogRestartsDelta: 0 }), NOW);
+  assert.equal(watchdogLooping(old), false);
   assert.equal(boxIsBad(old), false, "412 lifetime restarts with none recently is not a loop");
-  assert.doesNotMatch(boxRow(old), /WATCHDOG/, "and it earns no clause at all");
-  assert.equal(boxChip(old), null);
 });
 
 test("one restart between reports is a restart, not a loop", () => {
-  // Ordinary after a deploy or a daemon-reload. Paging on it trains an operator to
-  // ignore the page, so it is reported without being marked.
   const s = classifyIntegrity(report({ watchdogRestarts: 9, watchdogRestartsDelta: 1 }), NOW);
-  assert.match(boxRow(s), /watchdog restarted once/);
+  assert.equal(watchdogLooping(s), false);
   assert.equal(boxIsBad(s), false);
-  assert.equal(boxChip(s), null);
 });
 
-test("an UNREAD counter is not a calm one", () => {
-  // null means systemctl would not answer, or this is the first report so there is no
-  // previous one to diff against. Neither is evidence the watchdog is fine, and neither
-  // is evidence it is looping, so nothing is claimed either way.
+test("an UNREAD counter is not a calm one and not a loop: nothing is claimed either way", () => {
   const s = classifyIntegrity(report({ watchdogRestarts: null, watchdogRestartsDelta: null }), NOW);
-  assert.doesNotMatch(boxRow(s), /WATCHDOG|watchdog/);
+  assert.equal(watchdogLooping(s), false);
   assert.equal(boxIsBad(s), false, "unmeasured must not be reported as broken");
-  assert.equal(boxChip(s), null);
 });
 
-test("the loop clause does not displace a real file fault", () => {
-  // Both facts, and the file verdict leads because it is the more upstream problem.
-  const row = boxRow(classifyIntegrity(report({ present: 12, notEnabled: 1, watchdogRestartsDelta: 61 }), NOW));
-  assert.match(row, /2 of 14 MISSING/);
-  assert.match(row, /WATCHDOG LOOPING/);
-  assert.ok(row.indexOf("MISSING") < row.indexOf("WATCHDOG"), "the file fault comes first");
-});
-
-// ── minerBinary: the clause box-report's own comment was written for (#392) ──────────
-//
-// The field has been on the box since #332 "so the panel can say WHY the count is short
-// instead of only that it is". It never reached the panel, because the reader dropped
-// it. These pin the sentence, not the plumbing.
-
-test("a short count says the miner binary is stale, not just that something is missing", () => {
-  const s = classifyIntegrity(report({ expected: 41, present: 40, minerBinary: "stale" }), NOW);
-  const row = boxRow(s);
-  assert.match(row, /1 of 41 MISSING/);
-  assert.match(row, /miner binary STALE/, "the count is short and the row does not say why");
-});
-
-test("an absent binary is named as absent, which is a different fix from stale", () => {
-  const s = classifyIntegrity(report({ expected: 41, present: 40, minerBinary: "absent" }), NOW);
-  assert.match(boxRow(s), /miner binary ABSENT/);
-});
-
-test("an unverified binary says so, because unmeasured is not working", () => {
-  const s = classifyIntegrity(report({ minerBinary: "unknown" }), NOW);
-  assert.match(boxRow(s), /miner binary unverified/);
-});
-
-test("a current binary adds no words to an already long row", () => {
-  const s = classifyIntegrity(report({ minerBinary: "current" }), NOW);
-  assert.doesNotMatch(boxRow(s), /miner binary/);
-});
-
-test("untracked adds nothing either: the repo pins no binary, which is not this box's fault", () => {
-  const s = classifyIntegrity(report({ minerBinary: "untracked" }), NOW);
-  assert.doesNotMatch(boxRow(s), /miner binary/);
-});
-
-test("a report with no minerBinary at all renders exactly as before", () => {
-  const withField = boxRow(classifyIntegrity(report({ minerBinary: "current" }), NOW));
-  const without = boxRow(classifyIntegrity(report({ minerBinary: null }), NOW));
-  assert.equal(without, withField, "an older report must not change the row's shape");
-});
-
-// ── THE BOX CANNOT PAGE ANYONE (risk register #15) ──────────────────────────────────────
-import { alertBridgeDown } from "./boxLabel.ts";
-
-test("a dead, unlinked or absent alert channel is a fault the row names, because no alert about it can arrive", () => {
-  for (const [v, words] of [["down", /ALERT BRIDGE DOWN/], ["unlinked", /ALERT BRIDGE UNLINKED/], ["none", /NO ALERT CHANNEL/], ["misconfigured", /ALERT CHANNEL MISCONFIGURED/]] as const) {
+test("a dead, unlinked, absent or misconfigured alert channel is a fault: no alert about it can arrive", () => {
+  for (const v of ["down", "unlinked", "none", "misconfigured"]) {
     const s = classifyIntegrity(report({ alertBridge: v }), NOW);
-    assert.match(boxRow(s), words);
-    assert.match(boxRow(s), /pages go nowhere/);
-    assert.equal(boxIsBad(s), true, v);
     assert.equal(alertBridgeDown(s), true, v);
-    // On the terse strip too, the same way a looping watchdog is: the panel is a click
-    // nobody makes when the strip looks fine, and this is the fault no page can announce.
-    assert.equal(boxChip(s), "CANNOT PAGE", v);
+    assert.equal(boxIsBad(s), true, v);
   }
 });
 
-test("CANNOT PAGE outranks INCOMPLETE on the strip: a half-installed box usually has no alerts.env, and the pager matters more", () => {
-  const s = classifyIntegrity(report({ present: 13, alertBridge: "none" }), NOW);
-  assert.equal(s.state, "incomplete");
-  assert.equal(boxChip(s), "CANNOT PAGE");
-  assert.match(boxRow(s), /NO ALERT CHANNEL/);
-  assert.equal(boxIsBad(s), true);
-});
-
-test("a looping watchdog outranks the dead bridge on the strip's one slot: both are on the row", () => {
-  const s = classifyIntegrity(report({ alertBridge: "down", watchdogRestarts: 61, watchdogRestartsDelta: 61 }), NOW);
-  assert.equal(boxChip(s), "WATCHDOG LOOP");
-  assert.match(boxRow(s), /WATCHDOG LOOPING/);
-  assert.match(boxRow(s), /ALERT BRIDGE DOWN/);
-});
-
-test("ok, a webhook channel, unknown and an older report are NOT the fault here, and say nothing", () => {
+test("ok, a webhook channel, unknown and an older report are NOT the pager fault", () => {
   // "unknown" is the off-box probe's to fail: a public row cannot separate "could not ask"
   // from "asked and it is down" without teaching readers to ignore red.
   for (const v of ["ok", "webhook", "unknown", null]) {
     const s = classifyIntegrity(report({ alertBridge: v }), NOW);
-    assert.doesNotMatch(boxRow(s), /BRIDGE|ALERT CHANNEL/, `alertBridge ${String(v)}`);
+    assert.equal(alertBridgeDown(s), false, `alertBridge ${String(v)}`);
     assert.equal(boxIsBad(s), false, `alertBridge ${String(v)}`);
-    assert.equal(boxChip(s), null, `alertBridge ${String(v)}`);
   }
 });
 
-// ── A STOPPED WATCHDOG IS A FAULT, AND A VISIBLE ONE (risk register #16) ─────────────────
-import { watchdogStopped } from "./boxLabel.ts";
-
-test("a watchdog systemd calls inactive or failed is a fault the row and the strip both name", () => {
+test("a watchdog systemd calls inactive, failed or deactivating is a fault (risk register #16)", () => {
   // is-enabled was true of it, Restart=always never let it reach failed, and the restart
   // counter counted restarts, of which a stopped unit has none: a box with no
   // self-healing read complete and calm.
-  for (const [v, words] of [["inactive", /WATCHDOG STOPPED, nothing heals/], ["failed", /WATCHDOG FAILED, nothing heals/], ["deactivating", /WATCHDOG STOPPING, nothing heals/]] as const) {
+  for (const v of ["inactive", "failed", "deactivating"]) {
     const s = classifyIntegrity(report({ watchdogUnit: v }), NOW);
     assert.equal(s.state, "complete", "the files are all there; that is exactly the trap");
-    assert.match(boxRow(s), words);
-    assert.equal(boxIsBad(s), true, v);
     assert.equal(watchdogStopped(s), true, v);
-    assert.equal(boxChip(s), "WATCHDOG STOPPED", v);
+    assert.equal(boxIsBad(s), true, v);
   }
 });
 
-test("active, activating, unknown and an older report are not that fault, and say nothing about it", () => {
+test("active, activating, unknown and an older report are not that fault", () => {
   // activating is seconds from running; unknown is the off-box probe's to fail; null is
   // a server that predates the field. deactivating is NOT here: its next state is
   // stopped, and passing it would reopen the hole at the moment a stop begins.
   for (const v of ["active", "activating", "unknown", null]) {
     const s = classifyIntegrity(report({ watchdogUnit: v }), NOW);
-    assert.doesNotMatch(boxRow(s), /WATCHDOG STOPPED|WATCHDOG FAILED/, `watchdogUnit ${String(v)}`);
     assert.equal(watchdogStopped(s), false, `watchdogUnit ${String(v)}`);
     assert.equal(boxIsBad(s), false, `watchdogUnit ${String(v)}`);
-    assert.equal(boxChip(s), null, `watchdogUnit ${String(v)}`);
   }
 });
 
-test("a looping watchdog outranks a stopped one on the strip, and a stopped one outranks a dead bridge", () => {
-  assert.equal(boxChip(classifyIntegrity(report({ watchdogUnit: "inactive", watchdogRestarts: 61, watchdogRestartsDelta: 61 }), NOW)), "WATCHDOG LOOP");
-  const s = classifyIntegrity(report({ watchdogUnit: "inactive", alertBridge: "down" }), NOW);
-  assert.equal(boxChip(s), "WATCHDOG STOPPED");
-  assert.match(boxRow(s), /WATCHDOG STOPPED/);
-  assert.match(boxRow(s), /ALERT BRIDGE DOWN/);
+test("undeclared enabled units are a fact, not a fault: a drifted box is still ok", () => {
+  // classifyIntegrity's own comment: drift is surfaced, never classified on. Folding it
+  // into the verdict would make a drifted box outrank a clean one.
+  const s = classifyIntegrity(report({ enabledUndeclared: 2 }), NOW);
+  assert.equal(boxIsBad(s), false);
+  assert.equal(publicBox(s).state, "ok");
 });

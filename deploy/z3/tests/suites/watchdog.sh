@@ -49,6 +49,8 @@ wd_env() {
   # send delivered, as before.
   cat > "$T/alert.sh" <<ALERT
 #!/bin/sh
+# --describe is the start line asking which channel, not a page: answer and do not count.
+[ "\${1:-}" = "--describe" ] && { echo "\${STUB_ALERT_CHANNEL:-stub-channel}"; exit 0; }
 printf '%s\\n' "\$*" >> "$T/attempts.log"
 n=0; [ -f "$T/alert-calls" ] && n=\$(cat "$T/alert-calls"); n=\$((n + 1)); echo "\$n" > "$T/alert-calls"
 if [ "\$n" -le "\${STUB_ALERT_FAIL_N:-0}" ]; then echo "stub alert: send failed"; exit \${STUB_ALERT_FAIL_RC:-1}; fi
@@ -71,6 +73,18 @@ wd_run() {
   return 0
 }
 alerts() { cat "$T/alerts.log" 2>/dev/null; }
+
+echo "== watchdog: the start line names the channel alert.sh would use, never a URL (R-24)"
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+export WATCHDOG_ALERT_URL="http://hook.invalid/secret-path-MARKER"
+STUB_ALERT_CHANNEL="signal" wd_run 1
+check "the start line carries alert.sh's --describe answer" "grep -q 'starting: .* alert=signal' '$T/run.log'"
+check "and not the watchdog's own URL variable" "! grep -q 'secret-path-MARKER' '$T/run.log'"
+check "and asking did not count as a page" "! grep -q -- '--describe' '$T/attempts.log' 2>/dev/null"
+unset WATCHDOG_ALERT_URL
 
 echo "== watchdog: a crash-looping container is never called recovered"
 wd_env

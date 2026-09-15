@@ -1,7 +1,9 @@
 /** GET /api/status - backend reachability, faucet policy, and wallet balance. */
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { config, ZATOSHI_PER_TAZ } from "@/lib/config";
 import { classifyIntegrity } from "@/lib/boxIntegrity";
+import { publicBox } from "@/lib/boxLabel";
+import { OPS_HEADER, opsTokenMatches } from "@/lib/opsToken";
 import { readBoxIntegrity } from "@/lib/boxIntegrityFile";
 import { pingBackend } from "@/lib/zcash/lightwalletd";
 import { safeBalance } from "@/lib/zcash/send";
@@ -73,7 +75,16 @@ async function ctazBlock() {
   };
 }
 
-export const GET = withApi("status", async () => {
+export const GET = withApi("status", async (req: NextRequest) => {
+  // The operator's view (risk register II, R-24): the box's named faults and the
+  // running commit come back only with the token; everyone else gets one word and no
+  // commit. See src/lib/opsToken.ts.
+  const ops = opsTokenMatches(req.headers.get(OPS_HEADER), process.env.FAUCET_OPS_TOKEN);
+  const box = classifyIntegrity(readBoxIntegrity(), Date.now());
+  // Two bodies on one URL, chosen by a header: say so to any cache that ever sits in
+  // front, or the operator's body could be handed to the public. Caddy caches nothing
+  // today; this is for the day something does.
+  const headers = { "cache-control": "private, no-store", vary: OPS_HEADER };
   const [backend, balanceZat, node] = await Promise.all([pingBackend(), safeBalance(), getNodeStatus()]);
   // Synchronous and off the await chain: a few hundred bytes from a bind mount, so it
   // does not belong in the Promise.all with three network calls.
@@ -87,8 +98,9 @@ export const GET = withApi("status", async () => {
     // Which commit this running build came from, so an external check can tell whether a
     // merge actually reached production. The deploy is pull-based, so a stalled timer or a
     // silently failed rebuild otherwise looks identical to being up to date.
-    // "unknown" when the deploy did not supply one, never omitted.
-    buildCommit: process.env.FAUCET_BUILD_COMMIT || "unknown",
+    // "unknown" when the deploy did not supply one. OPERATOR ONLY (R-24): to anyone
+    // else "three commits behind main" is a list of fixes the box does not have yet.
+    ...(ops ? { buildCommit: process.env.FAUCET_BUILD_COMMIT || "unknown" } : {}),
     network: config.network,
     dripTaz: config.dripTaz,
     cooldownSeconds: config.cooldownSeconds,
@@ -116,12 +128,15 @@ export const GET = withApi("status", async () => {
     // Null when the ledger will not answer; an unknown count is not zero.
     drips: await countDrips(Date.now(), "taz"),
     backend,
-    // Does the box have what the repo says it must? COUNTS ONLY, never file names:
-    // this endpoint is public, and naming what is missing from a production box is
-    // reconnaissance. live-smoke asserts this from outside on a schedule (the cron
-    // asks for 15 minutes; GitHub delivered about five hours when it was measured),
-    // and it is the only signal that has ever reached us unprompted.
-    box: classifyIntegrity(readBoxIntegrity(), Date.now()),
+    // Does the box have what the repo says it must? To the operator (token): counts,
+    // never file names, plus the watchdog unit and pager state. To everyone else: one
+    // word (R-24), because "the watchdog is stopped" and "pages go nowhere" on a public
+    // page is reconnaissance. live-smoke asserts this from outside on a schedule with
+    // the token, and it is the only signal that has ever reached us unprompted.
+    // The operator's shape carries the same one-word verdict the public gets, so the
+    // off-box probe judges both shapes by that word alone and never prints a unit or
+    // bridge name into a run log that, on a public repository, anyone can read.
+    box: ops ? { ...box, verdict: publicBox(box).state } : publicBox(box),
     node, // { ready, syncPercent, height, nodeHeight } or null while the wallet is down
     // OBSERVED, not configured. `active` used to be config.miner.active straight from
     // an env flag, so it could not be false while the miner was broken, and it said
@@ -147,5 +162,5 @@ export const GET = withApi("status", async () => {
     // than the reconciler's last tick); refilling is the reconciler's decision.
     reserve: { ...getReserveReconciler().status, spendableTaz: balanceTaz },
     ctaz: await ctazBlock(),
-  });
+  }, { headers });
 });

@@ -4,14 +4,13 @@ import { CSSProperties, useCallback, useEffect, useRef, useState } from "react";
 import { BrandMark } from "./BrandMark";
 import { reserveRows } from "@/lib/reserveLabel";
 import { minerChip, minerRow, minerErrorRow, minerIsBad, readingFromStatus } from "@/lib/minerLabel";
-import { boxRow, boxChip, boxIsBad } from "@/lib/boxLabel";
+import { publicBoxRow, publicBoxChip, publicBoxIsBad, type PublicBox } from "@/lib/boxLabel";
 import { syncLabel, syncBarWidth } from "@/lib/syncLabel";
 import { networkFacts, formatAmount, type FaucetNetwork } from "@/lib/network";
 import { incomeSentence } from "@/lib/incomeSentence";
 import { validateTestnetAddress } from "@/lib/zcash/address";
 import { powEstimateSeconds, powEstimateText } from "@/lib/powEstimate";
 import type { CtazState } from "@/lib/crosslink/recency";
-import type { IntegrityStatus } from "@/lib/boxIntegrity";
 import type { MinerReading } from "@/lib/miner/heartbeat";
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
@@ -61,9 +60,10 @@ interface Status {
   // deploy answering this shape has no heartbeat to report, and treating a missing
   // field as "running" would be the bug all over again.
   miner?: Partial<MinerReading> & { active: boolean };
-  /** The box's own integrity, measured by a unit on the host. Optional: a deploy
-   * older than #287 does not send it, and absent must not read as complete. */
-  box?: IntegrityStatus;
+  /** The box's own integrity, measured by a unit on the host, as ONE WORD: the page is
+   * public and the named faults are the operator's (R-24). Optional: a deploy older
+   * than #287 does not send it, and absent must not read as ok. */
+  box?: PublicBox;
   reserve?: { targetTaz: number; lowTaz: number; refilling: boolean; spendableTaz: number | null; shieldCoinbase?: boolean; harvesting?: boolean; failedSteps?: number; lastFailure?: { outcome: "waiting" | "resyncing" | "error"; reason: string } | null };
   donationAddress?: string;
   /** Mainnet, for project upkeep. Empty when unset OR rejected by config validation. */
@@ -1148,7 +1148,7 @@ export default function Home() {
           // the terse strip telling an operator what they already assume, but a box
           // that is missing units has to be visible without opening the panel,
           // because the panel is a click nobody makes when they think all is well.
-          ...(box && boxChip(box) ? [{ k: "box", v: boxChip(box)! }] : []),
+          ...(box && publicBoxChip(box) ? [{ k: "box", v: publicBoxChip(box)! }] : []),
           // "indexer", never "node". This is the lightwalletd we query, not the
           // Zcash node behind it, and calling it the node version would be wrong
           // in front of the people who asked for it. Our own zebra version is not
@@ -1219,7 +1219,7 @@ export default function Home() {
               // The box's own integrity. Measured since #287 and never rendered until
               // now: the endpoint knew two files were missing and the panel said
               // nothing, so the one place a person looks did not carry it.
-              ...(box ? [{ net: "both", k: "box", v: boxRow(box), bad: boxIsBad(box) }] : []),
+              ...(box ? [{ net: "both", k: "box", v: publicBoxRow(box), bad: publicBoxIsBad(box) }] : []),
               ...(reserve
                 ? [
                     // Wording lives in reserveRows and is unit-tested, because

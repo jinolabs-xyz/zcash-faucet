@@ -88,6 +88,17 @@ repository variable would be a way to silence this rather than fix it. Change it
 `scripts/live-probe.mjs`, in a pull request, if it ever needs changing: the repo
 suite fails if the name appears in the workflow at all.
 
+**The probe reads the operator's view with a token.** `/api/status` hands out the
+box's named faults (which unit is stopped, whether the pager works) and the running
+commit only to a request carrying `FAUCET_OPS_TOKEN` in the `x-faucet-ops` header;
+the public page gets one word, `ok`, `attention` or `unknown`, and no commit, so it
+never announces when the box can neither heal nor page (risk register II, R-24). Set
+the same value in `deploy/z3/faucet.env` on the box and as the GitHub secret
+`FAUCET_OPS_TOKEN`; without it the probe still fails on `attention` and `unknown`,
+it just cannot say which fault. The watchdog's own start line reports the channel it
+would page through as `alert.sh --describe` answers it (`signal`, `webhook/slack`,
+`none`, `misconfigured/…`), never a URL.
+
 **The off-box probe cannot pass without probing.** `live-smoke.yml` runs
 `scripts/live-probe.mjs` from a GitHub runner: it is the only signal that has ever
 reached us unprompted, and it had three ways to go green while watching nothing. An
@@ -177,10 +188,11 @@ unit's systemd word (`active`, `activating`, `deactivating`, `inactive`, `failed
 or `unknown` when systemctl would not say). It used to be invisible: the file count
 asks `is-enabled`, which a stopped unit still is; `Restart=always` with the start
 limit off means it never reaches `failed` on its own; and the restart counter counts
-restarts, of which a unit somebody stopped has none. The panel row reads `WATCHDOG
-STOPPED, nothing heals` (or `FAILED`, or `STOPPING`), the strip shows `WATCHDOG
-STOPPED`, and the off-box live probe fails on everything but `active` and `activating`
-(an older server that sends no field is cannot-verify). The report refreshes every
+restarts, of which a unit somebody stopped has none. The public page folds it into
+one word (`OPS ATTENTION` on the strip; the named state is the operator's, through
+Signal, the box's report and the token view of `/api/status`, R-24), and the off-box
+live probe fails on everything but a box that is complete with the watchdog
+`active`/`activating` and the pager `ok`/`webhook`, without printing which. The report refreshes every
 five minutes, so a repair that stops the watchdog should run `/opt/faucet/box-report.sh`
 after starting it again (the runbook headers say so, and zsnap's cold export does it
 itself); otherwise the panel and the probe carry the stop for up to five minutes.
@@ -192,10 +204,12 @@ publishes `alertBridge`: `ok` (up and the configured number linked), `unlinked`,
 `down`, `misconfigured` (a state `alert.sh` refuses to send in: Signal without
 a usable E.164 number or recipient, or, for any format, a box with neither `jq`
 nor `python3` to encode a body), `webhook` (Slack or Discord, nothing to
-probe), `none` (no alert URL at all), `unknown` (could not ask). The panel's box
-row names `down`, `unlinked`, `misconfigured` and `none` (`... pages go
-nowhere`) and the strip shows `CANNOT PAGE` for them, the way it shows a looping
-watchdog; the off-box live probe fails on those and on `unknown`. That probe is the one channel that does not depend on the bridge,
+probe), `none` (no alert URL at all), `unknown` (could not ask). The public page
+folds all of that into one word (`OPS ATTENTION` on the strip for any fault,
+`unknown` when the box could not tell); the named state reaches the operator
+through Signal, the box's own report, and `/api/status` with the operator token
+(R-24). The off-box live probe fails on every state but `ok` and `webhook`,
+whether it reads the word or the name. That probe is the one channel that does not depend on the bridge,
 and it depends on the repository variable `FAUCET_LIVE_URL` being set and on
 someone reading the red-run email; it is the last line, not a second bridge.
 
