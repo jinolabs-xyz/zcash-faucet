@@ -341,7 +341,11 @@ export class ZalletSender implements Sender {
         // The wallet said no before spawning anything. If it said no to the RECIPIENT,
         // that is the visitor's to fix and not a wallet failure (review of #531).
         const msg = err instanceof Error ? err.message : String(err);
-        const m = /^zallet RPC z_sendmany: (.*) \(code (-?\d+)\)$/.exec(msg);
+        // [\s\S], not `.`: zallet's privacy-policy refusals are Fluent block text and
+        // arrive with the .ftl's line breaks inside them, plus a recommendation sentence
+        // after a space. `.` stopped at the first newline, the match failed, and a real
+        // refusal fell through to the wallet-failed branch (review of #544).
+        const m = /^zallet RPC z_sendmany: ([\s\S]*) \(code (-?\d+)\)$/.exec(msg);
         if (m && isRecipientRefusal(Number(m[2]), m[1])) throw new RecipientRefusedError(m[1]);
         throw err;
       }

@@ -320,6 +320,11 @@ const RECIPIENT = [
   "Invalid Sapling payment address",
   "Invalid Orchard receiver in Unified Address",
   "Invalid Sapling receiver in Unified Address",
+  // zallet's privacy-policy refusals as production sends them: Fluent block text with the
+  // .ftl's line breaks kept, and the recommendation sentence appended after a space
+  // (payments.rs). The single-line transcriptions above never occur on the wire.
+  "This transaction would have transparent recipients, which is not enabled by\ndefault because it will publicly reveal transaction recipients and amounts. THIS MAY AFFECT YOUR PRIVACY. Resubmit with the 'privacyPolicy' parameter set\nto 'AllowRevealedRecipients' or weaker if you wish to allow this transaction to proceed\nanyway.",
+  "Could not send to the Sapling shielded pool without spending non-Sapling\nfunds, which would reveal transaction amounts. THIS MAY AFFECT YOUR PRIVACY. Resubmit with the 'privacyPolicy' parameter set\nto 'AllowRevealedAmounts' or weaker if you wish to allow this transaction to proceed\nanyway.",
 ];
 // Wallet-side sentences that mention pools, addresses or policies and MUST keep counting
 // against the wallet (review of #531, round 2: a keyword scan sent all of these to the
