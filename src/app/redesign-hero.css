@@ -111,3 +111,29 @@ button.tag:hover,a.tag:hover{border-color:var(--muted)}
  * rule - so the ruling's intent is here instead, and the discrepancy is in the PR body.
  */
 .mascot-riso{width:100% !important;max-width:calc(22*var(--u)) !important;height:auto !important}
+
+/* ===== NOT IN THE SNAPSHOT: a property globals.css sets and the spec never names =====
+ * `globals.css:151` styles `.tag` with `text-transform: uppercase`. The spec's `.tag` rule
+ * does not mention the property at all, so transcribing it verbatim overrides the font, the
+ * size, the radius and the border while leaving the legacy uppercase untouched - and the
+ * design's lowercase words render as OK PARKED UNWATCHED in a hybrid neither design intends.
+ * Visible today on the tags inside the claim card (page.tsx:1464 and :1589).
+ *
+ * FOUND BY SDE-UI, in a screenshot of their own views, and handed over rather than spot-fixed
+ * in their file alone. It is the general form of a lesson I learned the narrow way on the
+ * shell: correcting a general rule does not correct the specific ones that override it - and
+ * its mirror, transcribing a rule does not neutralise the properties the old rule set that
+ * the new one is silent about. A verbatim transcription only replaces what it NAMES.
+ *
+ * The detector is four lines and it is now run against both of these sheets: for every class
+ * my rules style, list the properties globals.css sets on the same class that my rule never
+ * names. `text-transform` on `.tag` was the only real hit across both files.
+ */
+.tag{text-transform:none}
+
+/* The same shape one selector over, and the reason the detector is worth running rather than
+ * reading: globals.css:72 paints `html` with the OLD palette's --color-bg. Nothing in the
+ * transcription names `html`'s background, so the overscroll and rubber-band area behind the
+ * page keeps the pre-redesign colour while the page itself is on --page. Only visible on a
+ * bounce, which is why nobody would find it by looking. */
+html{background:var(--page)}
