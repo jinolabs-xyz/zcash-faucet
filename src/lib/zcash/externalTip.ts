@@ -390,6 +390,17 @@ export interface TipReferences {
   /** The source whose height a caller should judge a node against: the highest
    *  non-stale one. Null when no source is usable. */
   used: ReferenceName | null;
+  /**
+   * That source's height, FLAT, beside the name of the source it came from.
+   *
+   * Redundant with `sources[used].height` and deliberately so: the watchdog is the
+   * consumer, it parses with grep, sed and cut by design, and reaching two levels into a
+   * JSON body with a brace-bounded grep is the #391 greedy-regex lesson volunteered. The
+   * alternative was teaching the last line of defence to depend on python3 or jq, which
+   * changes its dependency profile for one number. Null whenever `used` is null, so the
+   * two can never tell different stories.
+   */
+  usedHeight: number | null;
 }
 
 /**
@@ -518,11 +529,15 @@ export function getTipReferences(now: number = Date.now()): TipReferences {
   const fresh = (Object.entries(sources) as [ReferenceName, TipReference][]).filter(([, v]) => !v.stale);
   const heights = fresh.map(([, v]) => v.height);
   const spreadBlocks = heights.length >= 2 ? Math.max(...heights) - Math.min(...heights) : null;
+  const used = fresh.length ? fresh.reduce((a, b) => (b[1].height > a[1].height ? b : a))[0] : null;
   return {
     sources,
     spreadBlocks,
     corroborated: spreadBlocks == null ? null : spreadBlocks <= AGREE_BLOCKS,
-    used: fresh.length ? fresh.reduce((a, b) => (b[1].height > a[1].height ? b : a))[0] : null,
+    used,
+    // From the same entry `used` names, not recomputed, so a future change to the choice
+    // rule cannot move one without the other.
+    usedHeight: used ? sources[used]!.height : null,
   };
 }
 

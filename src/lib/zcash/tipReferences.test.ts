@@ -73,6 +73,28 @@ test("THE 13:06Z CASE: a source 113 blocks behind cannot pass a node the other s
   assert.equal(refs.sources.hosh?.stale, false, "our fetch was seconds old; hosh's number was not");
 });
 
+test("usedHeight is the height of the source `used` names, flat, for a reader that cannot nest", () => {
+  // The watchdog parses with grep, sed and cut by design, so tipReferences.sources[used]
+  // .height is out of reach two levels down and reaching for it with a brace-bounded grep
+  // is the #391 greedy-regex lesson volunteered (SDE-Infra, writing the consumer). The
+  // field is redundant on purpose; what matters is that it cannot disagree with `used`.
+  plant({ hosh: { height: 4_349_918, ageMs: 12_000 }, lightwalletd: { height: 4_349_928, ageMs: 34_000 } });
+  const refs = getTipReferences(NOW);
+  assert.equal(refs.used, "lightwalletd");
+  assert.equal(refs.usedHeight, 4_349_928);
+  assert.equal(refs.usedHeight, refs.sources[refs.used!]!.height, "the two must always tell one story");
+  assert.equal(refs.usedHeight, referenceTipAt(NOW).height, "and the same one referenceTip judges against");
+
+  // Null WITH used, never a stale height left standing beside a null name.
+  plant({ hosh: { height: 4_349_918, ageMs: REFERENCE_MAX_AGE_MS + 1 } });
+  const stale = getTipReferences(NOW);
+  assert.equal(stale.used, null);
+  assert.equal(stale.usedHeight, null, "no usable source means no height, not the stale one");
+
+  resetExternalTipForTests();
+  assert.equal(getTipReferences(NOW).usedHeight, null, "and nothing fetched at all is null too");
+});
+
 test("the staleness bound is a boundary, and it is OUR fetch age", () => {
   plant({ hosh: { height: 4_000_000, ageMs: REFERENCE_MAX_AGE_MS } });
   assert.equal(getTipReferences(NOW).sources.hosh?.stale, false, "exactly at the bound is still usable");
@@ -93,6 +115,18 @@ test("a stale reference is still reported, and still cannot be used", () => {
   assert.equal(refs.sources.hosh?.stale, true);
   assert.equal(refs.sources.hosh?.height, 4_349_900, "reported, because an operator wants to see it");
   assert.equal(refs.used, "lightwalletd", "but the fresh lower one is what a node is judged against");
+  // AND THE FLAT FIELD SAYS THE SAME, here, where the distinction is most visible: a
+  // higher STALE source sits beside a lower fresh one, so a usedHeight taken from the
+  // wrong set reads 4,349,900 next to a `used` that names the other source.
+  //
+  // WITHOUT THIS LINE A RECOMPUTE SURVIVES, and it is worth being exact about which one,
+  // because I got it wrong once. `used ? max(all sources) : null` - GUARDED, so the
+  // ternary short-circuits on the stale-only case below - passed the whole suite until
+  // this assertion existed. The guard-LESS variant does fail below, which is what I
+  // measured when I first disputed the finding; two different mutants, and the one the
+  // CTO's red-team meant was the one that survives. Measured both ways: guarded is green
+  // without this line and red with it.
+  assert.equal(refs.usedHeight, 4_349_700, "the flat height follows `used`, not the highest number present");
   assert.equal(refs.spreadBlocks, null, "one usable source is not a spread");
   assert.equal(refs.corroborated, null, "and it is not disagreement either");
 });

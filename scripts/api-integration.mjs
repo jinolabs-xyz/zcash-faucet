@@ -608,7 +608,11 @@ try {
       Number.isInteger(refs.sources.hosh.ageSeconds) && refs.sources.hosh.ageSeconds >= 0 &&
       refs.sources.hosh.stale === false &&
       refs.sources.lightwalletd === undefined &&
-      refs.spreadBlocks === null && refs.corroborated === null && refs.used === "hosh",
+      refs.spreadBlocks === null && refs.corroborated === null && refs.used === "hosh" &&
+      // FLAT, beside the name, because the watchdog reads this with grep and cannot nest
+      // (SDE-Infra's ask, writing the R-12 rung). Asserted equal to the nested value so
+      // the redundancy can never become a disagreement.
+      refs.usedHeight === refs.sources.hosh.height,
     JSON.stringify(refs));
   // And the node is judged against that reference rather than against a number with no
   // source: same height, arrived at through the max-over-non-stale rule.
