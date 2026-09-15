@@ -51,13 +51,16 @@ box_report_out_default() {
   # failure after this ends in cannot_say and exit 0, so without this line an operator
   # looking at a box that publishes nothing has a stray mktemp error and no idea which
   # directory was tried.
+  local out why
   if [ -n "$mp" ]; then
-    echo "box-report: report path $mp/box-integrity.json (from docker volume inspect $vol)" >&2
-    printf '%s/box-integrity.json\n' "$mp"
+    out="$mp/box-integrity.json"; why="from docker volume inspect $vol"
   else
-    echo "box-report: report path $root/$vol/_data/box-integrity.json (fallback: docker did not name a mountpoint for $vol)" >&2
-    printf '%s/%s/_data/box-integrity.json\n' "$root" "$vol"
+    out="$root/$vol/_data/box-integrity.json"; why="fallback: docker did not name a mountpoint for $vol"
   fi
+  # Spelled once per branch and used twice, so the line an operator reads and the path the
+  # report is written to cannot drift apart (review of #550).
+  echo "box-report: report path $out ($why)" >&2
+  printf '%s\n' "$out"
 }
 OUT="${BOX_REPORT_OUT:-$(box_report_out_default)}"
 SYSTEMCTL="${BOX_REPORT_SYSTEMCTL:-systemctl}"

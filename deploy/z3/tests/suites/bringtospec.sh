@@ -352,3 +352,36 @@ check "and the writer, falling back on its own, wrote to exactly that path" \
   "[ -s \"$reader_fb\" ]"
 check "and both of them asked docker first rather than going straight to the guess" \
   "[ \"\$(grep -c 'docker volume inspect -f {{.Mountpoint}} no-such-volume' '$STUB_LOG')\" -ge 2 ]"
+
+echo "== bring-to-spec and box-report agree on the PRODUCTION default, with no override set"
+# THE HOLE THE OVERRIDE OPENED, found in review of #550. Adding *_VOLUME_ROOT made the
+# fallback observable, and then every case set it - so the production default itself, the
+# string that actually ships, went untested in both files at once. Moving the writer's
+# default to somewhere else entirely left the suite green.
+#
+# Neither override is set here and nothing is written: with no mountpoint from docker each
+# script RESOLVES its own production path and SAYS it, the writer on stderr and the reader
+# in its cannot-verify line, and the assertion is that the two strings are the same one.
+# That is why the path line exists at all, and it is the only way to compare these two
+# without root on /var/lib/docker.
+spec_env
+unset SPEC_REPORT SPEC_VOLUME_ROOT BOX_REPORT_OUT BOX_REPORT_VOLUME_ROOT
+export STUB_LOG="$T/stub.log"; : > "$STUB_LOG"
+export STUB_VOLROOT="$T/empty"; mkdir -p "$STUB_VOLROOT"   # docker names no mountpoint
+export STUB_REPORT_PATH="$T/report/elsewhere.json"
+bash "$SPEC" > "$T/prod.log" 2>&1
+reader_prod="$(sed -n 's/.*no integrity report at \(.*\)\./\1/p' "$T/prod.log" | head -1)"
+mkdir -p "$T/repohome/deploy"
+ln -sfn "$T/src" "$T/repohome/deploy/z3"
+( BOX_REPORT_REPO="$T/repohome" BOX_REPORT_INSTALL_DIR="$T/install" \
+  BOX_REPORT_UNIT_DIR="$T/units" BOX_REPORT_SYSTEMCTL="$SCRATCH/stubs/audit-systemctl" \
+  bash "$REPO/deploy/z3/box-report.sh" ) > /dev/null 2>"$T/prod.err"
+writer_prod="$(sed -n 's/^box-report: report path \(.*\) (.*$/\1/p' "$T/prod.err" | head -1)"
+check "the reader resolved a production path and named it" "[ -n '$reader_prod' ]"
+check "the writer resolved one and named it too" "[ -n '$writer_prod' ]"
+check "and the two production defaults are the SAME path, with nothing overridden" \
+  "[ \"$reader_prod\" = \"$writer_prod\" ]"
+# Anchored once, deliberately: this is the string that ships, so a silent move of BOTH
+# defaults together would otherwise still agree with itself.
+check "and it is the stock daemon's path for the volume this project creates" \
+  "[ \"$writer_prod\" = '/var/lib/docker/volumes/zcash-faucet_faucet_data/_data/box-integrity.json' ]"
