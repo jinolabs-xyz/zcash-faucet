@@ -10,6 +10,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import {
   barMetrics,
   barRects,
@@ -97,11 +98,27 @@ test("Mondays are the dated ticks, and the label has no leading zero", () => {
   assert.equal(isMonday("2026-09-08"), false);
   assert.equal(mondayLabel("2026-09-07"), "Mon 7");
   assert.equal(mondayLabel("2026-09-14"), "Mon 14");
-  // Parsed as UTC, never as local. A local parse moves the day boundary by the viewer's
-  // offset and labels the wrong bars for anyone west of Greenwich.
   assert.equal(isMonday("2026-08-17"), true);
   const mondays = SERIES.filter((d) => isMonday(d.day));
   assert.ok(mondays.length >= 4 && mondays.length <= 5, `${mondays.length} Mondays in 30 days`);
+});
+
+test("the day is parsed in UTC, never in the viewer's timezone", () => {
+  // FOUND BY A SURVIVING MUTANT. Swapping getUTCDay for getDay leaves this suite green on
+  // this machine and only on this machine: it sits at UTC+5:30, where the offset never
+  // pushes 2026-09-07T00:00:00Z back across a day boundary. West of Greenwich it does,
+  // and every Monday label lands on the wrong bar for that viewer.
+  //
+  // So the timezone is FORCED rather than trusted. A test whose result depends on where
+  // the machine happens to be is not testing the property, it is testing the machine.
+  const probe = (tz: string) =>
+    execFileSync(process.execPath, ["--input-type=module", "-e",
+      `import { isMonday } from ${JSON.stringify(new URL("./charts.ts", import.meta.url).href)};` +
+      `process.stdout.write(String(isMonday("2026-09-07")));`],
+      { env: { ...process.env, TZ: tz }, encoding: "utf8" }).trim();
+  for (const tz of ["UTC", "Pacific/Niue", "Pacific/Kiritimati", "America/Los_Angeles", "Asia/Kolkata"]) {
+    assert.equal(probe(tz), "true", `2026-09-07 is a Monday in UTC but isMonday said otherwise under TZ=${tz}`);
+  }
 });
 
 test("the mean line comes from the counter's own window, not from the series", () => {

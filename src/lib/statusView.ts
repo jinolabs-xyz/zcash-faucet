@@ -15,7 +15,7 @@
  * three of them disagree with helpers this repo already ships and those disagreements
  * are the interesting part. Each one is marked DEPARTURE below with the reason.
  */
-import { minerChip, readingFromStatus, type MinerUnit } from "./minerLabel.ts";
+import { minerChip, minerIsBad, readingFromStatus, type MinerUnit } from "./minerLabel.ts";
 import type { MinerReading } from "./miner/heartbeat.ts";
 
 /** Thousands separators, the only number formatting these views do. */
@@ -214,8 +214,15 @@ export function minerTone(
   // not green: nothing is being mined, and green would say otherwise.
   if (r.state === "not-writing" && unit === "inactive") return "unknown";
   if (r.state === "running") return "ok";
-  if (r.state === "waiting") return "warn";
-  return "bad";
+  // AND THE REST IS minerIsBad's CALL, NOT A SECOND ONE MADE HERE. The first version of
+  // this function re-derived the judgement with its own `state === "waiting" ? warn :
+  // bad`, which was the same answer by a different route - and a mutation pass proved
+  // what that costs: deleting the heartbeat half of minerLabel's parked() left every
+  // test green, because nothing this file called ever reached it. minerIsBad is where
+  // that decision lives and is tested, including the two cases that look like faults and
+  // are not, and the one that looks calm and is not: a node with NO PEERS, where the
+  // miner row is the only place that fault can show.
+  return minerIsBad(r, unit) ? "bad" : "warn";
 }
 
 /** Accepted as a share of everything submitted. Null when nothing has been submitted. */

@@ -197,6 +197,32 @@ test("a live heartbeat is never overruled by a stale box report", () => {
   assert.equal(minerTone(running, "inactive"), "ok");
 });
 
+test("a STALLED miner on an inactive unit is still a fault, not a parked one", () => {
+  // FOUND BY A SURVIVING MUTANT, and it is the assertion the test above only looked like
+  // it was making. Deleting the heartbeat half of minerLabel's parked() - so that
+  // `unit === "inactive"` alone decides - leaves every case above green, because
+  // minerChip switches on the STATE first and never consults parked() for a running
+  // miner. The half is load-bearing in exactly one place, minerIsBad, and this is it: a
+  // miner that is stalled while systemd's word is stale would stop being marked at all.
+  const stalled = { state: "stalled", active: false, beatAgoSeconds: 4, templateAgoSeconds: 9000 } as const;
+  assert.equal(minerWord(stalled, "inactive"), "no blocks");
+  assert.equal(minerTone(stalled, "inactive"), "bad", "a stale 'inactive' must not calm a stalled miner");
+  assert.notEqual(minerTone(stalled, "inactive"), "warn");
+});
+
+test("a node with NO PEERS is marked on the miner, because it shows nowhere else", () => {
+  // An isolated node sits at its OWN tip, so the node row stays green and its lag reads
+  // zero. minerIsBad carries this and the first version of minerTone threw it away by
+  // painting every waiting miner "warn". Two minutes is the threshold, so a node that
+  // has just restarted does not flash red on every deploy.
+  const settling = { state: "waiting", active: false, beatAgoSeconds: 3, waitingReason: "no-peers", waitingAgoSeconds: 30 } as const;
+  const isolated = { state: "waiting", active: false, beatAgoSeconds: 3, waitingReason: "no-peers", waitingAgoSeconds: 600 } as const;
+  assert.equal(minerTone(settling, "active"), "warn", "the first two minutes are a restart, not a finding");
+  assert.equal(minerTone(isolated, "active"), "bad");
+  // And the ordinary case is still not a fault: the node row beside it carries that one.
+  assert.equal(minerTone({ state: "waiting", active: false, beatAgoSeconds: 3, nodeLag: 40 } as const, "active"), "warn");
+});
+
 test("we-are-not-watching and we-cannot-tell each read as themselves, not as a fault", () => {
   // The preview renders both as "stalled", which claims a broken miner for a deploy
   // that simply has no heartbeat path and for a response too old to carry a state.
