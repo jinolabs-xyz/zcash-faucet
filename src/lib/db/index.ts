@@ -23,6 +23,7 @@ import {
   PURGE_SQL,
   DRIP_BUMP_SQL,
   DRIP_TOTALS_SQL,
+  DRIP_BY_DAY_SQL,
   DRIP_ANY_SQL,
   DRIP_SEED_SQL,
   pendingLeaseSeconds,
@@ -326,10 +327,39 @@ function utcDay(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10);
 }
 
+/**
+ * The last `days` UTC days, oldest first, today last - "last 30" meaning today and the
+ * twenty-nine before it, which is the reading the totals already use.
+ *
+ * One definition, because a total's window and a series' window drifting apart by a day
+ * is not a visible bug: the chart would disagree with the number printed beside it and
+ * both would look plausible.
+ */
+function utcDayWindow(nowMs: number, days: number): string[] {
+  const out: string[] = [];
+  for (let back = days - 1; back >= 0; back -= 1) out.push(utcDay(nowMs - back * 86_400_000));
+  return out;
+}
+
+/** One UTC day of the series: the day, and how many drips went out on it. */
+export interface DripDay {
+  /** YYYY-MM-DD, UTC. */
+  day: string;
+  sent: number;
+}
+
 export interface DripCounts {
   allTime: number;
   last7d: number;
   last30d: number;
+  /**
+   * The last 30 UTC days, oldest first, one entry per day whether or not anything was
+   * served. COUNTS ONLY, and there is nothing here for it to grow into: the table behind
+   * it holds (network, day, sent) and no claim row ever reaches it. A day with no drips
+   * is a zero rather than a missing entry, because a series that omits its quiet days
+   * draws the same shape as one that never had any.
+   */
+  byDay: DripDay[];
 }
 
 /** Single-flight guard for the one-time seed, per process. Cross-process replays are
@@ -358,13 +388,25 @@ export async function countDrips(nowMs: number, network: DripNetwork = "taz"): P
       throw e;
     });
     await seedOnce;
-    const cutoff = (days: number) => utcDay(nowMs - (days - 1) * 86_400_000);
-    const row = await driver().get<{ allTime: number; last30d: number; last7d: number }>(
-      DRIP_TOTALS_SQL,
-      [cutoff(30), cutoff(7), network],
-    );
+    const window30 = utcDayWindow(nowMs, 30);
+    const [row, days] = await Promise.all([
+      driver().get<{ allTime: number; last30d: number; last7d: number }>(
+        DRIP_TOTALS_SQL,
+        [window30[0], utcDayWindow(nowMs, 7)[0], network],
+      ),
+      driver().all<{ day: string; sent: number }>(
+        DRIP_BY_DAY_SQL,
+        [network, window30[0], window30[window30.length - 1]],
+      ),
+    ]);
     if (!row) return null;
-    return { allTime: Number(row.allTime), last7d: Number(row.last7d), last30d: Number(row.last30d) };
+    const sentOn = new Map(days.map((d) => [String(d.day), Number(d.sent)]));
+    return {
+      allTime: Number(row.allTime),
+      last7d: Number(row.last7d),
+      last30d: Number(row.last30d),
+      byDay: window30.map((day) => ({ day, sent: sentOn.get(day) ?? 0 })),
+    };
   } catch (e) {
     console.error(`[drips] count read failed: ${e instanceof Error ? e.message : e}`);
     return null;
@@ -383,8 +425,10 @@ export async function countDrips(nowMs: number, network: DripNetwork = "taz"): P
 async function seedDripDays(nowMs: number): Promise<void> {
   const any = await driver().get<{ n: number }>(DRIP_ANY_SQL, []);
   if (any && Number(any.n) > 0) return;
-  for (let back = 2; back >= 0; back -= 1) {
-    const day = utcDay(nowMs - back * 86_400_000);
+  // Retention keeps ~25 hours, so the survivors span at most three UTC days - through
+  // the same window helper the counter and the series use, so there is no second copy
+  // of "how a UTC day is counted back" left in this file.
+  for (const day of utcDayWindow(nowMs, 3)) {
     const startSec = Math.floor(Date.parse(`${day}T00:00:00Z`) / 1000);
     const r = await driver().get<{ n: number }>(
       `SELECT COUNT(*) AS n FROM claims WHERE status = 'sent' AND created_at >= ? AND created_at < ?`,

@@ -30,6 +30,12 @@ const plant = (addr: string, status: string, atSec: number) =>
     `INSERT INTO claims (address_hash, ip_hash, amount_zat, status, created_at) VALUES (?, ?, ?, ?, ?)`,
     [`h-${addr}`, `ip-${addr}`, 100, status, atSec],
   );
+// THE THIRD DAY BACK, which nothing reached before: the loop spans three days, not two,
+// because a 25-hour retention window that starts just after a UTC midnight reaches into
+// the day before yesterday. A row this old is past what retention normally keeps - the
+// span of the loop is what is under test here, and without this the third leg could be
+// deleted and every assertion in this file would still pass.
+await plant("d2", "sent", NOW_SEC - 2 * 86_400 + 3_600);
 await plant("y1", "sent", NOW_SEC - 86_400);
 await plant("y2", "sent", NOW_SEC - 86_400 + 60);
 await plant("t1", "sent", NOW_SEC - 60);
@@ -40,16 +46,20 @@ const { countDrips } = await import("./index.ts");
 test("first read seeds the buckets from surviving sent rows, once", async () => {
   const c = await countDrips(NOW_MS);
   assert.ok(c, "counter should answer");
-  assert.equal(c.allTime, 3, "three sent survivors, the failed row not among them");
-  assert.equal(c.last7d, 3);
+  assert.equal(c.allTime, 4, "four sent survivors, the failed row not among them");
+  assert.equal(c.last7d, 4);
 
-  const yesterday = new Date(NOW_MS - 86_400_000).toISOString().slice(0, 10);
-  const row = await raw.get<{ sent: number }>(`SELECT sent FROM drip_days WHERE network = 'taz' AND day = ?`, [yesterday]);
-  assert.equal(row?.sent, 2, "yesterday's two land in yesterday's bucket, not today's");
+  const dayOf = (back: number) => new Date(NOW_MS - back * 86_400_000).toISOString().slice(0, 10);
+  const bucket = (day: string) =>
+    raw.get<{ sent: number }>(`SELECT sent FROM drip_days WHERE network = 'taz' AND day = ?`, [day]);
+  const yesterday = dayOf(1);
+  assert.equal((await bucket(yesterday))?.sent, 2, "yesterday's two land in yesterday's bucket, not today's");
+  assert.equal((await bucket(dayOf(2)))?.sent, 1, "and the day before that is seeded too, not dropped off the loop");
+  assert.equal((await bucket(dayOf(0)))?.sent, 1, "today's one, the failed row excluded");
 
   // Replay safety: MAX semantics mean re-running the seed cannot double-count.
   // Reach it directly, since the in-process single-flight guard will not run twice.
   await raw.run(`INSERT INTO drip_days (network, day, sent) VALUES ('taz', ?, ?) ON CONFLICT(network, day) DO UPDATE SET sent = MAX(sent, excluded.sent)`, [yesterday, 2]);
   const again = await countDrips(NOW_MS);
-  assert.equal(again?.allTime, 3, "a replayed seed must not inflate the count");
+  assert.equal(again?.allTime, 4, "a replayed seed must not inflate the count");
 });

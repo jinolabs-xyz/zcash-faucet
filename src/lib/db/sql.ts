@@ -471,6 +471,23 @@ SELECT COALESCE(SUM(sent), 0)                              AS allTime,
   FROM drip_days
  WHERE network = ?`;
 
+/**
+ * The same counter, day by day, for the 30-day series on the page. Counts only: this
+ * table has never held anything else, which is the point of counting here rather than in
+ * `claims`.
+ *
+ * The day range BOUNDS THE READ; it is not what makes the answer right. The caller builds
+ * the series from its own 30-day window and fills it from these rows, so a row outside
+ * the window has nowhere to land whether SQL returns it or not - and rows this table
+ * accumulates year on year are not worth shipping to filter in JS. Same reason there is
+ * no ORDER BY: the caller keys these by day, so an order here would be decoration that
+ * looks like a contract. Params: network, first day, last day.
+ */
+export const DRIP_BY_DAY_SQL = `
+SELECT day, sent
+  FROM drip_days
+ WHERE network = ? AND day >= ? AND day <= ?`;
+
 export const DRIP_ANY_SQL = `SELECT COUNT(*) AS n FROM drip_days`;
 
 /** MAX rather than +: the seed writes absolute per-day counts, so replaying it
