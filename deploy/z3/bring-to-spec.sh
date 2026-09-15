@@ -157,9 +157,13 @@ fi
 # under a stock daemon. SPEC_REPORT still wins for the suite.
 spec_report_default() {
   local vol="${SPEC_FAUCET_VOLUME:-zcash-faucet_faucet_data}" mp=""
+  # Same override, same default, as box-report.sh's: the two fall back to the same place
+  # and a test can point both at a directory it can actually write, so the equality is
+  # observed rather than grepped for in each other's source.
+  local root="${SPEC_VOLUME_ROOT:-/var/lib/docker/volumes}"
   # A bounded ask: a wedged dockerd must not hang a post-condition somebody runs by hand.
   mp="$(timeout 10 docker volume inspect -f '{{.Mountpoint}}' "$vol" 2>/dev/null)" || mp=""
-  printf '%s/box-integrity.json\n' "${mp:-/var/lib/docker/volumes/$vol/_data}"
+  printf '%s/box-integrity.json\n' "${mp:-$root/$vol/_data}"
 }
 report="${SPEC_REPORT:-$(spec_report_default)}"
 if [ ! -f "$report" ]; then

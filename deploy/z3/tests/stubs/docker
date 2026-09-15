@@ -16,6 +16,10 @@ case "${1:-}" in
             *) vol="$1"; shift ;;
           esac
         done
+        # STUB_VOLUME_HANG=<seconds>: a daemon that accepts the call and never answers,
+        # which is what a wedged dockerd looks like from a script. The callers wrap this
+        # in `timeout 10`, and a bound nothing can exercise is a bound nobody is keeping.
+        [ -n "${STUB_VOLUME_HANG:-}" ] && sleep "$STUB_VOLUME_HANG"
         dir="${STUB_VOLROOT:?}/$vol"
         [ -d "$dir" ] || { echo "Error: no such volume: $vol" >&2; exit 1; }
         case "$fmt" in

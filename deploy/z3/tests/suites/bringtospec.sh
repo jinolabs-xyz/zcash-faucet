@@ -276,3 +276,112 @@ bash "$SPEC" > "$T/novolume.log" 2>&1
 check "with no such volume the post-condition is unverified, exit 2" "[ $? -eq 2 ]"
 check "and it names the stock path for the real volume name, not z3_faucet_data" \
   "grep -q 'no integrity report at /var/lib/docker/volumes/zcash-faucet_faucet_data/_data/box-integrity.json' '$T/novolume.log'"
+
+echo "== bring-to-spec and box-report resolve the SAME path, each from its own code"
+# THE SEAM, not either half. The two cases above pin STUB_REPORT_PATH, so they prove the
+# READER's default and say nothing about where the writer puts the file. Until box-report
+# derived its own path, this script asked docker (#542, R-42) while box-report.sh carried a
+# hard-coded /var/lib/docker/volumes/... copy: on a daemon with a non-stock data-root the
+# reader looked where docker said and the writer wrote where a stock daemon would have put
+# it, the post-condition read "no integrity report" forever, and neither half was wrong on
+# its own - which is exactly why nothing said so.
+#
+# NEITHER PATH IS STATED HERE. The reader NAMES its own default in the line it prints when
+# the report is absent; the writer simply writes to its own and we look for the file there.
+# So editing one script's derivation and not the other fails this, which a test that spelled
+# the path out would not.
+spec_env
+unset SPEC_REPORT
+export STUB_LOG="$T/stub.log"; : > "$STUB_LOG"
+# A NON-STOCK data-root, which is the whole point: under the stock one the two defaults
+# coincide by accident and this case could not fail.
+export STUB_VOLROOT="$T/dockerroot/volumes"
+mkdir -p "$STUB_VOLROOT/zcash-faucet_faucet_data"
+# The double writes where the post-condition will not look, so the run reaches its
+# cannot-verify path and prints the path its own default resolved to.
+export STUB_REPORT_PATH="$T/report/elsewhere.json"
+bash "$SPEC" > "$T/seam.log" 2>&1
+reader_path="$(sed -n 's/.*no integrity report at \(.*\)\./\1/p' "$T/seam.log" | head -1)"
+check "the reader derived its path from docker, under the non-stock root" \
+  "[ -n '$reader_path' ] && [ '$reader_path' = '$STUB_VOLROOT/zcash-faucet_faucet_data/box-integrity.json' ]"
+# Now the REAL writer, its own default, the same stub daemon, pointed at the ops tree
+# spec_env already built. Whether that box comes out AT SPEC is a different question and
+# not this case's; all this asks is where the file lands.
+mkdir -p "$T/repohome/deploy"
+ln -sfn "$T/src" "$T/repohome/deploy/z3"
+( unset BOX_REPORT_OUT
+  BOX_REPORT_REPO="$T/repohome" BOX_REPORT_INSTALL_DIR="$T/install" \
+  BOX_REPORT_UNIT_DIR="$T/units" BOX_REPORT_SYSTEMCTL="$SCRATCH/stubs/audit-systemctl" \
+  bash "$REPO/deploy/z3/box-report.sh" ) > /dev/null 2>&1
+check "and the writer, told no path either, wrote to exactly the file the reader named" \
+  "[ -s '$reader_path' ]"
+check "and both of them asked docker the same question" \
+  "[ \"\$(grep -c 'docker volume inspect -f {{.Mountpoint}} zcash-faucet_faucet_data' '$STUB_LOG')\" -ge 2 ]"
+
+echo "== bring-to-spec and box-report fall back to the SAME path when docker cannot answer"
+# THE OTHER HALF OF THE SEAM. The case above proves the two agree when docker DOES name a
+# mountpoint. This one is the branch that only runs when something is already wrong, which
+# is exactly when a disagreement would be hardest to see - and it was previously asserted
+# by grepping both scripts for the same literal string, two guesses about a format rather
+# than one observation (review of #550).
+#
+# Neither path is spelled out here. The reader NAMES the path it would read in its own
+# cannot-verify line; the writer WRITES to the path it chose; the assertion is that the
+# two are the same string.
+spec_env
+unset SPEC_REPORT
+export STUB_LOG="$T/stub.log"; : > "$STUB_LOG"
+export STUB_VOLROOT="$T/empty"; mkdir -p "$STUB_VOLROOT"   # no volume of that name exists
+# INLINE, NOT EXPORTED, for the reason the boxreport suite gives: one shell for every
+# suite, so an export here is still set for whatever runs next.
+shared_root="$T/shared"; mkdir -p "$shared_root"
+export STUB_REPORT_PATH="$T/report/elsewhere.json"
+SPEC_VOLUME_ROOT="$shared_root" SPEC_FAUCET_VOLUME="no-such-volume" \
+  bash "$SPEC" > "$T/fallback.log" 2>&1
+reader_fb="$(sed -n 's/.*no integrity report at \(.*\)\./\1/p' "$T/fallback.log" | head -1)"
+check "the reader falls back and names the path it would have read" "[ -n '$reader_fb' ]"
+# The same conditions on the writer's side, its own default, its own fallback.
+mkdir -p "$T/repohome/deploy"
+ln -sfn "$T/src" "$T/repohome/deploy/z3"
+( unset BOX_REPORT_OUT
+  BOX_REPORT_REPO="$T/repohome" BOX_REPORT_INSTALL_DIR="$T/install" \
+  BOX_REPORT_UNIT_DIR="$T/units" BOX_REPORT_SYSTEMCTL="$SCRATCH/stubs/audit-systemctl" \
+  BOX_REPORT_VOLUME_ROOT="$shared_root" BOX_REPORT_FAUCET_VOLUME="no-such-volume" \
+  bash "$REPO/deploy/z3/box-report.sh" ) > /dev/null 2>&1
+check "and the writer, falling back on its own, wrote to exactly that path" \
+  "[ -s \"$reader_fb\" ]"
+check "and both of them asked docker first rather than going straight to the guess" \
+  "[ \"\$(grep -c 'docker volume inspect -f {{.Mountpoint}} no-such-volume' '$STUB_LOG')\" -ge 2 ]"
+
+echo "== bring-to-spec and box-report agree on the PRODUCTION default, with no override set"
+# THE HOLE THE OVERRIDE OPENED, found in review of #550. Adding *_VOLUME_ROOT made the
+# fallback observable, and then every case set it - so the production default itself, the
+# string that actually ships, went untested in both files at once. Moving the writer's
+# default to somewhere else entirely left the suite green.
+#
+# Neither override is set here and nothing is written: with no mountpoint from docker each
+# script RESOLVES its own production path and SAYS it, the writer on stderr and the reader
+# in its cannot-verify line, and the assertion is that the two strings are the same one.
+# That is why the path line exists at all, and it is the only way to compare these two
+# without root on /var/lib/docker.
+spec_env
+unset SPEC_REPORT SPEC_VOLUME_ROOT BOX_REPORT_OUT BOX_REPORT_VOLUME_ROOT
+export STUB_LOG="$T/stub.log"; : > "$STUB_LOG"
+export STUB_VOLROOT="$T/empty"; mkdir -p "$STUB_VOLROOT"   # docker names no mountpoint
+export STUB_REPORT_PATH="$T/report/elsewhere.json"
+bash "$SPEC" > "$T/prod.log" 2>&1
+reader_prod="$(sed -n 's/.*no integrity report at \(.*\)\./\1/p' "$T/prod.log" | head -1)"
+mkdir -p "$T/repohome/deploy"
+ln -sfn "$T/src" "$T/repohome/deploy/z3"
+( BOX_REPORT_REPO="$T/repohome" BOX_REPORT_INSTALL_DIR="$T/install" \
+  BOX_REPORT_UNIT_DIR="$T/units" BOX_REPORT_SYSTEMCTL="$SCRATCH/stubs/audit-systemctl" \
+  bash "$REPO/deploy/z3/box-report.sh" ) > /dev/null 2>"$T/prod.err"
+writer_prod="$(sed -n 's/^box-report: report path \(.*\) (.*$/\1/p' "$T/prod.err" | head -1)"
+check "the reader resolved a production path and named it" "[ -n '$reader_prod' ]"
+check "the writer resolved one and named it too" "[ -n '$writer_prod' ]"
+check "and the two production defaults are the SAME path, with nothing overridden" \
+  "[ \"$reader_prod\" = \"$writer_prod\" ]"
+# Anchored once, deliberately: this is the string that ships, so a silent move of BOTH
+# defaults together would otherwise still agree with itself.
+check "and it is the stock daemon's path for the volume this project creates" \
+  "[ \"$writer_prod\" = '/var/lib/docker/volumes/zcash-faucet_faucet_data/_data/box-integrity.json' ]"
