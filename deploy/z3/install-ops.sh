@@ -116,6 +116,7 @@ rc=0
 # the restart block after enablement). Only watchdog.sh needs it today; the timer-driven
 # scripts re-exec their installed copy each run and so update themselves.
 watchdog_changed=0
+ctaz_socket_changed=0
 for src in "$SRC"/*.sh; do
   [ -e "$src" ] || continue
   case "$(basename "$src")" in
@@ -138,6 +139,7 @@ for src in "$SRC"/*.service "$SRC"/*.timer "$SRC"/*.socket; do
   before="$changed"
   place "$src" "$UNIT_DIR/$(basename "$src")" 644 || rc=1
   [ "$changed" != "$before" ] && units=$((units + 1))
+  [ "$(basename "$src")" = "ctaz-rpc.socket" ] && [ "$changed" != "$before" ] && ctaz_socket_changed=1
 done
 
 # DROP-INS, because this script globbed the top level only and a file in a subdirectory
@@ -242,6 +244,35 @@ if [ "$watchdog_changed" = "1" ] && [ "$DRY" != "1" ]; then
     fi
   else
     log "watchdog.sh changed but faucet-watchdog.service is not active; leaving it as the operator has it"
+  fi
+fi
+
+# --- restart the cTAZ socket when its unit changed -----------------------------
+# THE SAME LESSON AS THE WATCHDOG, ONE MECHANISM ALONG (review of #553).
+#
+# SocketMode and SocketGroup are applied when systemd CREATES the socket, not on
+# daemon-reload. The enable loop above deliberately skips a unit that is already enabled,
+# and ctaz-rpc.socket is in enabled-units, so a narrowed ACL would sit in the unit file,
+# match the repo, pass audit-drift, and the LIVE socket would keep the mode it was created
+# with until a reboot. The change would read as shipped and would not be.
+#
+# Same rule as the watchdog, for the same reason: only when the unit CHANGED, and only
+# when it is already active. Starting a stopped socket is an arming decision and belongs
+# to enabled-units, not to a file sync.
+#
+# RemoveOnStop=yes on the unit means the restart removes and recreates the socket file,
+# which is what applies the new mode. Any broker instance mid-call is per-connection
+# (Accept=yes) and finishes on its own fd.
+if [ "$ctaz_socket_changed" = "1" ] && [ "$DRY" != "1" ]; then
+  if "$SYSTEMCTL" is-active --quiet ctaz-rpc.socket 2>/dev/null; then
+    if "$SYSTEMCTL" restart ctaz-rpc.socket >/dev/null 2>&1; then
+      log "ctaz-rpc.socket changed; restarted it so the new SocketGroup/SocketMode actually apply"
+    else
+      log "ERROR: ctaz-rpc.socket changed but restarting it failed; the LIVE socket still has the OLD mode"
+      rc=1
+    fi
+  else
+    log "ctaz-rpc.socket changed but is not active; leaving it as the operator has it"
   fi
 fi
 

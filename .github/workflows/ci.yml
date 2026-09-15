@@ -591,3 +591,86 @@ jobs:
           docker volume rm r10 >/dev/null
           printf '%s\n' "$out"
           [ "$out" = "$(printf 'uid=1000 caps=0000000000000000 bnd=00000000000000c9 nnp=1 owner=1000\nwrite-ok\ntmpfs-ok\nrootfs-ro')" ] || { echo "the runtime is not the one the compose file promises"; exit 1; }
+
+      # AND THE cTAZ SOCKET ADMITS THE APP AND NOT THE BOX (review of #545, follow-up).
+      #
+      # ctaz-rpc.socket is a systemd unit, so nothing here can prove systemd APPLIES what it
+      # declares; that is only observable on the box and OPERATIONS.md carries the command.
+      # What this proves is the half that is a kernel property and is therefore the half a
+      # CI runner can settle honestly: that the mode and group the unit declares actually
+      # admit uid 1000 and refuse everyone else. The unit's declaration is pinned separately
+      # in the repo suite, so the two cannot drift.
+      #
+      # The mode is read OUT OF THE UNIT rather than typed here, for the same reason the
+      # probe above takes its flags from the compose file: a test that supplies the value it
+      # then asserts is testing nothing (#545 review).
+      - name: the cTAZ socket's declared group and mode admit uid 1000 and refuse another uid
+        run: |
+          set -uo pipefail
+          unit=deploy/z3/ctaz-rpc.socket
+          grp="$(sed -n 's/^SocketGroup=//p' "$unit" | tail -1)"
+          mode="$(sed -n 's/^SocketMode=//p' "$unit" | tail -1)"
+          usr="$(sed -n 's/^SocketUser=//p' "$unit" | tail -1)"
+          echo "the unit declares ${usr}:${grp} ${mode}"
+          # NUMERIC gid only, and that is the intent rather than a limitation: the repo
+          # suite pins SocketGroup=1000, and a NAME here would make Number(gid) NaN in the
+          # listener below, so chownSync would throw and the step would fail as "the
+          # listener never came up" instead of as the ACL regression it is (review of #553).
+          case "$grp" in ''|*[!0-9]*) echo "SocketGroup must be a numeric gid for this probe, got '$grp'"; exit 1 ;; esac
+          [ -n "$mode" ] && [ "$usr" = root ] || { echo "could not read SocketUser/Mode from $unit"; exit 1; }
+          cat > /tmp/listener.js <<'JS'
+          const net = require("net"), fs = require("fs");
+          const [, , path, gid, mode] = process.argv;
+          try { fs.unlinkSync(path); } catch {}
+          // The probe ends the moment it connects, so this write can land on a socket the
+          // peer has already closed. Without a handler that ECONNRESET is an unhandled
+          // error event, the listener dies after ONE accepted connection, and the second
+          // uid then measures a missing listener rather than the ACL (review of #553).
+          const s = net.createServer((c) => { c.on("error", () => {}); c.end("{}\n"); });
+          s.on("error", (e) => { console.error("listener error:", e.code); process.exit(1); });
+          s.listen(path, () => { fs.chownSync(path, 0, Number(gid)); fs.chmodSync(path, parseInt(mode, 8)); console.log("listening"); });
+          setTimeout(() => process.exit(0), 60000);
+          JS
+          cat > /tmp/probe.js <<'JS'
+          const net = require("net");
+          const c = net.createConnection(process.argv[2]);
+          c.on("connect", () => { c.end(); console.log("CONNECT"); process.exit(0); });
+          c.on("error", (e) => { console.log(e.code); process.exit(0); });
+          JS
+          docker volume create ctazsock >/dev/null
+          # ONE CLEANUP, ON EVERY EXIT PATH (CTO, review of #553). The gid refusal below
+          # exits before any of the inline removals, so that path used to leave the
+          # listener container and the named volume behind - the same shape as the leak I
+          # filed on #558 the same afternoon, and a trap is the only form of this that
+          # cannot be missed by a new early exit.
+          trap 'docker rm -f ctaz-listener >/dev/null 2>&1 || true; docker volume rm ctazsock >/dev/null 2>&1 || true' EXIT
+          docker run -d --name ctaz-listener -v ctazsock:/d -v /tmp/listener.js:/l.js:ro \
+            --entrypoint node faucet-ci-check:${{ github.sha }} /l.js /d/ctaz-rpc.sock "$grp" "$mode" >/dev/null
+          for _ in $(seq 1 20); do docker logs ctaz-listener 2>&1 | grep -q listening && break; sleep 1; done
+          docker logs ctaz-listener 2>&1 | grep -q listening || { echo "the listener never came up"; exit 1; }
+          # DERIVED FROM THE IMAGE, NOT TYPED (SDE-App, review of #553). The unit declares a
+          # NUMERIC SocketGroup and the entrypoint drops to `node` BY NAME, so the two halves
+          # are pinned in different places and nothing compared them. They agree at the
+          # pinned digest, and the realistic way they stop agreeing is a deliberate base
+          # bump - which arrives here as a dependabot PR whose reviewer has no reason to
+          # think about a socket unit. So the probe asks the image who `node` is, and the
+          # unit has to name that gid.
+          imguid="$(docker run --rm --entrypoint id faucet-ci-check:${{ github.sha }} -u node)"
+          imggid="$(docker run --rm --entrypoint id faucet-ci-check:${{ github.sha }} -g node)"
+          echo "the image says node is ${imguid}:${imggid}; the unit declares SocketGroup=${grp}"
+          [ "$imggid" = "$grp" ] || { echo "the unit's SocketGroup ($grp) is not the image's node gid ($imggid), so the app could not connect"; exit 1; }
+          other_uid=$((imguid + 2))
+          as() { docker run --rm -u "$1:$1" -v ctazsock:/d -v /tmp/probe.js:/p.js:ro --entrypoint node faucet-ci-check:${{ github.sha }} /p.js /d/ctaz-rpc.sock; }
+          app="$(as "$imguid")"; other="$(as "$other_uid")"; again="$(as "$imguid")"
+          echo "uid $imguid (the app): $app"
+          echo "uid $other_uid (anyone else): $other"
+          echo "uid $imguid again (the listener survived): $again"
+          [ "$app" = CONNECT ] || { echo "the app's own uid cannot reach the socket the unit declares: cTAZ would be dark"; exit 1; }
+          [ "$other" = EACCES ] || { echo "the socket is open to uid $other_uid, so it is open to the box: expected EACCES, got $other"; exit 1; }
+          # THE THIRD PROBE IS THE LISTENER'S OWN REGRESSION (review of #553). Without the
+          # connection error handler the listener died on the first accepted connection, and
+          # the uid-1002 EACCES still held because the kernel checks the inode mode before
+          # looking for a listener - so the ACL proof stayed green over a dead server. This
+          # probe is the one that goes red for that, rather than the reader discovering it
+          # the next time a mode regression reports ECONNREFUSED instead of an ACL.
+          [ "$again" = CONNECT ] || { echo "the listener did not survive the first connection, so the uid-1002 result proves nothing: got $again"; exit 1; }

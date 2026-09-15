@@ -78,6 +78,88 @@ The watchdog restarts fallen containers within 30 seconds, so if you stop a
 container on purpose for a maintenance window, stop the watchdog first and
 start it again after.
 
+## The cTAZ socket: who is allowed to connect
+
+`ctaz-rpc.socket` is the app's only route to the Crosslink node, and since R-10 the app is
+the image's `node` user (uid 1000) rather than root. The unit gives the socket to
+`root:1000` at mode `0660`, so uid 1000 may connect and no other unprivileged uid on the
+box may. That is a smaller grant than the `0666` it replaced, which admitted every uid.
+
+The mode is a numeric gid, so it is worth confirming once that gid 1000 on this box is what
+you think it is, and that systemd applied what the unit declares. Neither is observable
+from the repository:
+
+```bash
+# a. what holds gid 1000 here
+getent group 1000
+
+# b. what systemd actually created, which is the half CI cannot prove.
+# NUMERIC: %U:%G prints UNKNOWN when no /etc/group entry holds gid 1000, which reads as a
+# fault and is not one. The unit declares a numeric gid, so compare numerically.
+sudo stat -c '%u:%g %a %n' /var/lib/docker/volumes/zcash-faucet_faucet_data/_data/ctaz-rpc.sock
+# expected: 0:1000 660
+
+# b2. what systemd THINKS it should create, which separates two states (b) cannot:
+systemctl show -p SocketUser,SocketGroup,SocketMode ctaz-rpc.socket
+# unit text not loaded  -> the old values here: install-ops placed the file but the
+#                          daemon-reload did not take, or the file never arrived
+# new values here, old on the socket -> loaded but not APPLIED: the restart did not run
+#                          or failed, which is the case (b) alone cannot distinguish
+
+# c. the app's own view, from inside the container
+docker exec zcash-faucet-faucet-1 stat -c '%u:%g %a' /app/data/ctaz-rpc.sock
+# expected: 0:1000 660
+```
+
+Reading the answers, and the middle one is the trap:
+
+- **`0:1000 660`** is the shipped state: owned by root, grouped to the app's gid, group-writable and not world-writable.
+- **`666`** means the live socket was created before this change and has not been
+  recreated since. It does **not by itself** mean install-ops never ran, which is the
+  reading to resist: the mode is applied when systemd CREATES the socket, not on
+  `daemon-reload`, so the unit text on disk can be correct while the live socket is not.
+  A box that never received the unit at all reads `666` too, which is why (b2) is worth
+  running before anything is re-run. `systemctl restart ctaz-rpc.socket` is the direct fix
+  once (b2) says the text is loaded.
+- **`stat: No such file or directory`** means the socket unit is not listening, and on a
+  box brought to spec that is the anomaly rather than the expected reading: `ctaz-rpc.socket`
+  is in `deploy/z3/enabled-units`, so it is armed and should be active whatever the cTAZ
+  *node* is doing. Settle which state the box is in before reading any mode, with
+  `systemctl is-active ctaz-rpc.socket`. The installer will not start it for you: it
+  restarts a changed unit only when that unit is already active, because starting a stopped
+  socket is an arming decision that belongs to `enabled-units` and to the operator.
+- **`root:root`** has to be read together with the mode, because two different states
+  wear it. With **`0666`** it is the pre-#553 live socket — the unit narrowed it, systemd
+  has not recreated it, and `systemctl restart ctaz-rpc.socket` is the fix. With **`0660`**
+  it is either a socket that predates #545 or a `SocketGroup=` that did not take, and
+  `systemctl show -p SocketGroup ctaz-rpc.socket` separates them: a loaded `SocketGroup=1000`
+  beside a live `root:root` means the live socket is old, not that the setting failed.
+  Either way the app cannot connect while it reads `root:root`, so cTAZ is dark.
+
+In every wrong case the panel reads cannot-verify rather than lying, which is what the
+five-state gate is for. Nothing monitors socket-file permissions, so this check is the only
+thing that reads them.
+
+**And a wrong ACL is being exercised right now, not parked with the node.** What decides
+whether the app dials this socket is `FAUCET_CTAZ_ENABLED` in the app's environment, not
+whether `ctaz-node.service` is running: the readers in `src/lib/crosslink/read.ts` return on
+`!config.crosslink.enabled` before touching the transport, and the refresher in
+`src/lib/crosslink/cache.ts` dials every `REFRESH_INTERVAL_MS` (20 s) when it is true.
+(Cited by symbol, not by line: line numbers in a doc rot silently, and the repo suite can
+hold a symbol to its word.) The box runs with it **true** while the
+node is parked (owner's decision of 2026-09-08), so this socket is opened three times a
+minute today. Settle it rather than trusting this paragraph:
+
+```bash
+docker exec zcash-faucet-faucet-1 printenv FAUCET_CTAZ_ENABLED    # true = dialled every 20 s
+```
+
+The reason that matters: a wrong ACL and a deliberately parked node produce **the same
+panel reading** — `ctaz cannot-verify` — so a permission fault here does not announce
+itself, it hides inside the expected appearance. That is the opposite of what an earlier
+draft of this section said, and the correction came from the record of 2026-09-08 rather
+than from re-reading the code.
+
 ## Logs
 
 ```bash

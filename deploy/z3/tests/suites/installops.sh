@@ -354,3 +354,71 @@ export STUB_RESTARTED="$T/restarted2"; : > "$STUB_RESTARTED"
 bash "$INSTALL_OPS" "$T/src" > "$T/wd2.log" 2>&1
 check "a re-run exits 0" "[ $? -eq 0 ]"
 check "and does not restart the watchdog when nothing changed" "[ ! -s '$STUB_RESTARTED' ]"
+
+echo "== install-ops: a changed ctaz-rpc.socket is RESTARTED, or its new mode never applies"
+# THE SAME LESSON AS THE WATCHDOG, ONE MECHANISM ALONG (review of #553). SocketMode and
+# SocketGroup are applied when systemd CREATES the socket, not on daemon-reload, and the
+# enable loop skips a unit that is already enabled. So without this the narrowed ACL sits
+# in the unit file, matches the repo, passes audit-drift, and the LIVE socket keeps the
+# mode it was created with until a reboot: shipped on disk, not in effect.
+ops_env
+printf '[Unit]\nDescription=t\n[Socket]\nListenStream=/tmp/ctaz.sock\nSocketUser=root\nSocketGroup=1000\nSocketMode=0660\n[Install]\nWantedBy=sockets.target\n' \
+  > "$T/src/ctaz-rpc.socket"
+export STUB_RESTARTED="$T/sockrestart"; : > "$STUB_RESTARTED"
+bash "$INSTALL_OPS" "$T/src" > "$T/sock1.log" 2>&1
+check "exits 0" "[ $? -eq 0 ]"
+check "the socket was restarted when its unit changed" \
+  "grep -qx 'ctaz-rpc.socket' '$STUB_RESTARTED'"
+check "and the run says why, in terms of the thing that would not have applied" \
+  "grep -q 'restarted it so the new SocketGroup/SocketMode actually apply' '$T/sock1.log'"
+
+echo "== install-ops: an UNCHANGED ctaz-rpc.socket is not bounced"
+# Same gate as the watchdog's: restarting every deploy tick would drop the socket, and
+# with it any broker call in flight, for no reason.
+ops_env
+printf '[Unit]\nDescription=t\n[Socket]\nListenStream=/tmp/ctaz.sock\nSocketUser=root\nSocketGroup=1000\nSocketMode=0660\n[Install]\nWantedBy=sockets.target\n' \
+  > "$T/src/ctaz-rpc.socket"
+bash "$INSTALL_OPS" "$T/src" > /dev/null 2>&1
+export STUB_RESTARTED="$T/sockrestart2"; : > "$STUB_RESTARTED"
+bash "$INSTALL_OPS" "$T/src" > "$T/sock2.log" 2>&1
+check "a re-run exits 0" "[ $? -eq 0 ]"
+check "and does not restart the socket when nothing changed" "[ ! -s '$STUB_RESTARTED' ]"
+
+echo "== install-ops: a changed socket that is NOT active is left alone, because starting it is an arming decision"
+# The line this script draws everywhere else: a file sync may APPLY a change to something
+# already running; it may not ARM something the operator stopped. enabled-units owns that.
+ops_env
+printf '[Unit]\nDescription=t\n[Socket]\nListenStream=/tmp/ctaz.sock\nSocketUser=root\nSocketGroup=1000\nSocketMode=0660\n[Install]\nWantedBy=sockets.target\n' \
+  > "$T/src/ctaz-rpc.socket"
+: > "$T/active"   # nothing is active, the socket included
+export STUB_RESTARTED="$T/sockrestart3"; : > "$STUB_RESTARTED"
+# INLINE, NOT EXPORTED: ops_env does not reset STUB_ACTIVE, so exporting it here leaves the
+# next case running against a box where nothing is active, no restart is attempted, and its
+# assertions fail for a reason that has nothing to do with what it tests. Caught by the
+# unmutated baseline going red, which is the only thing that would have caught it.
+STUB_ACTIVE="$T/active" bash "$INSTALL_OPS" "$T/src" > "$T/sock3.log" 2>&1
+check "exits 0" "[ $? -eq 0 ]"
+check "a stopped socket is NOT started by a file sync" "! grep -qx 'ctaz-rpc.socket' '$STUB_RESTARTED'"
+check "and the run says it left it as the operator has it" \
+  "grep -q 'ctaz-rpc.socket changed but is not active' '$T/sock3.log'"
+
+echo "== install-ops: a socket restart that FAILS is an error, not a line nobody reads"
+# The failure path is the one that matters operationally: if the restart does not take, the
+# unit file on disk says root:1000 0660 and the LIVE socket still has the old mode, which
+# is precisely the state OPERATIONS.md sends an operator to diagnose. Reporting it as a
+# note and exiting 0 would leave a box that reads shipped and is not.
+#
+# Found by mutation on my own change: downgrading this ERROR to a note left the suite green
+# (#553 review, second round). The watchdog's own restart-failure path has the same gap and
+# is not this PR's to close.
+ops_env
+printf '[Unit]\nDescription=t\n[Socket]\nListenStream=/tmp/ctaz.sock\nSocketUser=root\nSocketGroup=1000\nSocketMode=0660\n[Install]\nWantedBy=sockets.target\n' \
+  > "$T/src/ctaz-rpc.socket"
+export STUB_RESTARTED="$T/sockrestart4"; : > "$STUB_RESTARTED"
+STUB_RESTART_FAIL=ctaz-rpc.socket bash "$INSTALL_OPS" "$T/src" > "$T/sock4.log" 2>&1
+rc_sock=$?
+check "the run FAILS rather than reporting a clean install" "[ $rc_sock -ne 0 ]"
+check "and it tried, so the failure is the restart's and not a skipped step" \
+  "grep -qx 'ctaz-rpc.socket' '$STUB_RESTARTED'"
+check "and it says the LIVE socket still has the old mode, which is what an operator needs" \
+  "grep -q 'the LIVE socket still has the OLD mode' '$T/sock4.log'"

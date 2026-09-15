@@ -139,6 +139,49 @@ check "and the CI image job proves the runtime shape rather than assuming it" \
 check "and takes its run flags from the compose file, so the probe cannot supply what it asserts" \
   "grep -q 'docker compose -f deploy/z3/docker-compose.faucet.yml config --format json' '$CIWF' && grep -q 'docker run --rm \$flags -v r10:/app/data' '$CIWF' && ! grep -q 'docker run --rm --read-only' '$CIWF'"
 
+echo "== repo: the cTAZ socket admits the app and not the box, and CI reads that from the unit"
+# The app is uid 1000 since R-10, so root:root 0660 locks it out and 0666 lets in every uid
+# on the host. root:1000 0660 is the one that admits the app alone, and the numbers here are
+# measured rather than argued (review of #545: 0660 root:root is EACCES to uid 1000; 0666
+# admits uid 1002 too; root:1000 0660 admits 1000 and refuses 1002).
+#
+# A unit file is the only place this can be declared, so this half IS a text check - but it
+# is a text check on the ARTEFACT WE SHIP, not one standing in for behaviour. The behaviour
+# half is the CI step, and the point of the last assertion is that the step reads the mode
+# out of this unit instead of typing it, so the two cannot say different things.
+SOCK="$REPO/deploy/z3/ctaz-rpc.socket"
+check "the socket is owned by root and grouped to the app's gid, not to root" \
+  "grep -qx 'SocketUser=root' '$SOCK' && grep -qx 'SocketGroup=1000' '$SOCK'"
+check "and its mode is 0660, so it is not open to every uid on the box" \
+  "grep -qx 'SocketMode=0660' '$SOCK' && ! grep -q '^SocketMode=0666' '$SOCK'"
+check "and CI proves both uids against it, reading the mode from the unit rather than typing it" \
+  "grep -q \"sed -n 's/^SocketMode=//p\" '$CIWF' && grep -q 'anyone else' '$CIWF' && grep -q 'expected EACCES' '$CIWF'"
+# THE TWO HALVES ARE PINNED IN DIFFERENT PLACES AND SOMETHING HAS TO COMPARE THEM (SDE-App,
+# review of #553). The unit names a NUMERIC gid; the entrypoint drops to `node` BY NAME. They
+# agree at the pinned digest and the realistic way they stop agreeing is a base bump, which
+# arrives as a dependabot PR whose reviewer has no reason to think about a socket unit. So the
+# probe must ASK the image who node is rather than type 1000, and refuse when the unit
+# disagrees with it.
+check "and the probe derives the app's uid and gid from the image instead of typing them" \
+  "grep -q 'imguid=\"\$(docker run --rm --entrypoint id' '$CIWF' && grep -q 'imggid=\"\$(docker run --rm --entrypoint id' '$CIWF' && ! grep -q 'as 1000' '$CIWF'"
+check "and refuses when the unit's SocketGroup is not the image's node gid" \
+  "grep -qF 'is not the image'\''s node gid' '$CIWF'"
+check "and probes a THIRD time as the app, so a listener that died on the first connection is caught" \
+  "grep -q 'the listener survived' '$CIWF' && grep -q 'the listener did not survive the first connection' '$CIWF'"
+
+# THE DOC'S CLAIM ABOUT WHEN THIS SOCKET IS DIALLED, HELD TO THE CODE THAT DECIDES IT (CTO,
+# review of #553). An earlier draft said the ACL was unobserved while cTAZ is parked, and
+# that was backwards: the dial is gated on the app's FAUCET_CTAZ_ENABLED, not on the node's
+# state, so the socket is opened every refresh tick today and a wrong ACL reads as the same
+# `cannot-verify` a parked node produces. A doc that gets this backwards sends an operator
+# away from a live fault, so both halves of the claim are pinned rather than trusted.
+check "OPERATIONS.md says the dial is gated on the app's flag, and the code still gates it there" \
+  "grep -qF 'FAUCET_CTAZ_ENABLED' '$REPO/OPERATIONS.md' && grep -qF 'config.crosslink.enabled' '$REPO/OPERATIONS.md' && grep -qF 'if (!config.crosslink.enabled)' '$REPO/src/lib/crosslink/read.ts'"
+check "and its 20-second figure is the interval the refresher actually uses" \
+  "grep -qF 'REFRESH_INTERVAL_MS' '$REPO/OPERATIONS.md' && grep -qE 'REFRESH_INTERVAL_MS = 20_000' '$REPO/src/lib/crosslink/cache.ts'"
+check "and the socket probe reaps its listener and volume on EVERY exit path, not just the happy one" \
+  "grep -qF \"trap 'docker rm -f ctaz-listener\" '$CIWF' && [ \"\$(grep -c 'docker volume rm ctazsock' '$CIWF')\" = 1 ]"
+
 echo "== repo: the watchdog's node-lag limit is the miner's, for the miner's reason"
 # Both read zebra's clock-based estimatedheight. The miner's guard (sync.rs) explains why
 # 100 and not less: hour-long testnet gaps push the estimate ~50 "behind" with nobody

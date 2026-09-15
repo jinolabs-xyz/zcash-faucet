@@ -17,15 +17,32 @@ ListenStream=/var/lib/docker/volumes/zcash-faucet_faucet_data/_data/ctaz-rpc.soc
 # A wedged node call ties up its own instance and nothing else.
 Accept=yes
 
-# The container runs as root and the volume is root-owned, so 0660 root:root is reachable
-# from the container and from nothing else on the box. Deliberately NOT 0666: every other
-# process on this host is outside the trust boundary this socket defines.
+# WHO MAY CONNECT, and it is one uid rather than everyone.
+#
+# The app is the app's `node` user since R-10 (uid 1000), not root, so root:root 0660 locks
+# it out: connecting to a unix socket needs write permission on it, and a capability-dropped
+# root in the container has no DAC_OVERRIDE either. Measured, both directions, in the review
+# of #545: 0660 root:root is EACCES to uid 1000, 0666 connects.
+#
+# 0666 was the first fix and it is wider than it needs to be. It admits ANY uid on the box,
+# and the argument for it was that the volume root is traversable by root alone, which is
+# true of the host and not of the container, where /app/data is node-owned 0755 and any
+# process in that namespace could reach it. So the group bit does the same job with a
+# smaller grant: `setpriv --clear-groups` drops the app's supplementary groups but keeps
+# gid 1000 as its primary, which is what the group bit matches on.
+#
+# Measured the same way rather than reasoned about:
+#   root:1000 0660   uid 1000 connects,  uid 1002 EACCES
+#   root:root 0666   uid 1000 connects,  uid 1002 CONNECTS TOO
+#
+# THE COST, said out loud: this pins the socket's ACL to numeric gid 1000 rather than to
+# the faucet, so it narrows to "root and whatever account holds gid 1000 on this box"
+# rather than to the container alone. A dedicated group cannot do the job, because
+# --clear-groups means the app can only ever match on its primary gid. OPERATIONS.md
+# carries the command to confirm gid 1000 is what this box thinks it is.
 SocketUser=root
-SocketGroup=root
-# 0666, not 0660: the connecting side is the app's `node` user (uid 1000, R-10), which
-# has no group on the host. The parent directory is docker's volume root, traversable by
-# root alone, so the wide mode grants nothing to anyone who could not already reach it.
-SocketMode=0666
+SocketGroup=1000
+SocketMode=0660
 
 # A stale socket file from an unclean shutdown would otherwise make the unit fail to
 # start, which turns a reboot into a dark cTAZ.
