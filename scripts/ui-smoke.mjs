@@ -221,28 +221,12 @@ async function checkAppearance(page) {
   // So the COUNT is pinned, and the number comes down as slices land: 4 at S1, 3 once S2
   // transcribes the claim view, and 0 after S5. Changing it is a line in the diff and a
   // decision someone made, which is the whole point.
-  const LEGACY_VIEWS = 4;
+  const LEGACY_VIEWS = 3;   // S2a transcribed the claim view and took its cap off
   const legacy = await page.locator(".view.legacy-measure").count();
   ok(`exactly ${LEGACY_VIEWS} views still carry the transitional 760px measure`,
     legacy === LEGACY_VIEWS,
     `${legacy} found; if a slice just transcribed a view, drop this number with it`);
 
-  // AND THE WIDTH IT IS THERE TO HOLD, measured rather than inferred from the class being
-  // present (SDE-Infra's finding on review). The count above catches the class being
-  // REMOVED early; it cannot catch the cap silently failing to apply - a changed selector,
-  // a specificity fight, a later rule setting width on the same children. Those leave the
-  // class in place and the content at full width, which is the 802px regression this whole
-  // thing exists to prevent, and nothing else in this suite can see it.
-  //
-  // The property, not the number: the view is wide and its content is NOT. Asserting the
-  // view is genuinely wide first is what stops this passing at a narrow viewport, where
-  // everything is under 760 and the cap proves nothing.
-  const measure = await page.evaluate(() => {
-    const view = document.querySelector(".view.legacy-measure");
-    const input = document.querySelector("input.input");
-    if (!view || !input) return { missing: true };
-    return { view: Math.round(view.getBoundingClientRect().width), input: Math.round(input.getBoundingClientRect().width) };
-  });
   // THE PRIVACY SENTENCE, PINNED WORD FOR WORD, because it is a factual claim about what
   // this service keeps and the exact words were argued over. The preview said "Addresses and
   // IPs are never logged"; I blocked on it because it is defensible about RAW values and
@@ -254,10 +238,63 @@ async function checkAppearance(page) {
       "No accounts, no cookies, no trackers. Addresses and IPs are hashed, never stored raw.") === true,
     "the exact sentence is not on the page");
 
+  // AND THE WIDTH THE TRANSITIONAL CAP IS THERE TO HOLD, measured rather than inferred from
+  // the class being present (SDE-Infra's finding on review). The count above catches the class
+  // being REMOVED early; it cannot catch the cap silently failing to apply - a changed
+  // selector, a specificity fight, a later rule setting width on the same children. Those
+  // leave the class in place and the content at full width, which is the 802px regression this
+  // exists to prevent, and nothing else in this suite can see it.
+  //
+  // MEASURED INSIDE ONE VIEW, AND A VISIBLE ONE. The first version of this took the first
+  // `.view.legacy-measure` in the DOM and the first `input.input` on the page, which were the
+  // same view only while the claim view was still capped. S2a transcribed the claim view and
+  // took its cap off, so the selector began returning a HIDDEN section - width 0 - and
+  // comparing it against an input in a different, visible view. It failed loudly, which is the
+  // good case, but for one commit it was measuring two unrelated things. The cap applies to
+  // `.view.legacy-measure > *`, so that is what is measured, in the view it belongs to.
+  await showView(page, "status");
+  const measure = await page.evaluate(() => {
+    const view = document.querySelector(".view.legacy-measure:not([hidden])");
+    const child = view && view.firstElementChild;
+    if (!view || !child) return { missing: true };
+    return { view: Math.round(view.getBoundingClientRect().width), child: Math.round(child.getBoundingClientRect().width) };
+  });
   ok("the untranscribed content is still capped at its old measure inside a full-width view",
-    !measure.missing && measure.view > 900 && measure.input <= 760,
-    measure.missing ? "no .view.legacy-measure or no input.input, so nothing was measured"
-      : `view ${measure.view}px, address field ${measure.input}px (cap 760)`);
+    !measure.missing && measure.view > 900 && measure.child <= 760,
+    measure.missing ? "no visible .view.legacy-measure with content, so nothing was measured"
+      : `view ${measure.view}px, its capped content ${measure.child}px (cap 760)`);
+  await showView(page, "claim");
+
+  // THE FOX FOLLOWS ITS COLUMN, and nothing else checks this. page-mascot writes
+  // `width: size, height: size` INLINE on its root (dist/mascot.js:149), and an inline
+  // declaration beats any normal author rule, so the spec's `.mascot-riso { width: 100% }`
+  // loses and the fox sits at its fixed 300px whatever its column does. The override that
+  // fixes it carries `!important`, is NOT in the frozen snapshot (MASCOT.md asks for it and
+  // describes it as already there), and is exactly the kind of load-bearing line that gets
+  // "tidied" by someone who sees an !important and assumes it is cargo. Measured: 244px with
+  // it at 1440x900, 300px without.
+  //
+  // THE ASSERTION IS AGAINST THE COLUMN, NOT A PIXEL NUMBER, and the first version of it was
+  // wrong in a way worth recording. It asserted `width < 300`, the component's inline size.
+  // That passed with the override REMOVED, because at this suite's 1280-wide viewport the
+  // non-important `max-width` still caps the fox at ~281px - under 300, over its ~243px
+  // column, overflowing it. A threshold that the broken state also satisfies is not a test
+  // (L1). What "follows its column" actually means is that the fox is no wider than the
+  // figure it sits in, so that is what is measured.
+  const fox = await page.evaluate(() => {
+    const el = document.querySelector(".mascot-riso");
+    const col = el && el.closest(".hero-mascot");
+    if (!el || !col) return { missing: true };
+    return {
+      w: Math.round(el.getBoundingClientRect().width),
+      col: Math.round(col.getBoundingClientRect().width),
+      inline: el.style.width,
+    };
+  });
+  ok("the mascot follows its column instead of the size the component sets inline",
+    !fox.missing && fox.w > 0 && fox.w <= fox.col + 1,
+    fox.missing ? "no .mascot-riso inside a .hero-mascot, so nothing was measured"
+      : `rendered ${fox.w}px in a ${fox.col}px column, inline ${fox.inline || "(none)"}`);
 
   // The LIVE dot paints the state, not a fixed colour: --color-live only when the
   // faucet is serviceable. Compare the dot's resolved background to the token
