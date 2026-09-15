@@ -47,6 +47,19 @@ case "${1:-}" in
   tag)
     src="$IMG/$(printf '%s' "$2" | tr '/:' '__')"
     dst="$IMG/$(printf '%s' "$3" | tr '/:' '__')"
+    # STUB_TAG_FAIL=<source tag>: the daemon refuses THIS retag while its source is present.
+    #
+    # NAMED, not a boolean, because redeploy tags in BOTH directions: latest -> previous
+    # before the build, and previous -> latest inside do_rollback. A blanket knob fails the
+    # first one, the run never reaches a rollback at all, and a test asserting "exits 1"
+    # passes for entirely the wrong reason.
+    #
+    # And a source that is PRESENT is the point. `docker tag` already fails below when the
+    # image is missing, and that is not the case do_rollback guards: it has just read the
+    # previous image's id, so the source is there and a daemon error is what is left.
+    if [ -n "${STUB_TAG_FAIL:-}" ] && [ "$2" = "$STUB_TAG_FAIL" ]; then
+      echo "Error: response from daemon: could not tag $2 (stub)" >&2; exit 1
+    fi
     [ -f "$src" ] || { echo "Error: No such image: $2" >&2; exit 1; }
     cp "$src" "$dst"
     ;;
