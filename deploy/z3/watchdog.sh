@@ -96,6 +96,7 @@ FORK_HEAL_ENABLED="${WATCHDOG_FORK_HEAL_ENABLED:-1}"
 FORK_AHEAD_BLOCKS="${WATCHDOG_FORK_AHEAD_BLOCKS:-150}"   # ahead of the highest corroborated reference
 FORK_MINER_MIN_SECS="${WATCHDOG_FORK_MINER_MIN_SECS:-600}" # miner alive this long = it could have built this
 alerted_fork=0
+fork_cannot_tell_logged=0   # the cannot-tell line is a state, said once, and re-armed when it ends
 
 # Poison auto-heal (step 5). Restarting zallet cannot fix a crash whose cause is a row
 # in wallet.db, so the watchdog runs the repair tools when it sees that exact signature.
@@ -813,10 +814,17 @@ heal_self_mined_fork() {
   if [ "$corr" != "true" ] || [ -z "$used_h" ]; then
     # An absent field reads the same as a null one here, on purpose: a body that predates
     # #559 must not be turned into a height by this function, and "no number" is never 0.
-    log "fork check: cannot tell, so nothing is paged and nothing is touched (corroborated=${corr:-absent}, highest usable reference=${used_h:-none}, ours $blocks)"
+    # ONCE PER EPISODE, not once per sweep (CTO red-team, finding 7): a single-sourced oracle,
+    # an unreachable app or a body from before #559 is a STATE, and one line every 30 s for as
+    # long as it lasts is the shape this file already refuses elsewhere (miner_waiting_logged).
+    if [ "$fork_cannot_tell_logged" != "1" ]; then
+      log "fork check: cannot tell, so nothing is paged and nothing is touched (corroborated=${corr:-absent}, highest usable reference=${used_h:-none}, ours $blocks). Silent until this changes."
+      fork_cannot_tell_logged=1
+    fi
     return 0
   fi
 
+  fork_cannot_tell_logged=0
   ahead=$(( blocks - used_h ))
   # AND THE WAY BACK TO ZERO (SDE-App, review of #560). Every other alert flag in this script
   # has one and this did not, so the rung would have paged once per watchdog PROCESS and gone
@@ -839,7 +847,7 @@ heal_self_mined_fork() {
     mins=$(( started_age / 60 ))
     who="our miner is active and its heartbeat says it started ${mins} min ago, so this chain is most likely ours"
   elif [ "$miner_word" = "active" ]; then
-    who="our miner is active but its heartbeat cannot show it has been running long (startedAt age: ${started_age:-unreadable}s), so what built $ahead blocks is unexplained"
+    who="our miner is active but its heartbeat cannot show it has been running long (startedAt age: ${started_age:+${started_age}s}${started_age:-unreadable}), so what built $ahead blocks is unexplained"
   else
     who="our miner is ${miner_word:-not running}, so what built $ahead blocks is unexplained"
   fi
@@ -861,10 +869,19 @@ heal_self_mined_fork() {
   # than trusting the write: a page that says "the miner is parked" while the file is
   # missing would send a human away calm from the one state that needs them, and a failed
   # mkdir on /var/lib is exactly the kind of thing that happens on a full disk.
+  #
+  # AND "PARKED" IS NOT WHAT A MARKER DOES TO A RUNNING MINER (CTO red-team, finding 2). The
+  # rung does not stop the miner - that is the ruling - and the marker gates STARTS only. So
+  # over an ACTIVE unit the old wording described a state nobody was in: the box keeps
+  # extending the private chain at ~10 blocks a minute while the page says it is parked, and
+  # the one command the 2026-09-15 record puts first was missing from the list. The active
+  # case now leads with the stop.
+  local park stop_first=""
+  [ "$miner_word" = "active" ] && stop_first="The miner unit is still ACTIVE and extending this chain: stop it by hand FIRST (systemctl stop $MINER_UNIT). "
   if [ -f "$FORK_PARK_MARKER" ]; then
-    park="The miner is parked by marker ($FORK_PARK_MARKER) and no deploy will start it while that file exists."
+    park="${stop_first}A park marker is written ($FORK_PARK_MARKER): no deploy and no watchdog heal will START the miner while that file exists."
   else
-    park="THE MINER IS NOT PARKED: $FORK_PARK_MARKER could not be written, so the next auto-deploy tick WILL start the miner again. Stop the miner by hand first."
+    park="${stop_first}THE MINER IS NOT PARKED: $FORK_PARK_MARKER could not be written, so the next auto-deploy tick WILL start the miner again. Stop the miner by hand first."
   fi
 
   if [ "$alerted_fork" = "0" ]; then

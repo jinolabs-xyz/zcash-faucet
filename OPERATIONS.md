@@ -177,10 +177,29 @@ sudo cat /var/lib/faucet-watchdog/miner-parked-by-fork-heal
 sudo journalctl -u faucet-autodeploy.service --since -2h | grep -F 'fork heal parked it'
 ```
 
-**Clearing it is a human decision and there is no command that does it for you**, which is
-the point. Before clearing, satisfy yourself the node is on the network's chain rather than
-its own — the check is in the fork section of this file, and comparing `getbestblockhash`
-against an independent explorer is the one that settles it:
+**Stop the miner first.** The watchdog does not stop it — that is deliberate, stopping is the
+owner's — so while a fork page is open the unit is very likely still running and still
+extending the private chain. Nothing below is worth doing until it is stopped:
+
+```bash
+sudo systemctl stop zcash-testnet-miner.service
+```
+
+**Clearing the marker is a human decision and there is no command that does it for you**, which
+is the point. Before clearing, settle whether the node is on the network's chain rather than its
+own. The check is here rather than cross-referenced, because an earlier draft pointed at a
+"fork section" of this file that does not exist:
+
+```bash
+# our tip, from the box
+sudo docker exec z3-testnet-zebra-1 sh -lc 'CK=$(cat /run/auth/.cookie 2>/dev/null || cat /var/run/auth/.cookie); curl -s -u "$CK" --data-binary "{\"jsonrpc\":\"1.0\",\"id\":\"ops\",\"method\":\"getbestblockhash\",\"params\":[]}" -H content-type:text/plain http://127.0.0.1:18232/'
+
+# the same height from somewhere that is not us, in a browser:
+#   https://testnet.zcashexplorer.app  or  https://testnet.cipherscan.app
+# Same hash at the same height: we are on the network's chain and the marker can go.
+# Different hash: we are on our own chain, and the fix is a snapshot reimport (SNAPSHOTS.md),
+# not clearing the marker.
+```
 
 ```bash
 # only once the node is demonstrably NOT on a private chain

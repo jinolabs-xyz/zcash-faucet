@@ -1229,6 +1229,81 @@ check "pages once, and a cannot-tell sweep in the middle does not buy a second p
 check "and the cannot-tell sweep is in the journal, so the case really passed through it" \
   "grep -q 'fork check: cannot tell.*corroborated=false' '$T/run.log'"
 
+echo "== watchdog: the ahead limit is a BOUNDARY, and the page text names the miner's real state"
+# CTO red-team, findings 2 and 3 (R1). Every case so far was 200 ahead or 100 ahead, so -gt
+# could become -ge and nothing would notice. The reference moves by one block between sweeps:
+# exactly at the limit is silence, one past it is a fork.
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT_SEQ="4350050 4350050 4350049 4350049"
+wd_run 4
+check "exactly at the limit is a node that mines, not a fork" \
+  "[ \"\$(grep -c 'blocks AHEAD' '$T/alerts.log')\" = 1 ]"
+check "and the page that did fire is the one past the limit, 151" "grep -q '151 blocks AHEAD' '$T/alerts.log'"
+# FINDING 2: the rung never stops the miner, so over an ACTIVE unit "parked" described a state
+# nobody was in while the box kept extending the chain at ~10 blocks a minute.
+check "the page leads with the stop, because the unit is still running" \
+  "grep -q 'still ACTIVE and extending this chain: stop it by hand FIRST' '$T/alerts.log'"
+check "and says what the marker actually does, which is gate STARTS" \
+  "grep -q 'no deploy and no watchdog heal will START the miner' '$T/alerts.log'"
+
+echo "== watchdog: a miner too young to have built the fork is not blamed for it"
+# CTO red-team, finding 3 (R2): every active-miner case used a startedAt an hour old, so
+# `-gt $FORK_MINER_MIN_SECS` could have been `-gt 0` and stayed green.
+wd_fork_env
+miner_hb 5 120 10          # alive, but two minutes old against the 600 s bound
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4350000
+wd_run 2
+check "pages, because the fork is established by the heights either way" "grep -q '200 blocks AHEAD' '$T/alerts.log'"
+check "but calls it unexplained rather than blaming a two-minute-old miner" \
+  "grep -q 'cannot show it has been running long' '$T/alerts.log' && ! grep -q 'most likely ours' '$T/alerts.log'"
+check "and reads the age as seconds, not as 'unreadables'" "! grep -q 'unreadables' '$T/alerts.log'"
+
+echo "== watchdog: and the same miner IS blamed once the bound says it is old enough"
+wd_fork_env
+miner_hb 5 120 10
+export WATCHDOG_FORK_MINER_MIN_SECS=60      # the same miner, a bound it now clears
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4350000
+wd_run 2
+check "the bound is READ rather than hardcoded, so the attribution follows it" \
+  "grep -q 'most likely ours' '$T/alerts.log'"
+
+echo "== watchdog: turning the NODE heal off does not turn fork detection off with it"
+# CTO red-team, finding 3 (R3). The PR body claims this and nothing tested it; the heights are
+# read in the loop rather than inside step 7 precisely so that this holds.
+wd_fork_env
+export WATCHDOG_NODE_HEAL_ENABLED=0
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4350000
+wd_run 2
+check "still pages with the node heal disabled" "grep -q '200 blocks AHEAD' '$T/alerts.log'"
+check "and still writes the marker" "[ -f '$T/park/$FORK_MARKER_REL' ]"
+
+echo "== watchdog: and the rung's OWN kill switch is honoured"
+# CTO red-team, finding 3 (R7): WATCHDOG_FORK_HEAL_ENABLED existed and nothing proved it did
+# anything. A switch that does not switch is worse than no switch.
+wd_fork_env
+export WATCHDOG_FORK_HEAL_ENABLED=0
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4350000
+wd_run 2
+check "no page with the rung disabled" "! grep -q 'blocks AHEAD' '$T/alerts.log'"
+check "no marker either" "[ ! -f '$T/park/$FORK_MARKER_REL' ]"
+check "and it is silent about it rather than logging a cannot-tell every sweep" "! grep -q 'fork check' '$T/run.log'"
+
+echo "== watchdog: cannot-tell is said ONCE, not once every sweep"
+# CTO red-team, finding 7: one line every 30 s for as long as the oracle is single-sourced is
+# the shape this file already refuses elsewhere (miner_waiting_logged).
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFS=single STUB_READY_USEDHEIGHT=4350000
+wd_run 4
+check "four sweeps of the same cannot-tell state, one line" \
+  "[ \"\$(grep -c 'fork check: cannot tell' '$T/run.log')\" = 1 ]"
+check "and it says it will stay quiet" "grep -q 'Silent until this changes' '$T/run.log'"
+
 echo "== watchdog: with no marker, the same heal DOES release the miner (the control)"
 wd_fork_env
 export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677 STUB_ZEBRA_ADVANCE=1 STUB_ZEBRA_STUCK_CALLS=2
