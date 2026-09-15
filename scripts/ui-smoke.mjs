@@ -117,6 +117,44 @@ async function checkAppearance(page) {
   // assert its presence, not an accessible name.
   ok("the masthead mark renders", await page.getByTestId("brand-mark").isVisible());
 
+  // THE TRANSITIONAL MEASURE, COUNTED SO IT CANNOT OUTLIVE ITS PURPOSE QUIETLY.
+  //
+  // `.view.legacy-measure` caps a view's content at the 760px the pre-redesign markup was
+  // written for. The redesign's views are full width because the cards they will hold are,
+  // so every slice that transcribes a view must take the class off with it - and a class
+  // left behind would not fail anything, it would just quietly squeeze the new design into
+  // two thirds of the page. Nobody notices a layout that merely looks narrow.
+  //
+  // So the COUNT is pinned, and the number comes down as slices land: 4 at S1, 3 once S2
+  // transcribes the claim view, and 0 after S5. Changing it is a line in the diff and a
+  // decision someone made, which is the whole point.
+  const LEGACY_VIEWS = 4;
+  const legacy = await page.locator(".view.legacy-measure").count();
+  ok(`exactly ${LEGACY_VIEWS} views still carry the transitional 760px measure`,
+    legacy === LEGACY_VIEWS,
+    `${legacy} found; if a slice just transcribed a view, drop this number with it`);
+
+  // AND THE WIDTH IT IS THERE TO HOLD, measured rather than inferred from the class being
+  // present (SDE-Infra's finding on review). The count above catches the class being
+  // REMOVED early; it cannot catch the cap silently failing to apply - a changed selector,
+  // a specificity fight, a later rule setting width on the same children. Those leave the
+  // class in place and the content at full width, which is the 802px regression this whole
+  // thing exists to prevent, and nothing else in this suite can see it.
+  //
+  // The property, not the number: the view is wide and its content is NOT. Asserting the
+  // view is genuinely wide first is what stops this passing at a narrow viewport, where
+  // everything is under 760 and the cap proves nothing.
+  const measure = await page.evaluate(() => {
+    const view = document.querySelector(".view.legacy-measure");
+    const input = document.querySelector("input.input");
+    if (!view || !input) return { missing: true };
+    return { view: Math.round(view.getBoundingClientRect().width), input: Math.round(input.getBoundingClientRect().width) };
+  });
+  ok("the untranscribed content is still capped at its old measure inside a full-width view",
+    !measure.missing && measure.view > 900 && measure.input <= 760,
+    measure.missing ? "no .view.legacy-measure or no input.input, so nothing was measured"
+      : `view ${measure.view}px, address field ${measure.input}px (cap 760)`);
+
   // The LIVE dot paints the state, not a fixed colour: --color-live only when the
   // faucet is serviceable. Compare the dot's resolved background to the token
   // itself, not a hardcoded rgb, so a theme edit cannot make this assertion lie.
