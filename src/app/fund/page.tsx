@@ -12,7 +12,6 @@
  * wrong: if config did not validate one, this page is a 404 rather than a page with a
  * blank where an address should be.
  */
-import { notFound } from "next/navigation";
 import { config } from "@/lib/config";
 import { CopyAddress } from "../donate/CopyAddress";
 import { Shell, CHECKING_BADGE } from "@/components/Shell";
@@ -30,9 +29,6 @@ export const metadata = {
 
 export default function Fund() {
   const maintenance = config.maintenanceAddress.trim();
-  // No address, no page. A "fund us" page with nothing to send to is an invitation to
-  // send somewhere else, and the footer link is already conditional on the same value.
-  if (!maintenance) notFound();
 
   return (
     <Shell nav={{ kind: "links" }} badge={CHECKING_BADGE} status={{ maintenanceAddress: maintenance }}>
@@ -49,20 +45,46 @@ export default function Fund() {
               <a href="/donate">donate TAZ</a>.
             </p>
           </div>
-          <article className="card claim feature">
-            <div className="panel">
-              <span className="lbl">Mainnet ZEC, shielded</span>
-              <code className="addr" id="fund">{maintenance}</code>
-              <CopyAddress address={maintenance} label="Mainnet donation address" />
-              {/* Beside the address, not under the fold. The design puts it here and it is
-                  the only irreversible action on the site. */}
-              <p className="warn-line">Check the address first. Mainnet sends cannot be reversed.</p>
-            </div>
-            <div className="card-copy">
-              <h2>Pays for the server</h2>
-              <p>Copy the address into your wallet. It arrives shielded, and it pays for the server and the domain.</p>
-            </div>
-          </article>
+          {/* NO ADDRESS IS A STATE THIS PAGE RENDERS, NOT A 404, and that is the behaviour
+              this page already had. I wrote notFound() here first, reasoning that a "fund us"
+              page with nothing to send to invites sending somewhere else. It is a defensible
+              product argument and it was an UNSTATED CHANGE to shipped behaviour that the
+              snapshot does not ask for - and it went red in a check that already existed: the
+              mobile audit visits /fund and a 404 there logs a console error. An existing check
+              caught an unstated departure, which is the check doing its job.
+
+              So the page keeps its two states, transcribed into the design's card. The footer
+              link stays conditional on the same value, and ui-smoke pins that the two agree. */}
+          {maintenance ? (
+            <article className="card claim feature">
+              <div className="panel">
+                <span className="lbl">Mainnet ZEC, shielded</span>
+                <code className="addr" id="fund">{maintenance}</code>
+                <CopyAddress address={maintenance} label="Mainnet donation address" />
+                {/* Beside the address, not under the fold. The design puts it here and it is
+                    the only irreversible action on the site. */}
+                <p className="warn-line">Check the address first. Mainnet sends cannot be reversed.</p>
+              </div>
+              <div className="card-copy">
+                <h2>Pays for the server</h2>
+                <p>Copy the address into your wallet. It arrives shielded, and it pays for the server and the domain.</p>
+              </div>
+            </article>
+          ) : (
+            <article className="card claim feature">
+              <div className="panel">
+                <span className="lbl">No address configured</span>
+                <p className="hint">
+                  This deployment has not published a mainnet address, so there is nothing to send to here. If you
+                  run it, set <code className="mono">FAUCET_MAINTENANCE_ADDRESS</code>.
+                </p>
+              </div>
+              <div className="card-copy">
+                <h2>Pays for the server</h2>
+                <p>When an address is set it appears here, and the footer gains its Fund ZEC link at the same time.</p>
+              </div>
+            </article>
+          )}
         </div>
       </section>
     </Shell>
