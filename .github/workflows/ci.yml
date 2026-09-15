@@ -579,3 +579,51 @@ jobs:
           docker volume rm r10 >/dev/null
           printf '%s\n' "$out"
           [ "$out" = "$(printf 'uid=1000 caps=0000000000000000 bnd=00000000000000c9 nnp=1 owner=1000\nwrite-ok\ntmpfs-ok\nrootfs-ro')" ] || { echo "the runtime is not the one the compose file promises"; exit 1; }
+
+      # AND THE cTAZ SOCKET ADMITS THE APP AND NOT THE BOX (review of #545, follow-up).
+      #
+      # ctaz-rpc.socket is a systemd unit, so nothing here can prove systemd APPLIES what it
+      # declares; that is only observable on the box and OPERATIONS.md carries the command.
+      # What this proves is the half that is a kernel property and is therefore the half a
+      # CI runner can settle honestly: that the mode and group the unit declares actually
+      # admit uid 1000 and refuse everyone else. The unit's declaration is pinned separately
+      # in the repo suite, so the two cannot drift.
+      #
+      # The mode is read OUT OF THE UNIT rather than typed here, for the same reason the
+      # probe above takes its flags from the compose file: a test that supplies the value it
+      # then asserts is testing nothing (#545 review).
+      - name: the cTAZ socket's declared group and mode admit uid 1000 and refuse another uid
+        run: |
+          set -uo pipefail
+          unit=deploy/z3/ctaz-rpc.socket
+          grp="$(sed -n 's/^SocketGroup=//p' "$unit" | tail -1)"
+          mode="$(sed -n 's/^SocketMode=//p' "$unit" | tail -1)"
+          usr="$(sed -n 's/^SocketUser=//p' "$unit" | tail -1)"
+          echo "the unit declares ${usr}:${grp} ${mode}"
+          [ -n "$grp" ] && [ -n "$mode" ] && [ "$usr" = root ] || { echo "could not read SocketUser/Group/Mode from $unit"; exit 1; }
+          cat > /tmp/listener.js <<'JS'
+          const net = require("net"), fs = require("fs");
+          const [, , path, gid, mode] = process.argv;
+          try { fs.unlinkSync(path); } catch {}
+          const s = net.createServer((c) => c.end("{}\n"));
+          s.listen(path, () => { fs.chownSync(path, 0, Number(gid)); fs.chmodSync(path, parseInt(mode, 8)); console.log("listening"); });
+          setTimeout(() => process.exit(0), 60000);
+          JS
+          cat > /tmp/probe.js <<'JS'
+          const net = require("net");
+          const c = net.createConnection(process.argv[2]);
+          c.on("connect", () => { c.end(); console.log("CONNECT"); process.exit(0); });
+          c.on("error", (e) => { console.log(e.code); process.exit(0); });
+          JS
+          docker volume create ctazsock >/dev/null
+          docker run -d --name ctaz-listener -v ctazsock:/d -v /tmp/listener.js:/l.js:ro \
+            --entrypoint node faucet-ci-check:${{ github.sha }} /l.js /d/ctaz-rpc.sock "$grp" "$mode" >/dev/null
+          for _ in $(seq 1 20); do docker logs ctaz-listener 2>&1 | grep -q listening && break; sleep 1; done
+          docker logs ctaz-listener 2>&1 | grep -q listening || { echo "the listener never came up"; docker rm -f ctaz-listener >/dev/null; docker volume rm ctazsock >/dev/null; exit 1; }
+          as() { docker run --rm -u "$1:$1" -v ctazsock:/d -v /tmp/probe.js:/p.js:ro --entrypoint node faucet-ci-check:${{ github.sha }} /p.js /d/ctaz-rpc.sock; }
+          app="$(as 1000)"; other="$(as 1002)"
+          docker rm -f ctaz-listener >/dev/null; docker volume rm ctazsock >/dev/null
+          echo "uid 1000 (the app): $app"
+          echo "uid 1002 (anyone else): $other"
+          [ "$app" = CONNECT ] || { echo "the app's own uid cannot reach the socket the unit declares: cTAZ would be dark"; exit 1; }
+          [ "$other" = EACCES ] || { echo "the socket is open to uid 1002, so it is open to the box: expected EACCES, got $other"; exit 1; }

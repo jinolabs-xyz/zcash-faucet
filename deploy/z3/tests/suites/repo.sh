@@ -139,6 +139,24 @@ check "and the CI image job proves the runtime shape rather than assuming it" \
 check "and takes its run flags from the compose file, so the probe cannot supply what it asserts" \
   "grep -q 'docker compose -f deploy/z3/docker-compose.faucet.yml config --format json' '$CIWF' && grep -q 'docker run --rm \$flags -v r10:/app/data' '$CIWF' && ! grep -q 'docker run --rm --read-only' '$CIWF'"
 
+echo "== repo: the cTAZ socket admits the app and not the box, and CI reads that from the unit"
+# The app is uid 1000 since R-10, so root:root 0660 locks it out and 0666 lets in every uid
+# on the host. root:1000 0660 is the one that admits the app alone, and the numbers here are
+# measured rather than argued (review of #545: 0660 root:root is EACCES to uid 1000; 0666
+# admits uid 1002 too; root:1000 0660 admits 1000 and refuses 1002).
+#
+# A unit file is the only place this can be declared, so this half IS a text check - but it
+# is a text check on the ARTEFACT WE SHIP, not one standing in for behaviour. The behaviour
+# half is the CI step, and the point of the last assertion is that the step reads the mode
+# out of this unit instead of typing it, so the two cannot say different things.
+SOCK="$REPO/deploy/z3/ctaz-rpc.socket"
+check "the socket is owned by root and grouped to the app's gid, not to root" \
+  "grep -qx 'SocketUser=root' '$SOCK' && grep -qx 'SocketGroup=1000' '$SOCK'"
+check "and its mode is 0660, so it is not open to every uid on the box" \
+  "grep -qx 'SocketMode=0660' '$SOCK' && ! grep -q '^SocketMode=0666' '$SOCK'"
+check "and CI proves both uids against it, reading the mode from the unit rather than typing it" \
+  "grep -q \"sed -n 's/^SocketMode=//p\" '$CIWF' && grep -q 'uid 1002 (anyone else)' '$CIWF' && grep -q 'expected EACCES' '$CIWF'"
+
 echo "== repo: the watchdog's node-lag limit is the miner's, for the miner's reason"
 # Both read zebra's clock-based estimatedheight. The miner's guard (sync.rs) explains why
 # 100 and not less: hour-long testnet gaps push the estimate ~50 "behind" with nobody

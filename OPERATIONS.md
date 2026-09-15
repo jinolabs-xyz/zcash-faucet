@@ -78,6 +78,35 @@ The watchdog restarts fallen containers within 30 seconds, so if you stop a
 container on purpose for a maintenance window, stop the watchdog first and
 start it again after.
 
+## The cTAZ socket: who is allowed to connect
+
+`ctaz-rpc.socket` is the app's only route to the Crosslink node, and since R-10 the app is
+the image's `node` user (uid 1000) rather than root. The unit gives the socket to
+`root:1000` at mode `0660`, so uid 1000 may connect and no other unprivileged uid on the
+box may. That is a smaller grant than the `0666` it replaced, which admitted every uid.
+
+The mode is a numeric gid, so it is worth confirming once that gid 1000 on this box is what
+you think it is, and that systemd applied what the unit declares. Neither is observable
+from the repository:
+
+```bash
+# a. what holds gid 1000 here
+getent group 1000
+
+# b. what systemd actually created, which is the half CI cannot prove
+sudo stat -c '%U:%G %a %n' /var/lib/docker/volumes/zcash-faucet_faucet_data/_data/ctaz-rpc.sock
+# expected: root:<the gid-1000 group> 660
+
+# c. the app's own view, from inside the container
+docker exec zcash-faucet-faucet-1 stat -c '%u:%g %a' /app/data/ctaz-rpc.sock
+# expected: 0:1000 660
+```
+
+If (b) shows `666` the unit on the box predates this change and `install-ops.sh` has not
+run; if it shows `root:root`, `SocketGroup=` did not take and cTAZ will be dark, because
+the app cannot connect. Either way the panel reads cannot-verify rather than lying, which
+is the behaviour the five-state gate is for.
+
 ## Logs
 
 ```bash
