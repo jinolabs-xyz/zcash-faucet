@@ -1102,7 +1102,7 @@ export default function Home() {
               the hyperlink, this becomes two anchors on the same disc layout. The footer's
               "not an official Zcash service" is unchanged either way. */}
           <Link className="home" href="/" aria-label="Zcash Testnet Faucet, home">
-            <span className="mark"><BrandMark /></span>
+            <BrandMark />
             <span className="name">Zcash Testnet Faucet</span>
           </Link>
           <span className="badge" data-state={statusText} data-testid="status-badge">
