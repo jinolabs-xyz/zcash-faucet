@@ -6,7 +6,7 @@
  * null and the UI shows an indeterminate "bringing the node online" state.
  */
 import { config, num } from "../config.ts";
-import { getExternalTip } from "./externalTip.ts";
+import { referenceTip } from "./externalTip.ts";
 import { mayBuildTransaction, readChainFreshness, type ChainGate } from "./shieldGate.ts";
 import { tipProgress, type TipSample } from "./tipProgress.ts";
 import { getChainIdentity } from "./chainIdentityOracle.ts";
@@ -102,7 +102,15 @@ export async function getNodeStatus(): Promise<NodeStatus | null> {
     // DISTANCE: the network is reachable AND our tip is far below it. A null
     // external tip means we could not verify, and we do NOT flip to frozen on that
     // - a public-endpoint outage must never take down a healthy faucet.
-    const externalHeight = getExternalTip();
+    //
+    // THE HIGHEST NON-STALE REFERENCE, not simply the one the aggregate handed back
+    // (#548). On 2026-09-15 at 13:06Z this passed a resyncing node as current for three
+    // minutes because the single reference it asked was 113 blocks behind the network
+    // while another source knew better and nothing consulted it. Taking the max is what
+    // makes a stale source unable to vouch for a node, and it works WITHOUT knowing the
+    // source was stale - which matters, because hosh publishes no timestamp and we
+    // cannot know (externalTip.ts, REFERENCE_MAX_AGE_MS).
+    const externalHeight = referenceTip().height;
     const behind = externalHeight != null && externalHeight - n > FREEZE_BLOCKS;
 
     // MOTION: our own tip has not advanced in a long time. This needs no second

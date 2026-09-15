@@ -17,6 +17,7 @@ import { getNodeStatus } from "@/lib/zcash/nodeStatus";
 import { cachedLedgerHealth } from "@/lib/db";
 import { ledgerBlocksServing } from "@/lib/db/probe";
 import { readSendHealth, sendHealthBlocksServing } from "@/lib/zcash/sendHealth";
+import { getTipReferences } from "@/lib/zcash/externalTip";
 import { readinessReason } from "@/lib/readiness";
 import { withApi } from "@/lib/api";
 
@@ -109,6 +110,23 @@ export const GET = withApi("ready", async () => {
       // refusing every drip because the tip cannot be verified". Readers that page
       // (watchdog step 4, scripts/live-probe.mjs) treat that as not ready.
       node,
+      /**
+       * WHAT EACH EXTERNAL REFERENCE SAYS, AND WHETHER THEY AGREE (#548, and the data the
+       * watchdog's fork rung reads). `node.externalHeight` is one number with no
+       * provenance, so a reader could not tell a fresh reference from a stale one, nor a
+       * single source from two that agree. Both facts are here, named.
+       *
+       * TWO THINGS THIS BLOCK DOES NOT PROMISE, because two fields could easily imply
+       * otherwise. `ageSeconds` is how long ago WE fetched: hosh publishes no timestamp,
+       * so nothing here can say how current its number is. And both sources are
+       * independent of OUR NODE - the property that catches a frozen or forked node - but
+       * not of each other: hosh aggregates the online testnet lightwalletds, which are
+       * both zec.rocks, and our own endpoint defaults to one of them. A zec.rocks-wide
+       * wrong answer corroborates itself perfectly. What corroboration does catch is the
+       * failure we actually had: different fetch paths and cadences, so one going stale
+       * or flapping shows up as a spread.
+       */
+      tipReferences: getTipReferences(),
       backend: { reachable: backend.reachable },
       // Reported even when serving, and carrying its own three-state verdict, so
       // "container up but not serving" has a name in the alert. "The faucet is

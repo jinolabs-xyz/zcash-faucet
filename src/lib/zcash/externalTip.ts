@@ -239,21 +239,18 @@ export interface TipFetchBudget {
 const PRODUCTION_BUDGET: TipFetchBudget = { hoshTimeoutMs: HOSH_TIMEOUT_MS, fallbackTotalMs: FALLBACK_TOTAL_MS };
 
 /**
- * Do the actual network work: hosh first, then a direct node. Carries provenance.
- * The budget is injectable so the bound can be proven in a test against hanging fakes
- * in milliseconds; production always passes PRODUCTION_BUDGET.
+ * The direct leg on its own: the first configured public third party that answers.
+ *
+ * Extracted so the single-answer fetch above and the both-references fetch below share
+ * one copy of the budget splitting and the independence filter. Two copies of a rule
+ * about who may be an oracle is how one of them ends up honouring an endpoint the other
+ * refuses.
  */
-export async function fetchNetworkTipWithin(
+async function fetchDirectTip(
   budget: TipFetchBudget,
-  endpoints: readonly string[] = config.lightwalletdEndpoints,
-  getLatest: (endpoint: string, timeoutMs: number) => Promise<number | null> = getLatestBlock,
-): Promise<{ height: number | null; source: TipSource; host: string | null }> {
-  const h = await fromHosh(budget.hoshTimeoutMs).catch(() => null);
-  if (h != null && h > 0) return { height: h, source: "hosh", host: null };
-  // hosh down or its testnet filter yielded nothing - degrade to a direct node,
-  // and say so, because a silent degrade to a single source defeats the point of
-  // the aggregate (App's medium on #171).
-  console.warn("[externalTip] hosh gave no testnet height; falling back to direct GetLatestBlock");
+  endpoints: readonly string[],
+  getLatest: (endpoint: string, timeoutMs: number) => Promise<number | null>,
+): Promise<{ height: number; host: string } | null> {
   // ONE deadline for every leg, split FAIRLY. The total is what the caller's wait knows
   // about, so no leg may exceed what is left of it; but a first endpoint that accepts
   // the connection and never answers must not spend the whole budget and hide every
@@ -276,16 +273,39 @@ export async function fetchNetworkTipWithin(
     const share = Math.ceil(remaining / (legs.length - i));
     try {
       const height = await getLatest(legs[i], share);
-      if (height != null && height > 0) return { height, source: "direct", host: targetFor(legs[i]).target };
+      if (height != null && height > 0) return { height, host: targetFor(legs[i]).target };
     } catch {
       // try the next endpoint
     }
   }
-  return { height: null, source: "none", host: null };
+  return null;
 }
 
-function fetchNetworkTip(): Promise<{ height: number | null; source: TipSource; host: string | null }> {
-  return fetchNetworkTipWithin(PRODUCTION_BUDGET);
+/**
+ * BOTH references at once, each with its own answer, for /api/ready's `tipReferences`
+ * and the watchdog's fork rung (R-12).
+ *
+ * In PARALLEL, not in series, and the difference is the point: the single-answer fetch
+ * above asks the fallback only when the aggregate failed, so on a normal day we never
+ * learn what the second source thinks. The whole reason the 13:06Z incident was invisible
+ * is that hosh was 113 blocks stale, our own endpoint knew better, and nothing ever put
+ * the two numbers side by side.
+ *
+ * It costs one extra gRPC call to a public endpoint per refresh, which is at most one per
+ * 30 s. Parallel also makes the worst case max(hosh, fallback) rather than their sum, so
+ * the money path's wait (REFRESH_ATTEMPT_MS, sized on the sum) still covers it with room -
+ * a wait that is longer than needed is the safe direction to be wrong in.
+ */
+export async function fetchBothReferencesWithin(
+  budget: TipFetchBudget,
+  endpoints: readonly string[] = config.tipOracleEndpoints,
+  getLatest: (endpoint: string, timeoutMs: number) => Promise<number | null> = getLatestBlock,
+): Promise<{ hosh: number | null; direct: { height: number; host: string } | null }> {
+  const [hosh, direct] = await Promise.all([
+    fromHosh(budget.hoshTimeoutMs).catch(() => null),
+    fetchDirectTip(budget, endpoints, getLatest).catch(() => null),
+  ]);
+  return { hosh: hosh != null && hosh > 0 ? hosh : null, direct };
 }
 
 const STALE_MS = 30_000; // refresh in the background once the cache is older than this
@@ -343,7 +363,63 @@ const g = globalThis as unknown as {
   __faucetTipRefreshing?: boolean;
   __faucetTipLastAttemptAt?: number;
   __faucetTipBootChecked?: boolean;
+  __faucetTipSources?: Partial<Record<ReferenceName, { height: number; at: number; host: string | null }>>;
 };
+
+/** The references we ask, by name. Open-ended on purpose: the watchdog's fork rung reads
+ *  whatever is present rather than two hard-coded keys, so a third source is additive. */
+export type ReferenceName = "hosh" | "lightwalletd";
+
+export interface TipReference {
+  height: number;
+  /** How long ago WE fetched it. Never how current the SOURCE is - see the note below. */
+  ageSeconds: number;
+  /** Our fetch is older than REFERENCE_MAX_AGE_MS, so it may not pass a node as current. */
+  stale: boolean;
+  /** Which host answered, when we know it. The aggregate does not name one. */
+  host?: string | null;
+}
+
+export interface TipReferences {
+  sources: Partial<Record<ReferenceName, TipReference>>;
+  /** The widest disagreement between non-stale sources, or null when fewer than two. */
+  spreadBlocks: number | null;
+  /** spreadBlocks <= AGREE_BLOCKS. NULL, never false, when it cannot be computed: a
+   *  reader treating "cannot tell" as "they disagree" would page on an absent source. */
+  corroborated: boolean | null;
+  /** The source whose height a caller should judge a node against: the highest
+   *  non-stale one. Null when no source is usable. */
+  used: ReferenceName | null;
+}
+
+/**
+ * How old OUR FETCH of a reference may be before it stops being usable as proof that a
+ * node is current. Same bound the aggregate cache uses, and for the same reason.
+ *
+ * WHAT `stale` CANNOT TELL YOU, and this is the limit of the whole block: hosh publishes
+ * `{ chain, online, height }` per server and NO timestamp, so we can know when we last
+ * looked and never how old the number we were handed is. On 2026-09-15 at 13:06Z our
+ * fetch was seconds old and hosh's height was 113 blocks behind the network, and readiness
+ * passed a resyncing node as current against it (#548). An age bound cannot see that case.
+ * What sees it is a second source disagreeing, which is why this block exists at all.
+ */
+export const REFERENCE_MAX_AGE_MS = MAX_AGE_MS;
+
+/**
+ * How far apart two references may be and still be called agreement.
+ *
+ * DERIVED, not picked. Our own endpoint is one of the servers hosh aggregates, so the
+ * normal spread is the aggregate's leader minus one of its members: 0 to 2 blocks on a
+ * ~75 s block time with a 30 s refresh. The pathological day measured 113 blocks of
+ * staleness and a 110-block flap within a quarter of an hour. 20 is an order of magnitude
+ * above the normal spread and five times below the observed failure, so ordinary cadence
+ * differences stay quiet and 2026-09-15's do not.
+ *
+ * The watchdog's fork rung uses its own, larger threshold for a different question (how
+ * far ABOVE the network our node may read before it is a fork); this one is only about
+ * whether two references tell the same story.
+ */
+export const AGREE_BLOCKS = Number(process.env.TIP_AGREE_BLOCKS ?? 20);
 
 function cacheRef(): TipCache {
   return (g.__faucetTipCache ??= { height: null, at: 0, source: "none", host: null });
@@ -364,14 +440,106 @@ async function refresh(waiveGap = false): Promise<void> {
   g.__faucetTipLastAttemptAt = Date.now();
   g.__faucetTipRefreshing = true;
   try {
-    const r = await fetchNetworkTip();
+    const both = await fetchBothReferencesWithin(PRODUCTION_BUDGET);
+    const now = Date.now();
+    // Each reference keeps its own answer and its own age. A source that failed this
+    // round keeps its last one: the age is what turns an outage into an honest "stale",
+    // exactly as MAX_AGE_MS does for the aggregate below.
+    const sources = (g.__faucetTipSources ??= {});
+    if (both.hosh != null) sources.hosh = { height: both.hosh, at: now, host: null };
+    if (both.direct) sources.lightwalletd = { height: both.direct.height, at: now, host: both.direct.host };
+
+    // THE AGGREGATE CACHE KEEPS ITS OLD MEANING, deliberately: the aggregate when we have
+    // it, the direct endpoint when we do not. Every existing reader (the shield gate, the
+    // money path, nodeStatus) sees exactly what it saw before this change.
+    const r: TipReading =
+      both.hosh != null
+        ? { height: both.hosh, source: "hosh", host: null }
+        : both.direct
+          ? { height: both.direct.height, source: "direct", host: both.direct.host }
+          : { height: null, source: "none", host: null };
+    if (both.hosh == null) {
+      // Said out loud for the reason #171 gave: a silent degrade to one source defeats
+      // the point of asking an aggregate.
+      console.warn("[externalTip] hosh gave no testnet height; the direct endpoint is the only reference this round");
+    }
     const h = r.height;
-    if (h != null && h > 0) g.__faucetTipCache = { height: h, at: Date.now(), source: r.source, host: r.host };
+    if (h != null && h > 0) g.__faucetTipCache = { height: h, at: now, source: r.source, host: r.host };
     // On failure we keep the last-known cache rather than clearing it; MAX_AGE_MS
     // is what eventually turns a long outage into an honest "cannot verify".
   } finally {
     g.__faucetTipRefreshing = false;
   }
+}
+
+/**
+ * What each reference says right now, and whether they agree.
+ *
+ * SYNCHRONOUS AND LAST-KNOWN, like every other reader here: this is on the readiness path
+ * and a public endpoint's bad minute must never be able to slow it down.
+ *
+ * `used` is the highest NON-STALE source, and that choice is the #548 fix rather than a
+ * preference. On 2026-09-15 readiness passed a resyncing node as current because the one
+ * reference it asked was 113 blocks behind the network; a second source knew better and
+ * nothing consulted it. Taking the max means a stale source can no longer pass a node that
+ * another source can see is behind - which works without knowing that the first source was
+ * stale, and that matters because (see REFERENCE_MAX_AGE_MS) hosh publishes nothing that
+ * would let us know.
+ */
+export function getTipReferences(now: number = Date.now()): TipReferences {
+  const raw = g.__faucetTipSources ?? {};
+  const sources: Partial<Record<ReferenceName, TipReference>> = {};
+  for (const [name, v] of Object.entries(raw) as [ReferenceName, { height: number; at: number; host: string | null }][]) {
+    const ageMs = now - v.at;
+    sources[name] = {
+      height: v.height,
+      ageSeconds: Math.max(0, Math.round(ageMs / 1000)),
+      stale: ageMs > REFERENCE_MAX_AGE_MS,
+      host: v.host,
+    };
+  }
+  const fresh = (Object.entries(sources) as [ReferenceName, TipReference][]).filter(([, v]) => !v.stale);
+  const heights = fresh.map(([, v]) => v.height);
+  const spreadBlocks = heights.length >= 2 ? Math.max(...heights) - Math.min(...heights) : null;
+  return {
+    sources,
+    spreadBlocks,
+    corroborated: spreadBlocks == null ? null : spreadBlocks <= AGREE_BLOCKS,
+    used: fresh.length ? fresh.reduce((a, b) => (b[1].height > a[1].height ? b : a))[0] : null,
+  };
+}
+
+export interface ReferenceTipReading {
+  /** The highest non-stale reference, or null when no reference is usable. */
+  height: number | null;
+  /** Which source that was. Null whenever height is null. */
+  source: ReferenceName | null;
+  /**
+   * We have references and every one of them is past its age bound. Distinct from having
+   * none at all, which is `height: null, stale: false` - a caller that must tell "we
+   * looked and the answer is old" from "we have never had an answer" can, and the money
+   * gate is exactly such a caller.
+   */
+  stale: boolean;
+}
+
+/**
+ * THE ONE READ BOTH GATES USE: the height a node should be judged against, with its
+ * provenance. The highest non-stale reference, so that one stale source cannot vouch for
+ * a node another source can see is behind (#548).
+ *
+ * Readiness uses it through nodeStatus. The shield gate is the other caller and it is
+ * NOT wired here: it carries the unsafe-versus-cannot-verify asymmetry and gets its own
+ * PR and its own tests. The exposure that leaves open is written down rather than
+ * implied - at 13:06Z on 2026-09-15 the gate would have measured our resyncing node 37
+ * blocks behind a stale reference where the truth was 150 - and this helper exists in
+ * this PR precisely so that one is two call sites rather than a second implementation.
+ */
+export function referenceTip(now: number = Date.now()): ReferenceTipReading {
+  const refs = getTipReferences(now);
+  const names = Object.keys(refs.sources) as ReferenceName[];
+  if (refs.used) return { height: refs.sources[refs.used]!.height, source: refs.used, stale: false };
+  return { height: null, source: null, stale: names.length > 0 };
 }
 
 /** Kick an initial fetch at boot so the first readiness check has a value. Also the
@@ -380,8 +548,8 @@ async function refresh(waiveGap = false): Promise<void> {
 export function warmExternalTip(): Promise<void> {
   if (!g.__faucetTipBootChecked) {
     g.__faucetTipBootChecked = true;
-    if (!config.lightwalletdEndpoints.some(isIndependentTipEndpoint)) {
-      console.warn(`[externalTip] no configured LIGHTWALLETD_ENDPOINT is a public third party (${config.lightwalletdEndpoints.join(", ")}), so the tip oracle has no fallback: once hosh has been unreachable long enough for the cached tip to age out (${MAX_AGE_MS / 60_000} min), drips are refused until it answers again`);
+    if (!config.tipOracleEndpoints.some(isIndependentTipEndpoint)) {
+      console.warn(`[externalTip] no configured tip endpoint is a public third party (${config.tipOracleEndpoints.join(", ") || "none set"}), so the tip oracle has no second reference: once hosh has been unreachable long enough for the cached tip to age out (${MAX_AGE_MS / 60_000} min), drips are refused until it answers again`);
     }
   }
   return refresh();
@@ -399,6 +567,9 @@ export function resetExternalTipForTests(): void {
   delete g.__faucetTipRefreshing;
   delete g.__faucetTipLastAttemptAt;
   delete g.__faucetTipBootChecked;
+  // The per-source cache resets with the rest of it. A reset that clears half the state
+  // lets one case answer for the next, which is the leak shape this repo keeps paying for.
+  delete g.__faucetTipSources;
 }
 
 export function warmExternalTipNowForTests(): Promise<void> {
