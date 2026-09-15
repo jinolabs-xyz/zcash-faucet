@@ -538,12 +538,19 @@ export interface ReferenceTipReading {
  * provenance. The highest non-stale reference, so that one stale source cannot vouch for
  * a node another source can see is behind (#548).
  *
- * Readiness uses it through nodeStatus. The shield gate is the other caller and it is
- * NOT wired here: it carries the unsafe-versus-cannot-verify asymmetry and gets its own
- * PR and its own tests. The exposure that leaves open is written down rather than
- * implied - at 13:06Z on 2026-09-15 the gate would have measured our resyncing node 37
- * blocks behind a stale reference where the truth was 150 - and this helper exists in
- * this PR precisely so that one is two call sites rather than a second implementation.
+ * Readiness uses it through nodeStatus. The shield gate is the other caller and it is NOT
+ * wired here: it carries the unsafe-versus-cannot-verify asymmetry and gets its own PR and
+ * its own tests, and this helper exists in this one so that is two call sites rather than a
+ * second implementation.
+ *
+ * THE EXPOSURE THAT LEAVES OPEN, corrected: the gate's lag budget is five blocks, so a
+ * stale reference only fools it when it sits CLOSE to our own height while the real tip is
+ * further ahead - not merely when it is stale. Measured from 2026-09-15's 14:01Z flap,
+ * where hosh read 4,349,808 and our own endpoint read 4,349,928: a node at 4,349,805 is 3
+ * behind the stale one, inside the budget and allowed, and 123 behind the truth, which is
+ * past the tip+40 expiry window. (An earlier draft of this comment cited the 13:06Z
+ * numbers, 37 against 150; both of those exceed the five-block budget, so that pair does
+ * not demonstrate the bug and the claim was withdrawn.)
  */
 export function referenceTip(now: number = Date.now()): ReferenceTipReading {
   const refs = getTipReferences(now);

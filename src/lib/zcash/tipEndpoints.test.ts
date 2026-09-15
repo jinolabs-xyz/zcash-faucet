@@ -21,17 +21,22 @@ test("the oracle looks where TIP_ORACLE_ENDPOINT says, not at the read-side back
   assert.deepEqual(config.lightwalletdEndpoints, ["https://backend.example:443"], "the backend is untouched");
 });
 
-test("an explicitly empty list means the aggregate alone, and is not the default", () => {
-  // THIS RE-IMPLEMENTS THE PARSER, and the comment here used to claim the opposite -
-  // SDE-Infra's note on review. What it can honestly show is the DISTINCTION the split
-  // rests on: "" and unset are different answers, which is what lets a suite stand the
-  // direct leg down without breaking the backend ping. The unset branch against the real
-  // module is covered where a test imports config with the variable absent
-  // (externalTip.test.ts), not here.
-  const parse = (raw: string | undefined) =>
-    raw === undefined
-      ? config.lightwalletdEndpoints
-      : raw.split(",").map((s) => s.trim()).filter(Boolean);
-  assert.deepEqual(parse(""), [], "set to empty: no direct reference at all");
-  assert.deepEqual(parse(undefined), config.lightwalletdEndpoints, "unset: exactly today's behaviour");
+test("an explicitly EMPTY list means the aggregate alone, read from config rather than from a copy of its parser", async () => {
+  // AGAINST THE REAL MODULE. The first version of this case re-implemented the parser in a
+  // local closure and asserted that - which would have stayed green if config had started
+  // treating "" as unset, the exact confusion the split exists to avoid (the CTO's
+  // red-team, and SDE-Infra's note that the comment claimed otherwise). config reads the
+  // environment once at load, so a fresh evaluation is the only way to ask it a second
+  // question: the query string defeats the module cache.
+  process.env.TIP_ORACLE_ENDPOINT = "";
+  // The specifier is widened to `string` on purpose: tsc cannot resolve a query-string
+  // module and would fail the build, while node needs exactly that query to re-evaluate.
+  const spec: string = "../config.ts?empty-tip-oracle";
+  const fresh = (await import(spec)) as typeof import("../config.ts");
+  assert.deepEqual(fresh.config.tipOracleEndpoints, [], "empty is a real answer: no direct reference at all");
+  assert.deepEqual(
+    fresh.config.lightwalletdEndpoints,
+    ["https://backend.example:443"],
+    "and it did not take the backend list as a fallback, which is what unset does",
+  );
 });
