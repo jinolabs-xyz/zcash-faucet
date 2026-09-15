@@ -40,7 +40,7 @@ wd_env() {
   # syncing". Nothing noticed for as long as the grace window was 999999, because a
   # faucet that is never ready and never paged looks exactly like one that is fine.
   # The first case that set the grace to 0 failed in CI and passed alone.
-  unset STUB_READY_EXTERNAL STUB_CURL_RC
+  unset STUB_READY_EXTERNAL STUB_CURL_RC STUB_READY_REFS STUB_READY_USEDHEIGHT WATCHDOG_NODE_CONFIRMED_LAG_LIMIT
   unset STUB_SLOWLOOP STUB_ALERT_FAIL_N STUB_ALERT_FAIL_RC WATCHDOG_RECOVERY_MIN_UPTIME
   unset STUB_CRASHLOOP STUB_HEAL_FIXES STUB_ZEBRA_BLOCKS STUB_ZEBRA_EST STUB_ZEBRA_ADVANCE STUB_ZEBRA_STUCK_CALLS \
         WATCHDOG_NODE_HEAL_ENABLED WATCHDOG_NODE_STOPS_MINER WATCHDOG_MINER_HEARTBEAT WATCHDOG_MINER_UNIT STUB_START_FAIL \
@@ -592,9 +592,13 @@ wd_node_env() {
   # minutes; the decision logic under test is the same either way.
   export WATCHDOG_NODE_STALL_SECS=0
   export WATCHDOG_NODE_LAG_LIMIT=100
-  # The network agrees with zebra's estimate in every case below unless a case says
-  # otherwise: the ladder's rewind rungs act only on a lag an independent tip confirms.
-  export STUB_READY_EXTERNAL=zebra-est
+  # The network AGREES with zebra's estimate in every case below unless a case says
+  # otherwise, and it now says so as a corroboration SHAPE rather than as a bare height.
+  # That is the axis this rung turns on: step 7 reads the corroborated tip, so a fixture
+  # that only carries a number describes a body the rung is right to ignore. Cases that
+  # want no usable tip set STUB_READY_REFS=none; cases about a body from before #559 unset
+  # it, which wd_fork_env does for all of them.
+  export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=zebra-est
   export WATCHDOG_NODE_HEAL_MAX=3
   export WATCHDOG_NODE_CLEAR_CACHE_AFTER=2
   export WATCHDOG_NODE_DROP_NONFINAL_AFTER=3
@@ -826,7 +830,7 @@ echo "== watchdog: A QUIET TESTNET IS NOT A FORKED NODE (risk register II, R-11)
 wd_node_env
 echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
 export STUB_ZEBRA_BLOCKS=4340727 STUB_ZEBRA_EST=4340782   # 55 "behind" by the clock, tip unmoved
-export STUB_READY_EXTERNAL=4340727                         # the network is exactly where we are
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4340727  # two references agree: exactly where we are
 unset WATCHDOG_NODE_LAG_LIMIT                              # the SCRIPT'S default is what this case is about
 peers="$STUB_VOLROOT/z3-testnet-chain/network/testnet.peers"
 nonfinal="$STUB_VOLROOT/z3-testnet-chain/non_finalized_state"
@@ -840,14 +844,14 @@ echo "== watchdog: a lag only zebra believes in buys restarts, never a rewind or
 wd_node_env
 echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
 export STUB_ZEBRA_BLOCKS=4340727 STUB_ZEBRA_EST=4340900   # 173 by the clock, over the limit, tip unmoved
-export STUB_READY_EXTERNAL=4340730                         # the network says 3 ahead
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4340730  # two references agree: 3 ahead
 peers="$STUB_VOLROOT/z3-testnet-chain/network/testnet.peers"; nonfinal="$STUB_VOLROOT/z3-testnet-chain/non_finalized_state"
 wd_run 6   # baseline, three heals, give-up, quiet
 check "it restarts (cheap, reversible, zebra's own word is enough for that)" "[ \"\$(grep -c 'docker restart z3-testnet-zebra-1' '$STUB_LOG')\" = 3 ]"
 check "but never stops the node to clear state" "! grep -q 'docker stop z3-testnet-zebra-1' '$STUB_LOG'"
 check "the peer cache and the non-finalized state survive every attempt" "[ -f '$peers' ] && [ -d '$nonfinal' ]"
 check "the miner is left running: its own guard is the same 100" "! grep -q 'systemctl stop zcash-testnet-miner' '$STUB_LOG'"
-check "the journal says why the rewind was withheld" "grep -q 'not rewinding state on a clock estimate' '$T/run.log' && grep -q 'external: 4340730' '$T/run.log'"
+check "the journal says why the rewind was withheld" "grep -q 'not rewinding state on an unconfirmed lag' '$T/run.log' && grep -q 'the corroborated tip 4340730 does not support' '$T/run.log'"
 check "the give-up page says the lag is unconfirmed and does not prescribe a snapshot" \
   "grep -q 'NEEDS YOU: zebra reports itself 173 blocks behind its own estimate' '$T/alerts.log' && grep -q 'no independent tip confirms it' '$T/alerts.log' && ! grep -q 'reimport a snapshot' '$T/alerts.log'"
 
@@ -860,10 +864,10 @@ echo "== watchdog: an episode that LOSES its confirmation still tells the operat
 wd_node_env
 echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
 export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677
-export STUB_READY_EXTERNAL=4332680   # confirmed
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4332680   # confirmed by two that agree
 wd_run 2   # baseline, heal 1 (confirmed: miner stopped, flag on disk)
 check "the first, confirmed heal stopped the miner" "grep -q 'systemctl stop zcash-testnet-miner' '$STUB_LOG' && [ \"\$(cat '$T/state/miner-stopped-for-node-heal.flaps')\" = 1 ]"
-export STUB_READY_EXTERNAL=          # the confirmation is gone
+export STUB_READY_REFS=none STUB_READY_USEDHEIGHT=   # the confirmation is gone: no usable reference
 wd_run 5   # a fresh process: baseline, three unconfirmed restarts, give-up
 check "the unconfirmed give-up page still says the miner is left STOPPED and how to start it" \
   "grep -q 'no independent tip confirms it' '$T/alerts.log' && grep -q 'The miner is left STOPPED.*systemctl start zcash-testnet-miner.service' '$T/alerts.log'"
@@ -873,7 +877,7 @@ echo "== watchdog: no independent tip at all is 'unconfirmed', not 'behind'"
 wd_node_env
 echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
 export STUB_ZEBRA_BLOCKS=4340727 STUB_ZEBRA_EST=4340900
-export STUB_READY_EXTERNAL=                                # the field is absent: oracle dark or app unreachable
+export STUB_READY_REFS=none STUB_READY_USEDHEIGHT=         # nothing usable: oracle dark or app unreachable
 peers="$STUB_VOLROOT/z3-testnet-chain/network/testnet.peers"; nonfinal="$STUB_VOLROOT/z3-testnet-chain/non_finalized_state"
 wd_run 6
 check "restarts only" "grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG' && ! grep -q 'docker stop z3-testnet-zebra-1' '$STUB_LOG'"
@@ -889,7 +893,7 @@ echo "== watchdog: a lag the network CONFIRMS gets the whole ladder, as before"
 wd_node_env
 echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
 export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677
-export STUB_READY_EXTERNAL=4332680                         # the network agrees: 1446 ahead
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4332680  # two references agree: 1446 ahead
 peers="$STUB_VOLROOT/z3-testnet-chain/network/testnet.peers"; nonfinal="$STUB_VOLROOT/z3-testnet-chain/non_finalized_state"
 wd_run 6
 check "the miner is stopped for a confirmed heal" "grep -q 'systemctl stop zcash-testnet-miner' '$STUB_LOG'"
@@ -1099,6 +1103,118 @@ wd_fork_env() {
   echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
 }
 
+echo "== watchdog: THE 2026-09-15T20:35Z OUTAGE, at the night's numbers and the limits that ship"
+# THE EPISODE, AS A TEST, AND THIS IS THE SECOND WRITING OF IT. The first used a 150-block gap
+# against the suite's own NODE_LAG_LIMIT=100, so it passed while the SHIPPED configuration sat
+# the whole episode out: the CTO's red-team drove the real numbers and measured ZERO restarts,
+# on this branch and on main alike, because 58 is under 100. A case that cannot fail on the
+# thing it is named for is worse than no case, so the numbers here are the night's and BOTH
+# limits are the script's rather than the suite's.
+#
+# Frozen at 4351410 with the self-estimate FLAT - zebra believed it was at the tip, and on the
+# night reported syncPercent 100 beside a 44-block lag - while two references that AGREE put
+# the network 58 ahead. Nothing but the corroborated number can fire this.
+wd_node_env
+unset WATCHDOG_NODE_LAG_LIMIT           # the SHIPPED limits are the subject of this case,
+unset WATCHDOG_NODE_CONFIRMED_LAG_LIMIT # both of them, not the suite's convenient 100
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"   # there has to be a miner to stop
+export STUB_ZEBRA_BLOCKS=4351410 STUB_ZEBRA_EST=4351410   # frozen, and zebra thinks it is at the tip
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4351468 # two references agree: 58 ahead, the night's gap
+wd_run 2
+check "the heal fires at the night's 58 blocks on the limits that actually ship" \
+  "grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
+check "and the journal names the corroborated number that decided it" \
+  "grep -q 'zebra stalled.*58 behind per corroborated tip 4351468' '$T/run.log'"
+check "and the miner is stopped for the heal, as for any other stall" \
+  "grep -q 'systemctl stop zcash-testnet-miner.service' '$STUB_LOG'"
+
+echo "== watchdog: two references that DISAGREE cannot start the ladder, let alone rewind"
+# THE DEFECT THIS ROUND CLOSES, and it is the one that must not ship. The first cut read
+# `externalHeight`, which the app sets to the highest fresh reference WHETHER OR NOT the
+# references agree (src/lib/zcash/externalTip.ts), so one flaky source reporting 150 ahead was
+# enough to restart zebra, stop the miner and drop the non-finalized state. That is a chain
+# rewind bought with an oracle outage, which this file's own header forbids in those words.
+# Zebra's own estimate is flat here, so the corroborated reading is the only thing that could
+# act and it is not corroborated.
+wd_node_env
+unset WATCHDOG_NODE_CONFIRMED_LAG_LIMIT
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4351410 STUB_ZEBRA_EST=4351410     # zebra's own clock says we are at the tip
+export STUB_READY_REFS=disagree STUB_READY_USEDHEIGHT=4351560  # 150 ahead, and the two sources are 400 apart
+wd_run 5
+check "zebra is not restarted on a height the sources disagree about" \
+  "! grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
+check "and the miner is left alone" \
+  "! grep -q 'systemctl stop zcash-testnet-miner.service' '$STUB_LOG'"
+check "and the non-finalized state survives, which is the rewind this forbids" \
+  "[ -f '$STUB_VOLROOT/z3-testnet-chain/non_finalized_state/backup.bin' ]"
+check "and the peer cache survives too, because nothing authorised any rung" \
+  "[ -f '$STUB_VOLROOT/z3-testnet-chain/network/testnet.peers' ]"
+
+echo "== watchdog: ONE reference is not corroboration either, and cannot start the ladder"
+# corroborated is NULL for a single source, not false, and null must read the same as false
+# here. Step 8 has held this since #560; step 7 did not, and that asymmetry is the bug.
+wd_node_env
+unset WATCHDOG_NODE_CONFIRMED_LAG_LIMIT
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4351410 STUB_ZEBRA_EST=4351410
+export STUB_READY_REFS=single STUB_READY_USEDHEIGHT=4351560    # one fresh source, corroborated null
+wd_run 5
+check "a single source does not restart zebra" \
+  "! grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
+check "and does not stop the miner" \
+  "! grep -q 'systemctl stop zcash-testnet-miner.service' '$STUB_LOG'"
+check "and does not drop the non-finalized state" \
+  "[ -f '$STUB_VOLROOT/z3-testnet-chain/non_finalized_state/backup.bin' ]"
+
+echo "== watchdog: with no independent tip the fallback still acts, and says it is the weaker evidence"
+wd_node_env
+export STUB_ZEBRA_BLOCKS=4351410 STUB_ZEBRA_EST=4351560
+export STUB_READY_REFS=none STUB_READY_USEDHEIGHT=""      # app unreachable: no usable reference
+# SIX SWEEPS, NOT TWO, AND THAT IS THE WHOLE POINT OF THE THIRD LINE. The rewinding rung does
+# not begin until attempt NODE_DROP_NONFINAL_AFTER=3, so at wd_run 2 backup.bin survives no
+# matter what the code does and the assertion was green under every mutant the body listed -
+# including the one that confirms on any lag at all. Found by the CTO's red-team; it is a
+# check that could not fail, which is the shape this suite exists to refuse.
+wd_run 6
+check "still restarts on zebra's own estimate rather than doing nothing" \
+  "grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
+check "and names it as the weaker evidence in the journal" \
+  "grep -q \"behind per zebra's own clock estimate, no corroborated tip this sweep\" '$T/run.log'"
+check "and withholds the rewind past the attempt it would have started at" \
+  "[ -f '$STUB_VOLROOT/z3-testnet-chain/non_finalized_state/backup.bin' ]"
+
+echo "== watchdog: the exhausted-tip-set wedge is named, and clears the peers it is about"
+# watchdog.sh:89 has described this failure since August and nothing ever looked for it: zebra
+# logs "exhausted prospective tip set" and loops on a 67 s sync restart that does not recover.
+# On 2026-09-15 recovery came from an inbound gossiped block, not from the syncer.
+wd_node_env
+export STUB_ZEBRA_BLOCKS=4351410 STUB_ZEBRA_EST=4351410
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4351560
+printf 'exhausted prospective tip set\nwaiting to restart sync timeout=67s\n' > "$STUB_CONTAINERS/z3-testnet-zebra-1.logs"
+wd_run 3
+check "the journal names the wedge rather than saying only stalled" \
+  "grep -q 'exhausted its prospective tip set' '$T/run.log'"
+check "and the peer cache is cleared, which is what a peer set that stopped serving needs" \
+  "[ ! -f '$STUB_VOLROOT/z3-testnet-chain/network/testnet.peers' ]"
+: > "$STUB_CONTAINERS/z3-testnet-zebra-1.logs"
+
+echo "== watchdog: the named wedge clears the PEERS it is about, and never the chain"
+# The peer set having stopped serving is what the peer cache drop addresses, so zebra's own log
+# may authorise that rung with no independent height. It may NOT authorise the non-finalized
+# drop, which rewinds up to ~100 blocks of chain: that still needs a second opinion, because a
+# log line about peers says nothing about which chain is right.
+wd_node_env
+export STUB_ZEBRA_BLOCKS=4351410 STUB_ZEBRA_EST=4351560   # zebra's own clock says behind
+export STUB_READY_REFS=none STUB_READY_USEDHEIGHT=""       # and nothing corroborated confirms it
+printf 'exhausted prospective tip set\nwaiting to restart sync timeout=67s\n' > "$STUB_CONTAINERS/z3-testnet-zebra-1.logs"
+wd_run 5
+check "the peer cache goes, because that is what the wedge is about" \
+  "[ ! -f '$STUB_VOLROOT/z3-testnet-chain/network/testnet.peers' ]"
+check "the chain does NOT, because a log line about peers does not say which chain is right" \
+  "[ -f '$STUB_VOLROOT/z3-testnet-chain/non_finalized_state/backup.bin' ]"
+: > "$STUB_CONTAINERS/z3-testnet-zebra-1.logs"
+
 echo "== watchdog: a node AHEAD of two agreeing references is our own chain, and it says so"
 wd_fork_env
 export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200      # our node believes it is at the tip
@@ -1142,9 +1258,12 @@ check "and names null rather than treating it as false" "grep -q 'fork check: ca
 echo "== watchdog: a body from before #559 carries no usedHeight, and absent is never zero"
 wd_fork_env
 export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
-# STUB_READY_REFS left at its default: no tipReferences block at all, as production serves
-# today while the autodeploy timer is stopped. A missing field read as 0 would make every
-# sweep a 4,350,200-block fork.
+# STUB_READY_REFS=absent, SAID RATHER THAN INHERITED: no tipReferences block at all, as
+# production serves today while the autodeploy timer is stopped. A missing field read as 0
+# would make every sweep a 4,350,200-block fork. This used to rely on the suite's default
+# being "no shape at all"; the default is a corroborated one now, because step 7 needs a
+# corroboration shape to act, so the case whose subject is the block's ABSENCE says so.
+export STUB_READY_REFS=absent
 wd_run 2
 check "writes no marker" "[ ! -f '$T/park/$FORK_MARKER_REL' ]"
 check "pages nothing" "! grep -q 'blocks AHEAD' '$T/alerts.log'"
