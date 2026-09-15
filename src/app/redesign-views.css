@@ -1,0 +1,156 @@
+/*
+ * The Status, Analytics and Tools views, transcribed VERBATIM from the preview the owner
+ * approved (redesign-frozen/S2-S5-20260915T1958Z, index.html). Values are copied rather
+ * than retyped: if a number here disagrees with the preview, one of the two is a typo.
+ *
+ * WHAT THIS FILE IS NOT. The shell (header, footer, stage, views, entrance, breakpoints)
+ * is redesign-shell.css and belongs to S1. The tokens every rule here reads are
+ * redesign-tokens.css. This file adds the card recipe and the three views' own furniture
+ * and nothing else, so a rule that restyles existing markup would be a bug in the diff
+ * rather than a judgement call.
+ *
+ * THE BREAKPOINTS FOR .grid3 AND .pcards LIVE IN THE SHELL, not here, because S1 shipped
+ * them. Their base rules were not shipped with them, which is why they are below: a grid
+ * that is three columns at every width until 64rem is not what the owner ruled, it is
+ * what an unstyled grid happens to do.
+ */
+
+/* ===== Card recipe (preview lines 72-105, 136, 200-202, 228-230) =================
+ * SHARED WITH S2a, WHICH TRANSCRIBES THE SAME RECIPE FOR THE CLAIM CARD. Whichever of
+ * the two lands second deletes its copy in the rebase, so that one change to .card is
+ * one change. Two definitions in two files would let the cascade decide by import order
+ * and make an edit to the loser silently do nothing.
+ * --- delete this fence, to the matching marker, if S2a brings these ----------------- */
+.card{position:relative;background:var(--surface);border:calc(.075*var(--u)) solid var(--border);border-radius:calc(1.59*var(--u));overflow:hidden;
+  box-shadow:calc(.32*var(--u)) calc(.9*var(--u)) calc(1.42*var(--u)) var(--shadow-a),0 calc(.14*var(--u)) calc(.42*var(--u)) var(--shadow-b)}
+.panel{position:relative;margin:0 2.55%;padding:7.5% 7.5% 8%;border-radius:calc(1.28*var(--u)) calc(1.28*var(--u)) calc(1.08*var(--u)) calc(1.08*var(--u));background:var(--panel-bg);display:flex;flex-direction:column;gap:calc(1.1*var(--u))}
+.card-copy{position:relative;padding:7% 8.4% 7.5%}
+.card-copy h2{margin:0 0 calc(.5*var(--u));color:var(--ink-2);font:600 calc(1.86*var(--u))/1.04 var(--sans-semibold);letter-spacing:calc(-.125*var(--u));text-wrap:balance}
+.card-copy p{margin:0;color:var(--muted);font-size:calc(1.18*var(--u));font-weight:500;line-height:1.28;letter-spacing:calc(-.04*var(--u))}
+.card-copy p + p{margin-top:calc(.7*var(--u))}
+
+.lbl{color:var(--label);font:500 calc(.8*var(--u))/1.3 var(--mono)}
+.metric{display:flex;flex-direction:column;gap:calc(.3*var(--u))}
+.metric-row{display:flex;align-items:baseline;gap:calc(1*var(--u));flex-wrap:wrap}
+.metric strong{color:var(--display-accent);font-size:calc(2.2*var(--u));font-weight:600;font-family:var(--sans-semibold);line-height:.95;letter-spacing:calc(-.04*var(--u));font-variant-numeric:tabular-nums}
+/* The delta is green by default because the common case is good news. A tone attribute
+ * is the only thing that moves it, so a figure nobody classified stays green rather than
+ * turning an unknown into a warning. */
+.metric .delta{color:var(--green-text);font:500 calc(.85*var(--u))/1.3 var(--mono)}
+.metric .delta[data-tone="warn"]{color:var(--warn-text)}
+.metric .delta[data-tone="bad"]{color:var(--bad-text)}
+.metric .delta[data-tone="unknown"]{color:var(--muted)}
+
+.tag{font-family:inherit;display:inline-flex;align-items:center;gap:calc(.5*var(--u));height:calc(2.15*var(--u));padding:0 calc(.9*var(--u));border-radius:calc(.5*var(--u));background:var(--tag-bg);color:var(--ink);
+  font-size:calc(.84*var(--u));font-weight:500;letter-spacing:0;border:calc(.06*var(--u)) solid var(--hair);white-space:nowrap;text-decoration:none;cursor:default}
+.tag b{font-weight:600;font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:calc(.8*var(--u))}
+.tag .sdot{width:calc(.55*var(--u));height:calc(.55*var(--u));border-radius:50%;background:var(--unknown)}
+.tag[data-tone="ok"] .sdot{background:var(--green)}
+.tag[data-tone="warn"] .sdot{background:var(--warn)}
+.tag[data-tone="bad"] .sdot{background:var(--bad)}
+button.tag,a.tag{cursor:pointer;transition:box-shadow .18s,transform .18s}
+button.tag:hover,a.tag:hover{border-color:var(--muted)}
+.tag.ink{background:var(--ink);color:var(--surface);border-color:var(--ink)}
+.tag.ink:hover{background:var(--ink-3)}
+
+.chips{display:flex;flex-wrap:wrap;gap:calc(.5*var(--u)) calc(1.4*var(--u))}
+
+.prompt{width:100%;padding:calc(.95*var(--u)) calc(1.1*var(--u));border:calc(.06*var(--u)) solid var(--prompt-border);border-radius:calc(.6*var(--u));background:var(--prompt-bg);color:var(--ink);font:475 calc(1.03*var(--u))/1.31 var(--mono);letter-spacing:calc(-.02*var(--u))}
+.prompt::placeholder{color:var(--muted)}
+.prompt[aria-invalid="true"]{border-color:var(--bad)}
+
+.prog{height:calc(.6*var(--u));border-radius:999px;background:var(--orange-soft);overflow:hidden;margin-top:calc(.9*var(--u))}
+.prog i{display:block;height:100%;width:var(--w,40%);background:var(--orange);border-radius:999px;transition:width .2s}
+/* --- end of the shared fence ------------------------------------------------------ */
+
+/* ===== The three views' own furniture ============================================= */
+
+.vhead{width:100%}
+.vhead h2{margin:0;font:600 calc(1.86*var(--u))/1.04 var(--sans-semibold);letter-spacing:calc(-.125*var(--u));color:var(--ink-2)}
+.vhead p{margin:calc(.4*var(--u)) 0 0;font-size:calc(.95*var(--u));color:var(--muted);font-weight:500}
+
+/* Equal cards. The grid stretches the shells, the panels share one height so the three
+ * headings sit on one line, and the copy takes the rest. Without the shared panel height
+ * the three cards' headings step down a staircase, which is what the design's "three
+ * equal cards" rules out. */
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:calc(1.8*var(--u));width:100%;align-items:stretch}
+.grid3 .card{display:flex;flex-direction:column}
+.grid3 .card .panel{min-height:calc(14.5*var(--u));justify-content:flex-start}
+.grid3 .card .card-copy{flex:1}
+.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:calc(1.8*var(--u));width:100%;align-items:stretch}
+.grid2 .card{display:flex;flex-direction:column}
+.grid2 .card .panel{min-height:calc(14.5*var(--u));justify-content:flex-start}
+.grid2 .card .card-copy{flex:1}
+
+.rows{margin:calc(.9*var(--u)) 0 0;padding:0;display:grid;font-size:calc(.86*var(--u))}
+.rows > div{display:flex;justify-content:space-between;gap:calc(.8*var(--u));padding:calc(.5*var(--u)) 0;border-top:calc(.06*var(--u)) solid var(--hair)}
+.rows dt{color:var(--muted);font-weight:500;display:flex;align-items:center;gap:calc(.5*var(--u))}
+.rows dd{margin:0;text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:calc(.8*var(--u));color:var(--ink)}
+.rows .group{border-top:0;padding:calc(.9*var(--u)) 0 calc(.2*var(--u));font:700 calc(.7*var(--u))/1 var(--sans);letter-spacing:calc(.05*var(--u));text-transform:uppercase;color:var(--label)}
+
+/* A state word carries its tone as an attribute, never as a class per word, so adding a
+ * state cannot add a colour nobody defined. Unknown is grey and is a state of its own. */
+.word[data-tone="ok"]{color:var(--green-text)}
+.word[data-tone="warn"]{color:var(--warn-text)}
+.word[data-tone="bad"]{color:var(--bad-text)}
+.word[data-tone="unknown"]{color:var(--muted)}
+
+/* The reachability dot defaults to grey and only data-on="true" makes it green, so a
+ * backend we have not heard from cannot render as reachable. */
+.rdot{display:inline-block;width:calc(.5*var(--u));height:calc(.5*var(--u));border-radius:50%;background:var(--unknown);margin-right:calc(.4*var(--u));vertical-align:.05em}
+.rdot[data-on="true"]{background:var(--green)}
+
+/* min-height so the card does not resize when the first answer arrives. */
+.ans{font-size:calc(.88*var(--u));color:var(--muted);margin:0;min-height:1.4em;font-weight:500}
+
+#lookupform{display:flex;gap:calc(.6*var(--u));align-items:stretch;margin-top:calc(.6*var(--u))}
+#lookupform .prompt{flex:1;min-width:0}
+#lookupform .tag.ink{height:auto;padding-inline:calc(1.3*var(--u));font-size:calc(.95*var(--u));white-space:nowrap;border-radius:calc(.6*var(--u))}
+/* DEPARTURE from the preview, measured rather than designed, and the same one S1 made
+ * four times. At the phone breakpoint the preview's own type and padding give the field
+ * and its button 41px, and ui-smoke enforces a 44px tap-target floor on a real iPhone 13
+ * viewport. 44px is the floor, so this raises exactly those two controls at exactly that
+ * width and changes nothing on a desktop, where they are already taller. */
+@media (max-width:32rem){
+  #lookupform .prompt,#lookupform .tag.ink{min-height:44px}
+}
+
+/* ===== Analytics (preview lines 272-300) ========================================== */
+
+/* Three columns, two below 76rem, one below 56rem (owner ruling). The first card spans
+ * two so the thirty-day series gets the width a thirty-bar chart needs, and it drops that
+ * span at the same breakpoints rather than staying double-width in a two-column grid. */
+.pcards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-auto-rows:minmax(0,auto);gap:calc(1.4*var(--u));width:100%;align-items:stretch}
+.pcards > .pc:first-child{grid-column:span 2}
+@media (max-width:76rem){.pcards{grid-template-columns:repeat(2,minmax(0,1fr))}.pcards > .pc.wide{grid-column:auto}}
+@media (max-width:56rem){.pcards{grid-template-columns:1fr}.pcards > .pc:first-child,.pcards > .pc.wide{grid-column:auto}}
+/* A short viewport tightens the padding rather than letting the view scroll: every page
+ * is one screen tall at 1280x800 and above. */
+@media (max-height:840px){.pc{padding:calc(.8*var(--u)) calc(1.2*var(--u))}.pc .figs{margin-top:calc(.3*var(--u))}.vhead p{display:none}.pcards{gap:calc(1*var(--u))}.view{gap:calc(1.2*var(--u))}}
+
+.pc{background:var(--surface);border:calc(.075*var(--u)) solid var(--border);border-radius:calc(1.59*var(--u));padding:calc(1.2*var(--u)) calc(1.5*var(--u));min-width:0;box-shadow:calc(.32*var(--u)) calc(.9*var(--u)) calc(1.42*var(--u)) var(--shadow-a),0 calc(.14*var(--u)) calc(.42*var(--u)) var(--shadow-b)}
+.pc h3{margin:0 0 calc(.9*var(--u));font-size:calc(1.1*var(--u));font-weight:600;display:flex;align-items:center;gap:calc(.6*var(--u));color:var(--ink-2);flex-wrap:wrap}
+.pc h3 .tag{margin-left:auto;height:calc(1.8*var(--u));font-family:var(--mono);font-size:calc(.78*var(--u))}
+.pc > canvas,.pc .chart > canvas{width:100%;display:block}
+.pc .chart{position:relative}
+
+.tot{display:flex;gap:calc(1.8*var(--u));margin-top:calc(.8*var(--u));padding-top:calc(.8*var(--u));border-top:calc(.06*var(--u)) solid var(--hair);font-size:calc(.78*var(--u));color:var(--label);font-weight:500}
+.tot b{display:block;font-size:calc(1.5*var(--u));font-weight:600;color:var(--display-accent);font-variant-numeric:tabular-nums;letter-spacing:calc(-.03*var(--u))}
+
+.pc .sent{font-size:calc(.9*var(--u));color:var(--muted);margin:calc(.6*var(--u)) 0 0;font-weight:500}
+.pc .figs{display:flex;flex-wrap:wrap;gap:calc(1.2*var(--u)) calc(2*var(--u));margin-top:calc(.7*var(--u));font-size:calc(.78*var(--u));color:var(--label);font-weight:500}
+.pc .figs b{display:block;font:700 calc(1.15*var(--u))/1.2 var(--mono);color:var(--ink);letter-spacing:calc(-.02*var(--u));overflow-wrap:anywhere}
+.pc .figs .big b{font-size:clamp(calc(1.2*var(--u)),1.6vw,calc(1.8*var(--u)));color:var(--display-accent);font-family:var(--sans);letter-spacing:calc(-.04*var(--u))}
+
+/* The network card is a label/value grid rather than the flex row the other cards use:
+ * the sync figure carries its own % and must never wrap, and the backend dot sits on the
+ * value line (owner ruling). */
+.pc.wide{grid-column:auto}
+.pc.wide .figs{flex-direction:column;gap:calc(.55*var(--u))}
+.pc.wide .figs > span{display:grid;grid-template-columns:1fr auto;align-items:baseline;column-gap:calc(1*var(--u))}
+.pc.wide .figs > span > b{grid-column:2;white-space:nowrap;text-align:right;display:flex;align-items:center;justify-content:flex-end;gap:calc(.4*var(--u))}
+.pc.wide .figs > span > span{grid-column:2;text-align:right;font-size:calc(.72*var(--u));color:var(--muted)}
+.pc.wide .figs .rdot{margin-right:0}
+
+.legend{display:flex;flex-wrap:wrap;gap:calc(1*var(--u));margin-top:calc(.6*var(--u));font:500 calc(.78*var(--u))/1 var(--sans);color:var(--muted)}
+.legend i{display:inline-block;width:calc(.6*var(--u));height:calc(.6*var(--u));border-radius:50%;margin-right:calc(.4*var(--u))}
