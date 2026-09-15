@@ -169,6 +169,17 @@ check "and refuses when the unit's SocketGroup is not the image's node gid" \
 check "and probes a THIRD time as the app, so a listener that died on the first connection is caught" \
   "grep -q 'the listener survived' '$CIWF' && grep -q 'the listener did not survive the first connection' '$CIWF'"
 
+# THE DOC'S CLAIM ABOUT WHEN THIS SOCKET IS DIALLED, HELD TO THE CODE THAT DECIDES IT (CTO,
+# review of #553). An earlier draft said the ACL was unobserved while cTAZ is parked, and
+# that was backwards: the dial is gated on the app's FAUCET_CTAZ_ENABLED, not on the node's
+# state, so the socket is opened every refresh tick today and a wrong ACL reads as the same
+# `cannot-verify` a parked node produces. A doc that gets this backwards sends an operator
+# away from a live fault, so both halves of the claim are pinned rather than trusted.
+check "OPERATIONS.md says the dial is gated on the app's flag, and the code still gates it there" \
+  "grep -qF 'FAUCET_CTAZ_ENABLED' '$REPO/OPERATIONS.md' && grep -qF 'config.crosslink.enabled' '$REPO/OPERATIONS.md' && grep -qF 'if (!config.crosslink.enabled)' '$REPO/src/lib/crosslink/read.ts'"
+check "and its 20-second figure is the interval the refresher actually uses" \
+  "grep -qF 'REFRESH_INTERVAL_MS' '$REPO/OPERATIONS.md' && grep -qE 'REFRESH_INTERVAL_MS = 20_000' '$REPO/src/lib/crosslink/cache.ts'"
+
 echo "== repo: the watchdog's node-lag limit is the miner's, for the miner's reason"
 # Both read zebra's clock-based estimatedheight. The miner's guard (sync.rs) explains why
 # 100 and not less: hour-long testnet gaps push the estimate ~50 "behind" with nobody

@@ -121,18 +121,39 @@ Reading the answers, and the middle one is the trap:
   A box that never received the unit at all reads `666` too, which is why (b2) is worth
   running before anything is re-run. `systemctl restart ctaz-rpc.socket` is the direct fix
   once (b2) says the text is loaded.
-- **`stat: No such file or directory`** means the socket unit is not running. That is a
-  state the installer deliberately leaves alone: it restarts a changed unit only when the
-  unit is already active, because starting a stopped socket is an arming decision that
-  belongs to `enabled-units` and to the operator. cTAZ is parked, so this is the expected
-  reading today, and the ACL below is unobserved until the socket is started.
+- **`stat: No such file or directory`** means the socket unit is not listening, and on a
+  box brought to spec that is the anomaly rather than the expected reading: `ctaz-rpc.socket`
+  is in `deploy/z3/enabled-units`, so it is armed and should be active whatever the cTAZ
+  *node* is doing. Settle which state the box is in before reading any mode, with
+  `systemctl is-active ctaz-rpc.socket`. The installer will not start it for you: it
+  restarts a changed unit only when that unit is already active, because starting a stopped
+  socket is an arming decision that belongs to `enabled-units` and to the operator.
 - **`root:root`** means `SocketGroup=` did not take, and cTAZ will be dark because the app
   cannot connect.
 
 In every wrong case the panel reads cannot-verify rather than lying, which is what the
-five-state gate is for. Nothing monitors socket-file permissions, so this check is the
-only thing that reads them: cTAZ is parked today and the app reads the status *file*
-(`source: file`), so a wrong ACL here shows up only when cTAZ is un-parked.
+five-state gate is for. Nothing monitors socket-file permissions, so this check is the only
+thing that reads them.
+
+**And a wrong ACL is being exercised right now, not parked with the node.** What decides
+whether the app dials this socket is `FAUCET_CTAZ_ENABLED` in the app's environment, not
+whether `ctaz-node.service` is running: the readers in `src/lib/crosslink/read.ts` return on
+`!config.crosslink.enabled` before touching the transport, and the refresher in
+`src/lib/crosslink/cache.ts` dials every `REFRESH_INTERVAL_MS` (20 s) when it is true.
+(Cited by symbol, not by line: line numbers in a doc rot silently, and the repo suite can
+hold a symbol to its word.) The box runs with it **true** while the
+node is parked (owner's decision of 2026-09-08), so this socket is opened three times a
+minute today. Settle it rather than trusting this paragraph:
+
+```bash
+docker exec zcash-faucet-faucet-1 printenv FAUCET_CTAZ_ENABLED    # true = dialled every 20 s
+```
+
+The reason that matters: a wrong ACL and a deliberately parked node produce **the same
+panel reading** — `ctaz cannot-verify` — so a permission fault here does not announce
+itself, it hides inside the expected appearance. That is the opposite of what an earlier
+draft of this section said, and the correction came from the record of 2026-09-08 rather
+than from re-reading the code.
 
 ## Logs
 
