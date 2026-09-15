@@ -220,10 +220,16 @@ async function checkLegacyPalette(browser) {
     // is a property the transcription was silent about and inherited whether it meant to or
     // not (L20). Read off a real element's ::selection, not from the rule text.
     const sel = await p.evaluate(() => {
-      const el = document.querySelector(".stage") ?? document.body;
+      // A DESCENDANT, not `.stage` itself. `.stage ::selection` matches elements INSIDE the
+      // stage, so reading it off `.stage` measures only globals' rule and reports the
+      // retired mix whether the fix is there or not - which is what it did.
+      const el = document.querySelector(".stage h1, .stage p, .stage a") ?? document.body;
       const got = getComputedStyle(el, "::selection").backgroundColor;
+      // THE RETIRED VALUE AS THE OLD RULE WOULD PRODUCE IT, mix and all. Comparing the
+      // selection's 30% mix against the SOLID retired accent was my first version, and the
+      // two can never be equal, so it passed with the fix deleted - measured, 146/0.
       const probe = document.createElement("span");
-      probe.style.backgroundColor = "var(--color-accent)";
+      probe.style.backgroundColor = "color-mix(in srgb, var(--color-accent) 30%, transparent)";
       document.body.appendChild(probe);
       const retired = getComputedStyle(probe).backgroundColor;
       probe.remove();
