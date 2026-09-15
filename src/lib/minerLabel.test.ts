@@ -265,8 +265,15 @@ test("and an older reading renders exactly as it did before this change", () => 
 
 const stopped: MinerReading = { ...base, state: "not-writing", beatAgoSeconds: 14.5 * 3600, lastErrorStage: "getblocktemplate", consecutiveErrors: 1975 };
 
-test("a dead heartbeat plus an INACTIVE unit is off, calmly, in both places", () => {
-  assert.equal(minerChip(stopped, "inactive"), "off");
+test("a dead heartbeat plus an INACTIVE unit is calm in both places", () => {
+  // The CHIP's word is "parked" since the CTO's 2026-09-15 ruling for the redesigned
+  // Status view: one word, accurate, and not a fault name. The reasoning this test was
+  // written for is unchanged and is what it still holds - a miner someone stopped must
+  // read calmly and must not be red - only the token moved.
+  assert.equal(minerChip(stopped, "inactive"), "parked");
+  assert.notEqual(minerChip(stopped, "inactive"), "no signal", "the 2026-09-08 wrong answer");
+  // The ROW keeps "off, unit stopped": it is a sentence rather than a state token, and
+  // the ruling was about the word the public status shows.
   assert.match(minerRow(stopped, "inactive"), /\boff\b/);
   assert.doesNotMatch(minerRow(stopped, "inactive"), /NO HEARTBEAT/);
   assert.equal(minerIsBad(stopped, "inactive"), false, "parked must not be red, or red stops meaning anything");
