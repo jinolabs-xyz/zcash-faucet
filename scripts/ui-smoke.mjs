@@ -104,13 +104,13 @@ const COLOUR_LIB = `
 async function checkAppearance(page) {
   // The masthead mark, same identity as the favicon. aria-hidden by design, so
   // assert its presence, not an accessible name.
-  ok("the masthead mark renders", await page.locator("svg.brand-mark").first().isVisible());
+  ok("the masthead mark renders", await page.getByTestId("brand-mark").first().isVisible());
 
   // The LIVE dot paints the state, not a fixed colour: --color-live only when the
   // faucet is serviceable. Compare the dot's resolved background to the token
   // itself, not a hardcoded rgb, so a theme edit cannot make this assertion lie.
   const [dotBg, liveToken] = await page.evaluate(() => {
-    const dot = [...document.querySelectorAll("span[aria-hidden]")].find((el) => el.style.animation.includes("pulse"));
+    const dot = document.querySelector("[data-testid=status-dot]");
     // No dot is its own failure, not a theme mismatch: falling back to body here
     // resolves the :root default and would report a misleading wrong-theme colour
     // for a problem that is actually a missing dot.
@@ -134,7 +134,7 @@ async function checkAppearance(page) {
   // is the exact cascade fact this proves is still working.
   const dotAnim = () =>
     page.evaluate(() => {
-      const dot = [...document.querySelectorAll("span[aria-hidden]")].find((el) => el.style.animation.includes("pulse"));
+      const dot = document.querySelector("[data-testid=status-dot]");
       return dot ? getComputedStyle(dot).animationName : "no dot";
     });
   await page.emulateMedia({ reducedMotion: "no-preference" });
@@ -298,7 +298,7 @@ async function checkAppearance(page) {
     if ((want === "ink") !== (await isInk())) await page.getByRole("button", { name: /Switch to/ }).click();
     await page.waitForFunction((w) => (document.querySelector(".app")?.classList.contains("ink") ?? false) === (w === "ink"), want);
     await page.waitForFunction(() => {
-      const el = document.querySelector(".theme-toggle");
+      const el = document.querySelector("[data-testid=theme-toggle]");
       if (!el) return true; // no toggle is the other checks' problem, not this wait's
       const now = getComputedStyle(el).color;
       const settled = window.__uiSmokeLastColour === now;
@@ -416,10 +416,10 @@ async function checkFirstPaint(page, base, address) {
     // in, because `?? 0` renders through toFixed(1) as "0.0 TAZ" and never matched.
     const cells = await page.evaluate(() => {
       const out = {};
-      for (const b of document.querySelectorAll("header + div span > b")) {
-        const span = b.parentElement;
-        const key = span.textContent.slice(0, span.textContent.length - b.textContent.length).trim();
-        if (key) out[key] = b.textContent.trim();
+      for (const cell of document.querySelectorAll("[data-strip-key]")) {
+        const key = cell.getAttribute("data-strip-key");
+        const value = cell.querySelector("[data-testid=strip-value]")?.textContent?.trim();
+        if (key) out[key] = value ?? "";
       }
       return out;
     });
@@ -430,8 +430,8 @@ async function checkFirstPaint(page, base, address) {
     }
 
     // The regression. Type and submit while status is still held.
-    await page.locator("input.input").first().fill(address);
-    await page.locator("button.btn-primary").first().click();
+    await page.getByTestId("address-input").fill(address);
+    await page.getByTestId("claim-button").click();
     await page.waitForTimeout(400);
     const after = await page.textContent("body");
     const queued = /Queued/.test(after);
@@ -470,8 +470,8 @@ async function checkRefusalCards(browser, base, address) {
     { name: "a freshness hold", status: 503, body: { error: "Our chain view is not fresh enough to send safely. Nothing was claimed, your cooldown is untouched. Try again shortly.", retryAfterSeconds: 3 },
       expect: async (c) => {
         ok("a 503 with a retryAfter is 'our side, not yours'", /our side, not yours/.test(c.text), c.text.split("\n")[0]);
-        ok("and its button counts down, disabled", c.buttons.some((b) => /try again in \d+s/.test(b)) && await page.locator("[role=alert] button.btn-primary").isDisabled(), c.buttons.join("|"));
-        await page.waitForFunction(() => { const b = document.querySelector("[role=alert] button.btn-primary"); return b && !b.disabled; }, null, { timeout: 8000 }).catch(() => {});
+        ok("and its button counts down, disabled", c.buttons.some((b) => /try again in \d+s/.test(b)) && await page.getByTestId("error-retry").isDisabled(), c.buttons.join("|"));
+        await page.waitForFunction(() => { const b = document.querySelector("[data-testid=error-retry]"); return b && !b.disabled; }, null, { timeout: 8000 }).catch(() => {});
         ok("and enables when the wait is over", (await card()).buttons.includes("try again"));
       } },
     { name: "a full queue", status: 503, body: { error: "Faucet is busy: too many sends queued. Try again in a moment.", kind: "busy" },
@@ -488,9 +488,9 @@ async function checkRefusalCards(browser, base, address) {
     { name: "a bad request", status: 400, body: { error: "Invalid address." },
       expect: async (c) => {
         ok("a 400 offers Edit the address and no Try again", c.buttons.includes("edit the address") && !c.buttons.includes("try again"), c.buttons.join("|"));
-        await page.locator("[role=alert] button", { hasText: /edit the address/i }).click();
+        await page.getByTestId("error-edit").click();
         await page.waitForTimeout(300);
-        ok("and Edit the address returns to the form with the address kept", (await page.locator("input.input").first().inputValue()) === address && !(await page.locator("[role=alert]").filter({ hasText: /\S/ }).count()));
+        ok("and Edit the address returns to the form with the address kept", (await page.getByTestId("address-input").inputValue()) === address && !(await page.locator("[role=alert]").filter({ hasText: /\S/ }).count()));
       } },
     { name: "a failed send", status: 502, body: { error: "The send failed on our side. Nothing left the wallet. Try again in a moment." },
       expect: async (c) => {
@@ -505,8 +505,8 @@ async function checkRefusalCards(browser, base, address) {
       await page.route("**/api/faucet", (route) => route.fulfill({ status: s.status, contentType: "application/json", body: JSON.stringify({ ...s.body, requestId: "ui-smoke" }) }));
       await page.goto(base, { waitUntil: "networkidle" });
       await page.waitForFunction(() => /\bLIVE\b/.test(document.body.innerText), null, { timeout: 30_000 });
-      await page.locator("input.input").first().fill(address);
-      await page.locator("button.btn-primary").first().click();
+      await page.getByTestId("address-input").fill(address);
+      await page.getByTestId("claim-button").click();
       // An EMPTY [role=alert] is always in the DOM; wait for one with text.
       await page.waitForFunction(() => [...document.querySelectorAll("[role=alert]")].some((e) => (e.textContent || "").trim()), null, { timeout: 60_000 }).catch(() => {});
       const c = await card();
@@ -528,15 +528,21 @@ async function checkRefusalCards(browser, base, address) {
 // at all is exactly the shape that used to lie. What it must say now is that it cannot
 // tell, which is neither healthy nor "off".
 async function checkMinerPanel(page) {
-  await page.getByRole("button", { name: /More details/ }).click();
+  // The control was reached by its label until this change, so the label needs its own
+  // assertion: it says what it will do, and it has to keep saying the right one.
+  const toggle = page.getByTestId("panel-toggle");
+  ok("the disclosure says More details when the panel is shut",
+    /More details/.test((await toggle.textContent()) ?? ""), (await toggle.textContent())?.trim());
+  await toggle.click();
+  ok("and Hide details when it is open",
+    /Hide details/.test((await toggle.textContent()) ?? ""), (await toggle.textContent())?.trim());
 
   // Read the one cell, not the panel's textContent. There are no newlines in that
   // string, so a /miner\s*([^\n]*)/ match runs to the end and drags in reserve, queue
   // and backend. Every assertion below would then be answered by some other row.
   const row = await page.evaluate(() => {
-    const cells = [...document.querySelectorAll(".panel-grid > *")];
-    const hit = cells.find((c) => c.firstElementChild?.textContent?.trim() === "miner");
-    return hit?.lastElementChild?.textContent?.trim() ?? "";
+    const hit = document.querySelector("[data-panel-key='miner']");
+    return hit?.querySelector("[data-testid=panel-value]")?.textContent?.trim() ?? "";
   });
 
   ok("the panel reports the miner at all", row.length > 0, row);
@@ -549,7 +555,7 @@ async function checkMinerPanel(page) {
   // "off" is the specific wrong answer. We have not established the miner is off, only
   // that we cannot see it, and those call for different responses from an operator.
   ok("no heartbeat is NOT reported as off", !/\boff\b/.test(row), row);
-  await page.getByRole("button", { name: /Hide details/ }).click();
+  await page.getByTestId("panel-toggle").click();
 }
 
 /**
@@ -595,8 +601,8 @@ async function checkCtazToggle(page, base) {
   await ctazTab.click();
   await page.waitForTimeout(300);
   ok("the claim button quotes the cTAZ amount, not the TAZ one",
-    /0\.5 cTAZ/.test((await page.locator("button.btn-primary").first().textContent()) ?? ""),
-    (await page.locator("button.btn-primary").first().textContent())?.trim());
+    /0\.5 cTAZ/.test((await page.getByTestId("claim-button").textContent()) ?? ""),
+    (await page.getByTestId("claim-button").textContent())?.trim());
 
   // The panel's cTAZ rows. `reserve` is the one that matters: their surface has no
   // balance method, so anything numeric here would be invented.
@@ -608,13 +614,13 @@ async function checkCtazToggle(page, base) {
   const panelRows = async () =>
     Object.fromEntries(
       await page.evaluate(() =>
-        [...document.querySelectorAll(".panel-grid > *")].map((c) => [
-          c.firstElementChild?.textContent?.trim(),
-          c.lastElementChild?.textContent?.trim(),
+        [...document.querySelectorAll("[data-panel-key]")].map((c) => [
+          c.getAttribute("data-panel-key"),
+          c.querySelector("[data-testid=panel-value]")?.textContent?.trim(),
         ])),
     );
 
-  await page.getByRole("button", { name: /More details/ }).click();
+  await page.getByTestId("panel-toggle").click();
   const rows = await panelRows();
   ok("the panel gains a cTAZ readiness row", /ready|behind|stale|not-activated|cannot-verify/.test(rows["node"] ?? ""), rows["node"]);
   ok("the cTAZ reserve reads unknown, never a number", rows["reserve"] === "unknown", rows["reserve"]);
@@ -637,14 +643,20 @@ async function checkCtazToggle(page, base) {
   ok("and the cTAZ-only rows are gone from it", tazRows["reserve"] === undefined, Object.keys(tazRows).join(", "));
   await ctazTab.click();
   await page.waitForTimeout(300);
-  await page.getByRole("button", { name: /Hide details/ }).click();
+  await page.getByTestId("panel-toggle").click();
 
   // A real claim on the feature net, through the button and the proof of work.
   const address = await freshAddress();
-  await page.locator("input.input").first().fill(address);
-  await page.locator("button.btn-primary").first().click();
-  await page.getByText("Sent ✓").waitFor({ timeout: 120_000 });
+  await page.getByTestId("address-input").fill(address);
+  await page.getByTestId("claim-button").click();
+  await page.getByTestId("sent-badge").waitFor({ timeout: 120_000 });
   ok("a cTAZ claim driven through the UI succeeds", true);
+  // The success card is reached by its testid now, so the WORDS need an assertion of
+  // their own: "Sent ✓" is what a person reads to know the drip went, and until this
+  // change the selector was the only thing holding it.
+  ok("and the card says Sent ✓, not merely something with that testid",
+    (await page.getByTestId("sent-badge").textContent())?.trim() === "Sent ✓",
+    (await page.getByTestId("sent-badge").textContent())?.trim());
 
   const body = await page.textContent("body");
   ok("the receipt shows what the network PAID", /0\.5 cTAZ/.test(body));
@@ -771,20 +783,20 @@ async function checkMobile(browser, base) {
 
     // The panel open, which is the tallest the home page gets before a claim.
     await page.goto(base, { waitUntil: "networkidle", timeout: 60_000 });
-    await page.getByRole("button", { name: /More details/ }).click();
+    await page.getByTestId("panel-toggle").click();
     await audit("/ panel open");
 
     // And the receipt, the one state that only exists after a real claim. Checked on
     // a phone because it is the state a claimant is actually looking at, and it is
     // the longest card on the page.
-    await page.getByRole("button", { name: /Hide details/ }).click();
+    await page.getByTestId("panel-toggle").click();
     await page.getByRole("button", { name: "Make a throwaway address and key" }).first().click();
     await page
-      .waitForFunction(() => (document.querySelector("input.input")?.value ?? "").length > 100, null, { timeout: 20_000 })
+      .waitForFunction(() => (document.querySelector("[data-testid=address-input]")?.value ?? "").length > 100, null, { timeout: 20_000 })
       .catch(() => {});
     await page.getByRole("button", { name: "Copy key" }).first().click();
-    await page.locator("button.btn-primary").first().click();
-    await page.getByText("Sent ✓").waitFor({ timeout: 120_000 });
+    await page.getByTestId("claim-button").click();
+    await page.getByTestId("sent-badge").waitFor({ timeout: 120_000 });
     await audit("/ receipt");
 
     ok("mobile: no page or console errors at 375x812", seen.length === 0, seen.slice(0, 2).join(" | "));
@@ -800,7 +812,7 @@ async function checkMobile(browser, base) {
 async function check404(page, base) {
   const res = await page.goto(`${base}/this-route-does-not-exist`, { waitUntil: "networkidle" });
   ok("an unknown path returns a real 404", res?.status() === 404, String(res?.status()));
-  ok("the 404 wears the site chrome", await page.locator("svg.brand-mark").first().isVisible());
+  ok("the 404 wears the site chrome", await page.getByTestId("brand-mark").first().isVisible());
 }
 
 const browser = await chromium.launch();
@@ -875,8 +887,8 @@ try {
     const asked = [];
     const onReq = (r) => { if (/\/api\/(pow\/challenge|faucet)$/.test(r.url())) asked.push(`${r.method()} ${new URL(r.url()).pathname}`); };
     page.on("request", onReq);
-    await page.locator("input.input").first().fill(bad);
-    await page.locator("button.btn-primary").first().click();
+    await page.getByTestId("address-input").fill(bad);
+    await page.getByTestId("claim-button").click();
     await page.waitForFunction(() => /bad bech32m checksum/.test(document.querySelector("#addrmsg")?.textContent ?? ""), null, { timeout: 5000 }).catch(() => {});
     // Short timeouts with a fallback: with the check missing the page is on the error
     // card by now and #addrmsg is gone, and that must read as THIS failing, not a hang.
@@ -892,8 +904,8 @@ try {
     // two different figures from two different rates is arithmetic or nothing.
     for (const [ms, expect] of [[8000, "about 4 s"], [2000, "about 1 s"]]) {
       await page.route("**/pow-worker.js", (route) => route.fulfill({ status: 200, contentType: "application/javascript", body: `self.onmessage=function(){setInterval(function(){self.postMessage({type:"progress",hashes:8192,ms:${ms}})},40)};` }));
-      await page.locator("input.input").first().fill(good);
-      await page.locator("button.btn-primary").first().click();
+      await page.getByTestId("address-input").fill(good);
+      await page.getByTestId("claim-button").click();
       const cancelBtn = page.getByRole("button", { name: "Cancel", exact: true });
       await cancelBtn.waitFor({ timeout: 5000 }).catch(() => {});
       // The worker first, so the sentence read below is one the worker's report produced.
@@ -904,8 +916,8 @@ try {
       const sentence = ((await page.textContent("body")) ?? "").match(/(Usually|Measuring)[^.]*\./)?.[0] ?? "no estimate sentence";
       ok(`and the card says "Usually ${expect}": 2^12 at the reported rate, as a lottery's expected duration`, sentence.includes(`Usually ${expect} on this device`), sentence);
       await cancelBtn.click({ timeout: 3000 }).catch(() => {});
-      await page.locator("button.btn-primary").waitFor({ timeout: 5000 }).catch(() => {});
-      ok("Cancel returns to the form with the address still in it", (await page.locator("input.input").first().inputValue({ timeout: 3000 }).catch(() => "")) === good);
+      await page.getByTestId("claim-button").waitFor({ timeout: 5000 }).catch(() => {});
+      ok("Cancel returns to the form with the address still in it", (await page.getByTestId("address-input").inputValue({ timeout: 3000 }).catch(() => "")) === good);
       // The worker must be gone, not just the card: a Cancel that only hid the card left
       // a phone's CPU pinned, and an orphan that later found would null the refs of the
       // next solve. A never-finding worker cannot exit on its own, so 0 means terminated.
@@ -917,11 +929,11 @@ try {
     page.off("request", onReq);
     // If a check above left the page off the form, put it back so the rest of the run
     // is not lost to a 30 s locator timeout with the diagnosis already printed.
-    if (!(await page.locator("button.btn-primary").first().isVisible({ timeout: 1000 }).catch(() => false))) {
+    if (!(await page.getByTestId("claim-button").isVisible({ timeout: 1000 }).catch(() => false))) {
       await page.getByRole("button", { name: "Cancel", exact: true }).click({ timeout: 1000 }).catch(() => {});
       await page.getByRole("button", { name: /Edit the address|Try again|Another address/ }).first().click({ timeout: 2000 }).catch(() => {});
     }
-    await page.locator("input.input").first().fill("", { timeout: 3000 }).catch(() => {});
+    await page.getByTestId("address-input").fill("", { timeout: 3000 }).catch(() => {});
   }
 
   // Generate-then-claim, the flow #31 broke for every visitor: the button read
@@ -935,12 +947,12 @@ try {
   // with a too-short address.
   await page
     .waitForFunction(
-      () => (document.querySelector("input.input")?.value ?? "").length > 0 || /Couldn.t (generate|reach)/.test(document.body.innerText),
+      () => (document.querySelector("[data-testid=address-input]")?.value ?? "").length > 0 || /Couldn.t (generate|reach)/.test(document.body.innerText),
       null,
       { timeout: 20_000 },
     )
     .catch(() => {});
-  const generated = await page.locator("input.input").first().inputValue();
+  const generated = await page.getByTestId("address-input").inputValue();
   ok("the generate button yields a full unified address", generated.length > 100, `${generated.length} chars`);
   if (generated.length <= 100) throw new Error("generate did not produce a usable address, skipping the claim it feeds");
   // THE KEY COMES WITH IT, AND THE REQUEST WAITS FOR IT (risk register II, R-31). For
@@ -949,11 +961,11 @@ try {
   // button is held until it has been copied, and the receipt offers it again.
   const keyPanel = page.getByTestId("generated-key");
   ok("the generated address comes with its spending key on screen", await keyPanel.isVisible());
-  const primary = page.locator("button.btn-primary").first();
+  const primary = page.getByTestId("claim-button");
   ok("and the request button waits until the key has been copied", (await primary.isDisabled()) && /Copy the key first/.test((await primary.textContent()) ?? ""), (await primary.textContent())?.trim());
   // A disabled button is no gate against a keyboard: Enter in the address field calls
   // submit() directly. The gate lives in submit() too, so Enter must change nothing.
-  await page.locator("input.input").first().press("Enter");
+  await page.getByTestId("address-input").press("Enter");
   await page.waitForTimeout(400);
   // If the gate let Enter through, the form is gone (the page is solving or sending)
   // and the button no longer exists: that is the failure, named, not a locator timeout.
@@ -962,7 +974,7 @@ try {
   // Review typed one character and deleted it: the first cut cleared the key on any
   // edit, so the exact generated address came back with no panel and a normal button.
   // The panel and the gate are keyed on the address; a round trip must change nothing.
-  const field = page.locator("input.input").first();
+  const field = page.getByTestId("address-input");
   await field.press("End");
   await field.type("x");
   ok("editing the address hides the key panel", !(await keyPanel.isVisible()), "panel visible with a different address");
@@ -970,20 +982,20 @@ try {
   const backHeld = await primary.isDisabled({ timeout: 2_000 }).catch(() => false);
   ok("and typing it back re-shows the panel with the gate still closed", (await keyPanel.isVisible()) && backHeld, (await primary.textContent({ timeout: 1_000 }).catch(() => "form gone"))?.trim());
   // Masked BEFORE reveal: the secret must not be in the page until asked for.
-  const masked = (await keyPanel.locator("code").textContent()) ?? "";
+  const masked = (await keyPanel.getByTestId("generated-key-secret").textContent()) ?? "";
   ok("the key is masked until revealed", /^•+$/.test(masked), `${masked.length} chars`);
   await keyPanel.getByRole("button", { name: "Copy key" }).click();
   await page.waitForFunction(() => !document.querySelector("button.btn-primary")?.disabled, null, { timeout: 5_000 }).catch(() => {});
   ok("copying the key releases the request button", await primary.isEnabled(), (await primary.textContent())?.trim());
   await keyPanel.getByRole("button", { name: "Reveal" }).click();
-  const shown = (await keyPanel.locator("code").textContent()) ?? "";
+  const shown = (await keyPanel.getByTestId("generated-key-secret").textContent()) ?? "";
   ok("revealed, the key is a real secret and not the mask", shown.length > 40 && !/^•+$/.test(shown), `${shown.length} chars`);
   // The clipboard holds the KEY, not the address: a copy button that copied the wrong
   // field would pass every visibility check above and leave the person with nothing.
   const clipKey = await page.evaluate(() => navigator.clipboard.readText()).catch(() => "");
   ok("what Copy key put on the clipboard is the revealed key", clipKey === shown, `${clipKey.length} chars, ${clipKey === generated ? "the ADDRESS" : "not the address"}`);
   await primary.click();
-  await page.getByText("Sent ✓").waitFor({ timeout: 120_000 });
+  await page.getByTestId("sent-badge").waitFor({ timeout: 120_000 });
   ok("a generated address is accepted by the faucet (#31)", true);
   ok("the receipt offers the spending key again", await page.getByRole("button", { name: "Copy spending key" }).isVisible());
   await page.getByRole("button", { name: "Copy spending key" }).click();
@@ -992,13 +1004,13 @@ try {
   await page.getByRole("button", { name: /Another address/ }).click();
 
   const address = await freshAddress();
-  await page.locator("input.input").first().fill(address);
-  const submit = page.locator("button.btn-primary").first();
+  await page.getByTestId("address-input").fill(address);
+  const submit = page.getByTestId("claim-button");
   ok("the claim button is offered", await submit.isEnabled(), (await submit.textContent())?.trim());
   await submit.click();
 
   // Covers the in-page proof-of-work worker as well as the claim round trip.
-  await page.getByText("Sent ✓").waitFor({ timeout: 120_000 });
+  await page.getByTestId("sent-badge").waitFor({ timeout: 120_000 });
   ok("a claim driven through the UI succeeds", true);
   const success = await page.textContent("body");
   ok("success names the address it sent to", success.includes(address.slice(-6)));

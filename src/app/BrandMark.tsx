@@ -36,6 +36,7 @@ export function BrandMark() {
     <svg
       aria-hidden="true"
       focusable="false"
+      data-testid="brand-mark"
       className="brand-mark"
       width={`${CAP_MATCHED_EM}em`}
       height={`${CAP_MATCHED_EM}em`}

@@ -1119,6 +1119,7 @@ export default function Home() {
             two read as one pair rather than a control bolted on beside a label. */}
         <button
           type="button"
+          data-testid="theme-toggle"
           className="theme-toggle"
           onClick={() => setTheme((t) => (t === "ink" ? "paper" : "ink"))}
           aria-label={theme === "ink" ? "Switch to light theme" : "Switch to dark theme"}
@@ -1129,12 +1130,12 @@ export default function Home() {
         {/* Not a live region: the sr-only status region in <main> owns phase
             announcements, a live badge here would say everything twice. */}
         <div style={{ display: "flex", alignItems: "center", gap: 7, border: "2px solid var(--color-divider)", padding: "5px 9px", fontFamily: "var(--mono)", fontSize: 10, fontWeight: 700, letterSpacing: ".1em" }}>
-          <span aria-hidden="true" style={{ width: 9, height: 9, flex: "none", background: dot.fill, border: `2px solid ${dot.ring}`, animation: "pulse 2.6s ease-in-out infinite" }} />
-          <span>{statusText}</span>
+          <span data-testid="status-dot" aria-hidden="true" style={{ width: 9, height: 9, flex: "none", background: dot.fill, border: `2px solid ${dot.ring}`, animation: "pulse 2.6s ease-in-out infinite" }} />
+          <span data-testid="status-word">{statusText}</span>
         </div>
       </header>
 
-      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "4px 18px", padding: `9px ${pad}`, borderBottom: "1px solid var(--color-divider)", fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".05em", color: muted(55) }}>
+      <div data-testid="status-strip" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "4px 18px", padding: `9px ${pad}`, borderBottom: "1px solid var(--color-divider)", fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".05em", color: muted(55) }}>
         {[
           { k: "node", v: nodeWord },
           { k: "sync", v: syncCell ?? "–" },
@@ -1174,13 +1175,14 @@ export default function Home() {
               ]
             : []),
         ].map((it) => (
-          <span key={it.k}>{it.k} <b style={{ color: "var(--color-text)", fontWeight: 700 }}>{it.v}</b></span>
+          <span key={it.k} data-strip-key={it.k}>{it.k} <b data-testid="strip-value" style={{ color: "var(--color-text)", fontWeight: 700 }}>{it.v}</b></span>
         ))}
         {/* A bordered box, not bare text. With `padding: 0` this was a ghost button
             with every visual cue removed, so it read as a label and nobody knew the
             panel opened. The chevron alone was not enough: it is 8px of glyph doing
             the work a control's whole shape should do. */}
         <button
+          data-testid="panel-toggle"
           className="btn btn-secondary btn-sm disclosure"
           onClick={() => setPanel((p) => !p)}
           aria-expanded={panel}
@@ -1291,9 +1293,9 @@ export default function Home() {
               // is monospace k/v and anything else would need a column nothing else
               // uses. Colour alone would fail anyone who cannot see it, so the marker
               // carries the meaning and the colour only reinforces it.
-              <div key={r.k} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, padding: "7px 0", borderBottom: "1px solid var(--color-divider)", fontFamily: "var(--mono)", fontSize: 11 }}>
+              <div key={r.k} data-panel-key={r.k} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, padding: "7px 0", borderBottom: "1px solid var(--color-divider)", fontFamily: "var(--mono)", fontSize: 11 }}>
                 <span style={{ color: muted(55) }}>{r.k}</span>
-                <span style={{ fontWeight: 700, textAlign: "right", color: r.bad ? "var(--color-empty)" : undefined }}>
+                <span data-testid="panel-value" style={{ fontWeight: 700, textAlign: "right", color: r.bad ? "var(--color-empty)" : undefined }}>
                   {r.bad ? <span aria-hidden="true">! </span> : null}
                   {r.bad ? <span className="sr-only">needs attention: </span> : null}
                   {r.v}
@@ -1550,7 +1552,7 @@ export default function Home() {
         {(phase === "ready" || phase === "checking" || phase === "syncing" || phase === "fault" || phase === "empty" || phase === "degraded") && (
           <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
             <label htmlFor="zaddr" style={{ ...kicker, color: muted(60) }}>Your testnet address</label>
-            <input id="zaddr" className="input" type="text" spellCheck={false} autoComplete="off" autoCapitalize="off" placeholder="utest1… / ztestsapling… / tm…" value={addr} onChange={(e) => { setAddr(e.target.value); setTouched(false); }} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} aria-describedby="addrmsg" />
+            <input id="zaddr" data-testid="address-input" className="input" type="text" spellCheck={false} autoComplete="off" autoCapitalize="off" placeholder="utest1… / ztestsapling… / tm…" value={addr} onChange={(e) => { setAddr(e.target.value); setTouched(false); }} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} aria-describedby="addrmsg" />
             <div id="addrmsg" aria-live="polite" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 9, minHeight: 24 }}>
               {badgeShow && "label" in c && <span className="tag tag-outline">{c.label}</span>}
               {"priv" in c && c.priv === false && <span style={{ fontSize: 12, lineHeight: 1.45, color: muted(62) }}>Transparent address, so this drip will be visible on-chain.</span>}
@@ -1561,7 +1563,7 @@ export default function Home() {
             {genKey && genKey.address === addr.trim() && (
               <div data-testid="generated-key" style={{ display: "flex", flexDirection: "column", gap: 8, padding: "12px 14px", border: "1px solid var(--color-divider)", borderRadius: 6 }}>
                 <span style={{ ...kicker, color: muted(60) }}>{genKey.label}</span>
-                <code aria-label={keyShown ? undefined : "Spending key, hidden"} style={{ fontFamily: "var(--mono)", fontSize: 11.5, lineHeight: 1.5, wordBreak: "break-all", color: keyShown ? "inherit" : muted(55) }}>
+                <code data-testid="generated-key-secret" aria-label={keyShown ? undefined : "Spending key, hidden"} style={{ fontFamily: "var(--mono)", fontSize: 11.5, lineHeight: 1.5, wordBreak: "break-all", color: keyShown ? "inherit" : muted(55) }}>
                   {keyShown ? genKey.secret : "•".repeat(Math.min(genKey.secret.length, 48))}
                 </code>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
@@ -1574,7 +1576,7 @@ export default function Home() {
                 <p aria-live="polite" className="sr-only">{copied === "key" ? "Spending key copied." : ""}</p>
               </div>
             )}
-            <button className="btn btn-primary" onClick={() => void submit()} disabled={phase === "empty" || phase === "degraded" || (!!genKey && genKey.address === addr.trim() && !keyCopied && !keyShown)} style={{ width: "100%", justifyContent: "space-between" }}>
+            <button data-testid="claim-button" className="btn btn-primary" onClick={() => void submit()} disabled={phase === "empty" || phase === "degraded" || (!!genKey && genKey.address === addr.trim() && !keyCopied && !keyShown)} style={{ width: "100%", justifyContent: "space-between" }}>
               <span>{genKey && genKey.address === addr.trim() && !keyCopied && !keyShown ? "Copy the key first" : phase === "checking" ? "Checking status…" : phase === "syncing" ? "Queue it, sends when the node is ready" : phase === "fault" ? "Queue it, sends when the faucet is back" : phase === "empty" ? (refilling && refillHealthy ? "Topping up, back in a moment" : "Waiting for a refill") : phase === "degraded" ? "Not taking claims right now" : "Request " + dripText}</span>
               <span aria-hidden="true">→</span>
             </button>
@@ -1631,7 +1633,7 @@ export default function Home() {
         {phase === "success" && tx && (
           <div style={{ border: "2px solid var(--color-text)", display: "flex", flexDirection: "column" }}>
             <div style={{ padding: 16, borderBottom: "2px solid var(--color-text)", display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, background: "var(--color-surface)" }}>
-              <span style={{ fontFamily: "var(--mono)", fontSize: 10, fontWeight: 700, letterSpacing: ".14em", textTransform: "uppercase" }}>Sent ✓</span>
+              <span data-testid="sent-badge" style={{ fontFamily: "var(--mono)", fontSize: 10, fontWeight: 700, letterSpacing: ".14em", textTransform: "uppercase" }}>Sent ✓</span>
               <span style={{ fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".08em", color: muted(55) }}>just now</span>
             </div>
             <div style={{ padding: "18px 16px", display: "flex", flexDirection: "column", gap: 14 }}>
@@ -1832,12 +1834,12 @@ export default function Home() {
               )}
               <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
                 {tryAgain && (
-                  <button className="btn btn-primary btn-sm" onClick={() => void submit()} disabled={k === "held" && waitS > 0}>
+                  <button data-testid="error-retry" className="btn btn-primary btn-sm" onClick={() => void submit()} disabled={k === "held" && waitS > 0}>
                     {k === "held" && waitS > 0 ? `Try again in ${waitS}s` : "Try again"}
                   </button>
                 )}
                 {k === "bad" && (
-                  <button className="btn btn-primary btn-sm" onClick={() => { setErrMsg(""); setPhase(basePhase(status, network)); }}>Edit the address</button>
+                  <button data-testid="error-edit" className="btn btn-primary btn-sm" onClick={() => { setErrMsg(""); setPhase(basePhase(status, network)); }}>Edit the address</button>
                 )}
                 <button className="btn btn-ghost btn-sm" onClick={again} style={{ padding: 0 }}>Start over</button>
               </div>
