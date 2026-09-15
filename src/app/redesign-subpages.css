@@ -1,0 +1,57 @@
+/*
+ * /terms, /donate and /fund inside the shared shell, transcribed VERBATIM from the
+ * approved snapshot (redesign-frozen/S2-S5-20260915T2224Z, the "subpages" block at
+ * terms.html:380-396). Values are copied rather than retyped: if a number here disagrees
+ * with the preview, one of the two is a typo.
+ *
+ * SLICED BY RULE BLOCK, NEVER BY LINE. A line filter takes half of a wrapped rule and
+ * produces a sheet with unbalanced braces that still parses into something plausible -
+ * SDE-App caught exactly that on S2b's slice by counting braces rather than reading the
+ * diff, and it is L4's detector applied to CSS.
+ *
+ * THESE PAGES HAVE NO MASCOT, which is the whole reason the grid has its own name. The
+ * hero on the index is copy, fox and card; here it is copy and card, so `.hero-grid.two`
+ * re-columns it rather than leaving a hole where the fox was.
+ */
+
+/* ===== subpages: the hero's grid without the mascot ===== */
+.hero-grid.two{grid-template-columns:1.1fr 1fr}
+.hero-copy .lede a{color:var(--accent-text);font-weight:600}
+.card.feature .panel .lbl{display:block;margin-bottom:calc(.5*var(--u))}
+
+/* An address is the payload of two of these three pages, so it is a block that can be
+ * selected in one gesture and cannot be truncated: `word-break:break-all` on a unified
+ * address is the difference between copying it and copying most of it. */
+.addr{display:block;word-break:break-all;font:500 calc(.95*var(--u))/1.45 var(--mono);color:var(--ink);background:var(--prompt-bg);border:calc(.06*var(--u)) solid var(--prompt-border);border-radius:calc(.6*var(--u));padding:calc(.8*var(--u)) calc(1*var(--u));margin:0 0 calc(.9*var(--u))}
+.addr.small{font-size:calc(.85*var(--u));margin:calc(.6*var(--u)) 0}
+.card-copy .tag{margin-top:calc(.6*var(--u))}
+
+/* The only irreversible action on the site gets the warn colour, in the mono face, beside
+ * the address rather than under the fold. */
+.warn-line{font:500 calc(.8*var(--u))/1.4 var(--mono);color:var(--warn-text);margin:calc(.7*var(--u)) 0 0}
+
+.terms{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:calc(1.2*var(--u)) calc(2.2*var(--u));width:100%;align-items:start}
+.terms h2{margin:0 0 calc(.3*var(--u));color:var(--ink-3);font:600 calc(1.05*var(--u))/1.2 var(--sans-semibold);letter-spacing:calc(-.02*var(--u))}
+.terms p{margin:0 0 calc(.6*var(--u));color:var(--muted);font-size:calc(.86*var(--u));line-height:1.45}
+.terms p b{color:var(--ink);font-weight:600}
+.terms a{color:var(--accent-text);font-weight:600}
+
+.view.sub{min-height:calc(100dvh - 30*var(--u));justify-content:center}
+
+@media (max-height:840px){.card.feature .panel{padding:5.5% 6% 6%}.addr{font-size:calc(.88*var(--u));padding:calc(.6*var(--u)) calc(.9*var(--u))}.card-copy{padding:5% 8.4% 5.5%}}
+@media (max-width:56rem){.hero-grid.two{grid-template-columns:1fr}.terms{grid-template-columns:1fr}}
+
+/* ===== NOT IN THE PREVIEW, and each one is here for a measured reason ===============
+ *
+ * The preview's pages are static HTML served beside index.html, so they inherit the
+ * index's stylesheet wholesale. In the app they are their own routes and the legacy
+ * `globals.css` is still loaded under them, which means the transcription only replaces
+ * what it NAMES (LESSONS L20). These are the properties globals sets on selectors this
+ * sheet uses and the snapshot never mentions, found with the same detector that caught
+ * `.tag`'s uppercase and the `html` background on the index.
+ */
+/* globals.css styles `code` with the old palette's surface and a border radius of 0. The
+ * design's address block sets its own background, border and radius but says nothing about
+ * these two, so without this an address renders in the retired palette inside a correct
+ * box. */
+.addr{background-clip:padding-box;box-shadow:none}
