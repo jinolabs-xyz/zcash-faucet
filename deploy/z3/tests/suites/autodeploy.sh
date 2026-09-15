@@ -747,3 +747,47 @@ rm -f "$STUB_CHECKS_JSON"
 bash "$AD" > "$T/ci-why.log" 2>&1
 check "the refusal carries curl's own words, not only 'could not read'" \
   "grep -q 'could not read check-runs from' '$T/ci-why.log' && grep -q 'The requested URL returned error: 503' '$T/ci-why.log'"
+
+echo "== auto-deploy: the fork-park marker refuses to restart even an ACTIVE miner (R-12)"
+# THE SEQUENCE THIS EXISTS FOR, 2026-09-15: a deploy started a miner that had been parked,
+# the box mined a private chain, and Zallet rewound 18,434 blocks and rescanned for hours.
+# The state-word gate above protects a miner the OWNER stopped, and it CANNOT protect one
+# the watchdog's fork heal stopped, because by the time a deploy lands the unit may have
+# been started again by anything - including an earlier tick of this script. So the marker
+# outranks "it was running".
+ad_env
+CARGO_STUB="$T/cargo-park"
+cat > "$CARGO_STUB" <<'STUB'
+#!/usr/bin/env bash
+echo "cargo $*" >> "${CARGO_LOG:?}"
+mp=""; for a in "$@"; do case "$prev" in --manifest-path) mp="$a";; esac; prev="$a"; done
+out="$(dirname "$mp")/target/release"
+mkdir -p "$out"; printf 'built %s\n' "$RANDOM" > "$out/zcash-testnet-miner"
+STUB
+chmod +x "$CARGO_STUB"
+export CARGO_LOG="$T/cargo.calls"; : > "$CARGO_LOG"
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"   # running, which is the point
+marker="$T/miner-parked-by-fork-heal"
+printf 'parked 2026-09-15T13:22:17Z: node 4349914 above both references\n' > "$marker"
+ad_advance deploy/z3/miner/src/main.rs
+AUTODEPLOY_FORK_PARK_MARKER="$marker" MINER_CARGO="$CARGO_STUB" bash "$AD" > "$T/park.log" 2>&1
+check "the deploy still exits 0: the change shipped, the miner is just left alone" "[ $? -eq 0 ]"
+check "the binary was still rebuilt and installed" "[ -f '$T/install/zcash-testnet-miner' ]"
+check "but the ACTIVE miner was NOT restarted, which the state-word gate alone would have done" \
+  "! grep -q 'systemctl restart zcash-testnet-miner' '$STUB_LOG'"
+check "and the run says the marker is why, and that a human clears it" \
+  "grep -q 'fork heal parked it and the marker is still there' '$T/park.log' && grep -q 'Clear it by hand' '$T/park.log'"
+check "and it does not claim the miner was restarted" \
+  "! grep -q 'miner rebuilt and restarted' '$T/park.log'"
+
+echo "== auto-deploy: with no marker, an active miner is restarted exactly as before"
+# The control. Without this the case above could pass because the miner branch never ran.
+ad_env
+export CARGO_LOG="$T/cargo.calls"; : > "$CARGO_LOG"
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+ad_advance deploy/z3/miner/src/main.rs
+AUTODEPLOY_FORK_PARK_MARKER="$T/no-such-marker" MINER_CARGO="$CARGO_STUB" bash "$AD" > "$T/nopark.log" 2>&1
+check "exits 0" "[ $? -eq 0 ]"
+check "and the active miner IS restarted when nothing is parked" \
+  "grep -q 'systemctl restart zcash-testnet-miner' '$STUB_LOG'"
+check "and says so" "grep -qE 'miner rebuilt and restarted \(' '$T/nopark.log'"

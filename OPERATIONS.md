@@ -160,6 +160,42 @@ itself, it hides inside the expected appearance. That is the opposite of what an
 draft of this section said, and the correction came from the record of 2026-09-08 rather
 than from re-reading the code.
 
+## The miner is parked by the fork heal: what that means and how to clear it
+
+When the watchdog's fork rung fires it writes a marker and `auto-deploy.sh` then refuses to
+restart the miner, **even when the unit is active**. That is deliberate and it is the half
+that was missing on 2026-09-15: the existing gate reads the unit's state word, which
+protects a miner the owner stopped and cannot protect one a heal stopped, because by the
+time a deploy lands anything may have started it again.
+
+```bash
+# is it parked, and why
+sudo cat /var/lib/faucet-watchdog/miner-parked-by-fork-heal
+# the file carries the instant and the heights that triggered it
+
+# what the deploy said about it
+sudo journalctl -u faucet-autodeploy.service --since -2h | grep -F 'fork heal parked it'
+```
+
+**Clearing it is a human decision and there is no command that does it for you**, which is
+the point. Before clearing, satisfy yourself the node is on the network's chain rather than
+its own — the check is in the fork section of this file, and comparing `getbestblockhash`
+against an independent explorer is the one that settles it:
+
+```bash
+# only once the node is demonstrably NOT on a private chain
+sudo rm /var/lib/faucet-watchdog/miner-parked-by-fork-heal
+sudo systemctl start zcash-testnet-miner.service   # if you want it mining again at all
+```
+
+Removing the marker does **not** start the miner. Starting it is a second, separate
+decision, and the owner's: the marker only stops a deploy from making that decision for
+you. The next fork the rung sees will write the marker again.
+
+The marker lives under `/var/lib` rather than `/run` on purpose. The watchdog's flap counts
+are in `/run` because they describe the last few minutes and a reboot is a fair reason to
+forget them; a parking decision is the opposite, since a reboot does not resolve a fork.
+
 ## Logs
 
 ```bash

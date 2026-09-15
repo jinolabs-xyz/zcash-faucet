@@ -55,6 +55,48 @@ FLAP_REALERT="${WATCHDOG_FLAP_REALERT:-60}"         # then re-page every N attem
 RECOVERY_MIN_UPTIME="${WATCHDOG_RECOVERY_MIN_UPTIME:-$(( INTERVAL * 3 ))}"
 STATE_DIR="${WATCHDOG_STATE_DIR:-/run/faucet-watchdog}"
 
+# THE FORK PARK MARKER, and it is PERSISTENT where STATE_DIR is not (R-12).
+#
+# STATE_DIR is /run on purpose: flap counts describe the last few minutes and a reboot is
+# a fair reason to forget them. A PARKING DECISION is the opposite. A reboot does not
+# resolve a fork, so a marker that vanished across one would let the next auto-deploy tick
+# start a miner straight back onto a private chain - which is the 2026-09-15 sequence, in
+# which a deploy un-parked a miner the owner had stopped and the box mined its own fork
+# until Zallet rewound 18,434 blocks.
+#
+# Written by this script, read by auto-deploy.sh, CLEARED ONLY BY A HUMAN. The watchdog
+# never parks the miner itself: step 7 may stop it for the duration of a node heal, and
+# whether it STAYS stopped is the owner's, which is exactly what a marker a human clears
+# expresses and a process that starts it again does not. OPERATIONS.md carries the clear.
+#
+# mkdir -p rather than StateDirectory= in the unit, deliberately: changing the unit file
+# would need the unit restarted before it took effect, and install-ops.sh restarts the
+# watchdog on a watchdog.sh change rather than a unit change (review of #553 found that
+# same gap on the cTAZ socket). A directory this script makes itself has no such gap.
+FORK_PARK_DIR="${WATCHDOG_FORK_PARK_DIR:-/var/lib/faucet-watchdog}"
+FORK_PARK_MARKER="$FORK_PARK_DIR/miner-parked-by-fork-heal"
+
+# THE AHEAD RUNG'S BOUNDS (R-12). Step 7 handles a node the network has left BEHIND. This
+# is the other shape: our node higher than every independent reference, which is what a
+# private chain looks like from the inside. A couple of blocks ahead is ordinary for a node
+# that mines and /api/ready says so in words; 150 is far past anything ordinary explains.
+#
+# CORROBORATION IS REQUIRED AND `null` IS NOT CORROBORATION. One reference cannot tell our
+# fork from its own bad answer, and two that disagree cannot either. Both are cannot-tell,
+# and cannot-tell pages nothing and touches nothing - a rung that acts on one flaky oracle
+# converts an oracle outage into a chain rewind.
+#
+# IT DROPS NOTHING, and that is a ruling rather than an omission (CTO, 2026-09-15, on my
+# disagreement with the first design). Dropping the non-finalized state reaches the last
+# ~100 blocks, so at 150 ahead the rung would delete the top of our own chain, come back
+# still ~50 blocks ahead on the same fork, and log a heal it did not perform. A fork this
+# deep needs a snapshot reimport, which is a human's call; what the rung automates is the
+# part that failed on 2026-09-15 - the miner not coming back on its own.
+FORK_HEAL_ENABLED="${WATCHDOG_FORK_HEAL_ENABLED:-1}"
+FORK_AHEAD_BLOCKS="${WATCHDOG_FORK_AHEAD_BLOCKS:-150}"   # ahead of the highest corroborated reference
+FORK_MINER_MIN_SECS="${WATCHDOG_FORK_MINER_MIN_SECS:-600}" # miner alive this long = it could have built this
+alerted_fork=0
+
 # Poison auto-heal (step 5). Restarting zallet cannot fix a crash whose cause is a row
 # in wallet.db, so the watchdog runs the repair tools when it sees that exact signature.
 # Off by setting HEAL_ENABLED=0, and capped so a wrong diagnosis cannot rewrite the
@@ -508,6 +550,17 @@ MINER_RELEASE_NOTE=""
 release_miner_after_heal() {
   MINER_RELEASE_NOTE=""
   [ "$(flap_get "$MINER_STOP_KEY")" = "1" ] || return 0
+  # THE MARKER OUTRANKS THE RELEASE (R-12). Without this the rung is bypassed by this
+  # script: the fork rung parks the miner decision, the node then recovers enough for
+  # `release_miner_after_heal` to fire, and the watchdog starts the miner back onto the
+  # chain it was just parked off - the same un-parking auto-deploy was taught to refuse,
+  # one caller over. Whether it stays stopped is the owner's, and the marker is how that
+  # is expressed to every process that might start it.
+  if [ -f "$FORK_PARK_MARKER" ]; then
+    MINER_RELEASE_NOTE=" The miner is still stopped ON PURPOSE: a fork park marker is in place ($FORK_PARK_MARKER). Clearing it is a human's call - see OPERATIONS.md."
+    log "node recovered but NOT starting $MINER_UNIT: $FORK_PARK_MARKER exists"
+    return 0
+  fi
   if systemctl start "$MINER_UNIT" >/dev/null 2>&1; then
     flap_set "$MINER_STOP_KEY" 0
     alerted_miner_start_failed=0
@@ -542,7 +595,7 @@ heal_node_if_stalled() {
   [ -n "$name" ] || return 0
 
   local heights blocks est prev now lag
-  heights="$(zebra_chain_heights "$name")"
+  heights="$2"
   [ -n "$heights" ] || return 0
   blocks="${heights%% *}"; est="${heights##* }"
   prev="$node_last_height"; node_last_height="$blocks"
@@ -722,6 +775,96 @@ fi
 log "starting: interval=${INTERVAL}s faucet=${FAUCET_URL} ready_grace=${READY_GRACE_SECS}s alert=${alert_channel}"
 
 ticks=0
+# STEP 8: A SELF-MINED FORK - OUR NODE AHEAD OF EVERY INDEPENDENT REFERENCE.
+#
+# 2026-09-15: a deploy restarted a miner the owner had stopped, the box mined its own chain,
+# and Zallet eventually rewound 18,434 blocks. Nothing in the watchdog was watching for
+# that direction. Step 7 asks "is the network past us"; this asks "are we past the network",
+# which is the same fault seen from the side where money is built.
+#
+# WHAT IT READS, and why it can: /api/ready carries `usedHeight` beside `used` (#559, asked
+# for while writing this) and `corroborated` beside it. Both are FLAT, because this script
+# parses with grep, sed and cut by design - `sources[used].height` two levels down is out of
+# reach and a brace-bounded grep for it is the #391 greedy-match trap volunteered. Our own
+# height comes from step 7's reader, so one RPC shape lives in one place.
+#
+# THREE OUTCOMES AND ONE OF THEM IS SILENCE. Not corroborated (false, or `null` for a single
+# source) or no usable reference at all is CANNOT-TELL: logged, never paged, nothing touched.
+# Ahead by at most the limit is normal for a node that mines. Past the limit, on two
+# references that agree with each other, is a fork - and then it writes the park marker and
+# pages, in that order, because the marker is what stops the next auto-deploy tick from
+# starting the miner and the page can wait two seconds behind it.
+#
+# IT DROPS NOTHING - see FORK_AHEAD_BLOCKS above for why a rewind here would be a lie.
+heal_self_mined_fork() {
+  local name="$1" blocks corr used_h ahead miner_word started_age who mins
+  [ "$FORK_HEAL_ENABLED" = "1" ] || return 0
+  [ -n "$name" ] || return 0
+
+  # THE SWEEP'S ONE HEIGHT READING, handed in rather than fetched. Empty means zebra did
+  # not answer, and no answer is steps 1-2's business, never evidence of a fork.
+  blocks="${2%% *}"
+  case "$blocks" in ''|*[!0-9]*) return 0 ;; esac
+
+  corr="$(printf '%s' "${ready_body:-}" | grep -o '"corroborated":[a-z]*' | head -n1 | cut -d: -f2)"
+  used_h="$(printf '%s' "${ready_body:-}" | grep -o '"usedHeight":[0-9][0-9]*' | head -n1 | cut -d: -f2)"
+  case "$used_h" in ''|*[!0-9]*) used_h="" ;; esac
+
+  if [ "$corr" != "true" ] || [ -z "$used_h" ]; then
+    # An absent field reads the same as a null one here, on purpose: a body that predates
+    # #559 must not be turned into a height by this function, and "no number" is never 0.
+    log "fork check: cannot tell, so nothing is paged and nothing is touched (corroborated=${corr:-absent}, highest usable reference=${used_h:-none}, ours $blocks)"
+    return 0
+  fi
+
+  ahead=$(( blocks - used_h ))
+  [ "$ahead" -gt "$FORK_AHEAD_BLOCKS" ] || return 0
+
+  # ATTRIBUTION, SEPARATELY FROM DETECTION. The fork is established by the heights; who
+  # built it is a different question, and the answer changes what the page tells a human to
+  # look at. The miner's own heartbeat is the witness rather than the unit's state, because
+  # a unit can be active with a wedged process that has templated nothing for hours.
+  miner_word="$(systemctl is-active "$MINER_UNIT" 2>/dev/null)" || true
+  started_age="$(ts_age "$(hb_field startedAt)")"
+  if [ "$miner_word" = "active" ] && [ -n "$started_age" ] && [ "$started_age" -gt "$FORK_MINER_MIN_SECS" ]; then
+    mins=$(( started_age / 60 ))
+    who="our miner is active and its heartbeat says it started ${mins} min ago, so this chain is most likely ours"
+  elif [ "$miner_word" = "active" ]; then
+    who="our miner is active but its heartbeat cannot show it has been running long (startedAt age: ${started_age:-unreadable}s), so what built $ahead blocks is unexplained"
+  else
+    who="our miner is ${miner_word:-not running}, so what built $ahead blocks is unexplained"
+  fi
+
+  # THE MARKER BEFORE THE PAGE, and a failure to write it is its own sentence: without the
+  # file, auto-deploy does NOT refuse, and a human reading a page that says "parked" while
+  # nothing is parked is worse off than one who knows the park failed.
+  local park
+  if [ ! -f "$FORK_PARK_MARKER" ]; then
+    mkdir -p "$FORK_PARK_DIR" 2>/dev/null
+    if printf '%s fork: ours %s, highest corroborated reference %s, ahead %s. %s\n' \
+         "$(date -u +%FT%TZ)" "$blocks" "$used_h" "$ahead" "$who" >> "$FORK_PARK_MARKER" 2>/dev/null; then
+      log "wrote $FORK_PARK_MARKER; auto-deploy will refuse to start $MINER_UNIT until a human clears it"
+    else
+      log "ERROR: could not write $FORK_PARK_MARKER, so auto-deploy will NOT refuse to start $MINER_UNIT"
+    fi
+  fi
+  # THE PAGE DESCRIBES WHAT IS TRUE, NOT WHAT WAS ATTEMPTED. Read the marker back rather
+  # than trusting the write: a page that says "the miner is parked" while the file is
+  # missing would send a human away calm from the one state that needs them, and a failed
+  # mkdir on /var/lib is exactly the kind of thing that happens on a full disk.
+  if [ -f "$FORK_PARK_MARKER" ]; then
+    park="The miner is parked by marker ($FORK_PARK_MARKER) and no deploy will start it while that file exists."
+  else
+    park="THE MINER IS NOT PARKED: $FORK_PARK_MARKER could not be written, so the next auto-deploy tick WILL start the miner again. Stop the miner by hand first."
+  fi
+
+  if [ "$alerted_fork" = "0" ]; then
+    danger "our node is $ahead blocks AHEAD of the highest reference two independent sources agree on (ours $blocks, reference $used_h). That is our own chain, not the network's. $who. $park Nothing has been rewound: a drop of the non-finalized state only reaches ~100 blocks and cannot undo this. WHAT TO DO: confirm with an explorer (compare getblockhash at $used_h), then reimport a snapshot per SNAPSHOTS.md, then clear the marker per OPERATIONS.md once the node is back on the network's chain."; rc=$?
+    paged "$rc" && alerted_fork=1
+  fi
+  return 0
+}
+
 while true; do
   ticks=$((ticks + 1))
   zebra="$(find_container "$ZEBRA_MATCH")"
@@ -950,9 +1093,25 @@ while true; do
   # signal (the heartbeat) rather than off /api/ready.
   heal_miner_if_stalled
 
+  # ZEBRA'S HEIGHTS, ONCE, FOR BOTH RUNGS. Not an optimisation and not tidiness: asking
+  # twice gave steps 7 and 8 different numbers, since the tip can move between two calls,
+  # so one sweep could act on two different worlds. It also doubled the RPC load on a node
+  # whose RPC thread is already starved by its own miner (16-45 s recency answers). And
+  # reading it HERE rather than inside step 7 keeps the two rungs independent: step 7 is
+  # switchable off (WATCHDOG_NODE_HEAL_ENABLED=0) and fork detection must not switch off
+  # with it. The suite found the double read the blunt way - the zebra stub advances the
+  # height once per CALL, so a second caller doubled every step-7 case's sync progress and
+  # 22 of them failed at once.
+  zebra_heights="$(zebra_chain_heights "$zebra")"
+
   # 7: node sync-stall recovery. Reads zebra directly, so it is independent of whether the
   # watchdog can reach the app, and acts only on behind-AND-stuck.
-  heal_node_if_stalled "$zebra"
+  heal_node_if_stalled "$zebra" "$zebra_heights"
+
+  # 8: a self-mined fork. AFTER step 7, because the two are opposite directions and step 7
+  # may have just restarted the node; reads this sweep's /api/ready body (fetched in 4) and
+  # zebra directly.
+  heal_self_mined_fork "$zebra" "$zebra_heights"
 
   # Bounded only under test. Production leaves MAX_TICKS at 0 and never exits,
   # and the sleep is skipped on the final tick so a suite is not paying for it.
