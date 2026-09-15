@@ -34,7 +34,7 @@
  */
 
 import { num } from "../config.ts";
-import { getExternalTip, warmExternalTip, HOSH_TIMEOUT_MS, MIN_ATTEMPT_GAP_MS, REFRESH_ATTEMPT_MS } from "./externalTip.ts";
+import { referenceTip, warmExternalTip, HOSH_TIMEOUT_MS, MIN_ATTEMPT_GAP_MS, REFRESH_ATTEMPT_MS } from "./externalTip.ts";
 
 /*
  * The decision itself is a PURE function of two heights (see shieldFreshness),
@@ -246,9 +246,23 @@ export function freshnessRefusalText(gate: ChainGate): string {
   );
 }
 
-/** Live reading: the pure decision above, fed the current cached oracle value. */
+/**
+ * Live reading: the pure decision above, fed the HIGHEST NON-STALE reference.
+ *
+ * Not "the cached oracle value", which is what this read for as long as there was only one
+ * (#548). referenceTip() also kicks a background refresh when the freshest source is older
+ * than STALE_MS, which is the same thing getExternalTip() did here before: the oracle stays
+ * warm on the money path as well, and that is now a named property with a test rather than
+ * a side effect of which accessor happened to be called. The lag budget here is five blocks, so the exposure is narrow and specific: it
+ * needs a stale reference sitting CLOSE to our own height while the real tip is further
+ * ahead. Measured from 2026-09-15's 14:01Z flap, where hosh read 4,349,808 and our own
+ * endpoint read 4,349,928: a node at 4,349,805 is 3 behind the stale one, inside the
+ * budget and allowed, and 123 behind the truth - past the tip+40 expiry window this gate
+ * exists to protect. Taking the max cannot make the gate more permissive, only less: a
+ * stale reference is a LOW one, so the max is always the fresher story.
+ */
 export function readChainFreshness(nodeHeight: number | null): ChainGate {
-  return chainFreshness(nodeHeight, getExternalTip());
+  return chainFreshness(nodeHeight, referenceTip().height);
 }
 
 /**
@@ -296,7 +310,7 @@ export async function readChainFreshnessAsking(
   waitMs = ORACLE_WAIT_MS,
   // Injectable so the WAITING can be tested without a network: the module-level cache
   // is otherwise the only thing a test can reach, and only cold.
-  readTip: () => number | null = getExternalTip,
+  readTip: () => number | null = () => referenceTip().height,
   warm: () => unknown = warmExternalTip,
 ): Promise<ChainGate> {
   // NOTHING TO WAIT FOR when our own node's height is unknown: the verdict is
