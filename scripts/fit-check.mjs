@@ -55,9 +55,13 @@ const RULING_COMBOS = 70;   // 5 sizes x 2 themes x (4 views + 3 pages), once ev
 // measured rows together and they agreed with each other - halving THEMES halved the coverage
 // and stayed green. Sizes times themes is fixed from the first slice, so it is checked from the
 // first slice.
-const RULING_VIEWPORT_PASSES = 10;   // 5 sizes x 2 themes
-if (SIZES.length * THEMES.length !== RULING_VIEWPORT_PASSES) {
-  console.error(`fit-check: ${SIZES.length} sizes x ${THEMES.length} themes is ${SIZES.length * THEMES.length} passes, and the ruling is ${RULING_VIEWPORT_PASSES}. Change the arrays and this number together, deliberately, or neither.`);
+// EACH ARRAY, NOT THEIR PRODUCT (CTO red-team, review of #563): padding one list while halving
+// the other keeps the product and silently drops a theme.
+const RULING_SIZES = 5;
+const RULING_THEMES = 2;
+const RULING_VIEWPORT_PASSES = RULING_SIZES * RULING_THEMES;
+if (SIZES.length !== RULING_SIZES || THEMES.length !== RULING_THEMES) {
+  console.error(`fit-check: this file has ${SIZES.length} sizes and ${THEMES.length} themes, and the ruling is ${RULING_SIZES} and ${RULING_THEMES}. Change the arrays and these numbers together, deliberately, or neither.`);
   process.exit(1);
 }
 const PLANNED = SIZES.length * THEMES.length * (VIEWS.length + PAGES_IN_SHELL.length);

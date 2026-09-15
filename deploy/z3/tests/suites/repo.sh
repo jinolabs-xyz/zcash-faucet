@@ -1284,7 +1284,7 @@ check "both run in the ui job against the URL the smoke server already has" \
 # measured everything it happened to plan - three viewports to one recomputed the total and
 # every check stayed green. The numbers MASCOT.md names live beside the arrays now.
 check "the mascot check plans the combinations and sectors MASCOT.md names" \
-  "grep -qF 'const RULING_COMBOS = 6;' '$REPO/scripts/mascot-check.mjs' && grep -qF 'const RULING_POINTER = 3;' '$REPO/scripts/mascot-check.mjs' && grep -q 'Change the arrays and these numbers together' '$REPO/scripts/mascot-check.mjs'"
+  "grep -qF 'const RULING_VIEWPORTS = 3;' '$REPO/scripts/mascot-check.mjs' && grep -qF 'const RULING_THEMES = 2;' '$REPO/scripts/mascot-check.mjs' && grep -qF 'const RULING_POINTER = 3;' '$REPO/scripts/mascot-check.mjs' && grep -q 'Change the arrays and these numbers together' '$REPO/scripts/mascot-check.mjs'"
 check "and its dimensions are MASCOT.md's three viewports, two themes and three sectors" \
   "grep -qF 'const VIEWPORTS = [[1440, 900], [1100, 800], [390, 844]];' '$REPO/scripts/mascot-check.mjs' && grep -qF 'want: \"0% 50%\"' '$REPO/scripts/mascot-check.mjs' && grep -qF 'want: \"50% 0%\"' '$REPO/scripts/mascot-check.mjs' && grep -qF 'want: \"100% 100%\"' '$REPO/scripts/mascot-check.mjs'"
 check "the fit check plans its full 70 the same way" \
@@ -1298,7 +1298,7 @@ check "and its dimensions carry the sizes the clipping actually appears at, not 
 check "including THEMES, which both scripts multiply by and neither pinned" \
   "grep -qF 'const THEMES = [\"paper\", \"ink\"];' '$REPO/scripts/fit-check.mjs' && grep -qF 'const THEMES = [\"paper\", \"ink\"];' '$REPO/scripts/mascot-check.mjs'"
 check "and the fit check holds sizes-times-themes from the FIRST slice, not only at the end" \
-  "grep -qF 'const RULING_VIEWPORT_PASSES = 10;' '$REPO/scripts/fit-check.mjs' && grep -qF 'SIZES.length * THEMES.length !== RULING_VIEWPORT_PASSES' '$REPO/scripts/fit-check.mjs'"
+  "grep -qF 'const RULING_SIZES = 5;' '$REPO/scripts/fit-check.mjs' && grep -qF 'const RULING_THEMES = 2;' '$REPO/scripts/fit-check.mjs' && grep -qF 'SIZES.length !== RULING_SIZES || THEMES.length !== RULING_THEMES' '$REPO/scripts/fit-check.mjs'"
 # FITS MEANS REACHABLE (CTO's ruling on #562, after their red-team found the clipped footer). The
 # arithmetic alone called a footer that had been CUT OFF and could not be scrolled to "SCROLLS",
 # on a build whose own suite read 130 ok while three links could not be clicked and prod has
@@ -1309,6 +1309,11 @@ check "fits means the footer is on screen and its links are hit-testable, not ju
 check "and clipping is named as clipping rather than reported as a scroll" \
   "grep -q 'CLIPPED, footer cut by' '$REPO/scripts/fit-check.mjs' && grep -qF 'getComputedStyle(st).overflowY !== \"hidden\"' '$REPO/scripts/fit-check.mjs'"
 # THE SHEETS: served, and held at the size the owner ruled.
+# THE BOOP NAMES ITS LAYER (CTO red-team, review of #563): `span span` matches BOTH sprite
+# layers and the directions layer is opacity 1 always, so the old assertion was true before any
+# click and deleting the handler outright still passed 6/6.
+check "the boop finds the reactions layer by the sheet it paints, and asserts a RISE" \
+  "grep -qF '(getComputedStyle(l).backgroundImage || \"\").includes(which)' '$REPO/scripts/mascot-check.mjs' && grep -q 'before any click, so a rise cannot be observed' '$REPO/scripts/mascot-check.mjs'"
 check "the sheets are checked over the wire before the pointer assertions, since a 404 passes them" \
   "grep -qF '/mascots/fox-riso-directions.webp' '$REPO/scripts/mascot-check.mjs' && grep -qF '/mascots/fox-riso-reactions.webp' '$REPO/scripts/mascot-check.mjs' && grep -q 'is not served' '$REPO/scripts/mascot-check.mjs'"
 check "the image job measures each sheet against MASCOT.md's 300 KB and refuses a served PNG" \

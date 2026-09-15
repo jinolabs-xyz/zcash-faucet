@@ -46,10 +46,15 @@ const POINTER = [
   { name: "up", dx: 0, dy: -300, want: "50% 0%" },
   { name: "down-right", dx: 300, dy: 250, want: "100% 100%" },
 ];
-const RULING_COMBOS = 6;   // three viewports x two themes
+// EACH ARRAY, NOT THEIR PRODUCT (CTO red-team, review of #563): 2 themes to 1 with the viewport
+// list padded to 6 keeps the product and never renders the ink theme. A product is one number
+// standing in for three, which is the same substitution this file exists to refuse.
+const RULING_VIEWPORTS = 3;
+const RULING_THEMES = 2;
+const RULING_COMBOS = RULING_VIEWPORTS * RULING_THEMES;
 const RULING_POINTER = 3;  // the three sectors MASCOT.md names
-if (VIEWPORTS.length * THEMES.length !== RULING_COMBOS || POINTER.length !== RULING_POINTER) {
-  console.error(`mascot-check: this file plans ${VIEWPORTS.length * THEMES.length} viewport/theme combinations and ${POINTER.length} pointer sectors, but MASCOT.md names ${RULING_COMBOS} and ${RULING_POINTER}. Change the arrays and these numbers together, deliberately, or neither.`);
+if (VIEWPORTS.length !== RULING_VIEWPORTS || THEMES.length !== RULING_THEMES || POINTER.length !== RULING_POINTER) {
+  console.error(`mascot-check: this file has ${VIEWPORTS.length} viewports, ${THEMES.length} themes and ${POINTER.length} pointer sectors, and MASCOT.md names ${RULING_VIEWPORTS}, ${RULING_THEMES} and ${RULING_POINTER}. Change the arrays and these numbers together, deliberately, or neither.`);
   process.exit(1);
 }
 
@@ -131,14 +136,36 @@ for (const [w, h] of VIEWPORTS) {
         else sectors += 1;
         console.log(`pointer ${name}: ${pos}`);
       }
-      await page.click(".mascot-riso");
-      await page.waitForTimeout(250);
-      const reacted = await page.evaluate(() => {
+      // THE REACTIONS LAYER BY NAME, NOT "ONE OF THE TWO" (CTO red-team, review of #563). This
+      // read `.mascot-riso span span`, which matches BOTH sprite layers, and the DIRECTIONS
+      // layer has no opacity rule so it is 1 always - so `some(o => o === 1)` was true before
+      // any click, and deleting the click handler outright still passed. The layer is found by
+      // the sheet it paints, and the assertion is that ITS opacity RISES.
+      const layerOf = (which) => {
         const layers = [...document.querySelectorAll(".mascot-riso span span")];
-        return layers.map((l) => Number(getComputedStyle(l).opacity));
-      });
-      if (!reacted.some((o) => o === 1)) fails.push(`a click left every reactions layer under opacity 1 (${reacted.join(", ")})`);
-      console.log(`boop: layer opacities ${reacted.join(", ")}`);
+        const el = layers.find((l) => (getComputedStyle(l).backgroundImage || "").includes(which));
+        return el ? Number(getComputedStyle(el).opacity) : null;
+      };
+      // THE REACTION IS TRANSIENT, so a single sample after a fixed wait is a coin flip. MASCOT.md
+      // calls it "blink then a payoff on click": the layer rises and falls again. Sampling once
+      // at 250 ms gave 0 -> 1 on one run and 0 -> 0 on the next against an UNCHANGED page, which
+      // is a flaky gate - worse than no gate, because it teaches people to re-run CI. Polled for
+      // the PEAK across a window instead, which is the property: a click makes it fully visible
+      // at some point.
+      const beforeBoop = await page.evaluate(layerOf, "reactions");
+      await page.click(".mascot-riso");
+      let afterBoop = 0;
+      for (let waited = 0; waited < 2000 && afterBoop !== 1; waited += 50) {
+        afterBoop = Math.max(afterBoop, await page.evaluate(layerOf, "reactions") ?? 0);
+        if (afterBoop !== 1) await page.waitForTimeout(50);
+      }
+      if (beforeBoop === null) {
+        fails.push("no layer paints the reactions sheet, so the boop assertion measured nothing");
+      } else {
+        if (!(beforeBoop < 1)) fails.push(`the reactions layer is already at opacity ${beforeBoop} before any click, so a rise cannot be observed`);
+        if (afterBoop !== 1) fails.push(`a click never took the reactions layer to opacity 1 (peak ${afterBoop} over 2 s)`);
+      }
+      console.log(`boop: reactions layer ${beforeBoop} -> peak ${afterBoop}`);
     }
     await page.close();
   }
