@@ -80,3 +80,37 @@ test("a series the ledger could not answer is unknown on the counter, never thir
     delete g.__faucetDriver;
   }
 });
+
+test("the counter asks for the window, not for the whole table", async () => {
+  // THE DAY RANGE IS THE ONE THING HERE NO OTHER TEST CAN SEE. The series is built from
+  // the window and filled from whatever rows come back, so SQL that filtered nothing
+  // would produce an identical answer - SDE-Infra's finding, and they were right that my
+  // first mutation table only covered half of it. `drip_days` grows 365 rows a year per
+  // network and this read happens on every status poll, which on D1 is bytes over HTTPS,
+  // so the bounded read is worth having and worth being able to break.
+  const g = globalThis as unknown as { __faucetDriver?: unknown };
+  const asked: { sql: string; params: unknown[] }[] = [];
+  g.__faucetDriver = {
+    run: async () => ({ changes: 0, lastInsertRowid: 0 }),
+    get: async (sql: string) =>
+      /COUNT\(\*\) AS n FROM drip_days/.test(sql) ? { n: 1 } : { allTime: 0, last30d: 0, last7d: 0 },
+    all: async (sql: string, params: unknown[]) => {
+      asked.push({ sql, params });
+      return [];
+    },
+  };
+  try {
+    const nowMs = Date.parse("2026-08-02T12:00:00Z");
+    const c = await countDrips(nowMs, "taz");
+    assert.ok(c);
+    assert.equal(asked.length, 1, "one read for the series");
+    const { sql, params } = asked[0];
+    assert.deepEqual(params, ["taz", "2026-07-04", "2026-08-02"], "the network and both ends of the window");
+    // The parameters have to reach a predicate that uses them. Passing bounds to a
+    // statement that ignores them is the shape this is here to catch.
+    assert.match(sql, /day\s*>=\s*\?/, "a lower bound the first day is bound to");
+    assert.match(sql, /day\s*<=\s*\?/, "an upper bound the last day is bound to");
+  } finally {
+    delete g.__faucetDriver;
+  }
+});
