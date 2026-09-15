@@ -44,6 +44,14 @@
 import { chromium, devices } from "playwright";
 
 const BASE = (process.env.UI_SMOKE_URL ?? "http://localhost:3120").replace(/\/$/, "");
+// THE DESKTOP SIZE THIS SUITE SPEAKS FOR, declared rather than inherited. The contexts below
+// passed no viewport, so the desktop pass ran at whatever Playwright defaults to - 1280x720
+// today - and the suite reported a clean run while the footer sat 64px below the fold with its
+// links unreachable by a pointer. A size nobody chose is a size nobody is testing. Naming it
+// changes nothing today and stops it changing silently tomorrow.
+const DESKTOP = { width: 1280, height: 720 };
+// The second desktop size the footer is checked at, because one size proves one size.
+const DESKTOP_ALT = { width: 1366, height: 768 };
 let failures = 0;
 const ok = (name, cond, detail = "") => {
   console.log(`${cond ? "ok" : "FAIL"}: ${name}${detail ? ` (${detail})` : ""}`);
@@ -112,10 +120,144 @@ const COLOUR_LIB = `
     };
   `;
 
+/**
+ * THE FOOTER IS REACHABLE BY A POINTER, at two desktop sizes.
+ *
+ * The design clamps the page to one screen (`.stage` height:100dvh, and above 56rem
+ * `overflow:hidden`). Over the pre-redesign content, which is taller than a screen, that cut
+ * the footer by 30 to 93px and left Donate TAZ, Terms and GitHub unreachable - six wheel
+ * events moved scrollTop from 0 to 0 - while this suite reported a clean run. It reported
+ * clean because everything here asked whether text was PRESENT, and `textContent` reads a
+ * clipped element exactly like a visible one.
+ *
+ * WHAT IS ASSERTED, AND WHY IT IS NOT "the document fits the viewport". The ruling that
+ * dropped the clamp makes the document TALLER than the viewport over this content - measured
+ * 787px in 720px and 803px in 768px - so "fits" and "clamp dropped" cannot both be true in
+ * this slice. Fitting is the FINISHED design's property and arrives with the content designed
+ * for it, enforced per slice by I1's fit check. The property that was actually broken, and
+ * the one a visitor feels, is REACHABILITY: the page scrolls, and every footer link can be
+ * clicked once you get there. Clipped-and-unscrollable fails this; tall-and-scrollable passes.
+ *
+ * `elementFromPoint` at the link's centre is what makes it real - a link that is present, in
+ * the box model, and covered or clipped fails, which is what "pointer-unreachable" meant to
+ * whoever wanted /terms. Production has `maintenanceAddress` set and carries a fourth link,
+ * so whatever links the footer holds are the ones checked and the count is not hard-coded.
+ */
+async function checkFooterReachable(browser) {
+  for (const vp of [DESKTOP, DESKTOP_ALT]) {
+    const c = await browser.newContext({ viewport: vp });
+    const p = await c.newPage();
+    await p.goto(BASE, { waitUntil: "networkidle" });
+    await p.waitForTimeout(400);
+    const label = `${vp.width}x${vp.height}`;
+
+    // NOTHING BETWEEN THE FOOTER AND THE DOCUMENT CLIPS WHAT IT CANNOT SCROLL.
+    //
+    // This is the CAUSE rather than a symptom, and the difference cost me a measurement. My
+    // first version asked whether the document could be scrolled to its bottom. With the
+    // clamp in place `documentElement.scrollHeight` EQUALS the viewport - `.stage` clips, so
+    // the document itself never overflows - and the check took its "the page fits, nothing to
+    // scroll" branch and passed. It passed over the exact defect it was written for.
+    //
+    // Worse, whether the clamp actually cuts anything depends on how tall the content happens
+    // to be, which moves with phase, data and font metrics: the red-team measured a 30 to 93px
+    // cut, and on my fixture stack the same CSS fits 720px exactly and cuts nothing. A check
+    // that only fires in the states where the damage is already visible is not a check on the
+    // clamp, it is a check on today's content (L1).
+    //
+    // So: walk from the footer to the document and fail on any ancestor that hides overflow
+    // while having more content than box. That is "clipped with no way to reach it", and it is
+    // true or false regardless of whether this run's content happens to trip it.
+    const clip = await p.evaluate(() => {
+      const found = [];
+      for (let e = document.querySelector(".ftr"); e; e = e.parentElement) {
+        const cs = getComputedStyle(e);
+        const hidden = cs.overflowY === "hidden" || cs.overflowY === "clip";
+        const over = e.scrollHeight - e.clientHeight;
+        if (hidden && over > 1) {
+          found.push(`${e.tagName.toLowerCase()}${e.className ? "." + String(e.className).split(" ")[0] : ""} hides ${over}px`);
+        }
+      }
+      return found;
+    });
+    ok(`${label}: nothing between the footer and the document clips content it cannot scroll`,
+      clip.length === 0, clip.join("; ") || "no clipping ancestor");
+
+    const r = await p.evaluate(() => {
+      document.querySelector(".ftr")?.scrollIntoView({ block: "end" });
+      const links = [...document.querySelectorAll(".ftr nav a")].map((a) => {
+        const b = a.getBoundingClientRect();
+        const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+        return {
+          t: a.textContent.trim(),
+          inView: b.top >= 0 && b.bottom <= innerHeight && b.width > 0,
+          hit: !!(hit && (hit === a || a.contains(hit))),
+        };
+      });
+      return { links };
+    });
+    const bad = r.links.filter((l) => !l.inView || !l.hit);
+    ok(`${label}: every footer link can be reached and clicked`,
+      r.links.length > 0 && bad.length === 0,
+      r.links.length === 0 ? "no footer links found, so nothing was measured"
+        : r.links.map((l) => `${l.t}:${l.inView ? "in" : "OUT"}/${l.hit ? "hit" : "BLOCKED"}`).join("  "));
+    await c.close();
+  }
+}
+
 async function checkAppearance(page) {
   // The masthead mark, same identity as the favicon. aria-hidden by design, so
   // assert its presence, not an accessible name.
   ok("the masthead mark renders", await page.getByTestId("brand-mark").isVisible());
+
+  // THE TRANSITIONAL MEASURE, COUNTED SO IT CANNOT OUTLIVE ITS PURPOSE QUIETLY.
+  //
+  // `.view.legacy-measure` caps a view's content at the 760px the pre-redesign markup was
+  // written for. The redesign's views are full width because the cards they will hold are,
+  // so every slice that transcribes a view must take the class off with it - and a class
+  // left behind would not fail anything, it would just quietly squeeze the new design into
+  // two thirds of the page. Nobody notices a layout that merely looks narrow.
+  //
+  // So the COUNT is pinned, and the number comes down as slices land: 4 at S1, 3 once S2
+  // transcribes the claim view, and 0 after S5. Changing it is a line in the diff and a
+  // decision someone made, which is the whole point.
+  const LEGACY_VIEWS = 4;
+  const legacy = await page.locator(".view.legacy-measure").count();
+  ok(`exactly ${LEGACY_VIEWS} views still carry the transitional 760px measure`,
+    legacy === LEGACY_VIEWS,
+    `${legacy} found; if a slice just transcribed a view, drop this number with it`);
+
+  // AND THE WIDTH IT IS THERE TO HOLD, measured rather than inferred from the class being
+  // present (SDE-Infra's finding on review). The count above catches the class being
+  // REMOVED early; it cannot catch the cap silently failing to apply - a changed selector,
+  // a specificity fight, a later rule setting width on the same children. Those leave the
+  // class in place and the content at full width, which is the 802px regression this whole
+  // thing exists to prevent, and nothing else in this suite can see it.
+  //
+  // The property, not the number: the view is wide and its content is NOT. Asserting the
+  // view is genuinely wide first is what stops this passing at a narrow viewport, where
+  // everything is under 760 and the cap proves nothing.
+  const measure = await page.evaluate(() => {
+    const view = document.querySelector(".view.legacy-measure");
+    const input = document.querySelector("input.input");
+    if (!view || !input) return { missing: true };
+    return { view: Math.round(view.getBoundingClientRect().width), input: Math.round(input.getBoundingClientRect().width) };
+  });
+  // THE PRIVACY SENTENCE, PINNED WORD FOR WORD, because it is a factual claim about what
+  // this service keeps and the exact words were argued over. The preview said "Addresses and
+  // IPs are never logged"; I blocked on it because it is defensible about RAW values and
+  // misleading about the salted fingerprints the rate limiter persists until PURGE_SQL drops
+  // them, and the CTO ruled the stronger, truer form. A sentence like this drifting back
+  // toward the comfortable version is exactly the change nobody notices in a diff.
+  ok("the footer states what is kept, in the words that survived review",
+    (await page.textContent("body"))?.includes(
+      "No accounts, no cookies, no trackers. Addresses and IPs are hashed, never stored raw.") === true,
+    "the exact sentence is not on the page");
+
+  ok("the untranscribed content is still capped at its old measure inside a full-width view",
+    !measure.missing && measure.view > 900 && measure.input <= 760,
+    measure.missing ? "no .view.legacy-measure or no input.input, so nothing was measured"
+      : `view ${measure.view}px, address field ${measure.input}px (cap 760)`);
 
   // The LIVE dot paints the state, not a fixed colour: --color-live only when the
   // faucet is serviceable. Compare the dot's resolved background to the token
@@ -473,7 +615,7 @@ async function checkFirstPaint(page, base, address) {
 // network layer with the bodies the route really sends, and the page's own switch is
 // what is under test. Its own context: routes must not leak into the claim flow.
 async function checkRefusalCards(browser, base, address) {
-  const ctx = await browser.newContext();
+  const ctx = await browser.newContext({ viewport: DESKTOP });
   const page = await ctx.newPage();
   const norm = (t) => t.toLowerCase().replace(/[\u2018\u2019]/g, "'");
   const card = async () => {
@@ -544,7 +686,22 @@ async function checkRefusalCards(browser, base, address) {
 // so an unconfigured or broken miner still rendered "on", and a run with no heartbeat
 // at all is exactly the shape that used to lie. What it must say now is that it cannot
 // tell, which is neither healthy nor "off".
+/**
+ * Opens one of the four views the redesign's segmented nav switches between.
+ *
+ * The content did not go away, it went behind a nav, and a hidden section is not
+ * clickable. Driving the nav is also what a visitor does, so this asserts the nav works on
+ * the way to asserting what is inside: a broken nav fails here, by name, rather than fifty
+ * lines later as a mystery timeout on something unrelated.
+ */
+async function showView(page, v) {
+  await page.getByTestId(`nav-${v}`).click();
+  await page.locator(`[data-testid="view-${v}"]`).waitFor({ state: "visible", timeout: 5000 });
+}
+
 async function checkMinerPanel(page) {
+  // The panel and its disclosure live in the status view now.
+  await showView(page, "status");
   // The control was reached by its label until this change, so the label needs its own
   // assertion. DRIVEN BY TESTID, ASSERTED BY ROLE AND NAME - SDE-Infra's finding, and it is
   // the right one: getByRole(name:) asserts the COMPUTED ACCESSIBLE NAME, which is what a
@@ -642,6 +799,7 @@ async function checkCtazToggle(page, base) {
         ])),
     );
 
+  await showView(page, "status");
   await page.getByTestId("panel-toggle").click();
   const rows = await panelRows();
   ok("the panel gains a cTAZ readiness row", /ready|behind|stale|not-activated|cannot-verify/.test(rows["node"] ?? ""), rows["node"]);
@@ -658,6 +816,10 @@ async function checkCtazToggle(page, base) {
     rows["box"] !== undefined && rows["backend"] !== undefined);
 
   // And the mirror, so neither assertion can pass by the panel simply being empty.
+  // The network tabs are the CLAIM view's, the panel is the STATUS view's, so the tab
+  // click needs the claim view back. Reading the rows does not: panelRows() reads the DOM
+  // rather than the screen, and the panel stays mounted once it is open.
+  await showView(page, "claim");
   await page.getByRole("tab", { name: /^TAZ/ }).click();
   await page.waitForTimeout(300);
   const tazRows = await panelRows();
@@ -665,7 +827,10 @@ async function checkCtazToggle(page, base) {
   ok("and the cTAZ-only rows are gone from it", tazRows["reserve"] === undefined, Object.keys(tazRows).join(", "));
   await ctazTab.click();
   await page.waitForTimeout(300);
+  await showView(page, "status");
   await page.getByTestId("panel-toggle").click();
+  // The claim below is driven through the claim view's own controls.
+  await showView(page, "claim");
 
   // A real claim on the feature net, through the button and the proof of work.
   const address = await freshAddress();
@@ -767,25 +932,26 @@ async function checkMobile(browser, base) {
     ok(`mobile ${label}: no horizontal overflow`, r.docW <= r.vw, `${r.docW} vs ${r.vw}${r.wide.length ? " :: " + r.wide.join(", ") : ""}`);
     ok(`mobile ${label}: nothing pinned covers a control`, r.covered.length === 0, r.covered.join(", "));
     ok(`mobile ${label}: tap targets reach 44px`, r.small.length === 0, r.small.join(", "));
-    // The contribute link is icon-only ONLY at this width (its label shows from
-    // 560px up, where the text-contrast check owns it). So its icon-contrast home
-    // is here: the named guard moved with the state, rather than being deleted
-    // when the desktop check lost the subject. Landing page only, both themes
-    // arrive via the caller's sweep.
+    // THE ICON-ONLY CONTROL'S 1.4.11 GUARD, AND ITS SUBJECT MOVED (the redesign's shell).
+    // This measured `a.contribute`, which was icon-only at this width and labelled above
+    // 560px. The approved design has no contribute link in the header at all: the source
+    // is a text link in the footer now, where the text-contrast check owns it. That leaves
+    // the THEME TOGGLE as the only icon-only control on the page, which is precisely what
+    // this guard is for, so it follows the state rather than being deleted with the old
+    // markup. Note what is NOT carried over: there is no `labelled` case any more, because
+    // this control is icon-only at every width by design.
     if (label.startsWith("/ ") || label === "/ ink" || label === "/ paper") {
       const icon = await page.evaluate(`(() => {
         ${COLOUR_LIB}
-        const el = [...document.querySelectorAll("a.contribute")].find((e) => e.getBoundingClientRect().width > 0);
+        const el = [...document.querySelectorAll("[data-testid=theme-toggle]")].find((e) => e.getBoundingClientRect().width > 0);
         if (!el) return { missing: true };
-        const lbl = el.querySelector(".contribute-label");
-        if (lbl && getComputedStyle(lbl).display !== "none") return { labelled: true };
         const ratio = ratioOf(getComputedStyle(el).color, el);
         return { ratio };
       })()`);
       ok(
-        `mobile ${label}: the contribute icon keeps 1.4.11 contrast`,
-        !icon.missing && !icon.labelled && icon.ratio != null && icon.ratio >= 3,
-        icon.missing ? "contribute link not found, so nothing was measured" : icon.labelled ? "label visible at mobile width, state contract broken" : `glyph ${icon.ratio?.toFixed(2)}:1`,
+        `mobile ${label}: the icon-only control keeps 1.4.11 contrast`,
+        !icon.missing && icon.ratio != null && icon.ratio >= 3,
+        icon.missing ? "theme toggle not found, so nothing was measured" : `glyph ${icon.ratio?.toFixed(2)}:1`,
       );
     }
   };
@@ -805,6 +971,7 @@ async function checkMobile(browser, base) {
 
     // The panel open, which is the tallest the home page gets before a claim.
     await page.goto(base, { waitUntil: "networkidle", timeout: 60_000 });
+    await showView(page, "status");
     await page.getByTestId("panel-toggle").click();
     await audit("/ panel open");
 
@@ -812,6 +979,7 @@ async function checkMobile(browser, base) {
     // a phone because it is the state a claimant is actually looking at, and it is
     // the longest card on the page.
     await page.getByTestId("panel-toggle").click();
+    await showView(page, "claim");
     await page.getByRole("button", { name: "Make a throwaway address and key" }).first().click();
     await page
       .waitForFunction(() => (document.querySelector("[data-testid=address-input]")?.value ?? "").length > 100, null, { timeout: 20_000 })
@@ -838,7 +1006,7 @@ async function check404(page, base) {
 }
 
 const browser = await chromium.launch();
-const ctx = await browser.newContext({ permissions: ["clipboard-read", "clipboard-write"] });
+const ctx = await browser.newContext({ viewport: DESKTOP, permissions: ["clipboard-read", "clipboard-write"] });
 const page = await ctx.newPage();
 
 // Anything the page logs as an error, or any uncaught exception, fails the run.
@@ -858,10 +1026,13 @@ try {
 
   // Visual + a11y checks before the claim flow, while the home page is loaded.
   await checkAppearance(page);
+  await checkFooterReachable(browser);
   // WHERE THE TAZ COMES FROM follows the status (R-39). Under this stack there is no
   // miner heartbeat, so the sentence has to be the not-mining one; the three
   // contradictory fixed sentences must be gone from the rendered page.
   {
+    // Both tools sit behind the Tools view now, so open that before driving them.
+    await showView(page, "tools");
     // The sentence lives in the "How it works" view; open it the way a visitor does.
     await page.getByRole("button", { name: "How it works" }).click();
     await page.locator("#tool-about").waitFor({ timeout: 5000 });
@@ -896,6 +1067,9 @@ try {
     await page.getByRole("button", { name: "Balance lookup" }).click();
   }
   await checkMinerPanel(page);
+  // The claim flow below drives input.input and button.btn-primary, which belong to the
+  // claim view. Leave the nav where the rest of this file expects to find things.
+  await showView(page, "claim");
 
   // THE PROOF OF WORK IS EXPLAINED BEFORE IT RUNS, ESTIMATED WHILE IT RUNS, AND CAN BE
   // ABANDONED; A BAD CHECKSUM COSTS NO SOLVE (risk register II, R-38).

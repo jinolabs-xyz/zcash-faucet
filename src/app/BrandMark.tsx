@@ -13,8 +13,14 @@
  * TRADEMARK. The mark belongs to the Electric Coin Company and third-party use is
  * governed by the Zcash Foundation's trademark policy. That policy allows a
  * community project to display it to show it works with Zcash, provided the project
- * does not hold itself out as official or endorsed. This faucet is neither, and the
- * footer says so beside a link to z.cash.
+ * does not hold itself out as official or endorsed. This faucet is neither, and /terms
+ * says so in as many words: "It is an independent community project. It is not an official
+ * Zcash service and is not affiliated with, sponsored by, or endorsed by the Electric Coin
+ * Company", with a "Trademarks and licence" section naming ECC and linking the policy.
+ *
+ * It used to say the FOOTER carried this beside a link to z.cash. Both halves of that are
+ * gone as of the redesign: the footer line moved to /terms and the masthead is one link
+ * home. The condition is met by the statement, not by the hyperlink (CTO, 2026-09-15).
  *
  * `currentColor` rather than the upstream #231f20, so one file serves both themes.
  * Geometry is untouched.
