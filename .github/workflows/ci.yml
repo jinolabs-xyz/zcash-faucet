@@ -422,6 +422,19 @@ jobs:
           echo "pwhash=..." > "$ctx/deploy/z3-stack/config/testnet/zallet.toml"
           echo "binary" > "$ctx/deploy/z3/miner/target/release/zcash-testnet-miner"
           echo "x" > "$ctx/deploy/z3/.some-dotfile"
+          # THE R-10 EXCLUSIONS, one planted file each (#545 review): the ops scripts, the
+          # local doubles, the docs, the design sources, the workflows, the team notes and
+          # every test spelling. A grep for the six .dockerignore lines proved nothing
+          # about matching (#369); a trailing !scripts/** would have kept it green.
+          mkdir -p "$ctx/scripts" "$ctx/docs" "$ctx/design" "$ctx/.github/workflows" "$ctx/.team" "$ctx/src/lib"
+          echo "double" > "$ctx/scripts/fake-zallet.mjs"
+          echo "doc" > "$ctx/docs/OPERATIONS.md"
+          echo "html" > "$ctx/design/faucet-architecture.html"
+          echo "yaml" > "$ctx/.github/workflows/ci.yml"
+          echo "notes" > "$ctx/.team/board.md"
+          echo "test" > "$ctx/src/lib/pow.test.ts"
+          echo "test" > "$ctx/src/lib/page.test.tsx"
+          echo "test" > "$ctx/scripts/probe.test.mjs"
           printf 'FROM busybox\nCOPY . /ctx\nRUN find /ctx -type f | sort > /ctx.list\n' > "$ctx/Dockerfile"
           docker build -q -t dockerignore-probe "$ctx" >/dev/null
           got="$(docker run --rm --entrypoint sh dockerignore-probe -c 'grep -vE "^/ctx/(Dockerfile|\.dockerignore)$" /ctx.list' || true)"
@@ -440,8 +453,9 @@ jobs:
             echo "THE BUILD CONTEXT LET THESE THROUGH (only the example is allowed):"
             printf '%s\n' "$got" | sed 's/^/  /'
             echo
-            echo "Every one of these is a copy of the secrets file under another name."
-            echo "Add the missing shape to .dockerignore ABOVE the !**/faucet.env.example negation."
+            echo "Each is a secrets-file spelling or an R-10 exclusion (scripts, docs, design, .github,"
+            echo ".team, *.test.*). Add the missing rule to .dockerignore ABOVE the !**/faucet.env.example"
+            echo "negation, and check nothing after it negates the rule back."
             exit 1
           fi
           echo "context admits only $want"
@@ -521,13 +535,34 @@ jobs:
       # is what every existing box has. The read-only probe touches a path node OWNS
       # (/home/node): touching /app proved nothing, since root-owned 0755 refuses uid 1000
       # with or without the flag (review of #545).
-      - name: the image drops root, keeps no capability, and can still write its ledger
+      # Every run flag comes from the committed compose file, resolved by compose itself
+      # (the x-common anchor merge included), never typed here: a probe that passes
+      # --read-only and --cap-drop ALL on its own command line and then asserts rootfs-ro
+      # and caps=0 can never go red for a change to this repo (#545 review). Deleting
+      # security_opt from the anchor now turns nnp=0 and fails the job. And the capability
+      # line to read is CapBnd, not CapEff: setpriv clears the effective set on its own
+      # when it drops uid, so CapEff=0 is true of any drop-privileges entrypoint whether or
+      # not cap_drop is in the compose file. The bounding set is what carries cap_drop and
+      # cap_add: 0xc9 is exactly CHOWN, FOWNER, SETGID, SETUID and nothing else.
+      - name: under the flags the compose file declares, the image drops root, bounds itself to the four capabilities, and can still write its ledger
         run: |
           set -uo pipefail
+          : > deploy/z3/faucet.env   # env_file is required; an empty one resolves the config
+          flags="$(docker compose -f deploy/z3/docker-compose.faucet.yml config --format json | python3 -c '
+          import json, sys
+          s = json.load(sys.stdin)["services"]["faucet"]
+          a = ["--read-only"] if s.get("read_only") else []
+          for t in s.get("tmpfs") or []: a += ["--tmpfs", t]
+          for c in s.get("cap_drop") or []: a += ["--cap-drop", c]
+          for c in s.get("cap_add") or []: a += ["--cap-add", c]
+          for o in s.get("security_opt") or []: a += ["--security-opt", o]
+          print(" ".join(a))')"
+          rm -f deploy/z3/faucet.env
+          [ -n "$flags" ] || { echo "could not resolve the faucet service from the compose file"; exit 1; }
+          echo "compose says: $flags"
           docker volume create r10 >/dev/null
           docker run --rm -v r10:/app/data --entrypoint sh faucet-ci-check:${{ github.sha }} -c 'touch /app/data/faucet.db && chown 0:0 /app/data/faucet.db'
-          out="$(docker run --rm --read-only --tmpfs /tmp --tmpfs /app/.next/cache --cap-drop ALL --cap-add CHOWN --cap-add FOWNER --cap-add SETUID --cap-add SETGID --security-opt no-new-privileges:true \
-                 -v r10:/app/data faucet-ci-check:${{ github.sha }} sh -c 'echo "uid=$(id -u) caps=$(grep ^CapEff /proc/self/status | cut -f2) nnp=$(grep ^NoNewPrivs /proc/self/status | cut -f2) owner=$(stat -c %u /app/data/faucet.db)"; touch /app/data/w && echo write-ok; touch /home/node/probe 2>/dev/null && echo ROOTFS-WRITABLE || echo rootfs-ro')"
+          out="$(docker run --rm $flags -v r10:/app/data faucet-ci-check:${{ github.sha }} sh -c 'echo "uid=$(id -u) caps=$(grep ^CapEff /proc/self/status | cut -f2) bnd=$(grep ^CapBnd /proc/self/status | cut -f2) nnp=$(grep ^NoNewPrivs /proc/self/status | cut -f2) owner=$(stat -c %u /app/data/faucet.db)"; touch /app/data/w && echo write-ok; touch /home/node/probe 2>/dev/null && echo ROOTFS-WRITABLE || echo rootfs-ro')"
           docker volume rm r10 >/dev/null
           printf '%s\n' "$out"
-          [ "$out" = "$(printf 'uid=1000 caps=0000000000000000 nnp=1 owner=1000\nwrite-ok\nrootfs-ro')" ] || { echo "the runtime is not the one the compose file promises"; exit 1; }
+          [ "$out" = "$(printf 'uid=1000 caps=0000000000000000 bnd=00000000000000c9 nnp=1 owner=1000\nwrite-ok\nrootfs-ro')" ] || { echo "the runtime is not the one the compose file promises"; exit 1; }

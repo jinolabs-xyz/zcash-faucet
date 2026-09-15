@@ -187,9 +187,12 @@ check "exits 2 (rolled back, did not ship)" "[ $rc -eq 2 ]"
 # it ran as root, and under the new compose file (no DAC_OVERRIDE) could not write a
 # node-owned ledger: live, "ready", and every claim SQLITE_READONLY. Measured in review.
 check "the rollback re-owns /app/data to root through the service (its caps, its image, chown as the entrypoint)" \
-  "grep -qE 'compose .*run --rm --no-deps --entrypoint chown faucet -R 0:0 /app/data' '$STUB_LOG'"
-check "and does so BEFORE the rolled-back image is started" \
-  "[ \"\$(grep -n 'entrypoint chown faucet' '$STUB_LOG' | head -1 | cut -d: -f1)\" -lt \"\$(grep -n 'up -d --no-build faucet' '$STUB_LOG' | tail -1 | cut -d: -f1)\" ]"
+  "grep -qE 'compose .*run --rm --no-deps --no-build -T --entrypoint chown faucet -R 0:0 /app/data' '$STUB_LOG'"
+# Two starts in this log, the failed image's and the rollback's; the re-own has to sit
+# between them. Counted rather than tail -1'd, so another start landing later in the
+# path cannot make this pass by accident (#545 review).
+check "and does so after the failed image's start and before the rolled-back image's" \
+  "[ \"\$(grep -c 'up -d --no-build faucet' '$STUB_LOG')\" -eq 2 ] && [ \"\$(sed -n '/entrypoint chown faucet/,\$p' '$STUB_LOG' | grep -c 'up -d --no-build faucet')\" -eq 1 ]"
 
 check "says the change did not ship" "grep -q 'did NOT ship' '$T/nr.log'"
 check "says live but never ready" "grep -q 'never became ready' '$T/nr.log'"

@@ -77,9 +77,11 @@ for `/tmp` and `.next/cache`, drops every capability and adds back the four the
 hand-off needs (they stay in the bounding set, and `no-new-privileges` on the
 service is what keeps a process from ever getting them back), and the build context leaves out the ops scripts, the test
 doubles, the tests and the docs, with devDependencies pruned before the run
-stage. The CI `image` job runs the built image under those exact flags and
-fails unless the process is uid 1000 with no effective capability on a
-read-only root that can still write its ledger. What remains reachable from
+stage. The CI `image` job runs the built image under the flags it reads back
+from the compose file itself (`docker compose config`, so the anchor counts)
+and fails unless the process is uid 1000 with `no_new_privs` set, a bounding
+set of exactly those four capabilities, and a read-only root that can still
+write its ledger. What remains reachable from
 inside: the ledger volume, the wallet's RPC over the z3 network with the
 credential in the environment, and the read-only miner heartbeat.
 

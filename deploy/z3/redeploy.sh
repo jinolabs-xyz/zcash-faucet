@@ -403,7 +403,7 @@ do_rollback() {
   # the previous image; an image with the entrypoint hands it to node again on start,
   # so this is right in both directions. Best effort: a failure here is logged and the
   # rollback proceeds, since a stuck rollback is the worse outcome.
-  compose run --rm --no-deps --entrypoint chown faucet -R 0:0 /app/data 2>&1 | sed 's/^/    /' \
+  compose run --rm --no-deps --no-build -T --entrypoint chown faucet -R 0:0 /app/data 2>&1 | sed 's/^/    /' \
     || log "WARNING: could not re-own the ledger volume for the rolled-back image; if claims fail after this, run: docker run --rm -v zcash-faucet_faucet_data:/app/data $PREVIOUS_TAG chown -R 0:0 /app/data"
   compose up -d --no-build faucet || { log "ERROR: could not start the rolled-back image"; return 1; }
   # Liveness only: the previous build was serving, and if the node has since

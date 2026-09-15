@@ -126,6 +126,8 @@ check "and adds back only the four the root-to-node hand-off needs" \
   "[ \"\$(faucet_svc | grep -oE 'cap_add: \\[[A-Z, ]+\\]')\" = 'cap_add: [CHOWN, FOWNER, SETUID, SETGID]' ]"
 check "and mounts a tmpfs where Next and node write, so read-only is not a boot failure" \
   "faucet_svc | grep -q '^      - /app/.next/cache' && faucet_svc | grep -q '^      - /tmp'"
+check "and inherits no-new-privileges from the shared anchor, so a child cannot regain what setpriv gave up" \
+  "faucet_svc | grep -q '^    <<: \\*common' && awk '/^x-common:/{f=1} /^services:/{f=0} f' \"\$COMPOSE_F\" | grep -q 'security_opt: \\[no-new-privileges:true\\]'"
 check "the Dockerfile's entrypoint is the script that drops root, and node is still the command" \
   "grep -q '^ENTRYPOINT \\[\"/app/docker-entrypoint.sh\"\\]' '$REPO/Dockerfile' && grep -q '^CMD \\[\"node\"' '$REPO/Dockerfile' && grep -q 'exec setpriv --reuid=node --regid=node' '$REPO/docker-entrypoint.sh'"
 check "and the build stage prunes devDependencies before the run stage copies it" \
@@ -133,7 +135,9 @@ check "and the build stage prunes devDependencies before the run stage copies it
 check "the build context leaves out the ops scripts, the harnesses, the tests and the docs" \
   "( for p in deploy scripts docs design .github '**/*.test.ts' '**/*.test.mjs'; do grep -qxF \"\$p\" '$REPO/.dockerignore' || exit 1; done )"
 check "and the CI image job proves the runtime shape rather than assuming it" \
-  "grep -q 'uid=1000 caps=0000000000000000 nnp=1 owner=1000' '$CIWF' && grep -q 'touch /home/node/probe' '$CIWF'"
+  "grep -q 'uid=1000 caps=0000000000000000 bnd=00000000000000c9 nnp=1 owner=1000' '$CIWF' && grep -q 'touch /home/node/probe' '$CIWF'"
+check "and takes its run flags from the compose file, so the probe cannot supply what it asserts" \
+  "grep -q 'docker compose -f deploy/z3/docker-compose.faucet.yml config --format json' '$CIWF' && grep -q 'docker run --rm \$flags -v r10:/app/data' '$CIWF' && ! grep -q 'docker run --rm --read-only' '$CIWF'"
 
 echo "== repo: the watchdog's node-lag limit is the miner's, for the miner's reason"
 # Both read zebra's clock-based estimatedheight. The miner's guard (sync.rs) explains why
