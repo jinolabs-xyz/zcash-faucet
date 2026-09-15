@@ -138,8 +138,13 @@ export class D1Driver implements DbDriver {
 
   async all<T = Row>(sql: string, params: SqlParam[]): Promise<T[]> {
     const { results } = await this.query(sql, params);
-    // No rows and a proxy that returned no `results` key are the same answer here: an
-    // empty series. A missing day is already zero-filled by the caller.
-    return (results as T[] | undefined) ?? [];
+    // NO ROWS AND NO ANSWER ARE DIFFERENT ANSWERS. A SELECT that matched nothing comes
+    // back as `results: []`; a reply with no `results` at all is malformed, and taking
+    // it for an empty set would hand the caller a zero-filled month as fact. `get`'s
+    // caller already turns its `undefined` into null - unknown, the same rule the
+    // balance follows - and this throws so that a series does too, through countDrips'
+    // catch, rather than reading as a quiet thirty days of nothing.
+    if (!Array.isArray(results)) throw new Error("D1 proxy returned no results array");
+    return results as T[];
   }
 }

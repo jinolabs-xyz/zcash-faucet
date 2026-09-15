@@ -622,7 +622,12 @@ try {
       byDay.every((d) => JSON.stringify(Object.keys(d).sort()) === '["day","sent"]' && /^\d{4}-\d{2}-\d{2}$/.test(d.day) && Number.isInteger(d.sent) && d.sent >= 0) &&
       byDay.every((d, i) => i === 0 || Date.parse(`${d.day}T00:00:00Z`) - Date.parse(`${byDay[i - 1].day}T00:00:00Z`) === 86_400_000) &&
       [dayBefore, dayAfter].includes(byDay[29].day) &&
-      byDay[29].sent >= 1 &&
+      // The last TWO days, not today alone. If the run crosses UTC midnight between the
+      // claim and this read, the drip is counted on the day that has just become
+      // yesterday, and an assertion on byDay[29] alone would go red for the clock rather
+      // than for the code - the same flake the day labels above are read either side of
+      // the request to avoid.
+      byDay[28].sent + byDay[29].sent >= 1 &&
       byDay.reduce((n, d) => n + d.sent, 0) === dripStatus.last30d,
     JSON.stringify({ len: byDay.length, first: byDay[0], last: byDay[29], last30d: dripStatus?.last30d }));
 

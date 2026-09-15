@@ -425,8 +425,10 @@ export async function countDrips(nowMs: number, network: DripNetwork = "taz"): P
 async function seedDripDays(nowMs: number): Promise<void> {
   const any = await driver().get<{ n: number }>(DRIP_ANY_SQL, []);
   if (any && Number(any.n) > 0) return;
-  for (let back = 2; back >= 0; back -= 1) {
-    const day = utcDay(nowMs - back * 86_400_000);
+  // Retention keeps ~25 hours, so the survivors span at most three UTC days - through
+  // the same window helper the counter and the series use, so there is no second copy
+  // of "how a UTC day is counted back" left in this file.
+  for (const day of utcDayWindow(nowMs, 3)) {
     const startSec = Math.floor(Date.parse(`${day}T00:00:00Z`) / 1000);
     const r = await driver().get<{ n: number }>(
       `SELECT COUNT(*) AS n FROM claims WHERE status = 'sent' AND created_at >= ? AND created_at < ?`,
