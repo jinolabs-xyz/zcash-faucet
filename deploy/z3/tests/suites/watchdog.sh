@@ -1170,6 +1170,12 @@ check "still parks, because nothing may start the miner onto this chain" "[ -f '
 check "still pages" "grep -q '200 blocks AHEAD' '$T/alerts.log'"
 check "calls the cause unexplained" "grep -q 'unexplained' '$T/alerts.log'"
 check "and does NOT claim our miner did it" "! grep -q 'most likely ours' '$T/alerts.log'"
+# THE ABSENCE HALF, which the active case cannot give me: with the unit inactive there is
+# nothing to stop, so telling a human to stop it first would send them to a command that does
+# nothing while the real instruction sits below it. My own mutation of the active case proved
+# the sentence appears when it should; only this proves it stays away when it should not.
+check "and does not tell anyone to stop a miner that is already stopped" \
+  "! grep -q 'still ACTIVE and extending' '$T/alerts.log'"
 
 echo "== watchdog: a park marker that cannot be written is said plainly, not papered over"
 wd_fork_env
