@@ -10,6 +10,6 @@
     "schema:remote": "wrangler d1 execute zcash-faucet-db --remote --file schema.sql"
   },
   "devDependencies": {
-    "wrangler": "^4.0.0"
+    "wrangler": "^4.131.1"
   }
 }
