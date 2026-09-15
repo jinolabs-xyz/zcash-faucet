@@ -1,0 +1,372 @@
+{
+  "uptimeSeconds": 3535,
+  "network": "testnet",
+  "dripTaz": 0.1,
+  "cooldownSeconds": 86400,
+  "sender": "zallet",
+  "challenge": "pow",
+  "balanceTaz": 4506.871133,
+  "empty": false,
+  "donationAddress": "utest17rnhex9h0grncus4ax40w2xkmvhz843mvp6c2sp2lcvnup85t9c7n806z099g0hkktx9rgy6cd4z68xthzp5tcz09gvlw4d4m6ynmm0qgj2svdsmw3s6f3d63uur5gyr57kdvnj47gxzsqcc83h6n56gxagen9len4e2dd5rkd36r0s04k56q0zy0gqk0evv06qt9llsqtjsuv2xkgd",
+  "miningAddress": "tmUiVxo1bbZLP5z6KYfM4dh3PcX5wkd7on8",
+  "maintenanceAddress": "u1qj7c2kr4ygv6cn0u5t5gd2kna9q48afg4hwx3reql2fhqmdt6v2pvztcy8xmmklnanlzev7vflxzn72v7eu3vgvj7c9sjwvjkhtecfj0cvryn95cyr9sana9vs07yftgeemrv9uckasjaju4wgsy69u0t6c98cqqtsu3cpmxdyc39qaa",
+  "queueDepth": 0,
+  "sends": {
+    "state": "unknown",
+    "ok": 0,
+    "failed": 0,
+    "unknown": 0,
+    "refused": 0,
+    "reason": "only 0 decided send(s) in the last 15 min, too few to judge"
+  },
+  "drips": {
+    "allTime": 187,
+    "last7d": 74,
+    "last30d": 148,
+    "byDay": [
+      {
+        "day": "2026-08-17",
+        "sent": 6
+      },
+      {
+        "day": "2026-08-18",
+        "sent": 2
+      },
+      {
+        "day": "2026-08-19",
+        "sent": 3
+      },
+      {
+        "day": "2026-08-20",
+        "sent": 4
+      },
+      {
+        "day": "2026-08-21",
+        "sent": 4
+      },
+      {
+        "day": "2026-08-22",
+        "sent": 2
+      },
+      {
+        "day": "2026-08-23",
+        "sent": 3
+      },
+      {
+        "day": "2026-08-24",
+        "sent": 5
+      },
+      {
+        "day": "2026-08-25",
+        "sent": 2
+      },
+      {
+        "day": "2026-08-26",
+        "sent": 5
+      },
+      {
+        "day": "2026-08-27",
+        "sent": 0
+      },
+      {
+        "day": "2026-08-28",
+        "sent": 0
+      },
+      {
+        "day": "2026-08-29",
+        "sent": 0
+      },
+      {
+        "day": "2026-08-30",
+        "sent": 4
+      },
+      {
+        "day": "2026-08-31",
+        "sent": 3
+      },
+      {
+        "day": "2026-09-01",
+        "sent": 4
+      },
+      {
+        "day": "2026-09-02",
+        "sent": 2
+      },
+      {
+        "day": "2026-09-03",
+        "sent": 1
+      },
+      {
+        "day": "2026-09-04",
+        "sent": 4
+      },
+      {
+        "day": "2026-09-05",
+        "sent": 3
+      },
+      {
+        "day": "2026-09-06",
+        "sent": 3
+      },
+      {
+        "day": "2026-09-07",
+        "sent": 5
+      },
+      {
+        "day": "2026-09-08",
+        "sent": 9
+      },
+      {
+        "day": "2026-09-09",
+        "sent": 10
+      },
+      {
+        "day": "2026-09-10",
+        "sent": 11
+      },
+      {
+        "day": "2026-09-11",
+        "sent": 13
+      },
+      {
+        "day": "2026-09-12",
+        "sent": 15
+      },
+      {
+        "day": "2026-09-13",
+        "sent": 8
+      },
+      {
+        "day": "2026-09-14",
+        "sent": 10
+      },
+      {
+        "day": "2026-09-15",
+        "sent": 7
+      }
+    ]
+  },
+  "backend": {
+    "endpoint": "https://testnet.zec.rocks:443",
+    "network": "testnet",
+    "reachable": true,
+    "detail": "HTTP 200",
+    "tried": [
+      {
+        "endpoint": "https://testnet.zec.rocks:443",
+        "reachable": true,
+        "detail": "HTTP 200"
+      }
+    ]
+  },
+  "box": {
+    "state": "ok",
+    "minerUnit": "inactive"
+  },
+  "node": {
+    "ready": true,
+    "syncPercent": 100,
+    "height": 4351175,
+    "nodeHeight": 4351175,
+    "externalHeight": 4351174,
+    "frozen": false,
+    "behind": false,
+    "tipStalledMs": 0,
+    "networkQuiet": false,
+    "shield": {
+      "state": "safe",
+      "nodeHeight": 4351175,
+      "externalHeight": 4351174,
+      "lag": -1,
+      "reason": "our node is 1 blocks AHEAD of the independent reference. Normal for a node that mines, and safe for an expiry height because ahead cannot be stale. It is not evidence that we agree with the network, which height alone cannot show"
+    },
+    "chain": {
+      "state": "cannot-verify",
+      "reason": "a consensus branch id is missing, so whether we share rules is unestablished"
+    },
+    "canBuildTx": true
+  },
+  "miner": {
+    "beatAgoSeconds": 22748,
+    "templateAgoSeconds": 22754,
+    "lastTemplateHeight": 4349604,
+    "mode": "submit",
+    "lastErrorStage": null,
+    "consecutiveErrors": 0,
+    "solvedCount": 69,
+    "submittedAccepted": 40,
+    "submittedRejected": 29,
+    "solvedAgoSeconds": 22765.344,
+    "nodeLag": 23,
+    "waitingAgoSeconds": null,
+    "waitingReason": null,
+    "state": "not-writing",
+    "active": false
+  },
+  "reserve": {
+    "targetTaz": 1000,
+    "lowTaz": 500,
+    "refilling": false,
+    "spendableTaz": 4506.871133,
+    "shieldCoinbase": true,
+    "blindTicks": 0,
+    "emptySweeps": 0,
+    "forbiddenTicks": 0,
+    "shieldRefusals": 0,
+    "lastRefusal": null,
+    "remainingUTXOs": null,
+    "harvesting": false,
+    "stepInFlight": false,
+    "movedWithoutCount": 0,
+    "harvestAgeSeconds": 3533,
+    "harvestMinUTXOs": 50,
+    "harvestIntervalSeconds": 3600,
+    "failedSteps": 1,
+    "lastFailure": {
+      "outcome": "waiting",
+      "reason": "zallet RPC z_shieldcoinbase: Failed to propose shielding transaction: Insufficient balance (have 0, need 10000 including fee) (code -4)"
+    }
+  },
+  "ctaz": {
+    "enabled": true,
+    "readiness": "cannot-verify",
+    "servable": false,
+    "height": null,
+    "roundLag": null,
+    "finalizers": null,
+    "ageSeconds": null,
+    "syncPercent": null,
+    "blocks": null,
+    "tip": null,
+    "source": "file",
+    "dripZat": "50000000",
+    "drips": {
+      "allTime": 2,
+      "last7d": 0,
+      "last30d": 0,
+      "byDay": [
+        {
+          "day": "2026-08-17",
+          "sent": 0
+        },
+        {
+          "day": "2026-08-18",
+          "sent": 0
+        },
+        {
+          "day": "2026-08-19",
+          "sent": 0
+        },
+        {
+          "day": "2026-08-20",
+          "sent": 0
+        },
+        {
+          "day": "2026-08-21",
+          "sent": 0
+        },
+        {
+          "day": "2026-08-22",
+          "sent": 0
+        },
+        {
+          "day": "2026-08-23",
+          "sent": 0
+        },
+        {
+          "day": "2026-08-24",
+          "sent": 0
+        },
+        {
+          "day": "2026-08-25",
+          "sent": 0
+        },
+        {
+          "day": "2026-08-26",
+          "sent": 0
+        },
+        {
+          "day": "2026-08-27",
+          "sent": 0
+        },
+        {
+          "day": "2026-08-28",
+          "sent": 0
+        },
+        {
+          "day": "2026-08-29",
+          "sent": 0
+        },
+        {
+          "day": "2026-08-30",
+          "sent": 0
+        },
+        {
+          "day": "2026-08-31",
+          "sent": 0
+        },
+        {
+          "day": "2026-09-01",
+          "sent": 0
+        },
+        {
+          "day": "2026-09-02",
+          "sent": 0
+        },
+        {
+          "day": "2026-09-03",
+          "sent": 0
+        },
+        {
+          "day": "2026-09-04",
+          "sent": 0
+        },
+        {
+          "day": "2026-09-05",
+          "sent": 0
+        },
+        {
+          "day": "2026-09-06",
+          "sent": 0
+        },
+        {
+          "day": "2026-09-07",
+          "sent": 0
+        },
+        {
+          "day": "2026-09-08",
+          "sent": 0
+        },
+        {
+          "day": "2026-09-09",
+          "sent": 0
+        },
+        {
+          "day": "2026-09-10",
+          "sent": 0
+        },
+        {
+          "day": "2026-09-11",
+          "sent": 0
+        },
+        {
+          "day": "2026-09-12",
+          "sent": 0
+        },
+        {
+          "day": "2026-09-13",
+          "sent": 0
+        },
+        {
+          "day": "2026-09-14",
+          "sent": 0
+        },
+        {
+          "day": "2026-09-15",
+          "sent": 0
+        }
+      ]
+    },
+    "reserve": "unknown"
+  }
+}

@@ -6,13 +6,15 @@ import { CSSProperties, useCallback, useEffect, useRef, useState } from "react";
 import "./redesign-tokens.css";
 import "./redesign-shell.css";
 import "./redesign-hero.css";
+import "./redesign-views.css";
 import { BrandMark } from "./BrandMark";
+import { StatusCards } from "@/components/StatusCards";
+import { AnalyticsCards } from "@/components/AnalyticsCards";
+import { ToolsCards } from "@/components/ToolsCards";
 import Link from "next/link";
 import { Sparkline, type DripDay } from "./Sparkline";
 import { Mascot } from "@/components/Mascot";
-import { reserveRows } from "@/lib/reserveLabel";
-import { minerChip, minerRow, minerErrorRow, minerIsBad, readingFromStatus } from "@/lib/minerLabel";
-import { publicBoxRow, publicBoxChip, publicBoxIsBad, type PublicBox } from "@/lib/boxLabel";
+import type { PublicBox } from "@/lib/boxLabel";
 import { syncLabel, syncBarWidth } from "@/lib/syncLabel";
 import { networkFacts, formatAmount, type FaucetNetwork } from "@/lib/network";
 import { incomeSentence } from "@/lib/incomeSentence";
@@ -330,7 +332,6 @@ export default function Home() {
   const [phase, setPhase] = useState<Phase>("checking");
   const [addr, setAddr] = useState("");
   const [touched, setTouched] = useState(false);
-  const [panel, setPanel] = useState(false);
   // PAPER IS THE DEFAULT NOW (the approved redesign is a light design). A visitor who
   // has chosen a theme keeps it: the stored key is unchanged, so only people who never
   // toggled see the new default.
@@ -391,7 +392,6 @@ export default function Home() {
   // one, starts over, or the fault ends: a sentence about a hold nobody made must not
   // outlive the hold it was about (round 3).
   const [holdDropped, setHoldDropped] = useState(false);
-  const [tool, setTool] = useState<"lookup" | "about" | null>(null);
   const [lookupAddr, setLookupAddr] = useState("");
   const [lookupRes, setLookupRes] = useState("");
   const [elapsed, setElapsed] = useState(0);
@@ -401,8 +401,6 @@ export default function Home() {
   // Set while a solve is running; calling it abandons the solve and the claim (R-38).
   const powCancel = useRef<(() => void) | null>(null);
   const [genErr, setGenErr] = useState("");
-  // Which lightwalletd we are talking to. Asked for by name in community feedback.
-  const [indexer, setIndexer] = useState<{ vendor: string; version: string } | null>(null);
   const [txSeen, setTxSeen] = useState<{ known: boolean | null; confirmations: number | null } | null>(null);
   // A claim held while the node syncs. Persisted so a reload (or coming back
   // tomorrow) keeps the place in line; fires on its own when the node is ready.
@@ -488,22 +486,6 @@ export default function Home() {
     load();
     const iv = setInterval(load, 4000);
     return () => { alive = false; clearInterval(iv); };
-  }, []);
-
-  // Fetched ONCE, deliberately not on the 4s poll. A server version does not
-  // change while someone has the page open, and /api/network costs a gRPC
-  // round-trip per call, so polling it would spend a request every four seconds
-  // to re-learn a constant. Failure is silent: no label is better than a wrong
-  // one, and nothing else on the page depends on this.
-  useEffect(() => {
-    let alive = true;
-    fetch("/api/network")
-      .then((r) => r.json())
-      .then((n) => {
-        if (alive && n?.ok && n.vendor && n.version) setIndexer({ vendor: n.vendor, version: n.version });
-      })
-      .catch(() => {});
-    return () => { alive = false; };
   }, []);
 
   useEffect(() => {
@@ -944,41 +926,8 @@ export default function Home() {
   // tip over an external tip that the node stopped following, and it was the strip's
   // reading for the whole of 2026-09-07. Frozen says frozen, and the sync cell says how
   // far behind rather than how close.
-  const walletDown = status != null && status.sender === "zallet" && !node;
-  // "ready" is the server's readiness word and it stays true while the freshness gate
-  // refuses (a 40-block lag, or an oracle it cannot ask); the card names the node in
-  // both, so the strip must not say ready beside it (round 3).
-  const nodeWord =
-    status == null ? "–"
-    : walletDown ? "no answer"
-    : node?.frozen ? "frozen"
-    : node?.canBuildTx === false ? (node.shield?.state === "unsafe" ? "behind" : "unverified")
-    : node?.ready ? "ready"
-    : "syncing";
-  const behindText =
-    node?.frozen
-      ? node.behind && status && nodeGap(status) != null
-        ? `${num(nodeGap(status))} behind`
-        : "stalled"
-      : node?.canBuildTx === false
-        ? (node.shield?.state === "unsafe" && node.shield.lag != null ? `${num(node.shield.lag)} behind` : "unverified")
-      : walletDown ? "–" : null;
-  const syncCell = behindText ?? syncText;
   const height = node?.height ?? null;
   const nodeHeight = node?.nodeHeight ?? null;
-  // Keeps null rather than ?? 0. The default erased the difference between "the
-  // wallet says zero" and "we have not asked", one line before the only consumer,
-  // so no guard downstream could recover it.
-  const balance = status?.balanceTaz ?? null;
-  // Derived once. A missing miner block reads as cannot-verify rather than as off,
-  // which is what an older deploy answering the previous shape will produce.
-  const miner = readingFromStatus(status?.miner);
-  const box = status?.box ?? null;
-  // systemd's word for the miner unit rides along on the box report. It is what lets a
-  // miner someone stopped on purpose read "off" instead of the NO HEARTBEAT alarm the
-  // heartbeat alone can produce (2026-09-08: red for hours over a parked unit).
-  const minerUnit = box?.minerUnit ?? null;
-  const minerError = minerErrorRow(miner, minerUnit);
   const reserve = status?.reserve;
   const donation = status?.donationAddress?.trim() ?? "";
   // A refill running while we can still serve must read as healthy, not as an
@@ -1071,7 +1020,6 @@ export default function Home() {
       )
     : "Faucet ready.";
 
-  const pad = "clamp(16px,4vw,26px)";
   const kicker: CSSProperties = { fontFamily: "var(--mono)", fontSize: 10, fontWeight: 700, letterSpacing: ".14em", textTransform: "uppercase", color: "var(--color-accent-text)" };
   const rowLine: CSSProperties = { display: "flex", justifyContent: "space-between", gap: 12, padding: "8px 0", borderBottom: "1px solid var(--color-divider)", fontFamily: "var(--mono)", fontSize: 11.5 };
 
@@ -1792,218 +1740,35 @@ export default function Home() {
           </div>
         </section>
 
-        <section className="view legacy-measure" data-view="status" data-testid="view-status" aria-label="Status" hidden={view !== "status"}>
-
-      <div data-testid="status-strip" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "4px 18px", padding: `9px ${pad}`, borderBottom: "1px solid var(--color-divider)", fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".05em", color: muted(55) }}>
-        {[
-          { k: "node", v: nodeWord },
-          { k: "sync", v: syncCell ?? "–" },
-          { k: "height", v: num(height) },
-          { k: "balance", v: balance != null ? balance.toFixed(1) + " TAZ" : status == null ? "–" : "0 TAZ" },
-          // Terse here, per the user. "off" is only available when the heartbeat has
-          // stopped AND systemd says the unit is inactive, i.e. someone stopped it; a
-          // stalled miner is running and failing and must never read as off.
-          { k: "miner", v: status == null ? "–" : minerChip(miner, minerUnit) },
-          // Only when it is NOT complete. A permanent "box ok" would spend a slot on
-          // the terse strip telling an operator what they already assume, but a box
-          // that is missing units has to be visible without opening the panel,
-          // because the panel is a click nobody makes when they think all is well.
-          ...(box && publicBoxChip(box) ? [{ k: "box", v: publicBoxChip(box)! }] : []),
-          // "indexer", never "node". This is the lightwalletd we query, not the
-          // Zcash node behind it, and calling it the node version would be wrong
-          // in front of the people who asked for it. Our own zebra version is not
-          // reachable from the app at all: everything goes via zallet or
-          // lightwalletd, so it needs a data path we do not have (#193).
-          ...(indexer ? [{ k: "indexer", v: `${indexer.vendor} ${indexer.version}` }] : []),
-          // Only while it is NOT servable, same rule as the box chip. A permanent
-          // "ctaz ready" would spend a slot on the terse strip saying nothing, but a
-          // feature net that cannot pay has to be visible without opening the panel.
-          ...(ctaz && !ctaz.servable ? [{ k: "ctaz", v: ctaz.readiness }] : []),
-          ...(reserve
-            ? [
-                {
-                  k: "reserve",
-                  // "ok" would be a lie under the low mark with no refill running
-                  // (miner off), so that case reads "low" instead.
-                  v: refilling
-                    ? "topping up"
-                    : reserve.spendableTaz != null && reserve.spendableTaz < reserve.lowTaz
-                      ? "low"
-                      : "ok",
-                },
-              ]
-            : []),
-        ].map((it) => (
-          <span key={it.k} data-strip-key={it.k}>{it.k} <b data-testid="strip-value" style={{ color: "var(--color-text)", fontWeight: 700 }}>{it.v}</b></span>
-        ))}
-        {/* A bordered box, not bare text. With `padding: 0` this was a ghost button
-            with every visual cue removed, so it read as a label and nobody knew the
-            panel opened. The chevron alone was not enough: it is 8px of glyph doing
-            the work a control's whole shape should do. */}
-        <button
-          data-testid="panel-toggle"
-          className="btn btn-secondary btn-sm disclosure"
-          onClick={() => setPanel((p) => !p)}
-          aria-expanded={panel}
-          aria-controls="live-panel"
-          style={{ marginLeft: "auto" }}
-        >
-          {panel ? "Hide details" : "More details"}
-          <span aria-hidden="true" className="disclosure-caret">{panel ? "▲" : "▼"}</span>
-        </button>
-      </div>
-
-      {panel && (
-        <div id="live-panel" style={{ borderBottom: "2px solid var(--color-divider)", background: "var(--color-surface)", padding: `16px ${pad}` }}>
-          <div className="panel-grid">
-            {[
-              // Same rule as the header strip. The panel opens on a click, and nothing
-              // stops that click landing before the first status does.
-              // EVERY ROW DECLARES WHICH ASSET IT IS ABOUT, and the panel then shows only
-              // the selected one. Asked for directly: picking cTAZ and still reading TAZ's
-              // balance, miner and drip counts is how someone concludes the cTAZ wallet
-              // holds 1000 TAZ. Two assets in one grid is a mixing hazard, not a density
-              // win.
-              //
-              // "both" is for facts about the BOX rather than either chain - the integrity
-              // count and the lightwalletd backend serve whichever asset you are looking at,
-              // so hiding them behind a toggle would just make them harder to find.
-              // The parenthetical is the sync cell; skipped when it would only repeat the word
-              // ("unverified (unverified)") and trimmed when it ends with it ("behind (40)").
-              { net: "taz", k: "node", v: nodeWord + (nodeWord !== "ready" && syncCell && syncCell !== "–" && syncCell !== nodeWord ? " (" + syncCell.replace(new RegExp(` ${nodeWord}$`), "") + ")" : ""), bad: status != null && (walletDown || node?.ready === false || node?.canBuildTx === false) },
-              { net: "taz", k: "block height", v: num(height) + (nodeHeight ? " / " + num(nodeHeight) : "") },
-              { net: "taz", k: "wallet balance", v: status?.balanceTaz != null ? status.balanceTaz.toFixed(2) + " TAZ" : "–", bad: status?.empty === true },
-              // The detail belongs here, per the user: he asked that the miner's real
-              // state be knowable from More details.
-              { net: "taz", k: "miner", v: status == null ? "–" : minerRow(miner, minerUnit), bad: status != null && minerIsBad(miner, minerUnit) },
-              ...(status != null && minerError ? [{ net: "taz", k: "miner error", v: minerError, bad: true }] : []),
-              // The box's own integrity. Measured since #287 and never rendered until
-              // now: the endpoint knew two files were missing and the panel said
-              // nothing, so the one place a person looks did not carry it.
-              ...(box ? [{ net: "both", k: "box", v: publicBoxRow(box), bad: publicBoxIsBad(box) }] : []),
-              ...(reserve
-                ? [
-                    // Wording lives in reserveRows and is unit-tested, because
-                    // "257.2 / 1000" beside "idle" made a healthy faucet look broken.
-                    //
-                    // Only the refill line. reserveRows.reserve renders spendableTaz,
-                    // which the status route sets from THIS REQUEST'S balance read, so
-                    // it was the same number as "wallet balance" one row up, printed to
-                    // a different number of decimals. Two rows, one figure, and a
-                    // reader at 3am reasonably assumes two different quantities. If the
-                    // route ever sources them separately, bring the row back.
-                    ...(() => { const rr = reserveRows({ ...reserve, refilling }); return [{ net: "taz", k: "refill", v: rr.refill, bad: rr.refillBad }]; })(),
-                  ]
-                : []),
-              { net: "taz", k: "queue", v: (status?.queueDepth ?? 0) + " pending" },
-              // One line, per the standing rule. The legend lives in the KEY so the
-              // value stays short at any magnitude; "10 all time · 10 in 7d · 10 in
-              // 30d" wrapped the cell on first render. Same slash idiom as the block
-              // height row. An unreadable counter says unknown rather than rendering
-              // a zero that would read as "this faucet has never served anyone".
-              { net: "taz", k: "drips ever/7d/30d", v: status?.drips ? num(status.drips.allTime) + " / " + num(status.drips.last7d) + " / " + num(status.drips.last30d) : "unknown" },
-              { net: "both", k: "backend", v: status?.backend?.reachable ? "reachable" : "unreachable", bad: status != null && !status.backend?.reachable },
-              // The cTAZ dimension, one line per fact and every key naming its network,
-              // so no row here can be mistaken for one of the TAZ rows above it.
-              ...(ctaz
-                ? [
-                    {
-                      net: "ctaz",
-                      k: "node",
-                      // The gate's own word. Five states rather than a boolean, because
-                      // "cannot-verify" is a different instruction from "behind".
-                      v: ctaz.readiness + (ctaz.roundLag != null ? ` (round lag ${ctaz.roundLag})` : ""),
-                      bad: !ctaz.servable,
-                    },
-                    // The percent is its own row, next to the state and not folded into
-                    // it. "23% synced" and "cannot reach the node" must never render the
-                    // same, which is the whole reason the gate has five states and no
-                    // syncing state. Unknown says unknown rather than 0%.
-                    {
-                      net: "ctaz",
-                      k: "sync",
-                      v: ctaz.syncPercent != null
-                        ? ctaz.syncPercent.toFixed(1) + "%" +
-                          (ctaz.blocks != null && ctaz.tip != null ? ` (${num(ctaz.blocks)} of ${num(ctaz.tip)})` : "")
-                        : ctaz.source === "file"
-                          ? "unknown, the box's status file is stale or unreadable"
-                          : "unknown",
-                      // Not a fault. A syncing node is doing what it should, and cTAZ is
-                      // not being served yet either way.
-                      bad: false,
-                    },
-                    { net: "ctaz", k: "block height", v: num(ctaz.blocks ?? ctaz.height) + (ctaz.finalizers != null ? " · " + ctaz.finalizers + " finalizers" : "") },
-                    // The literal string from the response, rendered as given. Their RPC
-                    // surface has no shielded balance method, so this is an answer and
-                    // not a gap, and "0" here would be the balance ?? 0 bug all over
-                    // again on a wallet we have never been able to read.
-                    { net: "ctaz", k: "reserve", v: ctaz.reserve },
-                    { net: "ctaz", k: "drips ever/7d/30d", v: ctaz.drips ? num(ctaz.drips.allTime) + " / " + num(ctaz.drips.last7d) + " / " + num(ctaz.drips.last30d) : "unknown" },
-                  ]
-                : []),
-            ]
-              // The filter. A row survives if it is about the asset in front of you or
-              // about the box itself. The prefixes came off the cTAZ keys in the same
-              // change: "ctaz sync" was disambiguating against a TAZ row that is no
-              // longer on screen, and a redundant prefix on every key is noise.
-              .filter((r) => r.net === "both" || r.net === network)
-              .map((r) => (
-              // A bad row is marked in the VALUE, not with a badge or an icon: the grid
-              // is monospace k/v and anything else would need a column nothing else
-              // uses. Colour alone would fail anyone who cannot see it, so the marker
-              // carries the meaning and the colour only reinforces it.
-              <div key={r.k} data-panel-key={r.k} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, padding: "7px 0", borderBottom: "1px solid var(--color-divider)", fontFamily: "var(--mono)", fontSize: 11 }}>
-                <span style={{ color: muted(55) }}>{r.k}</span>
-                <span data-testid="panel-value" style={{ fontWeight: 700, textAlign: "right", color: r.bad ? "var(--color-empty)" : undefined }}>
-                  {r.bad ? <span aria-hidden="true">! </span> : null}
-                  {r.bad ? <span className="sr-only">needs attention: </span> : null}
-                  {r.v}
-                </span>
-              </div>
-            ))}
+        <section className="view" data-view="status" data-testid="view-status" aria-label="Status" hidden={view !== "status"}>
+          <div className="vhead">
+            <h2>Status</h2>
+            <p>What the node can prove right now, polled every 15 s. One word per state, and the details are for the operator.</p>
           </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginTop: 14 }}>
-            <span className="tag tag-outline">Own node, own wallet, shielded drips</span>
-            <span style={{ fontSize: 11.5, color: muted(55) }}>Numbers come straight off the node. Refreshes every few seconds.</span>
-          </div>
-        </div>
-      )}
-
+          <StatusCards status={status} network={network} />
         </section>
 
-        <section className="view legacy-measure" data-view="analytics" data-testid="view-analytics" aria-label="Usage analytics" hidden={view !== "analytics"}>
-          {/* S4 builds the four canvases here. Until then the view is not empty and
-              not a placeholder: the header strip is already a real reader of the
-              thirty-day series, and this says where the rest is going. */}
-          <p className="lede small">The thirty-day drip series is in the header strip. Charts land in a later slice.</p>
+        <section className="view" data-view="analytics" data-testid="view-analytics" aria-label="Usage analytics" hidden={view !== "analytics"}>
+          <div className="vhead">
+            <h2>Usage</h2>
+            <p>Aggregate counts by UTC day from <code className="mono">/api/status</code>. Nothing per user is collected, so nothing per user is shown.</p>
+          </div>
+          <AnalyticsCards status={status} />
         </section>
 
-        <section className="view legacy-measure" data-view="tools" data-testid="view-tools" aria-label="Tools" hidden={view !== "tools"}>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 16px", alignItems: "center" }}>
-          <button className="btn btn-ghost btn-sm" onClick={() => { setTool((t) => (t === "lookup" ? null : "lookup")); setLookupRes(""); }} aria-expanded={tool === "lookup"} aria-controls="tool-lookup" style={{ padding: 0 }}>Balance lookup</button>
-          <button className="btn btn-ghost btn-sm" onClick={() => setTool((t) => (t === "about" ? null : "about"))} aria-expanded={tool === "about"} aria-controls="tool-about" style={{ padding: 0 }}>How it works</button>
-        </div>
-
-        {tool === "lookup" && (
-          <div id="tool-lookup" style={{ border: "2px solid var(--color-divider)", padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
-            <label htmlFor="lk" style={{ ...kicker, color: muted(60) }}>Balance lookup</label>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-              <input id="lk" className="input" type="text" spellCheck={false} placeholder="any testnet address" value={lookupAddr} onChange={(e) => { setLookupAddr(e.target.value); setLookupRes(""); }} style={{ flex: "1 1 220px", minHeight: 44 }} />
-              <button className="btn btn-secondary btn-sm" onClick={doLookup} style={{ minHeight: 44 }}>Look up</button>
-            </div>
-            {lookupRes && <p style={{ margin: 0, fontFamily: "var(--mono)", fontSize: 12, lineHeight: 1.5 }}>{lookupRes}</p>}
+        <section className="view" data-view="tools" data-testid="view-tools" aria-label="Tools" hidden={view !== "tools"}>
+          <div className="vhead">
+            <h2>Tools</h2>
+            <p>A balance lookup for testnet addresses, and how the faucet is run.</p>
           </div>
-        )}
-
-        {tool === "about" && (
-          <div id="tool-about" style={{ border: "2px solid var(--color-divider)", padding: 14, display: "flex", flexDirection: "column", gap: 9 }}>
-            <span style={{ ...kicker, color: muted(60) }}>How it works</span>
-            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: muted(72) }}>This faucet runs its own node and wallet. {incomeFrom(status) ?? "It mines testnet blocks; what it hands out is mined, donated, or topped up by hand."} It can run empty, and it says so plainly when it does.</p>
-            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: muted(72) }}>Drips leave as shielded (z→z) transactions. The amount and the recipient never touch the public ledger, which is also why a send takes about ten seconds: it is building the zero-knowledge proof that makes that possible.</p>
-          </div>
-        )}
-
-
+          <ToolsCards
+            status={status}
+            address={lookupAddr}
+            onAddressChange={(v) => { setLookupAddr(v); setLookupRes(""); }}
+            onLookup={doLookup}
+            result={lookupRes}
+            incomeSentence={incomeFrom(status)}
+          />
         </section>
 
       </main>
