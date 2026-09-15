@@ -104,7 +104,7 @@ const COLOUR_LIB = `
 async function checkAppearance(page) {
   // The masthead mark, same identity as the favicon. aria-hidden by design, so
   // assert its presence, not an accessible name.
-  ok("the masthead mark renders", await page.getByTestId("brand-mark").first().isVisible());
+  ok("the masthead mark renders", await page.getByTestId("brand-mark").isVisible());
 
   // The LIVE dot paints the state, not a fixed colour: --color-live only when the
   // faucet is serviceable. Compare the dot's resolved background to the token
@@ -407,7 +407,12 @@ async function checkFirstPaint(page, base, address) {
     await page.goto(base, { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: /Checking status/ }).waitFor({ timeout: 15_000 });
     const body = await page.textContent("body");
-    ok("first paint says CHECKING, not LIVE", /CHECKING/.test(body) && !/\bLIVE\b/.test(body));
+    // Two different questions: the BADGE says CHECKING (read off the badge, not found
+    // somewhere in the page), and the word LIVE appears nowhere at all on first paint.
+    // Bounded and caught: a missing badge must fail THIS check with a reason, not throw
+    // out of the run and take every later check's diagnosis with it.
+    const badgeWord = (await page.getByTestId("status-word").textContent({ timeout: 5_000 }).catch(() => "no badge on the page"))?.trim();
+    ok("first paint says CHECKING, not LIVE", badgeWord === "CHECKING" && !/\bLIVE\b/.test(body), badgeWord);
 
     // Read the status strip cell by cell rather than grepping the body. A body-wide
     // regex cannot do this job: the drip amount "0.1 TAZ" is legitimately on the page,
@@ -416,7 +421,8 @@ async function checkFirstPaint(page, base, address) {
     // in, because `?? 0` renders through toFixed(1) as "0.0 TAZ" and never matched.
     const cells = await page.evaluate(() => {
       const out = {};
-      for (const cell of document.querySelectorAll("[data-strip-key]")) {
+      const strip = document.querySelector("[data-testid=status-strip]");
+      for (const cell of strip?.querySelectorAll("[data-strip-key]") ?? []) {
         const key = cell.getAttribute("data-strip-key");
         const value = cell.querySelector("[data-testid=strip-value]")?.textContent?.trim();
         if (key) out[key] = value ?? "";
@@ -529,13 +535,18 @@ async function checkRefusalCards(browser, base, address) {
 // tell, which is neither healthy nor "off".
 async function checkMinerPanel(page) {
   // The control was reached by its label until this change, so the label needs its own
-  // assertion: it says what it will do, and it has to keep saying the right one.
+  // assertion. DRIVEN BY TESTID, ASSERTED BY ROLE AND NAME - SDE-Infra's finding, and it is
+  // the right one: getByRole(name:) asserts the COMPUTED ACCESSIBLE NAME, which is what a
+  // screen reader announces, while textContent is merely what the element happens to
+  // contain. They agree today because the button has no aria-label; add one later and only
+  // the role+name form notices.
   const toggle = page.getByTestId("panel-toggle");
-  ok("the disclosure says More details when the panel is shut",
-    /More details/.test((await toggle.textContent()) ?? ""), (await toggle.textContent())?.trim());
+  const namedButton = async (re) => (await page.getByRole("button", { name: re }).count()) === 1;
+  ok("the disclosure is announced as More details when the panel is shut",
+    await namedButton(/More details/), (await toggle.textContent())?.trim());
   await toggle.click();
-  ok("and Hide details when it is open",
-    /Hide details/.test((await toggle.textContent()) ?? ""), (await toggle.textContent())?.trim());
+  ok("and as Hide details when it is open",
+    await namedButton(/Hide details/), (await toggle.textContent())?.trim());
 
   // Read the one cell, not the panel's textContent. There are no newlines in that
   // string, so a /miner\s*([^\n]*)/ match runs to the end and drags in reserve, queue
@@ -812,7 +823,7 @@ async function checkMobile(browser, base) {
 async function check404(page, base) {
   const res = await page.goto(`${base}/this-route-does-not-exist`, { waitUntil: "networkidle" });
   ok("an unknown path returns a real 404", res?.status() === 404, String(res?.status()));
-  ok("the 404 wears the site chrome", await page.getByTestId("brand-mark").first().isVisible());
+  ok("the 404 wears the site chrome", await page.getByTestId("brand-mark").isVisible());
 }
 
 const browser = await chromium.launch();
@@ -985,7 +996,14 @@ try {
   const masked = (await keyPanel.getByTestId("generated-key-secret").textContent()) ?? "";
   ok("the key is masked until revealed", /^•+$/.test(masked), `${masked.length} chars`);
   await keyPanel.getByRole("button", { name: "Copy key" }).click();
-  await page.waitForFunction(() => !document.querySelector("button.btn-primary")?.disabled, null, { timeout: 5_000 }).catch(() => {});
+  // `!el?.disabled` is true when el is MISSING, so a renamed class would have made this
+  // wait resolve at once and the next line read the button before React applied the
+  // post-copy state: an intermittent false red in exactly the PR these hooks protect.
+  // Requiring the element means a missing button times out and says so instead.
+  await page.waitForFunction(() => {
+    const b = document.querySelector("[data-testid=claim-button]");
+    return !!b && !b.disabled;
+  }, null, { timeout: 5_000 }).catch(() => {});
   ok("copying the key releases the request button", await primary.isEnabled(), (await primary.textContent())?.trim());
   await keyPanel.getByRole("button", { name: "Reveal" }).click();
   const shown = (await keyPanel.getByTestId("generated-key-secret").textContent()) ?? "";
