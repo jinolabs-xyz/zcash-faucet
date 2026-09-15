@@ -127,9 +127,34 @@ const pagesInShell = ["/terms", "/donate", "/fund"].filter((r) => {
 const transcriptionComplete = wiredViews.length === 4 && pagesInShell.length === 3;
 
 const divergent = new Set(transcriptionComplete ? [...added, ...changed, ...dropped] : [...added, ...changed]);
+
+// A DECLARATION NAMES WHAT WE SHIP, NOT JUST THE SELECTOR (SDE-App predicted this before the
+// file existed: "a departures file is a place to hide a real divergence"). Declared per selector
+// alone, a SECOND, different change to an already-declared rule inherits the old label silently -
+// measured: adding `outline:9px solid red` to `.badge .dot`, which is declared, passed. So each
+// entry carries the declarations we ship for that selector, and a body that is not the declared
+// one is an undeclared divergence even though the selector is listed.
+const shippedBody = (sel) => [...(ship.get(sel) || [])].sort().join(" || ");
+const bodyOf = (entry) => (typeof entry === "string" ? null : entry && entry.shipped);
+const reasonOf = (entry) => (typeof entry === "string" ? entry : entry && entry.why) || "";
+const wrongBody = [...divergent].filter((s) => {
+  const e = declared[s];
+  if (e === undefined) return false;               // undeclared, reported below
+  const want = bodyOf(e);
+  if (want === null) return true;                  // declared by selector only: not enough
+  return want !== shippedBody(s);
+});
 const undeclared = [...divergent].filter((s) => !(s in declared));
 const stale = Object.keys(declared).filter((s) => !divergent.has(s));
 
+if (process.env.PARITY_PRINT === "1") {
+  // Prints the exact entries for the current divergences, so a declaration is copied rather
+  // than retyped - a hand-typed body would be one more thing that can be subtly wrong.
+  const out = {};
+  for (const s of [...divergent].sort()) out[s] = { why: reasonOf(declared[s]) || "TODO: why this differs from the approved design", shipped: shippedBody(s) };
+  console.log(JSON.stringify(out, null, 2));
+  process.exit(0);
+}
 console.log(`parity: ${ship.size} shipped rules against ${spec.size} in the spec`);
 console.log(`  added ${added.length}  changed ${changed.length}  dropped ${dropped.length}  declared ${Object.keys(declared).length}`);
 console.log(transcriptionComplete
@@ -139,9 +164,15 @@ for (const s of undeclared) {
   const why = added.includes(s) ? "not in the spec" : changed.includes(s) ? "declarations differ" : "in the spec, not shipped";
   console.error(`  UNDECLARED (${why}): ${s}`);
 }
-for (const s of stale) console.error(`  STALE DEPARTURE, no longer differs, remove it: ${s}  ("${declared[s]}")`);
-if (undeclared.length || stale.length) {
-  console.error(`parity: ${undeclared.length} undeclared divergence(s), ${stale.length} stale departure(s)`);
+for (const s of stale) console.error(`  STALE DEPARTURE, no longer differs, remove it: ${s}  ("${reasonOf(declared[s])}")`);
+for (const s of wrongBody) {
+  const want = bodyOf(declared[s]);
+  console.error(`  DECLARED WITH A DIFFERENT BODY: ${s}`);
+  console.error(`      declared: ${want === null ? "(selector only - a declaration must name what we ship)" : want}`);
+  console.error(`      shipped:  ${shippedBody(s)}`);
+}
+if (undeclared.length || stale.length || wrongBody.length) {
+  console.error(`parity: ${undeclared.length} undeclared divergence(s), ${stale.length} stale departure(s), ${wrongBody.length} declared with a different body`);
   console.error(`Declare a deliberate one in ${DEPARTURES} with the reason, or restore the spec's rule.`);
   process.exit(1);
 }
