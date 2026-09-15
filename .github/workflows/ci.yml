@@ -553,9 +553,12 @@ jobs:
           s = json.load(sys.stdin)["services"]["faucet"]
           # Keys that would override the flags below without changing them: privileged
           # resets the bounding set to everything, pid/ipc/network_mode/devices/userns
-          # hand over host namespaces or nodes, an extra mount is an extra reach. Any of
-          # them present is a failure here, whatever the probe would then measure.
-          for k in ("privileged", "pid", "ipc", "network_mode", "devices", "userns_mode", "cgroup", "sysctls", "device_cgroup_rules", "ports"):
+          # hand over host namespaces or nodes, an extra mount is an extra reach, and a
+          # compose entrypoint/command/user replaces the root-dropping entrypoint the image
+          # ships while this probe (which runs through that entrypoint) would still read
+          # uid=1000. Any of them present is a failure here, whatever the probe measures.
+          # (No apostrophes in this block: it is inside the single quotes of python -c.)
+          for k in ("privileged", "pid", "ipc", "network_mode", "devices", "userns_mode", "cgroup", "sysctls", "device_cgroup_rules", "ports", "entrypoint", "command", "user"):
               if s.get(k): sys.exit("compose service sets %s" % k)
           if sorted(s.get("cap_add") or []) != ["CHOWN", "FOWNER", "SETGID", "SETUID"]: sys.exit("cap_add is not the four")
           mounts = sorted((v["source"], v["target"], bool(v.get("read_only"))) for v in s.get("volumes") or [])

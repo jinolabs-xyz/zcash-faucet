@@ -82,6 +82,8 @@ from the compose file itself (`docker compose config`, so the anchor counts):
 `read_only`, `tmpfs`, `cap_drop`, `cap_add`, `security_opt`. It refuses the
 service outright if it carries a key that would override those (`privileged`,
 `pid`, `ipc`, `network_mode`, `devices`, `userns_mode`, `ports`, an
+`entrypoint`, `command` or `user` of its own, since those bypass the image's
+root-dropping entrypoint while the probe still runs through it, an
 unconfined profile, a capability beyond the four, a mount beyond the ledger
 volume and the read-only heartbeat), and otherwise fails unless the process is
 uid 1000 with `no_new_privs` set, a bounding set of exactly those four
