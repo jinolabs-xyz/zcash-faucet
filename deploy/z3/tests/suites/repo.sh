@@ -1287,10 +1287,19 @@ check "the mascot check plans the combinations and sectors MASCOT.md names" \
   "grep -qF 'const RULING_COMBOS = 6;' '$REPO/scripts/mascot-check.mjs' && grep -qF 'const RULING_POINTER = 3;' '$REPO/scripts/mascot-check.mjs' && grep -q 'Change the arrays and these numbers together' '$REPO/scripts/mascot-check.mjs'"
 check "and its dimensions are MASCOT.md's three viewports, two themes and three sectors" \
   "grep -qF 'const VIEWPORTS = [[1440, 900], [1100, 800], [390, 844]];' '$REPO/scripts/mascot-check.mjs' && grep -qF 'want: \"0% 50%\"' '$REPO/scripts/mascot-check.mjs' && grep -qF 'want: \"50% 0%\"' '$REPO/scripts/mascot-check.mjs' && grep -qF 'want: \"100% 100%\"' '$REPO/scripts/mascot-check.mjs'"
-check "the fit check plans its 42 the same way" \
-  "grep -qF 'const RULING_COMBOS = 42;' '$REPO/scripts/fit-check.mjs' && grep -qF 'PLANNED !== RULING_COMBOS' '$REPO/scripts/fit-check.mjs'"
-check "and its dimensions are the three desktop sizes, two themes, four views and three pages" \
-  "grep -qF 'const SIZES = [[1440, 900], [1280, 800], [1920, 1080]];' '$REPO/scripts/fit-check.mjs' && grep -qF 'const VIEWS = [\"claim\", \"status\", \"analytics\", \"tools\"];' '$REPO/scripts/fit-check.mjs' && grep -qF 'const PAGES = [\"/terms\", \"/donate\", \"/fund\"];' '$REPO/scripts/fit-check.mjs'"
+check "the fit check plans its full 70 the same way" \
+  "grep -qF 'const RULING_COMBOS = 70;' '$REPO/scripts/fit-check.mjs' && grep -qF 'PLANNED !== RULING_COMBOS' '$REPO/scripts/fit-check.mjs'"
+check "and its dimensions carry the sizes the clipping actually appears at, not only the brief's" \
+  "grep -qF 'const SIZES = [[1440, 900], [1280, 800], [1920, 1080], [1366, 768], [1280, 720]];' '$REPO/scripts/fit-check.mjs' && grep -qF 'const VIEWS = [\"claim\", \"status\", \"analytics\", \"tools\"];' '$REPO/scripts/fit-check.mjs' && grep -qF 'const PAGES = [\"/terms\", \"/donate\", \"/fund\"];' '$REPO/scripts/fit-check.mjs'"
+# FITS MEANS REACHABLE (CTO's ruling on #562, after their red-team found the clipped footer). The
+# arithmetic alone called a footer that had been CUT OFF and could not be scrolled to "SCROLLS",
+# on a build whose own suite read 130 ok while three links could not be clicked and prod has
+# maintenanceAddress set. A check that measures a page's height and not whether anyone can reach
+# what is on it is L1 in this file's own words: a proxy for the property.
+check "fits means the footer is on screen and its links are hit-testable, not just the numbers" \
+  "grep -qF 'document.elementFromPoint(x, y)' '$REPO/scripts/fit-check.mjs' && grep -qF 'r.links.every((l) => l.inView && l.reachable)' '$REPO/scripts/fit-check.mjs'"
+check "and clipping is named as clipping rather than reported as a scroll" \
+  "grep -q 'CLIPPED, footer cut by' '$REPO/scripts/fit-check.mjs' && grep -qF 'getComputedStyle(st).overflowY !== \"hidden\"' '$REPO/scripts/fit-check.mjs'"
 # THE SHEETS: served, and held at the size the owner ruled.
 check "the sheets are checked over the wire before the pointer assertions, since a 404 passes them" \
   "grep -qF '/mascots/fox-riso-directions.webp' '$REPO/scripts/mascot-check.mjs' && grep -qF '/mascots/fox-riso-reactions.webp' '$REPO/scripts/mascot-check.mjs' && grep -q 'is not served' '$REPO/scripts/mascot-check.mjs'"
