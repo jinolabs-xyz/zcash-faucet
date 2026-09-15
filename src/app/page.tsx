@@ -1191,7 +1191,7 @@ export default function Home() {
           and does not rewrite it, so a reviewer can see the shell landing without reading
           a thousand lines of diff that say the same words in a different place. */}
       <main className="views">
-        <section className="view" data-view="claim" data-testid="view-claim" aria-label="Claim" hidden={view !== "claim"}>
+        <section className="view legacy-measure" data-view="claim" data-testid="view-claim" aria-label="Claim" hidden={view !== "claim"}>
         <p className="sr-only" role="status">{announce}</p>
         {(phase === "ready" || phase === "checking" || phase === "syncing" || phase === "fault" || phase === "empty" || phase === "degraded") && (
           <div>
@@ -1768,7 +1768,7 @@ export default function Home() {
 
         </section>
 
-        <section className="view" data-view="status" data-testid="view-status" aria-label="Status" hidden={view !== "status"}>
+        <section className="view legacy-measure" data-view="status" data-testid="view-status" aria-label="Status" hidden={view !== "status"}>
 
       <div data-testid="status-strip" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "4px 18px", padding: `9px ${pad}`, borderBottom: "1px solid var(--color-divider)", fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".05em", color: muted(55) }}>
         {[
@@ -1947,14 +1947,14 @@ export default function Home() {
 
         </section>
 
-        <section className="view" data-view="analytics" data-testid="view-analytics" aria-label="Usage analytics" hidden={view !== "analytics"}>
+        <section className="view legacy-measure" data-view="analytics" data-testid="view-analytics" aria-label="Usage analytics" hidden={view !== "analytics"}>
           {/* S4 builds the four canvases here. Until then the view is not empty and
               not a placeholder: the header strip is already a real reader of the
               thirty-day series, and this says where the rest is going. */}
           <p className="lede small">The thirty-day drip series is in the header strip. Charts land in a later slice.</p>
         </section>
 
-        <section className="view" data-view="tools" data-testid="view-tools" aria-label="Tools" hidden={view !== "tools"}>
+        <section className="view legacy-measure" data-view="tools" data-testid="view-tools" aria-label="Tools" hidden={view !== "tools"}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 16px", alignItems: "center" }}>
           <button className="btn btn-ghost btn-sm" onClick={() => { setTool((t) => (t === "lookup" ? null : "lookup")); setLookupRes(""); }} aria-expanded={tool === "lookup"} aria-controls="tool-lookup" style={{ padding: 0 }}>Balance lookup</button>
           <button className="btn btn-ghost btn-sm" onClick={() => setTool((t) => (t === "about" ? null : "about"))} aria-expanded={tool === "about"} aria-controls="tool-about" style={{ padding: 0 }}>How it works</button>
