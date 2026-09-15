@@ -120,9 +120,25 @@ const wiredViews = existsSync(PAGE_SRC) ? ["claim", "status", "analytics", "tool
   const i = src.indexOf(`data-view="${v}"`);
   return i !== -1 && !src.slice(src.lastIndexOf("<section", i), i).includes("legacy-measure");
 }) : [];
+// AND "IN THE SHELL" IS TWO FACTS, NOT ONE STRING (SDE-UI, review of this PR). The first
+// version asked whether the page file itself names the stage. That was true when it was
+// written and the Shell extraction moved it: S5 puts a page in the shell by rendering
+// <Shell>, and the shell OWNS the stage, so the page file then contains that string zero
+// times. Measured against S5's own branch - each of the three pages has `"stage"` 0 times and
+// `<Shell` once - so the filter returned [] on precisely the tree it exists to detect, and
+// `transcriptionComplete` would have been false for ever. A gate that starts failing at the
+// moment it is supposed to switch on.
+//
+// Either fact alone is a string that can move again. Together they are the wiring: the page
+// renders the shell, AND the shell is the thing that carries the stage. The direct spelling
+// stays accepted because a page that inlines the stage is genuinely in the shell too.
+const SHELL_SRC = "src/components/Shell.tsx";
+const shellOwnsStage = existsSync(SHELL_SRC) && readFileSync(SHELL_SRC, "utf8").includes('"stage"');
 const pagesInShell = ["/terms", "/donate", "/fund"].filter((r) => {
   const f = `src/app${r}/page.tsx`;
-  return existsSync(f) && readFileSync(f, "utf8").includes('"stage"');
+  if (!existsSync(f)) return false;
+  const src = readFileSync(f, "utf8");
+  return src.includes('"stage"') || (shellOwnsStage && /<Shell[\s/>]/.test(src));
 });
 const transcriptionComplete = wiredViews.length === 4 && pagesInShell.length === 3;
 

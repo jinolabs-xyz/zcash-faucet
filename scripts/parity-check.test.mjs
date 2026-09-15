@@ -16,12 +16,24 @@ import { execFileSync } from "node:child_process";
 const SCRIPT = "scripts/parity-check.mjs";
 
 /** Run the checker in its own directory with the given fixtures; return {code, out}. */
-function runParity({ spec, shipped, departures }) {
+function runParity({ spec, shipped, departures, pages, shell }) {
   const dir = mkdtempSync(join(tmpdir(), "parity-"));
   try {
     mkdirSync(join(dir, "design", "spec"), { recursive: true });
     mkdirSync(join(dir, "scripts"), { recursive: true });
     mkdirSync(join(dir, "src", "app"), { recursive: true });
+    // Optional page/shell sources, for the completion gate. Written only when a case asks,
+    // so the eight cases above keep the tree they were measured against.
+    if (pages) {
+      for (const [route, src] of Object.entries(pages)) {
+        mkdirSync(join(dir, "src", "app", route), { recursive: true });
+        writeFileSync(join(dir, "src", "app", route, "page.tsx"), src);
+      }
+    }
+    if (shell !== undefined) {
+      mkdirSync(join(dir, "src", "components"), { recursive: true });
+      writeFileSync(join(dir, "src", "components", "Shell.tsx"), shell);
+    }
     writeFileSync(join(dir, "design", "spec", "spec.css"), spec);
     writeFileSync(join(dir, "src", "app", "shipped.css"), shipped);
     if (departures !== undefined) writeFileSync(join(dir, "design", "spec", "departures.json"), JSON.stringify(departures, null, 2));
@@ -94,3 +106,42 @@ test("a rule the spec has and we dropped is reported but not gated mid-transcrip
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /dropped 1/);
 });
+
+// THE COMPLETION GATE, WHICH COULD NEVER FINISH SWITCHING ON (SDE-UI, review of this PR).
+// "In the shell" was one string in the page file, and the Shell extraction moved it: S5 puts a
+// page in the shell by rendering <Shell>, and the shell owns the stage, so the page file
+// contains `"stage"` zero times. Measured against S5's own branch, the old spelling reported
+// 0 of 3 pages in the shell on exactly the tree it exists to detect, so the DROPPED class would
+// have stayed advisory for ever. These two cases are the reason it is now two facts.
+const SHELL_OWNING_STAGE = 'export function Shell(){ return <div className="stage" /> }\n';
+const PAGE_RENDERING_SHELL = 'import { Shell } from "@/components/Shell";\nexport default function P(){ return <Shell>x</Shell> }\n';
+
+test("a page is in the shell when it renders the Shell that owns the stage", () => {
+  const r = runParity({
+    spec: SPEC, shipped: SPEC,
+    shell: SHELL_OWNING_STAGE,
+    pages: { terms: PAGE_RENDERING_SHELL, donate: PAGE_RENDERING_SHELL, fund: PAGE_RENDERING_SHELL },
+  });
+  assert.match(r.out, /3\/3 pages in the shell/);
+});
+
+test("and a page that stops rendering it drops out of the count", () => {
+  const r = runParity({
+    spec: SPEC, shipped: SPEC,
+    shell: SHELL_OWNING_STAGE,
+    pages: { terms: 'export default function P(){ return <div>x</div> }\n', donate: PAGE_RENDERING_SHELL, fund: PAGE_RENDERING_SHELL },
+  });
+  assert.match(r.out, /2\/3 pages in the shell/);
+});
+
+test("the shell not owning the stage is not a shell, however many pages render it", () => {
+  // The second fact, on its own. A <Shell> that carries no stage is a name, not the chrome,
+  // and either fact alone is a string that can move again the way the first one did.
+  const r = runParity({
+    spec: SPEC, shipped: SPEC,
+    shell: 'export function Shell(){ return <div className="something-else" /> }\n',
+    pages: { terms: PAGE_RENDERING_SHELL, donate: PAGE_RENDERING_SHELL, fund: PAGE_RENDERING_SHELL },
+  });
+  assert.match(r.out, /0\/3 pages in the shell/);
+});
+
