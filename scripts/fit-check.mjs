@@ -50,6 +50,16 @@ const PAGES_IN_SHELL = PAGES.filter((route) => {
   return existsSync(src) && readFileSync(src, "utf8").includes('"stage"');
 });
 const RULING_COMBOS = 70;   // 5 sizes x 2 themes x (4 views + 3 pages), once every page is in the shell
+// THE PART THAT DOES NOT DEPEND ON WHICH SLICES HAVE LANDED (SDE-App, review of #563). The
+// full count is only checkable at the end, so until then a shrunk array changed PLANNED and the
+// measured rows together and they agreed with each other - halving THEMES halved the coverage
+// and stayed green. Sizes times themes is fixed from the first slice, so it is checked from the
+// first slice.
+const RULING_VIEWPORT_PASSES = 10;   // 5 sizes x 2 themes
+if (SIZES.length * THEMES.length !== RULING_VIEWPORT_PASSES) {
+  console.error(`fit-check: ${SIZES.length} sizes x ${THEMES.length} themes is ${SIZES.length * THEMES.length} passes, and the ruling is ${RULING_VIEWPORT_PASSES}. Change the arrays and this number together, deliberately, or neither.`);
+  process.exit(1);
+}
 const PLANNED = SIZES.length * THEMES.length * (VIEWS.length + PAGES_IN_SHELL.length);
 if (PAGES_IN_SHELL.length === PAGES.length && PLANNED !== RULING_COMBOS) {
   console.error(`fit-check: every page is in the shell, so this file should plan ${RULING_COMBOS} combinations and it plans ${PLANNED}. Change the arrays and this number together, deliberately, or neither.`);
@@ -87,8 +97,26 @@ const MEASURE = () => {
       reachable: !!hit && (hit === a || a.contains(hit) || hit.contains(a)),
     };
   });
+  // THE CAUSE, NOT THE SYMPTOM (SDE-App, from their own #562 fix round, where two assertions in a
+  // row passed over the defect). Whether a clamp CUTS depends on content height, so "the footer
+  // is visible" and "the links are clickable" are both true on a page that is one paragraph
+  // shorter - while the clamp is just as wrong. What is always true is that an ancestor hides
+  // its overflow while holding more content than its box. That is the defect; the cut footer is
+  // one of its symptoms.
+  const clipping = [];
+  for (let el = ftr || document.body; el && el !== document.documentElement; el = el.parentElement) {
+    const cs = getComputedStyle(el);
+    const hides = cs.overflowY === "hidden" || cs.overflowY === "clip";
+    if (hides && el.scrollHeight > el.clientHeight + 1) {
+      clipping.push({
+        el: `${el.tagName.toLowerCase()}${el.className ? "." + String(el.className).split(" ")[0] : ""}`,
+        hidden: el.scrollHeight - el.clientHeight,
+      });
+    }
+  }
   const fb = ftr ? ftr.getBoundingClientRect() : null;
   return {
+    clipping,
     sh: st ? st.scrollHeight : -1, ch: st ? st.clientHeight : -1,
     sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth,
     theme: document.documentElement.dataset.theme,
@@ -100,7 +128,11 @@ const MEASURE = () => {
   };
 };
 
-const fitsNow = (r) => r.sh <= r.ch + 1 && r.sw <= r.cw && (r.footerCut === null || r.footerCut === 0) && r.links.every((l) => l.inView && l.reachable);
+const fitsNow = (r) =>
+  (r.clipping || []).length === 0 &&
+  r.sh <= r.ch + 1 && r.sw <= r.cw &&
+  (r.footerCut === null || r.footerCut === 0) &&
+  r.links.every((l) => l.inView && l.reachable);
 
 const browser = await chromium.launch();
 const rows = [];
@@ -163,7 +195,9 @@ if (missing) { console.error(`fit-check: FAIL - ${missing}`); process.exit(1); }
 
 for (const o of rows) {
   const unreachable = (o.links || []).filter((l) => !l.inView || !l.reachable).map((l) => l.name);
+  const clipped = (o.clipping || []).map((c) => `${c.el} hides ${c.hidden}px`).join(", ");
   const why = o.fits ? "fits"
+    : clipped ? `CLIPPED by an ancestor (${clipped})`
     : o.footerCut > 0 && !o.canScroll ? `CLIPPED, footer cut by ${o.footerCut}px and the page cannot scroll`
     : o.sh > o.ch + 1 ? "SCROLLS"
     : unreachable.length ? "footer links unreachable" : "does not fit";

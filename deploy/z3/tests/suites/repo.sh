@@ -1291,6 +1291,14 @@ check "the fit check plans its full 70 the same way" \
   "grep -qF 'const RULING_COMBOS = 70;' '$REPO/scripts/fit-check.mjs' && grep -qF 'PLANNED !== RULING_COMBOS' '$REPO/scripts/fit-check.mjs'"
 check "and its dimensions carry the sizes the clipping actually appears at, not only the brief's" \
   "grep -qF 'const SIZES = [[1440, 900], [1280, 800], [1920, 1080], [1366, 768], [1280, 720]];' '$REPO/scripts/fit-check.mjs' && grep -qF 'const VIEWS = [\"claim\", \"status\", \"analytics\", \"tools\"];' '$REPO/scripts/fit-check.mjs' && grep -qF 'const PAGES = [\"/terms\", \"/donate\", \"/fund\"];' '$REPO/scripts/fit-check.mjs'"
+# EVERY ARRAY THE COUNT MULTIPLIES, not the ones I happened to name (SDE-App, review of #563,
+# against their own finding as I had implemented it). THEMES was pinned nowhere, so cutting it
+# to one halved the coverage of both scripts while their own arithmetic still agreed with
+# itself. "Pin the arrays" has to mean all of them or it is a list with a hole in it.
+check "including THEMES, which both scripts multiply by and neither pinned" \
+  "grep -qF 'const THEMES = [\"paper\", \"ink\"];' '$REPO/scripts/fit-check.mjs' && grep -qF 'const THEMES = [\"paper\", \"ink\"];' '$REPO/scripts/mascot-check.mjs'"
+check "and the fit check holds sizes-times-themes from the FIRST slice, not only at the end" \
+  "grep -qF 'const RULING_VIEWPORT_PASSES = 10;' '$REPO/scripts/fit-check.mjs' && grep -qF 'SIZES.length * THEMES.length !== RULING_VIEWPORT_PASSES' '$REPO/scripts/fit-check.mjs'"
 # FITS MEANS REACHABLE (CTO's ruling on #562, after their red-team found the clipped footer). The
 # arithmetic alone called a footer that had been CUT OFF and could not be scrolled to "SCROLLS",
 # on a build whose own suite read 130 ok while three links could not be clicked and prod has
