@@ -1018,6 +1018,19 @@ async function checkSubpages(browser, base) {
     fundLinked === fundHasAddress,
     `footer link ${fundLinked ? "present" : "absent"}, address card ${fundHasAddress ? "present" : "absent"}`);
 
+  // /fund IS NEVER A 404 (CTO ruling, 23:39Z, on App's finding). I had written notFound() here
+  // and it was wrong for a reason better than the one I had: maintenanceAddress is empty when
+  // UNSET **or when config validation REJECTS it**, so a validation failure would silently
+  // delete a page instead of degrading it, and the operator's first signal would be a visitor
+  // asking where it went. A page that exists in every other configuration does not become
+  // not-found because it has nothing to offer; it says so.
+  const fundBody = await page.locator(".view.sub").innerText();
+  ok("/fund answers 200 in BOTH configurations, and says which one it is in",
+    fundHasAddress
+      ? /Mainnet ZEC, shielded/.test(fundBody) && /cannot be reversed/.test(fundBody)
+      : /No address configured/.test(fundBody) && /FAUCET_MAINTENANCE_ADDRESS/.test(fundBody),
+    `${fundHasAddress ? "address" : "no-address"} state: ${fundBody.replace(/\s+/g, " ").slice(0, 110)}`);
+
   for (const { path, heading } of PAGES) {
     const res = await page.goto(base + path, { waitUntil: "networkidle" });
     ok(`${path} answers 200`, res?.status() === 200, `status ${res?.status()}`);
@@ -1090,6 +1103,21 @@ async function checkSubpages(browser, base) {
     ok(`${path} renders the footer links with JavaScript disabled`,
       (await plain.locator(".ftr a").count()) >= 3, `${await plain.locator(".ftr a").count()} links`);
   }
+
+  // THE OBLIGATIONS THEMSELVES, not just the heading around them. My first spelling of this
+  // asserted the h1 and the footer links, and a mutant that hid the whole `.terms` body with
+  // display:none PASSED - the heading is in hero-copy and the footer is outside it, so nothing
+  // I had written was looking at the text the page exists to state. That is the property the
+  // whole server-rendered design is for, so it is measured directly: the sections a reader
+  // needs, in the DOM, with scripting off.
+  await plain.goto(base + "/terms", { waitUntil: "domcontentloaded" });
+  const termsOff = (await plain.locator(".terms").textContent()) ?? "";
+  for (const heading of ["Who runs this", "What you get", "No warranty", "Privacy", "Trademarks and licence"]) {
+    ok(`/terms states "${heading}" with JavaScript disabled`, termsOff.includes(heading),
+      `${termsOff.length} chars of terms body`);
+  }
+  ok("and the privacy sentence itself is there without a script",
+    termsOff.includes("salted hash for rate limiting"), termsOff.slice(0, 90));
   // The addresses are the payload of two of these three pages and the reason they are server
   // rendered at all: a page handing over an address must not need a script to show it.
   await plain.goto(base + "/donate", { waitUntil: "domcontentloaded" });
