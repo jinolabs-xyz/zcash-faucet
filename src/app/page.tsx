@@ -1092,15 +1092,13 @@ export default function Home() {
           {/* ONE LINK HOME, mark and wordmark together, on the orange-soft disc (owner
               ruling, 2026-09-16, preview line 378).
 
-              THIS DROPS THE z.cash HYPERLINK AND THAT IS AN OPEN QUESTION, not an
-              oversight. The mark linked to z.cash because the comment it replaced called
-              that "the trademark policy's condition for showing it", with the wordmark a
-              separate link because nested anchors are invalid markup. One anchor around
-              both cannot also point at z.cash, so the ruling and the condition cannot both
-              be satisfied as drawn. Implemented as ruled, raised with the CTO at 18:57Z and
-              carried at the top of the PR body: if the answer is that the condition needs
-              the hyperlink, this becomes two anchors on the same disc layout. The footer's
-              "not an official Zcash service" is unchanged either way. */}
+              THIS DROPS THE z.cash HYPERLINK, AND THE QUESTION IT RAISED IS ANSWERED
+              (CTO, 19:38Z). Our old comment called the hyperlink "the trademark policy's
+              condition for showing the mark", and that was our own reading rather than the
+              policy's words: the condition is not to hold yourself out as official or
+              endorsed, which /terms states plainly and at length. The hyperlink was one way
+              of meeting it, not the requirement. So one anchor around mark and wordmark is
+              fine, and the attribution lives where someone actually reads it. */}
           <Link className="home" href="/" aria-label="Zcash Testnet Faucet, home">
             <BrandMark />
             <span className="name">Zcash Testnet Faucet</span>
@@ -1996,6 +1994,14 @@ export default function Home() {
           about raw values and misleading about derived ones, and that is a call for the
           owner rather than for the slice that moves the furniture. Raised, not decided. */}
           <footer className="ftr">
+            {/* THE WORDING IS THE CTO'S RULING OF 19:38Z, not the preview's original. I
+                blocked on the preview's "Addresses and IPs are never logged" because it is
+                defensible about RAW values and misleading about the salted fingerprints the
+                rate limiter keeps until PURGE_SQL drops them. "hashed, never stored raw" is
+                both true and the stronger claim, since it says what we do rather than only
+                what we do not. Nothing here sets a cookie and no raw IP is stored or sent
+                anywhere. The same words are in the frozen spec. */}
+            <span>No accounts, no cookies, no trackers. Addresses and IPs are hashed, never stored raw.</span>
             <nav>
               <a href="/donate">Donate TAZ</a>
               {/* Absent unless config validated a maintenance address, so a rejected or
@@ -2032,11 +2038,14 @@ export default function Home() {
                   height={36}
                 />
               </a>
-              {/* The Zcash mark in the masthead is ECC's trademark, shown under the
-                  Foundation's policy for projects that work with Zcash. That policy turns
-                  on not looking official, so this says plainly that we are not. Cheap to
-                  add, and it is the condition of using the mark. */}
-              <span className="footer-note">not an official Zcash service</span>
+              {/* THE "not an official Zcash service" LINE LEFT THE FOOTER (owner ruling,
+                  applied in the frozen spec). It has not left the site: /terms already says
+                  "It is an independent community project. It is not an official Zcash
+                  service and is not affiliated with, sponsored by, or endorsed by the
+                  Electric Coin Company", and its "Trademarks and licence" section names ECC
+                  and links the Foundation's policy. I checked both before removing this
+                  rather than taking the ruling's word for it, because the policy condition
+                  is the reason we may show the mark at all. S5 adds one more sentence there. */}
             </div>
           </footer>
         </div>

@@ -150,6 +150,17 @@ async function checkAppearance(page) {
     if (!view || !input) return { missing: true };
     return { view: Math.round(view.getBoundingClientRect().width), input: Math.round(input.getBoundingClientRect().width) };
   });
+  // THE PRIVACY SENTENCE, PINNED WORD FOR WORD, because it is a factual claim about what
+  // this service keeps and the exact words were argued over. The preview said "Addresses and
+  // IPs are never logged"; I blocked on it because it is defensible about RAW values and
+  // misleading about the salted fingerprints the rate limiter persists until PURGE_SQL drops
+  // them, and the CTO ruled the stronger, truer form. A sentence like this drifting back
+  // toward the comfortable version is exactly the change nobody notices in a diff.
+  ok("the footer states what is kept, in the words that survived review",
+    (await page.textContent("body"))?.includes(
+      "No accounts, no cookies, no trackers. Addresses and IPs are hashed, never stored raw.") === true,
+    "the exact sentence is not on the page");
+
   ok("the untranscribed content is still capped at its old measure inside a full-width view",
     !measure.missing && measure.view > 900 && measure.input <= 760,
     measure.missing ? "no .view.legacy-measure or no input.input, so nothing was measured"
