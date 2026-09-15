@@ -15,6 +15,11 @@ WD="$REPO/deploy/z3/watchdog.sh"
 wd_env() {
   mk_scratch "${TMPDIR:-/tmp}/wd-test.XXXXXX"
   export STUB_LOG="$T/stub.log"; : > "$STUB_LOG"
+  # THE PER-CALL COUNTERS GO WITH IT. The log is truncated per case but the sequence knobs'
+  # counters sat beside it untouched, so a case using one would have started wherever the
+  # previous case stopped - the suite-order leak this repo has paid for twice, waiting for a
+  # second case to use a sequence. Cleared here rather than in the one case that noticed.
+  rm -f "$STUB_LOG".*-count
   export STUB_CONTAINERS="$T/containers"; mkdir -p "$STUB_CONTAINERS"
   export PATH="$SCRATCH/stubs:$BASE_PATH"
   export WATCHDOG_STATE_DIR="$T/state"
@@ -41,6 +46,13 @@ wd_env() {
         WATCHDOG_NODE_HEAL_ENABLED WATCHDOG_NODE_STOPS_MINER WATCHDOG_MINER_HEARTBEAT WATCHDOG_MINER_UNIT STUB_START_FAIL \
         WATCHDOG_SIGNAL_MATCH STUB_READY_CANBUILD STUB_READY_CANBUILD_ONCE \
         STUB_READY STUB_READY_REASON STUB_READY_FAIL_UNTIL STUB_HEALTH
+  # R-12's knobs belong in THIS list and not in the cases: the suites share one shell, and
+  # an export that outlives its case is a bug I have shipped twice (STUB_ACTIVE into the
+  # next install-ops case, BOX_REPORT_FAUCET_VOLUME into bringtospec). A fork shape left
+  # set would make a later case's silence mean nothing.
+  unset STUB_READY_REFS STUB_READY_USEDHEIGHT STUB_READY_USEDHEIGHT_SEQ STUB_READY_REFS_SEQ \
+        WATCHDOG_FORK_HEAL_ENABLED \
+        WATCHDOG_FORK_AHEAD_BLOCKS WATCHDOG_FORK_MINER_MIN_SECS WATCHDOG_FORK_PARK_DIR
   # Capture what would have been paged, without a webhook.
   # Records EVERY argument, so the suite can see that the watchdog passes --now (its
   # messages are one per episode and must never be held by alert.sh's cooldown).
@@ -1071,3 +1083,253 @@ wd_run 2
 check "no zallet restart was attempted" "! grep -q 'docker restart -t 30' '$T/stub.log' && ! grep -q 'restarting .* once' '$T/run.log'"
 check "and no restart time was written, so the real restart is not withheld once zallet appears" "[ ! -e '$T/state/sends.zallet_restart_at.flaps' ]"
 unset WATCHDOG_SENDS_RESTART_AFTER WATCHDOG_SENDS_RESTART_BUDGET STUB_READY_REASON WATCHDOG_ZALLET_MATCH
+
+# ── STEP 8: A SELF-MINED FORK (R-12) ─────────────────────────────────────────────────
+# The 2026-09-15 sequence read from the other side: our node HIGHER than the network. Step
+# 7's cases all model a node the network has left behind, so none of them can fail if this
+# direction is unwatched - which it was.
+FORK_MARKER_REL="miner-parked-by-fork-heal"
+wd_fork_env() {
+  wd_node_env
+  export WATCHDOG_FORK_PARK_DIR="$T/park"; rm -rf "$T/park"
+  export WATCHDOG_MINER_HEARTBEAT="$T/heartbeat.json"
+  # A miner up for an hour by its OWN heartbeat: beat fresh, start old, templating.
+  # Fresh template too, so step 6 has no stall to act on and cannot muddy these logs.
+  miner_hb 5 3600 10
+  echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+}
+
+echo "== watchdog: a node AHEAD of two agreeing references is our own chain, and it says so"
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200      # our node believes it is at the tip
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4350000   # two sources agree, 200 behind us
+wd_run 2
+check "writes the park marker" "[ -f '$T/park/$FORK_MARKER_REL' ]"
+check "and the marker carries the three numbers a human needs" \
+  "grep -q 'ours 4350200, highest corroborated reference 4350000, ahead 200' '$T/park/$FORK_MARKER_REL'"
+check "pages, naming the direction rather than a lag" "grep -q '200 blocks AHEAD' '$T/alerts.log'"
+check "and attributes it to our miner, which its heartbeat can support" "grep -q 'most likely ours' '$T/alerts.log'"
+check "and says what a human does next, both steps" \
+  "grep -q 'SNAPSHOTS.md' '$T/alerts.log' && grep -q 'clear the marker' '$T/alerts.log'"
+# THE RULING, AS A TEST. A drop reaches ~100 blocks and this fork is 200, so a rewind here
+# would delete the top of our own chain and leave us on the same fork - an action logged as
+# a heal that healed nothing. These four assertions are what "it drops nothing" means.
+check "DROPS NOTHING: the non-finalized state survives" "[ -f '$STUB_VOLROOT/z3-testnet-chain/non_finalized_state/backup.bin' ]"
+check "and the peer cache survives" "[ -f '$STUB_VOLROOT/z3-testnet-chain/network/testnet.peers' ]"
+check "and zebra is not restarted for being ahead" "! grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
+check "and it does not stop the miner itself, because that stays the owner's" "! grep -q 'systemctl stop zcash-testnet-miner' '$STUB_LOG'"
+check "pages once for the episode, not once per sweep" "[ \"\$(grep -c 'blocks AHEAD' '$T/alerts.log')\" = 1 ]"
+
+echo "== watchdog: two references that DISAGREE cannot establish a fork, so nothing happens"
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFS=disagree STUB_READY_USEDHEIGHT=4350000   # 400 apart: no corroboration
+wd_run 2
+check "writes no marker" "[ ! -f '$T/park/$FORK_MARKER_REL' ]"
+check "pages nothing" "! grep -q 'blocks AHEAD' '$T/alerts.log'"
+check "and the journal says it cannot tell, with the reading that made it so" \
+  "grep -q 'fork check: cannot tell.*corroborated=false' '$T/run.log'"
+
+echo "== watchdog: ONE reference is not agreement either, and corroborated null is cannot-tell"
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFS=single STUB_READY_USEDHEIGHT=4350000
+wd_run 2
+check "writes no marker on a single source" "[ ! -f '$T/park/$FORK_MARKER_REL' ]"
+check "pages nothing" "! grep -q 'blocks AHEAD' '$T/alerts.log'"
+check "and names null rather than treating it as false" "grep -q 'fork check: cannot tell.*corroborated=null' '$T/run.log'"
+
+echo "== watchdog: a body from before #559 carries no usedHeight, and absent is never zero"
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+# STUB_READY_REFS left at its default: no tipReferences block at all, as production serves
+# today while the autodeploy timer is stopped. A missing field read as 0 would make every
+# sweep a 4,350,200-block fork.
+wd_run 2
+check "writes no marker" "[ ! -f '$T/park/$FORK_MARKER_REL' ]"
+check "pages nothing" "! grep -q 'blocks AHEAD' '$T/alerts.log'"
+check "and says both halves are missing rather than inventing a number" \
+  "grep -q 'fork check: cannot tell.*corroborated=absent, highest usable reference=none' '$T/run.log'"
+
+echo "== watchdog: a node a little ahead is a node that mines, and is left alone in silence"
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350100 STUB_ZEBRA_EST=4350100      # 100 ahead, inside the 150 limit
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4350000
+wd_run 2
+check "no marker" "[ ! -f '$T/park/$FORK_MARKER_REL' ]"
+check "no page" "! grep -q 'blocks AHEAD' '$T/alerts.log'"
+check "and not even a cannot-tell line, because there was nothing to decide" "! grep -q 'fork check' '$T/run.log'"
+
+echo "== watchdog: the same fork with the miner NOT running is unexplained, not blamed on it"
+wd_fork_env
+echo inactive > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4350000
+wd_run 2
+check "still parks, because nothing may start the miner onto this chain" "[ -f '$T/park/$FORK_MARKER_REL' ]"
+check "still pages" "grep -q '200 blocks AHEAD' '$T/alerts.log'"
+check "calls the cause unexplained" "grep -q 'unexplained' '$T/alerts.log'"
+check "and does NOT claim our miner did it" "! grep -q 'most likely ours' '$T/alerts.log'"
+# THE ABSENCE HALF, which the active case cannot give me: with the unit inactive there is
+# nothing to stop, so telling a human to stop it first would send them to a command that does
+# nothing while the real instruction sits below it. My own mutation of the active case proved
+# the sentence appears when it should; only this proves it stays away when it should not.
+check "and does not tell anyone to stop a miner that is already stopped" \
+  "! grep -q 'still running (systemd says' '$T/alerts.log'"
+
+echo "== watchdog: a park marker that cannot be written is said plainly, not papered over"
+wd_fork_env
+export WATCHDOG_FORK_PARK_DIR=/proc/no-such-dir              # mkdir -p and the append both fail
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4350000
+wd_run 2
+check "the journal carries the ERROR" "grep -q 'ERROR: could not write .*$FORK_MARKER_REL' '$T/run.log'"
+check "and the PAGE says the miner is NOT parked, rather than claiming a park that did not happen" \
+  "grep -q 'THE MINER IS NOT PARKED' '$T/alerts.log'"
+check "and tells the human to stop it by hand" "grep -q 'Stop the miner by hand first' '$T/alerts.log'"
+
+echo "== watchdog: the marker outranks the watchdog's OWN miner release after a node heal"
+# The gap this closes is one caller over from the auto-deploy one: step 7 stops the miner,
+# the node recovers, and release_miner_after_heal starts it again - onto the chain the fork
+# rung just parked it off. Both cases model a fork AND a behind-and-stuck node, which is
+# exactly the state a forked node reports once the network moves past its private tip.
+wd_fork_env
+mkdir -p "$T/park"; printf 'planted by the suite\n' > "$T/park/$FORK_MARKER_REL"
+export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677 STUB_ZEBRA_ADVANCE=1 STUB_ZEBRA_STUCK_CALLS=2
+wd_run 4   # baseline, stuck (stop miner + restart), advancing (would release), quiet
+check "the miner is still stopped for the heal" "grep -q 'systemctl stop zcash-testnet-miner.service' '$STUB_LOG'"
+check "and it is NOT started again while the marker exists" "! grep -q 'systemctl start zcash-testnet-miner.service' '$STUB_LOG'"
+check "the journal says the marker is why" "grep -q 'NOT starting zcash-testnet-miner.service:.*$FORK_MARKER_REL' '$T/run.log'"
+check "and the report says it is still stopped on purpose" "grep -q 'still stopped ON PURPOSE' '$T/alerts.log'"
+check "so the unit really is inactive at the end" "[ \"\$(cat '$STUB_SYSTEMD/zcash-testnet-miner.service')\" = inactive ]"
+
+echo "== watchdog: a fork that clears and returns pages AGAIN, not once per watchdog process"
+# SDE-App's block on #560, as a test. alerted_fork had no way back to zero, so the rung paged
+# once per PROCESS and went quiet for ever - and this rung exists for a RECURRENCE, where the
+# second page is the one that matters. The reference catches up and passes us mid-run, which
+# is a definite not-a-fork, and then falls behind again: one process, two episodes.
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT_SEQ="4350000 4350000 4350300 4350300 4350000"
+wd_run 5
+check "pages for the first fork and again for the second" "[ \"\$(grep -c 'blocks AHEAD' '$T/alerts.log')\" = 2 ]"
+check "and says nothing on the sweeps where the reference had caught up" \
+  "[ \"\$(grep -c 'fork check: cannot tell' '$T/run.log')\" = 0 ]"
+check "the marker is still there from the first episode, so nothing un-parks in between" \
+  "[ -f '$T/park/$FORK_MARKER_REL' ]"
+
+echo "== watchdog: a cannot-tell sweep between two forks does NOT re-arm the page"
+# THE OTHER HALF OF SDE-App's finding, and the half my first fix left untested: the flag has
+# to come back to zero on a DEFINITE not-a-fork and NOT on cannot-tell. Resetting on
+# cannot-tell would let a flapping oracle - one source dark, two disagreeing - re-page on
+# every swing, which is precisely what the corroboration gate exists to prevent. My own
+# mutation put the reset on that path and the suite stayed green, so this is that mutation's
+# test: one fork, one sweep the rung cannot judge, the same fork again, ONE page.
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_USEDHEIGHT=4350000
+export STUB_READY_REFS_SEQ="agree disagree agree agree"
+wd_run 4
+check "pages once, and a cannot-tell sweep in the middle does not buy a second page" \
+  "[ \"\$(grep -c 'blocks AHEAD' '$T/alerts.log')\" = 1 ]"
+check "and the cannot-tell sweep is in the journal, so the case really passed through it" \
+  "grep -q 'fork check: cannot tell.*corroborated=false' '$T/run.log'"
+
+echo "== watchdog: the ahead limit is a BOUNDARY, and the page text names the miner's real state"
+# CTO red-team, findings 2 and 3 (R1). Every case so far was 200 ahead or 100 ahead, so -gt
+# could become -ge and nothing would notice. The reference moves by one block between sweeps:
+# exactly at the limit is silence, one past it is a fork.
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT_SEQ="4350050 4350050 4350049 4350049"
+wd_run 4
+check "exactly at the limit is a node that mines, not a fork" \
+  "[ \"\$(grep -c 'blocks AHEAD' '$T/alerts.log')\" = 1 ]"
+check "and the page that did fire is the one past the limit, 151" "grep -q '151 blocks AHEAD' '$T/alerts.log'"
+# FINDING 2: the rung never stops the miner, so over an ACTIVE unit "parked" described a state
+# nobody was in while the box kept extending the chain at ~10 blocks a minute.
+check "the page leads with the stop, because the unit is still running" \
+  "grep -q 'still running (systemd says active) and extending this chain: stop it by hand FIRST' '$T/alerts.log'"
+check "and says what the marker actually does, which is gate STARTS" \
+  "grep -q 'no deploy and no watchdog heal will START the miner' '$T/alerts.log'"
+
+echo "== watchdog: a miner too young to have built the fork is not blamed for it"
+# CTO red-team, finding 3 (R2): every active-miner case used a startedAt an hour old, so
+# `-gt $FORK_MINER_MIN_SECS` could have been `-gt 0` and stayed green.
+wd_fork_env
+miner_hb 5 120 10          # alive, but two minutes old against the 600 s bound
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4350000
+wd_run 2
+check "pages, because the fork is established by the heights either way" "grep -q '200 blocks AHEAD' '$T/alerts.log'"
+check "but calls it unexplained rather than blaming a two-minute-old miner" \
+  "grep -q 'cannot show it has been running long' '$T/alerts.log' && ! grep -q 'most likely ours' '$T/alerts.log'"
+check "and reads the age as seconds, not as 'unreadables'" "! grep -q 'unreadables' '$T/alerts.log'"
+# THE FIX FOR THAT BUG HAD A BUG (CTO red-team, review of round 3): ${v:+${v}s}${v:-unreadable}
+# is not an if/else, it is two expansions, so a readable age rendered "120s120". Asserted by
+# SHAPE rather than by the literal, because the heartbeat ages a second between sweeps.
+check "and renders it once rather than twice" \
+  "grep -qE 'startedAt age: [0-9]+s\\)' '$T/alerts.log' && ! grep -qE 'startedAt age: [0-9]+s[0-9]' '$T/alerts.log'"
+
+echo "== watchdog: and the same miner IS blamed once the bound says it is old enough"
+wd_fork_env
+miner_hb 5 120 10
+export WATCHDOG_FORK_MINER_MIN_SECS=60      # the same miner, a bound it now clears
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4350000
+wd_run 2
+check "the bound is READ rather than hardcoded, so the attribution follows it" \
+  "grep -q 'most likely ours' '$T/alerts.log'"
+
+echo "== watchdog: a miner that is ACTIVATING is still a miner that will extend the chain"
+# CTO red-team, review of round 3: the stop instruction keyed on the unit word being exactly
+# "active", so a unit mid-start got a fork page with no stop line at all - and "activating" is a
+# miner that is seconds from submitting on top of the private chain.
+wd_fork_env
+echo activating > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4350000
+wd_run 2
+check "pages" "grep -q '200 blocks AHEAD' '$T/alerts.log'"
+check "and still leads with the stop, carrying systemd's own word" \
+  "grep -q 'still running (systemd says activating) and extending this chain: stop it by hand FIRST' '$T/alerts.log'"
+
+echo "== watchdog: turning the NODE heal off does not turn fork detection off with it"
+# CTO red-team, finding 3 (R3). The PR body claims this and nothing tested it; the heights are
+# read in the loop rather than inside step 7 precisely so that this holds.
+wd_fork_env
+export WATCHDOG_NODE_HEAL_ENABLED=0
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4350000
+wd_run 2
+check "still pages with the node heal disabled" "grep -q '200 blocks AHEAD' '$T/alerts.log'"
+check "and still writes the marker" "[ -f '$T/park/$FORK_MARKER_REL' ]"
+
+echo "== watchdog: and the rung's OWN kill switch is honoured"
+# CTO red-team, finding 3 (R7): WATCHDOG_FORK_HEAL_ENABLED existed and nothing proved it did
+# anything. A switch that does not switch is worse than no switch.
+wd_fork_env
+export WATCHDOG_FORK_HEAL_ENABLED=0
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4350000
+wd_run 2
+check "no page with the rung disabled" "! grep -q 'blocks AHEAD' '$T/alerts.log'"
+check "no marker either" "[ ! -f '$T/park/$FORK_MARKER_REL' ]"
+check "and it is silent about it rather than logging a cannot-tell every sweep" "! grep -q 'fork check' '$T/run.log'"
+
+echo "== watchdog: cannot-tell is said ONCE, not once every sweep"
+# CTO red-team, finding 7: one line every 30 s for as long as the oracle is single-sourced is
+# the shape this file already refuses elsewhere (miner_waiting_logged).
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFS=single STUB_READY_USEDHEIGHT=4350000
+wd_run 4
+check "four sweeps of the same cannot-tell state, one line" \
+  "[ \"\$(grep -c 'fork check: cannot tell' '$T/run.log')\" = 1 ]"
+check "and it says it will stay quiet" "grep -q 'Silent until this changes' '$T/run.log'"
+
+echo "== watchdog: with no marker, the same heal DOES release the miner (the control)"
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677 STUB_ZEBRA_ADVANCE=1 STUB_ZEBRA_STUCK_CALLS=2
+wd_run 4
+check "started again, so the guard above is the marker and not something else" "grep -q 'systemctl start zcash-testnet-miner.service' '$STUB_LOG'"

@@ -281,7 +281,19 @@ if [ "$miner" = "1" ]; then
       state="$(systemctl is-active zcash-testnet-miner.service 2>/dev/null || true)"
       case "${state:-unknown}" in
         active)
-          if systemctl restart zcash-testnet-miner.service 2>/dev/null; then
+          # THE FORK PARK MARKER OUTRANKS "it was running" (R-12). The gate above protects a
+          # miner the OWNER stopped, by reading the unit's state word. It cannot protect one
+          # the watchdog's fork heal stopped, because by the time a deploy lands the unit may
+          # have been started again by anything - including an earlier tick of this script.
+          # On 2026-09-15 that is the sequence that cost three hours: a deploy started a miner
+          # that had been parked, the box mined a private chain, and Zallet rewound 18,434
+          # blocks. So a marker on disk refuses the restart even for an ACTIVE unit, and only
+          # a human clears it (OPERATIONS.md). Refusing is not an error: the deploy shipped,
+          # and the miner is where the heal and the owner left it.
+          if [ -f "${AUTODEPLOY_FORK_PARK_MARKER:-/var/lib/faucet-watchdog/miner-parked-by-fork-heal}" ]; then
+            log "miner rebuilt, and NOT restarted: the watchdog's fork heal parked it and the marker is still there ($sha). Clear it by hand once the node is off the fork: see OPERATIONS.md."
+            miner_rc=0
+          elif systemctl restart zcash-testnet-miner.service 2>/dev/null; then
             log "miner rebuilt and restarted ($sha)"
             miner_rc=0
           else

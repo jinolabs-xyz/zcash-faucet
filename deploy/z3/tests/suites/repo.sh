@@ -1215,3 +1215,27 @@ check "the balance lookup takes the address in a POST body, and the page sends i
   "grep -q 'export const POST = withApi(\"balance\"' '$REPO/src/app/api/balance/route.ts' && ! grep -qE 'searchParams|URLSearchParams' '$REPO/src/app/api/balance/route.ts' && ! grep -qE '/api/balance\\?|URLSearchParams' '$REPO/src/app/page.tsx'"
 check "the probe has tests, and npm test runs them" \
   "[ -f '$REPO/scripts/live-probe.test.mjs' ] && grep -q 'scripts/\*\*/\*.test.mjs' '$REPO/package.json'"
+
+echo "== repo: the fork-park marker is one path in three files, and the doc says what clearing it does NOT do"
+# THREE COPIES OF ONE PATH: watchdog.sh writes it, auto-deploy.sh refuses on it, and
+# OPERATIONS.md tells an operator where to look. A doc that names the wrong path is the
+# #553 failure again - there the doc diagnosed a state backwards, and an operator following
+# it would have re-run the wrong thing. Held equal here rather than trusted.
+MARKER_PATH='/var/lib/faucet-watchdog/miner-parked-by-fork-heal'
+# COMPOSED, not spelled: the watchdog builds the path from FORK_PARK_DIR plus the basename,
+# so the assertion has to check the two halves it actually writes rather than the joined
+# string. My first spelling grepped for the whole path and failed on the clean tree, which
+# is the baseline earning its keep.
+check "the watchdog declares the marker dir under /var/lib, not /run, so it survives a reboot" \
+  "grep -qF 'WATCHDOG_FORK_PARK_DIR:-/var/lib/faucet-watchdog' '$REPO/deploy/z3/watchdog.sh'"
+check "and names the marker file the other two files look for" \
+  "grep -qF 'FORK_PARK_MARKER=\"\$FORK_PARK_DIR/miner-parked-by-fork-heal\"' '$REPO/deploy/z3/watchdog.sh'"
+check "auto-deploy refuses on the same path the watchdog writes" \
+  "grep -qF '$MARKER_PATH' '$REPO/deploy/z3/auto-deploy.sh'"
+check "and OPERATIONS.md sends the operator to that same path" \
+  "grep -qF '$MARKER_PATH' '$REPO/OPERATIONS.md'"
+# THE SENTENCE THAT MATTERS MOST IN THAT SECTION. Removing the marker must not read as
+# "and then it mines again": starting the miner is a second decision and the owner's, and a
+# doc that blurred the two would hand a deploy's mistake to a human instead of fixing it.
+check "and says plainly that clearing the marker does not start the miner" \
+  "grep -qE 'Removing the marker does [*]{0,2}not[*]{0,2} start the miner' '$REPO/OPERATIONS.md'"

@@ -50,12 +50,58 @@ case "$*" in
     [ "$ext" = "zebra-est" ] && ext="${STUB_ZEBRA_EST:-}"
     heights=""
     [ -n "$ext" ] && heights=",\"nodeHeight\":${STUB_ZEBRA_BLOCKS:-0},\"externalHeight\":${ext}"
+    # THE tipReferences BLOCK, for the watchdog's step 8 (R-12). FIVE SHAPES, and only the
+    # five the app can actually produce - a stub that can express `corroborated:true` beside
+    # a null `usedHeight` lets a test assert behaviour for a body that cannot exist, which
+    # is worse than not covering it. STUB_READY_REFS:
+    #   agree    two fresh sources 1 apart, corroborated true,  usedHeight = STUB_READY_USEDHEIGHT
+    #   disagree two fresh sources far apart, corroborated false, usedHeight = the higher one
+    #   single   one fresh source, corroborated NULL (one source is not agreement)
+    #   none     nothing usable: sources {}, used null, usedHeight null, corroborated null
+    #   absent   no tipReferences field at all, as a body from before #559 (the default)
+    refs=""
+    uh="${STUB_READY_USEDHEIGHT:-}"
+    # STUB_READY_REFS_SEQ="agree disagree agree": the reference SHAPE per call, same
+    # one-value-each-last-repeating rule as the other two sequences. A cannot-tell sweep
+    # between two forks is the only way to test WHERE the once-per-episode flag resets.
+    shape="${STUB_READY_REFS:-absent}"
+    if [ -n "${STUB_READY_REFS_SEQ:-}" ]; then
+      rcf="${STUB_LOG}.refs-count"
+      rn=$(( $(cat "$rcf" 2>/dev/null || echo 0) + 1 )); echo "$rn" > "$rcf"
+      ri=0
+      for x in $STUB_READY_REFS_SEQ; do ri=$((ri + 1)); shape="$x"; [ "$ri" -ge "$rn" ] && break; done
+    fi
+    # STUB_READY_USEDHEIGHT_SEQ="4350000 4350300": the reference height per CALL, one value
+    # each with the last repeating, modelled on STUB_READY_SEQUENCE above. For an episode
+    # that ends and begins again inside ONE watchdog process, which is the only way to see
+    # whether a once-per-episode page can ever fire a second time.
+    if [ -n "${STUB_READY_USEDHEIGHT_SEQ:-}" ]; then
+      ucf="${STUB_LOG}.usedheight-count"
+      un=$(( $(cat "$ucf" 2>/dev/null || echo 0) + 1 )); echo "$un" > "$ucf"
+      ui=0
+      for x in $STUB_READY_USEDHEIGHT_SEQ; do ui=$((ui + 1)); uh="$x"; [ "$ui" -ge "$un" ] && break; done
+    fi
+    case "$shape" in
+      absent) refs="" ;;
+      agree)
+        [ -n "$uh" ] || { echo "stub curl: STUB_READY_REFS=agree needs STUB_READY_USEDHEIGHT" >&2; exit 64; }
+        refs=",\"tipReferences\":{\"sources\":{\"hosh\":{\"height\":${uh},\"ageSeconds\":2,\"stale\":false,\"host\":null},\"lightwalletd\":{\"height\":$((uh - 1)),\"ageSeconds\":9,\"stale\":false,\"host\":\"lwd\"}},\"spreadBlocks\":1,\"corroborated\":true,\"used\":\"hosh\",\"usedHeight\":${uh}}" ;;
+      disagree)
+        [ -n "$uh" ] || { echo "stub curl: STUB_READY_REFS=disagree needs STUB_READY_USEDHEIGHT" >&2; exit 64; }
+        refs=",\"tipReferences\":{\"sources\":{\"hosh\":{\"height\":${uh},\"ageSeconds\":2,\"stale\":false,\"host\":null},\"lightwalletd\":{\"height\":$((uh - 400)),\"ageSeconds\":9,\"stale\":false,\"host\":\"lwd\"}},\"spreadBlocks\":400,\"corroborated\":false,\"used\":\"hosh\",\"usedHeight\":${uh}}" ;;
+      single)
+        [ -n "$uh" ] || { echo "stub curl: STUB_READY_REFS=single needs STUB_READY_USEDHEIGHT" >&2; exit 64; }
+        refs=",\"tipReferences\":{\"sources\":{\"hosh\":{\"height\":${uh},\"ageSeconds\":2,\"stale\":false,\"host\":null}},\"spreadBlocks\":null,\"corroborated\":null,\"used\":\"hosh\",\"usedHeight\":${uh}}" ;;
+      none)
+        refs=",\"tipReferences\":{\"sources\":{},\"spreadBlocks\":null,\"corroborated\":null,\"used\":null,\"usedHeight\":null}" ;;
+      *) echo "stub curl: unsupported reference shape: $shape" >&2; exit 64 ;;
+    esac
     for a in "$@"; do
       case "$a" in *"%{http_code}"*)
         if [ "$want_code" = "200" ] && [ "$canbuild" = "0" ]; then
-          printf '{"ready":true,"reason":null,"node":{"ready":true,"canBuildTx":false%s,"shield":{"state":"unverifiable","lag":null,"reason":"no independent tip to compare against"}}}' "$heights"
-        elif [ "$want_code" = "200" ]; then printf '{"ready":true,"reason":null,"node":{"ready":true,"canBuildTx":true%s}}' "$heights"
-        else printf '{"ready":false,"reason":"%s","node":{"ready":false%s}}' "${STUB_READY_REASON:-node syncing}" "$heights"; fi
+          printf '{"ready":true,"reason":null,"node":{"ready":true,"canBuildTx":false%s,"shield":{"state":"unverifiable","lag":null,"reason":"no independent tip to compare against"}}%s}' "$heights" "$refs"
+        elif [ "$want_code" = "200" ]; then printf '{"ready":true,"reason":null,"node":{"ready":true,"canBuildTx":true%s}%s}' "$heights" "$refs"
+        else printf '{"ready":false,"reason":"%s","node":{"ready":false%s}%s}' "${STUB_READY_REASON:-node syncing}" "$heights" "$refs"; fi
         printf '\n%s' "$want_code"
         exit 0 ;;
       esac

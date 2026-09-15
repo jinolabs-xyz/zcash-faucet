@@ -163,6 +163,61 @@ itself, it hides inside the expected appearance. That is the opposite of what an
 draft of this section said, and the correction came from the record of 2026-09-08 rather
 than from re-reading the code.
 
+## The miner is parked by the fork heal: what that means and how to clear it
+
+When the watchdog's fork rung fires it writes a marker and `auto-deploy.sh` then refuses to
+restart the miner, **even when the unit is active**. That is deliberate and it is the half
+that was missing on 2026-09-15: the existing gate reads the unit's state word, which
+protects a miner the owner stopped and cannot protect one a heal stopped, because by the
+time a deploy lands anything may have started it again.
+
+```bash
+# is it parked, and why
+sudo cat /var/lib/faucet-watchdog/miner-parked-by-fork-heal
+# the file carries the instant and the heights that triggered it
+
+# what the deploy said about it
+sudo journalctl -u faucet-autodeploy.service --since -2h | grep -F 'fork heal parked it'
+```
+
+**Stop the miner first.** The watchdog does not stop it — that is deliberate, stopping is the
+owner's — so while a fork page is open the unit is very likely still running and still
+extending the private chain. Nothing below is worth doing until it is stopped:
+
+```bash
+sudo systemctl stop zcash-testnet-miner.service
+```
+
+**Clearing the marker is a human decision and there is no command that does it for you**, which
+is the point. Before clearing, settle whether the node is on the network's chain rather than its
+own. The check is here rather than cross-referenced, because an earlier draft pointed at a
+"fork section" of this file that does not exist:
+
+```bash
+# our tip, from the box
+sudo docker exec z3-testnet-zebra-1 sh -lc 'CK=$(cat /run/auth/.cookie 2>/dev/null || cat /var/run/auth/.cookie); curl -s -u "$CK" --data-binary "{\"jsonrpc\":\"1.0\",\"id\":\"ops\",\"method\":\"getbestblockhash\",\"params\":[]}" -H content-type:text/plain http://127.0.0.1:18232/'
+
+# the same height from somewhere that is not us, in a browser:
+#   https://testnet.zcashexplorer.app  or  https://testnet.cipherscan.app
+# Same hash at the same height: we are on the network's chain and the marker can go.
+# Different hash: we are on our own chain, and the fix is a snapshot reimport (SNAPSHOTS.md),
+# not clearing the marker.
+```
+
+```bash
+# only once the node is demonstrably NOT on a private chain
+sudo rm /var/lib/faucet-watchdog/miner-parked-by-fork-heal
+sudo systemctl start zcash-testnet-miner.service   # if you want it mining again at all
+```
+
+Removing the marker does **not** start the miner. Starting it is a second, separate
+decision, and the owner's: the marker only stops a deploy from making that decision for
+you. The next fork the rung sees will write the marker again.
+
+The marker lives under `/var/lib` rather than `/run` on purpose. The watchdog's flap counts
+are in `/run` because they describe the last few minutes and a reboot is a fair reason to
+forget them; a parking decision is the opposite, since a reboot does not resolve a fork.
+
 ## Logs
 
 ```bash
