@@ -214,7 +214,7 @@ jobs:
           npx playwright install --with-deps chromium
       # Drives a claim in a real browser: the page, the pow worker, the success
       # card and the copy path. Guarded so refs predating the script stay green.
-      - name: browser smoke
+      - name: browser checks - the claim smoke, then the fit check and the fox sweep
         run: |
           if [ ! -f scripts/ui-smoke.mjs ]; then
             echo "no scripts/ui-smoke.mjs on this ref, skipping"
@@ -260,6 +260,29 @@ jobs:
             echo "::warning::cTAZ did not come up, so the #326 toggle checks will be SKIPPED in this run"
           fi
           node scripts/ui-smoke.mjs
+
+          # THE REDESIGN CHECKS RUN AGAINST THE SERVER THIS STEP ALREADY HAS, rather than
+          # starting a second one: the ports are shared with every other suite, and the trap
+          # above is what reaps the doubles on a failure path.
+          #
+          # Both scripts decide whether they APPLY from a file in the tree, and the middle
+          # state is the loud one: no marker means not applicable and exit 0, a marker with
+          # no matching selector on the page is a FAILURE. That is what a rename looks like,
+          # and a check that shrugs at it would pass for ever afterwards.
+          node scripts/fit-check.mjs "$UI_SMOKE_URL"
+
+          # The sweep photographs the mascot at 54 pointer stops; scripts/fox-check.py reads
+          # every shot for holes in the silhouette, doubled fur, a second face and a
+          # protruding shoulder, and refuses a run that analysed fewer shots than the sweep
+          # intended. The analysis is the preview's own, kept rather than rewritten: porting
+          # it to JS would have made my port the thing that changed what 54/54 means.
+          if [ -f src/components/Mascot.tsx ]; then
+            python3 -m pip install --quiet --disable-pip-version-check pillow numpy
+            node scripts/fox-sweep.mjs fox-shots "$UI_SMOKE_URL"
+            python3 scripts/fox-check.py fox-shots public/mascot/fox.webp
+          else
+            echo "no src/components/Mascot.tsx on this ref, so the fox sweep is not applicable (not passed)"
+          fi
 
   api-tests:
     runs-on: ubuntu-latest
@@ -439,6 +462,15 @@ jobs:
           # every test spelling. A grep for the six .dockerignore lines proved nothing
           # about matching (#369); a trailing !scripts/** would have kept it green.
           mkdir -p "$ctx/scripts" "$ctx/docs" "$ctx/design" "$ctx/.github/workflows" "$ctx/.team" "$ctx/src/lib"
+          # THE MASCOT, BOTH DIRECTIONS (I1). public/mascot/*.webp is SERVED, so it must
+          # reach the image - an exclusion that swallowed it would show as a fox-shaped hole
+          # on the live page and nothing else here would notice. assets/mascot/*.png is the
+          # 1.5 MB of artwork those are built from and must NOT: it is a source, like design/.
+          mkdir -p "$ctx/public/mascot" "$ctx/assets/mascot"
+          echo "served" > "$ctx/public/mascot/fox.webp"
+          echo "served" > "$ctx/public/mascot/head.webp"
+          echo "served" > "$ctx/public/mascot/body.webp"
+          echo "source" > "$ctx/assets/mascot/fox.png"
           echo "double" > "$ctx/scripts/fake-zallet.mjs"
           echo "doc" > "$ctx/docs/OPERATIONS.md"
           echo "html" > "$ctx/design/faucet-architecture.html"
@@ -452,7 +484,10 @@ jobs:
           got="$(docker run --rm --entrypoint sh dockerignore-probe -c 'grep -vE "^/ctx/(Dockerfile|\.dockerignore)$" /ctx.list' || true)"
           docker rmi -f dockerignore-probe >/dev/null 2>&1 || true
           rm -rf "$ctx"
-          want="/ctx/deploy/z3/faucet.env.example"
+          # Built with printf rather than a literal multi-line string: inside a YAML block
+          # scalar the continuation lines would have to start at column 1 to keep the string
+          # right, and that is not YAML. Sorted, because `find | sort` produces this order.
+          want="$(printf '%s\n' /ctx/deploy/z3/faucet.env.example /ctx/public/mascot/body.webp /ctx/public/mascot/fox.webp /ctx/public/mascot/head.webp)"
           if [ -z "$got" ]; then
             # The opposite failure, and the message has to point the opposite way: the
             # example is documentation the README links to, and losing it means the
@@ -470,7 +505,35 @@ jobs:
             echo "negation, and check nothing after it negates the rule back."
             exit 1
           fi
-          echo "context admits only $want"
+          echo "context admits exactly:"; printf '%s\n' "$want" | sed 's/^/  /' 
+
+      # THE SERVED MASCOT, MEASURED INSIDE THE IMAGE (I1). Two failures in one check: the
+      # WebP layers must BE there, because a build that drops public/ shows up as a
+      # fox-shaped hole on the live page and nothing else in CI looks at it, and they must
+      # stay small, because the obvious way this regresses is someone committing the 1.5 MB
+      # PNG sources into public/ when a layer needs changing. 320 KB against today's 198 KB
+      # is room for S2 to add a layer without room for a source file.
+      - name: the mascot ships as WebP and stays under budget
+        run: |
+          set -euo pipefail
+          LIMIT=327680
+          list="$(docker run --rm --entrypoint sh faucet-ci-check:${{ github.sha }} -c 'ls -1 /app/public/mascot/*.webp 2>/dev/null' || true)"
+          if [ -z "$list" ]; then
+            echo "NO WebP MASCOT LAYERS IN THE IMAGE at /app/public/mascot."
+            echo "public/ reaches the image through the Dockerfile's COPY . . - check .dockerignore"
+            echo "and that scripts/build-mascot.mjs has been run."
+            exit 1
+          fi
+          total="$(docker run --rm --entrypoint sh faucet-ci-check:${{ github.sha }} -c 'cat /app/public/mascot/*.webp | wc -c')"
+          echo "served mascot layers:"; printf '%s\n' "$list" | sed 's/^/  /'
+          echo "total ${total} bytes (limit ${LIMIT})"
+          [ "$total" -le "$LIMIT" ] || { echo "the served mascot is over budget: ${total} > ${LIMIT} bytes"; exit 1; }
+          # A PNG under public/mascot is the specific regression this is here for, and it
+          # would otherwise pass whenever the WebP happened to stay small.
+          if docker run --rm --entrypoint sh faucet-ci-check:${{ github.sha }} -c 'ls /app/public/mascot/*.png 2>/dev/null' | grep -q png; then
+            echo "a PNG is being SERVED from public/mascot: the sources belong in assets/mascot"
+            exit 1
+          fi
 
       # The cheap half of #377's contract, run where it is free. An absence check only
       # catches what someone listed, so it is not the whole answer, but a secret reaching

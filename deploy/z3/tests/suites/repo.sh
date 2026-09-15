@@ -1259,3 +1259,37 @@ check "and OPERATIONS.md sends the operator to that same path" \
 # doc that blurred the two would hand a deploy's mistake to a human instead of fixing it.
 check "and says plainly that clearing the marker does not start the miner" \
   "grep -qE 'Removing the marker does [*]{0,2}not[*]{0,2} start the miner' '$REPO/OPERATIONS.md'"
+
+echo "== repo: the redesign's browser checks are wired, gated on a repo fact, and the mascot ships as WebP"
+# THE GATE THE CTO APPROVED FOR I1, pinned on both sides. Each script decides whether it
+# APPLIES from a file in the tree; the middle state - marker present, selector missing - is a
+# FAILURE rather than a shrug, because a check that shrugs at a rename passes for ever after
+# one. What can silently drift is the two halves naming different paths, so they are held equal
+# here: the sweep's marker, the CI step's condition and the component path the CTO pinned.
+MASCOT_MARKER='src/components/Mascot.tsx'
+SHELL_MARKER='src/app/redesign-tokens.css'
+check "the fox sweep and the CI step gate on the SAME mascot path" \
+  "grep -qF \"FOX_MARKER = \\\"$MASCOT_MARKER\\\"\" '$REPO/scripts/fox-sweep.mjs' && grep -qF '[ -f $MASCOT_MARKER ]' '$CIWF'"
+check "and the fit check gates on the shell file S1 adds" \
+  "grep -qF \"SHELL_MARKER = \\\"$SHELL_MARKER\\\"\" '$REPO/scripts/fit-check.mjs'"
+check "a marker with no matching selector FAILS rather than passing quietly" \
+  "grep -q 'is in the tree but' '$REPO/scripts/fox-sweep.mjs' && grep -q 'is in the tree but' '$REPO/scripts/fit-check.mjs'"
+check "both run in the ui job against the URL the smoke server already has" \
+  "grep -qF 'node scripts/fit-check.mjs \"\$UI_SMOKE_URL\"' '$CIWF' && grep -qF 'node scripts/fox-sweep.mjs fox-shots \"\$UI_SMOKE_URL\"' '$CIWF'"
+# A CHECKER THAT ANALYSES SIX SHOTS AND SAYS "failing: 0" IS A GREEN THAT MEANS NOTHING. The
+# preview's own copy had this hole; the port closes it and this holds the port to it.
+check "the fox checker refuses a sweep shorter than the one that was intended" \
+  "grep -q 'but the sweep intended' '$REPO/scripts/fox-check.py' && grep -q 'carries no expected count' '$REPO/scripts/fox-check.py'"
+check "and the sweep writes the count it intended, so there is something to refuse against" \
+  "grep -qF 'expected: EXPECTED' '$REPO/scripts/fox-sweep.mjs'"
+# THE ARTWORK AND WHAT IS SERVED FROM IT. The sources are committed so the served files are
+# reproducible (the argument scripts/build-icons.mjs makes for the icons), which only means
+# anything if a source edited without a rebuild goes red.
+check "the served WebP is built from the committed sources, and they still hash to the manifest" \
+  "( cd '$REPO' && sha256sum -c public/mascot/SOURCES.sha256 >/dev/null 2>&1 )"
+check "the sources are excluded from the image and the served WebP is not" \
+  "grep -qx 'assets' '$REPO/.dockerignore' && ! grep -q '^public' '$REPO/.dockerignore'"
+check "the CI context probe proves BOTH directions rather than only the exclusion" \
+  "grep -qF '/ctx/public/mascot/fox.webp' '$CIWF' && grep -qF 'assets/mascot/fox.png' '$CIWF'"
+check "the image job measures the served mascot and refuses a PNG served from public" \
+  "grep -q 'total \${total} bytes (limit \${LIMIT})' '$CIWF' && grep -q 'the sources belong in assets/mascot' '$CIWF'"
