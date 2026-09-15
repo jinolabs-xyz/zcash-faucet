@@ -154,7 +154,13 @@ html{background:var(--page)}
  * it computed padding-top 0. Same rule, our structure. */
 .views > .view.hero{flex:1 1 auto;min-height:0;justify-content:flex-start;padding-top:calc(2.5*var(--u))}
 @media (max-width:64rem){
-  .hero-grid{grid-template-columns:1fr;gap:calc(2.5*var(--u))}
+  /* THE ONE-COLUMN DECLARATION IS DROPPED, and the gap is kept. In the snapshot this rule is
+   * DEAD: the later mascot section holds three columns down to 56rem, so `grid-template-
+   * columns:1fr` here never applies. Moving the block into this sheet put it AFTER that
+   * three-column rule and woke it up, collapsing the hero to one column from 897 to 1024px -
+   * at 1024x768 the claim card, the product, started 16px below the fold. Moving a rule can
+   * revive one that was only ever dormant because of where it sat. */
+  .hero-grid{gap:calc(2.5*var(--u))}
   .view.hero{min-height:0}
   .hero-copy h1{font-size:calc(3*var(--u))}
 }
