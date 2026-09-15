@@ -1,6 +1,6 @@
 /**
  * The Analytics view: four canvases and the network card, transcribed from the approved
- * preview (redesign-frozen/S2-S5-20260915T1958Z, the `data-view="analytics"` section).
+ * preview (redesign-frozen/S2-S5-20260915T2110Z, the `data-view="analytics"` section).
  *
  * COUNTS ONLY, AND COUNTS BY UTC DAY. There is nothing per user here and nothing here
  * for per-user data to grow into, because the table behind the series holds (network,

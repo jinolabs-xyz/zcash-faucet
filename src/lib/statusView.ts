@@ -10,12 +10,12 @@
  * never as zero and never as fine. A null balance is not an empty wallet, an absent
  * height is not a height of zero, and a percentage we have not been given is not 100.
  *
- * The approved preview (redesign-frozen/S2-S5-20260915T1958Z) computes these inline as
+ * The approved preview (redesign-frozen/S2-S5-20260915T2110Z) computes these inline as
  * a `derived` bag. They are ported here rather than transcribed into the view, because
  * three of them disagree with helpers this repo already ships and those disagreements
  * are the interesting part. Each one is marked DEPARTURE below with the reason.
  */
-import { minerChip, minerIsBad, readingFromStatus, type MinerUnit } from "./minerLabel.ts";
+import { minerChip, minerIsBad, minerIsParked, readingFromStatus, type MinerUnit } from "./minerLabel.ts";
 import type { MinerReading } from "./miner/heartbeat.ts";
 
 /** Thousands separators, the only number formatting these views do. */
@@ -210,9 +210,12 @@ export function minerTone(
 ): "ok" | "warn" | "bad" | "unknown" {
   const r = readingFromStatus(miner);
   if (r.state === "cannot-verify" || r.state === "not-configured") return "unknown";
-  // A unit systemd calls inactive with no heartbeat is a miner someone stopped. Calm,
-  // not green: nothing is being mined, and green would say otherwise.
-  if (r.state === "not-writing" && unit === "inactive") return "unknown";
+  // A miner someone stopped: calm, not green, because nothing is being mined and green
+  // would say otherwise. ASKED OF minerLabel RATHER THAN RE-DERIVED. This line used to
+  // spell the rule out itself - `r.state === "not-writing" && unit === "inactive"` - which
+  // is the same mistake as the one the comment below describes, one line higher, and it
+  // survived a mutation of parked() without a single test noticing.
+  if (minerIsParked(r, unit)) return "unknown";
   if (r.state === "running") return "ok";
   // AND THE REST IS minerIsBad's CALL, NOT A SECOND ONE MADE HERE. The first version of
   // this function re-derived the judgement with its own `state === "waiting" ? warn :
