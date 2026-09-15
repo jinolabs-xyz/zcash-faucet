@@ -214,6 +214,23 @@ async function checkLegacyPalette(browser) {
       `text-transform ${rest.tagCase}`);
     ok(`${theme}: the page's root paints the design's background, not the old one`,
       rest.htmlBg === rest.page, `html ${rest.htmlBg} against --page ${rest.page}`);
+
+    // SELECTING TEXT DOES NOT HIGHLIGHT IT IN THE RETIRED PALETTE. globals.css:101 paints
+    // ::selection with --color-accent and the spec defines no selection colour at all, so it
+    // is a property the transcription was silent about and inherited whether it meant to or
+    // not (L20). Read off a real element's ::selection, not from the rule text.
+    const sel = await p.evaluate(() => {
+      const el = document.querySelector(".stage") ?? document.body;
+      const got = getComputedStyle(el, "::selection").backgroundColor;
+      const probe = document.createElement("span");
+      probe.style.backgroundColor = "var(--color-accent)";
+      document.body.appendChild(probe);
+      const retired = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return { got, retired };
+    });
+    ok(`${theme}: selecting text does not highlight it in the retired accent`,
+      sel.got !== sel.retired, `selection ${sel.got}, retired accent ${sel.retired}`);
     await c.close();
   }
 }
@@ -293,7 +310,13 @@ async function checkCardInnerPadding(browser) {
 }
 
 async function checkFooterReachable(browser) {
+  // THE LOOP'S OWN COVERAGE IS PINNED. Cutting DESKTOP_ALT out of it left the suite at
+  // 132 ok, 0 fail, exit 0 - half the viewports and a clean green, which is the array-pin
+  // hole I blocked #563 for arriving in my own file. The sizes actually visited are
+  // asserted, so dropping one is a red line rather than a quieter suite.
+  const visited = [];
   for (const vp of [DESKTOP, DESKTOP_ALT]) {
+    visited.push(`${vp.width}x${vp.height}`);
     const c = await browser.newContext({ viewport: vp });
     const p = await c.newPage();
     await p.goto(BASE, { waitUntil: "networkidle" });
@@ -332,8 +355,34 @@ async function checkFooterReachable(browser) {
     ok(`${label}: nothing between the footer and the document clips content it cannot scroll`,
       clip.length === 0, clip.join("; ") || "no clipping ancestor");
 
+    // AND THE STAGE DOES NOT SWALLOW A WHEEL. The pair above says the footer is reachable and
+    // nothing clips it; this says the thing a visitor's fingers do actually moves the page.
+    // A clamped `.stage` leaves scrollTop pinned at 0 through any number of wheel events,
+    // which is what "six wheel events moved scrollTop from 0 to 0" meant in the original
+    // finding.
+    const wheel = await p.evaluate(async () => {
+      const st = document.querySelector(".stage");
+      const before = { doc: document.documentElement.scrollTop, stage: st ? st.scrollTop : null };
+      for (let i = 0; i < 6; i++) window.dispatchEvent(new WheelEvent("wheel", { deltaY: 120, bubbles: true }));
+      window.scrollBy(0, 400);
+      await new Promise((r) => setTimeout(r, 120));
+      const over = document.documentElement.scrollHeight - innerHeight;
+      return { over, moved: document.documentElement.scrollTop - before.doc };
+    });
+    ok(`${label}: the page actually scrolls when it is taller than the viewport`,
+      wheel.over <= 0 || wheel.moved > 0,
+      wheel.over <= 0 ? "the page fits, so there was nothing to scroll"
+        : `${wheel.over}px past the fold and scrollTop moved ${wheel.moved}`);
+
+    // REACHED THE WAY A VISITOR REACHES IT, not the way a script can. This used
+    // `scrollIntoView({block:"end"})`, and the CTO's red-team found that it scrolls an
+    // `overflow:hidden` box PROGRAMMATICALLY where a wheel cannot - so on the clamped page it
+    // reported every link `in/hit` while only the sibling clip assertion went red. An
+    // assertion written to close an L1 that could not fail on its own defect, carried by its
+    // neighbour. `window.scrollTo` moves the document and is refused by a clipped box exactly
+    // as a wheel is.
     const r = await p.evaluate(() => {
-      document.querySelector(".ftr")?.scrollIntoView({ block: "end" });
+      window.scrollTo(0, document.documentElement.scrollHeight);
       const links = [...document.querySelectorAll(".ftr nav a")].map((a) => {
         const b = a.getBoundingClientRect();
         const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
@@ -352,6 +401,9 @@ async function checkFooterReachable(browser) {
         : r.links.map((l) => `${l.t}:${l.inView ? "in" : "OUT"}/${l.hit ? "hit" : "BLOCKED"}`).join("  "));
     await c.close();
   }
+  ok("the footer is checked at both declared desktop sizes",
+    visited.join(",") === `${DESKTOP.width}x${DESKTOP.height},${DESKTOP_ALT.width}x${DESKTOP_ALT.height}`,
+    visited.join(", ") || "no viewports visited");
 }
 
 async function checkAppearance(page) {

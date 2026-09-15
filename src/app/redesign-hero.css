@@ -200,3 +200,10 @@ html[data-theme]{background:var(--page)}
  * container. ui-smoke now measures the card's own edge, which is true of whatever fills it.
  * S2b replaces this block with the real panels and takes this rule with it. */
 .stage .card.claim{padding:7% 8.4% 7.5%}
+
+/* THE FOURTH AND FIFTH SURVIVORS, from the red-team's sweep of this same shape.
+ * globals.css:101 paints `::selection` with the retired `--color-accent` (#ec3013) and the
+ * spec defines no selection colour at all, so selecting any text on the redesigned page
+ * highlighted it in the old palette. `.stage ::selection` is (0,1,1) against globals' (0,0,1),
+ * so this is specificity rather than order like the three above it. */
+.stage ::selection{background:color-mix(in srgb,var(--accent) 30%,transparent)}

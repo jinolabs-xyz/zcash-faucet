@@ -1463,8 +1463,12 @@ export default function Home() {
             <div id="addrmsg" aria-live="polite" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 9, minHeight: 24 }}>
               {badgeShow && "label" in c && <span className="tag tag-outline">{c.label}</span>}
               {"priv" in c && c.priv === false && <span style={{ fontSize: 12, lineHeight: 1.45, color: muted(62) }}>Transparent address, so this drip will be visible on-chain.</span>}
-              {touched && "err" in c && c.err && <span style={{ fontSize: 12.5, lineHeight: 1.45, color: "var(--color-accent-800)", fontWeight: 500, maxWidth: "52ch" }}>{c.err}</span>}
-              {genErr && <span style={{ fontSize: 12.5, lineHeight: 1.45, color: "var(--color-accent-800)", fontWeight: 500, maxWidth: "52ch" }}>{genErr}</span>}
+              {/* THE DESIGN'S BAD COLOUR, not the retired palette's. These two carried inline
+                  `var(--color-accent-800)` - #7c1405 paper, #ffc4b8 ink - from the sheet the
+                  redesign replaces, which an inline style carries past any stylesheet fix.
+                  Found by the red-team's sweep for this shape (L20). */}
+              {touched && "err" in c && c.err && <span style={{ fontSize: 12.5, lineHeight: 1.45, color: "var(--bad-text)", fontWeight: 500, maxWidth: "52ch" }}>{c.err}</span>}
+              {genErr && <span style={{ fontSize: 12.5, lineHeight: 1.45, color: "var(--bad-text)", fontWeight: 500, maxWidth: "52ch" }}>{genErr}</span>}
               {!addr.trim() && <button className="btn btn-ghost btn-sm" onClick={generate} style={{ padding: 0 }}>Make a throwaway address and key</button>}
             </div>
             {genKey && genKey.address === addr.trim() && (
