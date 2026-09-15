@@ -41,8 +41,16 @@
 .metric .delta[data-tone="bad"]{color:var(--bad-text)}
 .metric .delta[data-tone="unknown"]{color:var(--muted)}
 
+/* text-transform:none IS NOT IN THE PREVIEW AND HAS TO BE HERE. globals.css:151 styles a
+ * `.tag` too and sets text-transform:uppercase, and the preview's rule never mentions the
+ * property, so the legacy value survives the cascade untouched: the design's "ok",
+ * "parked" and "unknown" rendered as "OK", "PARKED", "UNWATCHED" against a preview that
+ * shows them lowercase. Transcribing a rule verbatim does not neutralise a rule it does
+ * not mention. Checked the other way too, by diffing every class this sheet styles
+ * against globals.css for properties it sets and this file never names: text-transform on
+ * .tag is the only one. */
 .tag{font-family:inherit;display:inline-flex;align-items:center;gap:calc(.5*var(--u));height:calc(2.15*var(--u));padding:0 calc(.9*var(--u));border-radius:calc(.5*var(--u));background:var(--tag-bg);color:var(--ink);
-  font-size:calc(.84*var(--u));font-weight:500;letter-spacing:0;border:calc(.06*var(--u)) solid var(--hair);white-space:nowrap;text-decoration:none;cursor:default}
+  font-size:calc(.84*var(--u));font-weight:500;letter-spacing:0;text-transform:none;border:calc(.06*var(--u)) solid var(--hair);white-space:nowrap;text-decoration:none;cursor:default}
 .tag b{font-weight:600;font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:calc(.8*var(--u))}
 .tag .sdot{width:calc(.55*var(--u));height:calc(.55*var(--u));border-radius:50%;background:var(--unknown)}
 .tag[data-tone="ok"] .sdot{background:var(--green)}
