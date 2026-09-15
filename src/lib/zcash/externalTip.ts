@@ -485,8 +485,15 @@ async function refresh(waiveGap = false): Promise<void> {
 /**
  * What each reference says right now, and whether they agree.
  *
- * SYNCHRONOUS AND LAST-KNOWN, like every other reader here: this is on the readiness path
- * and a public endpoint's bad minute must never be able to slow it down.
+ * SYNCHRONOUS AND LAST-KNOWN: this is on the readiness path and a public endpoint's bad
+ * minute must never be able to slow it down.
+ *
+ * PURE, AND THAT IS HALF A SENTENCE. It reads the cache and kicks nothing, so something
+ * else has to be doing the asking - and on review of #554 that phrasing was read as
+ * reassurance by two people, including me writing it. What asks is `readTipReferences()`
+ * and `referenceTip()` below, which kick a background refresh once the freshest source is
+ * older than STALE_MS. Use those on any path that ships; this form is for tests and for
+ * callers that already have a `now`.
  *
  * `used` is the highest NON-STALE source, and that choice is the #548 fix rather than a
  * preference. On 2026-09-15 readiness passed a resyncing node as current because the one
@@ -552,11 +559,49 @@ export interface ReferenceTipReading {
  * numbers, 37 against 150; both of those exceed the five-block budget, so that pair does
  * not demonstrate the bug and the claim was withdrawn.)
  */
-export function referenceTip(now: number = Date.now()): ReferenceTipReading {
+export function referenceTipAt(now: number): ReferenceTipReading {
   const refs = getTipReferences(now);
   const names = Object.keys(refs.sources) as ReferenceName[];
   if (refs.used) return { height: refs.sources[refs.used]!.height, source: refs.used, stale: false };
   return { height: null, source: null, stale: names.length > 0 };
+}
+
+/**
+ * THE REFRESH KICK, and it is why these two accessors exist beside the pure rules above.
+ *
+ * `getExternalTipReading()` has always been a read that also kicks a background refresh
+ * once the cache is older than STALE_MS, and until this change it was reached on every
+ * status poll - nodeStatus for the height, and readChainFreshness for the shield block.
+ * Moving both of those to the reference rules took the last kick off the polling path:
+ * measured by the CTO's red-team at 4 oracle fetches in 95 s before, 1 after, with
+ * hosh.ageSeconds at 94. Five minutes of that and every reference is stale, readiness
+ * fails open with nothing to say why, and nothing is asking any more. A cache that only
+ * refreshes while claims are arriving is a cache that goes dark exactly when a quiet
+ * faucet most needs watching.
+ *
+ * So the production readers kick and the `...At(now)` forms stay pure, which is the split
+ * this file already uses for `readingFor` versus `getExternalTipReading`: the states worth
+ * testing stay reachable without a network, and the thing that ships still asks.
+ */
+function kickIfStale(now: number): void {
+  const at = Object.values(g.__faucetTipSources ?? {}).map((s) => s.at);
+  // No sources at all is also stale: that is a cold cache, and boot's warm may have failed.
+  const newest = at.length ? Math.max(...at) : 0;
+  if (now - newest > STALE_MS) void refresh();
+}
+
+/** The references, last-known, kicking a background refresh when they are getting old. */
+export function readTipReferences(): TipReferences {
+  const now = Date.now();
+  kickIfStale(now);
+  return getTipReferences(now);
+}
+
+/** The height to judge a node against, last-known, with the same kick. */
+export function referenceTip(): ReferenceTipReading {
+  const now = Date.now();
+  kickIfStale(now);
+  return referenceTipAt(now);
 }
 
 /** Kick an initial fetch at boot so the first readiness check has a value. Also the

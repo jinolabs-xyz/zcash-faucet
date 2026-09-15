@@ -17,7 +17,7 @@ import { getNodeStatus } from "@/lib/zcash/nodeStatus";
 import { cachedLedgerHealth } from "@/lib/db";
 import { ledgerBlocksServing } from "@/lib/db/probe";
 import { readSendHealth, sendHealthBlocksServing } from "@/lib/zcash/sendHealth";
-import { getTipReferences } from "@/lib/zcash/externalTip";
+import { readTipReferences } from "@/lib/zcash/externalTip";
 import { readinessReason } from "@/lib/readiness";
 import { withApi } from "@/lib/api";
 
@@ -126,7 +126,7 @@ export const GET = withApi("ready", async () => {
        * failure we actually had: different fetch paths and cadences, so one going stale
        * or flapping shows up as a spread.
        */
-      tipReferences: getTipReferences(),
+      tipReferences: readTipReferences(),
       backend: { reachable: backend.reachable },
       // Reported even when serving, and carrying its own three-state verdict, so
       // "container up but not serving" has a name in the alert. "The faucet is
