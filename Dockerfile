@@ -22,7 +22,13 @@ COPY . .
 RUN npm run build \
   # What the runtime does not need goes here, in the BUILD stage: a deletion in the run
   # stage is a new layer on top of the full copy and the image does not get smaller.
+  # The lockfile is saved across the prune and put back: `npm prune` rewrites it (an
+  # engines block appeared under @grpc/grpc-js), the run stage copies it, and the
+  # manifest verifier, which is the deploy gate, then reads a tracked file that differs
+  # from the commit as a stale layer and rolls the deploy back (SDE-Infra, review of #545).
+  && cp package-lock.json /tmp/package-lock.json \
   && npm prune --omit=dev && npm cache clean --force \
+  && mv /tmp/package-lock.json package-lock.json \
   && rm -rf .next/cache
 
 FROM node:24-slim@sha256:2fe369e969550cde8e867afc3fe370b260140cab4a23d467074295b42163d553 AS run
