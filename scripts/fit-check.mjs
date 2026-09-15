@@ -26,7 +26,13 @@ import { existsSync, readFileSync } from "node:fs";
 // S1 adds this file. It is the one fact that says "the redesign shell is in this tree".
 const SHELL_MARKER = "src/app/redesign-tokens.css";
 const BASE = process.argv[2] || process.env.UI_SMOKE_URL || "http://localhost:3120";
-const SIZES = [[1440, 900], [1280, 800], [1920, 1080]];
+// THE DESIGN'S THREE, PLUS THE TWO THE FAILURE ACTUALLY APPEARS AT. The brief names 1440x900,
+// 1280x800 and 1920x1080, and #562's clipped footer was invisible at all three: the red-team
+// found it at 1024x768, 1280x720, 1366x768 and 1440x810, which is what ordinary laptops are.
+// A fit check whose sizes cannot show the fault is arithmetic, not a gate, so the two most
+// common of those are in the list. Raised with the CTO rather than decided quietly, since it
+// widens what the ruling's number means.
+const SIZES = [[1440, 900], [1280, 800], [1920, 1080], [1366, 768], [1280, 720]];
 const THEMES = ["paper", "ink"];
 const VIEWS = ["claim", "status", "analytics", "tools"];
 const PAGES = ["/terms", "/donate", "/fund"];
@@ -43,20 +49,58 @@ const PAGES_IN_SHELL = PAGES.filter((route) => {
   const src = `src/app${route}/page.tsx`;
   return existsSync(src) && readFileSync(src, "utf8").includes('"stage"');
 });
-const RULING_COMBOS = 42;   // the number once all three pages are in the shell
+const RULING_COMBOS = 70;   // 5 sizes x 2 themes x (4 views + 3 pages), once every page is in the shell
 const PLANNED = SIZES.length * THEMES.length * (VIEWS.length + PAGES_IN_SHELL.length);
 if (PAGES_IN_SHELL.length === PAGES.length && PLANNED !== RULING_COMBOS) {
   console.error(`fit-check: every page is in the shell, so this file should plan ${RULING_COMBOS} combinations and it plans ${PLANNED}. Change the arrays and this number together, deliberately, or neither.`);
   process.exit(1);
 }
 if (PAGES_IN_SHELL.length !== PAGES.length) {
-  console.log(`fit-check: ${PAGES_IN_SHELL.length} of ${PAGES.length} pages are in the shell so far (${PAGES.filter((p) => !PAGES_IN_SHELL.includes(p)).join(", ")} still pre-redesign); planning ${PLANNED} combinations, and the ruling's ${RULING_COMBOS} applies once S5 lands.`);
+  console.log(`fit-check: ${PAGES_IN_SHELL.length} of ${PAGES.length} pages are in the shell so far (${PAGES.filter((p) => !PAGES_IN_SHELL.includes(p)).join(", ")} still pre-redesign); planning ${PLANNED} combinations, and the full ${RULING_COMBOS} applies once S5 lands.`);
 }
 
 if (!existsSync(SHELL_MARKER)) {
   console.log(`fit-check: no ${SHELL_MARKER} in this tree, so the redesign shell is not here yet and there is nothing to fit. NOT APPLICABLE, not passed.`);
   process.exit(0);
 }
+
+// WHAT "FITS" HAS TO MEAN, after the CTO's red-team found the real failure on #562: `.stage` was
+// `height:100dvh` with `overflow:hidden`, so content past the fold was not scrolled to, it was
+// CLIPPED - the footer was cut by 30 to 93px at ordinary laptop sizes and Donate TAZ, Terms and
+// GitHub could not be clicked at all, on a build whose suite reported 130 ok. Arithmetic alone
+// would have called that "scrolls" and moved on.
+//
+// So a page fits when the numbers say so AND the footer is on screen AND every footer link is
+// hit-testable where it is drawn. The last one is the property; the first two are how you
+// explain it. Run in the page so elementFromPoint sees the real compositing.
+const MEASURE = () => {
+  const st = document.querySelector(".stage");
+  const ftr = document.querySelector(".ftr");
+  const vh = window.innerHeight, vw = window.innerWidth;
+  const links = [...document.querySelectorAll(".ftr a")].map((a) => {
+    const b = a.getBoundingClientRect();
+    const x = Math.round(b.x + b.width / 2), y = Math.round(b.y + b.height / 2);
+    const hit = document.elementFromPoint(x, y);
+    return {
+      name: (a.textContent || "").trim().slice(0, 24),
+      inView: b.top >= 0 && b.bottom <= vh && b.left >= 0 && b.right <= vw,
+      reachable: !!hit && (hit === a || a.contains(hit) || hit.contains(a)),
+    };
+  });
+  const fb = ftr ? ftr.getBoundingClientRect() : null;
+  return {
+    sh: st ? st.scrollHeight : -1, ch: st ? st.clientHeight : -1,
+    sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth,
+    theme: document.documentElement.dataset.theme,
+    // Clipped rather than scrollable: the overflow exists and nothing can reach it.
+    canScroll: st ? st.scrollHeight > st.clientHeight && getComputedStyle(st).overflowY !== "hidden" : false,
+    footerBottom: fb ? Math.round(fb.bottom) : null,
+    footerCut: fb ? Math.max(0, Math.round(fb.bottom - vh)) : null,
+    links,
+  };
+};
+
+const fitsNow = (r) => r.sh <= r.ch + 1 && r.sw <= r.cw && (r.footerCut === null || r.footerCut === 0) && r.links.every((l) => l.inView && l.reachable);
 
 const browser = await chromium.launch();
 const rows = [];
@@ -99,25 +143,15 @@ for (const [W, H] of SIZES) {
       await nav.click();
       await page.locator(`[data-testid="view-${v}"]`).waitFor({ state: "visible", timeout: 5000 });
       await page.waitForTimeout(350);
-      const r = await page.evaluate(() => {
-        const st = document.querySelector(".stage");
-        return { sh: st.scrollHeight, ch: st.clientHeight, sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth };
-      });
-      rows.push({ size: `${W}x${H}`, theme, page: `/#${v}`, ...r, fits: r.sh <= r.ch + 1 && r.sw <= r.cw, themeKept: true });
+      const r = await page.evaluate(MEASURE);
+      rows.push({ size: `${W}x${H}`, theme, page: `/#${v}`, ...r, fits: fitsNow(r), themeKept: true });
     }
     if (missing) { await page.close(); break; }
     for (const p of PAGES_IN_SHELL) {
       await page.goto(BASE + p, { waitUntil: "networkidle" });
       await page.waitForTimeout(1200);
-      const r = await page.evaluate(() => {
-        const st = document.querySelector(".stage");
-        return {
-          sh: st ? st.scrollHeight : -1, ch: st ? st.clientHeight : -1,
-          sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth,
-          theme: document.documentElement.dataset.theme,
-        };
-      });
-      rows.push({ size: `${W}x${H}`, theme, page: p, ...r, fits: r.sh >= 0 && r.sh <= r.ch + 1 && r.sw <= r.cw, themeKept: r.theme === theme });
+      const r = await page.evaluate(MEASURE);
+      rows.push({ size: `${W}x${H}`, theme, page: p, ...r, fits: r.sh >= 0 && fitsNow(r), themeKept: r.theme === theme });
     }
     await page.close();
   }
@@ -128,7 +162,12 @@ await browser.close();
 if (missing) { console.error(`fit-check: FAIL - ${missing}`); process.exit(1); }
 
 for (const o of rows) {
-  console.log(`${o.size} ${o.theme.padEnd(5)} ${o.page.padEnd(11)} scroll ${o.sh}/${o.ch} ${o.fits ? "fits" : "SCROLLS"}${o.themeKept === false ? " THEME-LOST" : ""}`);
+  const unreachable = (o.links || []).filter((l) => !l.inView || !l.reachable).map((l) => l.name);
+  const why = o.fits ? "fits"
+    : o.footerCut > 0 && !o.canScroll ? `CLIPPED, footer cut by ${o.footerCut}px and the page cannot scroll`
+    : o.sh > o.ch + 1 ? "SCROLLS"
+    : unreachable.length ? "footer links unreachable" : "does not fit";
+  console.log(`${o.size} ${o.theme.padEnd(5)} ${o.page.padEnd(11)} scroll ${o.sh}/${o.ch} ${why}${unreachable.length ? ` [${unreachable.join(", ")}]` : ""}${o.themeKept === false ? " THEME-LOST" : ""}`);
 }
 console.log("errors:", errors.length ? errors : "none");
 // A RUN THAT CHECKED NOTHING IS NOT A PASS. Without this an early `break`, a bad base URL
