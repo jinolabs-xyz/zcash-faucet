@@ -115,6 +115,14 @@ test("a stale reference is still reported, and still cannot be used", () => {
   assert.equal(refs.sources.hosh?.stale, true);
   assert.equal(refs.sources.hosh?.height, 4_349_900, "reported, because an operator wants to see it");
   assert.equal(refs.used, "lightwalletd", "but the fresh lower one is what a node is judged against");
+  // AND THE FLAT FIELD SAYS THE SAME, here, where the distinction is most visible: a
+  // higher STALE source sits beside a lower fresh one, so a usedHeight taken from the
+  // wrong set reads 4,349,900 next to a `used` that names the other source. The CTO's
+  // red-team asked for this line; their stated reason - that max-over-all-sources
+  // otherwise survives - turned out not to hold (the stale-only case below already fails
+  // it, measured), but the assertion belongs here anyway: coverage that lives in another
+  // test's null branch is coverage that a later edit can remove without noticing.
+  assert.equal(refs.usedHeight, 4_349_700, "the flat height follows `used`, not the highest number present");
   assert.equal(refs.spreadBlocks, null, "one usable source is not a spread");
   assert.equal(refs.corroborated, null, "and it is not disagreement either");
 });
