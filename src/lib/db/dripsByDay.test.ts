@@ -105,10 +105,6 @@ test("a day outside the window cannot enter the series, in either direction", as
   // A row dated in the future is only reachable through a clock that was ahead when it
   // was written. The series is built from the window and filled from the rows, never the
   // other way round, so such a row has nowhere to land.
-  //
-  // The 30-day TOTAL is a different statement: DRIP_TOTALS_SQL has no upper bound, so it
-  // would count this row. That is pre-existing and not this change's to make - noted for
-  // the CTO rather than fixed quietly inside a feature PR.
   await plant("2026-08-04", 13);
   const c = await countDrips(NOW_MS);
   assert.ok(c);
@@ -116,6 +112,23 @@ test("a day outside the window cannot enter the series, in either direction", as
   assert.equal(c.byDay[29].day, LAST_DAY, "the window still ends today");
   assert.equal(sentOn(c.byDay, "2026-08-04"), null, "a future-dated row is not in the last 30 days");
   assert.equal(sentOn(c.byDay, "2026-07-03"), null, "and neither is the day before the window");
+});
+
+test("and the totals agree with the series about it, which is the whole point", async () => {
+  // THE CASE THIS TEST FILE USED TO CARRY AS A COMMENT. `last30d` had a lower bound and
+  // no upper one, so the future-dated row planted above was inside the total and outside
+  // the series: a chart that did not add up to the figure printed beside it, with nothing
+  // wrong on either side and nothing to make the disagreement visible.
+  const c = await countDrips(NOW_MS);
+  assert.ok(c);
+  assert.equal(c.byDay.reduce((n, d) => n + d.sent, 0), c.last30d, "the series still sums to the total");
+  assert.equal(c.last30d, 42 + 7 + 3, "the 13 dated in the future is in neither");
+  // 2026-07-28 is six days before NOW, so it is inside "today and the six before it"
+  // (the midnight test above pins that edge). 13 dated ahead of today is not.
+  assert.equal(c.last7d, 7 + 3, "nor in the 7-day window, which ends today as well");
+  // "Ever" means ever. A row whose day label is wrong is still a drip that went out, and
+  // dropping it from the all-time count to tidy a window would lose a real payment.
+  assert.equal(c.allTime, 42 + 7 + 3 + 99 + 13, "all-time keeps it, and the row before the window too");
 });
 
 test("each network draws its own series", async () => {
