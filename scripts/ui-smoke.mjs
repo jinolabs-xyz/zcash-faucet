@@ -1134,6 +1134,32 @@ async function checkMinerPanel(page) {
   const tone = await page.evaluate(() =>
     document.querySelector("[data-status-key='miner']")?.closest("[data-tone]")?.getAttribute("data-tone") ?? "");
   ok("and an unwatched miner is not painted as ok", tone === "unknown", `tone=${tone || "none"}`);
+
+  // THE INDEXER DID NOT VANISH WITH THE LEGACY STRIP, IT MOVED (CTO ruling 20:55Z). The
+  // strip carried a lightwalletd vendor/version row, asked for by name in community
+  // feedback. The design's Network card carries the ENDPOINT plus a reachability dot,
+  // which is the same fact under a better name: which indexer we are talking to, and
+  // whether it is answering. Asserted here so "it moved" is a checked claim rather than a
+  // sentence in a PR body, and so nobody adds a second row for it later.
+  for (const view of ["status", "analytics"]) {
+    await showView(page, view);
+    const backend = await page.evaluate((v) => {
+      const scope = document.querySelector(`[data-testid="view-${v}"]`);
+      const hit = [...(scope?.querySelectorAll("dt, .figs > span") ?? [])]
+        .find((el) => /^backend/i.test(el.textContent?.trim() ?? ""));
+      const row = hit?.closest("div, span");
+      const dot = row?.querySelector(".rdot");
+      const value = (row?.querySelector("dd") ?? row?.querySelector("b"))?.textContent?.trim() ?? "";
+      return { found: !!hit, value, dot: !!dot, on: dot?.getAttribute("data-on") ?? null };
+    }, view);
+    ok(`the ${view} view names the indexer we are talking to`,
+      backend.found && /[a-z0-9.-]+\.[a-z]{2,}(:\d+)?/i.test(backend.value), JSON.stringify(backend));
+    // The dot defaults to grey and only data-on="true" makes it green, so a backend we
+    // have not heard from cannot render as reachable.
+    ok(`and says whether it is answering, beside it`,
+      backend.dot && (backend.on === "true" || backend.on === "false"), JSON.stringify(backend));
+  }
+  await showView(page, "claim");
 }
 
 /**
@@ -1196,7 +1222,12 @@ async function checkCtazToggle(page, base) {
   // design actually promises; nothing here pretends the old property survived.
   const walletRows = async () =>
     await page.evaluate(() => {
-      const card = [...document.querySelectorAll("[data-view='status'] .card")]
+      // SCOPED BY THE SECTION'S OWN TESTID, not by [data-view='status']: the nav BUTTON
+      // carries data-view too (page.tsx:1080) and comes first in the document, so a
+      // querySelector on that attribute returns the button. This one happened to work
+      // because querySelectorAll matched both; the probe below did not, which is how it
+      // was found.
+      const card = [...document.querySelectorAll('[data-testid="view-status"] .card')]
         .find((c) => c.querySelector("h2")?.textContent?.trim() === "Wallet");
       // Only rows that are a label/value PAIR. The cTAZ group heading is a bare <div>
       // whose text is also "cTAZ", and matching it instead of the row below reads as a
@@ -1223,6 +1254,34 @@ async function checkCtazToggle(page, base) {
   const unitless = ctazRows.filter((r) => /^[\d,]+(\.\d+)?$/.test(r.value));
   ok("no wallet figure sits on the cTAZ tab without naming its unit",
     unitless.length === 0, unitless.map((r) => `${r.label}=${r.value}`).join(", ") || "none");
+
+  // THE OTHER HALF OF THE CTO'S RULING (20:55Z): the cTAZ group must be VISUALLY distinct
+  // from the wallet rows above it, and pinned, because "an untested convention is not a
+  // guarantee" and the failure mode is someone reading a TAZ balance as a cTAZ holding.
+  //
+  // TWO INDEPENDENT PROPERTIES, not one. A single pin (say, uppercase) is one CSS edit away
+  // from being flattened while still passing something; these fail separately.
+  const group = await page.evaluate(() => {
+    const card = [...document.querySelectorAll('[data-testid="view-status"] .card')]
+      .find((c) => c.querySelector("h2")?.textContent?.trim() === "Wallet");
+    const g = card?.querySelector(".rows .group");
+    const dt = card?.querySelector(".rows dt");
+    if (!g || !dt) return { missing: true };
+    const gs = getComputedStyle(g), ds = getComputedStyle(dt);
+    return {
+      text: g.textContent?.trim(),
+      width: Math.round(g.getBoundingClientRect().width),
+      transform: gs.textTransform, rowTransform: ds.textTransform,
+      weight: Number(gs.fontWeight), rowWeight: Number(ds.fontWeight),
+      tracking: gs.letterSpacing, rowTracking: ds.letterSpacing,
+    };
+  });
+  ok("the cTAZ group heading is on the card and rendered",
+    !group.missing && group.text === "cTAZ" && group.width > 0, JSON.stringify(group));
+  ok("and it is set apart from the wallet rows by case AND by weight, not by position alone",
+    !group.missing && group.transform === "uppercase" && group.rowTransform !== "uppercase"
+      && group.weight > group.rowWeight,
+    `group ${group.transform}/${group.weight} vs row ${group.rowTransform}/${group.rowWeight}`);
 
   // And the mirror, so neither assertion can pass by the card simply being empty. The
   // network tabs are the CLAIM view's, the card is the STATUS view's.
