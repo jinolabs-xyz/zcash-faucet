@@ -146,12 +146,17 @@ for (const [w, h] of VIEWPORTS) {
         const el = layers.find((l) => (getComputedStyle(l).backgroundImage || "").includes(which));
         return el ? Number(getComputedStyle(el).opacity) : null;
       };
-      // THE REACTION IS TRANSIENT, so a single sample after a fixed wait is a coin flip. MASCOT.md
-      // calls it "blink then a payoff on click": the layer rises and falls again. Sampling once
-      // at 250 ms gave 0 -> 1 on one run and 0 -> 0 on the next against an UNCHANGED page, which
-      // is a flaky gate - worse than no gate, because it teaches people to re-run CI. Polled for
-      // the PEAK across a window instead, which is the property: a click makes it fully visible
-      // at some point.
+      // A SINGLE SAMPLE AT 250 ms GAVE 0 -> 1 ON ONE RUN AND 0 -> 0 ON THE NEXT against an
+      // UNCHANGED page - a flaky gate, worse than no gate, because it teaches people to re-run
+      // CI. My first reading of WHY was wrong, and the CTO's red-team caught it: I said the
+      // reaction is transient and I was sampling past it. It is not transient at 250 ms. The
+      // preview's port of this component (MASCOT.md: the two behave the same) sets the layer to
+      // opacity 1 on click, swaps the cell to a payoff at BOOP_PAYOFF = 120 ms, and only drops
+      // back to 0 at BOOP_END = 560 ms. So 250 ms lands INSIDE the visible window, and a 0 there
+      // means the click produced no reaction at all - the handler was not attached yet.
+      // The poll is still the fix, but it is waiting for hydration rather than chasing a peak,
+      // which is why the window is 2 s and not 600 ms. Kept as a peak so a slow frame late in
+      // the window cannot fool it either.
       const beforeBoop = await page.evaluate(layerOf, "reactions");
       await page.click(".mascot-riso");
       let afterBoop = 0;
