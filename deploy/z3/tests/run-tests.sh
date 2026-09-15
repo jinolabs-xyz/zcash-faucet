@@ -472,7 +472,12 @@ echo "$pass passed, $fail failed"
 if [ -s "${HARNESS_TIMING:-/nonexistent}" ]; then
   echo
   echo "where the time went (wall clock before each result, slowest first):"
-  sort -rn "$HARNESS_TIMING" | head -8 | awk -F'\t' '{printf "  %7.1fs  %s\n", $1/1000000, $2}'
+  # `| head -8` would be the obvious spelling and it writes "sort: write failed: Broken pipe"
+  # into every run: head closes the pipe on its eighth line and sort takes SIGPIPE. Harmless,
+  # and it puts an error in the log of a green run, which is the kind of noise that teaches
+  # people to skim logs. awk reads to EOF and prints the first eight instead. Found in CI's own
+  # output on this PR rather than locally, where the message does not appear.
+  sort -rn "$HARNESS_TIMING" | awk -F'\t' 'NR<=8 {printf "  %7.1fs  %s\n", $1/1000000, $2}'
   slow="$(awk -F'\t' '$1 > 10000000' "$HARNESS_TIMING" | wc -l | tr -d ' ')"
   [ "$slow" -gt 0 ] && echo "  ($slow check(s) waited over 10s - each one should be able to say which property needs it)"
 fi
