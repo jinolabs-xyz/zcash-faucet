@@ -151,20 +151,37 @@ async function checkFooterReachable(browser) {
     await p.waitForTimeout(400);
     const label = `${vp.width}x${vp.height}`;
 
-    // Can the page be scrolled to its own bottom? This is the half the clamp broke: with
-    // overflow:hidden the content was taller AND scrollTop could not move off zero.
-    const scroll = await p.evaluate(async () => {
-      const d = document.documentElement;
-      const over = d.scrollHeight - innerHeight;
-      if (over <= 0) return { over, reached: true, scrollTop: 0 };
-      window.scrollTo(0, d.scrollHeight);
-      await new Promise((r) => setTimeout(r, 150));
-      return { over, reached: d.scrollTop >= over - 2, scrollTop: d.scrollTop };
+    // NOTHING BETWEEN THE FOOTER AND THE DOCUMENT CLIPS WHAT IT CANNOT SCROLL.
+    //
+    // This is the CAUSE rather than a symptom, and the difference cost me a measurement. My
+    // first version asked whether the document could be scrolled to its bottom. With the
+    // clamp in place `documentElement.scrollHeight` EQUALS the viewport - `.stage` clips, so
+    // the document itself never overflows - and the check took its "the page fits, nothing to
+    // scroll" branch and passed. It passed over the exact defect it was written for.
+    //
+    // Worse, whether the clamp actually cuts anything depends on how tall the content happens
+    // to be, which moves with phase, data and font metrics: the red-team measured a 30 to 93px
+    // cut, and on my fixture stack the same CSS fits 720px exactly and cuts nothing. A check
+    // that only fires in the states where the damage is already visible is not a check on the
+    // clamp, it is a check on today's content (L1).
+    //
+    // So: walk from the footer to the document and fail on any ancestor that hides overflow
+    // while having more content than box. That is "clipped with no way to reach it", and it is
+    // true or false regardless of whether this run's content happens to trip it.
+    const clip = await p.evaluate(() => {
+      const found = [];
+      for (let e = document.querySelector(".ftr"); e; e = e.parentElement) {
+        const cs = getComputedStyle(e);
+        const hidden = cs.overflowY === "hidden" || cs.overflowY === "clip";
+        const over = e.scrollHeight - e.clientHeight;
+        if (hidden && over > 1) {
+          found.push(`${e.tagName.toLowerCase()}${e.className ? "." + String(e.className).split(" ")[0] : ""} hides ${over}px`);
+        }
+      }
+      return found;
     });
-    ok(`${label}: the page can be scrolled to its own bottom, not clipped at it`,
-      scroll.reached,
-      scroll.over <= 0 ? "the page fits, so there was nothing to scroll"
-        : `${scroll.over}px past the fold and scrollTop stopped at ${scroll.scrollTop}`);
+    ok(`${label}: nothing between the footer and the document clips content it cannot scroll`,
+      clip.length === 0, clip.join("; ") || "no clipping ancestor");
 
     const r = await p.evaluate(() => {
       document.querySelector(".ftr")?.scrollIntoView({ block: "end" });
