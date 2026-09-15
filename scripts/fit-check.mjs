@@ -87,6 +87,19 @@ if (!existsSync(SHELL_MARKER)) {
 // So a page fits when the numbers say so AND the footer is on screen AND every footer link is
 // hit-testable where it is drawn. The last one is the property; the first two are how you
 // explain it. Run in the page so elementFromPoint sees the real compositing.
+// WHICH ELEMENT SCROLLS IS NOT FIXED, and assuming it cost me a false BLOCK on the PR this
+// check exists to protect (#562, review of 09e55d6). While `.stage` carried the one-screen
+// clamp it was the scroller; with the clamp overridden it is `height:auto` and the DOCUMENT
+// scrolls. Reading `.stage` on the fixed page reported "CLIPPED, the page cannot scroll" about
+// a page that scrolls perfectly well - the mirror of the mistake this check was written to
+// catch, one element over. So the scroller is whichever one actually scrolls, and reachability
+// is judged AFTER scrolling rather than from the first paint.
+const SCROLL_TO_BOTTOM = () => {
+  const st = document.querySelector(".stage");
+  if (st && st.scrollHeight > st.clientHeight) st.scrollTop = st.scrollHeight;
+  window.scrollTo(0, document.documentElement.scrollHeight);
+};
+
 const MEASURE = () => {
   const st = document.querySelector(".stage");
   const ftr = document.querySelector(".ftr");
@@ -119,8 +132,14 @@ const MEASURE = () => {
     }
   }
   const fb = ftr ? ftr.getBoundingClientRect() : null;
+  const doc = document.documentElement;
+  const stScrolls = st ? st.scrollHeight > st.clientHeight : false;
   return {
     clipping,
+    // The scroller, named, so a failure says which box it judged.
+    scroller: stScrolls ? ".stage" : "document",
+    docScroll: doc.scrollHeight, docClient: doc.clientHeight,
+    oneScreen: doc.scrollHeight <= doc.clientHeight + 1 && (!st || st.scrollHeight <= st.clientHeight + 1),
     sh: st ? st.scrollHeight : -1, ch: st ? st.clientHeight : -1,
     sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth,
     theme: document.documentElement.dataset.theme,
@@ -132,11 +151,20 @@ const MEASURE = () => {
   };
 };
 
+// THE ONE-SCREEN RULE IS KEYED TO THE TREE, not to a date. S1 overrides the clamp on purpose
+// while the views hold pre-redesign content, and the CTO's ruling is that it returns with the
+// content designed for it, enforced here per slice. So the tree says whether to demand it: the
+// override carries its own heading, and its absence is the clamp being back.
+const CLAMP_OVERRIDDEN = existsSync("src/app/redesign-shell.css")
+  && readFileSync("src/app/redesign-shell.css", "utf8").includes("NOT YET: the one-screen clamp");
+
+// Always: nothing clipped, nothing wider than the screen, and every footer link reachable once
+// the reader has scrolled. Additionally, once the clamp is back: it all fits one screen.
 const fitsNow = (r) =>
   (r.clipping || []).length === 0 &&
-  r.sh <= r.ch + 1 && r.sw <= r.cw &&
-  (r.footerCut === null || r.footerCut === 0) &&
-  r.links.every((l) => l.inView && l.reachable);
+  r.sw <= r.cw &&
+  r.links.every((l) => l.inView && l.reachable) &&
+  (CLAMP_OVERRIDDEN || r.oneScreen);
 
 const browser = await chromium.launch();
 const rows = [];
@@ -179,6 +207,8 @@ for (const [W, H] of SIZES) {
       await nav.click();
       await page.locator(`[data-testid="view-${v}"]`).waitFor({ state: "visible", timeout: 5000 });
       await page.waitForTimeout(350);
+      await page.evaluate(SCROLL_TO_BOTTOM);
+      await page.waitForTimeout(150);
       const r = await page.evaluate(MEASURE);
       rows.push({ size: `${W}x${H}`, theme, page: `/#${v}`, ...r, fits: fitsNow(r), themeKept: true });
     }
@@ -186,6 +216,8 @@ for (const [W, H] of SIZES) {
     for (const p of PAGES_IN_SHELL) {
       await page.goto(BASE + p, { waitUntil: "networkidle" });
       await page.waitForTimeout(1200);
+      await page.evaluate(SCROLL_TO_BOTTOM);
+      await page.waitForTimeout(150);
       const r = await page.evaluate(MEASURE);
       rows.push({ size: `${W}x${H}`, theme, page: p, ...r, fits: r.sh >= 0 && fitsNow(r), themeKept: r.theme === theme });
     }
@@ -202,10 +234,11 @@ for (const o of rows) {
   const clipped = (o.clipping || []).map((c) => `${c.el} hides ${c.hidden}px`).join(", ");
   const why = o.fits ? "fits"
     : clipped ? `CLIPPED by an ancestor (${clipped})`
-    : o.footerCut > 0 && !o.canScroll ? `CLIPPED, footer cut by ${o.footerCut}px and the page cannot scroll`
-    : o.sh > o.ch + 1 ? "SCROLLS"
-    : unreachable.length ? "footer links unreachable" : "does not fit";
-  console.log(`${o.size} ${o.theme.padEnd(5)} ${o.page.padEnd(11)} scroll ${o.sh}/${o.ch} ${why}${unreachable.length ? ` [${unreachable.join(", ")}]` : ""}${o.themeKept === false ? " THEME-LOST" : ""}`);
+    : unreachable.length ? `footer links unreachable after scrolling [${unreachable.join(", ")}]`
+    : o.sw > o.cw ? "wider than the screen"
+    : !o.oneScreen ? `does not fit one screen (${o.docScroll} of ${o.docClient}), and the clamp is not overridden`
+    : "does not fit";
+  console.log(`${o.size} ${o.theme.padEnd(5)} ${o.page.padEnd(11)} doc ${o.docScroll}/${o.docClient} via ${o.scroller} ${why}${o.themeKept === false ? " THEME-LOST" : ""}`);
 }
 console.log("errors:", errors.length ? errors : "none");
 // A RUN THAT CHECKED NOTHING IS NOT A PASS. Without this an early `break`, a bad base URL
