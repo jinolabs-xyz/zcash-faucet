@@ -1458,3 +1458,51 @@ check "the image job measures each sheet against MASCOT.md's 300 KB and refuses 
   "grep -qF 'LIMIT=307200' '$CIWF' && grep -q 'the sheets ship as WebP' '$CIWF'"
 check "and the CI context probe proves the sheets reach the image, both directions" \
   "grep -qF '/ctx/public/mascots/fox-riso-directions.webp' '$CIWF' && grep -qF 'echo \"html\" > \"\$ctx/design/faucet-architecture.html\"' '$CIWF'"
+
+echo "== repo: parity with the approved design is a committed check, against a vendored spec"
+# THE SPEC IS IN THE REPO OR THE CHECK IS A STORY. A parity check that reads the live share
+# directory compares against whatever the last edit did - the preview moved three times during
+# one slice - so the snapshot is vendored as a golden file and the check names it.
+check "the spec is vendored, not read from a directory outside the repo" \
+  "[ -s '$REPO/design/spec/S1-20260915T1938Z/shell.css' ] && ! grep -q 'ipc/share' '$REPO/scripts/parity-check.mjs'"
+check "and the CI step names that snapshot rather than a moving path" \
+  "grep -qF 'node scripts/parity-check.mjs design/spec/S1-20260915T1938Z/shell.css' '$CIWF'"
+# A DEPARTURES FILE IS A PLACE TO HIDE A DIVERGENCE unless it is held to describing one, which
+# is the same shape as an override that quietly retires the default it was added to test.
+check "a declaration that no longer describes a divergence fails, so the list cannot rot" \
+  "grep -q 'STALE DEPARTURE, no longer differs' '$REPO/scripts/parity-check.mjs'"
+# A DECLARATION NAMES WHAT WE SHIP (SDE-App predicted this before the file existed: a departures
+# file is a place to hide a divergence). Declared by SELECTOR alone, a second and different
+# change to an already-declared rule inherits the old label - measured, an added outline on
+# .badge .dot passed with the selector declared.
+check "and a declaration names the body it declares, so a second change cannot inherit its label" \
+  "grep -q 'DECLARED WITH A DIFFERENT BODY' '$REPO/scripts/parity-check.mjs' && grep -qF 'a declaration must name what we ship' '$REPO/scripts/parity-check.mjs'"
+# EVERY departures file, not one path. There is a file per vendored spec now: a single flat
+# one looked fine until the hero was compared against S2's document and all fifteen of S1's
+# declarations came back as stale, because they do not differ in a comparison they were never
+# about. A pin naming one path would have gone quiet the moment the second file appeared.
+# THREE HALVES NOW, NOT TWO. A departures file that mixes "we differ from the design" with "a
+# floor of ours the design cannot satisfy" means neither: the count tells a reviewer nothing
+# about whether the design is being ignored or protected. SDE-UI found the case on #576 - the
+# design's own copy control is 26px at the mobile unit, under the 44px tap target ui-smoke
+# enforces, so a FAITHFUL transcription broke a rule that lives outside the spec. CTO ruling.
+# AND `shipped` MAY BE THE EMPTY STRING, WHICH IS A BODY RATHER THAN A MISSING FIELD. This was
+# written when only ADDED and CHANGED were gated, so every declaration described a rule we ship and
+# every body was non-empty. DROPPED became enforceable the day the transcription completed, and a
+# rule the spec has and we ship NOWHERE declares the body "" - there is nothing else it could say.
+# Requiring truthiness put the two gates in direct contradiction: parity-check compares the declared
+# body against the shipped one, so "" is the only value that passes there, and any sentinel this
+# check would have accepted reads as DECLARED WITH A DIFFERENT BODY. `is not None` keeps the intent
+# whole: the field stays mandatory, and shipping the rule later still makes the declaration stale.
+check "every declaration in every departures file carries all three halves, kind included" \
+  "python3 -c \"import json,sys,glob; fs=glob.glob('$REPO/design/spec/*/departures.json'); sys.exit(1 if not fs else (1 if [k for f in fs for k,v in json.load(open(f)).items() if not k.startswith('_') and not (isinstance(v,dict) and v.get('why') and v.get('shipped') is not None and v.get('kind') in ('divergence','override'))] else 0))\""
+check "and the checker refuses a declaration that does not name its kind, rather than defaulting" \
+  "grep -qF 'UNKINDED DECLARATION' '$REPO/scripts/parity-check.mjs' && grep -qF 'means both means neither' '$REPO/scripts/parity-check.mjs'"
+check "and every vendored spec has one beside it, so a slice cannot depart undeclared" \
+  "python3 -c \"import sys,glob,os; specs=[d for d in glob.glob('$REPO/design/spec/*/') ]; sys.exit(0 if all(os.path.exists(d+'departures.json') for d in specs) else 1)\""
+check "and the CI step runs a comparison for every vendored spec" \
+  "[ \"\$(grep -c 'node scripts/parity-check.mjs design/spec/' '$CIWF')\" = \"\$(ls -d '$REPO'/design/spec/*/ | wc -l | tr -d ' ')\" ]"
+check "and the check reports what the spec has and we DROPPED, not only what we added" \
+  "grep -qF 'in the spec, not shipped' '$REPO/scripts/parity-check.mjs'"
+check "a rule moved into a media query is not counted as parity" \
+  "grep -qF 'context ?' '$REPO/scripts/parity-check.mjs' && grep -qF 'prelude.startsWith(\"@\")' '$REPO/scripts/parity-check.mjs'"
