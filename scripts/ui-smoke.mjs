@@ -306,11 +306,27 @@ async function checkHoverUnderAFlip(browser) {
     ok(`${theme}: hovering actually changes something, so this is not the rest pass relabelled`,
       reacts > 0, `${reacts} of ${before.length} links react to hover`);
 
+    // AND THE FLIP HAS TO ACTUALLY TAKE, which this check was not asserting (SDE-Infra, peer
+    // review). `checkChunkOrderIdentity` twenty lines up refuses with "the flip did not take: N
+    // stylesheet(s)" when there are fewer than two sheets to reorder; this one moved the links
+    // and then compared, without ever asking whether anything moved. On a page serving one
+    // stylesheet the reorder is a no-op, every reading is identical, `moved === 0` is true, and
+    // the cell reports green having visited nothing - the same vacuity the engagement guard
+    // above exists to prevent, one axis over.
+    //
+    // LATENT RATHER THAN LIVE, and they said so in those words after counting: the built page
+    // serves exactly two sheets today. It matters because the CSS import graph is being
+    // rewritten this week by three PRs and Next decides the chunk count, not us.
+    const order = () => p.evaluate(() =>
+      [...document.querySelectorAll('link[rel="stylesheet"]')].map((l) => l.href));
+    const sheetsBefore = await order();
     await p.evaluate(() => {
       const ls = [...document.querySelectorAll('link[rel="stylesheet"]')];
       if (ls.length >= 2) ls[0].parentNode.insertBefore(ls[ls.length - 1], ls[0]);
     });
     await p.waitForTimeout(400);
+    const sheetsAfter = await order();
+    const flipped = sheetsBefore.length >= 2 && sheetsBefore.join() !== sheetsAfter.join();
     const after = await sweep();
 
     let moved = 0, first = "";
@@ -325,8 +341,9 @@ async function checkHoverUnderAFlip(browser) {
     // it would go red the next time the design drops a footer link, for a reason that has
     // nothing to do with the cascade.
     ok(`${theme}: no link's HOVER styling changes when the CSS chunks are linked in the other order`,
-      before.length >= 4 && moved === 0,
-      before.length < 4 ? `only ${before.length} links hovered, too few to judge`
+      flipped && before.length >= 4 && moved === 0,
+      !flipped ? `the flip did not take: ${sheetsBefore.length} stylesheet(s)`
+        : before.length < 4 ? `only ${before.length} links hovered, too few to judge`
         : `${before.length} links hovered, ${moved} moved${first ? "; first: " + first : ""}`);
     await c.close();
   }
