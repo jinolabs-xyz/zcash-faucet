@@ -65,7 +65,7 @@ export default async function Fund() {
               <div className="panel">
                 <span className="lbl">Mainnet ZEC, shielded</span>
                 <code className="addr" id="fund">{maintenance}</code>
-                <CopyAddress address={maintenance} label="Mainnet donation address" />
+                <CopyAddress address={maintenance} label="Mainnet donation address" variant="panel" />
                 {/* Beside the address, not under the fold. The design puts it here and it is
                     the only irreversible action on the site. */}
                 <p className="warn-line">Check the address first. Mainnet sends cannot be reversed.</p>
