@@ -91,6 +91,29 @@
 .grid2 .card{display:flex;flex-direction:column}
 .grid2 .card .panel{min-height:calc(14.5*var(--u));justify-content:flex-start}
 .grid2 .card .card-copy{flex:1}
+/* THE COLLAPSE, BESIDE THE RULE IT OVERRIDES (#623). These four moved out of
+ * redesign-shell.css's breakpoint block, where they were inert: Shell.tsx imports the shell at
+ * line 32 and this file at line 34, so the base rule above was emitted last and won at equal
+ * specificity. The grid never collapsed - measured on 734d9f4, three 96.27px columns at a 360px
+ * viewport, which painted a 112.5px word past the right edge of a document that does not scroll.
+ * Here they are after the rule they override, in the same file, so no import order can disarm
+ * them - exactly how .pcards below has always carried its own, and why .pcards never had this
+ * bug. The selectors are the spec's, unchanged, so the design is shipped rather than departed
+ * from.
+ *
+ * AND THEY SIT AFTER .grid2's BASE RULE AS WELL AS .grid3's, which is the whole point and which I
+ * got wrong first: the move put them BETWEEN the two, so .grid3 collapsed and .grid2 stayed
+ * two-across at every width - the identical defect, one selector along, inside the fix for it.
+ * SDE-App caught it on the rendered screen (#627 review). "After the rule it overrides" means
+ * after EVERY rule it overrides. */
+@media (max-width:64rem){
+  .grid3{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .grid3 > :last-child{grid-column:1 / -1}
+}
+@media (max-width:32rem){
+  .grid3,.grid2{grid-template-columns:1fr}
+  .grid3 > :last-child{grid-column:auto}
+}
 
 .rows{margin:calc(.9*var(--u)) 0 0;padding:0;display:grid;font-size:calc(.86*var(--u))}
 .rows > div{display:flex;justify-content:space-between;gap:calc(.8*var(--u));padding:calc(.5*var(--u)) 0;border-top:calc(.06*var(--u)) solid var(--hair)}
