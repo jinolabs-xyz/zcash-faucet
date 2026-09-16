@@ -2,9 +2,7 @@
   "name": "zcash-testnet-faucet",
   "version": "0.1.0",
   "private": true,
-  "engines": {
-    "node": ">=24"
-  },
+  "engines": { "node": ">=24" },
   "description": "Zcash testnet (TAZ) faucet. Next.js + public lightwalletd backend, Z3-era stack (zcashd is EOL).",
   "scripts": {
     "dev": "next dev",
