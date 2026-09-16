@@ -69,6 +69,13 @@ case "$*" in
     #   disagree two fresh sources far apart, corroborated false, usedHeight = the higher one
     #   single   one fresh source, corroborated NULL (one source is not agreement)
     #   none     nothing usable: sources {}, used null, usedHeight null, corroborated null
+    #   stale    ANSWERED BUT NOT TRUSTED: one source keeps the height it last had, `stale`
+    #            true, and `used`/`usedHeight` are null because nothing is usable. This is the
+    #            state that separates a LAGGING reference from a DARK one, and until now no
+    #            shape could express it - every other shape hard-codes stale:false, so a height
+    #            and an unusable reference could never appear together (SDE-UI, review of #631).
+    #            STUB_READY_USEDHEIGHT is the height the stale source still carries; nothing is
+    #            usable, so it does NOT become usedHeight.
     #   absent   no tipReferences field at all, as a body from before #559 (the default)
     refs=""
     uh="${STUB_READY_USEDHEIGHT:-}"
@@ -110,6 +117,9 @@ case "$*" in
       single)
         [ -n "$uh" ] || { echo "stub curl: STUB_READY_REFS=single needs STUB_READY_USEDHEIGHT" >&2; exit 64; }
         refs=",\"tipReferences\":{\"sources\":{\"hosh\":{\"height\":${uh},\"ageSeconds\":2,\"stale\":false,\"host\":null}},\"spreadBlocks\":null,\"corroborated\":null,\"used\":\"hosh\",\"usedHeight\":${uh},\"hoshHeight\":${uh},\"lightwalletdHeight\":null}" ;;
+      stale)
+        [ -n "$uh" ] || { echo "stub curl: STUB_READY_REFS=stale needs STUB_READY_USEDHEIGHT" >&2; exit 64; }
+        refs=",\"tipReferences\":{\"sources\":{\"hosh\":{\"height\":${uh},\"ageSeconds\":900,\"stale\":true,\"host\":null}},\"spreadBlocks\":null,\"corroborated\":null,\"used\":null,\"usedHeight\":null,\"hoshHeight\":${uh},\"lightwalletdHeight\":null}" ;;
       none)
         refs=",\"tipReferences\":{\"sources\":{},\"spreadBlocks\":null,\"corroborated\":null,\"used\":null,\"usedHeight\":null,\"hoshHeight\":null,\"lightwalletdHeight\":null}" ;;
       *) echo "stub curl: unsupported reference shape: $shape" >&2; exit 64 ;;
