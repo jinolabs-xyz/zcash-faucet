@@ -236,6 +236,82 @@ async function checkChunkOrderIdentity(browser) {
     await c.close();
   }
   }
+  await checkHoverUnderAFlip(browser);
+}
+
+/* THE CELL NO OTHER CHECK VISITS: hover AND the chunk flip, in one pass.
+ *
+ * Found by SDE-UI reviewing this PR, and it is the sharpest thing anyone caught here. The
+ * `.stage a:hover` row in the body comes from DELETING the rule, which proves the RULE matters
+ * and says nothing about the RAISE - and the raise is what the PR is for. Restoring the tie,
+ * `.stage a:hover` back to a bare `a:hover`, survives the whole suite: the identity check flips
+ * the order at rest and under keyboard focus and never hovers, and the palette probe hovers and
+ * never flips. The tie needs both axes at once and nothing went there.
+ *
+ * States are a PRODUCT, not a list (L24). Theme x order x pointer is eight cells; checking both
+ * themes and both orders is four of them.
+ *
+ * Every visible link rather than one: UI's first two probes read `.tag`, which matches nothing on
+ * this tree, and then the first link on the page, which is a nav link with a more specific rule
+ * that wins at any order - an inconclusive read that would have looked like a refutation. Only
+ * enumerating them found footer-brand, the one that moves. */
+async function checkHoverUnderAFlip(browser) {
+  for (const theme of ["paper", "ink"]) {
+    const c = await browser.newContext({ viewport: DESKTOP });
+    const p = await c.newPage();
+    await p.goto(BASE, { waitUntil: "networkidle" });
+    await p.evaluate((t) => {
+      try { localStorage.setItem("zfaucet_theme", t); } catch {}
+      document.documentElement.dataset.theme = t;
+    }, theme);
+    await p.waitForTimeout(300);
+
+    const links = await p.$$("a[href]");
+    const sweep = async () => {
+      const seen = [];
+      for (const el of links) {
+        const box = await el.boundingBox().catch(() => null);
+        if (!box || box.width < 2 || box.height < 2) continue;
+        await p.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await p.waitForTimeout(25);
+        // NAME the link, because the one that moves here is an icon link with no text at all -
+        // the first run reported "  rgb(174,24,0) -> rgb(124,20,5)" with an empty name, which is
+        // a row that cannot say what it found.
+        seen.push(await el.evaluate((n) => {
+          const name = (n.textContent || "").trim() || n.getAttribute("aria-label")
+            || (n.className || "").toString().split(" ")[0] || n.getAttribute("href") || "(link)";
+          return `${name.slice(0, 22)}|${getComputedStyle(n).color}`;
+        }));
+      }
+      await p.mouse.move(2, 2);
+      return seen;
+    };
+
+    const before = await sweep();
+    await p.evaluate(() => {
+      const ls = [...document.querySelectorAll('link[rel="stylesheet"]')];
+      if (ls.length >= 2) ls[0].parentNode.insertBefore(ls[ls.length - 1], ls[0]);
+    });
+    await p.waitForTimeout(400);
+    const after = await sweep();
+
+    let moved = 0, first = "";
+    for (let k = 0; k < Math.min(before.length, after.length); k++) {
+      if (before[k] === after[k]) continue;
+      moved++;
+      if (!first) first = `${before[k].split("|")[0]} ${before[k].split("|")[1]} -> ${after[k].split("|")[1]}`;
+    }
+    // The floor is the anti-vacuity: a page that rendered no links would otherwise report
+    // "0 moved" and go green. FOUR rather than six, deliberately - this tree hovers exactly six,
+    // and a floor equal to today's count is a pin on the link count wearing a guard's clothes:
+    // it would go red the next time the design drops a footer link, for a reason that has
+    // nothing to do with the cascade.
+    ok(`${theme}: no link's HOVER colour changes when the CSS chunks are linked in the other order`,
+      before.length >= 4 && moved === 0,
+      before.length < 4 ? `only ${before.length} links hovered, too few to judge`
+        : `${before.length} links hovered, ${moved} moved${first ? "; first: " + first : ""}`);
+    await c.close();
+  }
 }
 
 async function checkLegacyPalette(browser) {
