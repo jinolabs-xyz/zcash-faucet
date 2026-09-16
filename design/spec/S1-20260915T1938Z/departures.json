@@ -51,16 +51,6 @@
     "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `:focus-visible`; the rule is shipped as `html :focus-visible`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs.",
     "shipped": ""
   },
-  "@media (max-width:32rem) | .seg button": {
-    "kind": "override",
-    "why": "WCAG 2.5.5 target size at the phone breakpoint: 26px to 44px.",
-    "shipped": "flex:1; padding:0 || min-height:44px"
-  },
-  "@media (max-width:32rem) | .strip": {
-    "kind": "override",
-    "why": "WCAG 2.5.5 target size at the phone breakpoint: 32px to 44px.",
-    "shipped": "height:auto; min-height:44px || padding-right:calc(.35*var(--u))"
-  },
   "@media (min-width:56rem) | .comp": {
     "kind": "override",
     "why": "The same override: the spec pins .comp to 100dvh here.",
