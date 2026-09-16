@@ -20,11 +20,6 @@
     "why": "The scrolling half of that column: `flex:1 1 auto; min-height:0; overflow:auto` is what lets the panel take the remaining height and scroll inside it rather than growing the card past the viewport. min-height:0 is load-bearing - without it a flex child refuses to shrink below its content and the overflow never engages.",
     "shipped": "flex:1 1 auto; min-height:0; overflow:auto"
   },
-  "@media (max-width:56rem) | .view.sub .tag": {
-    "kind": "override",
-    "why": "A 44px TAP FLOOR THE DESIGN DOES NOT CARRY. The approved preview is a desktop mock with no touch-target rule anywhere. SDE-App's #593 survey found nine scoped floors across this codebase with three different triggers, and this is one of them; it comes out when #593 unifies the subjects and the trigger together.",
-    "shipped": "min-height:44px"
-  },
   "body": {
     "kind": "override",
     "shipped": "",

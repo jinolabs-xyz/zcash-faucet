@@ -87,7 +87,6 @@
  *
  * I found this by running the suite after making the change, not before: the check that caught
  * it is one somebody wrote months ago for the claim page, doing its job on a page it predates. */
-@media (max-width:56rem){.view.sub .tag{min-height:44px}}
 
 @media (max-width:56rem){.hero-grid.two{grid-template-columns:1fr}.terms{grid-template-columns:1fr}}
 

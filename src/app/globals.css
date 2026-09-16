@@ -182,15 +182,88 @@ a:hover { color: var(--color-accent-800); }
   .nav-back-short { display: inline; }
 }
 
-/* fingers need bigger targets than mice: 44px is the accessibility floor */
-@media (pointer: coarse) {
-  .app .btn-sm { min-height: 44px; }
-  /* The icon controls were missed by the rule above, because it keys on .btn-sm
-     and these are .theme-toggle. Both the theme button and the source link were
-     30x30 on a phone, which is under the floor for the two controls in the
-     masthead that a finger is most likely to reach for. The square shape is the
-     point of them, so both dimensions grow together rather than just the height. */
-  .app .theme-toggle { width: 44px; height: 44px; }
+/* ===== THE TAP FLOOR. ONE RULE, ONE TRIGGER, EVERY SURFACE =====
+   Fingers need bigger targets than mice; 44px is the floor. This replaces nine rules that
+   were spread over five sheets and - the worse half - disagreed about WHEN a floor applies:
+
+     (pointer: coarse)   .app .btn-sm · .app .theme-toggle
+     (max-width:32rem)   .seg button · .strip · #lookupform .prompt,.tag.ink
+     (max-width:56rem)   .view.sub .tag · .hero-copy .chips .tag · .card.claim .tag,.tabs
+                         button · .card.claim .prompt,.automate,.linkbtn
+
+   Three answers to one question, and every gap between them is a device someone is holding.
+   MEASURED, on a 1024x768 tablet WITH touch: twenty controls under the floor and not one rule
+   reaching them, because 1024 is past 56rem and the two coarse rules key on classes the
+   redesign does not use. Every hero chip at 25.2px, the segmented nav at 28.6, the footer
+   links at 17.5, and the primary claim button at 42.9 - the whole page, with no floor at all,
+   on the device most likely to be touched.
+
+   THE TRIGGER IS `any-pointer: coarse`. A floor exists because a finger is imprecise, not
+   because a window is narrow, so width was only ever a proxy for touch - wrong in both
+   directions, missing the 1024 tablet above and firing on a 400px desktop window where a mouse
+   needs no floor. Narrow non-touch windows losing a floor they did not need is a deliberate
+   behaviour change.
+
+   `any-pointer`, NOT `pointer`, and SDE-Infra found the difference. `pointer` describes the
+   PRIMARY input, so a touchscreen laptop - `pointer:fine`, `any-pointer:coarse` - would get no
+   floor with a finger on the glass: the same hole as the 1024 tablet, one device along. I
+   deleted nine rules to stop a trigger being a proxy and then reached for a trigger that is a
+   proxy for something else. `any-pointer: coarse` asks the question the floor is about: can any
+   input on this device be a finger. The cost is that a touchscreen laptop's mouse user also
+   gets 44px controls, which is the right trade - a bigger target does not break a mouse, a
+   too-small one does break a finger.
+
+   AND NO ROW IN THIS SUITE CAN VERIFY WHICH TOKEN IS IN FORCE. Chromium emulation cannot
+   produce `pointer:fine` with `any-pointer:coarse` - hasTouch sets both together - so
+   `pointer`, `any-pointer` and `hover:none` are indistinguishable here; the CTO's red-team
+   measured `hover:none` at 288/0. Swapping the query does not become tested by swapping it.
+   What the rows DO pin is that the trigger is conditional at all: the floor applies under touch
+   and not under a fine pointer. This paragraph is a reasoned choice stated as one.
+
+   PROSE LINKS ARE EXEMPT, on purpose. A link inside a sentence (`jinolabs.xyz` at 11px, "donate
+   TAZ" at 14px) cannot be given a 44px box without wrecking the paragraph, and WCAG 2.5.8
+   exempts targets "in a sentence or block of text" for exactly that reason. So the subjects are
+   controls and navigation, named as such, rather than every `a` on the page.
+
+   `inline-flex` with centring rides along because `min-height` alone only grows the BOX: an
+   anchor whose line is 17px would sit at the top of a 44px target with 27px of dead space under
+   it, which looks like a bug and mis-places the thing a finger aims at. */
+@media (any-pointer: coarse) {
+  button,
+  input:not([type="hidden"]),
+  select,
+  textarea,
+  nav a,
+  button.tag,
+  a.tag,
+  .home,
+  .morelink,
+  .linkbtn,
+  .footer-brand { min-height: 44px; }
+
+  nav a,
+  .home,
+  .morelink,
+  .linkbtn,
+  .footer-brand { display: inline-flex; align-items: center; }
+
+  /* `.tag` IS TWO THINGS AND ONLY ONE OF THEM IS A TARGET. The chip is a `button` or an `a` in
+     the hero and the card, and a bare `span` in the status and analytics cards, where it is a
+     LABEL - "miner unwatched", "sends unknown". A floor on the class grew those pills to 44px
+     under touch: 18px of padding around a word nobody can press, measured at 30px before and
+     44 after. Named by element rather than by inventing a class, because the two uses are
+     already distinguishable. Found by the CTO's red-team. */
+
+  /* THE SQUARE IS A FLOOR, NOT A SIZE, AND THAT IS WHAT FIXES IT. Written as `width: 44px`
+     this rule is (0,1,0) and LOST to redesign-shell.css:82, `html .iconbtn` at (0,1,1), which
+     sets `width: calc(2.4*var(--u))`. `min-height` came through anyway because nothing else
+     declares one - so the control kept its height, lost its width, and the theme toggle SHRANK
+     against main: 44x44 there, 25-34 wide here. Main's rule was `.app .theme-toggle` at
+     (0,2,0), which outranked the shell; deleting it without matching its weight is what broke
+     it, and the row that should have caught it measured height only.
+     `min-width` has no competitor at any specificity, so the floor applies without a
+     specificity fight - and a floor is what this whole rule is, rather than a fixed size. */
+  .theme-toggle, .iconbtn { min-width: 44px; min-height: 44px; }
 }
 
 /* ── The footer, and why it stops sticking on a phone ────────────────────────
