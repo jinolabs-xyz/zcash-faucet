@@ -553,6 +553,86 @@ async function checkCardInnerPadding(browser) {
   }
 }
 
+async function checkLivePhasePanelsWearTheBox(browser) {
+  // THE PROBE ROW ABOVE IS A CLAIM ABOUT THE RULE. This one is the claim about the MARKUP, and
+  // the CTO's red-team is why it exists: rename `class="phase"` on a single panel and the probe
+  // row stays green (the injected div still matches `.phase`), while the live row prints "only
+  // the rule was measured" as ok. The family passed over a real defect on a real panel. That is
+  // L33 exactly - I named it in the comment up there and then did not close it, which is worse
+  // than not having noticed.
+  //
+  // No `.phase` is on screen at rest because all thirteen sit behind a state, so the state is
+  // DRIVEN. The mutations are the ones `phase-sweep.mjs` uses (its PHASES array), deliberately,
+  // so the two instruments disagree loudly rather than quietly if either drifts.
+  const base = await (await fetch(`${BASE}/api/status`)).json();
+  const DRIVEN = [
+    ["syncing", (s2) => { s2.node = { ...(s2.node ?? {}), ready: false }; return s2; }],
+    ["fault", (s2) => { s2.backend = { ...(s2.backend ?? {}), reachable: false }; return s2; }],
+    ["empty", (s2) => { s2.empty = true; s2.balanceTaz = 0; if (s2.reserve) s2.reserve.refilling = false; return s2; }],
+    ["topping-up", (s2) => { s2.empty = true; s2.balanceTaz = 0;
+      s2.reserve = { ...(s2.reserve ?? { targetTaz: 100, lowTaz: 5, spendableTaz: 0 }), refilling: true, shieldCoinbase: true };
+      s2.miner = { ...(s2.miner ?? {}), active: true }; return s2; }],
+    ["degraded", (s2) => { s2.sends = { ...(s2.sends ?? {}), state: "degraded" }; return s2; }],
+  ];
+
+  const seen = [];
+  for (const [name, mutate] of DRIVEN) {
+    const c = await browser.newContext({ viewport: DESKTOP });
+    const p = await c.newPage();
+    await p.route("**/api/status", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(mutate(JSON.parse(JSON.stringify(base)))) }));
+    await p.goto(BASE, { waitUntil: "domcontentloaded" });
+    await p.waitForSelector("#claim", { timeout: 15_000 }).catch(() => {});
+    // The panel arrives with the status, not with the document.
+    await p.waitForSelector(".card.claim .phase", { timeout: 8_000 }).catch(() => {});
+
+    const r = await p.evaluate(() => {
+      const px = (v) => Math.round(parseFloat(v) * 10) / 10 || 0;
+      const live = [...document.querySelectorAll(".card.claim .phase")].filter((el) => el.getClientRects().length);
+      // What the card is actually showing, whatever it is called. If the class was renamed this
+      // still finds the panel by its data attribute, so the row can say "a panel is on screen and
+      // it is not a .phase" rather than the much weaker "no .phase found".
+      const byData = [...document.querySelectorAll(".card.claim [data-phase]")].filter((el) => el.getClientRects().length);
+      const box = (el) => {
+        const cs = getComputedStyle(el);
+        return { padT: px(cs.paddingTop), padL: px(cs.paddingLeft), bor: px(cs.borderTopWidth),
+          rad: px(cs.borderTopLeftRadius),
+          painted: cs.backgroundImage !== "none"
+            || (cs.backgroundColor !== "rgba(0, 0, 0, 0)" && cs.backgroundColor !== "transparent") };
+      };
+      return {
+        liveCount: live.length,
+        dataCount: byData.length,
+        names: byData.map((el) => el.getAttribute("data-phase")),
+        classes: byData.map((el) => String(el.className || "(none)")),
+        boxes: live.map(box),
+      };
+    });
+
+    const dressed = (b) => b.padT > 0 && b.padL > 0 && b.bor > 0 && b.rad > 0 && b.painted;
+    seen.push(`${name}->${r.names.join("/") || "none"}`);
+
+    // A panel is on screen AND it is a .phase. These are two different failures and the detail
+    // says which: a renamed class shows as dataCount 1, liveCount 0, and names the class it wore.
+    ok(`driving ${name}: the panel the card shows is a .phase`,
+      r.dataCount >= 1 && r.liveCount === r.dataCount,
+      r.dataCount < 1 ? "no [data-phase] panel rendered at all - the state did not drive"
+        : `${r.dataCount} panel(s) ${JSON.stringify(r.names)} but ${r.liveCount} matched .phase; classes ${JSON.stringify(r.classes)}`);
+
+    ok(`driving ${name}: and it wears the design's box`,
+      r.liveCount >= 1 && r.boxes.every(dressed),
+      r.liveCount < 1 ? "nothing matched .phase, so no box was measured"
+        : `${r.boxes.filter(dressed).length} of ${r.liveCount} dressed; first padding ${r.boxes[0].padT}/${r.boxes[0].padL}px, border ${r.boxes[0].bor}px, radius ${r.boxes[0].rad}px, painted ${r.boxes[0].painted}`);
+
+    await c.close();
+  }
+
+  // COVERAGE PIN, the same one this file already puts on its viewport loops: if this list is cut
+  // the suite gets quieter and stays green, which is the hole #563 was blocked for.
+  ok("the phase drive covered every state it names",
+    seen.length === DRIVEN.length, seen.join(", "));
+}
+
 async function checkTallCardStaysReachable(browser) {
   // THE TALL PROBE. The one-screen clamp was removed on purpose, so "the card is taller than the
   // viewport" is NOT the defect and must not be asserted against - App measured the card at
@@ -2262,6 +2342,7 @@ try {
   await checkFooterReachable(browser);
   await checkCardInnerPadding(browser);
   await checkTallCardStaysReachable(browser);
+  await checkLivePhasePanelsWearTheBox(browser);
   await checkLegacyPalette(browser);
   await checkChunkOrderIdentity(browser);
   // WHERE THE TAZ COMES FROM follows the status (R-39). Under this stack there is no
