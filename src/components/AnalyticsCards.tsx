@@ -14,8 +14,8 @@
  */
 "use client";
 
-import { useEffect, useRef } from "react";
-import { drawDrips, drawReserve, drawSegments, barMax, sevenDayMean, type DripDay, type Segment } from "@/lib/charts";
+import { useEffect, useRef, useState } from "react";
+import { drawDrips, dripHitAtX, drawReserve, drawSegments, barMax, sevenDayMean, type DripDay, type Segment } from "@/lib/charts";
 import { paintGlyph, type GlyphName } from "@/lib/glyphs";
 import { groupDigits, reserveSentence, reserveWord, reserveChipTone, acceptSentence, minerWord, minerTone, sendsTone, syncFigure, heightDiff, heightNote, backendHost } from "@/lib/statusView";
 import type { Tone, ViewStatus } from "./viewStatus";
@@ -72,10 +72,17 @@ export function AnalyticsCards({ status }: { status: ViewStatus | null }) {
   const sends = status?.sends;
   const node = status?.node;
 
+  // THE HOVER THE DESIGN DRAWS (#594). `drawDrips` already lit `i === hovered` with --orange-line
+  // and was called with a literal -1, so the highlight shipped and could never fire. The index
+  // goes into the painter's key as well as its argument: without it the repaint is skipped and
+  // the bar under the pointer never changes colour, which looks exactly like a chart with no
+  // hover at all - the failure this issue is about, one layer along.
+  const [hover, setHover] = useState<{ index: number; cx: number; top: number } | null>(null);
+
   const dripsRef = useCanvasPainter(() => {
     const c = dripsRef.current;
-    if (c) drawDrips(c, c, { series, last7d: drips?.last7d }, -1);
-  }, `${series.length}:${series.map((d) => d.sent).join(",")}:${drips?.last7d}`);
+    if (c) drawDrips(c, c, { series, last7d: drips?.last7d }, hover?.index ?? -1);
+  }, `${series.length}:${series.map((d) => d.sent).join(",")}:${drips?.last7d}:${hover?.index ?? -1}`);
 
   const reserveRef = useCanvasPainter(() => {
     const c = reserveRef.current;
@@ -131,6 +138,11 @@ export function AnalyticsCards({ status }: { status: ViewStatus | null }) {
             id="c-drips"
             height={140}
             role="img"
+            onPointerMove={(e) => {
+              const c = dripsRef.current;
+              if (c) setHover(dripHitAtX(c, series, e.clientX));
+            }}
+            onPointerLeave={() => setHover(null)}
             /* The summary is built from the numbers that were drawn, so it cannot drift
                away from the picture. An empty series says so rather than reading as a
                month in which nobody claimed anything. */
@@ -141,6 +153,19 @@ export function AnalyticsCards({ status }: { status: ViewStatus | null }) {
                   `${mean === null ? "no 7 day mean" : `mean ${mean.toFixed(1)} per day over 7 days`}, busiest day ${barMax(series)}. ${today ?? 0} today.`
             }
           />
+          {/* `hidden` rather than unmounting, because the design ships one `.tip` per chart and a
+              node that comes and goes cannot be styled or found by a test at rest. Position is
+              inline because it follows the pointer; everything about how it LOOKS is the sheet's,
+              transcribed from S1's shell.css:287. */}
+          <div
+            className="tip"
+            id="tip"
+            data-testid="drips-tip"
+            hidden={!hover}
+            style={hover ? { left: `${hover.cx}px`, top: `${hover.top}px` } : undefined}
+          >
+            {hover ? `${series[hover.index]?.sent ?? 0} on ${series[hover.index]?.day ?? ""}` : ""}
+          </div>
         </div>
         <div className="tot">
           <span>
