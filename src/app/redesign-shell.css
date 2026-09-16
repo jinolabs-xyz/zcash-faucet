@@ -121,27 +121,20 @@ html .iconbtn:hover{color:var(--ink)}
 .entrance-active .card,.entrance-active .panel,.entrance-active .card-copy,.entrance-active .card-copy h2,.entrance-active .card-copy p,.entrance-active .corner-icon{will-change:transform,opacity,clip-path}
 
 /* ===== 12. Breakpoints =====
- * `.stage` ON THE .grid3/.grid2 RULES IS LOAD-BEARING, NOT TIDINESS (#623). Their base rule
- * lives in redesign-views.css (`.grid3{grid-template-columns:repeat(3,...)}`), and Shell.tsx
- * imports this file at line 32 and that one at line 34 - so the base rule is emitted AFTER
- * these overrides and wins at equal specificity (0,1,0). The collapse was dead: measured on
- * 734d9f4, the status view was still three 96px columns at 360px wide, which is what pushed
- * "miner unwatched" and "unknown" past the right edge of a document that does not scroll.
- * `.stage .grid3` is (0,2,0) and wins wherever it is emitted, so the rule no longer depends on
- * import order. redesign-views.css:24 says these breakpoints belong here; this is what it
- * takes for them to actually apply from here.
+ * .grid3 / .grid2 ARE NOT HERE ANY MORE, AND THAT IS THE FIX (#623). They were, and they did
+ * nothing: their base rule is in redesign-views.css, Shell.tsx imports this file at line 32 and
+ * that one at line 34, so the base rule was emitted AFTER these overrides and won at equal
+ * specificity (0,1,0). Measured on 734d9f4 the status view was still three 96px columns at a
+ * 360px viewport. They now live in redesign-views.css beside the rule they override, which is
+ * where .pcards already keeps its own and why .pcards never had this bug.
  *
- * `.pcards` is NOT the same case and is deliberately left alone: it carries its own
- * breakpoints in redesign-views.css:127-128, after its own base rule, so it already collapses.
- * The copy at line 145 below is redundant rather than broken.
+ * redesign-views.css:24 used to say these breakpoints live here. It says where they went.
  */
 @media (max-width:64rem){
   .stage{--u:clamp(10.5px,1.45cqw,13px)}
   .comp{width:min(92cqw,1360px)}
   .hdr{grid-template-columns:1fr auto;grid-template-areas:"brand right" "seg seg"}
   .brand{grid-area:brand}.hdr-right{grid-area:right}.seg{grid-area:seg;justify-self:center}
-  .stage .grid3{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .stage .grid3 > :last-child{grid-column:1 / -1}
 }
 @media (max-width:32rem){
   .stage{container-type:inline-size;height:auto;overflow:visible;--u:12px}
@@ -152,8 +145,6 @@ html .iconbtn:hover{color:var(--ink)}
   .strip .kv.all,.strip .kv.week span{display:none}
   .strip{padding-right:calc(.35*var(--u))}
   .view{gap:14px}
-  .stage .grid3,.stage .grid2{grid-template-columns:1fr}
-  .stage .grid3 > :last-child{grid-column:auto}
   .claim h1{font-size:clamp(27px,7.4vw,40px)}
   .metrics{grid-template-columns:1fr}
   .pcards{grid-template-columns:1fr}
