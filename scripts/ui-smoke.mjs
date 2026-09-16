@@ -1159,6 +1159,106 @@ async function checkMinerPanel(page) {
     ok(`and says whether it is answering, beside it`,
       backend.dot && (backend.on === "true" || backend.on === "false"), JSON.stringify(backend));
   }
+  // ── THE CARD TITLES: THEIR GLYPHS, THEIR SIZE AND THEIR FACE ───────────────────────
+  //
+  // All three of these went unnoticed through three rounds for the same reason: a heading
+  // with the wrong face, a figure two points small and a missing 16px icon all LOOK finished.
+  // Nothing about them throws, logs or renders blank at the card level, so only a measurement
+  // sees them.
+  await showView(page, "analytics");
+
+  // A canvas carries no content, so an absent glyph is invisible to any assertion about text.
+  // Count them, then prove each one actually PAINTED - a canvas that exists and is blank is
+  // the same defect wearing the element.
+  const glyphs = await page.evaluate(() => {
+    const scope = document.querySelector('[data-testid="view-analytics"]');
+    return [...(scope?.querySelectorAll("h3 canvas.g") ?? [])].map((c) => {
+      const cv = /** @type {HTMLCanvasElement} */ (c);
+      let painted = false;
+      try {
+        const x = cv.getContext("2d");
+        const d = x?.getImageData(0, 0, cv.width, cv.height).data;
+        painted = !!d && d.some((v, i) => i % 4 === 3 && v > 0);   // any non-transparent pixel
+      } catch { painted = false; }
+      return { name: cv.dataset.glyph ?? "", w: cv.width, painted };
+    });
+  });
+  ok("every analytics card title carries its glyph", glyphs.length === 5,
+    `${glyphs.length}: ${glyphs.map((g) => g.name).join(", ")}`);
+  ok("and every one of them actually painted, rather than being an empty canvas",
+    glyphs.length > 0 && glyphs.every((g) => g.painted && g.w > 0),
+    JSON.stringify(glyphs));
+
+  // THE BIG FIGURE TAKES THE RULE THAT WINS. The snapshot declares `.pc .figs .big b` twice at
+  // the same specificity and depth; the later one (index.html:298) is the shipped size and the
+  // clamp above it is dead. Transcribing the clamp rendered this two points small at 1440, and
+  // nothing but a computed read can tell the two apart.
+  //
+  // MEASURED AT SEVERAL WIDTHS, BECAUSE ONE WIDTH CANNOT SEE THIS DEFECT. My first version read
+  // the figure at 1440 only, and the mutant that restores the dead clamp SURVIVED it: at 1440
+  // the clamp's own maximum IS `calc(1.8*var(--u))` and `1.6vw` sits above it, so
+  // `clamp(1.2u, 1.6vw, 1.8u)` returns 1.8u and the two rules compute the identical 20.736px.
+  // An assertion that cannot fail for the defect it was written for is the shape this suite has
+  // caught four times tonight, and it caught mine.
+  //
+  // The rules diverge where `1.6vw` falls BELOW `1.8*var(--u)`, which is the narrow end. So the
+  // property is asserted as the flat rule states it - the figure is 1.8 units at EVERY width -
+  // and `--u` is measured by probe at each one rather than parsed, because it is a clamp
+  // declared on `.stage` (redesign-shell.css:43) and neither parseFloat nor <html> can read it.
+  const widths = [900, 1100, 1440, 1760];
+  const figures = [];
+  for (const w of widths) {
+    await page.setViewportSize({ width: w, height: 900 });
+    await page.waitForTimeout(120);
+    figures.push(await page.evaluate((width) => {
+      const el = document.querySelector('[data-testid="view-analytics"] .figs .big b');
+      if (!el) return { width, missing: true };
+      const probe = document.createElement("div");
+      probe.style.cssText = "position:absolute;visibility:hidden;width:var(--u)";
+      el.parentElement?.appendChild(probe);
+      const u = probe.getBoundingClientRect().width;
+      probe.remove();
+      const fontSize = parseFloat(getComputedStyle(el).fontSize);
+      return { width, u: Math.round(u * 100) / 100, fontSize, want: Math.round(1.8 * u * 100) / 100 };
+    }, w));
+  }
+  await page.setViewportSize(DESKTOP);
+  await page.waitForTimeout(120);
+  const offBy = figures.filter((f) => f.missing || f.u <= 0 || Math.abs(f.fontSize - f.want) > 0.5);
+  ok("the analytics big figure is 1.8 units at every width, not the dead clamp above the winning rule",
+    offBy.length === 0,
+    figures.map((f) => f.missing ? `${f.width}:missing` : `${f.width}px u=${f.u} got ${f.fontSize} want ${f.want}`).join("; "));
+
+  // THE HEADING'S FACE, because `globals.css:82` styles `h1..h6` as an ELEMENT rule and this
+  // card title names its size and weight as LONGHANDS. Whatever globals sets that the rule
+  // does not mention survives, which is how the titles were rendering in the heading face at
+  // line-height 1.12. A class-by-class L20 sweep cannot see an element rule, so this is the
+  // detector for the whole family rather than for one heading.
+  const h3 = await page.evaluate(() => {
+    const el = document.querySelector('[data-testid="view-analytics"] .pc h3');
+    if (!el) return null;
+    const cs = getComputedStyle(el);
+    const root = getComputedStyle(document.documentElement);
+    return {
+      family: cs.fontFamily,
+      sans: root.getPropertyValue("--sans").trim(),
+      heading: root.getPropertyValue("--font-heading").trim(),
+      lineHeight: cs.lineHeight,
+      fontSize: parseFloat(cs.fontSize),
+      letterSpacing: cs.letterSpacing,
+    };
+  });
+  // Quotes AND spacing normalised. The browser re-serialises a font stack with a space after
+  // every comma and the token does not, so comparing the raw strings compares FORMATTING and
+  // goes red on two spellings of the same stack - which is what my first version did.
+  const face = (v) => v.replace(/["']/g, "").replace(/\s*,\s*/g, ",").trim().toLowerCase();
+  ok("the analytics card title uses the design's face, not the one globals gives every heading",
+    !!h3 && face(h3.family) === face(h3.sans) && face(h3.family) !== face(h3.heading),
+    h3 ? `${h3.family} against --sans ${h3.sans}` : "no h3");
+  ok("and its line-height and letter-spacing are the design's, not globals' heading values",
+    !!h3 && Math.abs(parseFloat(h3.lineHeight) - h3.fontSize * 1.5) < 0.6 && h3.letterSpacing === "normal",
+    h3 ? `line-height ${h3.lineHeight} against 1.5*${h3.fontSize}, letter-spacing ${h3.letterSpacing}` : "no h3");
+
   await showView(page, "claim");
 }
 
@@ -1245,8 +1345,27 @@ async function checkCtazToggle(page, base) {
   const ctazRow = ctazRows.find((r) => r.label === "cTAZ");
   ok("the wallet card gains a cTAZ row on the cTAZ tab", ctazRow !== undefined,
     ctazRows.map((r) => r.label).join(", "));
+  // A WORD, NEVER A NUMBER - the property this line has always claimed - and the word now has
+  // to AGREE WITH THE STATUS rather than match a literal.
+  //
+  // This pinned `=== "parked"` and passed for three rounds, because the page had "parked" typed
+  // into its markup. The preview can afford that (no server behind it); we cannot, and a
+  // literal goes on saying parked about a Crosslink node that has come back. The moment the row
+  // started reading `ctaz`, this assertion went red against a page that had just become MORE
+  // correct - the local stack runs a crosslink double that IS servable, so the honest word here
+  // is "unknown" and production's is still "parked". Pinned to the literal, it was measuring the
+  // markup; pinned to the coupling, it measures the claim.
+  const ctazWordShown = ctazRow?.value ?? "";
   ok("and it reads one word, never a number, because their surface has no balance method",
-    ctazRow?.value === "parked", ctazRow?.value);
+    ctazWordShown.length > 0 && Number.isNaN(Number(ctazWordShown)) && /^[a-z][a-z ]*$/.test(ctazWordShown),
+    ctazWordShown || "(empty)");
+  ok("and the word agrees with what /api/status says about cTAZ, rather than being typed into the page",
+    status.ctaz?.enabled === false || status.ctaz == null
+      ? ctazWordShown === "parked"
+      : status.ctaz.servable === true
+        ? ctazWordShown !== "parked"
+        : ctazWordShown === "parked",
+    `enabled ${status.ctaz?.enabled} servable ${status.ctaz?.servable} -> ${ctazWordShown}`);
 
   // THE REPLACEMENT FOR #326's SEPARATION, asserted rather than assumed: every figure on
   // this card that is a TAZ amount says TAZ. A unitless number here is exactly what the
