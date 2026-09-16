@@ -1495,6 +1495,122 @@ async function showView(page, v) {
   await page.locator(`[data-testid="view-${v}"]`).waitFor({ state: "visible", timeout: 5000 });
 }
 
+// THE DEFAULT IS BLIND TO `visibility` AND `opacity`, which is the whole of the #595 finding:
+// bare `checkVisibility()` returns true for `visibility:hidden` and for `opacity:0`, so a row
+// named PAINTED passed an element no reader could see. These are the spec's option names; the
+// older aliases (`checkVisibilityCSS`, `checkOpacity`) mean the same two things and Chromium
+// honours both, measured from two directions - the CTO's red-team on the spec names, SDE-App on
+// the aliases - and the ruling is to use the spec's.
+//
+// I first passed all four as insurance against the Playwright pin moving. Dropped: the mutants
+// below are that insurance and they are a better one. If `visibility:hidden` or `opacity:0` ever
+// stops turning these rows red, the object is being ignored and the run says so - which is what
+// a silently-ignored option looks like from the outside, and no amount of spelling prevents it.
+const VIS_OPTS = { visibilityProperty: true, opacityProperty: true, contentVisibilityAuto: true };
+
+async function checkPuzzleSentenceWithdraws(browser) {
+  // BOTH SIDES OF THE GATE. Every row this branch shipped asserts the sentence is PRESENT, so
+  // `|| true` survives all of them - the CTO's red-team put it in and the suite stayed 245/0.
+  // A gate is two claims and we had only ever measured one: the sentence appears when the
+  // deployment has a puzzle, AND it goes away when the deployment does not. Without the second,
+  // "withdrawn on positive evidence" is a sentence in a PR body rather than a property of the
+  // page, and the ruling it came from turns into decoration.
+  const base = await (await fetch(`${BASE}/api/status`)).json();
+  const SENTENCE = /solves a short puzzle instead of a CAPTCHA/;
+
+  for (const [label, challenge, wantVisible] of [
+    ["a deployment that runs a puzzle", "pow", true],
+    ["a deployment that runs none", "none", false],
+  ]) {
+    const c = await browser.newContext({ viewport: DESKTOP });
+    const p = await c.newPage();
+    await p.route("**/api/status", (route) => {
+      const body = JSON.parse(JSON.stringify(base));
+      body.challenge = challenge;
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+    });
+    await p.goto(BASE, { waitUntil: "domcontentloaded" });
+    await p.waitForSelector(".hero-copy", { timeout: 15_000 }).catch(() => {});
+    await p.waitForTimeout(700);          // the island has to have been told
+
+    // PAINT, NOT TEXT. `textContent` still reads an element carrying `hidden`, and so do the
+    // served-bytes rows - the red-team's third finding is that `hidden` on the sentence survives
+    // every row this branch had.
+    //
+    // AND THE FIRST SPELLING OF THIS ROW WAS THE SAME MISTAKE ONE LAYER DOWN. I wrote that bare
+    // `checkVisibility()` "accounts for hidden, display:none, visibility and empty boxes". It does
+    // not: in Chromium the visibility and opacity checks are OPT-IN, so `visibility:hidden` on the
+    // sentence survived the whole suite at 274/0 with this row printing "1 painted". The row's
+    // NAME said painted and its instrument answered a narrower question - which is L35's escape
+    // hatch exactly, in the row I wrote to close an escape hatch.
+    //
+    // It matters here rather than in theory: the shipped sheets already carry
+    // `.entrance-pending .hero-copy{opacity:0}` for this element, so the property this row could
+    // not see is one a stylesheet on this page already sets. Found by the CTO's red-team.
+    // VIS_OPTS is passed IN rather than closed over: the body of an evaluate runs in the browser,
+    // where a Node-scope constant does not exist. The first spelling of this referenced it
+    // directly and the suite died at row 80 with "VIS_OPTS is not defined" - which is the run
+    // doing its job, and the reason a row is not finished when it typechecks.
+    const r = await p.evaluate(([re, visOpts]) => {
+      const els = [...document.querySelectorAll("p")].filter((el) => new RegExp(re).test(el.textContent || ""));
+      return {
+        inDom: els.length,
+        visible: els.filter((el) => (el.checkVisibility
+          ? el.checkVisibility(visOpts)
+          : el.getClientRects().length > 0)).length,
+        hidden: els.map((el) => el.hasAttribute("hidden")),
+      };
+    }, [SENTENCE.source, VIS_OPTS]);
+
+    ok(`${label}: the puzzle sentence is ${wantVisible ? "painted" : "withdrawn"}`,
+      wantVisible ? r.visible === 1 : r.visible === 0,
+      `${r.inDom} in the DOM, ${r.visible} painted, hidden attr ${JSON.stringify(r.hidden)}`);
+    await c.close();
+  }
+}
+
+async function checkFirstPaintSentenceIsPainted(browser) {
+  // THE FIRST PAINT, MEASURED AS PAINT. The served-bytes row proves the sentence is in the
+  // response and the first-paint row proves it is in the DOM before the status arrives; neither
+  // can see `hidden`, which leaves the bytes and the node exactly where they are and shows the
+  // reader nothing. That is a one-attribute regression away from the defect this whole branch
+  // exists to fix, with every row green.
+  //
+  // The status request is held open rather than answered, so this is the page as it exists for
+  // someone whose fetch has not come back - and, near enough, for someone running no scripts.
+  const c = await browser.newContext({ viewport: DESKTOP });
+  const p = await c.newPage();
+  await p.route("**/api/status", () => { /* never fulfilled: status never arrives */ });
+  await p.goto(BASE, { waitUntil: "domcontentloaded" });
+  await p.waitForSelector(".hero-copy", { timeout: 15_000 }).catch(() => {});
+  await p.waitForTimeout(500);
+
+  const r = await p.evaluate((visOpts) => {
+    const sentence = [...document.querySelectorAll("p")]
+      .find((el) => /solves a short puzzle instead of a CAPTCHA/.test(el.textContent || ""));
+    const chips = [...document.querySelectorAll('.hero-copy .chips [data-chip]')];
+    // The same options as the row above, and for the same reason: bare checkVisibility() is blind
+    // to `visibility` and `opacity`, which is how a "painted" row passes an invisible element.
+    const seen = (el) => !!el && (el.checkVisibility
+      ? el.checkVisibility(visOpts)
+      : el.getClientRects().length > 0);
+    return {
+      sentenceInDom: !!sentence,
+      sentencePainted: seen(sentence),
+      sentenceBox: sentence ? Math.round(sentence.getBoundingClientRect().height) : 0,
+      chips: chips.length,
+      chipsPainted: chips.filter(seen).length,
+    };
+  }, VIS_OPTS);
+
+  ok("before the status arrives, the puzzle sentence is not merely present but PAINTED",
+    r.sentencePainted && r.sentenceBox > 0,
+    `in DOM ${r.sentenceInDom}, painted ${r.sentencePainted}, ${r.sentenceBox}px tall`);
+  ok("and so is every hero chip",
+    r.chips === 4 && r.chipsPainted === 4, `${r.chipsPainted} of ${r.chips} chips painted`);
+  await c.close();
+}
+
 async function checkOpsChipFollowsTheBox(browser) {
   // THE OPS CHIP SAYS WHAT THE BOX SAID, AND UNKNOWN IS NOT ATTENTION.
   //
@@ -1536,13 +1652,30 @@ async function checkOpsChipFollowsTheBox(browser) {
         tone: el ? el.getAttribute("data-tone") : null,
         text: el ? (el.textContent || "").trim() : "",
         sendsTone: sends ? sends.getAttribute("data-tone") : null,
+        siblingChips: document.querySelectorAll('.hero-copy .chips [data-chip]').length,
       };
     });
     visited.push(state);
 
+    // THE POSITIVE CONTROL, AND WHAT IT DOES NOT COVER, because I measured the boundary rather
+    // than describing it. "Absent" is satisfied by a query that finds nothing anywhere, so each
+    // run also reports how many chips the same selection style finds: an absence beside four
+    // presences is an absence, an absence beside nothing is a broken page or a broken container
+    // selector. That is what this catches - the chips failing to render at all.
+    //
+    // It does NOT catch a typo in `[data-chip="box"]` itself. The mutant says so: renaming the
+    // attribute leaves the element matching `[data-chip]`, so the sibling count still reads five
+    // and both absence rows still pass - only the `attention` row goes red (`tone null`). So the
+    // `attention` case remains the anchor for this specific selector, exactly as the red-team
+    // said, and this control is a second, different guard rather than a replacement for it.
+    // Stating the limit because a control whose reach is assumed is the thing it exists to
+    // prevent. (CTO red-team, #595.)
     ok(`box ${state}: the ops chip is ${shouldShow ? "shown" : "absent"}`,
-      r.present === shouldShow,
-      r.present ? `present, tone ${r.tone}, "${r.text}"` : "absent");
+      r.present === shouldShow && r.siblingChips >= 4,
+      r.siblingChips < 4
+        ? `only ${r.siblingChips} sibling chips found - the chip selection is broken, so "absent" means nothing`
+        : r.present ? `present, tone ${r.tone}, "${r.text}" (beside ${r.siblingChips} other chips)`
+                    : `absent (beside ${r.siblingChips} other chips, so the selection works)`);
 
     if (shouldShow) {
       ok(`box ${state}: and it is toned ${wantTone}, from statusView's map`,
@@ -1551,13 +1684,35 @@ async function checkOpsChipFollowsTheBox(browser) {
       // The comparison that makes "absent" mean something: a chip that never renders in ANY
       // state would pass all three absence rows, so the attention case above is what proves the
       // element exists at all, and this notes what the row beside it was saying at the time.
-      ok(`box ${state}: (nothing claimed about the box; sends chip beside it reads ${r.sendsTone})`,
-        true, `no ops chip, sends tone ${r.sendsTone}`);
+      // A NOTE, PRINTED AS A NOTE. This was `ok(…, true, …)` - honestly named, genuinely useful
+      // context when reading a failure above it, and still two rows that could not go red,
+      // inflating a total that has been quoted as evidence in both directions on this PR.
+      // SDE-Infra's line: `console.log` costs nothing and keeps `ok` meaning "something was
+      // checked". What makes the absence meaningful is the `attention` case, which asserts
+      // presence AND tone, so deleting the chip outright still turns this family red there.
+      console.log(`note: box ${state}: no ops chip; sends chip beside it reads ${r.sendsTone}`);
     }
     await c.close();
   }
-  ok("the ops chip was measured in every box state it has",
-    visited.length === CASES.length, visited.join(", "));
+  // THE ROW THAT COUNTED ITS OWN LIST AGAINST ITSELF. `visited.push` runs once per CASES entry
+  // inside `for (… of CASES)`, so `visited.length === CASES.length` was true by construction and
+  // could only fail by the loop throwing - while its name claimed "every box state it HAS".
+  // What the box has is whatever `publicBox()` emits, and nothing compared CASES to that: a
+  // fourth state would have arrived with this row green and the chip unmeasured in it.
+  //
+  // Found by SDE-Infra and the CTO's red-team independently, and it is my own `.phase` probe
+  // shape a third time - an instrument supplying its own subject and then agreeing with itself.
+  // I wrote this row four hours after writing the lesson about it, which is the honest measure
+  // of how easily the shape hides.
+  //
+  // The literal is the pin. It is deliberately NOT derived from CASES, so the two have to be
+  // edited together, and it names its source so the next reader checks it with one grep instead
+  // of by reasoning about this file.
+  const BOX_STATES_PUBLICBOX_EMITS = ["ok", "attention", "unknown"];   // boxLabel.ts:86, publicBox()
+  ok("the ops chip was measured in every box state publicBox() can emit",
+    visited.length === BOX_STATES_PUBLICBOX_EMITS.length
+      && BOX_STATES_PUBLICBOX_EMITS.every((st) => visited.includes(st)),
+    `drove ${JSON.stringify(visited)}; publicBox() emits ${JSON.stringify(BOX_STATES_PUBLICBOX_EMITS)}`);
 }
 
 async function checkServedHtmlCarriesTheHero() {
@@ -1605,8 +1760,16 @@ async function checkServedHtmlCarriesTheHero() {
   // this PR exists to fix straight back onto the hero. They proved it was not a no-op by reading
   // the served bytes: 27,544 -> 27,411 and `class="morelink"` 1 -> 0, with chips and puzzle
   // untouched. Four rows covering four of six things is a gap the totals cannot show.
-  const statusLink = /class="tag more"/.test(html);
-  const analyticsLink = /class="morelink"/.test(html);
+  // ANCHORED ON THE TAG, NOT THE CLASS STRING. Next serialises the tree into `__next_f` chunks
+  // in these same bytes, so a bare string can match the flight payload rather than rendered
+  // markup. That mechanism is live on this page - the red-team counted `Get free testnet` seven
+  // times in a 27,544-byte render, the h1 duplicated by the payload - while these four subjects
+  // appear exactly once each today. So the proxy is not lying, by measurement rather than by
+  // argument, and that count is the only thing keeping it honest. `<a[^>]+class=` cannot be
+  // manufactured by the payload, which spells props as JSON (`className`) rather than as HTML
+  // attributes, so a future string that DOES get duplicated cannot fake a green here.
+  const statusLink = /<button\s[^>]*class="tag more"/.test(html);
+  const analyticsLink = /<a\s[^>]*class="morelink"/.test(html);
   ok("the served HTML carries both hero links, not just the chips",
     statusLink && analyticsLink,
     `tag more ${statusLink ? "present" : "ABSENT"}, morelink ${analyticsLink ? "present" : "ABSENT"} in ${html.length} bytes`);
@@ -2596,6 +2759,8 @@ try {
     ok("and the address is in the body", req.body.includes(`"address":"${lookupAddr}"`), req.body.slice(0, 60));
     ok("and the page answers that a shielded balance is private", /Shielded balances are private/.test(await page.locator("#lans").innerText()));
   }
+  await checkPuzzleSentenceWithdraws(browser);
+  await checkFirstPaintSentenceIsPainted(browser);
   await checkOpsChipFollowsTheBox(browser);
   await checkServedHtmlCarriesTheHero();
   await checkMinerPanel(page);
