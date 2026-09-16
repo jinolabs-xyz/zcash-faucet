@@ -5,6 +5,14 @@
 //
 //   rm -f data/faucet.db data/faucet.db-wal data/faucet.db-shm   # see below
 //   npm run build
+//   # EXPORTED, not prefixed, and that is the whole point of the line (SDE-UI, review of #605).
+//   # Everything below is a command PREFIX on `npm start`, which reaches the SERVER only. The
+//   # three address rows compare the env against the page, and the suite is a SEPARATE process,
+//   # so under a prefix they read undefined here and the rows go inert - green, and checking
+//   # nothing - which is the state #605 exists to stop. `export` puts them in both processes.
+//   export FAUCET_DONATION_ADDRESS=utest1cafakedonationaddressusedadtestsneverusethesezecfunds
+//   export FAUCET_MINING_ADDRESS=tmUiVxo1bbZLP5z6KYfM4dh3PcX5wkd7on8
+//   export FAUCET_MAINTENANCE_ADDRESS=u1cafakeaddressusedadtestsneverusethesezecfundsarenatreal
 //   node scripts/fake-zallet.mjs &                 # PORT=28299 wallet double
 //   PORT=28324 node scripts/fake-hosh.mjs &        # tip oracle fixture, see below
 //   PORT=28611 node scripts/fake-crosslink.mjs &   # cTAZ node double (#326)
@@ -2887,7 +2895,8 @@ async function checkPanelControlIsTheDesignsBar(browser, base) {
         ? ((path === "/fund" ? r.fundAddr : r.donAddr) > 0
             ? `set, and the page rendered ${path === "/fund" ? r.fundAddr : r.donAddr} characters of it`
             : "set, and the page rendered NO address in that slot - config rejected the value, so every row above measured the wrong configuration")
-        : "not set for this run, so there is nothing to have arrived");
+        : `NOT CHECKED: this process has no ${addrEnv}. Under a command-prefix recipe the server`
+          + ` has it and the suite does not, so this row cannot see a typo. Export it (header) to arm it.`);
 
     // THE CHIP IS SKIPPED WHEN IT IS ABSENT, so a mining address that never arrives takes the
     // measurement with it and says nothing. Same implication, same reason as above.
@@ -2897,7 +2906,7 @@ async function checkPanelControlIsTheDesignsBar(browser, base) {
         !minSet || (r.mineAddr > 0 && !!r.chip),
         minSet ? (r.mineAddr > 0 && r.chip ? `set, ${r.mineAddr} characters rendered beside a "${r.chip.cls}" chip`
                                            : `set, and the page shows ${r.mineAddr} address characters and ${r.chip ? "a" : "NO"} chip - the chip row below measured nothing`)
-               : "not set for this run, so there is no chip to expect");
+               : "NOT CHECKED: this process has no FAUCET_MINING_ADDRESS, so this row is inert here - export it (see the header) to arm it");
     }
     // THE CHIP IS BEHIND A CONFIGURED MINING ADDRESS, which my first version did not check: with
     // FAUCET_MINING_ADDRESS unset the page renders a `.hint` instead and the row failed with "no
