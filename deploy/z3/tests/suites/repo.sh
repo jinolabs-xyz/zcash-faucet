@@ -1278,7 +1278,16 @@ OUTER
 check "a nested harness run does not clobber the timing file of the run that started it" \
   "grep -q 'a row from the caller' '$T/kept.txt'"
 # Same toy, unexported, so a pass above cannot be the child simply never running.
-( cd "$T/tt" && OUT="$T/kept2.txt" bash "$T/tt/outer.sh" > "$T/toy.log" 2>&1 )
+#
+# `env -u HARNESS_TIMING` IS WHAT MAKES THIS PARTNER INDEPENDENT, and without it the partner
+# shares the failure it exists to rule out (SDE-App, review of #585). The mutant for the check
+# above is "delete `export -n` from lib.sh", and in exactly that configuration the harness's own
+# HARNESS_TIMING keeps its export attribute - so this invocation inherits it too, the
+# "unexported" toy is exported, and BOTH lines go red from one cause. Two red lines reading as
+# two independent kills is the attribution error L26 is about, arriving in the assertion written
+# to prevent it. Unset here and the partner stays GREEN under that mutant, which is the whole
+# point of a partner.
+( cd "$T/tt" && env -u HARNESS_TIMING OUT="$T/kept2.txt" bash "$T/tt/outer.sh" > "$T/toy.log" 2>&1 )
 check "and the toy's two levels both really ran, so the check above is not vacuous" \
   "grep -q 'a row from the caller' '$T/kept2.txt' && grep -q 'a row from the nested run' '$T/toy.log'"
 # AND THE ONE CASE THAT BROKE THE RULE STAYS FIXED. A pin on the knobs, not on a duration:
