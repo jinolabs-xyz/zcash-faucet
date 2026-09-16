@@ -177,6 +177,21 @@ jobs:
       # reserve would ship behind unit tests alone.
       FAUCET_CTAZ_ENABLED: "true"
       CROSSLINK_RPC_URL: http://127.0.0.1:28611/
+      # THE READ-SIDE BACKEND, POINTED AT A DOUBLE (#588). Unset, config.ts falls through
+      # to https://testnet.zec.rocks:443, so `pingBackend()` reached a third party on every
+      # run of this job and the index card's PHASE - and so its height - followed that call.
+      # It flaked exactly that way on #576 round two: one fit row read
+      # `1440x900 paper /#claim doc 941/900` with a red badge where main read 900/900, and
+      # the identical code re-ran green.
+      #
+      # A DOUBLE THAT ANSWERS, not a closed port, and the repo had already learnt why -
+      # scripts/api-integration.mjs:319: "Pinning LIGHTWALLETD_ENDPOINT at a closed port to
+      # block it is NOT safe: the same variable is also the app's read-side backend, so
+      # breaking it makes readiness report 'backend unreachable' and fails a different
+      # assertion. Verified by doing exactly that and watching it fail." A dead port does
+      # not remove the flake, it makes the FAILING state permanent - "backend unreachable"
+      # is the red badge that measured 941 px.
+      LIGHTWALLETD_ENDPOINT: http://127.0.0.1:28612/
       # EMPTY ON PURPOSE, and this line is why the job exists at all (#409).
       #
       # In production the app reaches the Crosslink node through a unix socket, because
@@ -236,15 +251,28 @@ jobs:
           # turns "did not come up" into a visible skip instead of a silent one.
           PORT=28611 node scripts/fake-crosslink.mjs &
           crosslink=$!
+          # The read-side backend double (#588). Unlike the cTAZ one this IS load-bearing:
+          # without it the page's backend ping leaves the index card in its unreachable
+          # phase, which is taller, and the fit rows measure that.
+          PORT=28612 node scripts/fake-lightwalletd.mjs &
+          lwd=$!
           # Declared before the trap so the early exit below still reaps the
           # doubles rather than leaking them on a failure path.
           server=""
-          trap 'kill "$server" "$double" "$hosh" "$crosslink" 2>/dev/null || true' EXIT
+          trap 'kill "$server" "$double" "$hosh" "$crosslink" "$lwd" 2>/dev/null || true' EXIT
           for _ in $(seq 1 30); do
             curl -sf "$HOSH_URL" >/dev/null && break
             sleep 1
           done
           curl -sf "$HOSH_URL" >/dev/null || { echo "tip-oracle fixture never came up"; exit 1; }
+          # Same reasoning as the oracle above: answering BEFORE the app starts, so the
+          # first status request cannot race it. A ping that misses turns the card's
+          # phase - and its height - into a timing question, which is the defect itself.
+          for _ in $(seq 1 30); do
+            curl -sf -I "$LIGHTWALLETD_ENDPOINT" >/dev/null && break
+            sleep 1
+          done
+          curl -sf -I "$LIGHTWALLETD_ENDPOINT" >/dev/null || { echo "lightwalletd double never came up"; exit 1; }
           npm start &
           server=$!
           for _ in $(seq 1 60); do

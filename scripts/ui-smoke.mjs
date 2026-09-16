@@ -7,11 +7,12 @@
 //   node scripts/fake-zallet.mjs &                 # PORT=28299 wallet double
 //   PORT=28324 node scripts/fake-hosh.mjs &        # tip oracle fixture, see below
 //   PORT=28611 node scripts/fake-crosslink.mjs &   # cTAZ node double (#326)
+//   PORT=28612 node scripts/fake-lightwalletd.mjs & # read-side backend double (#588)
 //   FAUCET_SENDER=zallet ZALLET_RPC_URL=http://127.0.0.1:28299/ ZALLET_ACCOUNT=fake-account \
 //   ZALLET_ADDRESS=utest1fake ZALLET_MIN_CONF=0 FAUCET_CHALLENGE=pow FAUCET_POW_BITS=12 \
 //   RATE_LIMIT_SALT=ui-smoke HOSH_URL=http://127.0.0.1:28324/ TIP_ORACLE_ENDPOINT= \
 //   FAUCET_CTAZ_ENABLED=true CROSSLINK_RPC_URL=http://127.0.0.1:28611/ \
-//   FAUCET_CTAZ_RPC_SOCKET= PORT=3120 npm start
+//   FAUCET_CTAZ_RPC_SOCKET= LIGHTWALLETD_ENDPOINT=http://127.0.0.1:28612/ PORT=3120 npm start
 //
 // TWO OF THOSE ARE EMPTY ON PURPOSE AND BOTH COST SOMEBODY AN AFTERNOON.
 // TIP_ORACLE_ENDPOINT= stands the oracle's direct leg down: it fetches both references
@@ -22,6 +23,17 @@
 // double on 28611 is never reached and every cTAZ assertion fails against a double that is
 // answering perfectly. CI sets both (.github/workflows/ci.yml, the ui job); this recipe
 // omitted the second one until 2026-09-15, which is exactly the shape of the note below.
+//
+// THE LIGHTWALLETD DOUBLE IS NOT OPTIONAL, AND IT IS THE THIRD OF THESE (#588). Without
+// LIGHTWALLETD_ENDPOINT the app falls through to https://testnet.zec.rocks:443, so the
+// index card's phase - and therefore its HEIGHT - follows a live third-party call. That
+// presents as a fit-check FLAKE rather than a visible failure: on #576 round two one row
+// read `1440x900 paper /#claim doc 941/900` with a red badge where main read 900/900, and
+// the same code re-ran green.
+//
+// Do NOT "fix" it by pointing the variable at a closed port. The same variable is also the
+// app's read-side backend, so a dead port makes the red badge PERMANENT rather than
+// removing it - api-integration.mjs:319 records that experiment and its result.
 //
 // The crosslink double is optional: without it the toggle does not render and the cTAZ
 // checks announce themselves as SKIPPED rather than passing quietly. A skipped check
