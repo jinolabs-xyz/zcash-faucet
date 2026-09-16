@@ -21,7 +21,15 @@ export interface ReadinessInputs {
   backendReachable: boolean;
   /** null when the node was not asked or did not answer. Which of the two it is matters:
    *  see nodeExpected. */
-  node: { ready: boolean; frozen: boolean; shield: { state: ChainFreshness; lag: number | null } } | null;
+  /** `height` is the WALLET's own scanned height and `nodeHeight` is our node's tip - the two
+   *  names getNodeStatus() gives them (nodeStatus.ts:129-130). They are here so the rung below
+   *  can say WHICH of the two is behind; without them the reason could only name the block.
+   *  number|null rather than number: both are unreadable states the node status really reports. */
+  node: {
+    ready: boolean; frozen: boolean;
+    height?: number | null; nodeHeight?: number | null;
+    shield: { state: ChainFreshness; lag: number | null };
+  } | null;
   /** True when this deployment HAS a node to ask (sender is zallet). A null node beside
    *  true is a node that did not answer, and the claim path refuses in that state (the
    *  gate is unverifiable without a node height), so readiness must too. Before this,
@@ -42,7 +50,34 @@ export function readinessReason(i: ReadinessInputs): string | null {
   if (!i.backendReachable) return "backend unreachable";
   if (i.nodeExpected && i.node == null) return "node status unknown";
   if (i.node && i.node.frozen) return "node frozen behind network";
-  if (i.node && i.node.ready === false) return "node syncing";
+  // THE WALLET, NOT THE NODE, AND IT IS NEVER THE NODE HERE. This said "node syncing", which
+  // sent an operator to zebra - healthy, at the tip, nothing to find. Nine minutes of it in
+  // production on 2026-09-16 (#596), while the thing behind was the wallet, by 50 then ~92
+  // blocks, re-scanning after a crash (#602).
+  //
+  // It is wrong EVERY time it fires, not sometimes, and the ladder is what makes that true:
+  // `ready` is `walletCaughtUp && !frozen` (nodeStatus.ts:129) and `frozen` is caught by the
+  // rung ABOVE this one, so by the time control arrives here `frozen` is false and the only
+  // term left that can be false is `walletCaughtUp`. There is no reachable state in which this
+  // line fires because of the node. The test below pins that rather than this paragraph.
+  //
+  // "re-scanning" is the CTO's word, ruled at 11:33Z and again at 12:39Z. I argued once for
+  // "scanning" - a wallet restored from seed or freshly deployed is behind for the same reason
+  // and has never scanned before, so the prefix is false in that state - and the ruling stands,
+  // so it ships. Recorded rather than re-argued: the lag beside it is right in both states and
+  // is the number an operator acts on.
+  //
+  // THE STRING IS READ BY deploy/z3/redeploy.sh, which is why that file moves in this commit:
+  // `reason_is_not_the_code()` matched "node syncing" and would have stopped matching, turning
+  // a re-scanning wallet into a rollback that cannot fix it.
+  if (i.node && i.node.ready === false) {
+    const lag = i.node.nodeHeight != null && i.node.height != null
+      ? i.node.nodeHeight - i.node.height
+      : null;
+    return lag == null
+      ? "wallet re-scanning, behind our node"
+      : `wallet re-scanning, ${lag} blocks behind our node`;
+  }
   // Only "unsafe". See the module comment: "unverifiable" stays ready on purpose. lag is
   // always known when the state is unsafe (chainFreshness needs both heights to say so),
   // so the number in the reason is a number.
