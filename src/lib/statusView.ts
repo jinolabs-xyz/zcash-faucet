@@ -158,6 +158,70 @@ export function reserveTone(
   return "ok";
 }
 
+/**
+ * The reserve chip's WORD, and then its tone from that word, which is the order the approved
+ * design uses and the order I had backwards.
+ *
+ * `index.html:932` is one line and it carries two facts:
+ *
+ *     const rs = s.reserve.refilling ? 'topping up' : wt === 'bad' ? 'low' : 'ok';
+ *
+ * I shipped `reserveWord(tone)` instead, deriving the word from `reserveTone`. That is the
+ * SAME DEFECT as minerTone re-deriving parked, which I fixed earlier in this PR, in a second
+ * place: a tone has three values and the word needs four, so `refilling` had nowhere to go and
+ * "topping up" could not be expressed AT ALL. What came out instead was `empty`, a word the
+ * design never uses, for a wallet that can pay - spendable 400 against a low mark of 500 reads
+ * `empty` beside a status card offering about 4,000 drips. A state word that contradicts the
+ * number beside it is worse than no chip.
+ *
+ * So the word comes from the FACTS and the tone comes from the WORD, both transcribed rather
+ * than reasoned about. `tone()` at index.html:881 maps low to bad and topping up to warn, so
+ * "topping up" is a WARNING and not a failure, which is right: refilling is the system working.
+ */
+export function reserveWord(
+  reserve:
+    | { spendableTaz?: number | null; lowTaz?: number | null; targetTaz?: number | null; refilling?: boolean | null }
+    | null
+    | undefined,
+): string {
+  // Unknown first. Refilling is only meaningful beside numbers we can read, and a chip that
+  // says "topping up" about a reserve we cannot see is a claim we have not established.
+  // The literal rather than viewStatus's UNKNOWN: this is lib, and lib importing a constant
+  // from components is a dependency running the wrong way for one string.
+  if (reserveTone(reserve) === "unknown") return "unknown";
+  if (reserve?.refilling) return "topping up";
+  return reserveTone(reserve) === "bad" ? "low" : "ok";
+}
+
+/** The chip's tone, from the WORD, per `tone()` at index.html:881. Never re-derived. */
+export function reserveChipTone(word: string): "ok" | "warn" | "bad" | "unknown" {
+  if (word === "low") return "bad";
+  if (word === "topping up") return "warn";
+  if (word === "ok") return "ok";
+  return "unknown";
+}
+
+/**
+ * The cTAZ row's word, from the status rather than from the markup.
+ *
+ * The approved preview hardcodes `parked` here (index.html:602) and its tab says "Coming soon",
+ * so transcribing the literal was faithful to the design. It is still wrong in an APP: the
+ * preview has no server behind it and we do, `/api/status` carries `ctaz.enabled` and
+ * `ctaz.servable`, and a literal goes on saying "parked" about a Crosslink node that has come
+ * back. The design cannot describe a state it has no data for; we can.
+ *
+ * NEVER A NUMBER, whatever the state. Their surface exposes no balance method, so a servable
+ * node still gets a word - "unknown" - rather than a figure we cannot read. That is the
+ * property #326's separation exists for and the reason this row says a word at all.
+ */
+export function ctazWord(ctaz: { enabled?: boolean; servable?: boolean } | null | undefined): string {
+  if (ctaz == null) return "unknown";          // nothing told us, so we claim nothing
+  if (ctaz.enabled === false) return "parked"; // the operator has it off
+  // Enabled and serving: we still cannot read a holding, so we do not imply one is zero.
+  if (ctaz.servable === true) return "unknown";
+  return "parked";
+}
+
 /* ── the miner ────────────────────────────────────────────────────────── */
 
 /**

@@ -43,6 +43,8 @@ export interface ViewStatus {
     refilling?: boolean;
     spendableTaz: number | null;
   };
+  /** Narrow on purpose: the cTAZ row says a WORD, so only the fields that decide the word. */
+  ctaz?: { enabled?: boolean; servable?: boolean } | null;
 }
 
 /** The tones the cards paint with. "unknown" is a state, never a shade of ok. */

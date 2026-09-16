@@ -20,56 +20,34 @@
  * the two lands second deletes its copy in the rebase, so that one change to .card is
  * one change. Two definitions in two files would let the cascade decide by import order
  * and make an edit to the loser silently do nothing.
- * --- delete this fence, to the matching marker, if S2a brings these ----------------- */
-.card{position:relative;background:var(--surface);border:calc(.075*var(--u)) solid var(--border);border-radius:calc(1.59*var(--u));overflow:hidden;
-  box-shadow:calc(.32*var(--u)) calc(.9*var(--u)) calc(1.42*var(--u)) var(--shadow-a),0 calc(.14*var(--u)) calc(.42*var(--u)) var(--shadow-b)}
-.panel{position:relative;margin:0 2.55%;padding:7.5% 7.5% 8%;border-radius:calc(1.28*var(--u)) calc(1.28*var(--u)) calc(1.08*var(--u)) calc(1.08*var(--u));background:var(--panel-bg);display:flex;flex-direction:column;gap:calc(1.1*var(--u))}
-.card-copy{position:relative;padding:7% 8.4% 7.5%}
-.card-copy h2{margin:0 0 calc(.5*var(--u));color:var(--ink-2);font:600 calc(1.86*var(--u))/1.04 var(--sans-semibold);letter-spacing:calc(-.125*var(--u));text-wrap:balance}
-.card-copy p{margin:0;color:var(--muted);font-size:calc(1.18*var(--u));font-weight:500;line-height:1.28;letter-spacing:calc(-.04*var(--u))}
-.card-copy p + p{margin-top:calc(.7*var(--u))}
-
-.lbl{color:var(--label);font:500 calc(.8*var(--u))/1.3 var(--mono)}
-.metric{display:flex;flex-direction:column;gap:calc(.3*var(--u))}
-.metric-row{display:flex;align-items:baseline;gap:calc(1*var(--u));flex-wrap:wrap}
-.metric strong{color:var(--display-accent);font-size:calc(2.2*var(--u));font-weight:600;font-family:var(--sans-semibold);line-height:.95;letter-spacing:calc(-.04*var(--u));font-variant-numeric:tabular-nums}
-/* The delta is green by default because the common case is good news. A tone attribute
- * is the only thing that moves it, so a figure nobody classified stays green rather than
- * turning an unknown into a warning. */
-.metric .delta{color:var(--green-text);font:500 calc(.85*var(--u))/1.3 var(--mono)}
-.metric .delta[data-tone="warn"]{color:var(--warn-text)}
-.metric .delta[data-tone="bad"]{color:var(--bad-text)}
+/* WHAT S2a BROUGHT IS GONE FROM HERE, AND WHAT IT DID NOT IS NOT.
+ *
+ * The fence that stood here said "delete this, to the matching marker, if S2a brings these".
+ * S2a landed, and I left the fence standing while the body claimed the rebase had removed it.
+ * The review caught the mismatch. Deleting the whole fence on its own instruction would have
+ * been wrong too: I compared it rule by rule against main's `redesign-hero.css` rather than
+ * taking the instruction at its word, and 25 of the 32 declarations are byte-identical there
+ * while SEVEN exist in no sheet on main at all. A blanket delete takes the prompt, the
+ * progress bar and the chip row with it.
+ *
+ * Deleted: `.card`, `.panel`, `.card-copy` and its two children, `.lbl`, `.metric`,
+ * `.metric-row`, `.metric strong`, `.metric .delta` and its warn and bad tones, and the whole
+ * `.tag` family. Every one verified present in `redesign-hero.css` with an identical body,
+ * and hero is imported BEFORE this sheet (`page.tsx:8` then `:9`), so the cascade result is
+ * unchanged rather than merely similar.
+ *
+ * `.tag` needed one extra check: the copy here inlined `text-transform:none` and hero's does
+ * not. Hero carries it as its own rule (`redesign-hero.css:132`) with the globals.css:151
+ * explanation attached, so the declaration survives the delete. Same outcome, one owner.
+ *
+ * Kept, because nothing on main defines them: */
 .metric .delta[data-tone="unknown"]{color:var(--muted)}
-
-/* text-transform:none IS NOT IN THE PREVIEW AND HAS TO BE HERE. globals.css:151 styles a
- * `.tag` too and sets text-transform:uppercase, and the preview's rule never mentions the
- * property, so the legacy value survives the cascade untouched: the design's "ok",
- * "parked" and "unknown" rendered as "OK", "PARKED", "UNWATCHED" against a preview that
- * shows them lowercase. Transcribing a rule verbatim does not neutralise a rule it does
- * not mention. Checked the other way too, by diffing every class this sheet styles
- * against globals.css for properties it sets and this file never names: text-transform on
- * .tag is the only one. */
-.tag{font-family:inherit;display:inline-flex;align-items:center;gap:calc(.5*var(--u));height:calc(2.15*var(--u));padding:0 calc(.9*var(--u));border-radius:calc(.5*var(--u));background:var(--tag-bg);color:var(--ink);
-  font-size:calc(.84*var(--u));font-weight:500;letter-spacing:0;text-transform:none;border:calc(.06*var(--u)) solid var(--hair);white-space:nowrap;text-decoration:none;cursor:default}
-.tag b{font-weight:600;font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:calc(.8*var(--u))}
-.tag .sdot{width:calc(.55*var(--u));height:calc(.55*var(--u));border-radius:50%;background:var(--unknown)}
-.tag[data-tone="ok"] .sdot{background:var(--green)}
-.tag[data-tone="warn"] .sdot{background:var(--warn)}
-.tag[data-tone="bad"] .sdot{background:var(--bad)}
-button.tag,a.tag{cursor:pointer;transition:box-shadow .18s,transform .18s}
-button.tag:hover,a.tag:hover{border-color:var(--muted)}
-.tag.ink{background:var(--ink);color:var(--surface);border-color:var(--ink)}
-.tag.ink:hover{background:var(--ink-3)}
-
 .chips{display:flex;flex-wrap:wrap;gap:calc(.5*var(--u)) calc(1.4*var(--u))}
-
 .prompt{width:100%;padding:calc(.95*var(--u)) calc(1.1*var(--u));border:calc(.06*var(--u)) solid var(--prompt-border);border-radius:calc(.6*var(--u));background:var(--prompt-bg);color:var(--ink);font:475 calc(1.03*var(--u))/1.31 var(--mono);letter-spacing:calc(-.02*var(--u))}
 .prompt::placeholder{color:var(--muted)}
 .prompt[aria-invalid="true"]{border-color:var(--bad)}
-
 .prog{height:calc(.6*var(--u));border-radius:999px;background:var(--orange-soft);overflow:hidden;margin-top:calc(.9*var(--u))}
 .prog i{display:block;height:100%;width:var(--w,40%);background:var(--orange);border-radius:999px;transition:width .2s}
-/* --- end of the shared fence ------------------------------------------------------ */
 
 /* ===== The three views' own furniture ============================================= */
 
@@ -137,7 +115,27 @@ button.tag:hover,a.tag:hover{border-color:var(--muted)}
 @media (max-height:840px){.pc{padding:calc(.8*var(--u)) calc(1.2*var(--u))}.pc .figs{margin-top:calc(.3*var(--u))}.vhead p{display:none}.pcards{gap:calc(1*var(--u))}.view{gap:calc(1.2*var(--u))}}
 
 .pc{background:var(--surface);border:calc(.075*var(--u)) solid var(--border);border-radius:calc(1.59*var(--u));padding:calc(1.2*var(--u)) calc(1.5*var(--u));min-width:0;box-shadow:calc(.32*var(--u)) calc(.9*var(--u)) calc(1.42*var(--u)) var(--shadow-a),0 calc(.14*var(--u)) calc(.42*var(--u)) var(--shadow-b)}
-.pc h3{margin:0 0 calc(.9*var(--u));font-size:calc(1.1*var(--u));font-weight:600;display:flex;align-items:center;gap:calc(.6*var(--u));color:var(--ink-2);flex-wrap:wrap}
+/* THE THREE PROPERTIES globals.css SUPPLIES BECAUSE THIS RULE DOES NOT NAME THEM (L20 again,
+ * through a door my sweep did not check). My L20 sweep diffed every CLASS this sheet styles
+ * against globals.css. `h1, h2, h3, h4, h5, h6` at globals.css:82 is an ELEMENT rule, so a
+ * class diff cannot see it, and it sets font-family, line-height and letter-spacing on every
+ * heading in the app.
+ *
+ * `.pc h3` names font-size and font-weight as LONGHANDS, so the other three survive untouched
+ * and the analytics card titles render in --font-heading at line-height 1.12 with
+ * letter-spacing -0.015em. The approved preview styles no headings at all, so there its h3
+ * inherits var(--sans) and 1.5 from `body` (index.html:52) with letter-spacing normal.
+ *
+ * `.vhead h2` two rules up is immune for a reason worth keeping: it uses the `font` SHORTHAND,
+ * which resets family and line-height whether you mention them or not. Shorthand closes the
+ * door, longhand leaves it open, and that is the difference between the two headings in this
+ * sheet rather than anything about where they sit. */
+.pc h3{margin:0 0 calc(.9*var(--u));font-size:calc(1.1*var(--u));font-weight:600;font-family:var(--sans);line-height:1.5;letter-spacing:normal;display:flex;align-items:center;gap:calc(.6*var(--u));color:var(--ink-2);flex-wrap:wrap}
+/* The glyph takes its ink from here: `paintGlyph` reads the canvas's OWN computed colour,
+ * the way the preview does, so this one declaration is what makes the card titles orange
+ * and what carries them across a theme switch. It went missing with the glyphs themselves -
+ * a rule whose only subject is absent styles nothing and reads as harmless. */
+.pc h3 canvas.g{color:var(--orange)}
 .pc h3 .tag{margin-left:auto;height:calc(1.8*var(--u));font-family:var(--mono);font-size:calc(.78*var(--u))}
 .pc > canvas,.pc .chart > canvas{width:100%;display:block}
 .pc .chart{position:relative}
@@ -148,7 +146,16 @@ button.tag:hover,a.tag:hover{border-color:var(--muted)}
 .pc .sent{font-size:calc(.9*var(--u));color:var(--muted);margin:calc(.6*var(--u)) 0 0;font-weight:500}
 .pc .figs{display:flex;flex-wrap:wrap;gap:calc(1.2*var(--u)) calc(2*var(--u));margin-top:calc(.7*var(--u));font-size:calc(.78*var(--u));color:var(--label);font-weight:500}
 .pc .figs b{display:block;font:700 calc(1.15*var(--u))/1.2 var(--mono);color:var(--ink);letter-spacing:calc(-.02*var(--u));overflow-wrap:anywhere}
-.pc .figs .big b{font-size:clamp(calc(1.2*var(--u)),1.6vw,calc(1.8*var(--u)));color:var(--display-accent);font-family:var(--sans);letter-spacing:calc(-.04*var(--u))}
+/* THE RULE THAT WINS, NOT THE FIRST ONE THAT MATCHES. The snapshot declares
+ * `.pc .figs .big b` TWICE at the same specificity, both at depth 0: a clamp at
+ * index.html:279 and the flat size at :298. Later wins, so :298 is the shipped figure and the
+ * clamp is dead code in the preview. I merged the two by hand and kept the DEAD one's
+ * font-size beside the live one's colour and family, which rendered the analytics headline at
+ * 23.04px against the design's 25.2px at 1440.
+ *
+ * Transcribing a sheet means transcribing what the CASCADE produces, not what the first
+ * matching line says. Checked the same way for every other doubled selector in this sheet. */
+.pc .figs .big b{font-size:calc(1.8*var(--u));color:var(--display-accent);font-family:var(--sans);letter-spacing:calc(-.04*var(--u))}
 
 /* The network card is a label/value grid rather than the flex row the other cards use:
  * the sync figure carries its own % and must never wrap, and the backend dot sits on the

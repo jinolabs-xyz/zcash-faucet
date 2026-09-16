@@ -23,6 +23,7 @@ import {
   syncFigure,
   syncBarPercent,
   dripsLeftText,
+  ctazWord,
   reserveTone,
   minerWord,
   minerTone,
@@ -191,23 +192,33 @@ export function StatusCards({ status, network }: { status: ViewStatus | null; ne
           <h2>Wallet</h2>
           <Rows>
             <Row label="Spendable">{spendable === UNKNOWN ? UNKNOWN : `${spendable} TAZ`}</Row>
+            {/* BOTH FIGURES NAME THEIR UNIT (ruling 1). The design's own row is
+                `<span>15</span> · low <span>5</span>` because on a page that has one currency
+                the unit is obvious; this app renders a cTAZ row on the same card, which is the
+                whole point of #326's separation, and a bare "15 · low 5" beside it is exactly
+                the misreading the hidden rows used to prevent. The number the reader must not
+                misread is the one we spell out. */}
             <Row label="Reserve line">
-              {reserve?.targetTaz != null ? groupDigits(reserve.targetTaz) : UNKNOWN} · low{" "}
-              {reserve?.lowTaz != null ? groupDigits(reserve.lowTaz) : UNKNOWN}
+              {reserve?.targetTaz != null ? `${groupDigits(reserve.targetTaz)} TAZ` : UNKNOWN} · low{" "}
+              {reserve?.lowTaz != null ? `${groupDigits(reserve.lowTaz)} TAZ` : UNKNOWN}
             </Row>
             <Row label="Drip">
               {status?.dripTaz ?? UNKNOWN} TAZ · 24h cooldown
             </Row>
             {/* cTAZ follows the network the claim view has selected, exactly as the
-                preview does. It is parked, so the word is the one the rest of the site
-                uses for it and there is no figure beside it to imply otherwise. */}
+                preview does, and there is no figure beside it to imply a holding we cannot
+                read. The WORD is derived rather than typed: the preview hardcodes "parked"
+                because it has no server behind it, and we do - a literal here goes on saying
+                parked about a Crosslink node that has come back. Today's status gives exactly
+                the preview's word, which is the point: the page now agrees with the data
+                instead of coinciding with it. */}
             {network === "ctaz" && (
               <>
                 <div>
                   <div className="group">cTAZ</div>
                 </div>
                 <Row label="cTAZ">
-                  <Word tone="unknown">parked</Word>
+                  <Word tone="unknown">{ctazWord(status?.ctaz)}</Word>
                 </Row>
               </>
             )}

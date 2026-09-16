@@ -1251,9 +1251,24 @@ async function checkCtazToggle(page, base) {
   // THE REPLACEMENT FOR #326's SEPARATION, asserted rather than assumed: every figure on
   // this card that is a TAZ amount says TAZ. A unitless number here is exactly what the
   // hidden rows used to prevent being misread as a cTAZ balance.
-  const unitless = ctazRows.filter((r) => /^[\d,]+(\.\d+)?$/.test(r.value));
+  // EVERY NUMBER NAMES ITS UNIT, ANYWHERE IN THE VALUE. My first spelling anchored the whole
+  // string with /^[\d,]+(\.\d+)?$/, so it could only ever flag a value that IS a bare number -
+  // and the row that was actually wrong read "15 \u00b7 low 5", which sails through it. The
+  // review found the row; the row was only shippable because my own pin could not see it. An
+  // assertion that catches the simplest spelling of a fault and nothing else is the false-pass
+  // shape this suite keeps finding in itself, and this is the third of mine tonight.
+  //
+  // THE `(?![\d,.])` IS LOAD-BEARING and it is why this is not the obvious one-liner. Without
+  // it the greedy number match BACKTRACKS when the unit lookahead fails: "1,000 TAZ" retreats
+  // to "1,00", whose next text is "0 TAZ" and is not a unit, so the correct row gets flagged.
+  // Measured before shipping - the unguarded form flags 4,50 in "4,506 TAZ", 0 in "0.1 TAZ"
+  // and 2 in "24h", i.e. it goes red on a page with nothing wrong with it.
+  const UNIT = String.raw`\s*(?:c?TAZ|h\b|%|drips?\b|blocks?\b|s\b)`;
+  const bareNumber = new RegExp(String.raw`\d[\d,]*(?:\.\d+)?(?![\d,.])(?!${UNIT})`, "g");
+  const unitless = ctazRows.flatMap((r) =>
+    (r.value.match(bareNumber) ?? []).map((n) => `${r.label}="${r.value}" has a bare ${n}`));
   ok("no wallet figure sits on the cTAZ tab without naming its unit",
-    unitless.length === 0, unitless.map((r) => `${r.label}=${r.value}`).join(", ") || "none");
+    unitless.length === 0, unitless.join("; ") || "none");
 
   // THE OTHER HALF OF THE CTO'S RULING (20:55Z): the cTAZ group must be VISUALLY distinct
   // from the wallet rows above it, and pinned, because "an untested convention is not a

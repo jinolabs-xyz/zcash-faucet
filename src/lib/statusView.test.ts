@@ -23,6 +23,9 @@ import {
   dripsLeftText,
   reserveSentence,
   reserveTone,
+  reserveWord,
+  reserveChipTone,
+  ctazWord,
   minerWord,
   minerTone,
   acceptPercent,
@@ -318,4 +321,91 @@ test("digit grouping", () => {
   assert.equal(groupDigits(1000), "1,000");
   assert.equal(groupDigits(0), "0");
   assert.equal(groupDigits(4506.871133), "4,506", "truncates rather than printing a decimal");
+});
+
+/* ── the reserve chip's word ──────────────────────────────────────────────
+ *
+ * These exist because the review drove a case I had not: spendable 400 against a low mark of
+ * 500 and a target of 1000 rendered `empty [bad]` beside a status card offering about 4,000
+ * drips. "empty" is not a word the approved design uses anywhere, and it was reachable because
+ * the word was derived from the TONE - three values - when the design derives it from the
+ * FACTS, which need four.
+ */
+test("the chip never says a word the approved design does not use", () => {
+  const words = new Set<string>();
+  for (const spendableTaz of [0, 1, 400, 499, 500, 501, 999, 1000, 4506])
+    for (const refilling of [true, false])
+      words.add(reserveWord({ spendableTaz, lowTaz: 500, targetTaz: 1000, refilling }));
+  words.add(reserveWord({ spendableTaz: null, lowTaz: 500, targetTaz: 1000 }));
+  words.add(reserveWord(null));
+  // index.html:932 produces exactly these three, plus unknown for a reserve we cannot read.
+  assert.deepEqual([...words].sort(), ["low", "ok", "topping up", "unknown"]);
+  assert.ok(!words.has("empty"), "empty is not a word this design has");
+});
+
+test("the review's own case reads topping up rather than empty when the reserve is refilling", () => {
+  const r = { spendableTaz: 400, lowTaz: 500, targetTaz: 1000 };
+  assert.equal(reserveWord({ ...r, refilling: true }), "topping up");
+  assert.equal(reserveChipTone(reserveWord({ ...r, refilling: true })), "warn");
+  // Not refilling and under the low mark is the design's "low", never "empty".
+  assert.equal(reserveWord({ ...r, refilling: false }), "low");
+  assert.equal(reserveChipTone(reserveWord({ ...r, refilling: false })), "bad");
+});
+
+test("refilling wins over the wallet tone, in both directions, the way index.html:932 orders it", () => {
+  // Above the target and refilling still says topping up: the spec tests `refilling` FIRST.
+  assert.equal(reserveWord({ spendableTaz: 4506, lowTaz: 500, targetTaz: 1000, refilling: true }), "topping up");
+  assert.equal(reserveWord({ spendableTaz: 4506, lowTaz: 500, targetTaz: 1000, refilling: false }), "ok");
+  // Between the low mark and the target, not refilling, is "ok" and not "low": the spec keys
+  // the word on `wt === 'bad'`, which is at-or-below the LOW mark, not below the target.
+  assert.equal(reserveWord({ spendableTaz: 900, lowTaz: 500, targetTaz: 1000, refilling: false }), "ok");
+  assert.equal(reserveTone({ spendableTaz: 900, lowTaz: 500, targetTaz: 1000 }), "warn");
+});
+
+test("a reserve we cannot read says unknown rather than claiming it is topping up", () => {
+  // refilling true with no numbers behind it is still a claim we have not established.
+  assert.equal(reserveWord({ spendableTaz: null, lowTaz: 500, targetTaz: 1000, refilling: true }), "unknown");
+  assert.equal(reserveChipTone("unknown"), "unknown");
+});
+
+test("the chip's tone comes from the word and is never re-derived", () => {
+  // The coupling that minerTone got wrong earlier in this PR, asserted here so the second
+  // instance cannot drift either: every word maps to exactly one tone, per index.html:881.
+  assert.equal(reserveChipTone("low"), "bad");
+  assert.equal(reserveChipTone("topping up"), "warn");
+  assert.equal(reserveChipTone("ok"), "ok");
+  assert.equal(reserveChipTone("empty"), "unknown");
+});
+
+/* ── the cTAZ row's word ────────────────────────────────────────────────── */
+
+test("the cTAZ row never says parked about a node the status reports as servable", () => {
+  // The whole point of deriving it. A literal cannot fail this and that is why it was one.
+  assert.notEqual(ctazWord({ enabled: true, servable: true }), "parked");
+  assert.equal(ctazWord({ enabled: true, servable: true }), "unknown");
+});
+
+test("and it says parked for the two ways cTAZ is not serving", () => {
+  assert.equal(ctazWord({ enabled: false, servable: false }), "parked");
+  assert.equal(ctazWord({ enabled: true, servable: false }), "parked");
+});
+
+test("a status that told us nothing about cTAZ gets a claim about nothing", () => {
+  assert.equal(ctazWord(null), "unknown");
+  assert.equal(ctazWord(undefined), "unknown");
+  assert.equal(ctazWord({}), "parked");   // present but silent on servable: not serving
+});
+
+test("today's production status produces exactly the word the preview hardcodes", () => {
+  // enabled true, servable false. The transcription was faithful; it was just not derived.
+  assert.equal(PROD.ctaz.enabled, true);
+  assert.equal(PROD.ctaz.servable, false);
+  assert.equal(ctazWord(PROD.ctaz), "parked");
+});
+
+test("the word is never a number, in any combination", () => {
+  for (const enabled of [true, false, undefined])
+    for (const servable of [true, false, undefined])
+      assert.ok(Number.isNaN(Number(ctazWord({ enabled, servable }))),
+        `${enabled}/${servable} produced a numeric word`);
 });

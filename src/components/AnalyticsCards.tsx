@@ -16,7 +16,8 @@
 
 import { useEffect, useRef } from "react";
 import { drawDrips, drawReserve, drawSegments, barMax, sevenDayMean, type DripDay, type Segment } from "@/lib/charts";
-import { groupDigits, reserveSentence, reserveTone, acceptSentence, minerWord, minerTone, syncFigure, heightDiff, heightNote, backendHost } from "@/lib/statusView";
+import { paintGlyph, type GlyphName } from "@/lib/glyphs";
+import { groupDigits, reserveSentence, reserveWord, reserveChipTone, acceptSentence, minerWord, minerTone, syncFigure, heightDiff, heightNote, backendHost } from "@/lib/statusView";
 import type { Tone, ViewStatus } from "./viewStatus";
 import { UNKNOWN } from "./viewStatus";
 
@@ -120,7 +121,10 @@ export function AnalyticsCards({ status }: { status: ViewStatus | null }) {
   return (
     <div className="pcards">
       <div className="pc">
-        <h3>Drips per day, 30 days</h3>
+        <h3>
+          <Glyph name="drips" />
+          Drips per day, 30 days
+        </h3>
         <div className="chart">
           <canvas
             ref={dripsRef}
@@ -153,8 +157,12 @@ export function AnalyticsCards({ status }: { status: ViewStatus | null }) {
 
       <div className="pc">
         <h3>
+          <Glyph name="reserve" />
           Wallet reserve
-          <Tag tone={reserveTone(reserve)}>{reserveWord(reserveTone(reserve))}</Tag>
+          {/* WORD FROM THE FACTS, TONE FROM THE WORD, which is the order index.html:932 and :881
+              use. Deriving the word from the tone lost `refilling` entirely, because a tone has
+              three values and the word needs four. */}
+          <Tag tone={reserveChipTone(reserveWord(reserve))}>{reserveWord(reserve)}</Tag>
         </h3>
         <canvas
           ref={reserveRef}
@@ -184,6 +192,7 @@ export function AnalyticsCards({ status }: { status: ViewStatus | null }) {
 
       <div className="pc">
         <h3>
+          <Glyph name="miner" />
           Miner
           <Tag tone={minerTone(miner, unit)}>{minerWord(miner, unit)}</Tag>
         </h3>
@@ -220,6 +229,7 @@ export function AnalyticsCards({ status }: { status: ViewStatus | null }) {
 
       <div className="pc">
         <h3>
+          <Glyph name="sends" />
           Sends, last 15 min
           <Tag tone={sendsTone(sends?.state)}>{sends?.state ?? UNKNOWN}</Tag>
         </h3>
@@ -256,7 +266,10 @@ export function AnalyticsCards({ status }: { status: ViewStatus | null }) {
       </div>
 
       <div className="pc wide">
-        <h3>Network</h3>
+        <h3>
+          <Glyph name="network" />
+          Network
+        </h3>
         <div className="figs">
           <span className="big">
             our height<b>{node?.nodeHeight != null ? groupDigits(node.nodeHeight) : UNKNOWN}</b>
@@ -285,9 +298,34 @@ export function AnalyticsCards({ status }: { status: ViewStatus | null }) {
   );
 }
 
-/** The reserve's own word, from its tone, so the chip and the colour cannot disagree. */
-function reserveWord(tone: Tone): string {
-  return tone === "ok" ? "ok" : tone === "warn" ? "low" : tone === "bad" ? "empty" : UNKNOWN;
+/**
+ * One card-title glyph. A canvas rather than an SVG because that is what the approved preview
+ * uses, and because the glyph takes its COLOUR from its own computed style, so it follows the
+ * theme without a prop and without a second palette to keep in step.
+ *
+ * REPAINTS ON THEME, like every other canvas in this view. A canvas keeps its pixels across a
+ * theme switch, so an icon painted once stays the old ink colour on the new background - the
+ * failure the other four canvases already have a painter for. `data-theme` moves on <html>, so
+ * that is what is observed.
+ */
+function Glyph({ name }: { name: GlyphName }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas) return;
+    const paint = () => paintGlyph(canvas, name);
+    paint();
+    const mo = new MutationObserver(paint);
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    // Width drives the whole 16-grid scale, so a resize is a repaint as well as a re-layout.
+    const ro = new ResizeObserver(paint);
+    ro.observe(canvas);
+    return () => {
+      mo.disconnect();
+      ro.disconnect();
+    };
+  }, [name]);
+  return <canvas ref={ref} className="g" data-glyph={name} aria-hidden="true" />;
 }
 
 function sendsTone(state: string | undefined): Tone {
