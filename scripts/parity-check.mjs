@@ -245,7 +245,31 @@ const declared = Object.fromEntries(
 // `.strip .kv b{font-size:calc(.95*var(--u))}` from redesign-shell.css and watched the strip
 // figures fall to .78u with the check silent; changing .95 to .96 was caught, because that ADDS
 // a body the spec does not have.
-const sameBodies = (a, b) => a.size === b.size && [...a].every((x) => b.has(x));
+// A SELECTOR SPLIT ACROSS TWO RULES IS THE SAME CSS AS ONE MERGED RULE, and until this it was
+// reported as a divergence. The set members are whole rule BODIES, so S2's spec, which writes
+// `.pc .figs b{overflow-wrap:anywhere}` at line 276 and the rest of it at line 293, has TWO
+// members where #567's sheet has one containing exactly the same five declarations. Measured on
+// #567's head: `.pc .figs b` came back as "declarations differ" with an empty difference on both
+// sides. That is noise rather than danger - a merge cannot turn a real difference into a green -
+// but the cost is real and specific: it invites a departures entry for a non-divergence, which
+// is the nine-invented-reasons mistake this file already carries a warning about, and I was
+// about to write one.
+//
+// SO THE COMPARISON DROPS TO DECLARATIONS - BUT ONLY WHERE THAT IS SAFE. The body-level set
+// exists to protect one real pattern: a rule declaring the SAME PROPERTY TWICE as a fallback
+// (`color:red; color:color-mix(...)`), where the order decides what an old browser gets and a
+// declaration set would call the two orders equal. So where either side declares a property more
+// than once, the old body-level comparison stands and nothing about that case changes.
+const propOf = (d) => d.slice(0, d.indexOf(":")).trim();
+const declsOf = (set) => [...set].flatMap((b) => b.split(";").map((d) => d.trim()).filter(Boolean));
+const repeatsAProperty = (decls) => new Set(decls.map(propOf)).size !== decls.length;
+const sameBodies = (a, b) => {
+  if (a.size === b.size && [...a].every((x) => b.has(x))) return true;   // identical as written
+  const da = declsOf(a), db = declsOf(b);
+  if (repeatsAProperty(da) || repeatsAProperty(db)) return false;        // the fallback pattern
+  const sa = new Set(da), sb = new Set(db);
+  return sa.size === sb.size && [...sa].every((x) => sb.has(x));
+};
 const added = [...ship.keys()].filter((s) => !spec.has(s));
 const changed = [...ship.keys()].filter((s) => spec.has(s) && !sameBodies(ship.get(s), spec.get(s)));
 const dropped = [...spec.keys()].filter((s) => !ship.has(s));

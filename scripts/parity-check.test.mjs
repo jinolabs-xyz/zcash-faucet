@@ -503,3 +503,46 @@ test("a spec held by its slice gate says so, instead of claiming mid-transcripti
   assert.doesNotMatch(r.out, /mid-transcription/);
   assert.equal(r.code, 0, r.out);
 });
+
+// ---------------------------------------------------------------------------------------
+// A SELECTOR SPLIT ACROSS TWO RULES IS THE SAME CSS AS ONE MERGED RULE.
+
+test("a selector the spec splits across two rules, merged in the shipped sheet, is parity", () => {
+  const r = runParity({
+    spec: ".a{color:red}\n.a{font-weight:600}\n.b{color:blue}\n",
+    shipped: ".a{color:red;font-weight:600}\n.b{color:blue}\n",
+    departures: {},
+  });
+  assert.equal(r.code, 0, r.out);
+});
+
+test("and the other direction, split in the shipped sheet and merged in the spec", () => {
+  const r = runParity({
+    spec: ".a{color:red;font-weight:600}\n.b{color:blue}\n",
+    shipped: ".a{color:red}\n.a{font-weight:600}\n.b{color:blue}\n",
+    departures: {},
+  });
+  assert.equal(r.code, 0, r.out);
+});
+
+test("a merge that is not the same declarations is still a divergence", () => {
+  const r = runParity({
+    spec: ".a{color:red}\n.a{font-weight:600}\n.b{color:blue}\n",
+    shipped: ".a{color:red;font-weight:700}\n.b{color:blue}\n",
+    departures: {},
+  });
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /UNDECLARED/);
+});
+
+test("THE FALLBACK PATTERN IS UNTOUCHED: one property declared twice keeps its order", () => {
+  // `color` twice is a deliberate old-browser fallback - the LAST one an old browser
+  // understands wins, so swapping them changes what ships. A declaration set would call
+  // these equal, which is why the body-level comparison still stands where a property repeats.
+  const r = runParity({
+    spec: ".a{color:red;color:color-mix(in srgb,red,blue)}\n.b{color:blue}\n",
+    shipped: ".a{color:color-mix(in srgb,red,blue);color:red}\n.b{color:blue}\n",
+    departures: {},
+  });
+  assert.equal(r.code, 1, r.out);
+});
