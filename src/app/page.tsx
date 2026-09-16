@@ -1497,91 +1497,52 @@ export default function Home() {
           </div>
         )}
 
+        {/* SENT (index.html:500-515). The snapshot's `<dl class="receipt">` with the row set it
+            names, plus two rows it has no state for and we do: the spending key, when the
+            address was one we generated, and "our node" rather than a confirmations count we
+            do not always have. Every value is what came BACK, not what the form offered - cTAZ
+            fixes its own amount and ignores what we asked for, so the two can differ and only
+            one of them is true. */}
         {phase === "success" && tx && (
-          <div style={{ border: "2px solid var(--color-text)", display: "flex", flexDirection: "column" }}>
-            <div style={{ padding: 16, borderBottom: "2px solid var(--color-text)", display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, background: "var(--color-surface)" }}>
-              <span data-testid="sent-badge" style={{ fontFamily: "var(--mono)", fontSize: 10, fontWeight: 700, letterSpacing: ".14em", textTransform: "uppercase" }}>Sent ✓</span>
-              <span style={{ fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".08em", color: muted(55) }}>just now</span>
+          <div className="phase" data-phase="sent">
+            <div className="kicker"><span data-testid="sent-badge">Sent ✓</span></div>
+            <h3>{tx.amountText} is on its way</h3>
+            <dl className="receipt">
+              <dt>Amount</dt><dd className="mono">{tx.amountText}</dd>
+              <dt>To</dt><dd className="mono" title={tx.to}>{short(tx.to, 12, 6)}</dd>
+              <dt>Chain</dt><dd className="mono">{networkFacts(tx.network).chain}</dd>
+              {/* The row is here whether or not there is an id, and it answers the question
+                  either way: hiding it on cTAZ would leave someone hunting for a txid the
+                  receipt never mentions. `tx.txid` decides it, not `tx.network`. */}
+              <dt>txid</dt>
+              <dd className="mono" title={tx.txid ?? undefined}>{tx.txid ? short(tx.txid, 10, 8) : "not reported by this network"}</dd>
+              <dt>Status</dt>
+              <dd>
+                {txSeen === null
+                  ? "checking…"
+                  : txSeen.known === true
+                    ? txSeen.confirmations
+                      ? `seen by our node, ${txSeen.confirmations} confirmation${txSeen.confirmations === 1 ? "" : "s"}`
+                      : "seen by our node, in the mempool"
+                    : txSeen.known === false
+                      ? "not seen yet"
+                      : "cannot say right now"}
+              </dd>
+            </dl>
+            <div className="row">
+              {tx.txid && <button className="tag" type="button" onClick={() => void copy("txid", tx.txid!)}>{copied === "txid" ? "Copied ✓" : "Copy txid"}</button>}
+              <button className="tag" type="button" onClick={() => void copy("receipt", receiptText(tx))}>{copied === "receipt" ? "Copied ✓" : "Copy receipt"}</button>
+              {genKey && genKey.address === tx.to && (
+                <button className="tag" type="button" aria-label="Copy spending key" onClick={() => void copy("key", genKey.secret)}>{copied === "key" ? "Copied ✓" : "Copy spending key"}</button>
+              )}
+              {tx.explorerUrl && <a className="tag" href={tx.explorerUrl} target="_blank" rel="noreferrer">Open in explorer ↗</a>}
+              <button className="tag ink" type="button" onClick={again}>Another address</button>
             </div>
-            <div style={{ padding: "18px 16px", display: "flex", flexDirection: "column", gap: 14 }}>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-                {/* What was PAID, from the response, not what the form offered. cTAZ's
-                    amount is fixed by their node and ignores what we ask for, so the
-                    two can differ and only one of them is true. */}
-                <span style={{ fontSize: "clamp(30px,8vw,42px)", fontWeight: 800, letterSpacing: "-.03em", lineHeight: 1 }}>{tx.amountText}</span>
-                <span style={{ fontFamily: "var(--mono)", fontSize: 12, color: muted(55) }}>on its way</span>
-              </div>
-              <div>
-                {/* Full values in title + a copyable receipt below: the shortened
-                    forms are for reading, never the only way to get the data. */}
-                <div style={rowLine}><span style={{ color: muted(55) }}>to</span><span title={tx.to} style={{ fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "60%" }}>{short(tx.to, 12, 6)}</span></div>
-                {/* The row is here either way, and it answers the question either way.
-                    Hiding it on cTAZ would leave someone looking for a txid that the
-                    receipt never mentions, which reads as an omission rather than as
-                    the network's answer. `tx.txid` decides this, not `tx.network`: the
-                    page reports what came back. */}
-                <div style={rowLine}>
-                  <span style={{ color: muted(55) }}>txid</span>
-                  {tx.txid ? (
-                    <span title={tx.txid} style={{ fontWeight: 700 }}>{short(tx.txid, 10, 8)}</span>
-                  ) : (
-                    <span style={{ fontWeight: 700, textAlign: "right", maxWidth: "66%" }}>none, this network returns none</span>
-                  )}
-                </div>
-                {/* Only asked when there is something to ask about. /api/tx queries OUR
-                    node, which has never heard of a Crosslink transaction and could not
-                    look one up without an id anyway. */}
-                {tx.txid && (
-                  <div style={rowLine}>
-                    <span style={{ color: muted(55) }}>our node</span>
-                    <span style={{ fontWeight: 700, textAlign: "right", maxWidth: "62%" }}>
-                      {txSeen === null
-                        ? "checking…"
-                        : txSeen.known === true
-                          ? txSeen.confirmations
-                            ? `seen it, ${txSeen.confirmations} confirmation${txSeen.confirmations === 1 ? "" : "s"}`
-                            : "seen it, in the mempool"
-                          : txSeen.known === false
-                            ? "not seen yet"
-                            : "cannot say right now"}
-                    </span>
-                  </div>
-                )}
-                <div style={rowLine}>
-                  <span style={{ color: muted(55) }}>privacy</span>
-                  <span style={{ fontWeight: 700, textAlign: "right", maxWidth: "62%" }}>
-                    {tx.priv ? <span className="tag tag-outline" style={{ fontSize: 9 }}>shielded z→z</span> : "transparent, public on-chain"}
-                  </span>
-                </div>
-                <div style={rowLine}>
-                  <span style={{ color: muted(55) }}>network</span>
-                  {/* The chain's name and nothing else. Appending the beta marker read
-                      "Crosslink feature net · feature net, beta", which says the same
-                      thing twice and is the sort of line that only shows up once it is
-                      in front of you. The marker's job is done at the toggle, where it
-                      is a warning before the choice rather than a label after it. */}
-                  <span style={{ fontWeight: 700 }}>{networkFacts(tx.network).chain}</span>
-                </div>
-              </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-                {/* No copy-txid and no explorer link when there is no id: a disabled
-                    button offering something that does not exist is worse than the
-                    button not being there (#323 ruling). Both keyed off the data. */}
-                {tx.txid && <button className="btn btn-secondary btn-sm" onClick={() => void copy("txid", tx.txid!)}>{copied === "txid" ? "Copied ✓" : "Copy txid"}</button>}
-                <button className="btn btn-secondary btn-sm" onClick={() => void copy("receipt", receiptText(tx))}>{copied === "receipt" ? "Copied ✓" : "Copy receipt"}</button>
-                {genKey && genKey.address === tx.to && <button className="btn btn-secondary btn-sm" aria-label="Copy spending key" onClick={() => void copy("key", genKey.secret)}>{copied === "key" ? "Copied ✓" : "Copy spending key"}</button>}
-                {tx.explorerUrl && <a className="btn btn-secondary btn-sm" href={tx.explorerUrl} target="_blank" rel="noreferrer">Open in explorer ↗</a>}
-                <button className="btn btn-ghost btn-sm" onClick={again} style={{ padding: 0 }}>Another address</button>
-              </div>
-              <p aria-live="polite" className="sr-only">{copied === "txid" ? "Transaction id copied." : copied === "receipt" ? "Receipt copied." : ""}</p>
-              <p style={{ margin: 0, fontSize: 12, lineHeight: 1.5, color: muted(55) }}>
-                {!tx.txid
-                  ? networkFacts(tx.network).noTxidReason
-                  : tx.priv
-                    ? "Shielded sends take a moment to show up in an explorer, and the amount stays private there."
-                    : "It can take a minute to appear in an explorer while the transaction is mined."}
-              </p>
-            </div>
+            <p className="fine">
+              {tx.network === "taz"
+                ? "Shielded sends take a moment to show up in an explorer, and the amount stays private there."
+                : "It can take a minute to appear in an explorer while the transaction is mined."}
+            </p>
           </div>
         )}
 
@@ -1615,42 +1576,43 @@ export default function Home() {
             // contradictory times on one card.
             const sub = r.kind === "subnet";
             return (
-              <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
-                <span style={kicker}>{sub ? "Network limit reached" : "Connection limit reached"}</span>
-                <h2 style={{ margin: 0, fontSize: 19, lineHeight: 1.25 }}>{sub ? "Your network is over its quota for now." : "This connection is out of drips for now."}</h2>
-                <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
-                  {r.reason || "Everyone on the same network shares this limit."}{" "}
-                  {!sub && whenText ? <>A slot frees at <strong>{whenText}</strong> (in {dur(remain)}).</> : null}
+              /* CONNECTION LIMIT and NETWORK LIMIT (index.html:520-527) are two panels in the
+                 snapshot and two situations here: a shared router is not a shared subnet, and
+                 the advice differs. A different address helps with neither, which is what the
+                 single old card wrongly offered. */
+              <div className="phase" data-phase={sub ? "network-limit" : "connection-limit"}>
+                <div className="kicker">{sub ? "Network limit" : "Connection limit"}</div>
+                <h3>{sub ? "Too many requests from this network" : "Too many requests from this connection"}</h3>
+                <p>
+                  {r?.reason || (sub ? "This network has had its share for now." : "This connection has had its share for now.")}{" "}
+                  {whenText ? <>Try again at <strong>{whenText}</strong> (in {dur(remain)}).</> : <>Try again in {dur(remain)}.</>}
                 </p>
-                <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
-                  The faucet is up. This is a limit, not a fault.
-                </p>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}><button className="btn btn-ghost btn-sm" onClick={again} style={{ padding: 0 }}>Start over</button></div>
+                <p className="fine">A different address will not help: the limit is on the connection, not the address. The faucet is up.</p>
+                <div className="row"><button className="tag" type="button" onClick={again}>Start over</button></div>
               </div>
             );
           }
           const rc = r?.receipt ?? null;
           return (
-            <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
-              <span style={kicker}>{rc ? "Already paid" : "Already claimed"}</span>
-              <h2 style={{ margin: 0, fontSize: 19, lineHeight: 1.25 }}>
-                {rc ? `This address got its ${rc.amountText}.` : "This address already claimed recently."}
-              </h2>
-              {rc?.txid && (
-                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
-                  <code data-testid="cooldown-txid" style={{ fontSize: 12, wordBreak: "break-all" }}>{rc.txid}</code>
-                  <button className="btn btn-secondary btn-sm" onClick={() => void copy("txid", rc.txid!)}>{copied === "txid" ? "Copied" : "Copy"}</button>
-                  {rc.explorerUrl && <a className="btn btn-secondary btn-sm" href={rc.explorerUrl} target="_blank" rel="noreferrer">Open in explorer ↗</a>}
-                </div>
-              )}
-              <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
-                {r?.reason || "This claim is on cooldown."}{" "}
+            /* ALREADY CLAIMED (index.html:516-519). The receipt is THIS BROWSER's own, never
+               asked of the server (that would be an address-to-txid oracle), and never shown
+               for a connection refusal where the blocking drip may be someone else's. */
+            <div className="phase" data-phase="already-claimed">
+              <div className="kicker">{rc ? "Already paid" : "Already claimed"}</div>
+              <h3>{rc ? `This address got its ${rc.amountText}` : "This address got a drip in the last 24 h"}</h3>
+              <p>
+                {r?.reason || "One drip per address per day keeps the reserve for everyone."}{" "}
                 {whenText ? <>The next drip for this address is available at <strong>{whenText}</strong> (in {dur(remain)}).</> : <>The next one is available in {dur(remain)}.</>}
               </p>
-              <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
-                The faucet is up. This is a limit, not a fault.
-              </p>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}><button className="btn btn-secondary btn-sm" onClick={again}>Try a different address</button></div>
+              {rc?.txid && (
+                <div className="row">
+                  <code className="mono" data-testid="cooldown-txid">{rc.txid}</code>
+                  <button className="tag" type="button" onClick={() => void copy("txid", rc.txid!)}>{copied === "txid" ? "Copied ✓" : "Copy txid"}</button>
+                  {rc.explorerUrl && <a className="tag" href={rc.explorerUrl} target="_blank" rel="noreferrer">Open in explorer ↗</a>}
+                </div>
+              )}
+              <p className="fine">The faucet is up. This is a limit, not a fault.</p>
+              <div className="row"><button className="tag ink" type="button" onClick={again}>Try a different address</button></div>
             </div>
           );
         })()}
@@ -1691,66 +1653,46 @@ export default function Home() {
             : k === "unknown" ? " Its cooldown was spent on this claim, so a retry would be refused either way."
             : "";
           const tryAgain = k === "failed" || k === "pow" || k === "offline" || k === "busy" || k === "held";
+          // THE 23:08Z MAPPING, seven kinds onto five panels. `send-failed` takes only the
+          // three that really left nothing and really can retry; `restarting` takes busy AND
+          // held, one panel with two data states, the clock appearing only when there is one;
+          // and `unknown` gets `lost-track`, which is NOT in the approved design and is a
+          // declared addition, because `send-failed` says "Nothing was deducted, you can try
+          // again now" and for a submitted-but-unconfirmed drip all three of those are false.
+          const panel =
+            k === "cap" ? "daily-cap"
+            : k === "bad" ? "couldnt-take"
+            : k === "unknown" ? "lost-track"
+            : k === "busy" || k === "held" ? "restarting"
+            : "send-failed";
           return (
-            <div role="alert" style={{ border: "2px solid var(--color-accent)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 11 }}>
-              <span style={kicker}>{kick}</span>
-              <h2 style={{ margin: 0, fontSize: 19, lineHeight: 1.25 }}>{head}</h2>
-              <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(70), maxWidth: "52ch" }}>{errMsg}{tail}</p>
+            <div className="phase" data-phase={panel} role="alert">
+              <div className="kicker">{kick}</div>
+              <h3>{head}</h3>
+              <p>{errMsg}{tail}</p>
               {k === "unknown" && fail.address && (
-                <code data-testid="unknown-address" style={{ fontFamily: "var(--mono)", fontSize: 12, wordBreak: "break-all", color: "var(--color-text)" }}>{fail.address}</code>
+                <code className="mono" data-testid="unknown-address">{fail.address}</code>
               )}
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+              <div className="row">
                 {tryAgain && (
-                  <button data-testid="error-retry" className="btn btn-primary btn-sm" onClick={() => void submit()} disabled={k === "held" && waitS > 0}>
+                  <button data-testid="error-retry" className="tag ink" type="button" onClick={() => void submit()} disabled={k === "held" && waitS > 0}>
                     {k === "held" && waitS > 0 ? `Try again in ${waitS}s` : "Try again"}
                   </button>
                 )}
                 {k === "bad" && (
-                  <button data-testid="error-edit" className="btn btn-primary btn-sm" onClick={() => { setErrMsg(""); setPhase(basePhase(status, network)); }}>Edit the address</button>
+                  <button data-testid="error-edit" className="tag ink" type="button" onClick={() => { setErrMsg(""); setPhase(basePhase(status, network)); }}>Edit the address</button>
                 )}
-                <button className="btn btn-ghost btn-sm" onClick={again} style={{ padding: 0 }}>Start over</button>
+                <button className="tag" type="button" onClick={again}>Start over</button>
               </div>
               {fail.requestId && (
-                <p data-testid="request-id" style={{ margin: 0, fontFamily: "var(--mono)", fontSize: 11, color: muted(55) }}>
-                  ref {fail.requestId}{" "}
-                  <span style={{ fontFamily: "inherit" }}>· quote it if you <a href="/terms" style={{ color: "inherit" }}>write to us</a></span>
-                </p>
+                <div className="ref mono" data-testid="request-id">
+                  ref {fail.requestId} · quote it if you <a href="/terms">write to us</a>
+                </div>
               )}
             </div>
           );
         })()}
 
-        <div className="hr" style={{ margin: "6px 0 0" }} />
-
-        {/* Who we are, AFTER the thing you came to do. Above the form this was a
-            third and fourth block of type between the headline and the field, which
-            is brand copy standing in the way of an action. Below it, it is what you
-            read once the request is placed, which is when "who runs this" actually
-            becomes an interesting question. */}
-        <div className="about-strip">
-          <p className="self-hosted-claim">
-            <span>Own node</span>
-            <span>Own wallet</span>
-            <span>Shielded drips</span>
-          </p>
-          <p className="about-strip-line">
-            We run the whole stack ourselves, and the community keeps it full.{" "}
-            <a href="/donate">Chip in</a> if it saved you time.
-          </p>
-          {/* DRIPS SERVED, ON THE LANDING PAGE. It was rendered only inside More
-              details, where the owner looked straight past it while asking where
-              it was; a number nobody finds is not published. Absent stays absent
-              rather than rendering a zero, which would read as "never served
-              anyone" on the one line meant to show the opposite. The 7-day figure
-              rides along only when it is non-zero, so a quiet week says nothing
-              instead of advertising a nought. */}
-          {status?.drips && status.drips.allTime > 0 ? (
-            <p className="about-strip-line drips-line">
-              <strong>{num(status.drips.allTime)}</strong> {status.drips.allTime === 1 ? "drip" : "drips"} served
-              {status.drips.last7d > 0 ? <> · <strong>{num(status.drips.last7d)}</strong> in the last 7 days</> : null}
-            </p>
-          ) : null}
-        </div>
 
             </article>
           </div>

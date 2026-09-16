@@ -275,8 +275,9 @@ async function checkLegacyPalette(browser) {
     // HOVERED ON A LINK THIS CHECK INSERTS, and the first version measured three links that
     // could not show the defect. It hovered `.ftr nav a`, which the footer's own (0,2,1) hover
     // rule already protects; `.seg button`, which is a button, so `a:hover` never matched it at
-    // all; and the first `main a`, which sits inside `.about-strip-line` whose (0,1,1) rule in
-    // globals sits AFTER `a:hover` and wins at any order. So a real link-order flip left the
+    // all; and the first `main a`, which sat inside `.about-strip-line` whose (0,1,1) rule in
+    // globals sat AFTER `a:hover` and won at any order. (That strip is gone as of the card
+    // redesign, and so is its rule - the reason the probe is injected rather than found is not.) So a real link-order flip left the
     // row green, and the 144/2 in the body came from a mutant that appends the retired rule
     // last - something a flip cannot produce. Found by the CTO's red-team.
     //
