@@ -3298,8 +3298,140 @@ async function checkNoEmDashReachesTheReader(browser, base) {
   }
 }
 
+async function checkNarrowViewport(browser, base) {
+  // #623. TWO FAILURES THAT ONLY EXIST BELOW 415px, AND EVERY WIDTH THIS SUITE ALREADY VISITS
+  // IS ABOVE THEM. checkTapFloor's list is 375, 600, 1024, 1440; the narrowest phone still in
+  // use is 320 (iPhone SE 1st gen, and the low-end Android floor), and the clipping below peaks
+  // at 360. A row cannot fail at a width nobody opens.
+  //
+  // THE SECOND ONE IS WORSE THAN OVERFLOW AND THAT IS WHY IT IS ITS OWN ROW. Content painted
+  // past the right edge while the document does NOT scroll is unreachable: there is no gesture
+  // that brings it into view. A page that overflows at least lets the reader drag to the end of
+  // the sentence. "miner unwatched" was 19.6px past the edge at 360 with scrollWidth == 360.
+  // FOUR TABS IN THE NAV, SO FOUR VIEWS IN THIS LIST. Tools (page.tsx:1904) was missing from the
+  // first version of these rows and from the other attempt at #623 - the owner found it. It is the
+  // same lesson as the viewport list one paragraph down, one level up: a row cannot fail at a width
+  // nobody opens, and it cannot fail in a VIEW nobody opens either. The header overhang is identical
+  // across all four, so the fix covers Tools whether or not it is listed - but that is luck, and
+  // only a row survives someone editing ToolsCards next month.
+  const SURFACES = [["/", "claim"], ["/", "status"], ["/", "analytics"], ["/", "tools"],
+                    ["/donate", null], ["/fund", null], ["/terms", null], ["/limits", null]];
+
+  for (const [path, view] of SURFACES) {
+    const name = `${path}${view ? " [" + view + "]" : ""}`;
+    const ctx = await browser.newContext({ viewport: { width: 320, height: 568 }, hasTouch: true });
+    const page = await ctx.newPage();
+    await page.goto(base + path, { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(400);
+    if (view) {
+      const tab = page.locator(".seg button").filter({ hasText: new RegExp(view, "i") }).first();
+      if (await tab.count()) { await tab.click().catch(() => {}); await page.waitForTimeout(300); }
+    }
+    const r = await page.evaluate(() => {
+      const cw = document.documentElement.clientWidth;
+      let worst = null;
+      for (const el of document.querySelectorAll("*")) {
+        const b = el.getBoundingClientRect();
+        if (b.width <= 0 || b.right <= cw + 0.5) continue;
+        if (!worst || b.right > worst.right) worst = {
+          right: b.right,
+          sel: el.tagName.toLowerCase() + (typeof el.className === "string" && el.className
+            ? "." + el.className.trim().split(/\s+/)[0] : ""),
+          minW: getComputedStyle(el).minWidth,
+        };
+      }
+      return { sw: document.documentElement.scrollWidth, cw, worst, controls: document.querySelectorAll(".seg button, .seg a").length };
+    });
+    // THE PARTNER, AND IT IS NOT DECORATION. "Nothing is wider than the viewport" is satisfied
+    // perfectly by a page that rendered nothing at all, which is exactly the failure a smoke
+    // suite is most likely to meet. So the nav has to be there for the row above to mean
+    // anything, and it is asserted separately rather than folded in, so a red run says which
+    // of the two happened (#587).
+    ok(`320px ${name}: the page rendered its nav, so the width row below is about a real page`,
+      r.controls >= 2, `${r.controls} segmented control(s) found, want >= 2`);
+    ok(`320px ${name}: the page does not scroll sideways`,
+      r.sw <= r.cw + 0.5,
+      `scrollWidth ${r.sw} against clientWidth ${r.cw}`
+      + (r.worst ? `; widest past the edge: ${r.worst.sel} right=${Math.round(r.worst.right)} min-width=${r.worst.minW}` : ""));
+    await ctx.close();
+  }
+
+  // THE COLLAPSE ITSELF, NOT JUST ITS SYMPTOM (#623, found on the rendered screen by SDE-App).
+  // My first fix moved the breakpoints below .grid3's base rule and ABOVE .grid2's, so .grid3
+  // collapsed and .grid2 stayed two-across at every width - the identical defect one selector
+  // along, inside the fix for it. The visible consequence was the Tools balance-lookup input at
+  // 28px on a 320 screen, for a testnet address of 35 characters.
+  //
+  // ASSERTING THE COLUMN COUNT RATHER THAN THE INPUT'S WIDTH, because the width was a SYMPTOM:
+  // the input is squeezed by the grid it sits in, so a row on the input alone would go green the
+  // moment someone widened the input inside a grid that is still wrong. A single-track value is
+  // the property the design actually specifies.
+  for (const w of [320, 360, 390]) {
+    const ctx = await browser.newContext({ viewport: { width: w, height: 800 }, hasTouch: true });
+    const page = await ctx.newPage();
+    await page.goto(base + "/", { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(400);
+    const tab = page.locator(".seg button").filter({ hasText: /tools/i }).first();
+    if (await tab.count()) { await tab.click().catch(() => {}); await page.waitForTimeout(300); }
+    const r = await page.evaluate(() => {
+      const g2 = document.querySelector(".grid2");
+      const inp = document.querySelector('.view[data-view="tools"] input:not([type=hidden])');
+      const cols = g2 ? getComputedStyle(g2).gridTemplateColumns : "";
+      return {
+        present: !!g2, cols, tracks: cols ? cols.trim().split(/\s+/).length : 0,
+        inputW: inp ? +inp.getBoundingClientRect().width.toFixed(1) : -1,
+        cw: document.documentElement.clientWidth,
+      };
+    });
+    // Partner: a .grid2 that is not in the DOM has one track by vacuity.
+    ok(`${w}px tools: the two-up grid is actually rendered, so the row below is about something`,
+      r.present, `.grid2 ${r.present ? "found" : "NOT in the DOM"}`);
+    ok(`${w}px tools: the two-up grid has collapsed to a single column`,
+      r.tracks === 1, `grid-template-columns: ${r.cols || "(none)"} - ${r.tracks} track(s), want 1`);
+    // And the consequence a reader actually meets, pinned to the viewport rather than a magic
+    // pixel count: this is the view's primary control and a 35-character address goes in it.
+    ok(`${w}px tools: the address input is not squeezed to a sliver by its grid`,
+      r.inputW >= r.cw * 0.4, `input ${r.inputW}px against a ${r.cw}px viewport, want >= 40%`);
+    await ctx.close();
+  }
+
+  // CLIPPED-AND-UNREACHABLE, at the four widths where it was measured. Status is the view that
+  // carries the operations tags ("miner unwatched", "sends unknown"), which are the labels that
+  // ran past the edge; the other two views are covered by the 320 loop above.
+  for (const w of [360, 375, 390, 414]) {
+    const ctx = await browser.newContext({ viewport: { width: w, height: 800 }, hasTouch: true });
+    const page = await ctx.newPage();
+    await page.goto(base + "/", { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(400);
+    const tab = page.locator(".seg button").filter({ hasText: /status/i }).first();
+    if (await tab.count()) { await tab.click().catch(() => {}); await page.waitForTimeout(300); }
+    const r = await page.evaluate(() => {
+      const cw = document.documentElement.clientWidth, past = [];
+      const subjects = document.querySelectorAll(".view .tag, .view strong, .view .chip, .view b");
+      for (const el of subjects) {
+        const b = el.getBoundingClientRect();
+        if (b.width > 0 && b.right > cw + 0.5)
+          past.push(`${(el.textContent || "").trim().slice(0, 18)} ${(b.right - cw).toFixed(1)}px`);
+      }
+      return { past, cw, sw: document.documentElement.scrollWidth, seen: subjects.length };
+    });
+    // Same partner shape: zero subjects would make "none of them overhangs" true and empty.
+    ok(`${w}px status: the view rendered labels to measure`,
+      r.seen > 0, `${r.seen} tag/figure element(s) found, want > 0`);
+    ok(`${w}px status: no label is painted past an edge the reader cannot scroll to`,
+      r.past.length === 0,
+      `scrollWidth ${r.sw} vs clientWidth ${r.cw} (so ${r.sw <= r.cw + 0.5 ? "no sideways scroll: anything past the edge is unreachable" : "the page scrolls"});`
+      + ` past the edge: ${r.past.slice(0, 4).join(", ") || "none"}`);
+    await ctx.close();
+  }
+}
+
 async function checkTapFloor(browser, base) {
-  const WIDTHS = [[375, 812], [600, 900], [1024, 768], [1440, 900]];
+  // 320 and 768-PORTRAIT ADDED (#623). The tablet was only ever opened at 1024x768 -
+  // landscape - and the nav tabs that measured 24.7x44 are in portrait. 320 is the
+  // narrowest phone still in use. Both failures below existed at widths this list did
+  // not visit, which is why every row stayed green over them.
+  const WIDTHS = [[320, 568], [375, 812], [600, 900], [768, 1024], [1024, 768], [1440, 900]];
   const PAGES = [["/", "index"], ["/donate", "donate"], ["/terms", "terms"], ["/fund", "fund"]];
   for (const [w, h] of WIDTHS) {
     const ctx = await browser.newContext({ viewport: { width: w, height: h }, hasTouch: true });
@@ -3326,7 +3458,17 @@ async function checkTapFloor(browser, base) {
           // words to set its width, so width is the whole of its target and a narrow one is
           // invisible until a finger misses it.
           const iconOnly = !(e.textContent || "").trim();
-          if (b.height >= 44 && (!iconOnly || b.width >= 44)) continue;
+          // AND THE PRIMARY NAV IS SUBJECT TO THE WIDTH HALF TOO (#623). The exemption above
+          // stays for text links - "Terms" at 29x44 in a row of footer links is the design, and
+          // that ruling is not being reversed. What it left uncovered is the segmented nav,
+          // which globals.css:225 names as a subject of the floor in the same breath as
+          // controls ("the subjects are controls and navigation"). Measured on main at 768
+          // portrait: Tools 24.7x44, Claim 27x44, Status 30x44 - a primary navigation target at
+          // a quarter of the floor on one axis, on the device most likely to be touched.
+          // A footer link sits in a row of links a finger can aim between; a nav tab is the
+          // thing being aimed at.
+          const isNav = !!e.closest(".seg");
+          if (b.height >= 44 && (b.width >= 44 || !(iconOnly || isNav))) continue;
           const words = (e.textContent || e.getAttribute("aria-label") || "").trim().replace(/\s+/g, " ").slice(0, 22);
           const cls = String(e.className || "").trim().split(/\s+/).filter(Boolean)[0];
           const what = `${words ? words + " " : ""}[${e.tagName.toLowerCase()}${cls ? "." + cls : ""}] ${Math.round(b.width)}x${Math.round(b.height)}`;
@@ -3721,6 +3863,7 @@ try {
   await checkTabAffordanceAndLimits(browser, BASE);
   await checkFooterHeldAgainstGrowth(browser, BASE);
   await checkNoEmDashReachesTheReader(browser, BASE);
+  await checkNarrowViewport(browser, BASE);
   await checkTapFloor(browser, BASE);
   await checkMobile(browser, BASE);
 

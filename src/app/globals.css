@@ -247,6 +247,22 @@ a:hover { color: var(--color-accent-800); }
   .linkbtn,
   .footer-brand { display: inline-flex; align-items: center; }
 
+  /* AND THE SAME FLOOR ON THE WIDTH AXIS (#623). `min-height` alone leaves a target that is
+     44 tall and 27 wide, which is not a 44px target - WCAG 2.5.5 is a square, and a finger
+     does not care which axis is short. Measured on main: "Tools" 24.7x44 and "Claim" 27x44 on
+     an iPad in portrait, "TAZ" 42.7x44 on a 390 phone. The icon-only controls below already
+     had this; every other target was getting one axis of the floor it was written for.
+     SCOPED TO THE PRIMARY NAV, NOT TO EVERY CONTROL, because ui-smoke.mjs:3323 already
+     carries a ruling that the width half is icon-only - "Terms at 29x44 is the design, not a
+     defect, and demanding 44 there would repaint the nav to satisfy a row" (CTO red-team). I
+     am not reversing that. What I am closing is the inconsistency it leaves: the paragraph at
+     line 225 of this file says the floor's subjects are "controls AND NAVIGATION", and the
+     segmented tabs are the navigation. On an iPad in portrait they measure 24.7x44 (Tools) and
+     27x44 (Claim) - a primary nav target a quarter of the floor on one axis. A footer link in
+     a row of links is the case that ruling is about; the main nav is not. */
+  .seg button,
+  .seg a { min-width: 44px; }
+
   /* `.tag` IS TWO THINGS AND ONLY ONE OF THEM IS A TARGET. The chip is a `button` or an `a` in
      the hero and the card, and a bare `span` in the status and analytics cards, where it is a
      LABEL - "miner unwatched", "sends unknown". A floor on the class grew those pills to 44px
