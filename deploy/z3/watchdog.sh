@@ -434,6 +434,19 @@ container_uptime() {
   started="${started%%.*}"; started="${started%Z}Z"
   epoch="$(date -u -d "$started" +%s 2>/dev/null)" || return 0
   case "$epoch" in ''|*[!0-9]*) return 0 ;; esac
+  # RAW `date`, NOT wd_now, AND THAT IS DELIBERATE (#626 review - SDE-UI and SDE-App reached it
+  # independently). `epoch` came from docker's StartedAt, a real instant produced OUTSIDE this
+  # process, so the only clock it can be subtracted from is the real one. Under the suite's driven
+  # clock this reads about -39,600,000 (1750000100 - a real StartedAt epoch), and the guard below
+  # swallows it. THAT MAGNITUDE IS THE POINT, and I had it wrong first: I wrote "-1.75 billion",
+  # which is only the degenerate path where CLOCK_FILE is set and the file is missing, and a
+  # number that size looks broken to anyone who sees it. -39 million is the kind of absurd a
+  # guard eats quietly - a plausible wrong number rather than an error, which is the worse
+  # failure. Corrected by SDE-App on review, who computed both paths rather than reading mine.
+  # The hazard is not a bug today; it is the tidy-up that
+  # converts "the remaining date calls" for consistency, and a comment is what stops that edit.
+  # A test cannot: it would have to pin the ABSENCE of a conversion, which is the denylist shape
+  # all three of us have shipped once this week.
   local up=$(( $(date -u +%s) - epoch ))
   [ "$up" -ge 0 ] || return 0
   echo "$up"
@@ -462,6 +475,8 @@ ts_age() {
   local ts="$1" epoch
   [ -n "$ts" ] || { printf ''; return; }
   epoch="$(date -u -d "$ts" +%s 2>/dev/null)" || { printf ''; return; }
+  # RAW `date` for the same reason as the sibling above: `epoch` is parsed from a timestamp the
+  # miner wrote, so its zero point is the real clock and nothing else can be subtracted here.
   printf '%s' "$(( $(date -u +%s) - epoch ))"
 }
 
