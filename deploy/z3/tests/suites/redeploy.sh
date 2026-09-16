@@ -317,6 +317,16 @@ redeploy_env
 touch "$STUB_HEALTH" "$STUB_READY"
 STUB_READY_MAX=1 STUB_READY_REASON="wallet balance unknown" bash "$REDEPLOY" > "$T/wallet.log" 2>&1
 check "a wallet reason STILL rolls back" "[ \"\$(img zcash-faucet:latest)\" = 'sha256:old' ]"
+# A SCANNING WALLET IS NOT THE IMAGE'S FAULT, and it used to reach here spelled "node
+# syncing" (#596). The rename made the reason name the right machine; this keeps the
+# classification it already had, so the rename is not also a change to what gets rolled back.
+# The two live beside each other on purpose: "balance unknown" is about REACHING the wallet,
+# which an image can break and a rollback can fix, and "scanning" is the wallet working
+# through blocks on its own clock, which no image causes and no rollback ends.
+redeploy_env
+touch "$STUB_HEALTH" "$STUB_READY"
+STUB_READY_MAX=1 STUB_READY_REASON="wallet re-scanning, 50 blocks behind our node" bash "$REDEPLOY" > "$T/rescan.log" 2>&1
+check "a re-scanning wallet: no rollback" "[ \"\$(img zcash-faucet:latest)\" != 'sha256:old' ] && grep -q 'CHAIN, not code' '$T/rescan.log'"
 
 echo "== redeploy: ON THE EXEC PATH TOO, a node behind the network is not rolled back"
 # The URL path read the reason from the body; the exec path (the default, and production)

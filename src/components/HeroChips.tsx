@@ -27,7 +27,7 @@
 import {
   groupDigits,
   heightDiff,
-  heightDeltaText,
+  heightDiffChip,
   minerWord,
   minerTone,
   nodeChipTone,
@@ -91,7 +91,7 @@ export function HeroChips({
           {/* The second figure is the delta, and it is absent rather than "(unknown)" when we
               have nothing to compare against - the design shows a parenthetical only when there
               is one. */}
-          {diff == null ? null : <b>{heightDeltaText(diff)}</b>}
+          {diff == null ? null : <b>{heightDiffChip(diff)}</b>}
         </Chip>
         <Chip name="miner" tone={status ? minerTone(status.miner, unit) : UNKNOWN} onOpen={() => onView("status")}>
           miner <b>{status ? minerWord(status.miner, unit) : UNKNOWN}</b>
