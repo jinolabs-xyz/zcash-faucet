@@ -1749,7 +1749,7 @@ async function showView(page, v) {
 // THE DEFAULT IS BLIND TO `visibility` AND `opacity`, which is the whole of the #595 finding:
 // bare `checkVisibility()` returns true for `visibility:hidden` and for `opacity:0`, so a row
 // named PAINTED passed an element no reader could see. These are the spec's option names; the
-// older aliases (`checkVisibilityCSS`, `checkOpacity`) mean the same two things and Chromium
+// older aliases (`checkVisibilityCSS`, `checkOpacity`) mean the same two of them, and Chromium
 // honours both, measured from two directions - the CTO's red-team on the spec names, SDE-App on
 // the aliases - and the ruling is to use the spec's.
 //
@@ -1758,6 +1758,51 @@ async function showView(page, v) {
 // stops turning these rows red, the object is being ignored and the run says so - which is what
 // a silently-ignored option looks like from the outside, and no amount of spelling prevents it.
 const VIS_OPTS = { visibilityProperty: true, opacityProperty: true, contentVisibilityAuto: true };
+
+async function checkVisibilityOptionsStillBite(browser) {
+  // THE CANARY FOR VIS_OPTS, and it exists because the failure it guards is SILENT. `checkVisibility`
+  // takes a WebIDL dictionary, and WebIDL drops members it does not recognise - no throw, no warning.
+  // So `visibilityProprety: true` (one transposition) is not an error: the option simply is not
+  // there, the call falls back to the blind default, and every row that depends on it goes green
+  // over an element no reader can see. #595 shipped with the mutants as the only guard, which means
+  // the drift is invisible until someone happens to run one.
+  //
+  // This asks the browser directly, on elements this file creates and controls, so it is a fact
+  // about the OPTIONS rather than about the page: three probes, one per property the options are
+  // supposed to add, plus a visible control so a probe that fails for any other reason cannot read
+  // as success.
+  const c = await browser.newContext({ viewport: DESKTOP });
+  const p = await c.newPage();
+  await p.goto(BASE, { waitUntil: "domcontentloaded" });
+  const r = await p.evaluate((opts) => {
+    const mk = (css) => {
+      const el = document.createElement("div");
+      el.style.cssText = "width:20px;height:20px;" + css;
+      el.textContent = "x";
+      document.body.appendChild(el);
+      return el;
+    };
+    const visible = mk("");
+    const hidden = mk("visibility:hidden");
+    const transparent = mk("opacity:0");
+    const out = {
+      visible: visible.checkVisibility(opts),
+      hidden: hidden.checkVisibility(opts),
+      transparent: transparent.checkVisibility(opts),
+      // What the bare call says, for the detail line: it is TRUE for both, which is the defect.
+      hiddenBare: hidden.checkVisibility(),
+      transparentBare: transparent.checkVisibility(),
+    };
+    for (const el of [visible, hidden, transparent]) el.remove();
+    return out;
+  }, VIS_OPTS);
+
+  ok("checkVisibility's options still bite: visibility:hidden and opacity:0 read as not visible",
+    r.visible === true && r.hidden === false && r.transparent === false,
+    `visible=${r.visible} hidden=${r.hidden} opacity0=${r.transparent}`
+    + ` (bare call says hidden=${r.hiddenBare}, opacity0=${r.transparentBare})`);
+  await c.close();
+}
 
 async function checkPuzzleSentenceWithdraws(browser) {
   // BOTH SIDES OF THE GATE. Every row this branch shipped asserts the sentence is PRESENT, so
@@ -1904,6 +1949,10 @@ async function checkOpsChipFollowsTheBox(browser) {
         text: el ? (el.textContent || "").trim() : "",
         sendsTone: sends ? sends.getAttribute("data-tone") : null,
         siblingChips: document.querySelectorAll('.hero-copy .chips [data-chip]').length,
+        // "has this page been told anything?" - the wallet chip reads `unknown` until a status
+        // arrives, so its leaving that value is the page's own signal that it has been told.
+        walletTold: !/unknown/i.test(
+          (document.querySelector('.hero-copy .chips [data-chip="wallet"]')?.textContent ?? "unknown")),
       };
     });
     visited.push(state);
@@ -1921,11 +1970,24 @@ async function checkOpsChipFollowsTheBox(browser) {
     // said, and this control is a second, different guard rather than a replacement for it.
     // Stating the limit because a control whose reach is assumed is the thing it exists to
     // prevent. (CTO red-team, #595.)
+    //
+    // AND IT CANNOT SEE A PAGE THAT WAS NEVER TOLD ANYTHING, which is the second limit and the
+    // one that matters to what "absent" means here. The four chips render before any status
+    // arrives, so a sibling count of four is equally true of a page mid-fetch - and on THAT page
+    // the ops chip is absent because nothing has been established, not because the box is well.
+    // The two readings are opposite and the count cannot tell them apart. So the row also asserts
+    // the wallet chip has left `unknown`, in the same evaluate: a page that has been told
+    // something has a wallet figure, and only then does an absent ops chip mean "the box is ok".
+    // (#606 item 1.)
     ok(`box ${state}: the ops chip is ${shouldShow ? "shown" : "absent"}`,
-      r.present === shouldShow && r.siblingChips >= 4,
-      r.siblingChips < 4
+      r.present === shouldShow && r.siblingChips >= 4 && r.walletTold,
+      !r.walletTold
+        ? `the page has not been told anything yet (wallet chip still reads unknown), so an absent ops chip means nothing`
+        : r.siblingChips < 4
         ? `only ${r.siblingChips} sibling chips found - the chip selection is broken, so "absent" means nothing`
-        : r.present ? `present, tone ${r.tone}, "${r.text}" (beside ${r.siblingChips} other chips)`
+        // `siblingChips` counts EVERY [data-chip], the ops chip included, so when it is present
+        // "beside 5 other chips" was counting it as its own sibling. Subtract it where it is there.
+        : r.present ? `present, tone ${r.tone}, "${r.text}" (beside ${r.siblingChips - 1} other chips)`
                     : `absent (beside ${r.siblingChips} other chips, so the selection works)`);
 
     if (shouldShow) {
@@ -3338,6 +3400,7 @@ try {
     ok("and the address is in the body", req.body.includes(`"address":"${lookupAddr}"`), req.body.slice(0, 60));
     ok("and the page answers that a shielded balance is private", /Shielded balances are private/.test(await page.locator("#lans").innerText()));
   }
+  await checkVisibilityOptionsStillBite(browser);
   await checkPuzzleSentenceWithdraws(browser);
   await checkFirstPaintSentenceIsPainted(browser);
   await checkOpsChipFollowsTheBox(browser);
