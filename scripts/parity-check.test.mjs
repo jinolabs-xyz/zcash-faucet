@@ -16,7 +16,7 @@ import { execFileSync } from "node:child_process";
 const SCRIPT = "scripts/parity-check.mjs";
 
 /** Run the checker in its own directory with the given fixtures; return {code, out}. */
-function runParity({ spec, shipped, departures, pages, shell, entry, args, sheets, specs }) {
+function runParity({ spec, shipped, departures, pages, shell, entry, args, sheets, specs, env }) {
   const dir = mkdtempSync(join(tmpdir(), "parity-"));
   try {
     mkdirSync(join(dir, "design", "spec"), { recursive: true });
@@ -43,7 +43,7 @@ function runParity({ spec, shipped, departures, pages, shell, entry, args, sheet
     if (departures !== undefined) writeFileSync(join(dir, "design", "spec", "departures.json"), JSON.stringify(departures, null, 2));
     writeFileSync(join(dir, "scripts", "parity-check.mjs"), readFileSync(SCRIPT, "utf8"));
     try {
-      const out = execFileSync(process.execPath, ["scripts/parity-check.mjs", "design/spec/spec.css", ...(args || ["src/app/shipped.css"])], { cwd: dir, encoding: "utf8" });
+      const out = execFileSync(process.execPath, ["scripts/parity-check.mjs", "design/spec/spec.css", ...(args || ["src/app/shipped.css"])], { cwd: dir, encoding: "utf8", env: { ...process.env, ...(env || {}) } });
       return { code: 0, out };
     } catch (e) {
       return { code: e.status ?? 1, out: `${e.stdout ?? ""}${e.stderr ?? ""}` };
@@ -68,7 +68,7 @@ test("an undeclared change fails, and names the selector", () => {
 test("declared with its body is parity", () => {
   const r = runParity({
     spec: SPEC, shipped: ".a{color:green}\n.b{color:blue}\n",
-    departures: { ".a": { why: "a reason", shipped: "color:green" } },
+    departures: { ".a": { kind: "divergence", why: "a reason", shipped: "color:green" } },
   });
   assert.equal(r.code, 0, r.out);
 });
@@ -79,7 +79,7 @@ test("A SECOND CHANGE CANNOT INHERIT AN EXISTING LABEL", () => {
   // adding an outline to an already-declared `.badge .dot` passed.
   const r = runParity({
     spec: SPEC, shipped: ".a{color:green;outline:9px solid red}\n.b{color:blue}\n",
-    departures: { ".a": { why: "a reason", shipped: "color:green" } },
+    departures: { ".a": { kind: "divergence", why: "a reason", shipped: "color:green" } },
   });
   assert.equal(r.code, 1, r.out);
   assert.match(r.out, /DECLARED WITH A DIFFERENT BODY: \.a/);
@@ -95,7 +95,7 @@ test("a declaration by selector alone is not enough", () => {
 });
 
 test("a declaration that no longer describes a divergence fails", () => {
-  const r = runParity({ spec: SPEC, shipped: SPEC, departures: { ".a": { why: "stale", shipped: "color:green" } } });
+  const r = runParity({ spec: SPEC, shipped: SPEC, departures: { ".a": { kind: "divergence", why: "stale", shipped: "color:green" } } });
   assert.equal(r.code, 1, r.out);
   assert.match(r.out, /STALE DEPARTURE/);
 });
@@ -438,4 +438,53 @@ test("the walk alone is what finds a component-imported sheet, declared or not",
   });
   assert.equal(r.code, 1, r.out);
   assert.match(r.out, /src\/app\/elsewhere\.css does not declare a spec/);
+});
+
+// ---------------------------------------------------------------------------------------
+// TWO KINDS OF DEPARTURE. A file that means both means neither: "twelve departures" says
+// nothing about whether the design is being ignored or protected. CTO ruling after SDE-UI
+// found the case on #576 - the design's own copy control is under the tap-target floor, so a
+// faithful transcription broke a rule that lives outside the spec.
+
+const DIVERGE = { kind: "divergence", why: "x", shipped: "color:green" };
+
+test("a declaration that does not say which kind it is fails, and is named", () => {
+  const r = runParity({
+    spec: SPEC, shipped: ".a{color:green}\n.b{color:blue}\n",
+    departures: { ".a": { why: "x", shipped: "color:green" } },
+  });
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /UNKINDED DECLARATION: \.a/);
+  assert.match(r.out, /means both means neither/);
+});
+
+test("and a kind that is not one of the two is refused rather than accepted as a label", () => {
+  const r = runParity({
+    spec: SPEC, shipped: ".a{color:green}\n.b{color:blue}\n",
+    departures: { ".a": { kind: "wontfix", why: "x", shipped: "color:green" } },
+  });
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /"wontfix"/);
+});
+
+test("the two kinds are counted apart, so one number can be driven down and the other left alone", () => {
+  const r = runParity({
+    spec: ".a{color:red}\n.b{color:blue}\n.c{color:pink}\n",
+    shipped: ".a{color:green}\n.b{color:blue}\n.c{color:teal}\n",
+    departures: {
+      ".a": DIVERGE,
+      ".c": { kind: "override", why: "a floor the design cannot satisfy", shipped: "color:teal" },
+    },
+  });
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /1 divergence\(s\) from the design, 1 override\(s\) of it/);
+});
+
+test("PARITY_PRINT emits the kind field, so the generator cannot reintroduce unkinded entries", () => {
+  const r = runParity({
+    spec: SPEC, shipped: ".a{color:green}\n.b{color:blue}\n",
+    departures: {}, env: { PARITY_PRINT: "1" },
+  });
+  assert.match(r.out, /"kind"/);
+  assert.match(r.out, /divergence \| override/);
 });

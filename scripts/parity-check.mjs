@@ -328,6 +328,23 @@ const divergent = new Set(transcriptionComplete ? [...added, ...changed, ...drop
 const shippedBody = (sel) => [...(ship.get(sel) || [])].sort().join(" || ");
 const bodyOf = (entry) => (typeof entry === "string" ? null : entry && entry.shipped);
 const reasonOf = (entry) => (typeof entry === "string" ? entry : entry && entry.why) || "";
+// TWO KINDS, NAMED, BECAUSE A FILE THAT MEANS BOTH MEANS NEITHER (CTO ruling, after SDE-UI hit
+// the case on #576: the design's `.tag` copy control is 26 px at the mobile unit, under the
+// 44 px tap-target floor ui-smoke enforces. A faithful transcription broke a rule that lives
+// OUTSIDE the spec).
+//
+//   "divergence" - the shipped CSS differs from the approved design and the design is still the
+//                  authority. Somebody chose to differ, and `why` is the justification. These
+//                  should trend to zero, and each one is a small debt.
+//   "override"   - a rule of ours that the design cannot satisfy: an accessibility floor, a tap
+//                  target minimum, a reduced-motion guard. The design is not wrong and this is
+//                  not a debt; it will never be reconciled and should not be chased.
+//
+// Read as one list they are indistinguishable, so "twelve departures" tells a reviewer nothing
+// about whether the design is being ignored or protected. Counted apart, the first number is
+// the one to drive down and the second is the one to leave alone.
+const KINDS = ["divergence", "override"];
+const kindOf = (entry) => (typeof entry === "string" ? undefined : entry && entry.kind);
 const wrongBody = [...divergent].filter((s) => {
   const e = declared[s];
   if (e === undefined) return false;               // undeclared, reported below
@@ -335,6 +352,11 @@ const wrongBody = [...divergent].filter((s) => {
   if (want === null) return true;                  // declared by selector only: not enough
   return want !== shippedBody(s);
 });
+// A DECLARATION WITHOUT A KIND IS THE OLD FILE, and the old file is the thing being replaced,
+// so it fails rather than defaulting. Defaulting to "divergence" would silently relabel every
+// override as a debt; defaulting to "override" would silently excuse every divergence.
+const unkinded = Object.keys(declared).filter((s) => !KINDS.includes(kindOf(declared[s])));
+
 const undeclared = [...divergent].filter((s) => !(s in declared));
 const stale = Object.keys(declared).filter((s) => !divergent.has(s));
 
@@ -342,12 +364,18 @@ if (process.env.PARITY_PRINT === "1") {
   // Prints the exact entries for the current divergences, so a declaration is copied rather
   // than retyped - a hand-typed body would be one more thing that can be subtly wrong.
   const out = {};
-  for (const s of [...divergent].sort()) out[s] = { why: reasonOf(declared[s]) || "TODO: why this differs from the approved design", shipped: shippedBody(s) };
+  for (const s of [...divergent].sort()) out[s] = {
+    kind: kindOf(declared[s]) || `TODO: one of ${KINDS.join(" | ")} - "divergence" is a debt against the design, "override" is a floor of ours the design cannot satisfy`,
+    why: reasonOf(declared[s]) || "TODO: why this differs from the approved design",
+    shipped: shippedBody(s),
+  };
   console.log(JSON.stringify(out, null, 2));
   process.exit(0);
 }
 console.log(`parity: ${ship.size} shipped rules against ${spec.size} in the spec`);
+const byKind = (k) => Object.keys(declared).filter((s) => kindOf(declared[s]) === k).length;
 console.log(`  added ${added.length}  changed ${changed.length}  dropped ${dropped.length}  declared ${Object.keys(declared).length}`);
+console.log(`  of the declared: ${byKind("divergence")} divergence(s) from the design, ${byKind("override")} override(s) of it`);
 console.log(transcriptionComplete
   ? "  the transcription is complete (4 views wired, 3 pages in the shell), so DROPPED is gated too"
   : `  mid-transcription (${wiredViews.length}/4 views wired, ${pagesInShell.length}/3 pages in the shell): ${dropped.length} dropped rules are the slices that have not landed, and are not gated yet`);
@@ -362,8 +390,15 @@ for (const s of wrongBody) {
   console.error(`      declared: ${want === null ? "(selector only - a declaration must name what we ship)" : want}`);
   console.error(`      shipped:  ${shippedBody(s)}`);
 }
-if (undeclared.length || stale.length || wrongBody.length) {
-  console.error(`parity: ${undeclared.length} undeclared divergence(s), ${stale.length} stale departure(s), ${wrongBody.length} declared with a different body`);
+for (const s of unkinded) {
+  console.error(`  UNKINDED DECLARATION: ${s} has kind ${JSON.stringify(kindOf(declared[s]))}, which is not one of ${KINDS.join(", ")}.`);
+}
+if (unkinded.length) {
+  console.error(`parity: ${unkinded.length} declaration(s) do not say whether they are a divergence from the design or an override of it.`);
+  console.error(`A file that means both means neither: "divergence" is a debt against the design, "override" is a floor of ours the design cannot satisfy.`);
+}
+if (undeclared.length || stale.length || wrongBody.length || unkinded.length) {
+  console.error(`parity: ${undeclared.length} undeclared divergence(s), ${stale.length} stale departure(s), ${wrongBody.length} declared with a different body, ${unkinded.length} without a kind`);
   console.error(`Declare a deliberate one in ${DEPARTURES} with the reason, or restore the spec's rule.`);
   process.exit(1);
 }

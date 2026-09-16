@@ -16,34 +16,42 @@
     ]
   },
   ".card.claim": {
+    "kind": "override",
     "why": "`will-change:height` for the panel animation, which the frozen preview does not need because its demo machine swaps panels without animating the box.",
     "shipped": "will-change:height"
   },
   ".mascot-riso": {
+    "kind": "divergence",
     "why": "The owner's 19:40Z ruling says the mascot follows its column. The frozen snapshot does NOT carry the !important width/max-width/height that the ruling describes - grep finds none on that rule - so the ruling's intent is transcribed here and the discrepancy between the ruling's words and the snapshot is recorded in the PR body rather than silently resolved either way.",
     "shipped": "position:relative; display:block; flex:none; width:100%; max-width:calc(22*var(--u)); aspect-ratio:1; padding:0; border:0; background:transparent; appearance:none; cursor:pointer; user-select:none; touch-action:manipulation || width:100% !important; max-width:calc(22*var(--u)) !important; height:auto !important"
   },
   ".stage .card.claim": {
+    "kind": "divergence",
     "why": "The card's own padding, which the design carries on .card-copy - a wrapper our current content does not sit inside. Every other parity probe measures a DESIGN element; this is CURRENT content inside a design container. S2b replaces this block with the real panels and takes this rule with it.",
     "shipped": "padding:7% 8.4% 7.5%"
   },
   ".tag": {
+    "kind": "override",
     "why": "Our tag is a button or an anchor as well as a span, so it carries cursor and transition that a static pill in the preview has no need of.",
     "shipped": "font-family:inherit; display:inline-flex; align-items:center; gap:calc(.5*var(--u)); height:calc(2.15*var(--u)); padding:0 calc(.9*var(--u)); border-radius:calc(.5*var(--u)); background:var(--tag-bg); color:var(--ink); font-size:calc(.84*var(--u)); font-weight:500; letter-spacing:0; border:calc(.06*var(--u)) solid var(--hair); white-space:nowrap; text-decoration:none; cursor:default || text-transform:none"
   },
   ".views > .view.hero": {
+    "kind": "override",
     "why": "The spec has this as `.comp > .view.hero`. Our four views sit inside a <main class=\"views\"> landmark rather than directly in .comp, so the child combinator matched nothing at all and computed padding-top 0. Same rule, our structure.",
     "shipped": "flex:1 1 auto; min-height:0; justify-content:flex-start; padding-top:calc(2.5*var(--u))"
   },
   "@media (max-width:56rem) | .mascot-riso": {
+    "kind": "divergence",
     "why": "Same ruling, the narrow breakpoint: the cap that keeps the fox inside its column at phone widths, which the snapshot's own rule does not express.",
     "shipped": "max-width:min(52vw,240px) !important"
   },
   "@media (max-width:64rem) | .hero-grid": {
+    "kind": "divergence",
     "why": "The 64rem block ships the gap and NOT grid-template-columns:1fr. That declaration was dead in the snapshot - a later section overrode it - and moving the block into this sheet brought it to life, collapsing the hero to one column from 897 to 1024px. Dropped deliberately; #566's third round is the record.",
     "shipped": "gap:calc(2.5*var(--u))"
   },
   "html": {
+    "kind": "override",
     "why": "globals.css paints `html` with the OLD palette's --color-bg and nothing in the transcription names html's background, so the overscroll and rubber-band area behind the page kept the pre-redesign colour while the page itself was on --page. Only visible on a bounce, which is why nobody would find it by looking.",
     "shipped": "background:var(--page)"
   }

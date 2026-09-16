@@ -1481,8 +1481,15 @@ check "and a declaration names the body it declares, so a second change cannot i
 # one looked fine until the hero was compared against S2's document and all fifteen of S1's
 # declarations came back as stale, because they do not differ in a comparison they were never
 # about. A pin naming one path would have gone quiet the moment the second file appeared.
-check "every declaration in every departures file carries both halves" \
-  "python3 -c \"import json,sys,glob; fs=glob.glob('$REPO/design/spec/*/departures.json'); sys.exit(1 if not fs else (1 if [k for f in fs for k,v in json.load(open(f)).items() if not k.startswith('_') and not (isinstance(v,dict) and v.get('why') and v.get('shipped'))] else 0))\""
+# THREE HALVES NOW, NOT TWO. A departures file that mixes "we differ from the design" with "a
+# floor of ours the design cannot satisfy" means neither: the count tells a reviewer nothing
+# about whether the design is being ignored or protected. SDE-UI found the case on #576 - the
+# design's own copy control is 26px at the mobile unit, under the 44px tap target ui-smoke
+# enforces, so a FAITHFUL transcription broke a rule that lives outside the spec. CTO ruling.
+check "every declaration in every departures file carries all three halves, kind included" \
+  "python3 -c \"import json,sys,glob; fs=glob.glob('$REPO/design/spec/*/departures.json'); sys.exit(1 if not fs else (1 if [k for f in fs for k,v in json.load(open(f)).items() if not k.startswith('_') and not (isinstance(v,dict) and v.get('why') and v.get('shipped') and v.get('kind') in ('divergence','override'))] else 0))\""
+check "and the checker refuses a declaration that does not name its kind, rather than defaulting" \
+  "grep -qF 'UNKINDED DECLARATION' '$REPO/scripts/parity-check.mjs' && grep -qF 'means both means neither' '$REPO/scripts/parity-check.mjs'"
 check "and every vendored spec has one beside it, so a slice cannot depart undeclared" \
   "python3 -c \"import sys,glob,os; specs=[d for d in glob.glob('$REPO/design/spec/*/') ]; sys.exit(0 if all(os.path.exists(d+'departures.json') for d in specs) else 1)\""
 check "and the CI step runs a comparison for every vendored spec" \
