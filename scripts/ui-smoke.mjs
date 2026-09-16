@@ -3136,7 +3136,16 @@ async function checkNoEmDashReachesTheReader(browser, base) {
       // The offending line, not just a count. "an em dash is on the page" costs a reader a hunt
       // through the whole document; naming the line is the difference from a diagnosis.
       for (const line of txt.split("\n")) if (line.includes(em)) hits.push(line.trim().slice(0, 60));
-      return { hits, figs: document.querySelectorAll(".figs b").length };
+      // SCOPED TO THE CLAIM CARD, AND THAT IS THE WHOLE OF THE PARTNER'S VALUE (SDE-UI, review).
+      // `.figs b` page-wide also matches AnalyticsCards' three figure blocks
+      // (AnalyticsCards.tsx:180, :217, :273), which have nothing to do with the nulled status and
+      // render regardless. Measured: with all four claim-card `.figs` removed the page-wide count
+      // was still 11 and the partner stayed GREEN - so it certified "the placeholders were on
+      // screen" using slots from a different view, which is exactly the vacuity it exists to rule
+      // out. The claim card is `<article id="claim">` (page.tsx:1252-1884) and all four live
+      // inside it, so the id is both the tightest anchor and the one that cannot drift with a
+      // class rename.
+      return { hits, figs: document.querySelectorAll("#claim .figs b").length };
     }, EM);
     ok(`${label}: no em dash reaches the reader`,
       r.hits.length === 0,
@@ -3144,9 +3153,12 @@ async function checkNoEmDashReachesTheReader(browser, base) {
     // THE ANTI-VACUITY PARTNER. Without it the driven pass proves nothing: if the null payload
     // stopped rendering figures - a markup change, a guard added upstream - there would be no
     // placeholder on the page and "no em dash" would be true because nothing was there at all.
+    //
+    // Counted inside the claim card only, for the reason in the evaluate above: the first spelling
+    // counted page-wide and could be satisfied by a view the nulled payload does not touch.
     if (payload) {
       ok(`${label}: and the placeholders were actually on screen to be checked`,
-        r.figs > 0, `${r.figs} figure slot(s) rendered under the nulled status, want > 0`);
+        r.figs > 0, `${r.figs} claim-card figure slot(s) rendered under the nulled status, want > 0`);
     }
     await ctx.close();
   }
