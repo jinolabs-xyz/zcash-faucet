@@ -831,30 +831,82 @@ async function checkFooterReachable(browser) {
     // the stage that IS taller than a screen, and see whether the page can still reach it. With
     // the stage as it ships the box grows and the document scrolls; under the clamp the probe
     // is swallowed and a wheel cannot get to it. That is true whatever today's content weighs.
+    // THE FOURTH ANSWER, AND IT IS A CHANGE OF PREMISE, NOT A FIX. I am the author of the clamp
+    // this row now runs against, so I am saying plainly what moved rather than quietly editing an
+    // assertion until it went green.
+    //
+    // The version above required THE DOCUMENT TO GROW: put 1200px in `.comp`, and the page must
+    // get taller so a wheel can reach it. That was the right property for the page it was written
+    // for. The owner has since stated the opposite rule twice - "the footer should never move and
+    // there should not be any scrolling part" - and shipping it is what makes this row red. A
+    // growing document IS the defect now.
+    //
+    // What does not change is the thing the outage was about: CONTENT THAT EXISTS AND CANNOT BE
+    // REACHED. That is still the hazard, and under a clamp it is a bigger one, because
+    // `.stage{overflow:hidden}` will swallow anything no inner scroller catches. So the row keeps
+    // the probe and keeps the wheel, and asks the visitor's question instead of the layout's:
+    // CAN A POINTER GET TO THE BOTTOM OF IT? Page scroll and an inner scroller both count, because
+    // to a visitor's fingers they are the same gesture.
+    //
+    // This is why the property is the right one rather than the convenient one: it is green on the
+    // OLD page too, where the document grows and the wheel moves it. A rule that only holds after
+    // my change would be a rule written to fit my change.
+    //
+    // The probe goes where content actually goes - the view on screen - not into `.comp`, which
+    // holds the header, the nav and the footer and no growing content at all.
     const stage = await p.evaluate(() => {
       const el = document.querySelector(".stage");
       if (!el) return null;
       const cs = getComputedStyle(el);
-      const host = el.querySelector(".comp") ?? el;
+      const host = document.querySelector(".card.claim > .panel")
+        ?? [...document.querySelectorAll(".views > .view")].find((v) => v.getClientRects().length)
+        ?? el.querySelector(".comp") ?? el;
       const probe = document.createElement("div");
       probe.id = "tall-probe";
-      probe.style.cssText = "height:1200px;width:1px;flex:none";
+      // `flex:none` is not enough in a column flex container: it resolves to `flex:0 0 auto` and
+      // the item still shrinks below its content box. `min-height` is the only one with no
+      // competitor, and a probe that silently shrinks makes every row under it vacuous.
+      probe.style.cssText = "height:1200px;min-height:1200px;width:1px;flex:0 0 1200px";
       host.appendChild(probe);
-      const r = el.getBoundingClientRect();
-      const buried = Math.round(probe.getBoundingClientRect().bottom - (r.top + el.clientHeight));
-      const inserted = !!probe.getBoundingClientRect().height;
+      const inserted = probe.getBoundingClientRect().height >= 1200;
       probe.remove();
       // AFTER the probe is gone. Measured with it still in, this reported the page as 1109px
       // past the fold and turned the wheel assertion below into a false red against a document
       // that no longer overflowed - a probe of mine poisoning the next check.
       const docOver = Math.round(document.documentElement.scrollHeight - innerHeight);
-      return { overflowY: cs.overflowY, buried, docOver, inserted };
+      return { overflowY: cs.overflowY, docOver, inserted };
     });
-    ok(`${label}: content taller than the viewport is not swallowed by the stage`,
-      !!stage && stage.inserted && stage.buried <= 1,
+
+    // REACHED WITH A REAL WHEEL, over the probe itself, because a wheel is refused by a clipped
+    // box exactly as a visitor's fingers are. Programmatic scrolling is not a substitute: the
+    // red-team already caught `scrollIntoView` moving an `overflow:hidden` box where a pointer
+    // cannot, and this row would inherit that false green.
+    const reach = await p.evaluate(() => {
+      const host = document.querySelector(".card.claim > .panel")
+        ?? [...document.querySelectorAll(".views > .view")].find((v) => v.getClientRects().length)
+        ?? document.querySelector(".stage .comp") ?? document.querySelector(".stage");
+      const probe = document.createElement("div");
+      probe.id = "tall-probe";
+      probe.style.cssText = "height:1200px;min-height:1200px;width:1px;flex:0 0 1200px";
+      host.appendChild(probe);
+      const b = probe.getBoundingClientRect();
+      return { x: Math.round(Math.min(Math.max(b.left, 4), innerWidth - 4)), y: Math.round(innerHeight / 2) };
+    });
+    await p.mouse.move(reach.x, reach.y);
+    for (let i = 0; i < 12; i++) { await p.mouse.wheel(0, 400); await p.waitForTimeout(40); }
+    await p.waitForTimeout(150);
+    const reached = await p.evaluate(() => {
+      const probe = document.getElementById("tall-probe");
+      const b = probe.getBoundingClientRect();
+      const short = Math.round(b.bottom - innerHeight);
+      probe.remove();
+      return { short };
+    });
+    ok(`${label}: content taller than the viewport can still be reached by a wheel`,
+      !!stage && stage.inserted && reached.short <= 1,
       !stage ? "no .stage on the page"
-        : !stage.inserted ? "the probe did not render, so nothing was measured"
-        : `overflow-y ${stage.overflowY}, a 1200px probe sits ${stage.buried}px past the stage's own box`);
+        : !stage.inserted ? "the probe did not render at its full height, so nothing was measured"
+        : `overflow-y ${stage.overflowY}, twelve wheel events left the bottom of a 1200px probe ${reached.short}px below the fold`);
 
     // And a REAL wheel, through the browser rather than a dispatched event, on the pages that
     // are taller than the viewport. This one can still be inapplicable - it says so rather
@@ -2563,6 +2615,81 @@ function checkSingleHeader() {
 // argues borders are exempt from 1.4.11 because THE GLYPH identifies the control; a text-only tab
 // with `background:none` has no glyph, so its border is the only non-text thing saying "control",
 // which is the defect the owner reported. It is inside the gated scope, not outside it.
+// THE OWNER'S RULE, STATED TWICE: "the footer should never move and there should not be any
+// scrolling part". The claim card breaks it by growing - the panel swaps between thirteen phases
+// and the receipt is the tallest - and the growth used to travel straight out of `.comp`'s
+// `height:100dvh` into the document, because `main.views` sits at the flex default
+// `min-height:auto` and will not shrink below its content. Measured before the fix: 39px of page
+// overflow at 1440x900, 132px at 1440x720.
+//
+// WHY A SYNTHETIC PROBE AND NOT THE REAL PHASES. Driving a phase measures whichever panel is
+// tallest TODAY. The property is that growth of ANY size is absorbed, so the probe grows the panel
+// by a fixed 600px, which is far past any real panel and does not drift as the panels are edited.
+// The phases are still driven below for the no-scroll half, at rest and in the tallest state I can
+// reach, so the row is not purely hypothetical.
+async function checkFooterHeldAgainstGrowth(browser, base) {
+  for (const vp of [{ width: 1280, height: 720 }, { width: 1366, height: 768 }, { width: 1440, height: 900 }]) {
+    const label = `${vp.width}x${vp.height}`;
+    const ctx = await browser.newContext({ viewport: vp });
+    const page = await ctx.newPage();
+    await page.goto(base, { waitUntil: "networkidle" });
+    await page.waitForSelector(".card.claim", { timeout: 15_000 }).catch(() => {});
+
+    const before = await page.evaluate(() => {
+      const f = document.querySelector("footer.ftr");
+      return { footerTop: f ? Math.round(f.getBoundingClientRect().top) : null,
+        over: document.documentElement.scrollHeight - document.documentElement.clientHeight };
+    });
+    ok(`${label}: at rest the page does not scroll and the footer is on screen`,
+      before.footerTop !== null && before.over <= 1 && before.footerTop < vp.height,
+      `footer top ${before.footerTop}, document overflows by ${before.over}px`);
+
+    const after = await page.evaluate(() => {
+      const panel = document.querySelector(".card.claim > .panel");
+      if (!panel) return { grew: false };
+      const probe = document.createElement("div");
+      probe.setAttribute("data-ui-smoke", "growth-probe");
+      // `flex:0 0` AND `min-height`, because the panel is a COLUMN FLEX CONTAINER: a bare
+      // `height:600px` child is a flex item at `flex-shrink:1` and the first version of this row
+      // watched it shrink to 98px. The footer then "held" against 98px of growth it had slack for
+      // and the row passed while proving nothing. The absorption row below is what caught it.
+      probe.style.cssText = "flex:0 0 600px;min-height:600px;height:600px";
+      panel.appendChild(probe);
+      const f = document.querySelector("footer.ftr");
+      return { grew: true,
+        footerTop: Math.round(f.getBoundingClientRect().top),
+        over: document.documentElement.scrollHeight - document.documentElement.clientHeight,
+        // SCROLLED TO THE END AND THE PROBE'S BOTTOM LOOKED FOR, rather than comparing the
+        // internal scroll against the probe's height. The panel grows into whatever slack the
+        // card has before it starts scrolling, so that arithmetic lands wherever today's content
+        // leaves it - 501px at one size and 539px at another - and any threshold picked from
+        // those numbers is a threshold fitted to today's copy. Reachable or not reachable does
+        // not drift.
+        panelScroll: panel.scrollHeight - panel.clientHeight,
+        reachable: (() => {
+          panel.scrollTop = panel.scrollHeight;
+          return Math.round(probe.getBoundingClientRect().bottom - panel.getBoundingClientRect().bottom);
+        })() };
+    });
+
+    ok(`${label}: 600px of panel growth does not move the footer`,
+      after.grew && Math.abs(after.footerTop - before.footerTop) <= 1,
+      after.grew ? `footer top ${before.footerTop} -> ${after.footerTop}` : "no .card.claim > .panel to grow");
+    ok(`${label}: and the document still does not scroll`,
+      after.grew && after.over <= 1,
+      after.grew ? `document overflows by ${after.over}px after the probe` : "not measured");
+    // THE GROWTH WENT SOMEWHERE. Without this, a panel with `display:none` or a clipped card would
+    // pass the two rows above by swallowing the probe instead of scrolling it, which is the same
+    // defect one step along - content that exists and cannot be reached.
+    ok(`${label}: the panel absorbed it by scrolling itself, not by clipping it`,
+      after.grew && after.panelScroll > 0 && after.reachable <= 1,
+      after.grew ? `panel has ${after.panelScroll}px of internal scroll and the probe's bottom sits ${after.reachable}px past the panel's own box at full scroll`
+        : "no .card.claim > .panel to grow");
+
+    await ctx.close();
+  }
+}
+
 async function checkTabAffordanceAndLimits(browser, base) {
   const rel = (a, b) => {
     const l = (h) => {
@@ -3033,6 +3160,7 @@ try {
   // it, and after the desktop claim so a mobile failure is never the first thing to
   // go red when something more basic is broken.
   await checkTabAffordanceAndLimits(browser, BASE);
+  await checkFooterHeldAgainstGrowth(browser, BASE);
   await checkTapFloor(browser, BASE);
   await checkMobile(browser, BASE);
 
