@@ -6,11 +6,6 @@
   "_spec": "design/spec/S1-20260915T1938Z/shell.css, the <style> blocks of the frozen S1 snapshot the shell was transcribed from.",
   "_clamp": "The three below are one departure in three rules: the design's one-screen clamp, overridden while the views still hold pre-redesign content. Shipping it clipped the footer by 30 to 93px at ordinary laptop sizes with three links unreachable. It returns with the content designed for it, S2 to S5, enforced per slice by scripts/fit-check.mjs.",
   "_form": "Each entry names WHY it differs and WHAT we ship. The body matters: declared by selector alone, a second, different change to an already-declared rule inherits the old label - measured, an added outline on .badge .dot passed. Regenerate the bodies with PARITY_PRINT=1 node scripts/parity-check.mjs <spec> <shipped...> and keep the why.",
-  ".badge .dot": {
-    "kind": "override",
-    "why": "The dot's colour is written inline from the phase machine, as it always has been, so a static colour here would be overridden anyway.",
-    "shipped": "width:calc(.6*var(--u)); height:calc(.6*var(--u)); border-radius:50% || width:calc(.6*var(--u)); height:calc(.6*var(--u)); border-radius:50%; background:var(--unknown)"
-  },
   ".badge[data-state=DEGRADED],.badge[data-state=EMPTY],.badge[data-state=NOT READY]": {
     "kind": "override",
     "why": "Same: real states the preview has no swatch for.",
