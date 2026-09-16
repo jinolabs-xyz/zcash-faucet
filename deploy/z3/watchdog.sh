@@ -535,6 +535,9 @@ heal_miner_if_stalled() {
     local prior; prior="$(flap_get "$key")"
     if [ "$prior" != "0" ]; then
       flap_set "$key" 0
+      # Episode state, so it clears with the count. Left set, a SECOND stall in the same process
+      # would be silent at the give-up rung.
+      flap_set "$key.paged" 0
       log "miner templating again (last ${tmpl_age}s ago); stall count reset"
       fixed "miner stalled (alive, no block template). Restarted it ($prior restart(s)). Mining again, template ${tmpl_age}s ago."
     fi
@@ -549,8 +552,15 @@ heal_miner_if_stalled() {
     else
       danger "miner stalled and 'systemctl restart $MINER_UNIT' FAILED ($n/$MINER_HEAL_MAX)."
     fi
-  elif [ "$n" -eq "$((MINER_HEAL_MAX + 1))" ]; then
-    danger "miner still stalled after $MINER_HEAL_MAX restarts. Not retrying. Zebra down, or its RPC endpoint moved?"
+  elif [ "$n" -gt "$MINER_HEAL_MAX" ] && [ "$(flap_get "$key.paged")" = "0" ]; then
+    # RETRIED UNTIL ONE LEAVES, not fired at an exact count (#511). This was `-eq MAX+1`, so the
+    # give-up page existed on exactly ONE sweep: alert.sh failing there - a Signal outage, a full
+    # disk, the broker hanging up - lost it for the rest of the episode, and nothing else says the
+    # miner has stopped being retried. Same fix and same shape as the crash-loop page (#507): the
+    # flag records DELIVERY rather than the attempt, and it lives on disk beside the count so a
+    # watchdog restart cannot hand out a second one.
+    danger "miner still stalled after $MINER_HEAL_MAX restarts. Not retrying. Zebra down, or its RPC endpoint moved?"; rc=$?
+    paged "$rc" && flap_set "$key.paged" 1
   fi
 }
 
@@ -941,6 +951,7 @@ heal_node_if_stalled() {
 }
 
 faucet_misses=0
+alerted_faucet_app=0  # delivery of the step-3 page, per episode (#511)
 faucet_restarts=0   # consecutive restarts with no healthy sweep in between
 unready_since=0
 alerted_unready=0
@@ -1264,7 +1275,7 @@ while true; do
       if [ "$faucet_restarts" -gt 0 ]; then
         fixed "faucet app hung. Restarted it ($faucet_restarts time(s)); answering again."
       fi
-      faucet_misses=0; faucet_restarts=0
+      faucet_misses=0; faucet_restarts=0; alerted_faucet_app=0
     else
       faucet_misses=$((faucet_misses + 1))
       log "faucet liveness miss $faucet_misses/$FAUCET_FAIL_LIMIT (via $liveness_via)"
@@ -1275,8 +1286,15 @@ while true; do
         faucet_misses=0
         # A second restart with no healthy sweep in between is a loop, not a fix: page once
         # there, then only periodically, the same shape as the container crash-loop page.
-        if [ "$faucet_restarts" -eq 2 ] || { [ "$faucet_restarts" -gt 2 ] && [ $(( (faucet_restarts - 2) % 20 )) -eq 0 ]; }; then
-          danger "faucet app not answering /api/health after $faucet_restarts restart(s). Not recovering."
+        # AT OR PAST TWO AND NOT YET DELIVERED, rather than AT exactly two (#511). The threshold
+        # page is retried every sweep until one leaves; the periodic re-alert keeps its cadence.
+        # Unlike the crash-loop and readiness pages after #507, this one was never gated on
+        # delivery, so a failed send at restart 2 meant silence until restart 22 - and the only
+        # other signal is step 4's NOT READY page thirty minutes later.
+        if { [ "$faucet_restarts" -ge 2 ] && [ "$alerted_faucet_app" = "0" ]; } \
+           || { [ "$faucet_restarts" -gt 2 ] && [ $(( (faucet_restarts - 2) % 20 )) -eq 0 ]; }; then
+          danger "faucet app not answering /api/health after $faucet_restarts restart(s). Not recovering."; rc=$?
+          paged "$rc" && alerted_faucet_app=1
         fi
       fi
     fi
