@@ -413,9 +413,17 @@ export interface TipReferences {
    * argument was already made once; this is the same argument for the two numbers that explain
    * WHY `used` was chosen.
    *
-   * Null when a source did not answer or was stale, which is a different fact from "answered
-   * with a lower height" -- the watchdog needs to distinguish a dark reference from a lagging
-   * one, because only the second is evidence about the chain.
+   * NULL MEANS NEVER ANSWERED. It does NOT mean stale: a stale entry keeps the height it last
+   * reported, exactly as `sources` does, because the height a dark source last knew is evidence
+   * and discarding it to encode one bit loses it. Usability is carried by `used` and
+   * `usedHeight`, which go null together -- a consumer asking "may I judge against this" reads
+   * those, one asking "what did each source last say" reads these.
+   *
+   * THIS PARAGRAPH SAID THE OPPOSITE UNTIL SDE-INFRA READ IT AS THE CONSUMER. I wrote the field
+   * intending null-for-stale, the suite refused it against the existing rule, I corrected the
+   * test and left the abandoned reasoning here. Had a parser been written to the comment it
+   * would have conflated a DARK reference with a LAGGING one, and those lead to opposite
+   * conclusions about the chain.
    *
    * Taken from the same `sources` entries the spread is computed from, never recomputed, so
    * these can never disagree with `spreadBlocks`.
