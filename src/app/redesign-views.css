@@ -1,3 +1,15 @@
+/* @spec design/spec/S2-S5-20260915T2224Z/index.css */
+/*
+ * THE SPEC LINE ABOVE NAMES A DIFFERENT SNAPSHOT FROM THE ONE THIS FILE'S OWN HEADER CITES,
+ * and that is deliberate rather than an oversight. This sheet was transcribed from
+ * `S2-S5-20260915T2110Z`; the vendored spec is `S2-S5-20260915T2224Z`. The two snapshots'
+ * `index.html` are BYTE-IDENTICAL (93,577 bytes, sha256 35f92839ef21fb53...), verified by diff before this
+ * line was written - the 22:24Z restaging moved the subpages, not the index. So the comparison
+ * is against the document this sheet was actually transcribed from, under the later name.
+ *
+ * If a future restaging changes index.html, this equivalence stops holding and this comment is
+ * the thing that should stop a reader assuming it still does: re-verify before trusting it.
+ */
 /*
  * The Status, Analytics and Tools views, transcribed VERBATIM from the preview the owner
  * approved (redesign-frozen/S2-S5-20260915T2110Z, index.html). Values are copied rather
