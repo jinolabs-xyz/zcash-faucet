@@ -15,6 +15,7 @@ import {
   groupDigits,
   heightDiff,
   heightDeltaText,
+  heightDiffChip,
   heightNote,
   heightTone,
   syncFigure,
@@ -89,6 +90,22 @@ test("behind is marked only once it is past ordinary propagation", () => {
 
 test("the height delta groups its digits, because a fork is five figures", () => {
   assert.equal(heightDeltaText(-12_345), "-12,345 vs network, behind");
+
+  // THE HERO CHIP IS NOT heightDeltaText IN BRACKETS, and the only case that shows it is a
+  // non-zero delta. The snapshot's `derived.heightDiffChip` is `(${sgn} vs network)` with the
+  // direction word kept in a separate field, so the two forms coincide at zero and diverge
+  // everywhere else. Pinning zero alone would pass a wrap of heightDeltaText, which is the fix
+  // the original finding implied - so the non-zero cases are the assertion and zero is the
+  // control.
+  assert.equal(heightDiffChip(0), "(+0 vs network)");
+  assert.equal(heightDiffChip(8), "(+8 vs network)");
+  assert.equal(heightDiffChip(-3), "(-3 vs network)");
+  assert.equal(heightDiffChip(4_000), "(+4,000 vs network)");
+  assert.equal(heightDiffChip(null), null);
+  for (const d of [8, -3, 4_000]) {
+    assert.notEqual(heightDiffChip(d), `(${heightDeltaText(d)})`,
+      "a wrap of heightDeltaText would carry the direction word the design keeps elsewhere");
+  }
   assert.equal(heightDeltaText(4_000), "+4,000 vs network, ahead");
 });
 
