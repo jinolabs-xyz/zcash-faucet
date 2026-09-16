@@ -592,7 +592,18 @@ async function checkAppearance(page) {
   // So the COUNT is pinned, and the number comes down as slices land: 4 at S1, 3 once S2
   // transcribes the claim view, and 0 after S5. Changing it is a line in the diff and a
   // decision someone made, which is the whole point.
-  const LEGACY_VIEWS = 3;   // S2a transcribed the claim view and took its cap off
+  //
+  // ZERO. S2a transcribed the claim view and this slice transcribes the other three, so no
+  // view carries the transitional measure any more. The pin stays at 0 rather than being
+  // deleted: it is what stops the class coming back on a view that has been transcribed.
+  //
+  // THE GEOMETRY ASSERTION THAT USED TO SIT HERE IS GONE WITH IT, deliberately and not
+  // softened into a skip. It measured that a capped view was wide while its content was
+  // not; at zero capped views there is nothing to measure and it would report "nothing was
+  // measured" as a failure. A check that cannot fail is not a check, and a check with no
+  // subject is worse - it teaches a reader that the property is still guarded when the
+  // count above is the only thing guarding it now.
+  const LEGACY_VIEWS = 0;
   const legacy = await page.locator(".view.legacy-measure").count();
   ok(`exactly ${LEGACY_VIEWS} views still carry the transitional 760px measure`,
     legacy === LEGACY_VIEWS,
@@ -609,32 +620,6 @@ async function checkAppearance(page) {
       "No accounts, no cookies, no trackers. Addresses and IPs are hashed, never stored raw.") === true,
     "the exact sentence is not on the page");
 
-  // AND THE WIDTH THE TRANSITIONAL CAP IS THERE TO HOLD, measured rather than inferred from
-  // the class being present (SDE-Infra's finding on review). The count above catches the class
-  // being REMOVED early; it cannot catch the cap silently failing to apply - a changed
-  // selector, a specificity fight, a later rule setting width on the same children. Those
-  // leave the class in place and the content at full width, which is the 802px regression this
-  // exists to prevent, and nothing else in this suite can see it.
-  //
-  // MEASURED INSIDE ONE VIEW, AND A VISIBLE ONE. The first version of this took the first
-  // `.view.legacy-measure` in the DOM and the first `input.input` on the page, which were the
-  // same view only while the claim view was still capped. S2a transcribed the claim view and
-  // took its cap off, so the selector began returning a HIDDEN section - width 0 - and
-  // comparing it against an input in a different, visible view. It failed loudly, which is the
-  // good case, but for one commit it was measuring two unrelated things. The cap applies to
-  // `.view.legacy-measure > *`, so that is what is measured, in the view it belongs to.
-  await showView(page, "status");
-  const measure = await page.evaluate(() => {
-    const view = document.querySelector(".view.legacy-measure:not([hidden])");
-    const child = view && view.firstElementChild;
-    if (!view || !child) return { missing: true };
-    return { view: Math.round(view.getBoundingClientRect().width), child: Math.round(child.getBoundingClientRect().width) };
-  });
-  ok("the untranscribed content is still capped at its old measure inside a full-width view",
-    !measure.missing && measure.view > 900 && measure.child <= 760,
-    measure.missing ? "no visible .view.legacy-measure with content, so nothing was measured"
-      : `view ${measure.view}px, its capped content ${measure.child}px (cap 760)`);
-  await showView(page, "claim");
 
   // THE FOX FOLLOWS ITS COLUMN, and nothing else checks this. page-mascot writes
   // `width: size, height: size` INLINE on its root (dist/mascot.js:149), and an inline
@@ -975,26 +960,36 @@ async function checkFirstPaint(page, base, address) {
     const badgeWord = (await page.getByTestId("status-word").textContent({ timeout: 5_000 }).catch(() => "no badge on the page"))?.trim();
     ok("first paint says CHECKING, not LIVE", badgeWord === "CHECKING" && !/\bLIVE\b/.test(body), badgeWord);
 
-    // Read the status strip cell by cell rather than grepping the body. A body-wide
+    // Read the three figures cell by cell rather than grepping the body. A body-wide
     // regex cannot do this job: the drip amount "0.1 TAZ" is legitimately on the page,
     // so "does a number followed by TAZ appear" is not a question with a useful answer.
     // The first version of this check tested /\b0 TAZ\b/ and passed with the bug still
     // in, because `?? 0` renders through toFixed(1) as "0.0 TAZ" and never matched.
+    //
+    // S3 MOVED THESE. They were the legacy status strip's [data-strip-key] cells; the
+    // strip went with the view, and the same three figures are now the design's Status
+    // cards, carrying [data-status-key]. The PROPERTY is unchanged and is the whole
+    // point: before any status has arrived, the page states nothing it was not told.
+    // The word changed with the design, from "–" to "unknown", which says the same
+    // thing in the vocabulary the rest of the redesign uses.
+    //
+    // The status view is hidden until it is selected, and a hidden section is not
+    // clickable, so drive the nav the way a visitor does before reading it.
+    await showView(page, "status");
     const cells = await page.evaluate(() => {
       const out = {};
-      const strip = document.querySelector("[data-testid=status-strip]");
-      for (const cell of strip?.querySelectorAll("[data-strip-key]") ?? []) {
-        const key = cell.getAttribute("data-strip-key");
-        const value = cell.querySelector("[data-testid=strip-value]")?.textContent?.trim();
-        if (key) out[key] = value ?? "";
+      for (const cell of document.querySelectorAll("[data-status-key]")) {
+        const key = cell.getAttribute("data-status-key");
+        if (key) out[key] = cell.textContent?.trim() ?? "";
       }
       return out;
     });
-    const DASH = "–";
-    ok("the strip was found at all", Object.keys(cells).length > 0, JSON.stringify(cells));
+    const UNTOLD = "unknown";
+    ok("the status figures were found at all", Object.keys(cells).length === 3, JSON.stringify(cells));
     for (const k of ["node", "balance", "miner"]) {
-      ok(`first paint states no ${k} it was not told`, cells[k] === DASH, `${k}=${cells[k] ?? "missing"}`);
+      ok(`first paint states no ${k} it was not told`, cells[k] === UNTOLD, `${k}=${cells[k] ?? "missing"}`);
     }
+    await showView(page, "claim");
 
     // The regression. Type and submit while status is still held.
     await page.getByTestId("address-input").fill(address);
@@ -1108,41 +1103,180 @@ async function showView(page, v) {
 }
 
 async function checkMinerPanel(page) {
-  // The panel and its disclosure live in the status view now.
+  // S3 REPLACED THE DISCLOSURE. The miner used to live behind a "More details" toggle in
+  // the legacy status view; the design's Status view has no disclosure at all, because
+  // the card IS the detail - a figure and a chip for the visitor, a table of rows under
+  // it for the operator. So there is nothing to open and nothing to close.
+  //
+  // WHAT THIS COSTS, AND IT IS NAMED RATHER THAN QUIETLY DROPPED: the old panel rendered
+  // minerRow(), a sentence ("not watched, no heartbeat path", "NO TEMPLATE in 2 h"). The
+  // approved design carries the one-word chip and the template age instead, which is the
+  // owner's "one word per state" rule applied to the miner. The sentence is not on the
+  // page any more. The property below is the half that survives the design, and it is the
+  // half that matters most: we say we are not watching rather than claiming a fault.
   await showView(page, "status");
-  // The control was reached by its label until this change, so the label needs its own
-  // assertion. DRIVEN BY TESTID, ASSERTED BY ROLE AND NAME - SDE-Infra's finding, and it is
-  // the right one: getByRole(name:) asserts the COMPUTED ACCESSIBLE NAME, which is what a
-  // screen reader announces, while textContent is merely what the element happens to
-  // contain. They agree today because the button has no aria-label; add one later and only
-  // the role+name form notices.
-  const toggle = page.getByTestId("panel-toggle");
-  const namedButton = async (re) => (await page.getByRole("button", { name: re }).count()) === 1;
-  ok("the disclosure is announced as More details when the panel is shut",
-    await namedButton(/More details/), (await toggle.textContent())?.trim());
-  await toggle.click();
-  ok("and as Hide details when it is open",
-    await namedButton(/Hide details/), (await toggle.textContent())?.trim());
+  const word = await page.evaluate(() =>
+    document.querySelector("[data-status-key='miner']")?.textContent?.trim() ?? "");
 
-  // Read the one cell, not the panel's textContent. There are no newlines in that
-  // string, so a /miner\s*([^\n]*)/ match runs to the end and drags in reserve, queue
-  // and backend. Every assertion below would then be answered by some other row.
-  const row = await page.evaluate(() => {
-    const hit = document.querySelector("[data-panel-key='miner']");
-    return hit?.querySelector("[data-testid=panel-value]")?.textContent?.trim() ?? "";
-  });
-
-  ok("the panel reports the miner at all", row.length > 0, row);
+  ok("the status view reports the miner at all", word.length > 0, word);
   // CI sets no FAUCET_MINER_HEARTBEAT_PATH, so the honest answer here is that nobody
   // wired the reader up, NOT that a heartbeat is missing. Those are different facts
   // and this asserts the one that actually applies to this run.
   ok("an unconfigured heartbeat says so, and does not blame a missing file",
-    /not watched, no heartbeat path/.test(row), row);
-  ok("no heartbeat is NOT reported as running", !/\bmining\b/.test(row), row);
+    word === "unwatched", word);
+  ok("no heartbeat is NOT reported as running", !/\bmining\b/.test(word), word);
   // "off" is the specific wrong answer. We have not established the miner is off, only
   // that we cannot see it, and those call for different responses from an operator.
-  ok("no heartbeat is NOT reported as off", !/\boff\b/.test(row), row);
-  await page.getByTestId("panel-toggle").click();
+  ok("no heartbeat is NOT reported as off", !/\boff\b/.test(word), word);
+  // And it is not painted as healthy either. The tone is derived from the state machine,
+  // so a word nobody classified cannot arrive green: reading the tone off the rendered
+  // word would be a proxy that a rename detaches from the thing it describes.
+  const tone = await page.evaluate(() =>
+    document.querySelector("[data-status-key='miner']")?.closest("[data-tone]")?.getAttribute("data-tone") ?? "");
+  ok("and an unwatched miner is not painted as ok", tone === "unknown", `tone=${tone || "none"}`);
+
+  // THE INDEXER DID NOT VANISH WITH THE LEGACY STRIP, IT MOVED (CTO ruling 20:55Z). The
+  // strip carried a lightwalletd vendor/version row, asked for by name in community
+  // feedback. The design's Network card carries the ENDPOINT plus a reachability dot,
+  // which is the same fact under a better name: which indexer we are talking to, and
+  // whether it is answering. Asserted here so "it moved" is a checked claim rather than a
+  // sentence in a PR body, and so nobody adds a second row for it later.
+  for (const view of ["status", "analytics"]) {
+    await showView(page, view);
+    const backend = await page.evaluate((v) => {
+      const scope = document.querySelector(`[data-testid="view-${v}"]`);
+      const hit = [...(scope?.querySelectorAll("dt, .figs > span") ?? [])]
+        .find((el) => /^backend/i.test(el.textContent?.trim() ?? ""));
+      const row = hit?.closest("div, span");
+      const dot = row?.querySelector(".rdot");
+      const value = (row?.querySelector("dd") ?? row?.querySelector("b"))?.textContent?.trim() ?? "";
+      return { found: !!hit, value, dot: !!dot, on: dot?.getAttribute("data-on") ?? null };
+    }, view);
+    ok(`the ${view} view names the indexer we are talking to`,
+      backend.found && /[a-z0-9.-]+\.[a-z]{2,}(:\d+)?/i.test(backend.value), JSON.stringify(backend));
+    // The dot defaults to grey and only data-on="true" makes it green, so a backend we
+    // have not heard from cannot render as reachable.
+    ok(`and says whether it is answering, beside it`,
+      backend.dot && (backend.on === "true" || backend.on === "false"), JSON.stringify(backend));
+  }
+  // ── THE CARD TITLES: THEIR GLYPHS, THEIR SIZE AND THEIR FACE ───────────────────────
+  //
+  // All three of these went unnoticed through three rounds for the same reason: a heading
+  // with the wrong face, a figure two points small and a missing 16px icon all LOOK finished.
+  // Nothing about them throws, logs or renders blank at the card level, so only a measurement
+  // sees them.
+  await showView(page, "analytics");
+
+  // A canvas carries no content, so an absent glyph is invisible to any assertion about text.
+  // Count them, then prove each one actually PAINTED - a canvas that exists and is blank is
+  // the same defect wearing the element.
+  const glyphs = await page.evaluate(() => {
+    const scope = document.querySelector('[data-testid="view-analytics"]');
+    return [...(scope?.querySelectorAll("h3 canvas.g") ?? [])].map((c) => {
+      const cv = /** @type {HTMLCanvasElement} */ (c);
+      let painted = false;
+      try {
+        const x = cv.getContext("2d");
+        const d = x?.getImageData(0, 0, cv.width, cv.height).data;
+        painted = !!d && d.some((v, i) => i % 4 === 3 && v > 0);   // any non-transparent pixel
+      } catch { painted = false; }
+      return { name: cv.dataset.glyph ?? "", w: cv.width, painted };
+    });
+  });
+  ok("every analytics card title carries its glyph", glyphs.length === 5,
+    `${glyphs.length}: ${glyphs.map((g) => g.name).join(", ")}`);
+  ok("and every one of them actually painted, rather than being an empty canvas",
+    glyphs.length > 0 && glyphs.every((g) => g.painted && g.w > 0),
+    JSON.stringify(glyphs));
+
+  // THE BIG FIGURE TAKES THE RULE THAT WINS. The snapshot declares `.pc .figs .big b` twice at
+  // the same specificity and depth; the later one (index.html:298) is the shipped size and the
+  // clamp above it is dead. Transcribing the clamp rendered this two points small at 1440, and
+  // nothing but a computed read can tell the two apart.
+  //
+  // MEASURED AT SEVERAL WIDTHS, BECAUSE ONE WIDTH CANNOT SEE THIS DEFECT. My first version read
+  // the figure at 1440 only, and the mutant that restores the dead clamp SURVIVED it: at 1440
+  // the clamp's own maximum IS `calc(1.8*var(--u))` and `1.6vw` sits above it, so
+  // `clamp(1.2u, 1.6vw, 1.8u)` returns 1.8u and the two rules compute the identical 20.736px.
+  // An assertion that cannot fail for the defect it was written for is the shape this suite has
+  // caught four times tonight, and it caught mine.
+  //
+  // The rules diverge where `1.6vw` falls BELOW `1.8*var(--u)`, which is the narrow end. So the
+  // property is asserted as the flat rule states it - the figure is 1.8 units at EVERY width -
+  // and `--u` is measured by probe at each one rather than parsed, because it is a clamp
+  // declared on `.stage` (redesign-shell.css:43) and neither parseFloat nor <html> can read it.
+  const widths = [900, 1100, 1440, 1760];
+  const figures = [];
+  for (const w of widths) {
+    await page.setViewportSize({ width: w, height: 900 });
+    await page.waitForTimeout(120);
+    figures.push(await page.evaluate((width) => {
+      const el = document.querySelector('[data-testid="view-analytics"] .figs .big b');
+      if (!el) return { width, missing: true };
+      const probe = document.createElement("div");
+      probe.style.cssText = "position:absolute;visibility:hidden;width:var(--u)";
+      el.parentElement?.appendChild(probe);
+      const u = probe.getBoundingClientRect().width;
+      probe.remove();
+      const fontSize = parseFloat(getComputedStyle(el).fontSize);
+      return { width, u: Math.round(u * 100) / 100, fontSize, want: Math.round(1.8 * u * 100) / 100 };
+    }, w));
+  }
+  await page.setViewportSize(DESKTOP);
+  await page.waitForTimeout(120);
+  const offBy = figures.filter((f) => f.missing || f.u <= 0 || Math.abs(f.fontSize - f.want) > 0.5);
+  ok("the analytics big figure is 1.8 units at every width, not the dead clamp above the winning rule",
+    offBy.length === 0,
+    figures.map((f) => f.missing ? `${f.width}:missing` : `${f.width}px u=${f.u} got ${f.fontSize} want ${f.want}`).join("; "));
+
+  // THE HEADING'S FACE, because `globals.css:82` styles `h1..h6` as an ELEMENT rule and this
+  // card title names its size and weight as LONGHANDS. Whatever globals sets that the rule
+  // does not mention survives, which is how the titles were rendering in the heading face at
+  // line-height 1.12. A class-by-class L20 sweep cannot see an element rule, so this is the
+  // detector for the whole family rather than for one heading.
+  const h3 = await page.evaluate(() => {
+    const el = document.querySelector('[data-testid="view-analytics"] .pc h3');
+    if (!el) return null;
+    const cs = getComputedStyle(el);
+    const root = getComputedStyle(document.documentElement);
+    return {
+      family: cs.fontFamily,
+      sans: root.getPropertyValue("--sans").trim(),
+      heading: root.getPropertyValue("--font-heading").trim(),
+      lineHeight: cs.lineHeight,
+      fontSize: parseFloat(cs.fontSize),
+      letterSpacing: cs.letterSpacing,
+    };
+  });
+  // Quotes AND spacing normalised. The browser re-serialises a font stack with a space after
+  // every comma and the token does not, so comparing the raw strings compares FORMATTING and
+  // goes red on two spellings of the same stack - which is what my first version did.
+  const face = (v) => v.replace(/["']/g, "").replace(/\s*,\s*/g, ",").trim().toLowerCase();
+  // THE CHIP'S OWN BOX, because the raise that put it there has to be asserted or it is a
+  // change nobody can see go wrong. `globals.css:151` and the transcription's `.tag` were both
+  // (0,1,0) and disagree about exactly these two: padding `5px 8px` against `0 calc(.9*var(--u))`
+  // and border-radius `0` against `calc(.5*var(--u))`. Whichever won was link order, which Next
+  // does not promise. Vertical padding and a rounded corner tell the two apart with no shared
+  // value between them.
+  const chip = await page.evaluate(() => {
+    const el = document.querySelector('[data-testid="view-analytics"] .pc h3 .tag');
+    if (!el) return null;
+    const cs = getComputedStyle(el);
+    return { padTop: parseFloat(cs.paddingTop), padBottom: parseFloat(cs.paddingBottom),
+             radius: parseFloat(cs.borderTopLeftRadius), transform: cs.textTransform };
+  });
+  ok("the status chip wears the design's box, not the legacy one globals still declares",
+    !!chip && chip.padTop === 0 && chip.padBottom === 0 && chip.radius > 1 && chip.transform === "none",
+    chip ? `padding ${chip.padTop}/${chip.padBottom}px, radius ${chip.radius}px, text-transform ${chip.transform}` : "no chip");
+
+  ok("the analytics card title uses the design's face, not the one globals gives every heading",
+    !!h3 && face(h3.family) === face(h3.sans) && face(h3.family) !== face(h3.heading),
+    h3 ? `${h3.family} against --sans ${h3.sans}` : "no h3");
+  ok("and its line-height and letter-spacing are the design's, not globals' heading values",
+    !!h3 && Math.abs(parseFloat(h3.lineHeight) - h3.fontSize * 1.5) < 0.6 && h3.letterSpacing === "normal",
+    h3 ? `line-height ${h3.lineHeight} against 1.5*${h3.fontSize}, letter-spacing ${h3.letterSpacing}` : "no h3");
+
+  await showView(page, "claim");
 }
 
 /**
@@ -1191,54 +1325,130 @@ async function checkCtazToggle(page, base) {
     /0\.5 cTAZ/.test((await page.getByTestId("claim-button").textContent()) ?? ""),
     (await page.getByTestId("claim-button").textContent())?.trim());
 
-  // The panel's cTAZ rows. `reserve` is the one that matters: their surface has no
-  // balance method, so anything numeric here would be invented.
+  // THE WALLET CARD'S cTAZ ROWS. Their surface has no balance method, so anything
+  // numeric here would be invented, and the design says so in one word.
   //
-  // NO "ctaz" PREFIX ON THE KEYS ANY MORE, and no filtering by one either. The panel now
-  // shows only the selected asset, so the prefix that used to disambiguate against a TAZ
-  // row on the same screen is gone. Reading every row is also what lets the next two
-  // assertions exist: they check what is ABSENT, which a prefix filter could never see.
-  const panelRows = async () =>
-    Object.fromEntries(
-      await page.evaluate(() =>
-        [...document.querySelectorAll("[data-panel-key]")].map((c) => [
-          c.getAttribute("data-panel-key"),
-          c.querySelector("[data-testid=panel-value]")?.textContent?.trim(),
-        ])),
-    );
+  // S3 REPLACED THE PANEL AND CHANGED WHAT IS GUARANTEED HERE, so this block asserts the
+  // new guarantee rather than the old one, and the difference is named in the PR body
+  // because it is a real one. The legacy panel HID every TAZ-only row under the cTAZ tab
+  // (#326: a TAZ wallet balance under a cTAZ tab is how someone concludes the cTAZ wallet
+  // holds 1000 TAZ). The approved design does not hide them - it keeps the wallet rows and
+  // ADDS a cTAZ group beneath - so the separation is now carried by every TAZ figure
+  // naming its own unit rather than by absence. That is weaker, it is the design the owner
+  // approved, and the CTO has been asked to rule. What is asserted below is what the
+  // design actually promises; nothing here pretends the old property survived.
+  const walletRows = async () =>
+    await page.evaluate(() => {
+      // SCOPED BY THE SECTION'S OWN TESTID, not by [data-view='status']: the nav BUTTON
+      // carries data-view too (page.tsx:1080) and comes first in the document, so a
+      // querySelector on that attribute returns the button. This one happened to work
+      // because querySelectorAll matched both; the probe below did not, which is how it
+      // was found.
+      const card = [...document.querySelectorAll('[data-testid="view-status"] .card')]
+        .find((c) => c.querySelector("h2")?.textContent?.trim() === "Wallet");
+      // Only rows that are a label/value PAIR. The cTAZ group heading is a bare <div>
+      // whose text is also "cTAZ", and matching it instead of the row below reads as a
+      // cTAZ row with an empty value - which is how this assertion first failed.
+      return [...(card?.querySelectorAll(".rows > div") ?? [])]
+        .filter((row) => row.querySelector("dt") && row.querySelector("dd"))
+        .map((row) => ({
+          label: row.querySelector("dt")?.textContent?.trim() ?? "",
+          value: row.querySelector("dd")?.textContent?.trim() ?? "",
+        }));
+    });
 
   await showView(page, "status");
-  await page.getByTestId("panel-toggle").click();
-  const rows = await panelRows();
-  ok("the panel gains a cTAZ readiness row", /ready|behind|stale|not-activated|cannot-verify/.test(rows["node"] ?? ""), rows["node"]);
-  ok("the cTAZ reserve reads unknown, never a number", rows["reserve"] === "unknown", rows["reserve"]);
-  ok("the cTAZ drip counter is its own", rows["drips ever/7d/30d"] !== undefined, rows["drips ever/7d/30d"]);
+  const ctazRows = await walletRows();
+  const ctazRow = ctazRows.find((r) => r.label === "cTAZ");
+  ok("the wallet card gains a cTAZ row on the cTAZ tab", ctazRow !== undefined,
+    ctazRows.map((r) => r.label).join(", "));
+  // A WORD, NEVER A NUMBER - the property this line has always claimed - and the word now has
+  // to AGREE WITH THE STATUS rather than match a literal.
+  //
+  // This pinned `=== "parked"` and passed for three rounds, because the page had "parked" typed
+  // into its markup. The preview can afford that (no server behind it); we cannot, and a
+  // literal goes on saying parked about a Crosslink node that has come back. The moment the row
+  // started reading `ctaz`, this assertion went red against a page that had just become MORE
+  // correct - the local stack runs a crosslink double that IS servable, so the honest word here
+  // is "unknown" and production's is still "parked". Pinned to the literal, it was measuring the
+  // markup; pinned to the coupling, it measures the claim.
+  const ctazWordShown = ctazRow?.value ?? "";
+  ok("and it reads one word, never a number, because their surface has no balance method",
+    ctazWordShown.length > 0 && Number.isNaN(Number(ctazWordShown)) && /^[a-z][a-z ]*$/.test(ctazWordShown),
+    ctazWordShown || "(empty)");
+  ok("and the word agrees with what /api/status says about cTAZ, rather than being typed into the page",
+    status.ctaz?.enabled === false || status.ctaz == null
+      ? ctazWordShown === "parked"
+      : status.ctaz.servable === true
+        ? ctazWordShown !== "parked"
+        : ctazWordShown === "parked",
+    `enabled ${status.ctaz?.enabled} servable ${status.ctaz?.servable} -> ${ctazWordShown}`);
 
-  // THE SEPARATION ITSELF, which is the point of the change and the thing a reader is
-  // hurt by if it regresses. A TAZ wallet balance under a cTAZ tab is how someone
-  // concludes the cTAZ wallet holds 1000 TAZ.
-  ok("no TAZ-only row leaks onto the cTAZ tab",
-    rows["wallet balance"] === undefined && rows["miner"] === undefined && rows["refill"] === undefined,
-    Object.keys(rows).join(", "));
-  ok("box and backend stay on both tabs, being about the machine not the chain",
-    rows["box"] !== undefined && rows["backend"] !== undefined);
+  // THE REPLACEMENT FOR #326's SEPARATION, asserted rather than assumed: every figure on
+  // this card that is a TAZ amount says TAZ. A unitless number here is exactly what the
+  // hidden rows used to prevent being misread as a cTAZ balance.
+  // EVERY NUMBER NAMES ITS UNIT, ANYWHERE IN THE VALUE. My first spelling anchored the whole
+  // string with /^[\d,]+(\.\d+)?$/, so it could only ever flag a value that IS a bare number -
+  // and the row that was actually wrong read "15 \u00b7 low 5", which sails through it. The
+  // review found the row; the row was only shippable because my own pin could not see it. An
+  // assertion that catches the simplest spelling of a fault and nothing else is the false-pass
+  // shape this suite keeps finding in itself, and this is the third of mine tonight.
+  //
+  // THE `(?![\d,.])` IS LOAD-BEARING and it is why this is not the obvious one-liner. Without
+  // it the greedy number match BACKTRACKS when the unit lookahead fails: "1,000 TAZ" retreats
+  // to "1,00", whose next text is "0 TAZ" and is not a unit, so the correct row gets flagged.
+  // Measured before shipping - the unguarded form flags 4,50 in "4,506 TAZ", 0 in "0.1 TAZ"
+  // and 2 in "24h", i.e. it goes red on a page with nothing wrong with it.
+  const UNIT = String.raw`\s*(?:c?TAZ|h\b|%|drips?\b|blocks?\b|s\b)`;
+  const bareNumber = new RegExp(String.raw`\d[\d,]*(?:\.\d+)?(?![\d,.])(?!${UNIT})`, "g");
+  const unitless = ctazRows.flatMap((r) =>
+    (r.value.match(bareNumber) ?? []).map((n) => `${r.label}="${r.value}" has a bare ${n}`));
+  ok("no wallet figure sits on the cTAZ tab without naming its unit",
+    unitless.length === 0, unitless.join("; ") || "none");
 
-  // And the mirror, so neither assertion can pass by the panel simply being empty.
-  // The network tabs are the CLAIM view's, the panel is the STATUS view's, so the tab
-  // click needs the claim view back. Reading the rows does not: panelRows() reads the DOM
-  // rather than the screen, and the panel stays mounted once it is open.
+  // THE OTHER HALF OF THE CTO'S RULING (20:55Z): the cTAZ group must be VISUALLY distinct
+  // from the wallet rows above it, and pinned, because "an untested convention is not a
+  // guarantee" and the failure mode is someone reading a TAZ balance as a cTAZ holding.
+  //
+  // TWO INDEPENDENT PROPERTIES, not one. A single pin (say, uppercase) is one CSS edit away
+  // from being flattened while still passing something; these fail separately.
+  const group = await page.evaluate(() => {
+    const card = [...document.querySelectorAll('[data-testid="view-status"] .card')]
+      .find((c) => c.querySelector("h2")?.textContent?.trim() === "Wallet");
+    const g = card?.querySelector(".rows .group");
+    const dt = card?.querySelector(".rows dt");
+    if (!g || !dt) return { missing: true };
+    const gs = getComputedStyle(g), ds = getComputedStyle(dt);
+    return {
+      text: g.textContent?.trim(),
+      width: Math.round(g.getBoundingClientRect().width),
+      transform: gs.textTransform, rowTransform: ds.textTransform,
+      weight: Number(gs.fontWeight), rowWeight: Number(ds.fontWeight),
+      tracking: gs.letterSpacing, rowTracking: ds.letterSpacing,
+    };
+  });
+  ok("the cTAZ group heading is on the card and rendered",
+    !group.missing && group.text === "cTAZ" && group.width > 0, JSON.stringify(group));
+  ok("and it is set apart from the wallet rows by case AND by weight, not by position alone",
+    !group.missing && group.transform === "uppercase" && group.rowTransform !== "uppercase"
+      && group.weight > group.rowWeight,
+    `group ${group.transform}/${group.weight} vs row ${group.rowTransform}/${group.rowWeight}`);
+
+  // And the mirror, so neither assertion can pass by the card simply being empty. The
+  // network tabs are the CLAIM view's, the card is the STATUS view's.
   await showView(page, "claim");
   await page.getByRole("tab", { name: /^TAZ/ }).click();
   await page.waitForTimeout(300);
-  const tazRows = await panelRows();
-  ok("the TAZ tab carries its own rows back", tazRows["wallet balance"] !== undefined && tazRows["miner"] !== undefined);
-  ok("and the cTAZ-only rows are gone from it", tazRows["reserve"] === undefined, Object.keys(tazRows).join(", "));
+  await showView(page, "status");
+  const tazRows = await walletRows();
+  ok("the TAZ tab carries the wallet rows",
+    tazRows.some((r) => r.label === "Spendable") && tazRows.some((r) => r.label === "Drip"),
+    tazRows.map((r) => r.label).join(", "));
+  ok("and the cTAZ row is gone from it", tazRows.every((r) => r.label !== "cTAZ"),
+    tazRows.map((r) => r.label).join(", "));
+  await showView(page, "claim");
   await ctazTab.click();
   await page.waitForTimeout(300);
-  await showView(page, "status");
-  await page.getByTestId("panel-toggle").click();
-  // The claim below is driven through the claim view's own controls.
-  await showView(page, "claim");
 
   // A real claim on the feature net, through the button and the proof of work.
   const address = await freshAddress();
@@ -1377,16 +1587,19 @@ async function checkMobile(browser, base) {
       }
     }
 
-    // The panel open, which is the tallest the home page gets before a claim.
+    // S3 TO S5 REPLACED THE DISCLOSURE WITH THREE FULL VIEWS, so the state that used to
+    // be "the panel open" is now three separate screens, and each is audited. This is
+    // more coverage than the line it replaces, not less: the analytics view in
+    // particular is five cards and four canvases that nothing else here looks at.
     await page.goto(base, { waitUntil: "networkidle", timeout: 60_000 });
-    await showView(page, "status");
-    await page.getByTestId("panel-toggle").click();
-    await audit("/ panel open");
+    for (const v of ["status", "analytics", "tools"]) {
+      await showView(page, v);
+      await audit(`/ ${v} view`);
+    }
 
     // And the receipt, the one state that only exists after a real claim. Checked on
     // a phone because it is the state a claimant is actually looking at, and it is
     // the longest card on the page.
-    await page.getByTestId("panel-toggle").click();
     await showView(page, "claim");
     await page.getByRole("button", { name: "Make a throwaway address and key" }).first().click();
     await page
@@ -1444,11 +1657,10 @@ try {
   {
     // Both tools sit behind the Tools view now, so open that before driving them.
     await showView(page, "tools");
-    // The sentence lives in the "How it works" view; open it the way a visitor does.
-    await page.getByRole("button", { name: "How it works" }).click();
-    await page.locator("#tool-about").waitFor({ timeout: 5000 });
-    const text = await page.locator("#tool-about").innerText();
-    await page.getByRole("button", { name: "How it works" }).click();
+    // S5: the design shows both cards at once, so there is no disclosure to open. The
+    // sentence lives in the How it works card and is on screen whenever the view is.
+    await page.getByTestId("how-it-works").waitFor({ timeout: 5000 });
+    const text = await page.getByTestId("how-it-works").innerText();
     ok("the income sentence follows the miner state (no heartbeat here: not mining, topped up by hand)", /The faucet is not mining right now, so what it hands out is donated or topped up by hand\./.test(text), text.match(/The faucet (mines|is not mining|has had)[^.]*\./)?.[0] ?? "no income sentence found");
     ok("and none of the old fixed sentences remain", !/does not currently earn from mining|income rounds to zero|refilled by hand at the moment|mining and shielding its own coins/.test(text));
   }
@@ -1460,22 +1672,23 @@ try {
     const seen = [];
     const onReq = (r) => { if (r.url().includes("/api/balance")) seen.push({ method: r.method(), url: r.url(), body: r.postData() ?? "" }); };
     page.on("request", onReq);
-    await page.getByRole("button", { name: "Balance lookup" }).click();
+    // S5: the lookup form is part of the Tools view now rather than behind a disclosure,
+    // so there is nothing to open. The field is #laddr and the answer is #lans, the ids
+    // the approved design uses.
     // A real shielded address from the app's own account API: the answer is
     // "private, not queryable", made with no external call and no 400 in the console.
     const lookupAddr = await freshAddress();
-    await page.locator("#lk").fill(lookupAddr);
+    await page.locator("#laddr").fill(lookupAddr);
     await page.getByRole("button", { name: "Look up" }).click();
     // Settle on the answer, not on "Looking up…": that interim text is set before
     // the request is even sent.
-    await page.waitForFunction(() => /Shielded balances are private|TAZ ·|Couldn't|No balance|nothing to look up/.test(document.querySelector("#tool-lookup")?.textContent ?? ""), null, { timeout: 5000 }).catch(() => {});
+    await page.waitForFunction(() => /Shielded balances are private|TAZ ·|Couldn't|No balance|nothing to look up/.test(document.querySelector("#lans")?.textContent ?? ""), null, { timeout: 5000 }).catch(() => {});
     page.off("request", onReq);
     ok("the lookup button makes exactly one /api/balance request", seen.length === 1, JSON.stringify(seen));
     const req = seen[0] ?? { method: "", url: "", body: "" };
     ok("and it is a POST whose URL carries no address", req.method === "POST" && !/[?&]address=/.test(req.url) && !req.url.includes(lookupAddr.slice(0, 24)), `${req.method} ${req.url}`);
     ok("and the address is in the body", req.body.includes(`"address":"${lookupAddr}"`), req.body.slice(0, 60));
-    ok("and the page answers that a shielded balance is private", /Shielded balances are private/.test(await page.locator("#tool-lookup").innerText()));
-    await page.getByRole("button", { name: "Balance lookup" }).click();
+    ok("and the page answers that a shielded balance is private", /Shielded balances are private/.test(await page.locator("#lans").innerText()));
   }
   await checkMinerPanel(page);
   // The claim flow below drives input.input and button.btn-primary, which belong to the

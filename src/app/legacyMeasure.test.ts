@@ -52,7 +52,12 @@ function sectionBody(src: string, view: string): string {
 /** view -> the marker that is true once that view has been transcribed and wired. */
 const WIRED: Record<string, { marker: RegExp; what: string }> = {
   claim: { marker: /id="claim"/, what: "the design's claim card (phase-test.mjs drives #claim)" },
-  // status / analytics / tools: SDE-UI adds a row per slice, keyed to a wiring fact.
+  // S3/S4/S5. Each marker is the component actually RENDERED in that section, which is
+  // true only once the view is wired - not the component file existing, which goes true
+  // one PR earlier and would fire on a tree that is correct.
+  status: { marker: /<StatusCards\b/, what: "the design's three status cards" },
+  analytics: { marker: /<AnalyticsCards\b/, what: "the design's analytics cards" },
+  tools: { marker: /<ToolsCards\b/, what: "the design's tools cards" },
 };
 
 test("no view keeps the transitional measure after its slice has wired the real thing", () => {

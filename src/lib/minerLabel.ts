@@ -64,21 +64,41 @@ export type MinerUnit = string | null | undefined;
 
 /** A heartbeat nobody is writing AND a unit systemd calls inactive: stopped on purpose.
  *  Only that pairing. The heartbeat is the primary evidence, so a fresh one is never
- *  overruled by the word, and no word at all proves nothing. */
-function parked(r: MinerReading, unit: MinerUnit): boolean {
+ *  overruled by the word, and no word at all proves nothing.
+ *
+ *  EXPORTED because it has four readers and one of them lives in another file.
+ *  statusView.ts's minerTone needs this exact question and could not ask it while this was
+ *  module-private, so it re-derived the rule inline - character for character the same
+ *  test, in two places, with nothing holding them together. SDE-App found it on #567 and
+ *  measured what it costs: adding a heartbeat condition here left the whole suite at
+ *  877/877 while the tone silently kept the old rule, and a stopped miner with a fresh
+ *  heartbeat came apart three ways - chip "no signal", minerIsBad true, tone calm grey.
+ *  One definition, four readers, one edit. */
+export function minerIsParked(r: MinerReading, unit: MinerUnit): boolean {
   return r.state === "not-writing" && unit === "inactive";
 }
+
+/** The module's own short name for it. */
+const parked = minerIsParked;
 
 /**
  * The short token for the top status strip, which stays terse per the user. Bad states
  * still have to be legible here: "off" would be a lie for a stalled miner, since it is
  * running and failing, and those need different responses from an operator.
  *
- * "off" IS available now, for exactly one case: the heartbeat has stopped AND systemd
+ * A CALM WORD IS available for exactly one case: the heartbeat has stopped AND systemd
  * says the unit is inactive. That is a miner someone stopped, not one that died. The
  * strip read "no signal" and the panel shouted NO HEARTBEAT in red for hours over a
  * unit that was parked on purpose (2026-09-08), which teaches a reader that red means
  * nothing. A unit systemd calls failed stays red, with its own word.
+ *
+ * THAT WORD IS "parked", CHANGED FROM "off" BY THE CTO'S RULING OF 2026-09-15 for the
+ * redesigned Status view. It is the word the approved design uses, the word this team
+ * already uses for the same fact, and it is not a fault name, which is the standing rule
+ * for the public status. "off" reads like a setting; "parked" reads like a decision
+ * somebody made, which is exactly what this state is. Changed HERE rather than mapped in
+ * the view, so the whole app moves at once and there is never a second vocabulary for
+ * one state.
  */
 export function minerChip(r: MinerReading, unit: MinerUnit = null): string {
   switch (r.state) {
@@ -91,7 +111,7 @@ export function minerChip(r: MinerReading, unit: MinerUnit = null): string {
     case "waiting": return "waiting";
     case "stalled": return "no blocks";
     case "not-writing":
-      if (parked(r, unit)) return "off";
+      if (parked(r, unit)) return "parked";
       return unit === "failed" ? "unit failed" : "no signal";
     case "cannot-verify": return "unknown";
     // Not softened to blank. We are not watching the miner, and a reader who sees
