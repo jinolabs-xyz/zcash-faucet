@@ -289,6 +289,22 @@ async function checkChunkOrderIdentity(browser) {
   }
 }
 
+/* THE CELL NO OTHER CHECK VISITS: hover AND the chunk flip, in one pass.
+ *
+ * Found by SDE-UI reviewing this PR, and it is the sharpest thing anyone caught here. The
+ * `.stage a:hover` row in the body comes from DELETING the rule, which proves the RULE matters
+ * and says nothing about the RAISE - and the raise is what the PR is for. Restoring the tie,
+ * `.stage a:hover` back to a bare `a:hover`, survives the whole suite: the identity check flips
+ * the order at rest and under keyboard focus and never hovers, and the palette probe hovers and
+ * never flips. The tie needs both axes at once and nothing went there.
+ *
+ * States are a PRODUCT, not a list (L24). Theme x order x pointer is eight cells; checking both
+ * themes and both orders is four of them.
+ *
+ * Every visible link rather than one: UI's first two probes read `.tag`, which matches nothing on
+ * this tree, and then the first link on the page, which is a nav link with a more specific rule
+ * that wins at any order - an inconclusive read that would have looked like a refutation. Only
+ * enumerating them found footer-brand, the one that moves. */
 async function checkHoverUnderAFlip(browser) {
   for (const theme of ["paper", "ink"]) {
     const c = await browser.newContext({ viewport: DESKTOP });
