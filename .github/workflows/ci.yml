@@ -210,7 +210,7 @@ jobs:
       # and an empty maintenanceAddress is indistinguishable from an unset one, so a typo here
       # gives a GREEN run measuring exactly the state this change exists to stop measuring.
       # ui-smoke asserts the env reaches the page rather than trusting that it did.
-      FAUCET_MAINTENANCE_ADDRESS: u1cafakeaddressusedadtestsneverusethesezecfundsarenatreal
+      FAUCET_MAINTENANCE_ADDRESS: utest1cafakeaddressusedadtestsneverusethesezecfundsarenatreal
       # THE READ-SIDE BACKEND, POINTED AT A DOUBLE (#588). Unset, config.ts falls through
       # to https://testnet.zec.rocks:443, so `pingBackend()` reached a third party on every
       # run of this job and the index card's PHASE - and so its height - followed that call.
