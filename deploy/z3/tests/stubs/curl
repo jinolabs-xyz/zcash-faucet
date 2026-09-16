@@ -134,12 +134,24 @@ case "$*" in
       none) heights="" ;;
       absent) [ -n "$ext" ] && heights=",\"nodeHeight\":${STUB_ZEBRA_BLOCKS:-0},\"externalHeight\":${ext}" ;;
     esac
+    # THE REFERENCE BLOCK FOR THE HISTORY HALF (#533 step 2), FLAT and top-level beside the
+    # others, because that is the contract the watchdog parses with sed - `sources[...]` two
+    # levels down is the #391 trap that `usedHeight` exists to avoid. Both knobs or neither: a
+    # height with no hash is a body the app would never publish, and a stub that can express an
+    # impossible body lets a test assert behaviour for a state that cannot happen.
+    refblock=""
+    if [ -n "${STUB_READY_REFHEIGHT:-}" ] || [ -n "${STUB_READY_REFHASH:-}" ]; then
+      if [ -z "${STUB_READY_REFHEIGHT:-}" ] || [ -z "${STUB_READY_REFHASH:-}" ]; then
+        echo "stub curl: STUB_READY_REFHEIGHT and STUB_READY_REFHASH go together" >&2; exit 64
+      fi
+      refblock=",\"referenceHeight\":${STUB_READY_REFHEIGHT},\"referenceHash\":\"${STUB_READY_REFHASH}\""
+    fi
     for a in "$@"; do
       case "$a" in *"%{http_code}"*)
         if [ "$want_code" = "200" ] && [ "$canbuild" = "0" ]; then
-          printf '{"ready":true,"reason":null,"node":{"ready":true,"canBuildTx":false%s,"shield":{"state":"unverifiable","lag":null,"reason":"no independent tip to compare against"}}%s}' "$heights" "$refs"
-        elif [ "$want_code" = "200" ]; then printf '{"ready":true,"reason":null,"node":{"ready":true,"canBuildTx":true%s}%s}' "$heights" "$refs"
-        else printf '{"ready":false,"reason":"%s","node":{"ready":false%s}%s}' "${STUB_READY_REASON:-node syncing}" "$heights" "$refs"; fi
+          printf '{"ready":true,"reason":null,"node":{"ready":true,"canBuildTx":false%s,"shield":{"state":"unverifiable","lag":null,"reason":"no independent tip to compare against"}}%s%s}' "$heights" "$refs" "$refblock"
+        elif [ "$want_code" = "200" ]; then printf '{"ready":true,"reason":null,"node":{"ready":true,"canBuildTx":true%s}%s%s}' "$heights" "$refs" "$refblock"
+        else printf '{"ready":false,"reason":"%s","node":{"ready":false%s}%s%s}' "${STUB_READY_REASON:-node syncing}" "$heights" "$refs" "$refblock"; fi
         printf '\n%s' "$want_code"
         exit 0 ;;
       esac

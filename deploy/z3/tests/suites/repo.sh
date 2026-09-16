@@ -1722,3 +1722,44 @@ if [ -z "$CI_ORPHAN" ]; then
 else
   bad "and every address env the ui job sets is one config.ts reads, so CI cannot configure a variable nothing consumes (config reads no such var:$CI_ORPHAN)"
 fi
+
+echo "== repo: no unit test binds a fixed port, because a taken one reports a wrong value"
+# #603. A unit test on a fixed port does not FAIL when the port is taken - it reports a WRONG
+# VALUE. The spawn loses the bind, the test's own fetch reaches whoever IS listening, and the
+# assertion fails with a plausible number from a stranger's double. On 2026-09-16 send.test.ts
+# asserted 100000000n and got 1500000000n because another process held 28451; three people nearly
+# published that red as a code defect. crosslinksend.test.ts bound 28611, which is ALSO ui-smoke's
+# lightwalletd double, so a smoke run on the same box was enough to do it.
+#
+# TEST-SUPPORT CODE COUNTS, NOT JUST *.test.ts (SDE-Infra reviewing this PR). src/lib/testing/ is
+# where a fixed port lands NEXT: a `PORT` default in a shared spawner is invisible to a scan of
+# test files and re-creates the defect for every caller at once, which is worse than the three
+# call sites this closes. The scan takes both.
+#
+# COMMENTS STRIPPED BEFORE READING, and that is not a detail. These files now DESCRIBE the ports
+# they used to bind, in the comment explaining why they no longer do, so a naive grep reports the
+# fix as the defect. Same trap as the #607 reader finding "node syncing" twice in prose.
+# `while read`, not `for f in $(find ...)`: a path with a space would split into two and the row
+# would read a file that does not exist, which is a pass. SC2044.
+PORTED=""
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  n="$(grep -vE '^[[:space:]]*(//|\*|/\*)' "$f" | grep -cE '\b28[0-9]{3}\b' || true)"
+  [ "$n" = "0" ] || PORTED="$PORTED [$(basename "$f"):$n]"
+done <<EOF
+$(find "$REPO/src" -name '*.test.ts' -o -path '*/testing/*' -name '*.ts' 2>/dev/null)
+EOF
+check "no unit test binds a literal 28xxx port in code, so a busy box cannot fake an assertion" \
+  "[ -z '$PORTED' ]"
+
+# AND THE SET IS NOT EMPTY. A find that matched nothing would satisfy the row above for free -
+# every derived set this week has needed this and three of us have shipped one without it.
+TESTFILES="$(find "$REPO/src" -name '*.test.ts' 2>/dev/null | wc -l | tr -d ' ')"
+check "and there are unit tests to check at all, so the row above is not counting an empty set" \
+  "[ $TESTFILES -gt 20 ]"
+
+# The doubles have to report the port the KERNEL gave, or PORT=0 announces ":0" and a caller
+# cannot find them. This is the half that makes the fix possible rather than the fix itself.
+check "the doubles announce the port they are bound to, not the one they were asked for" \
+  "grep -q 'srv.address().port' '$REPO/scripts/fake-zallet.mjs' && grep -q 'srv.address().port' '$REPO/scripts/fake-crosslink.mjs'"
+

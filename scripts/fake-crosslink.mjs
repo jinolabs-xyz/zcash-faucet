@@ -95,7 +95,7 @@ function recencyStatus(id) {
   });
 }
 
-createServer((req, res) => {
+const srv = createServer((req, res) => {
   let body = "";
   req.on("data", (c) => (body += c));
   req.on("end", () => {
@@ -141,6 +141,11 @@ createServer((req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify(out));
   });
-}).listen(PORT, "127.0.0.1", () => {
-  console.log(`fake-crosslink on 127.0.0.1:${PORT} (tfl ${TFL_ACTIVATED ? "active" : "inactive"})`);
+});
+// THE PORT THE KERNEL GAVE, NOT THE ONE WE ASKED FOR (#603). Printing the request makes
+// `PORT=0` announce ":0", which is exactly the case a caller needs the number for. A test that
+// wants a free port sets PORT=0 and reads this line; a fixed port still prints itself.
+srv.listen(PORT, "127.0.0.1", () => {
+  const bound = srv.address().port;
+  console.log(`fake-crosslink on 127.0.0.1:${bound} (tfl ${TFL_ACTIVATED ? "active" : "inactive"})`);
 });

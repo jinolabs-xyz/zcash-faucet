@@ -7,15 +7,15 @@
  */
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawnFake, type Fake } from "../testing/spawnFake.ts";
 
 process.env.FAUCET_CTAZ_EXPECTED_ZAT = "50000000";
-const PORT = 28611;
-const URL = `http://127.0.0.1:${PORT}/`;
 
 const { CrosslinkSender, CrosslinkAmountDrift } = await import("./crosslinksend.ts");
 
-let node: ChildProcess;
+let node: Fake;
+/** The double `before` started. A function, not a constant: the port is not known until it has. */
+const URL = () => `http://127.0.0.1:${node.port}/`;
 const req = (addr: string) => ({
   toAddress: addr,
   addressInfo: { kind: "unified", shielded: true } as never,
@@ -27,34 +27,46 @@ const req = (addr: string) => ({
  *  its own file, crosslinksocket.test.ts, running the real broker script. */
 const http = (rpcUrl: string) => ({ socketPath: "", rpcUrl, timeoutMs: 15_000 });
 
-const start = async (env: Record<string, string> = {}, port = PORT) => {
-  const p = spawn("node", ["scripts/fake-crosslink.mjs"], {
-    env: { ...process.env, PORT: String(port), ...env }, stdio: "ignore",
-  });
+/**
+ * KERNEL-PICKED PORTS, ONE PER DOUBLE (#603). This file used to bind 28611 and derive its other
+ * two doubles as PORT+1 and PORT+2. 28611 is ALSO ui-smoke's lightwalletd double, so a smoke run
+ * on the same machine meant this file's fetch reached a stranger and the case failed on a
+ * plausible wrong value rather than on a bind error.
+ *
+ * Deriving a second port by adding one is the same bug with an extra step: it assumes a range is
+ * free because one port in it was. Each double now asks the kernel for its own.
+ */
+const started: Fake[] = [];
+const start = async (env: Record<string, string> = {}) => {
+  const f = await spawnFake("scripts/fake-crosslink.mjs", env);
+  started.push(f);
   for (let i = 0; i < 60; i++) {
     try {
-      await fetch(`http://127.0.0.1:${port}/`, {
+      await fetch(`http://127.0.0.1:${f.port}/`, {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "is_tfl_activated", params: [] }),
       });
-      return p;
+      return f;
     } catch { await new Promise((r) => setTimeout(r, 100)); }
   }
-  throw new Error(`double never came up on ${port}`);
+  throw new Error(`double announced :${f.port} but never answered an RPC`);
 };
 
 before(async () => { node = await start(); });
-after(() => { node?.kill(); });
+// EVERY double, not just the one `before` made. The old `after` killed `node` alone and left the
+// two spawned mid-test to be reaped by the OS, which on a fixed port is how the NEXT run finds
+// its port held.
+after(() => { for (const f of started) f.stop(); });
 
 test("a donation succeeds and reports the amount the network actually paid", async () => {
-  const r = await new CrosslinkSender(http(URL)).send(req("utest1aaaaaaaaaa"));
+  const r = await new CrosslinkSender(http(URL())).send(req("utest1aaaaaaaaaa"));
   assert.equal(r.amountZat, 50_000_000n);
 });
 
 test("NO TXID IS RETURNED, because their reply has none to give", async () => {
   // The property the whole SendResult widening exists for. If this ever starts carrying
   // a txid, either their surface changed or we invented one, and both need looking at.
-  const r = await new CrosslinkSender(http(URL)).send(req("utest1bbbbbbbbbb"));
+  const r = await new CrosslinkSender(http(URL())).send(req("utest1bbbbbbbbbb"));
   assert.equal(r.txid, undefined, "a txid here would have to have been manufactured");
   assert.equal(r.explorerUrl, undefined, "there is no transaction to link to");
 });
@@ -63,24 +75,24 @@ test("BALANCE THROWS rather than returning zero, so the panel says unknown", asy
   // Their surface has no balance RPC at all. Returning 0n would be volunteering the
   // `balance ?? 0` bug rather than inheriting it: an unreadable balance is not an empty
   // wallet, and this faucet has been bitten by exactly that confusion before.
-  await assert.rejects(() => new CrosslinkSender(http(URL)).balance(), /no balance RPC|unknown rather than zero/);
+  await assert.rejects(() => new CrosslinkSender(http(URL())).balance(), /no balance RPC|unknown rather than zero/);
 });
 
 test("a busy queue is a try-later, not a breakage", async () => {
-  const busy = await start({ FAUCET_BUSY: "1" }, PORT + 1);
+  const busy = await start({ FAUCET_BUSY: "1" });
   try {
     await assert.rejects(
-      () => new CrosslinkSender(http(`http://127.0.0.1:${PORT + 1}/`)).send(req("utest1cccccccccc")),
+      () => new CrosslinkSender(http(`http://127.0.0.1:${busy.port}/`)).send(req("utest1cccccccccc")),
       /busy/i,
       "their 16-deep queue and pending-dedupe both surface as busy, and both mean try later",
     );
-  } finally { busy.kill(); }
+  } finally { busy.stop(); }
 });
 
 test("a rejected address surfaces as an error rather than a silent no-op", async () => {
   // The double refuses an address it cannot use, the same way the real node refused a
   // junk one in the spike.
-  await assert.rejects(() => new CrosslinkSender(http(URL)).send(req("short")), /Invalid params/);
+  await assert.rejects(() => new CrosslinkSender(http(URL())).send(req("short")), /Invalid params/);
 });
 
 test("AN AMOUNT THAT IS NOT WHAT WE EXPECTED IS DRIFT, and it says the claim was paid", async () => {
@@ -88,7 +100,7 @@ test("AN AMOUNT THAT IS NOT WHAT WE EXPECTED IS DRIFT, and it says the claim was
   // where we find out, rather than the page going on promising a number the network no
   // longer pays. The error names the paid amount, because the money DID move and a caller
   // must not read this as nothing having happened.
-  const expectingLess = new CrosslinkSender(http(URL), 40_000_000n);
+  const expectingLess = new CrosslinkSender(http(URL()), 40_000_000n);
   await assert.rejects(
     () => expectingLess.send(req("utest1dddddddddd")),
     (e: unknown) => {
@@ -102,18 +114,18 @@ test("AN AMOUNT THAT IS NOT WHAT WE EXPECTED IS DRIFT, and it says the claim was
 });
 
 test("an unreadable reply is an unknown outcome, not a success", async () => {
-  const bad = await start({ FAUCET_ERROR: "node is resyncing" }, PORT + 2);
+  const bad = await start({ FAUCET_ERROR: "node is resyncing" });
   try {
     await assert.rejects(
-      () => new CrosslinkSender(http(`http://127.0.0.1:${PORT + 2}/`)).send(req("utest1eeeeeeeeee")),
+      () => new CrosslinkSender(http(`http://127.0.0.1:${bad.port}/`)).send(req("utest1eeeeeeeeee")),
       /resyncing/,
     );
-  } finally { bad.kill(); }
+  } finally { bad.stop(); }
 });
 
 test("the sender is named, so the route can derive the no-txid exemption from it", () => {
   // route.ts keys the ledger exemption off this name rather than being told, so nothing
   // can claim "this network has no txid" for a network that does.
-  assert.equal(new CrosslinkSender(http(URL)).name, "crosslink");
+  assert.equal(new CrosslinkSender(http(URL())).name, "crosslink");
   assert.ok(CrosslinkAmountDrift);
 });
