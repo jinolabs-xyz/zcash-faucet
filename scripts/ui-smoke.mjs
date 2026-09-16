@@ -575,7 +575,14 @@ async function checkTallCardStaysReachable(browser) {
       // that only fires when today's copy overflows is a probe on today's copy (L1).
       const spacer = document.createElement("div");
       spacer.setAttribute("data-ui-smoke", "tall-spacer");
-      spacer.style.height = (vh * 2) + "px";
+      // `height` ALONE IS NOT TALL. The panel is a flex column, so a child with a height and a
+      // default `flex-shrink:1` is free to be squeezed back to nothing - which is exactly what
+      // happened the first time this probe met a resolving clamp: the panel reported 469 scroll
+      // against 469 client with 1440px of spacer supposedly inside it, the engagement guard said
+      // no overflow was created, and the reachability row underneath was never tested at all.
+      // min-height with flex:none is a floor flexbox cannot argue with.
+      spacer.style.flex = "none";
+      spacer.style.minHeight = (vh * 2) + "px";
       const marker = document.createElement("p");
       marker.id = "ui-smoke-tall-marker";
       marker.textContent = "TALL PROBE TAIL";
@@ -1277,7 +1284,16 @@ async function checkRefusalCards(browser, base, address) {
         // cap", I concluded the reset time had been dropped, and the reset time was never touched
         // (verified across three refs: the clause is present on all of them, the wording is not).
         // A failure message that cannot distinguish its own conjuncts can only be read by guessing.
-        const capWords = /today's taz budget is spent/.test(c.text);
+        // RE-POINTED on the CTO's 08:12Z ruling. The old pin was `today's taz budget is spent`,
+        // which the 06:55Z copy ruling replaced with the snapshot's own heading - so the row was
+        // pinning wording that a later decision had retired, and failing a correct card. The
+        // ruling is: the design heading verbatim, and a real time from `nextAt` rather than a
+        // relative phrase. Both halves are still required; only the first one moved.
+        // The card text arrives through `norm`, which lowercases AND folds \u2018\u2019 to an
+        // ASCII apostrophe (line 1261). page.tsx writes the heading with a typographic one, so a
+        // regex carrying \u2019 matches nothing here - it would be pinning the source rather
+        // than the string this assertion is actually handed.
+        const capWords = /today's drips are spent/.test(c.text);
         const capWhen = /room again around .*\d{1,2}:\d{2}/.test(c.text);
         ok("kind cap says the budget is spent, with the time it resets", capWords && capWhen,
           capWords && capWhen ? c.text.split("\n")[0]
@@ -2122,7 +2138,16 @@ async function checkMobile(browser, base) {
       const small = [...document.querySelectorAll("a.btn,a.theme-toggle,button,input")]
         .filter((e) => { const b = e.getBoundingClientRect(); return b.height > 0 && b.height < 44; })
         .slice(0, 3)
-        .map((e) => `${(e.textContent || e.getAttribute("aria-label") || "").trim().slice(0, 22)} h=${Math.round(e.getBoundingClientRect().height)}`);
+        // NAME THE ELEMENT, NOT JUST ITS WORDS. An icon-only control has no text and no label to
+        // print, so this row used to report ` h=41` - a height with nothing attached to it, which
+        // is unactionable and cost real time this morning working out which control it meant.
+        // The tag and first class identify it whether or not it says anything.
+        .map((e) => {
+          const words = (e.textContent || e.getAttribute("aria-label") || "").trim().slice(0, 22);
+          const cls = String(e.className || "").trim().split(/\s+/).filter(Boolean)[0];
+          const what = `${e.tagName.toLowerCase()}${cls ? "." + cls : ""}`;
+          return `${words ? words + " " : ""}[${what}] h=${Math.round(e.getBoundingClientRect().height)}`;
+        });
       return { docW: document.documentElement.scrollWidth, vw, wide, covered: [...covered].slice(0, 3), small };
     });
     ok(`mobile ${label}: no horizontal overflow`, r.docW <= r.vw, `${r.docW} vs ${r.vw}${r.wide.length ? " :: " + r.wide.join(", ") : ""}`);
