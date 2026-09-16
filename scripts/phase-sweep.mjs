@@ -280,6 +280,76 @@ for (const [W, H] of VIEWPORTS) {
     }
   }
 
+  // ===== THE CLAIM FLOW, which no status body can reach =====
+  // Everything above is driven by mutating /api/status, which is cheap and is why it was all
+  // this sweep measured. The three states a visitor actually passes through - the human check,
+  // the send, and the receipt - are reachable only by claiming, and they are where the card
+  // changes height most: the receipt is the tallest panel on the page. Measuring the animation
+  // only on the phases that are easy to fake is measuring it where it matters least.
+  //
+  // CONTINUATION SEMANTICS, stated because this is the pass where they bite. The animator runs
+  // on every commit and CONTINUES an animation whose target has not moved - original endpoints,
+  // clock carried across - rather than restarting it. In this flow a proof-of-work tick and a
+  // status poll can both land inside one 460ms, so several animation objects can exist for one
+  // visible travel. The rows below therefore assert that the card never JUMPED and that some
+  // animation finished the travel; they do not count animations, because counting them would
+  // fail a correct card. That is the same mistake as tying `from` to the last painted height,
+  // which I made and removed two rounds ago.
+  {
+    await page.evaluate(() => { window.__cardAnims = []; window.__cardFrames = []; });
+    let claimed = false, why = "";
+    try {
+      const fresh = await page.evaluate(async (base) => {
+        const r = await fetch(base + "/api/account", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: "shielded" }) });
+        const b = await r.json();
+        return b?.account?.address ?? null;
+      }, BASE);
+      if (!fresh) throw new Error("/api/account gave no address");
+      // DELAYED ON PURPOSE. The doubles answer a claim in under a millisecond, so `sending`
+      // would never be painted and the flow would be two transitions instead of three.
+      await page.route("**/api/faucet", async (route) => {
+        if (route.request().method() !== "POST") return route.fallback();
+        await new Promise((r) => setTimeout(r, 900));
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+          ok: true, txid: "9".repeat(64), paidZat: 10000000, network: "taz", explorerUrl: null, requestId: "phase-sweep",
+        }) });
+      });
+      await page.fill("[data-testid=address-input]", fresh);
+      await page.click("[data-testid=claim-button]");
+      await page.waitForFunction(() => (document.querySelector("p.sr-only[role=status]")?.textContent ?? "").includes("Sent."), null, { timeout: 40000 });
+      await page.waitForTimeout(700);
+      claimed = true;
+    } catch (e) { why = String(e).split("\n")[0].slice(0, 140); }
+    await page.unroute("**/api/faucet").catch(() => {});
+
+    t(`${W} ${speed}: a real claim reaches the receipt`, claimed, claimed ? "live region reached \"Sent.\"" : why);
+
+    if (claimed) {
+      const frames = await page.evaluate(() => window.__cardFrames ?? []);
+      const anims = await page.evaluate(() => window.__cardAnims ?? []);
+      let worst = 0, pair = "";
+      for (let i = 1; i < frames.length; i++) {
+        const [, h0, r0] = frames[i - 1];
+        const [, h1, r1] = frames[i];
+        if (r0 && r1) continue;
+        const d = Math.abs(h1 - h0);
+        if (d > worst) { worst = d; pair = `${h0.toFixed(1)} -> ${h1.toFixed(1)}`; }
+      }
+      const travelled = anims.filter((a) => {
+        const f = a && a.frames;
+        if (!Array.isArray(f) || f.length < 2) return false;
+        const from = parseFloat(f[0].height), to = parseFloat(f[1].height);
+        return Number.isFinite(from) && Number.isFinite(to) && Math.abs(to - from) > 1
+          && a.opts && a.opts.duration === 460 && a.state === "finished";
+      }).length;
+      t(`${W} ${speed}: the card never jumps anywhere in the claim flow`, worst <= 2,
+        worst > 2 ? `un-animated ${pair} (${worst.toFixed(1)}px) between two painted frames`
+                  : `largest un-animated step across the whole flow: ${worst.toFixed(1)}px over ${frames.length} painted frames`);
+      t(`${W} ${speed}: and the flow really moved the card`, travelled > 0,
+        `${travelled} animation(s) of 460ms finished a travel over a pixel, out of ${anims.length} created`);
+    }
+  }
+
   // ===== TWO CLIPPING BOXES ON ONE AXIS =====
   // The height animation puts `overflow:hidden` on the CARD for 460ms and the design puts
   // `overflow:auto` on the `.panel` inside it. Nobody had measured what they do to each other.

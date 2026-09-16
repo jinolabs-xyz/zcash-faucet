@@ -443,7 +443,6 @@ export default function Home() {
   const ctaz = status?.ctaz?.enabled ? status.ctaz : null;
   // The toggle only exists when there is something to toggle to. One tab is not a
   // choice, and rendering it as one implies a second network that is not there.
-  const showToggle = !!ctaz;
 
   const drip = status?.dripTaz ?? 0.1;
   const dripText =
@@ -1160,7 +1159,17 @@ export default function Home() {
     : phase === "degraded" ? "Sends are failing right now, so the faucet is not taking claims. Nothing to do on your side."
     : phase === "submitting" ? (powState ? "Checking you are human. It runs on its own; there is a Cancel button if you would rather not wait." : "Sending your testnet ZEC. Keep this tab open.")
     : phase === "success" ? "Sent. Your testnet ZEC is on its way."
-    : phase === "cooldown" ? "Already claimed. A drip went out on this address or this connection in the last 24 hours."
+    // THREE PANELS, THREE SENTENCES. One `cooldown` phase renders `already-claimed`,
+    // `connection-limit` and `network-limit`, and this said the same thing for all three - so a
+    // screen reader user was told "this address or this connection", which is the page declining
+    // to say which, and the sweep could not witness the three apart either. The live region is
+    // the sweep's only witness that a phase was REACHED, so one sentence for three panels means
+    // two of them are measured by name and confirmed by nothing.
+    : phase === "cooldown" ? (
+        refusal?.kind === "subnet" ? "Too many requests from this network. This is a limit, not a fault."
+        : refusal?.kind === "connection" ? "Too many requests from this connection. This is a limit, not a fault."
+        : "Already claimed. This address had a drip in the last 24 hours."
+      )
     : phase === "error" ? (
         fail.kind === "held" ? "Not right now, on our side. " + errMsg
         : fail.kind === "busy" ? "The faucet is busy. Nothing left the wallet. " + errMsg
@@ -1239,6 +1248,182 @@ export default function Home() {
                   lines to sit under one new div would bury the change in a 520-line diff, and
                   this block is being read by three people today. */}
               <div className="panel">
+
+        {/* THE TOGGLE. A tablist rather than two buttons, because that is what it is:
+            picking one of a set changes the panel below it, and a screen reader user
+            gets arrow-key movement and a spoken "2 of 2" for free. Only rendered when
+            there is a second network, since one tab is not a choice.
+
+            Brutalist like everything else: 2px borders, square corners, the selected
+            tab inverted. The selection is carried by the border weight, the inversion
+            AND aria-selected, never by colour alone. */}
+        {/* UNCONDITIONAL, per the CTO's 08:45Z ruling. This was gated on `showToggle` (cTAZ
+            enabled) AND on six phases, so the tabs were absent from the first paint - the design
+            draws them always, and a control that appears once data arrives reads as the page
+            changing its mind. The cTAZ tab is parked rather than hidden, which is what
+            `data-parked` and the word below are for.
+
+            No wrapper around the two: `.panel` is a flex column with a `gap`, and a wrapper
+            makes the tabs and the tabpanel note ONE flex item, so the gap stops applying
+            between them and the spacing falls back to whatever margin happens to be inline.
+            The design has `.tabs` as a direct child (index.html:431). */}
+            {/* THE SNAPSHOT'S TABS (index.html:415-418), with every behaviour the brutalist
+                version had. The design carries the selection with a filled pill and
+                `aria-selected`; the keyboard handling, the spelled-out accessible name and the
+                roving tabIndex below are ours and are not in the snapshot, because the snapshot
+                is a static mock and this is a real tablist. Transcribing a design does not mean
+                transcribing away the things a screen reader needs. */}
+            <div className="tabs" role="tablist" aria-label="Which network to claim on">
+              {(["taz", "ctaz"] as const).map((n) => {
+                const f = networkFacts(n);
+                const on = network === n;
+                // THE RULING'S WORD, and the snapshot's (index.html:433): tab two reads "Coming
+                // soon". Not a hardcoded literal, because a label that is false whenever the
+                // feature is switched ON is a latent defect of its own. cTAZ is parked by the
+                // owner's 2026-09-08 decision, so "Coming soon" is what ships and what the first
+                // paint says - `ctaz` is null until a status body arrives. If it is ever
+                // switched on, the tab says what it is then instead. `f.beta` describes what the
+                // network IS; this says what a visitor can DO with it, which is the tab's job.
+                const parked = n === "ctaz" && !ctaz;
+                const word = n === "ctaz" ? (parked ? "Coming soon" : f.beta) : null;
+                return (
+                  <button
+                    key={n}
+                    role="tab"
+                    id={`net-tab-${n}`}
+                    aria-selected={on}
+                    aria-controls="net-panel"
+                    // Spelled out, because the two spans below compute an accessible
+                    // name of "cTAZfeature net, beta" with no separator: a flex gap is
+                    // a visual space, not a textual one. Verified in a browser, which
+                    // is the only place that difference shows up.
+                    aria-label={word ? `${f.tab}, ${word}` : f.tab}
+                    // Only the selected tab is in the tab order, per the tablist
+                    // pattern: arrow keys move within the set, Tab leaves it.
+                    tabIndex={on ? 0 : -1}
+                    onClick={() => setNetwork(n)}
+                    onKeyDown={(e) => {
+                      if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+                      e.preventDefault();
+                      const next: FaucetNetwork = n === "taz" ? "ctaz" : "taz";
+                      setNetwork(next);
+                      document.getElementById(`net-tab-${next}`)?.focus();
+                    }}
+                    // `data-parked` is the snapshot's own hook for the second tab's small
+                    // word (`.tabs button[data-parked] small`), so the word is styled by the
+                    // sheet rather than by an inline rule nobody can override.
+                    data-parked={word ? "" : undefined}
+                  >
+                    {f.tab}
+                    {word && <small>{word}</small>}
+                  </button>
+                );
+              })}
+            </div>
+            {/* Says what the selected network IS, under the tabs, because a four-letter
+                ticker does not tell anyone what chain they are about to be paid on. */}
+            <p id="net-panel" role="tabpanel" aria-labelledby={`net-tab-${network}`} style={{ margin: 0, fontSize: 12.5, lineHeight: 1.5, color: muted(62) }}>
+              {network === "ctaz"
+                ? "Crosslink is a feature net running an unreleased consensus change. Coins here are for trying that out, they are not testnet TAZ, and the chain can be reset without notice."
+                : "Public Zcash testnet. This is the one to use unless you know you want the other."}
+            </p>
+
+        {/* The cTAZ node's own readiness, in the words the gate uses. Five states, and
+            each says something different about what to do next. Shown only when it is
+            NOT ready, because a green line telling someone a healthy thing is healthy
+            is the sort of decoration that gets ignored when it changes. */}
+        {network === "ctaz" && ctaz && !ctaz.servable && (
+          <div style={{ border: "2px solid var(--color-divider)", padding: "14px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
+            <span style={kicker}>{ctaz.readiness === "not-activated" ? "Not available" : "Not ready"}</span>
+            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(70), maxWidth: "52ch" }}>
+              {ctaz.readiness === "behind"
+                ? "The Crosslink node is trailing the finality layer, so it is not current enough to pay out. It usually catches up within a couple of rounds."
+                : ctaz.readiness === "stale"
+                  ? "The Crosslink node last answered too long ago for us to act on, so we are not sending on its word. Nothing is wrong with your address."
+                  : ctaz.readiness === "not-activated"
+                    ? "This node does not have the finality layer switched on, so there is no cTAZ to hand out from it."
+                    : "We cannot read the Crosslink node's status right now, so we will not claim it is ready. That is different from knowing it is broken."}
+            </p>
+          </div>
+        )}
+
+        {/* THE SNAPSHOT'S FIELD ROW (index.html:421-425): `.fieldwrap`, a `.label` carrying the
+              address-kind badge on its right, the `.prompt` input, and one `.hint` line under it.
+              The ids and testids are unchanged - `zaddr`, `address-input`, `addrmsg` - because
+              assertions written months ago key on them and a transcription that renames its own
+              hooks makes its suite green by deleting the subject. */}
+        {/* THE FIELD IS NOT GATED ON A PHASE. It was, on six of them, so every result panel
+            replaced the tabs and the address field instead of appearing under them. The design
+            keeps both under every panel - index.html:430-441 sit ABOVE `#lower`, and the phases
+            are inside it - and the preview hides only `#actions` (`showActions = cfg.btn !== null`,
+            index.html:977). So the field stays and the BUTTON is what comes and goes, which is
+            also the honest arrangement: the address you typed does not stop existing because the
+            send failed. */}
+        <div className="fieldwrap">
+            <label className="label" htmlFor="zaddr">
+              <span>Your testnet address</span>
+              {/* `.abadge` is the design's own element for the kind word, and it is NOT a status
+                  chip: `.abadge` here, `.tag` in the hero, different owners. Empty `data-kind`
+                  when there is nothing to say, which is what `.abadge:empty` in the sheet hides. */}
+              <span className="abadge" data-kind={badgeShow && "label" in c ? (("priv" in c && c.priv === false) ? "public" : "shielded") : ""}>
+                {badgeShow && "label" in c ? c.label : ""}
+              </span>
+            </label>
+            <input id="zaddr" data-testid="address-input" className="prompt" type="text" spellCheck={false} autoComplete="off" autoCapitalize="off" placeholder="utest1… / ztestsapling… / tm…" value={addr} onChange={(e) => { setAddr(e.target.value); setTouched(false); }} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} aria-describedby="addrmsg" />
+            <div id="addrmsg" className="hint" aria-live="polite">
+              {"priv" in c && c.priv === false && <span style={{ fontSize: 12, lineHeight: 1.45, color: muted(62) }}>Transparent address, so this drip will be visible on-chain.</span>}
+              {/* THE DESIGN'S BAD COLOUR, not the retired palette's. These two carried inline
+                  `var(--color-accent-800)` - #7c1405 paper, #ffc4b8 ink - from the sheet the
+                  redesign replaces, which an inline style carries past any stylesheet fix.
+                  Found by the red-team's sweep for this shape (L20). */}
+              {touched && "err" in c && c.err && <span style={{ fontSize: 12.5, lineHeight: 1.45, color: "var(--bad-text)", fontWeight: 500, maxWidth: "52ch" }}>{c.err}</span>}
+              {genErr && <span style={{ fontSize: 12.5, lineHeight: 1.45, color: "var(--bad-text)", fontWeight: 500, maxWidth: "52ch" }}>{genErr}</span>}
+            </div>
+        </div>
+        {/* THE LOWER BLOCK (index.html:441): `.actions`, then every panel, inside one box.
+            The panels rendered ABOVE the tabs before this, so the card read result, then tabs,
+            then field - the page telling you the outcome before it tells you what you asked.
+            `.lower` is a flex column with a gap, and that gap is the space between the button
+            and whichever panel is showing. */}
+        <div className="lower">
+        {/* `.actions` (index.html:442-449): the key box, the primary button, then the link
+            button under it. All three sat inside `.fieldwrap` - the button under the hint and
+            the link button INSIDE the hint's `aria-live` region, so a screen reader announced a
+            button every time the address text changed. Gated where the design gates it.
+
+            `degraded` keeps its disabled button where the design's `not-taking` has none: ours
+            says "Not taking claims right now" at the point of action, and removing it leaves the
+            control a visitor is reaching for silently absent. Declared departure. */}
+        {(phase === "ready" || phase === "checking" || phase === "syncing" || phase === "fault" || phase === "empty" || phase === "degraded") && (
+          <div className="actions">
+            {genKey && genKey.address === addr.trim() && (
+              <div data-testid="generated-key" style={{ display: "flex", flexDirection: "column", gap: 8, padding: "12px 14px", border: "1px solid var(--color-divider)", borderRadius: 6 }}>
+                <span style={{ ...kicker, color: muted(60) }}>{genKey.label}</span>
+                <code data-testid="generated-key-secret" aria-label={keyShown ? undefined : "Spending key, hidden"} style={{ fontFamily: "var(--mono)", fontSize: 11.5, lineHeight: 1.5, wordBreak: "break-all", color: keyShown ? "inherit" : muted(55) }}>
+                  {keyShown ? genKey.secret : "•".repeat(Math.min(genKey.secret.length, 48))}
+                </code>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                  <button className="btn btn-secondary btn-sm" onClick={() => void copy("key", genKey.secret).then((okCopy) => { if (okCopy) setKeyCopied(true); })}>{copied === "key" ? "Copied ✓" : keyCopied ? "Copy key again" : "Copy key"}</button>
+                  <button className="btn btn-ghost btn-sm" aria-pressed={keyShown} onClick={() => setKeyShown((v) => !v)} style={{ padding: 0 }}>{keyShown ? "Hide" : "Reveal"}</button>
+                </div>
+                <p style={{ margin: 0, fontSize: 12, lineHeight: 1.5, color: muted(62), maxWidth: "52ch" }}>
+                  {genKey.warning} {keyCopied ? "Keep it somewhere: it is the only way to spend what arrives." : keyShown ? "Copy it from the screen before you request: it is the only way to spend what arrives." : "The request button waits until you have copied or revealed it: a drip to an address whose key is nowhere is a drip to nobody."}
+                </p>
+                <p aria-live="polite" className="sr-only">{copied === "key" ? "Spending key copied." : ""}</p>
+              </div>
+            )}
+            {/* THE SNAPSHOT'S PRIMARY ACTION (index.html:432). `.automate`, and the arrow comes
+                from `.automate::after` rather than an inline span - which is not only tidier:
+                `.automate:disabled::after{content:none}` takes the arrow away when the button is
+                disabled, and our inline span drew it in every state including "Waiting for a
+                refill". The design had thought about that and our markup had not. */}
+            <button data-testid="claim-button" className="automate" data-accent type="button" onClick={() => void submit()} disabled={phase === "empty" || phase === "degraded" || (!!genKey && genKey.address === addr.trim() && !keyCopied && !keyShown)}>
+              <span>{genKey && genKey.address === addr.trim() && !keyCopied && !keyShown ? "Copy the key first" : phase === "checking" ? "Checking status…" : phase === "syncing" ? "Queue it, sends when the node is ready" : phase === "fault" ? "Queue it, sends when the faucet is back" : phase === "empty" ? (refilling && refillHealthy ? "Topping up, back in a moment" : "Waiting for a refill") : phase === "degraded" ? "Not taking claims right now" : "Request " + dripText}</span>
+            </button>
+            <p style={{ margin: 0, fontSize: 11.5, letterSpacing: ".02em", color: muted(55), fontFamily: "var(--mono)" }}>{dripText} · once per address / 24h · shielded z→z</p>
+            {!addr.trim() && <button className="linkbtn" type="button" onClick={generate}>Make a throwaway address and key</button>}
+          </div>
+        )}
 
         {/* TAZ only. Every number in it (sync percent, our block height, our node
             height) is about OUR Zebra, and rendering it under a cTAZ hold would show
@@ -1332,6 +1517,13 @@ export default function Home() {
             <div className="kicker">Topping up the reserve</div>
             <h3>Refilling from the main wallet</h3>
             <p>Claims resume when the reserve is back above the line.</p>
+            {/* `hatch` IS INERT ON THIS BRANCH AND THAT IS DELIBERATE. The stripes come from
+                `.prog.hatch i` and `@keyframes stripe` (index.html:230-231), which ship in
+                SDE-UI's #591 - the same sheet that owns `.prog` itself (redesign-views.css:49).
+                Until it merges this renders as a plain `.prog` bar: the right length, no
+                stripes, no motion. The class is written now rather than added later so the two
+                land together instead of the markup waiting on a rule nobody remembers to bring.
+                Declared to the CTO, 08:45Z. */}
             <div
               className="prog hatch"
               role="progressbar"
@@ -1381,147 +1573,6 @@ export default function Home() {
                 <a className="tag" href="/donate">Why, and how it helps →</a>
               </div>
             )}
-          </div>
-        )}
-
-        {/* THE TOGGLE. A tablist rather than two buttons, because that is what it is:
-            picking one of a set changes the panel below it, and a screen reader user
-            gets arrow-key movement and a spoken "2 of 2" for free. Only rendered when
-            there is a second network, since one tab is not a choice.
-
-            Brutalist like everything else: 2px borders, square corners, the selected
-            tab inverted. The selection is carried by the border weight, the inversion
-            AND aria-selected, never by colour alone. */}
-        {showToggle && (phase === "ready" || phase === "checking" || phase === "syncing" || phase === "fault" || phase === "empty" || phase === "queued") && (
-          <div>
-            {/* THE SNAPSHOT'S TABS (index.html:415-418), with every behaviour the brutalist
-                version had. The design carries the selection with a filled pill and
-                `aria-selected`; the keyboard handling, the spelled-out accessible name and the
-                roving tabIndex below are ours and are not in the snapshot, because the snapshot
-                is a static mock and this is a real tablist. Transcribing a design does not mean
-                transcribing away the things a screen reader needs. */}
-            <div className="tabs" role="tablist" aria-label="Which network to claim on">
-              {(["taz", "ctaz"] as const).map((n) => {
-                const f = networkFacts(n);
-                const on = network === n;
-                return (
-                  <button
-                    key={n}
-                    role="tab"
-                    id={`net-tab-${n}`}
-                    aria-selected={on}
-                    aria-controls="net-panel"
-                    // Spelled out, because the two spans below compute an accessible
-                    // name of "cTAZfeature net, beta" with no separator: a flex gap is
-                    // a visual space, not a textual one. Verified in a browser, which
-                    // is the only place that difference shows up.
-                    aria-label={f.beta ? `${f.tab}, ${f.beta}` : f.tab}
-                    // Only the selected tab is in the tab order, per the tablist
-                    // pattern: arrow keys move within the set, Tab leaves it.
-                    tabIndex={on ? 0 : -1}
-                    onClick={() => setNetwork(n)}
-                    onKeyDown={(e) => {
-                      if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
-                      e.preventDefault();
-                      const next: FaucetNetwork = n === "taz" ? "ctaz" : "taz";
-                      setNetwork(next);
-                      document.getElementById(`net-tab-${next}`)?.focus();
-                    }}
-                    // `data-parked` is the snapshot's own hook for the second tab's small
-                    // word (`.tabs button[data-parked] small`), so the word is styled by the
-                    // sheet rather than by an inline rule nobody can override.
-                    data-parked={f.beta ? "" : undefined}
-                  >
-                    {f.tab}
-                    {f.beta && <small>{f.beta}</small>}
-                  </button>
-                );
-              })}
-            </div>
-            {/* Says what the selected network IS, under the tabs, because a four-letter
-                ticker does not tell anyone what chain they are about to be paid on. */}
-            <p id="net-panel" role="tabpanel" aria-labelledby={`net-tab-${network}`} style={{ margin: "9px 0 0", fontSize: 12.5, lineHeight: 1.5, color: muted(62) }}>
-              {network === "ctaz"
-                ? "Crosslink is a feature net running an unreleased consensus change. Coins here are for trying that out, they are not testnet TAZ, and the chain can be reset without notice."
-                : "Public Zcash testnet. This is the one to use unless you know you want the other."}
-            </p>
-          </div>
-        )}
-
-        {/* The cTAZ node's own readiness, in the words the gate uses. Five states, and
-            each says something different about what to do next. Shown only when it is
-            NOT ready, because a green line telling someone a healthy thing is healthy
-            is the sort of decoration that gets ignored when it changes. */}
-        {network === "ctaz" && ctaz && !ctaz.servable && (
-          <div style={{ border: "2px solid var(--color-divider)", padding: "14px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
-            <span style={kicker}>{ctaz.readiness === "not-activated" ? "Not available" : "Not ready"}</span>
-            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(70), maxWidth: "52ch" }}>
-              {ctaz.readiness === "behind"
-                ? "The Crosslink node is trailing the finality layer, so it is not current enough to pay out. It usually catches up within a couple of rounds."
-                : ctaz.readiness === "stale"
-                  ? "The Crosslink node last answered too long ago for us to act on, so we are not sending on its word. Nothing is wrong with your address."
-                  : ctaz.readiness === "not-activated"
-                    ? "This node does not have the finality layer switched on, so there is no cTAZ to hand out from it."
-                    : "We cannot read the Crosslink node's status right now, so we will not claim it is ready. That is different from knowing it is broken."}
-            </p>
-          </div>
-        )}
-
-        {/* THE SNAPSHOT'S FIELD ROW (index.html:421-425): `.fieldwrap`, a `.label` carrying the
-              address-kind badge on its right, the `.prompt` input, and one `.hint` line under it.
-              The ids and testids are unchanged - `zaddr`, `address-input`, `addrmsg` - because
-              assertions written months ago key on them and a transcription that renames its own
-              hooks makes its suite green by deleting the subject. */}
-        {(phase === "ready" || phase === "checking" || phase === "syncing" || phase === "fault" || phase === "empty" || phase === "degraded") && (
-          <div className="fieldwrap">
-            <label className="label" htmlFor="zaddr">
-              <span>Your testnet address</span>
-              {/* `.abadge` is the design's own element for the kind word, and it is NOT a status
-                  chip: `.abadge` here, `.tag` in the hero, different owners. Empty `data-kind`
-                  when there is nothing to say, which is what `.abadge:empty` in the sheet hides. */}
-              <span className="abadge" data-kind={badgeShow && "label" in c ? (("priv" in c && c.priv === false) ? "public" : "shielded") : ""}>
-                {badgeShow && "label" in c ? c.label : ""}
-              </span>
-            </label>
-            <input id="zaddr" data-testid="address-input" className="prompt" type="text" spellCheck={false} autoComplete="off" autoCapitalize="off" placeholder="utest1… / ztestsapling… / tm…" value={addr} onChange={(e) => { setAddr(e.target.value); setTouched(false); }} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} aria-describedby="addrmsg" />
-            <div id="addrmsg" className="hint" aria-live="polite">
-              {"priv" in c && c.priv === false && <span style={{ fontSize: 12, lineHeight: 1.45, color: muted(62) }}>Transparent address, so this drip will be visible on-chain.</span>}
-              {/* THE DESIGN'S BAD COLOUR, not the retired palette's. These two carried inline
-                  `var(--color-accent-800)` - #7c1405 paper, #ffc4b8 ink - from the sheet the
-                  redesign replaces, which an inline style carries past any stylesheet fix.
-                  Found by the red-team's sweep for this shape (L20). */}
-              {touched && "err" in c && c.err && <span style={{ fontSize: 12.5, lineHeight: 1.45, color: "var(--bad-text)", fontWeight: 500, maxWidth: "52ch" }}>{c.err}</span>}
-              {genErr && <span style={{ fontSize: 12.5, lineHeight: 1.45, color: "var(--bad-text)", fontWeight: 500, maxWidth: "52ch" }}>{genErr}</span>}
-              {!addr.trim() && <button className="linkbtn" type="button" onClick={generate}>Make a throwaway address and key</button>}
-            </div>
-            {genKey && genKey.address === addr.trim() && (
-              <div data-testid="generated-key" style={{ display: "flex", flexDirection: "column", gap: 8, padding: "12px 14px", border: "1px solid var(--color-divider)", borderRadius: 6 }}>
-                <span style={{ ...kicker, color: muted(60) }}>{genKey.label}</span>
-                <code data-testid="generated-key-secret" aria-label={keyShown ? undefined : "Spending key, hidden"} style={{ fontFamily: "var(--mono)", fontSize: 11.5, lineHeight: 1.5, wordBreak: "break-all", color: keyShown ? "inherit" : muted(55) }}>
-                  {keyShown ? genKey.secret : "•".repeat(Math.min(genKey.secret.length, 48))}
-                </code>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-                  <button className="btn btn-secondary btn-sm" onClick={() => void copy("key", genKey.secret).then((okCopy) => { if (okCopy) setKeyCopied(true); })}>{copied === "key" ? "Copied ✓" : keyCopied ? "Copy key again" : "Copy key"}</button>
-                  <button className="btn btn-ghost btn-sm" aria-pressed={keyShown} onClick={() => setKeyShown((v) => !v)} style={{ padding: 0 }}>{keyShown ? "Hide" : "Reveal"}</button>
-                </div>
-                <p style={{ margin: 0, fontSize: 12, lineHeight: 1.5, color: muted(62), maxWidth: "52ch" }}>
-                  {genKey.warning} {keyCopied ? "Keep it somewhere: it is the only way to spend what arrives." : keyShown ? "Copy it from the screen before you request: it is the only way to spend what arrives." : "The request button waits until you have copied or revealed it: a drip to an address whose key is nowhere is a drip to nobody."}
-                </p>
-                <p aria-live="polite" className="sr-only">{copied === "key" ? "Spending key copied." : ""}</p>
-              </div>
-            )}
-            {/* THE SNAPSHOT'S PRIMARY ACTION (index.html:432). `.automate`, and the arrow comes
-                from `.automate::after` rather than an inline span - which is not only tidier:
-                `.automate:disabled::after{content:none}` takes the arrow away when the button is
-                disabled, and our inline span drew it in every state including "Waiting for a
-                refill". The design had thought about that and our markup had not. */}
-            <button data-testid="claim-button" className="automate" data-accent type="button" onClick={() => void submit()} disabled={phase === "empty" || phase === "degraded" || (!!genKey && genKey.address === addr.trim() && !keyCopied && !keyShown)}>
-              <span>{genKey && genKey.address === addr.trim() && !keyCopied && !keyShown ? "Copy the key first" : phase === "checking" ? "Checking status…" : phase === "syncing" ? "Queue it, sends when the node is ready" : phase === "fault" ? "Queue it, sends when the faucet is back" : phase === "empty" ? (refilling && refillHealthy ? "Topping up, back in a moment" : "Waiting for a refill") : phase === "degraded" ? "Not taking claims right now" : "Request " + dripText}</span>
-            </button>
-            <p style={{ margin: 0, fontSize: 11.5, letterSpacing: ".02em", color: muted(55), fontFamily: "var(--mono)" }}>{dripText} · once per address / 24h · shielded z→z</p>
-            {/* The puzzle explanation moved UP to the hero's second line (S2a), so it is
-                read before the button rather than under it and the page says it once. R-38's
-                property is kept and strengthened; the copy is in the hero above. */}
           </div>
         )}
 
@@ -1651,6 +1702,16 @@ export default function Home() {
                  snapshot and two situations here: a shared router is not a shared subnet, and
                  the advice differs. A different address helps with neither, which is what the
                  single old card wrongly offered. */
+              /* WHAT THIS ADDS TO THE SNAPSHOT, declared. index.html:519-527 is kicker, h3
+                 and one countdown line - no `.fine`, no `.row`. Both additions are here because
+                 the mock has nowhere to go and a real card does:
+                   `.fine`  "A different address will not help" - the single most likely next
+                            action after this refusal is to retype a different address, which
+                            costs a round trip and refuses identically. It also separates a
+                            LIMIT from an OUTAGE, which the panel otherwise looks exactly like.
+                   `.row`   one "Start over". Without it the card is terminal: the field is
+                            above it now, but nothing resets the phase, so the visitor is left
+                            on a dead panel until they reload. */
               <div className="phase" data-phase={sub ? "network-limit" : "connection-limit"}>
                 <div className="kicker">{sub ? "Network limit" : "Connection limit"}</div>
                 <h3>{sub ? "Too many requests from this network" : "Too many requests from this connection"}</h3>
@@ -1668,6 +1729,14 @@ export default function Home() {
             /* ALREADY CLAIMED (index.html:516-519). The receipt is THIS BROWSER's own, never
                asked of the server (that would be an address-to-txid oracle), and never shown
                for a connection refusal where the blocking drip may be someone else's. */
+            /* SAME DECLARATION as the two limit panels, plus one more. index.html:516-518 is
+               kicker, h3 and a countdown; this adds `.fine`, a "Try a different address" row,
+               and - when this browser holds a receipt for the refused address - the txid with
+               its copy and explorer controls. The receipt row is the one worth defending: it is
+               THIS browser's own record, never asked of the server, and it answers the question
+               the refusal provokes ("what happened to my last one?") without an
+               address-to-txid oracle existing anywhere. The snapshot is a static mock with no
+               receipt to show, so its absence there is not a decision against it. */
             <div className="phase" data-phase="already-claimed">
               <div className="kicker">{rc ? "Already paid" : "Already claimed"}</div>
               <h3>{rc ? `This address got its ${rc.amountText}` : "This address got a drip in the last 24 h"}</h3>
@@ -1732,6 +1801,13 @@ export default function Home() {
           // Which sentence follows theirs. The server's own is shown as sent; the
           // page adds only what it knows and the server does not: the clock, the
           // address to watch, and that the address's cooldown is spent either way.
+          // THE CAP'S SENTENCE IS A COUNTDOWN, AND IT DOES NOT SAY MIDNIGHT. The snapshot's
+          // panel is `<p>The cap resets at midnight UTC. <span class="num" data-countdown>Try
+          // again in 14400s</span></p>`. The countdown is transcribed; the first clause is
+          // DROPPED and declared, because it is not true of this faucet: `src/lib/db/sql.ts:338`
+          // is `const since = o.now - 86_400`, a rolling 24-hour window, so nothing resets at
+          // midnight and a visitor told otherwise would come back at 00:01 to the same refusal.
+          // Per the CTO's 08:01Z ruling, which made the clause conditional on exactly this.
           const tail =
             k === "cap" && when ? ` It should have room again around ${when}.`
             : k === "held" && waitS > 0 ? ` You can try again in ${waitS}s.`
@@ -1778,6 +1854,7 @@ export default function Home() {
             </div>
           );
         })()}
+        </div>
 
               </div>
               {/* The design's second block, absent here entirely. `.corner-icon` is
