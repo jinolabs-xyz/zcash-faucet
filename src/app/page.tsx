@@ -22,6 +22,7 @@ import { Shell } from "@/components/Shell";
 import { StatusCards } from "@/components/StatusCards";
 import { AnalyticsCards } from "@/components/AnalyticsCards";
 import { ToolsCards } from "@/components/ToolsCards";
+import { motion, useReducedMotion } from "motion/react";
 import type { PublicBox } from "@/lib/boxLabel";
 import { syncLabel, syncBarWidth } from "@/lib/syncLabel";
 import { networkFacts, formatAmount, type FaucetNetwork } from "@/lib/network";
@@ -323,6 +324,12 @@ const faultReason = (s: Status): string | null => {
 export default function Home() {
   const [status, setStatus] = useState<Status | null>(null);
   const [phase, setPhase] = useState<Phase>("checking");
+  // THE CARD ANIMATES ITS OWN HEIGHT AND NOTHING OUTSIDE IT MOVES (owner ruling, 18:56Z).
+  // Read in JS rather than left to the stylesheet: globals.css:264 and redesign-shell.css:142
+  // both kill `animation` and `transition` under reduced motion, and a layout animation is
+  // neither - it is driven by the Web Animations API, so it would sail straight through both
+  // of those rules and play at full size for exactly the people who asked it not to.
+  const reduceMotion = useReducedMotion();
   const [addr, setAddr] = useState("");
   const [touched, setTouched] = useState(false);
   // PAPER IS THE DEFAULT NOW (the approved redesign is a light design). A visitor who
@@ -1059,7 +1066,15 @@ export default function Home() {
             {/* THE CARD SHELL, with the CURRENT claim markup inside it. S2b transcribes the
                 card's own contents and puts the phase changes on `motion`; this slice gives
                 them the shell they will live in, so the hero is real a merge earlier. */}
-            <article className="card claim feature" id="claim" aria-labelledby="h1">
+            <motion.article
+              className="card claim feature"
+              id="claim"
+              aria-labelledby="h1"
+              /* `layout` animates the box between renders, which is what a phase change moves.
+                 false under reduced motion gives the plain swap the ruling asks for. */
+              layout={reduceMotion ? false : true}
+              transition={reduceMotion ? { duration: 0 } : { type: "spring", stiffness: 260, damping: 32, mass: 0.9 }}
+            >
 
         {/* TAZ only. Every number in it (sync percent, our block height, our node
             height) is about OUR Zebra, and rendering it under a cTAZ hold would show
@@ -1626,7 +1641,7 @@ export default function Home() {
           ) : null}
         </div>
 
-            </article>
+            </motion.article>
           </div>
         </section>
 
