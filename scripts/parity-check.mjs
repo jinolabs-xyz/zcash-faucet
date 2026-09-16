@@ -352,8 +352,10 @@ const changed = [...ship.keys()].filter((s) => spec.has(s) && !sameBodies(ship.g
 // A bare element selector (`body`, `a`) has no class or id to look up and is always live.
 // THE DESIGN'S OWN PAGE IS VENDORED BESIDE THE SPEC AND READ DIRECTLY. There is no generated
 // list any more, and that is the fix rather than a tidy-up: round three shipped a 36-rule
-// exclusion file that CI could not verify - no HTML in the repo, no hash, generated from
-// ~/.claude/ipc/share, a path repo.sh forbids this script to read. The CTO's red-team killed it
+// exclusion file that CI could not verify - no HTML in the repo, no hash, generated from the
+// owner's live snapshot directory, a path outside the repo that repo.sh forbids this script to
+// name at all (the spelling is deliberately absent here: that pin is a plain string search and it
+// is right to be, since a guard that can be talked around is not one). The CTO's red-team killed it
 // with the obvious mutant: delete `.brand .name` from the shell AND strike `name` from the list,
 // and the run exits 0. An exclusion list that can be edited to match the thing it excuses is not
 // evidence.
