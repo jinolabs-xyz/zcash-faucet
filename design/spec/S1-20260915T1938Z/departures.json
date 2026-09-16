@@ -7,62 +7,77 @@
   "_clamp": "The three below are one departure in three rules: the design's one-screen clamp, overridden while the views still hold pre-redesign content. Shipping it clipped the footer by 30 to 93px at ordinary laptop sizes with three links unreachable. It returns with the content designed for it, S2 to S5, enforced per slice by scripts/fit-check.mjs.",
   "_form": "Each entry names WHY it differs and WHAT we ship. The body matters: declared by selector alone, a second, different change to an already-declared rule inherits the old label - measured, an added outline on .badge .dot passed. Regenerate the bodies with PARITY_PRINT=1 node scripts/parity-check.mjs <spec> <shipped...> and keep the why.",
   ".badge .dot": {
+    "kind": "override",
     "why": "The dot's colour is written inline from the phase machine, as it always has been, so a static colour here would be overridden anyway.",
     "shipped": "width:calc(.6*var(--u)); height:calc(.6*var(--u)); border-radius:50% || width:calc(.6*var(--u)); height:calc(.6*var(--u)); border-radius:50%; background:var(--unknown)"
   },
   ".badge[data-state=DEGRADED],.badge[data-state=EMPTY],.badge[data-state=NOT READY]": {
+    "kind": "override",
     "why": "Same: real states the preview has no swatch for.",
     "shipped": "color:var(--bad-text)"
   },
   ".badge[data-state=PREPARING],.badge[data-state=TOPPING UP]": {
+    "kind": "override",
     "why": "The preview's badge knows LIVE and SYNCING. Our phase machine says more, and those words were already carrying meaning on the page before the redesign.",
     "shipped": "color:var(--warn-text)"
   },
   ".brand .home .brand-mark": {
+    "kind": "override",
     "why": "Our mark is an SVG component where the preview's is a canvas, so the preview's canvas rules do not apply to it.",
     "shipped": "width:calc(1.45*var(--u)); height:calc(1.45*var(--u)); color:var(--ink-3)"
   },
   ".brand .home:focus-visible": {
+    "kind": "override",
     "why": "The same correction one specificity level up: this rule sets the whole outline shorthand, so correcting the general rule left the masthead link at 2.53:1 until this moved with it.",
     "shipped": "outline-color:var(--accent-text) || outline:calc(.15*var(--u)) solid var(--accent); outline-offset:calc(.25*var(--u))"
   },
   ".ftr nav a,.hdr-right nav a": {
+    "kind": "override",
     "why": "WCAG 1.4.3 needs 4.5:1 and the preview's --muted is 4.41:1 on --page. --label is 4.96:1, the next token up rather than a new colour.",
     "shipped": "color:var(--label)"
   },
   ".stage": {
+    "kind": "override",
     "why": "The one-screen clamp overridden: height:auto with min-height, and container-type:inline-size, because size containment needs a definite height in both axes and 1cqw goes with it.",
     "shipped": "container-type:inline-size; height:auto; min-height:100dvh; overflow:visible || container:stage / size; height:100dvh; overflow:auto; --u:clamp(10.5px,calc(1cqw * var(--cards-scale)),14px)"
   },
   ".view.legacy-measure > *": {
+    "kind": "divergence",
     "why": "Transitional, one view at a time as S2 to S5 land: the moved pre-redesign content keeps the 760px measure it was written for, inside a full-width view. src/app/legacyMeasure.test.ts fails in both directions on it and ui-smoke measures the width itself.",
     "shipped": "width:100%; max-width:760px"
   },
   ".views": {
+    "kind": "override",
     "why": "Our own <main> landmark around the four sections. The preview puts them straight into .comp; a landmark is an accessibility requirement a static preview does not have to meet.",
     "shipped": "display:flex; flex-direction:column; gap:calc(2.6*var(--u)); flex:1; width:100%; min-width:0"
   },
   ":focus-visible": {
+    "kind": "override",
     "why": "WCAG 1.4.11 needs 3:1 and --accent is 2.53:1 on --page. --accent-text is 6.29:1.",
     "shipped": "outline-color:var(--accent-text) || outline:calc(.16*var(--u)) solid var(--accent); outline-offset:calc(.2*var(--u)); border-radius:calc(.4*var(--u))"
   },
   "@media (max-width:32rem) | .seg button": {
+    "kind": "override",
     "why": "WCAG 2.5.5 target size at the phone breakpoint: 26px to 44px.",
     "shipped": "flex:1; padding:0 || min-height:44px"
   },
   "@media (max-width:32rem) | .strip": {
+    "kind": "override",
     "why": "WCAG 2.5.5 target size at the phone breakpoint: 32px to 44px.",
     "shipped": "height:auto; min-height:44px || padding-right:calc(.35*var(--u))"
   },
   "@media (min-width:56rem) | .comp": {
+    "kind": "override",
     "why": "The same override: the spec pins .comp to 100dvh here.",
     "shipped": "height:100dvh || height:auto; min-height:100dvh"
   },
   "@media (min-width:56rem) | .stage": {
+    "kind": "override",
     "why": "The same override at the desktop breakpoint, where the spec sets overflow:hidden.",
     "shipped": "overflow:hidden || overflow:visible"
   },
   "a:hover": {
+    "kind": "override",
     "why": "globals.css:98 paints a:hover from the retired palette (#7c1405 in paper, #ffc4b8 in ink) and the design's hover rule names no colour, so there was nothing to overwrite it. This restores the design's intent, underline only. The design's own .ftr nav a:hover and .hdr-right nav a:hover are (0,2,1) against this (0,1,1) and still win.",
     "shipped": "color:var(--accent-text) || text-decoration:underline"
   }
