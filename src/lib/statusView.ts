@@ -45,6 +45,37 @@ export function heightDeltaText(diff: number | null): string {
   return sgn + " vs network" + (diff > 0 ? ", ahead" : diff < 0 ? ", behind" : "");
 }
 
+/**
+ * THE HERO CHIP'S SECOND FIGURE, which is NOT `heightDeltaText` in brackets.
+ *
+ * The snapshot carries two derived fields, and the difference between them is the whole reason
+ * this function exists rather than a pair of parentheses at the call site:
+ *
+ *   index.html:668  `derived.heightDiff`     `+8`                 (status view, with
+ *                   `derived.heightNote`     `ahead, normal…`      the sentence beside it)
+ *   index.html:415  `derived.heightDiffChip` `(+8 vs network)`    (hero chip, no suffix)
+ *   index.html:908  'derived.heightDiffChip': `(${sgn} vs network)`
+ *
+ * Our `heightDeltaText` returns `+8 vs network, ahead` - it bundles the direction word that the
+ * design keeps in a separate field. So wrapping it gives `(+8 vs network, ahead)` where the
+ * design has `(+8 vs network)`, and the two agree ONLY when the delta is zero and the suffix is
+ * empty.
+ *
+ * That matters because zero is exactly where this was measured. The finding reported the gap as
+ * "two characters", 87.7px against 101.2px, taken against a node level with the network - and at
+ * that one value a wrap is correct. On any node that is ahead or behind, the cheap fix would have
+ * put a word in the chip that the design does not have there, and the measurement that justified
+ * it could not have seen that. Same shape as the `3.3*var(--u)` tap floor this morning: a number
+ * taken in the one state where the thing you are varying does not vary.
+ *
+ * Verified against the frozen snapshot directly rather than on the reported value.
+ */
+export function heightDiffChip(diff: number | null): string | null {
+  if (diff === null) return null;
+  const sgn = (diff >= 0 ? "+" : "") + groupDigits(Math.abs(diff) * (diff < 0 ? -1 : 1));
+  return `(${sgn} vs network)`;
+}
+
 /** The sentence under the difference on the network card. */
 export function heightNote(diff: number | null): string {
   if (diff === null) return "nothing to compare against";
@@ -237,12 +268,23 @@ export function ctazWord(ctaz: { enabled?: boolean; servable?: boolean } | null 
  * copy, and three copies of one derivation is how a page comes to disagree with itself about
  * what word describes the faucet (R-24). One definition, three importers.
  *
- * DEPARTURE, DECLARED: the approved preview's `tone()` map (index.html:881) has no key for
- * "failing", so a failing sender falls through its `|| 'unknown'` and the chip reads unknown.
- * Ours reads BAD, which is what the status and analytics views have shipped since S3. A sender
- * that is failing is not a sender we know nothing about, and introducing the preview's mapping
- * here would make the hero chip disagree with the status card one click away - which is the
- * defect this function exists in one place to prevent.
+ * THE "failing" BRANCH IS UNREACHABLE, and the declaration that used to sit here was wrong about
+ * why it mattered. It read as a live behavioural departure from the approved preview - the
+ * preview's `tone()` map has no "failing" key, ours returns `bad` - which invites a reader to
+ * believe the hero and the preview show different things for a failing sender.
+ *
+ * They cannot. `SendHealthState` is `"ok" | "degraded" | "unknown"` (zcash/sendHealth.ts:119) and
+ * nothing in the codebase produces the string "failing", so the branch has never once been taken
+ * and the two maps have never disagreed about a value that exists. A departure nobody can observe
+ * is worse than no departure: it spends a reader's attention on a difference that is not there,
+ * and it is the same dead-branch shape as the ops chip's `boxState === "failing" ? "bad" : "warn"`,
+ * which DID cause a visible defect because its sibling branch swallowed the real states.
+ *
+ * The line stays rather than being deleted, deliberately. It costs nothing, it is the mapping we
+ * would want if the union ever gains the state, and deleting it would be a behaviour change made
+ * on my own judgement in a follow-up whose job is declarations and rows. What changes here is the
+ * claim: this is dead code with a correct intention, not a shipped divergence. Found by the CTO's
+ * red-team (#591 finding 4).
  */
 export function sendsTone(state: string | undefined): "ok" | "warn" | "bad" | "unknown" {
   if (state === "ok") return "ok";

@@ -1483,6 +1483,89 @@ async function showView(page, v) {
   await page.locator(`[data-testid="view-${v}"]`).waitFor({ state: "visible", timeout: 5000 });
 }
 
+async function checkPuzzleSentenceWithdraws(browser) {
+  // BOTH SIDES OF THE GATE. Every row this branch shipped asserts the sentence is PRESENT, so
+  // `|| true` survives all of them - the CTO's red-team put it in and the suite stayed 245/0.
+  // A gate is two claims and we had only ever measured one: the sentence appears when the
+  // deployment has a puzzle, AND it goes away when the deployment does not. Without the second,
+  // "withdrawn on positive evidence" is a sentence in a PR body rather than a property of the
+  // page, and the ruling it came from turns into decoration.
+  const base = await (await fetch(`${BASE}/api/status`)).json();
+  const SENTENCE = /solves a short puzzle instead of a CAPTCHA/;
+
+  for (const [label, challenge, wantVisible] of [
+    ["a deployment that runs a puzzle", "pow", true],
+    ["a deployment that runs none", "none", false],
+  ]) {
+    const c = await browser.newContext({ viewport: DESKTOP });
+    const p = await c.newPage();
+    await p.route("**/api/status", (route) => {
+      const body = JSON.parse(JSON.stringify(base));
+      body.challenge = challenge;
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+    });
+    await p.goto(BASE, { waitUntil: "domcontentloaded" });
+    await p.waitForSelector(".hero-copy", { timeout: 15_000 }).catch(() => {});
+    await p.waitForTimeout(700);          // the island has to have been told
+
+    // PAINT, NOT TEXT. `textContent` still reads an element carrying `hidden`, and so do the
+    // served-bytes rows - the red-team's third finding is that `hidden` on the sentence survives
+    // every row this branch has. `checkVisibility()` is the browser's own answer to "would a
+    // reader see this", and it accounts for hidden, display:none, visibility and empty boxes.
+    const r = await p.evaluate((re) => {
+      const els = [...document.querySelectorAll("p")].filter((el) => new RegExp(re).test(el.textContent || ""));
+      return {
+        inDom: els.length,
+        visible: els.filter((el) => (el.checkVisibility ? el.checkVisibility() : el.getClientRects().length > 0)).length,
+        hidden: els.map((el) => el.hasAttribute("hidden")),
+      };
+    }, SENTENCE.source);
+
+    ok(`${label}: the puzzle sentence is ${wantVisible ? "painted" : "withdrawn"}`,
+      wantVisible ? r.visible === 1 : r.visible === 0,
+      `${r.inDom} in the DOM, ${r.visible} painted, hidden attr ${JSON.stringify(r.hidden)}`);
+    await c.close();
+  }
+}
+
+async function checkFirstPaintSentenceIsPainted(browser) {
+  // THE FIRST PAINT, MEASURED AS PAINT. The served-bytes row proves the sentence is in the
+  // response and the first-paint row proves it is in the DOM before the status arrives; neither
+  // can see `hidden`, which leaves the bytes and the node exactly where they are and shows the
+  // reader nothing. That is a one-attribute regression away from the defect this whole branch
+  // exists to fix, with every row green.
+  //
+  // The status request is held open rather than answered, so this is the page as it exists for
+  // someone whose fetch has not come back - and, near enough, for someone running no scripts.
+  const c = await browser.newContext({ viewport: DESKTOP });
+  const p = await c.newPage();
+  await p.route("**/api/status", () => { /* never fulfilled: status never arrives */ });
+  await p.goto(BASE, { waitUntil: "domcontentloaded" });
+  await p.waitForSelector(".hero-copy", { timeout: 15_000 }).catch(() => {});
+  await p.waitForTimeout(500);
+
+  const r = await p.evaluate(() => {
+    const sentence = [...document.querySelectorAll("p")]
+      .find((el) => /solves a short puzzle instead of a CAPTCHA/.test(el.textContent || ""));
+    const chips = [...document.querySelectorAll('.hero-copy .chips [data-chip]')];
+    const seen = (el) => !!el && (el.checkVisibility ? el.checkVisibility() : el.getClientRects().length > 0);
+    return {
+      sentenceInDom: !!sentence,
+      sentencePainted: seen(sentence),
+      sentenceBox: sentence ? Math.round(sentence.getBoundingClientRect().height) : 0,
+      chips: chips.length,
+      chipsPainted: chips.filter(seen).length,
+    };
+  });
+
+  ok("before the status arrives, the puzzle sentence is not merely present but PAINTED",
+    r.sentencePainted && r.sentenceBox > 0,
+    `in DOM ${r.sentenceInDom}, painted ${r.sentencePainted}, ${r.sentenceBox}px tall`);
+  ok("and so is every hero chip",
+    r.chips === 4 && r.chipsPainted === 4, `${r.chipsPainted} of ${r.chips} chips painted`);
+  await c.close();
+}
+
 async function checkOpsChipFollowsTheBox(browser) {
   // THE OPS CHIP SAYS WHAT THE BOX SAID, AND UNKNOWN IS NOT ATTENTION.
   //
@@ -1539,13 +1622,35 @@ async function checkOpsChipFollowsTheBox(browser) {
       // The comparison that makes "absent" mean something: a chip that never renders in ANY
       // state would pass all three absence rows, so the attention case above is what proves the
       // element exists at all, and this notes what the row beside it was saying at the time.
-      ok(`box ${state}: (nothing claimed about the box; sends chip beside it reads ${r.sendsTone})`,
-        true, `no ops chip, sends tone ${r.sendsTone}`);
+      // A NOTE, PRINTED AS A NOTE. This was `ok(…, true, …)` - honestly named, genuinely useful
+      // context when reading a failure above it, and still two rows that could not go red,
+      // inflating a total that has been quoted as evidence in both directions on this PR.
+      // SDE-Infra's line: `console.log` costs nothing and keeps `ok` meaning "something was
+      // checked". What makes the absence meaningful is the `attention` case, which asserts
+      // presence AND tone, so deleting the chip outright still turns this family red there.
+      console.log(`note: box ${state}: no ops chip; sends chip beside it reads ${r.sendsTone}`);
     }
     await c.close();
   }
-  ok("the ops chip was measured in every box state it has",
-    visited.length === CASES.length, visited.join(", "));
+  // THE ROW THAT COUNTED ITS OWN LIST AGAINST ITSELF. `visited.push` runs once per CASES entry
+  // inside `for (… of CASES)`, so `visited.length === CASES.length` was true by construction and
+  // could only fail by the loop throwing - while its name claimed "every box state it HAS".
+  // What the box has is whatever `publicBox()` emits, and nothing compared CASES to that: a
+  // fourth state would have arrived with this row green and the chip unmeasured in it.
+  //
+  // Found by SDE-Infra and the CTO's red-team independently, and it is my own `.phase` probe
+  // shape a third time - an instrument supplying its own subject and then agreeing with itself.
+  // I wrote this row four hours after writing the lesson about it, which is the honest measure
+  // of how easily the shape hides.
+  //
+  // The literal is the pin. It is deliberately NOT derived from CASES, so the two have to be
+  // edited together, and it names its source so the next reader checks it with one grep instead
+  // of by reasoning about this file.
+  const BOX_STATES_PUBLICBOX_EMITS = ["ok", "attention", "unknown"];   // boxLabel.ts:86, publicBox()
+  ok("the ops chip was measured in every box state publicBox() can emit",
+    visited.length === BOX_STATES_PUBLICBOX_EMITS.length
+      && BOX_STATES_PUBLICBOX_EMITS.every((st) => visited.includes(st)),
+    `drove ${JSON.stringify(visited)}; publicBox() emits ${JSON.stringify(BOX_STATES_PUBLICBOX_EMITS)}`);
 }
 
 async function checkServedHtmlCarriesTheHero() {
@@ -1593,8 +1698,16 @@ async function checkServedHtmlCarriesTheHero() {
   // this PR exists to fix straight back onto the hero. They proved it was not a no-op by reading
   // the served bytes: 27,544 -> 27,411 and `class="morelink"` 1 -> 0, with chips and puzzle
   // untouched. Four rows covering four of six things is a gap the totals cannot show.
-  const statusLink = /class="tag more"/.test(html);
-  const analyticsLink = /class="morelink"/.test(html);
+  // ANCHORED ON THE TAG, NOT THE CLASS STRING. Next serialises the tree into `__next_f` chunks
+  // in these same bytes, so a bare string can match the flight payload rather than rendered
+  // markup. That mechanism is live on this page - the red-team counted `Get free testnet` seven
+  // times in a 27,544-byte render, the h1 duplicated by the payload - while these four subjects
+  // appear exactly once each today. So the proxy is not lying, by measurement rather than by
+  // argument, and that count is the only thing keeping it honest. `<a[^>]+class=` cannot be
+  // manufactured by the payload, which spells props as JSON (`className`) rather than as HTML
+  // attributes, so a future string that DOES get duplicated cannot fake a green here.
+  const statusLink = /<button[^>]+class="tag more"/.test(html);
+  const analyticsLink = /<a[^>]+class="morelink"/.test(html);
   ok("the served HTML carries both hero links, not just the chips",
     statusLink && analyticsLink,
     `tag more ${statusLink ? "present" : "ABSENT"}, morelink ${analyticsLink ? "present" : "ABSENT"} in ${html.length} bytes`);
@@ -2566,6 +2679,8 @@ try {
     ok("and the address is in the body", req.body.includes(`"address":"${lookupAddr}"`), req.body.slice(0, 60));
     ok("and the page answers that a shielded balance is private", /Shielded balances are private/.test(await page.locator("#lans").innerText()));
   }
+  await checkPuzzleSentenceWithdraws(browser);
+  await checkFirstPaintSentenceIsPainted(browser);
   await checkOpsChipFollowsTheBox(browser);
   await checkServedHtmlCarriesTheHero();
   await checkMinerPanel(page);
