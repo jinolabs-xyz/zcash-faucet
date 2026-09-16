@@ -401,6 +401,35 @@ export interface TipReferences {
    * two can never tell different stories.
    */
   usedHeight: number | null;
+  /**
+   * EACH SOURCE'S HEIGHT, FLAT, for the same reason `usedHeight` is flat and by the same
+   * consumer's request (#600 step 3, SDE-Infra).
+   *
+   * The watchdog's fork ladder reads `corroborated`, and when that is false its journal line
+   * says only "cannot tell". The issue asks it to print the spread and the two heights it saw,
+   * so a journal can be read without the app -- and to do that it needs the per-source heights.
+   * Those live two levels in, under `sources.hosh.height`, and reaching two levels into a body
+   * with a brace-bounded grep is the #391 greedy-regex lesson. `usedHeight` exists because that
+   * argument was already made once; this is the same argument for the two numbers that explain
+   * WHY `used` was chosen.
+   *
+   * NULL MEANS NEVER ANSWERED. It does NOT mean stale: a stale entry keeps the height it last
+   * reported, exactly as `sources` does, because the height a dark source last knew is evidence
+   * and discarding it to encode one bit loses it. Usability is carried by `used` and
+   * `usedHeight`, which go null together -- a consumer asking "may I judge against this" reads
+   * those, one asking "what did each source last say" reads these.
+   *
+   * THIS PARAGRAPH SAID THE OPPOSITE UNTIL SDE-INFRA READ IT AS THE CONSUMER. I wrote the field
+   * intending null-for-stale, the suite refused it against the existing rule, I corrected the
+   * test and left the abandoned reasoning here. Had a parser been written to the comment it
+   * would have conflated a DARK reference with a LAGGING one, and those lead to opposite
+   * conclusions about the chain.
+   *
+   * Taken from the same `sources` entries the spread is computed from, never recomputed, so
+   * these can never disagree with `spreadBlocks`.
+   */
+  hoshHeight: number | null;
+  lightwalletdHeight: number | null;
 }
 
 /**
@@ -538,6 +567,10 @@ export function getTipReferences(now: number = Date.now()): TipReferences {
     // From the same entry `used` names, not recomputed, so a future change to the choice
     // rule cannot move one without the other.
     usedHeight: used ? sources[used]!.height : null,
+    // The same entries `spreadBlocks` was computed from. Deriving them here rather than in the
+    // caller keeps the three numbers on one clock: a reader can subtract them and get the spread.
+    hoshHeight: sources.hosh?.height ?? null,
+    lightwalletdHeight: sources.lightwalletd?.height ?? null,
   };
 }
 
