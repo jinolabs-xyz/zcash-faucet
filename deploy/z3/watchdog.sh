@@ -535,6 +535,9 @@ heal_miner_if_stalled() {
     local prior; prior="$(flap_get "$key")"
     if [ "$prior" != "0" ]; then
       flap_set "$key" 0
+      # Episode state, so it clears with the count. Left set, a SECOND stall in the same process
+      # would be silent at the give-up rung.
+      flap_set "$key.paged" 0
       log "miner templating again (last ${tmpl_age}s ago); stall count reset"
       fixed "miner stalled (alive, no block template). Restarted it ($prior restart(s)). Mining again, template ${tmpl_age}s ago."
     fi
@@ -549,8 +552,15 @@ heal_miner_if_stalled() {
     else
       danger "miner stalled and 'systemctl restart $MINER_UNIT' FAILED ($n/$MINER_HEAL_MAX)."
     fi
-  elif [ "$n" -eq "$((MINER_HEAL_MAX + 1))" ]; then
-    danger "miner still stalled after $MINER_HEAL_MAX restarts. Not retrying. Zebra down, or its RPC endpoint moved?"
+  elif [ "$n" -gt "$MINER_HEAL_MAX" ] && [ "$(flap_get "$key.paged")" = "0" ]; then
+    # RETRIED UNTIL ONE LEAVES, not fired at an exact count (#511). This was `-eq MAX+1`, so the
+    # give-up page existed on exactly ONE sweep: alert.sh failing there - a Signal outage, a full
+    # disk, the broker hanging up - lost it for the rest of the episode, and nothing else says the
+    # miner has stopped being retried. Same fix and same shape as the crash-loop page (#507): the
+    # flag records DELIVERY rather than the attempt, and it lives on disk beside the count so a
+    # watchdog restart cannot hand out a second one.
+    danger "miner still stalled after $MINER_HEAL_MAX restarts. Not retrying. Zebra down, or its RPC endpoint moved?"; rc=$?
+    paged "$rc" && flap_set "$key.paged" 1
   fi
 }
 
@@ -941,6 +951,7 @@ heal_node_if_stalled() {
 }
 
 faucet_misses=0
+alerted_faucet_app=0  # delivery of the step-3 page, per episode (#511)
 faucet_restarts=0   # consecutive restarts with no healthy sweep in between
 unready_since=0
 alerted_unready=0
@@ -1091,7 +1102,7 @@ check_history_against_reference() {
 }
 
 heal_self_mined_fork() {
-  local name="$1" blocks corr used_h ahead miner_word started_age who mins
+  local name="$1" blocks corr used_h ahead miner_word started_age who mins hosh_h lwd_h spread
   [ "$FORK_HEAL_ENABLED" = "1" ] || return 0
   [ -n "$name" ] || return 0
 
@@ -1112,11 +1123,29 @@ heal_self_mined_fork() {
     case "$used_h" in ''|*[!0-9]*) used_h="" ;; esac
     # An absent field reads the same as a null one here, on purpose: a body that predates
     # #559 must not be turned into a height by this function, and "no number" is never 0.
+    # WHAT THE TWO SOURCES ACTUALLY SAID (#600 step 3). "cannot tell" names the verdict and not
+    # the evidence, so an operator reading the journal has to go to the app to find out whether
+    # the references disagreed or one of them was simply absent - and #600 is about this line
+    # firing often. Both heights and the spread are FLAT on /api/ready for exactly this reader
+    # (SDE-App, #630): `sources.hosh.height` is two levels down and a brace-bounded grep for it
+    # is the #391 greedy-match trap, which is why `usedHeight` was flattened first.
+    #
+    # NULL MEANS NEVER ANSWERED, NOT STALE. A stale source keeps the height it last reported and
+    # is excluded by `used`, so "hosh=4349918" beside "highest usable reference=none" is a
+    # reference that answered and is not trusted - a different fact from "hosh=none", which is a
+    # reference that has not answered at all. The line has to be readable as those two states
+    # rather than collapsing them, because only the first says anything about the chain.
+    hosh_h="$(printf '%s' "${ready_body:-}" | grep -o '"hoshHeight":[0-9][0-9]*' | head -n1 | cut -d: -f2)"
+    lwd_h="$(printf '%s' "${ready_body:-}" | grep -o '"lightwalletdHeight":[0-9][0-9]*' | head -n1 | cut -d: -f2)"
+    spread="$(printf '%s' "${ready_body:-}" | grep -o '"spreadBlocks":[0-9][0-9]*' | head -n1 | cut -d: -f2)"
+    case "$hosh_h" in ''|*[!0-9]*) hosh_h="" ;; esac
+    case "$lwd_h"  in ''|*[!0-9]*) lwd_h=""  ;; esac
+    case "$spread" in ''|*[!0-9]*) spread="" ;; esac
     # ONCE PER EPISODE, not once per sweep (CTO red-team, finding 7): a single-sourced oracle,
     # an unreachable app or a body from before #559 is a STATE, and one line every 30 s for as
     # long as it lasts is the shape this file already refuses elsewhere (miner_waiting_logged).
     if [ "$fork_cannot_tell_logged" != "1" ]; then
-      log "fork check: cannot tell, so nothing is paged and nothing is touched (corroborated=${corr:-absent}, highest usable reference=${used_h:-none}, ours $blocks). Silent until this changes."
+      log "fork check: cannot tell, so nothing is paged and nothing is touched (corroborated=${corr:-absent}, highest usable reference=${used_h:-none}, ours $blocks; hosh=${hosh_h:-none}, lightwalletd=${lwd_h:-none}, spread=${spread:-unknown}). Silent until this changes."
       fork_cannot_tell_logged=1
     fi
     return 0
@@ -1246,7 +1275,7 @@ while true; do
       if [ "$faucet_restarts" -gt 0 ]; then
         fixed "faucet app hung. Restarted it ($faucet_restarts time(s)); answering again."
       fi
-      faucet_misses=0; faucet_restarts=0
+      faucet_misses=0; faucet_restarts=0; alerted_faucet_app=0
     else
       faucet_misses=$((faucet_misses + 1))
       log "faucet liveness miss $faucet_misses/$FAUCET_FAIL_LIMIT (via $liveness_via)"
@@ -1257,8 +1286,15 @@ while true; do
         faucet_misses=0
         # A second restart with no healthy sweep in between is a loop, not a fix: page once
         # there, then only periodically, the same shape as the container crash-loop page.
-        if [ "$faucet_restarts" -eq 2 ] || { [ "$faucet_restarts" -gt 2 ] && [ $(( (faucet_restarts - 2) % 20 )) -eq 0 ]; }; then
-          danger "faucet app not answering /api/health after $faucet_restarts restart(s). Not recovering."
+        # AT OR PAST TWO AND NOT YET DELIVERED, rather than AT exactly two (#511). The threshold
+        # page is retried every sweep until one leaves; the periodic re-alert keeps its cadence.
+        # Unlike the crash-loop and readiness pages after #507, this one was never gated on
+        # delivery, so a failed send at restart 2 meant silence until restart 22 - and the only
+        # other signal is step 4's NOT READY page thirty minutes later.
+        if { [ "$faucet_restarts" -ge 2 ] && [ "$alerted_faucet_app" = "0" ]; } \
+           || { [ "$faucet_restarts" -gt 2 ] && [ $(( (faucet_restarts - 2) % 20 )) -eq 0 ]; }; then
+          danger "faucet app not answering /api/health after $faucet_restarts restart(s). Not recovering."; rc=$?
+          paged "$rc" && alerted_faucet_app=1
         fi
       fi
     fi

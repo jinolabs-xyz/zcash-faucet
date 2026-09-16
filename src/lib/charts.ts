@@ -234,13 +234,51 @@ export interface DripsChartInput {
 }
 
 /** The thirty-day bar chart. Geometry from barRects, nothing decided here. */
+/**
+ * ONE OWNER FOR THE DRIPS PLOT BOX (#594). The hover hit-test has to agree with the paint or the
+ * tooltip names a different day than the bar it lights, and the disagreement is invisible until
+ * someone compares them by eye. Two copies of L/B/T drift the first time a margin moves, which is
+ * the untied-constant shape with numbers instead of strings. `drawDrips` and `dripHitAtX` both
+ * read this and nothing else knows the margins.
+ */
+export function dripsLayout(width: number): { height: number; L: number; B: number; T: number; iw: number; ih: number } {
+  const height = 140;
+  const L = 26, B = 22, T = 10;
+  return { height, L, B, T, iw: width - L - 4, ih: height - T - B };
+}
+
+/**
+ * Which bar a pointer at `clientX` is over, with the anchor the tooltip hangs from, or null when
+ * the pointer is outside the plot. NEAREST CENTRE rather than strict containment: the gaps
+ * between bars are dead space a reader does not perceive as "off the chart", and a tooltip that
+ * blinks out between bars reads as a bug rather than as precision.
+ */
+export function dripHitAtX(
+  canvas: HTMLCanvasElement,
+  series: readonly DripDay[],
+  clientX: number,
+): { index: number; cx: number; top: number } | null {
+  const box = canvas.getBoundingClientRect();
+  const width = box.width || 400;
+  const { L, T, iw, ih } = dripsLayout(width);
+  const rects = barRects(series, L, T, iw, ih);
+  if (rects.length === 0) return null;
+  const x = clientX - box.left;
+  if (x < L || x > L + iw) return null;
+  let best = 0, bestD = Infinity;
+  for (const [i, r] of rects.entries()) {
+    const d = Math.abs(x - (r.x + r.w / 2));
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  const r = rects[best];
+  return { index: best, cx: r.x + r.w / 2, top: r.y };
+}
+
 export function drawDrips(canvas: HTMLCanvasElement, host: HTMLElement, input: DripsChartInput, hovered: number): void {
   const width = canvas.getBoundingClientRect().width || 400;
-  const height = 140;
+  const { height, L, T, iw, ih } = dripsLayout(width);
   const ctx = prepareCanvas(canvas, width, height);
   if (!ctx) return;
-  const L = 26, B = 22, T = 10;
-  const iw = width - L - 4, ih = height - T - B;
   const rects = barRects(input.series, L, T, iw, ih);
   const max = barMax(input.series);
 

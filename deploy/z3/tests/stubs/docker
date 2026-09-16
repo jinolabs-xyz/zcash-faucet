@@ -115,6 +115,20 @@ case "${1:-}" in
           k=$(( $(cat "$f.restarted") + 1 )); echo "$k" > "$f.restarted"
           if [ "$k" -le "$STUB_HEALTH_STARTING_SWEEPS" ]; then echo starting; exit 0; fi
         fi
+        # STUB_HEALTH_SEQUENCE="unhealthy unhealthy healthy unhealthy": the health PER READ, one
+        # value each with the last repeating - the same rule as STUB_READY_SEQUENCE in the curl
+        # stub, and needed for the same reason. An episode that ENDS and BEGINS AGAIN can only be
+        # driven inside ONE watchdog process, because `faucet_restarts` and its delivered flag are
+        # shell variables that die with the process (watchdog.sh:881). A second `wd_run` starts
+        # from zero and therefore cannot see whether a flag outlived its episode, which is the
+        # whole question.
+        if [ -n "${STUB_HEALTH_SEQUENCE:-}" ]; then
+          hcf="$f.healthseq"
+          hn=$(( $(cat "$hcf" 2>/dev/null || echo 0) + 1 )); echo "$hn" > "$hcf"
+          hi=0
+          for hv in $STUB_HEALTH_SEQUENCE; do hi=$((hi + 1)); hout="$hv"; [ "$hi" -ge "$hn" ] && break; done
+          echo "$hout"; exit 0
+        fi
         sed -n 3p "$f" ;;
       *State.Status*)    head -n1 "$f" ;;
       *State.StartedAt*) st="$(sed -n 2p "$f")"; echo "${st:-2000-01-01T00:00:00.000000000Z}" ;;
