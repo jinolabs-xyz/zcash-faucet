@@ -1,1 +1,38 @@
-{}
+{
+  "_": "Every divergence from the frozen subpages spec, with the reason it exists. scripts/parity-check.mjs fails on a divergence that is not declared here AND on a declaration that no longer describes one, so this file cannot quietly become a list of things the check has stopped looking at. Keys beginning with _ are notes, not declarations.",
+  ".addr": {
+    "kind": "override",
+    "why": "CLOSES TWO PROPERTIES globals.css SETS ON `code` THAT THE DESIGN DOES NOT NAME - #575's leak family, in SDE-UI's own words in the sheet: globals styles `code` with the retired palette's surface and a border radius of 0, and the design's address block sets its own background, border and radius while saying nothing about background-clip or box-shadow. Without these an address renders in the retired palette inside an otherwise correct box.",
+    "shipped": "background-clip:padding-box; box-shadow:none || display:block; word-break:break-all; font:500 calc(.95*var(--u))/1.45 var(--mono); color:var(--ink); background:var(--prompt-bg); border:calc(.06*var(--u)) solid var(--prompt-border); border-radius:calc(.6*var(--u)); padding:calc(.8*var(--u)) calc(1*var(--u)); margin:0 0 calc(.9*var(--u))"
+  },
+  ".hint": {
+    "kind": "override",
+    "why": "IN THE DESIGN, ABOVE OUR SLICE'S MARKER. `.hint` is in the snapshot at donate.html:203-204 and was in no app sheet at all, so every hint on these pages rendered at the body's size and colour. Our vendored spec is the slice of terms.html that begins at the `===== subpages` marker and this rule sits ABOVE that marker, so the spec cannot see it. Dropped by the slice rather than decided against: this is a limit of what we vendored, not a divergence from what was approved.",
+    "shipped": "font-size:calc(.85*var(--u)); color:var(--muted); min-height:1.4em; margin:0"
+  },
+  ".hint[data-tone=bad]": {
+    "kind": "override",
+    "why": "Same as `.hint`: in the design, above the marker our slice starts at.",
+    "shipped": "color:var(--bad-text)"
+  },
+  ".view.sub .card.claim": {
+    "kind": "override",
+    "why": "THE SUBPAGE CARD IS A SCROLL BOX AND THE INDEX CARD IS NOT. The subpages put a long document inside the same `.card.claim` the index uses for a short form, so the card becomes a column that fills its view and hands the overflow to the panel. The design has no rule because its subpages are separate mocks rather than the index's card reused.",
+    "shipped": "padding:0; max-height:100%; display:flex; flex-direction:column"
+  },
+  ".view.sub .card.claim > .card-copy": {
+    "kind": "override",
+    "why": "The fixed half of the same column: the heading block does not scroll, so it is `flex:none` while the panel below it takes the rest.",
+    "shipped": "flex:none"
+  },
+  ".view.sub .card.claim > .panel": {
+    "kind": "override",
+    "why": "The scrolling half of that column: `flex:1 1 auto; min-height:0; overflow:auto` is what lets the panel take the remaining height and scroll inside it rather than growing the card past the viewport. min-height:0 is load-bearing - without it a flex child refuses to shrink below its content and the overflow never engages.",
+    "shipped": "flex:1 1 auto; min-height:0; overflow:auto"
+  },
+  "@media (max-width:56rem) | .view.sub .tag": {
+    "kind": "override",
+    "why": "A 44px TAP FLOOR THE DESIGN DOES NOT CARRY. The approved preview is a desktop mock with no touch-target rule anywhere. SDE-App's #593 survey found nine scoped floors across this codebase with three different triggers, and this is one of them; it comes out when #593 unifies the subjects and the trigger together.",
+    "shipped": "min-height:44px"
+  }
+}

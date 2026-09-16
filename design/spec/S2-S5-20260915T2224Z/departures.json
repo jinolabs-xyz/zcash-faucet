@@ -28,30 +28,15 @@
       }
     ]
   },
-  ".card.claim": {
-    "kind": "override",
-    "why": "`will-change:height` for the panel animation, which the frozen preview does not need because its demo machine swaps panels without animating the box.",
-    "shipped": "will-change:height"
-  },
   ".mascot-riso": {
     "kind": "divergence",
     "why": "The owner's 19:40Z ruling says the mascot follows its column. The frozen snapshot does NOT carry the !important width/max-width/height that the ruling describes - grep finds none on that rule - so the ruling's intent is transcribed here and the discrepancy between the ruling's words and the snapshot is recorded in the PR body rather than silently resolved either way.",
     "shipped": "position:relative; display:block; flex:none; width:100%; max-width:calc(22*var(--u)); aspect-ratio:1; padding:0; border:0; background:transparent; appearance:none; cursor:pointer; user-select:none; touch-action:manipulation || width:100% !important; max-width:calc(22*var(--u)) !important; height:auto !important"
   },
-  ".stage .card.claim": {
-    "kind": "divergence",
-    "why": "The card's own padding, which the design carries on .card-copy - a wrapper our current content does not sit inside. Every other parity probe measures a DESIGN element; this is CURRENT content inside a design container. S2b replaces this block with the real panels and takes this rule with it.",
-    "shipped": "padding:7% 8.4% 7.5%"
-  },
   ".tag": {
     "kind": "override",
-    "why": "Our tag is a button or an anchor as well as a span, so it carries cursor and transition that a static pill in the preview has no need of.",
-    "shipped": "font-family:inherit; display:inline-flex; align-items:center; gap:calc(.5*var(--u)); height:calc(2.15*var(--u)); padding:0 calc(.9*var(--u)); border-radius:calc(.5*var(--u)); background:var(--tag-bg); color:var(--ink); font-size:calc(.84*var(--u)); font-weight:500; letter-spacing:0; border:calc(.06*var(--u)) solid var(--hair); white-space:nowrap; text-decoration:none; cursor:default || text-transform:none"
-  },
-  ".views > .view.hero": {
-    "kind": "override",
-    "why": "The spec has this as `.comp > .view.hero`. Our four views sit inside a <main class=\"views\"> landmark rather than directly in .comp, so the child combinator matched nothing at all and computed padding-top 0. Same rule, our structure.",
-    "shipped": "flex:1 1 auto; min-height:0; justify-content:flex-start; padding-top:calc(2.5*var(--u))"
+    "why": "RE-SCOPED TO OUTRANK globals.css, SAME DECLARATIONS (#575). The legacy sheet styles the same element at the same specificity, so the design's own selector loses on source order alone. One ancestor is added - `html` for element rules, `.stage` for page furniture - which raises specificity without changing what is painted. The spec's key and ours therefore differ while the CSS does not, which the checker reports as one dropped rule plus one added rule: the same divergence twice. Under the spec's own key we now ship nothing: this is the dropped half, and `.stage .tag` carries the body.",
+    "shipped": ""
   },
   "@media (max-width:56rem) | .mascot-riso": {
     "kind": "divergence",
@@ -63,9 +48,129 @@
     "why": "The 64rem block ships the gap and NOT grid-template-columns:1fr. That declaration was dead in the snapshot - a later section overrode it - and moving the block into this sheet brought it to life, collapsing the hero to one column from 897 to 1024px. Dropped deliberately; #566's third round is the record.",
     "shipped": "gap:calc(2.5*var(--u))"
   },
-  "html": {
+  ".comp > .view.hero": {
     "kind": "override",
-    "why": "globals.css paints `html` with the OLD palette's --color-bg and nothing in the transcription names html's background, so the overscroll and rubber-band area behind the page kept the pre-redesign colour while the page itself was on --page. Only visible on a bounce, which is why nobody would find it by looking.",
+    "why": "RE-SCOPED TO OUTRANK globals.css, SAME DECLARATIONS (#575). The legacy sheet styles the same element at the same specificity, so the design's own selector loses on source order alone. One ancestor is added - `html` for element rules, `.stage` for page furniture - which raises specificity without changing what is painted. The spec's key and ours therefore differ while the CSS does not, which the checker reports as one dropped rule plus one added rule: the same divergence twice.",
+    "shipped": ""
+  },
+  ".iconbtn": {
+    "kind": "override",
+    "why": "RE-SCOPED TO OUTRANK globals.css, SAME DECLARATIONS (#575). The legacy sheet styles the same element at the same specificity, so the design's own selector loses on source order alone. One ancestor is added - `html` for element rules, `.stage` for page furniture - which raises specificity without changing what is painted. The spec's key and ours therefore differ while the CSS does not, which the checker reports as one dropped rule plus one added rule: the same divergence twice.",
+    "shipped": ""
+  },
+  ".iconbtn:hover": {
+    "kind": "override",
+    "why": "RE-SCOPED TO OUTRANK globals.css, SAME DECLARATIONS (#575). The legacy sheet styles the same element at the same specificity, so the design's own selector loses on source order alone. One ancestor is added - `html` for element rules, `.stage` for page furniture - which raises specificity without changing what is painted. The spec's key and ours therefore differ while the CSS does not, which the checker reports as one dropped rule plus one added rule: the same divergence twice.",
+    "shipped": ""
+  },
+  ".m-dir": {
+    "kind": "divergence",
+    "why": "THE MASCOT'S INNER DOM IS THE `page-mascot` PACKAGE'S, NOT OURS. The design draws the fox from its own markup and we render <Mascot/> from the package, which ships its own structure and styling. Transcribing these would be a second, competing description of a DOM we do not author, and the first time the package changed its internals ours would point at elements that no longer exist. The rendered result is checked by scripts/mascot-check.mjs instead of the rules behind it.",
+    "shipped": ""
+  },
+  ".m-dir,.m-react": {
+    "kind": "divergence",
+    "why": "THE MASCOT'S INNER DOM IS THE `page-mascot` PACKAGE'S, NOT OURS. The design draws the fox from its own markup and we render <Mascot/> from the package, which ships its own structure and styling. Transcribing these would be a second, competing description of a DOM we do not author, and the first time the package changed its internals ours would point at elements that no longer exist. The rendered result is checked by scripts/mascot-check.mjs instead of the rules behind it.",
+    "shipped": ""
+  },
+  ".m-react": {
+    "kind": "divergence",
+    "why": "THE MASCOT'S INNER DOM IS THE `page-mascot` PACKAGE'S, NOT OURS. The design draws the fox from its own markup and we render <Mascot/> from the package, which ships its own structure and styling. Transcribing these would be a second, competing description of a DOM we do not author, and the first time the package changed its internals ours would point at elements that no longer exist. The rendered result is checked by scripts/mascot-check.mjs instead of the rules behind it.",
+    "shipped": ""
+  },
+  ".m-squash": {
+    "kind": "divergence",
+    "why": "THE MASCOT'S INNER DOM IS THE `page-mascot` PACKAGE'S, NOT OURS. The design draws the fox from its own markup and we render <Mascot/> from the package, which ships its own structure and styling. Transcribing these would be a second, competing description of a DOM we do not author, and the first time the package changed its internals ours would point at elements that no longer exist. The rendered result is checked by scripts/mascot-check.mjs instead of the rules behind it.",
+    "shipped": ""
+  },
+  ".metric .delta[data-tone=unknown]": {
+    "kind": "override",
+    "why": "A REAL STATE THE PREVIEW HAS NO SWATCH FOR. The design tones the delta `warn` and `bad` only; our status can also be unestablished, and the same rule that made the badge carry PREPARING and TOPPING UP applies - the word was already on the page before the redesign and saying nothing about it is not an option. Same shape as the .badge[data-state=...] entries above.",
+    "shipped": "color:var(--muted)"
+  },
+  ".morelink:hover": {
+    "kind": "override",
+    "why": "CLOSES A PROPERTY globals.css SETS AND THE TRANSCRIPTION DOES NOT NAME - #575's seventh-leak family. globals.css:82 styles every heading with font-family, line-height and letter-spacing, and the design's rule names neither font-family nor (for .pc h3) the other two, so the retired values leak in under a rule that looks complete. Adding the design's own values by name is what makes the transcription describe what is painted. `.morelink:hover` is the same shape one property along: globals.css:97 sets text-underline-offset:3px and no transcription names it.",
+    "shipped": "text-decoration:underline; text-underline-offset:auto"
+  },
+  ".pc h3": {
+    "kind": "override",
+    "why": "CLOSES A PROPERTY globals.css SETS AND THE TRANSCRIPTION DOES NOT NAME - #575's seventh-leak family. globals.css:82 styles every heading with font-family, line-height and letter-spacing, and the design's rule names neither font-family nor (for .pc h3) the other two, so the retired values leak in under a rule that looks complete. Adding the design's own values by name is what makes the transcription describe what is painted. `.morelink:hover` is the same shape one property along: globals.css:97 sets text-underline-offset:3px and no transcription names it.",
+    "shipped": "margin:0 0 calc(.9*var(--u)); font-size:calc(1.1*var(--u)); font-weight:600; font-family:var(--sans); line-height:1.5; letter-spacing:normal; display:flex; align-items:center; gap:calc(.6*var(--u)); color:var(--ink-2); flex-wrap:wrap"
+  },
+  ".phase code.mono": {
+    "kind": "override",
+    "why": "THE ADDRESS ON `lost-track`, WHICH IS A PANEL THE APPROVED SET DOES NOT HAVE, in SDE-App's own words. A unified address is eighty-odd characters and the card is 24rem, so it has to break inside the word; the inline style this panel replaced said word-break:break-all and `.mono` alone does not. The design has no rule here because it has no such panel.",
+    "shipped": "display:block; word-break:break-all; margin-top:calc(.4*var(--u)); font-size:calc(.82*var(--u)); color:var(--ink)"
+  },
+  ".phase h3": {
+    "kind": "override",
+    "why": "CLOSES A PROPERTY globals.css SETS AND THE TRANSCRIPTION DOES NOT NAME - #575's seventh-leak family. globals.css:82 styles every heading with font-family, line-height and letter-spacing, and the design's rule names neither font-family nor (for .pc h3) the other two, so the retired values leak in under a rule that looks complete. Adding the design's own values by name is what makes the transcription describe what is painted. `.morelink:hover` is the same shape one property along: globals.css:97 sets text-underline-offset:3px and no transcription names it.",
+    "shipped": "margin:calc(.35*var(--u)) 0 calc(.3*var(--u)); color:var(--ink-3); font-size:calc(1.34*var(--u)); font-weight:500; line-height:1.1; letter-spacing:calc(-.05*var(--u)); font-family:var(--sans)"
+  },
+  ".stage .tag": {
+    "kind": "override",
+    "why": "RE-SCOPED TO OUTRANK globals.css, SAME DECLARATIONS (#575). The legacy sheet styles the same element at the same specificity, so the design's own selector loses on source order alone. One ancestor is added - `html` for element rules, `.stage` for page furniture - which raises specificity without changing what is painted. The spec's key and ours therefore differ while the CSS does not, which the checker reports as one dropped rule plus one added rule: the same divergence twice.",
+    "shipped": "font-family:inherit; display:inline-flex; align-items:center; gap:calc(.5*var(--u)); height:calc(2.15*var(--u)); padding:0 calc(.9*var(--u)); border-radius:calc(.5*var(--u)); background:var(--tag-bg); color:var(--ink); font-size:calc(.84*var(--u)); font-weight:500; letter-spacing:0; border:calc(.06*var(--u)) solid var(--hair); white-space:nowrap; text-decoration:none; cursor:default || text-transform:none"
+  },
+  ".stage ::selection": {
+    "kind": "override",
+    "why": "RE-SCOPED TO OUTRANK globals.css, SAME DECLARATIONS (#575). The legacy sheet styles the same element at the same specificity, so the design's own selector loses on source order alone. One ancestor is added - `html` for element rules, `.stage` for page furniture - which raises specificity without changing what is painted. The spec's key and ours therefore differ while the CSS does not, which the checker reports as one dropped rule plus one added rule: the same divergence twice.",
+    "shipped": "background:color-mix(in srgb,var(--accent) 30%,transparent)"
+  },
+  ".tag.more": {
+    "kind": "override",
+    "why": "RE-SCOPED TO OUTRANK globals.css, SAME DECLARATIONS (#575). The legacy sheet styles the same element at the same specificity, so the design's own selector loses on source order alone. One ancestor is added - `html` for element rules, `.stage` for page furniture - which raises specificity without changing what is painted. The spec's key and ours therefore differ while the CSS does not, which the checker reports as one dropped rule plus one added rule: the same divergence twice.",
+    "shipped": ""
+  },
+  ".tip": {
+    "kind": "divergence",
+    "why": "A GAP, NOT A DECISION, and it is declared here only so the gate can measure the other two hundred rules. The design's drips chart carries a hover tooltip (shell.css:287, index.html:637) and we ship neither the rule nor the element. Filed as #594 against the sheet owner. When it ships, this entry stops describing a divergence and the checker will demand its removal - which is the property that stops this line becoming permanent.",
+    "shipped": ""
+  },
+  ".views > .view.hero, .comp > .view.hero": {
+    "kind": "override",
+    "why": "RE-SCOPED TO OUTRANK globals.css, SAME DECLARATIONS (#575). The legacy sheet styles the same element at the same specificity, so the design's own selector loses on source order alone. One ancestor is added - `html` for element rules, `.stage` for page furniture - which raises specificity without changing what is painted. The spec's key and ours therefore differ while the CSS does not, which the checker reports as one dropped rule plus one added rule: the same divergence twice.",
+    "shipped": "flex:1 1 auto; min-height:0; justify-content:flex-start; padding-top:calc(2.5*var(--u))"
+  },
+  ":focus-visible": {
+    "kind": "override",
+    "why": "RE-SCOPED TO OUTRANK globals.css, SAME DECLARATIONS (#575). The legacy sheet styles the same element at the same specificity, so the design's own selector loses on source order alone. One ancestor is added - `html` for element rules, `.stage` for page furniture - which raises specificity without changing what is painted. The spec's key and ours therefore differ while the CSS does not, which the checker reports as one dropped rule plus one added rule: the same divergence twice.",
+    "shipped": ""
+  },
+  "@media (max-width:32rem) | #lookupform .prompt,#lookupform .tag.ink": {
+    "kind": "override",
+    "why": "A 44px TAP FLOOR THE DESIGN DOES NOT CARRY. The approved preview is a desktop mock and has no touch-target rule anywhere; shipping it as drawn puts 23-30px controls under a finger. SDE-App's #593 survey found NINE scoped floors across this codebase with THREE different triggers - (pointer:coarse), max-width:32rem and max-width:56rem - so a touch device at 1024px gets one answer and a narrow desktop window another. #593 replaces the scattered subjects AND unifies the trigger; these entries come out with it. Declared rather than dropped because a floor of ours the design cannot satisfy is exactly what an `override` is.",
+    "shipped": "min-height:44px"
+  },
+  "@media (max-width:56rem) | .card.claim .prompt,.card.claim .automate,.card.claim .linkbtn": {
+    "kind": "override",
+    "why": "A 44px TAP FLOOR THE DESIGN DOES NOT CARRY. The approved preview is a desktop mock and has no touch-target rule anywhere; shipping it as drawn puts 23-30px controls under a finger. SDE-App's #593 survey found NINE scoped floors across this codebase with THREE different triggers - (pointer:coarse), max-width:32rem and max-width:56rem - so a touch device at 1024px gets one answer and a narrow desktop window another. #593 replaces the scattered subjects AND unifies the trigger; these entries come out with it. Declared rather than dropped because a floor of ours the design cannot satisfy is exactly what an `override` is.",
+    "shipped": "min-height:44px"
+  },
+  "@media (max-width:56rem) | .card.claim .tag,.card.claim .tabs button": {
+    "kind": "override",
+    "why": "A 44px TAP FLOOR THE DESIGN DOES NOT CARRY. The approved preview is a desktop mock and has no touch-target rule anywhere; shipping it as drawn puts 23-30px controls under a finger. SDE-App's #593 survey found NINE scoped floors across this codebase with THREE different triggers - (pointer:coarse), max-width:32rem and max-width:56rem - so a touch device at 1024px gets one answer and a narrow desktop window another. #593 replaces the scattered subjects AND unifies the trigger; these entries come out with it. Declared rather than dropped because a floor of ours the design cannot satisfy is exactly what an `override` is.",
+    "shipped": "min-height:44px"
+  },
+  "@media (max-width:56rem) | .hero-copy .chips .tag": {
+    "kind": "override",
+    "why": "A 44px TAP FLOOR THE DESIGN DOES NOT CARRY. The approved preview is a desktop mock and has no touch-target rule anywhere; shipping it as drawn puts 23-30px controls under a finger. SDE-App's #593 survey found NINE scoped floors across this codebase with THREE different triggers - (pointer:coarse), max-width:32rem and max-width:56rem - so a touch device at 1024px gets one answer and a narrow desktop window another. #593 replaces the scattered subjects AND unifies the trigger; these entries come out with it. Declared rather than dropped because a floor of ours the design cannot satisfy is exactly what an `override` is.",
+    "shipped": "min-height:44px"
+  },
+  "a": {
+    "kind": "override",
+    "why": "RE-SCOPED TO OUTRANK globals.css, SAME DECLARATIONS (#575). The legacy sheet styles the same element at the same specificity, so the design's own selector loses on source order alone. One ancestor is added - `html` for element rules, `.stage` for page furniture - which raises specificity without changing what is painted. The spec's key and ours therefore differ while the CSS does not, which the checker reports as one dropped rule plus one added rule: the same divergence twice.",
+    "shipped": ""
+  },
+  "body": {
+    "kind": "override",
+    "why": "RE-SCOPED TO OUTRANK globals.css, SAME DECLARATIONS (#575). The legacy sheet styles the same element at the same specificity, so the design's own selector loses on source order alone. One ancestor is added - `html` for element rules, `.stage` for page furniture - which raises specificity without changing what is painted. The spec's key and ours therefore differ while the CSS does not, which the checker reports as one dropped rule plus one added rule: the same divergence twice.",
+    "shipped": ""
+  },
+  "html[data-theme]": {
+    "kind": "override",
+    "why": "RE-SCOPED TO OUTRANK globals.css, SAME DECLARATIONS (#575). The legacy sheet styles the same element at the same specificity, so the design's own selector loses on source order alone. One ancestor is added - `html` for element rules, `.stage` for page furniture - which raises specificity without changing what is painted. The spec's key and ours therefore differ while the CSS does not, which the checker reports as one dropped rule plus one added rule: the same divergence twice.",
     "shipped": "background:var(--page)"
   }
 }

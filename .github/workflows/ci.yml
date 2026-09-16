@@ -86,7 +86,7 @@ jobs:
           # transcribed from and the checker refuses to compare a sheet against a spec it
           # does not declare, so these two lines cannot silently swap sheets between them.
           node scripts/parity-check.mjs design/spec/S1-20260915T1938Z/shell.css src/app/redesign-shell.css src/app/redesign-tokens.css
-          node scripts/parity-check.mjs design/spec/S2-S5-20260915T2224Z/index.css src/app/redesign-hero.css
+          node scripts/parity-check.mjs design/spec/S2-S5-20260915T2224Z/index.css src/app/redesign-hero.css src/app/redesign-card.css src/app/redesign-views.css
           node scripts/parity-check.mjs design/spec/S2-S5-20260915T2224Z-subpages/terms.css src/app/redesign-subpages.css
 
   smoke:
