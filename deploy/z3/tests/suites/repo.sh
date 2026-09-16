@@ -1801,17 +1801,34 @@ check "and the file it names is the one that is actually there" \
 
 # An unresolved placeholder is the same defect as a missing line: the reader supplies something and
 # it is not checkable. <box> was the one that sent the owner to a laptop.
-PLACEHOLDER="$(grep -c 'root@<box>' "$OPS" || true)"
+# ANY PLACEHOLDER SPELLING, not the one that happened to be there. SDE-UI: respell it root@<host>
+# and a `grep -c 'root@<box>'` row passes while the page is exactly as useless. A denylist of the
+# spellings I thought of cannot be complete - the same finding they blocked my #619 on, and I wrote
+# this row after that.
+PLACEHOLDER="$(grep -cE 'root@<[^>]*>' "$OPS" || true)"
 check "the runbook names a real ssh host rather than an unresolved <box> placeholder" \
   "[ $PLACEHOLDER -eq 0 ]"
 
 # ABSENCE OF A PLACEHOLDER IS NOT PRESENCE OF THE HOST, and the defect this PR opens with is the
 # MISSING ssh line, not a wrong one. Without this the fix can be deleted and the gate stays green.
 # Ordering matters as much as presence: the ssh line below the marker read is the same defect.
-SSH_LINE="$(grep -n 'ssh root@zcashfaucet' "$OPS" | head -1 | cut -d: -f1)"
+# INSIDE THE SAME BLOCK, not merely earlier in the file. SDE-UI's mutant: move the ssh line to an
+# unrelated earlier section and delete it from the fork-park block, and a first-ssh-anywhere versus
+# first-marker-anywhere comparison still passes - the two happen to be adjacent today, so the row is
+# meaningful NOW and stops being so the moment the document is reorganised. The page is then back to
+# telling an operator to sudo cat a box-only path with no instruction to get there, which is the
+# defect this PR exists to close.
+#
+# So: find the marker read, walk BACK to the fence that opens its block, and require an ssh line
+# between the two. A block is the unit an operator copies.
 MARKER_CAT="$(grep -n 'cat /var/lib/faucet-watchdog/miner-parked-by-fork-heal' "$OPS" | head -1 | cut -d: -f1)"
-check "the fork-park block tells the operator to ssh to the box BEFORE reading a path that only exists there" \
-  "[ -n '$SSH_LINE' ] && [ -n '$MARKER_CAT' ] && [ $SSH_LINE -lt $MARKER_CAT ]"
+BLOCK_TOP="$(head -n "${MARKER_CAT:-1}" "$OPS" | grep -n '^```' | tail -1 | cut -d: -f1)"
+SSH_IN_BLOCK=0
+if [ -n "$MARKER_CAT" ] && [ -n "$BLOCK_TOP" ]; then
+  SSH_IN_BLOCK="$(sed -n "${BLOCK_TOP},${MARKER_CAT}p" "$OPS" | grep -c 'ssh root@' || true)"
+fi
+check "the fork-park block itself tells the operator to ssh to the box before reading a path that only exists there" \
+  "[ -n '$MARKER_CAT' ] && [ $SSH_IN_BLOCK -gt 0 ]"
 
 # NOT ADDING A MARKER-PATH ROW HERE. I wrote one and my own mutant refused it: renaming the
 # watchdog's marker to `...-healing` left my `grep -q "miner-parked-by-fork-heal"` matching, because
