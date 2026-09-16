@@ -345,6 +345,28 @@ check "the watchdog was restarted when watchdog.sh was (re)installed" \
   "grep -qx 'faucet-watchdog.service' '$STUB_RESTARTED'"
 check "and the run says why" "grep -q 'restarted faucet-watchdog.service so the new code' '$T/wd1.log'"
 
+echo "== install-ops: a watchdog restart that FAILS is an error, not a line nobody reads"
+# #557. The happy path above is held; its failure path was not, and downgrading the ERROR at
+# install-ops.sh:242 to a note left this suite green. Found by mutation while reviewing #553,
+# where the socket's restart block has the same shape and now has the case below.
+#
+# THE STATE IT REPORTS IS THE ONE AN OPERATOR MOST NEEDS NAMED, and it is the 2026-08-18 shape:
+# the file on disk matches the repo, audit-drift agrees, box-report counts it present, and the
+# running process is still executing the old code. That is how the step-5 poison heal sat dormant
+# while a crash loop ran to 944 restarts. A restart that silently fails puts the box back in it,
+# and the only signal is a log line and an exit code - so both are held here.
+ops_env
+export STUB_RESTARTED="$T/wdrestart3"; : > "$STUB_RESTARTED"
+STUB_RESTART_FAIL=faucet-watchdog.service bash "$INSTALL_OPS" "$T/src" > "$T/wd3.log" 2>&1
+rc_wd=$?
+check "the run FAILS rather than reporting a clean install" "[ $rc_wd -ne 0 ]"
+# THE ATTEMPT IS ASSERTED SEPARATELY from the failure, for the reason the socket case does it: a
+# skipped restart and a failed one both leave the old code running, and only this tells them apart.
+check "and it tried, so the failure is the restart's and not a skipped step" \
+  "grep -qx 'faucet-watchdog.service' '$STUB_RESTARTED'"
+check "and it says the watchdog is still running the OLD code, which is what an operator acts on" \
+  "grep -q 'it is still running the OLD code' '$T/wd3.log'"
+
 echo "== install-ops: a re-run with an UNCHANGED watchdog.sh does not bounce the watchdog"
 # The restart is gated on the file actually changing. Restarting every deploy tick, change
 # or not, would needlessly bounce the supervisor and could mask a real crash loop.
