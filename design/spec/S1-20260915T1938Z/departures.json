@@ -211,5 +211,20 @@
     "kind": "override",
     "why": "A DEDICATED BORDER TOKEN FOR THE TAB. `--tab-border` is added to both themes so the unselected tab can meet WCAG 1.4.11's 3.0:1 for a control boundary without moving `--prompt-border`, which `.prompt` shares. #968981 is 3.39:1 on --surface and 3.27:1 on --panel; #7d736b is 3.59:1 and 3.41:1 in ink. Chosen against BOTH backgrounds the tab sits on: the obvious candidates one step lighter clear 3.0 on the surface and fail on the panel, which is where the card actually is. The rest of this rule is the design's, unchanged; only the one token is added. Reasoning in full on the `.tabs button` entry in the S2 file.",
     "shipped": "--page:#171615; --surface:#201e1d; --panel:#262220; --tab-border:#7d736b; --ink:#f3f2f2; --ink-2:#f3f2f2; --ink-3:#fff; --muted:#b5b0ab; --label:#b5b0ab; --accent-text:#ff9783; --green:#35c46a; --green-text:#35c46a; --warn:#e0a43a; --warn-text:#e0a43a; --bad:#ff7b70; --bad-text:#ff7b70; --border:rgb(255 233 218 / 9%); --hair:#36312e; --prompt-border:#554d48; --prompt-bg:#1a1817; --bar-soft:#4d3b2f; --tag-bg:#292524; --orange-soft:#2f231c; --orange-line:#ff8a3d; --unknown:#8a857f; --panel-bg:radial-gradient(circle at 50% 78%,rgb(255 150 90 / 8%),transparent 47%),linear-gradient(180deg,#262220,#221f1e); --panel-bg-feature:radial-gradient(circle at 74% 46%,rgb(255 150 90 / 14%),transparent 48%),linear-gradient(180deg,#282321,#221f1e); --shadow-a:rgb(0 0 0 / 45%); --shadow-b:rgb(0 0 0 / 25%); color-scheme:dark"
+  },
+  "@media (max-width:32rem) | .brand": {
+    "kind": "override",
+    "why": "`min-width:0` ADDED (#623). The header grid could not shrink to a 320px screen: its columns measured 157.469px + 157.703px + a 10px gap = 325 inside a 292px box, so every page scrolled sideways by 19px - scrollWidth 339 against clientWidth 320, on all seven surfaces. Column one's floor is `.brand`, whose min-content is an unbreakable `white-space:nowrap` link; column two is `.hdr-right`, which cannot go below 157.7px without breaking the 44px tap floor it is already sitting on. A grid item defaults to `min-width:auto`, which refuses to shrink below min-content - the same property that pushed the footer off-screen in #610, on the other axis.\n\nThe design was drawn at widths where this never bound, so it has nothing to say about 320; this makes its header fit there rather than changing what it looks like above.",
+    "shipped": "grid-area:brand; flex-wrap:wrap; row-gap:6px; min-width:0"
+  },
+  "@media (max-width:32rem) | .brand .home": {
+    "kind": "override",
+    "why": "`white-space:normal` at the narrow breakpoint only (#623). This is the other half of `.brand{min-width:0}` above and neither works alone: giving the column permission to shrink does nothing while its content is one unbreakable 157.5px token. Letting \"Zcash Testnet Faucet\" wrap drops column one to its longest word and the page fits - scrollWidth 339 -> 320. Scoped to max-width:32rem, so the masthead is untouched at every width the design was drawn at.",
+    "shipped": "white-space:normal; min-width:0"
+  },
+  "@media (max-width:32rem) | .seg": {
+    "kind": "override",
+    "why": "`min-width:0`, `flex-wrap:wrap` and a tighter gap (#623). `.seg` spans both header columns, so it INHERITED the overflow above rather than causing it - it was the widest thing past the edge, which is why it reads like the cause and is not. These three are the structural guard that keeps it from becoming one: the nav may now shrink, and if a longer label or a larger font ever makes four tabs genuinely not fit on one row it wraps to two instead of escaping its parent. At the measured widths it still renders as one row, so this changes nothing visible today - it changes what happens when the content grows.",
+    "shipped": "grid-area:seg; justify-self:stretch; min-width:0; flex-wrap:wrap; gap:calc(.7*var(--u))"
   }
 }
