@@ -863,9 +863,10 @@ async function checkFooterReachable(browser) {
         ?? el.querySelector(".comp") ?? el;
       const probe = document.createElement("div");
       probe.id = "tall-probe";
-      // `flex:none` is not enough in a column flex container: it resolves to `flex:0 0 auto` and
+      // `flex:none` is not enough once the panel is bounded: it resolves to `flex:0 0 auto` and
       // the item still shrinks below its content box. `min-height` is the only one with no
-      // competitor, and a probe that silently shrinks makes every row under it vacuous.
+      // competitor, and a probe that silently shrinks makes every row under it vacuous. On main
+      // this is a no-op - nothing there bounds the panel, so nothing squeezes the probe.
       probe.style.cssText = "height:1200px;min-height:1200px;width:1px;flex:0 0 1200px";
       host.appendChild(probe);
       const inserted = probe.getBoundingClientRect().height >= 1200;
@@ -2649,10 +2650,17 @@ async function checkFooterHeldAgainstGrowth(browser, base) {
       if (!panel) return { grew: false };
       const probe = document.createElement("div");
       probe.setAttribute("data-ui-smoke", "growth-probe");
-      // `flex:0 0` AND `min-height`, because the panel is a COLUMN FLEX CONTAINER: a bare
-      // `height:600px` child is a flex item at `flex-shrink:1` and the first version of this row
-      // watched it shrink to 98px. The footer then "held" against 98px of growth it had slack for
-      // and the row passed while proving nothing. The absorption row below is what caught it.
+      // `flex:0 0` AND `min-height`, because a bare `height:600px` child of this panel collapses -
+      // it measured 98.7px - and the footer then "held" against 98px of growth it had slack for
+      // while two rows went green proving nothing. The absorption row below is what caught it.
+      //
+      // THE CAUSE IS NOT "IT IS A COLUMN FLEX CONTAINER", which is what I first wrote and what
+      // SDE-UI measured and disproved. On origin/main the identical bare div comes back at a full
+      // 600px at all five sizes, because there the panel is UNBOUNDED - it reports zero internal
+      // scroll and the card grows 537 to 1153 instead. A flex child is only squeezed when its
+      // container has a bound to squeeze it against. Bounding the panel is exactly what the clamp
+      // does, so the collapse is a consequence OF this change and not a pre-existing trap: the
+      // guard is necessary here and a no-op on main.
       probe.style.cssText = "flex:0 0 600px;min-height:600px;height:600px";
       panel.appendChild(probe);
       const f = document.querySelector("footer.ftr");
