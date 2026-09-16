@@ -61,11 +61,11 @@ export function readinessReason(i: ReadinessInputs): string | null {
   // term left that can be false is `walletCaughtUp`. There is no reachable state in which this
   // line fires because of the node. The test below pins that rather than this paragraph.
   //
-  // "scanning" rather than the incident's "re-scanning": a wallet restored from seed or freshly
-  // deployed is behind for the same reason and has never scanned before, and a word that is
-  // false in one of the two states is the defect this rung exists to fix. The lag is the number
-  // an operator acts on either way. CTO ruled "wallet re-scanning" at 11:33Z; this is one token
-  // away from that and I would rather be told than quietly right.
+  // "re-scanning" is the CTO's word, ruled at 11:33Z and again at 12:39Z. I argued once for
+  // "scanning" - a wallet restored from seed or freshly deployed is behind for the same reason
+  // and has never scanned before, so the prefix is false in that state - and the ruling stands,
+  // so it ships. Recorded rather than re-argued: the lag beside it is right in both states and
+  // is the number an operator acts on.
   //
   // THE STRING IS READ BY deploy/z3/redeploy.sh, which is why that file moves in this commit:
   // `reason_is_not_the_code()` matched "node syncing" and would have stopped matching, turning
@@ -75,8 +75,8 @@ export function readinessReason(i: ReadinessInputs): string | null {
       ? i.node.nodeHeight - i.node.height
       : null;
     return lag == null
-      ? "wallet scanning, behind our node"
-      : `wallet scanning, ${lag} blocks behind our node`;
+      ? "wallet re-scanning, behind our node"
+      : `wallet re-scanning, ${lag} blocks behind our node`;
   }
   // Only "unsafe". See the module comment: "unverifiable" stays ready on purpose. lag is
   // always known when the state is unsafe (chainFreshness needs both heights to say so),
