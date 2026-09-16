@@ -3298,6 +3298,83 @@ async function checkNoEmDashReachesTheReader(browser, base) {
   }
 }
 
+async function checkDripsTooltip(browser, base) {
+  // #594. The design ships `.tip` on the drips chart and we shipped it nowhere - the one rule in
+  // the S1 spec the design's own page uses and ours did not, and the only entry the parity gate
+  // refused to accept as a departure. `drawDrips` ALREADY lit `i === hovered` with --orange-line
+  // and was called with a literal -1, so the highlight existed and could never fire.
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const page = await ctx.newPage();
+  await page.goto(base + "/", { waitUntil: "domcontentloaded" });
+  const tab = page.locator(".seg button").filter({ hasText: /analytics/i }).first();
+  if (await tab.count()) { await tab.click().catch(() => {}); }
+  await page.waitForTimeout(700);
+
+  const canvas = page.locator("#c-drips");
+  const tip = page.getByTestId("drips-tip");
+
+  // THE PARTNER, FIRST. Every row below is satisfied by a chart that drew nothing: a canvas with
+  // no bars cannot change colour, and a tip that never shows cannot show the wrong thing. A
+  // partner that fails in every arm would mean the case never set its subject up (SDE-Infra, #628),
+  // so this one has to pass on a working page and on a broken highlight alike.
+  const shape = await page.evaluate(() => {
+    const c = document.querySelector("#c-drips");
+    if (!c) return { there: false };
+    const b = c.getBoundingClientRect();
+    return { there: true, w: Math.round(b.width), h: Math.round(b.height) };
+  });
+  ok("#594: the drips canvas is on screen with a real box, so the rows below have a subject",
+    shape.there && shape.w > 200 && shape.h > 50, JSON.stringify(shape));
+
+  ok("#594: the tooltip element ships, which it did not before",
+    (await tip.count()) === 1, `${await tip.count()} .tip element(s)`);
+  ok("#594: and it is hidden at rest, not a box sitting on the chart",
+    await tip.isHidden());
+
+  const box = await canvas.boundingBox();
+  const atRest = await page.evaluate(() => document.querySelector("#c-drips").toDataURL());
+
+  // A bar that is NOT today's: today is drawn with --orange whatever the pointer does, so hovering
+  // it would prove nothing about the hovered branch.
+  await page.mouse.move(box.x + box.width * 0.35, box.y + box.height * 0.7);
+  await page.waitForTimeout(250);
+  const hovered = await page.evaluate(() => document.querySelector("#c-drips").toDataURL());
+
+  ok("#594: hovering a bar repaints the chart, so the hovered branch is reached at all",
+    hovered !== atRest, hovered === atRest ? "the bitmap is unchanged" : "the bitmap changed");
+  ok("#594: and the tooltip is shown", await tip.isVisible());
+  // AND IT IS POSITIONED OVER THE CHART, which the text rows above do not check. Deleting the
+  // `.tip` rule leaves the element rendering its text perfectly - hidden, shown, correct string -
+  // while sitting static in the document flow instead of over the bar. Measured: with the rule
+  // removed every other row here stayed green. The parity gate would catch the missing rule, but
+  // this suite owns the behaviour and a tooltip in the wrong place is a behaviour.
+  const placed = await page.evaluate(() => {
+    const t = document.querySelector('[data-testid="drips-tip"]');
+    const c = document.querySelector("#c-drips");
+    if (!t || !c) return { ok: false, why: "missing element" };
+    const tb = t.getBoundingClientRect(), cb = c.getBoundingClientRect();
+    return {
+      position: getComputedStyle(t).position,
+      overChart: tb.left >= cb.left - 40 && tb.right <= cb.right + 40 && tb.top >= cb.top - 40 && tb.bottom <= cb.bottom + 40,
+      pointerEvents: getComputedStyle(t).pointerEvents,
+    };
+  });
+  ok("#594: the tooltip is lifted out of flow and sits over the chart, not under it",
+    placed.position === "absolute" && placed.overChart && placed.pointerEvents === "none",
+    JSON.stringify(placed));
+
+  const text = ((await tip.textContent()) ?? "").trim();
+  ok("#594: and it names a count and the day it belongs to, not just a number",
+    /^\d+ on \d{4}-\d{2}-\d{2}$/.test(text), JSON.stringify(text));
+
+  await page.mouse.move(box.x + box.width / 2, box.y - 60);
+  await page.waitForTimeout(250);
+  ok("#594: and it goes away again when the pointer leaves the chart", await tip.isHidden());
+  ok("#594: and the chart returns to exactly its unhovered bitmap",
+    (await page.evaluate(() => document.querySelector("#c-drips").toDataURL())) === atRest);
+  await ctx.close();
+}
+
 async function checkNarrowViewport(browser, base) {
   // #623. TWO FAILURES THAT ONLY EXIST BELOW 415px, AND EVERY WIDTH THIS SUITE ALREADY VISITS
   // IS ABOVE THEM. checkTapFloor's list is 375, 600, 1024, 1440; the narrowest phone still in
@@ -3914,6 +3991,8 @@ try {
   await checkTabAffordanceAndLimits(browser, BASE);
   await checkFooterHeldAgainstGrowth(browser, BASE);
   await checkNoEmDashReachesTheReader(browser, BASE);
+
+  await checkDripsTooltip(browser, BASE);
   await checkNarrowViewport(browser, BASE);
   await checkTapFloor(browser, BASE);
   await checkMobile(browser, BASE);

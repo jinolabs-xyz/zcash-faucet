@@ -1763,3 +1763,122 @@ check "and there are unit tests to check at all, so the row above is not countin
 check "the doubles announce the port they are bound to, not the one they were asked for" \
   "grep -q 'srv.address().port' '$REPO/scripts/fake-zallet.mjs' && grep -q 'srv.address().port' '$REPO/scripts/fake-crosslink.mjs'"
 
+echo "== repo: the runbook's commands can be run from where it says to run them"
+# A RUNBOOK COMMAND THAT CANNOT WORK IS WORSE THAN A MISSING ONE, because the failure reads like a
+# finding. On 2026-09-16 the owner followed this page twice and got two answers that looked like
+# discoveries and were neither:
+#   `cat /var/lib/faucet-watchdog/miner-parked-by-fork-heal` on a LAPTOP -> "No such file or
+#     directory", identical to the answer from the box, and the page had no ssh line above it.
+#   `cd .../deploy/z3 && docker compose restart faucet` -> "no configuration file provided: not
+#     found", because that directory holds only docker-compose.faucet.yml.
+#
+# These rows tie the page to what is on disk. They cannot check that a command WORKS - only the box
+# can - but they catch the two shapes that have actually bitten: a compose call in a directory with
+# no default-named file, and an unresolved placeholder standing where a host should be.
+# DOUBLE-QUOTED CHECK EXPRESSIONS, unlike most of this file. A count used ONLY inside a
+# single-quoted `check` argument is invisible to shellcheck, which reports SC2034 "appears
+# unused" and fails the shell job. The neighbours escape it because they also use their
+# variable unquoted in a loop; these two do not. Expanding at definition is equivalent here -
+# both are integers computed one line above.
+OPS="$REPO/OPERATIONS.md"
+check "OPERATIONS.md exists, so the rows below are reading something" '[ -s "$OPS" ]'
+
+# deploy/z3 has no docker-compose.yml, so every invocation naming that directory needs -f. Counted
+# rather than grepped for absence: `! grep -q` under pipefail is a false pass.
+Z3_CALLS="$(grep -c 'zcash-faucet/deploy/z3 && docker compose' "$OPS" || true)"
+Z3_NAKED="$(grep -n 'zcash-faucet/deploy/z3 && docker compose' "$OPS" | grep -vc 'compose -f docker-compose.faucet.yml' || true)"
+# THE SET FIRST, THEN ITS VIOLATORS. An empty set has no violators: delete every one of these lines
+# from the page and `grep -vc` counts zero non-matching lines out of zero, so the row below passes
+# while guarding nothing. SDE-Infra's block on this PR, and it is the second question in L38 - not
+# only what a constant is the truth of, but what the reader does when it reads NOTHING. I found
+# this exact shape in their #620 this afternoon and then shipped it here.
+check "the runbook still tells an operator how to restart the faucet at all" \
+  "[ $Z3_CALLS -gt 0 ]"
+check "every runbook compose call in deploy/z3 passes -f, because that directory has no default-named compose file" \
+  "[ $Z3_NAKED -eq 0 ]"
+check "and the file it names is the one that is actually there" \
+  '[ -f "$REPO/deploy/z3/docker-compose.faucet.yml" ] && [ ! -f "$REPO/deploy/z3/docker-compose.yml" ] && [ ! -f "$REPO/deploy/z3/compose.yaml" ]'
+
+# An unresolved placeholder is the same defect as a missing line: the reader supplies something and
+# it is not checkable. <box> was the one that sent the owner to a laptop.
+# ANY PLACEHOLDER SPELLING, not the one that happened to be there. SDE-UI: respell it root@<host>
+# and a `grep -c 'root@<box>'` row passes while the page is exactly as useless. A denylist of the
+# spellings I thought of cannot be complete - the same finding they blocked my #619 on, and I wrote
+# this row after that.
+PLACEHOLDER="$(grep -cE 'root@<[^>]*>' "$OPS" || true)"
+check "the runbook names a real ssh host rather than an unresolved <box> placeholder" \
+  "[ $PLACEHOLDER -eq 0 ]"
+
+# ABSENCE OF A PLACEHOLDER IS NOT PRESENCE OF THE HOST, and the defect this PR opens with is the
+# MISSING ssh line, not a wrong one. Without this the fix can be deleted and the gate stays green.
+# Ordering matters as much as presence: the ssh line below the marker read is the same defect.
+# INSIDE THE SAME BLOCK, not merely earlier in the file. SDE-UI's mutant: move the ssh line to an
+# unrelated earlier section and delete it from the fork-park block, and a first-ssh-anywhere versus
+# first-marker-anywhere comparison still passes - the two happen to be adjacent today, so the row is
+# meaningful NOW and stops being so the moment the document is reorganised. The page is then back to
+# telling an operator to sudo cat a box-only path with no instruction to get there, which is the
+# defect this PR exists to close.
+#
+# So: find the marker read, walk BACK to the fence that opens its block, and require an ssh line
+# between the two. A block is the unit an operator copies.
+MARKER_CAT="$(grep -n 'cat /var/lib/faucet-watchdog/miner-parked-by-fork-heal' "$OPS" | head -1 | cut -d: -f1)"
+BLOCK_TOP="$(head -n "${MARKER_CAT:-1}" "$OPS" | grep -n '^```' | tail -1 | cut -d: -f1)"
+SSH_IN_BLOCK=0
+if [ -n "$MARKER_CAT" ] && [ -n "$BLOCK_TOP" ]; then
+  SSH_IN_BLOCK="$(sed -n "${BLOCK_TOP},${MARKER_CAT}p" "$OPS" | grep -c 'ssh root@' || true)"
+fi
+check "the fork-park block itself tells the operator to ssh to the box before reading a path that only exists there" \
+  "[ -n '$MARKER_CAT' ] && [ $SSH_IN_BLOCK -gt 0 ]"
+
+# NOT ADDING A MARKER-PATH ROW HERE. I wrote one and my own mutant refused it: renaming the
+# watchdog's marker to `...-healing` left my `grep -q "miner-parked-by-fork-heal"` matching, because
+# the new name CONTAINS the old one - a substring pass dressed as a check. The mutant killed
+# :1337's row instead of mine, which is the tell. That row already ties the marker across the three
+# files and does it by composing FORK_PARK_DIR with the basename rather than spelling the joined
+# path, so it is both stricter and there first. A weaker duplicate beside it is noise that would
+# read like coverage.
+
+echo "== repo: no other workflow can impersonate a required CI job"
+# #514 part 1. auto-deploy's ci_gate selects check-runs by `.name` with no workflow or check-suite
+# filter and takes the NEWEST id per name, so a job in ANOTHER workflow sharing an id with a
+# required CI job would override CI's verdict - and newer wins, which on a tip live-smoke keeps
+# touching is always the impostor. Nothing collides today (live-smoke's only job is `probe`) and
+# the gate cannot tell; this row keeps that true.
+#
+# THE SET EQUALITY IS ALREADY HELD ABOVE, at "the gate requires exactly the jobs ci.yml defines",
+# and my first version of this re-asserted it with a WEAKER reader: `[a-z]` only, no tolerance for
+# a trailing comment - which is precisely the first-cut bug the comment at :237 records having
+# already been fixed once. Three of my four rows were redundant and one of them was a regression
+# dressed as a check. GATE_JOBS and the awk below are reused from there rather than re-derived.
+#
+# SCANNED UNDER `jobs:` ONLY: a whole-file scan also matches the `on:` triggers, so `push` and
+# `schedule` would read as job ids. I hit that enumerating the collision surface by hand.
+CLASH=""
+SCANNED=0
+for wf in "$REPO"/.github/workflows/*.yml "$REPO"/.github/workflows/*.yaml; do
+  [ -e "$wf" ] || continue
+  case "$wf" in *ci.yml) continue ;; esac
+  SCANNED=$((SCANNED + 1))
+  for id in $(awk '/^jobs:/{injobs=1; next} injobs && /^  [A-Za-z_][A-Za-z0-9_-]*:[[:space:]]*(#.*)?$/ {sub(/^  /, ""); sub(/:.*$/, ""); print}' "$wf"); do
+    for n in $GATE_JOBS; do
+      [ "$id" = "$n" ] && CLASH="$CLASH [$(basename "$wf"):$id]"
+    done
+  done
+done
+if [ -z "$CLASH" ]; then
+  ok "no other workflow declares a job id auto-deploy treats as CI's verdict"
+else
+  bad "no other workflow declares a job id auto-deploy treats as CI's verdict (the newer run would win:$CLASH)"
+fi
+
+# AND THE LOOP ABOVE ACTUALLY READ SOMETHING. With one workflow in the tree it never runs and
+# reports agreement it never tested - the empty-set shape, which three of us shipped this week.
+#
+# COUNTED INSIDE THE LOOP, not by a second find() beside it, and the difference is the whole value
+# of the row (SDE-UI, review of #634). Derived separately, the two cannot contradict each other for
+# the reason that actually happens: the glob stops matching - the directory is renamed, the
+# workflows move, someone writes `workflow/` - and `find` on its own hard-coded path still says
+# "1 other workflow" while the loop reads nothing. Both rows green, nothing checked. Sharing the
+# traversal means the only way the partner can be green is that the loop really walked a file.
+check "and the loop above actually read a workflow, so it is not reporting agreement on an empty set" \
+  "[ $SCANNED -ge 1 ]"
