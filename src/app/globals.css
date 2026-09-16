@@ -182,15 +182,56 @@ a:hover { color: var(--color-accent-800); }
   .nav-back-short { display: inline; }
 }
 
-/* fingers need bigger targets than mice: 44px is the accessibility floor */
+/* ===== THE TAP FLOOR. ONE RULE, ONE TRIGGER, EVERY SURFACE =====
+   Fingers need bigger targets than mice; 44px is the floor. This replaces nine rules that
+   were spread over five sheets and - the worse half - disagreed about WHEN a floor applies:
+
+     (pointer: coarse)   .app .btn-sm · .app .theme-toggle
+     (max-width:32rem)   .seg button · .strip · #lookupform .prompt,.tag.ink
+     (max-width:56rem)   .view.sub .tag · .hero-copy .chips .tag · .card.claim .tag,.tabs
+                         button · .card.claim .prompt,.automate,.linkbtn
+
+   Three answers to one question, and every gap between them is a device someone is holding.
+   MEASURED, on a 1024x768 tablet WITH touch: twenty controls under the floor and not one rule
+   reaching them, because 1024 is past 56rem and the two coarse rules key on classes the
+   redesign does not use. Every hero chip at 25.2px, the segmented nav at 28.6, the footer
+   links at 17.5, and the primary claim button at 42.9 - the whole page, with no floor at all,
+   on the device most likely to be touched.
+
+   THE TRIGGER IS `pointer: coarse` AND NOTHING ELSE. A floor exists because a finger is
+   imprecise, not because a window is narrow. Width was only ever a proxy for touch, and it is
+   wrong in both directions: it missed the tablet above, and it fires on a 400px desktop window
+   where a mouse needs no floor. That last one is a deliberate behaviour change - narrow
+   non-touch windows lose a floor they did not need - and it is declared in departures.
+
+   PROSE LINKS ARE EXEMPT, on purpose. A link inside a sentence (`jinolabs.xyz` at 11px, "donate
+   TAZ" at 14px) cannot be given a 44px box without wrecking the paragraph, and WCAG 2.5.8
+   exempts targets "in a sentence or block of text" for exactly that reason. So the subjects are
+   controls and navigation, named as such, rather than every `a` on the page.
+
+   `inline-flex` with centring rides along because `min-height` alone only grows the BOX: an
+   anchor whose line is 17px would sit at the top of a 44px target with 27px of dead space under
+   it, which looks like a bug and mis-places the thing a finger aims at. */
 @media (pointer: coarse) {
-  .app .btn-sm { min-height: 44px; }
-  /* The icon controls were missed by the rule above, because it keys on .btn-sm
-     and these are .theme-toggle. Both the theme button and the source link were
-     30x30 on a phone, which is under the floor for the two controls in the
-     masthead that a finger is most likely to reach for. The square shape is the
-     point of them, so both dimensions grow together rather than just the height. */
-  .app .theme-toggle { width: 44px; height: 44px; }
+  button,
+  input:not([type="hidden"]),
+  select,
+  textarea,
+  nav a,
+  .tag,
+  .home,
+  .morelink,
+  .linkbtn,
+  .footer-brand { min-height: 44px; }
+
+  nav a,
+  .home,
+  .morelink,
+  .linkbtn,
+  .footer-brand { display: inline-flex; align-items: center; }
+
+  /* The square shape is the point of these two, so both dimensions grow together. */
+  .theme-toggle, .iconbtn { width: 44px; height: 44px; }
 }
 
 /* ── The footer, and why it stops sticking on a phone ────────────────────────

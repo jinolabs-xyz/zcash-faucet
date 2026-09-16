@@ -104,14 +104,6 @@
 #lookupform{display:flex;gap:calc(.6*var(--u));align-items:stretch;margin-top:calc(.6*var(--u))}
 #lookupform .prompt{flex:1;min-width:0}
 #lookupform .tag.ink{height:auto;padding-inline:calc(1.3*var(--u));font-size:calc(.95*var(--u));white-space:nowrap;border-radius:calc(.6*var(--u))}
-/* DEPARTURE from the preview, measured rather than designed, and the same one S1 made
- * four times. At the phone breakpoint the preview's own type and padding give the field
- * and its button 41px, and ui-smoke enforces a 44px tap-target floor on a real iPhone 13
- * viewport. 44px is the floor, so this raises exactly those two controls at exactly that
- * width and changes nothing on a desktop, where they are already taller. */
-@media (max-width:32rem){
-  #lookupform .prompt,#lookupform .tag.ink{min-height:44px}
-}
 
 /* ===== Analytics (preview lines 272-300) ========================================== */
 

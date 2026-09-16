@@ -233,15 +233,14 @@ html :focus-visible{outline-color:var(--accent-text)}
 .stage a:hover{color:var(--accent-text)}
 .stage .ftr nav a:hover,.stage .hdr-right nav a:hover,.stage .seg a:hover{color:var(--ink)}
 
-/* 3. WCAG 2.5.5 target size, on the two controls the phone breakpoint leaves short. The
- *    segmented nav is calc(2.2*var(--u)) tall, which is 26px at --u:12px, and the drips
- *    strip is calc(2.7*var(--u)), which is 32px. Both are real tap targets: the nav
- *    switches views and the strip opens analytics. The nav already stretches to full width
- *    there, so a 44px target is what the layout was going to imply anyway. Desktop is
- *    untouched, where a pointer makes the smaller geometry fine. */
+/* 3. The strip's fixed height comes off at the phone breakpoint so it can grow. The tap
+ *    floor that used to live here - `.seg button` and `.strip` at min-height:44px - is gone;
+ *    there is one floor now, in globals.css, keyed on `pointer: coarse` rather than on a
+ *    width. What stays is only this: `height:calc(2.7*var(--u))` is FIXED, and a fixed height
+ *    beats a min-height on the same box unless the fixed one is released. So the floor can
+ *    raise the strip only because this line lets go of it. */
 @media (max-width:32rem){
-  .seg button{min-height:44px}
-  .strip{height:auto;min-height:44px}
+  .strip{height:auto}
 }
 
 /* 4. Not a rule, a note, so the reason is not only in a PR body: the preview has no
