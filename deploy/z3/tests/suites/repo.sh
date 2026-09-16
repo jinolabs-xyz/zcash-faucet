@@ -1247,9 +1247,40 @@ echo "== repo: the harness reports where its own wall clock went"
 check "every result records the wall clock before it, not the eval inside check()" \
   "grep -qF '_hz_mark \"\$1\"; pass=' '$REPO/deploy/z3/tests/lib.sh' && grep -qF '_hz_mark \"\$1\"; fail=' '$REPO/deploy/z3/tests/lib.sh'"
 check "and does it with the bash builtin, so 2000-odd checks cost no subprocesses" \
-  "grep -qF 'EPOCHREALTIME/[.,]/' '$REPO/deploy/z3/tests/lib.sh' && ! grep -q '_hz_prev=\$(date' '$REPO/deploy/z3/tests/lib.sh'"
+  "grep -qF 'local now=\$(( \${EPOCHREALTIME/[.,]/} ))' '$REPO/deploy/z3/tests/lib.sh' && ! grep -q 'now=\$(date' '$REPO/deploy/z3/tests/lib.sh'"
 check "the runner prints the slowest checks and counts the ones over 10s" \
   "grep -qF 'where the time went' '$REPO/deploy/z3/tests/run-tests.sh' && grep -qF '\$1 > 10000000' '$REPO/deploy/z3/tests/run-tests.sh'"
+
+# AND THIS ONE IS NOT A PIN, because this property CAN be observed from in here: it is about
+# what a child process inherits, and a child is two lines away. The timing path is a plain
+# shell variable, so a nested run only collides with its parent when the path arrived
+# EXPORTED - which is exactly the shape a human uses (`HARNESS_TIMING=/x ./run-tests.sh`) and
+# which CI never uses, so the damage is invisible on every green run we have. repo.sh starts
+# ten nested run-tests.sh runs; each sources lib.sh, truncates the inherited path and deletes
+# it on exit, and the parent's report silently drops every row from before the first one.
+# Measured on this tree: 214 rows with nothing exported, 102 with it exported.
+# The toy below is the two levels and nothing else, so it costs two bash starts, not a suite.
+mk_scratch "${TMPDIR:-/tmp}/repo-timing.XXXXXX"
+cp -r "$REPO/deploy/z3/tests" "$T/tt"
+cat > "$T/tt/nested.sh" <<'NESTED'
+cd "$(dirname "$0")" && . ./lib.sh && ok "a row from the nested run"
+NESTED
+# The parent records a row, runs the child, then copies the file BEFORE its own EXIT trap
+# removes it - the trap is the harness cleaning up after itself and is not what is on trial.
+cat > "$T/tt/outer.sh" <<'OUTER'
+cd "$(dirname "$0")"
+. ./lib.sh
+ok "a row from the caller"
+bash ./nested.sh
+cp "$HARNESS_TIMING" "$OUT" 2>/dev/null || true
+OUTER
+( cd "$T/tt" && HARNESS_TIMING="$T/inherited.txt" OUT="$T/kept.txt" bash "$T/tt/outer.sh" >/dev/null 2>&1 )
+check "a nested harness run does not clobber the timing file of the run that started it" \
+  "grep -q 'a row from the caller' '$T/kept.txt'"
+# Same toy, unexported, so a pass above cannot be the child simply never running.
+( cd "$T/tt" && OUT="$T/kept2.txt" bash "$T/tt/outer.sh" > "$T/toy.log" 2>&1 )
+check "and the toy's two levels both really ran, so the check above is not vacuous" \
+  "grep -q 'a row from the caller' '$T/kept2.txt' && grep -q 'a row from the nested run' '$T/toy.log'"
 # AND THE ONE CASE THAT BROKE THE RULE STAYS FIXED. A pin on the knobs, not on a duration:
 # timing assertions go red on a loaded runner, which teaches people to re-run CI.
 # AND THE SHIPPED DEFAULTS ARE ANCHORED, because removing the sleep removed the only thing that
@@ -1269,6 +1300,14 @@ check "and the shipped gap between probes" \
 # AND THE OPERATOR'S SENTENCE IS DERIVED FROM THEM, not typed beside them. The refusal says
 # "over ~N min", and N is computed from the two knobs; a literal there would go stale the first
 # time either number moved, and the operator would be told a duration the script does not wait.
+# AND THE OPERATOR'S DOC CARRIES THE SAME TWO NUMBERS. SNAPSHOTS.md tells whoever is holding
+# the pager "default 10 probes 30s apart", which is how long they will wait before the export
+# gives up. Typed beside the script rather than derived from it, so moving either knob leaves
+# the doc quietly wrong - and a doc that is quietly wrong about a wait is worse than one that
+# says nothing, because it is believed.
+SNAP_MD="$REPO/deploy/z3/SNAPSHOTS.md"
+check "SNAPSHOTS.md quotes the shipped probe count and gap, not numbers of its own" \
+  "grep -qF 'default $(sed -nE 's/^ZSNAP_READY_TRIES=\"\$\{ZSNAP_READY_TRIES:-([0-9]+)\}\".*/\1/p' "$REPO/deploy/z3/zsnap-export.sh") probes $(sed -nE 's/^ZSNAP_READY_WAIT=\"\$\{ZSNAP_READY_WAIT:-([0-9]+)\}\".*/\1/p' "$REPO/deploy/z3/zsnap-export.sh")s apart' '$SNAP_MD'"
 check "and the refusal's ~N min is computed from those two, so it cannot go stale" \
   "grep -qF 'over ~\$((ZSNAP_READY_TRIES * ZSNAP_READY_WAIT / 60)) min' '$REPO/deploy/z3/zsnap-export.sh'"
 check "zsnap's ready-gate case overrides the probe knobs instead of sleeping 4.5 minutes" \

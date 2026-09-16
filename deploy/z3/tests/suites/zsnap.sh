@@ -119,7 +119,10 @@ echo "== export: ready gate blocks, ZSNAP_FORCE=1 overrides"
 fresh_env; with_chain
 STUB_READY=0 ZSNAP_READY_TRIES=2 ZSNAP_READY_WAIT=1 bash "$EXPORT" > "$T/gate.log" 2>&1
 check "not-ready export refuses (exit != 0)" "[ $? -ne 0 ]"
-check "refusal names the gate" "grep -q 'not ready' '$T/gate.log'"
+# ANCHORED ON THE REFUSAL, not on two words that the RETRY line also carries. The export logs
+# "zebra not ready, probe 1/2, retrying in 1s" on its way to giving up, so `grep 'not ready'`
+# passes whether or not the refusal is ever printed - it was asserting that the retry happened.
+check "refusal names the gate" "grep -q 'not ready in 2 probes' '$T/gate.log'"
 STUB_READY=0 ZSNAP_FORCE=1 bash "$EXPORT" > "$T/force.log" 2>&1
 check "ZSNAP_FORCE=1 exports anyway" "[ $? -eq 0 ]"
 
