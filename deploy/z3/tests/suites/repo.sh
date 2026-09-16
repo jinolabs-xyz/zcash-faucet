@@ -1627,6 +1627,23 @@ fi
 # decision nobody recorded. Matched the way the shell matches, from the literals just read.
 RB_WRONG=""
 RB_EXCLUDED="wallet balance unknown"
+# AND THE STRING THIS ROW PROTECTS HAS TO BE ONE THE PRODUCT STILL SAYS. Found by SDE-UI reviewing
+# this PR, and it is the defect this whole file is about, one layer up and inside the gate that
+# fixes it: every GLOB literal is tied back to readinessReason() by the row above, and the one
+# literal tied to nothing was the one written HERE. Their mutant survived at 236/0 - rename
+# "wallet balance unknown" to "wallet balance unavailable" in readiness.ts and its test, then add
+# *"balance unavailable"* to both chain arms, and the rollback starts treating a wallet-balance
+# outage as not-the-code's-fault while this row reports the exclusion intact. Every other row is
+# honestly green: it is still a phrase, readinessReason genuinely emits it, and both sites agree.
+#
+# This does NOT guess the new spelling, which is the point. It refuses to go vacuous in silence:
+# the moment the product stops saying what RB_EXCLUDED says, the row below is protecting a string
+# nothing emits and this one says so.
+if printf '%s\n' "$RDY_EMITS" | grep -qF "$RB_EXCLUDED"; then
+  ok "and that reason is one readinessReason() still emits, so a rename cannot quietly make the row below vacuous"
+else
+  bad "and that reason is one readinessReason() still emits, so a rename cannot quietly make the row below vacuous (nothing emits [$RB_EXCLUDED], so the exclusion row is protecting a string the app no longer says)"
+fi
 while IFS= read -r lit; do
   [ -n "$lit" ] || continue
   case "$RB_EXCLUDED" in *"$lit"*) RB_WRONG="$RB_WRONG [$RB_EXCLUDED <- $lit]" ;; esac
