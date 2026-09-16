@@ -1115,7 +1115,6 @@ export default function Home() {
     : "Faucet ready.";
 
   const kicker: CSSProperties = { fontFamily: "var(--mono)", fontSize: 10, fontWeight: 700, letterSpacing: ".14em", textTransform: "uppercase", color: "var(--color-accent-text)" };
-  const rowLine: CSSProperties = { display: "flex", justifyContent: "space-between", gap: 12, padding: "8px 0", borderBottom: "1px solid var(--color-divider)", fontFamily: "var(--mono)", fontSize: 11.5 };
 
   return (
     // `app` stays on the outer element: it is what the smoke's theme and contrast checks
@@ -1168,6 +1167,19 @@ export default function Home() {
                 card's own contents and puts the phase changes on `motion`; this slice gives
                 them the shell they will live in, so the hero is real a merge earlier. */}
             <article className="card claim feature" id="claim" aria-labelledby="h1" ref={cardRef}>
+              {/* THE PANEL, which this card did not have. The design's claim card is
+                  article.card.claim.feature > div.panel + div.card-copy (index.html:429, :430,
+                  :553) and our content sat directly on the article, so `.panel` (hero.css:25),
+                  `.card.feature .panel` (:26) and `.card.claim > .panel` (card.css:21) were three
+                  rules in the tree matching nothing: no peach `--panel-bg-feature` gradient, no
+                  `gap:1.1u` between the field and the panels, and no scroll box for a panel
+                  taller than the card. `.stage .card.claim`'s padding was the hotfix standing in
+                  for this wrapper's margin+padding and comes out with it.
+
+                  The contents below keep their current indentation on purpose. Re-indenting 520
+                  lines to sit under one new div would bury the change in a 520-line diff, and
+                  this block is being read by three people today. */}
+              <div className="panel">
 
         {/* TAZ only. Every number in it (sync percent, our block height, our node
             height) is about OUR Zebra, and rendering it under a cTAZ hold would show
@@ -1693,7 +1705,16 @@ export default function Home() {
           );
         })()}
 
-
+              </div>
+              {/* The design's second block, absent here entirely. `.corner-icon` is
+                  `display:none` unconditionally (hero.css:32, index.html:81), so the snapshot's
+                  <canvas class="g" data-glyph="sends"> inside it draws nothing at any width -
+                  it is omitted rather than transcribed into markup that needs a glyph painter to
+                  render something invisible. The h2 and p are verbatim. */}
+              <div className="card-copy">
+                <h2>Shielded z→z</h2>
+                <p>Sent from the shielded wallet on our own node, so nothing on chain ties the drip to you.</p>
+              </div>
             </article>
           </div>
         </section>

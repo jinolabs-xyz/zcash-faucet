@@ -18,6 +18,13 @@
  */
 
 /* ===== 7. The claim card's internals (from the snapshot's views section) ===== */
+/* THE PARENT OF THE TWO RULES UNDER IT, and it was not in the tree. `flex:1 1 auto` on the
+ * panel means nothing unless `.card.claim` is a flex column, and the only copy of this rule
+ * lived at `.view.sub .card.claim` in redesign-subpages.css:61 - scoped to the subpages, so the
+ * index's claim card had the two children and not the parent. Same failure as the missing
+ * `.panel` markup one sheet over: a rule present, its precondition absent, nothing to see.
+ * index.html:147. */
+.card.claim{max-height:100%;display:flex;flex-direction:column}
 .card.claim > .panel{flex:1 1 auto;min-height:0;overflow:auto}
 .card.claim > .card-copy{flex:none}
 .linkbtn{background:none;border:0;padding:0;align-self:flex-start;color:var(--accent-text);font-size:calc(.9*var(--u));font-weight:600;cursor:pointer}
