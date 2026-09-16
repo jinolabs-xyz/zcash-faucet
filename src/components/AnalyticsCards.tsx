@@ -17,7 +17,7 @@
 import { useEffect, useRef } from "react";
 import { drawDrips, drawReserve, drawSegments, barMax, sevenDayMean, type DripDay, type Segment } from "@/lib/charts";
 import { paintGlyph, type GlyphName } from "@/lib/glyphs";
-import { groupDigits, reserveSentence, reserveWord, reserveChipTone, acceptSentence, minerWord, minerTone, syncFigure, heightDiff, heightNote, backendHost } from "@/lib/statusView";
+import { groupDigits, reserveSentence, reserveWord, reserveChipTone, acceptSentence, minerWord, minerTone, sendsTone, syncFigure, heightDiff, heightNote, backendHost } from "@/lib/statusView";
 import type { Tone, ViewStatus } from "./viewStatus";
 import { UNKNOWN } from "./viewStatus";
 
@@ -328,9 +328,3 @@ function Glyph({ name }: { name: GlyphName }) {
   return <canvas ref={ref} className="g" data-glyph={name} aria-hidden="true" />;
 }
 
-function sendsTone(state: string | undefined): Tone {
-  if (state === "ok") return "ok";
-  if (state === "degraded") return "warn";
-  if (state === "failing") return "bad";
-  return "unknown";
-}

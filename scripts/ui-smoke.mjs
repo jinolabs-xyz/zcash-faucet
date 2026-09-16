@@ -1002,6 +1002,41 @@ async function checkFirstPaint(page, base, address) {
     for (const k of ["node", "balance", "miner"]) {
       ok(`first paint states no ${k} it was not told`, cells[k] === UNTOLD, `${k}=${cells[k] ?? "missing"}`);
     }
+    // ── THE HERO'S CHIPS ARE IN THE FIRST PAINT, WHICH IS THE DEFECT THEY FIX ──────────
+    //
+    // The puzzle sentence was written `{status?.challenge === "pow" && ...}` and the index is a
+    // client island with `status` starting null, so the SERVER HTML omitted it on every
+    // deployment since it shipped. Nothing failed; the code was there; a reader with JavaScript
+    // off never saw it, and the owner found it missing from prod. Gating the chips the same way
+    // would have shipped that defect again in new markup, so this asserts the shape rather than
+    // the values: the chips exist before any status arrives.
+    const heroFirst = await page.evaluate(() => {
+      const chips = [...document.querySelectorAll(".hero-copy .chips [data-chip]")]
+        .map((b) => ({ name: b.dataset.chip, tone: b.dataset.tone ?? "(none)", text: (b.textContent || "").trim() }));
+      return {
+        chips,
+        more: !!document.querySelector(".hero-copy .chips .tag.more"),
+        analytics: (document.querySelector(".hero-copy .morelink")?.textContent || "").trim(),
+        puzzle: /solves a short puzzle instead of a CAPTCHA/.test(document.body.textContent || ""),
+      };
+    });
+    ok("first paint carries the four hero status chips",
+      ["wallet", "node", "miner", "sends"].every((n) => heroFirst.chips.some((c) => c.name === n)),
+      heroFirst.chips.map((c) => c.name).join(", ") || "no chips in the HTML");
+    ok("and each says unknown rather than a figure it has not been told",
+      heroFirst.chips.length > 0 && heroFirst.chips.every((c) => /unknown/.test(c.text)),
+      heroFirst.chips.map((c) => `${c.name}="${c.text}"`).join("; ") || "none");
+    // The ops chip is the one that must NOT be there: it is the word about the box, and a box we
+    // have not heard from is not a box in trouble.
+    ok("and no OPS ATTENTION before anything has been established",
+      !heroFirst.chips.some((c) => c.name === "box"),
+      heroFirst.chips.map((c) => c.name).join(", "));
+    ok("first paint carries both hero links",
+      heroFirst.more && /drips this week/.test(heroFirst.analytics),
+      `more=${heroFirst.more} analytics="${heroFirst.analytics}"`);
+    ok("first paint carries the puzzle sentence, which was absent from every served page before",
+      heroFirst.puzzle, heroFirst.puzzle ? "present" : "absent from the HTML");
+
     await showView(page, "claim");
 
     // The regression. Type and submit while status is still held.
@@ -1115,6 +1150,128 @@ async function showView(page, v) {
   await page.locator(`[data-testid="view-${v}"]`).waitFor({ state: "visible", timeout: 5000 });
 }
 
+async function checkOpsChipFollowsTheBox(browser) {
+  // THE OPS CHIP SAYS WHAT THE BOX SAID, AND UNKNOWN IS NOT ATTENTION.
+  //
+  // Found by SDE-Infra on review. The chip was gated `boxState && boxState !== "ok"` with a tone
+  // of `boxState === "failing" ? "bad" : "warn"`, and `publicBox()` emits exactly
+  // ok | attention | unknown - so "failing" was unreachable, the whole non-ok half collapsed to
+  // warn, and a box that simply had not reported showed OPS ATTENTION in a warning tone beside a
+  // miner chip and a sends chip both quietly reading `unknown`.
+  //
+  // Nothing already here could see it. The first-paint and served-HTML rows both check the chip
+  // is ABSENT, and at first paint `status` is null, so `boxState` is undefined and the old gate
+  // was falsy too - it passed those rows honestly and was still wrong the moment a status
+  // arrived. The state has to be driven to be measured at all.
+  const base = await (await fetch(`${BASE}/api/status`)).json();
+  const CASES = [
+    ["ok", false, null],
+    ["attention", true, "warn"],
+    ["unknown", false, null],
+  ];
+  const visited = [];
+  for (const [state, shouldShow, wantTone] of CASES) {
+    const c = await browser.newContext({ viewport: DESKTOP });
+    const p = await c.newPage();
+    await p.route("**/api/status", (route) => {
+      const body = JSON.parse(JSON.stringify(base));
+      body.box = { ...(body.box ?? {}), state };
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+    });
+    await p.goto(BASE, { waitUntil: "domcontentloaded" });
+    await p.waitForSelector(".hero-copy .chips", { timeout: 15_000 }).catch(() => {});
+    // The chip arrives with the status, so give the island a moment to have decided either way.
+    await p.waitForTimeout(600);
+
+    const r = await p.evaluate(() => {
+      const el = document.querySelector('.hero-copy .chips [data-chip="box"]');
+      const sends = document.querySelector('.hero-copy .chips [data-chip="sends"]');
+      return {
+        present: !!el,
+        tone: el ? el.getAttribute("data-tone") : null,
+        text: el ? (el.textContent || "").trim() : "",
+        sendsTone: sends ? sends.getAttribute("data-tone") : null,
+      };
+    });
+    visited.push(state);
+
+    ok(`box ${state}: the ops chip is ${shouldShow ? "shown" : "absent"}`,
+      r.present === shouldShow,
+      r.present ? `present, tone ${r.tone}, "${r.text}"` : "absent");
+
+    if (shouldShow) {
+      ok(`box ${state}: and it is toned ${wantTone}, from statusView's map`,
+        r.tone === wantTone, `tone ${r.tone}`);
+    } else {
+      // The comparison that makes "absent" mean something: a chip that never renders in ANY
+      // state would pass all three absence rows, so the attention case above is what proves the
+      // element exists at all, and this notes what the row beside it was saying at the time.
+      ok(`box ${state}: (nothing claimed about the box; sends chip beside it reads ${r.sendsTone})`,
+        true, `no ops chip, sends tone ${r.sendsTone}`);
+    }
+    await c.close();
+  }
+  ok("the ops chip was measured in every box state it has",
+    visited.length === CASES.length, visited.join(", "));
+}
+
+async function checkServedHtmlCarriesTheHero() {
+  // THE BYTES THE SERVER SENDS, WITH NO BROWSER IN THE WAY.
+  //
+  // The rows in checkFirstPaint read the DOM with the status request held, which is the right
+  // instrument for "the island renders chips before its data arrives" - but it is NOT the claim
+  // this PR is making. The claim is about the SERVED PAGE: that `{status?.challenge === "pow"}`
+  // meant the sentence never reached a reader with JavaScript off, on any deployment, ever. A
+  // hydrated DOM cannot testify to that no matter how early it is sampled, because by the time
+  // there is a DOM the island has already run (L33: the test exercises the mechanism, the
+  // invocation exercises the artefact). So this one asks the server and reads the response body.
+  const res = await fetch(`${BASE}/`, { headers: { accept: "text/html" } });
+  const html = await res.text();
+
+  const has = (re) => re.test(html);
+  const chips = ["wallet", "node", "miner", "sends"].filter((n) => html.includes(`data-chip="${n}"`));
+
+  ok("the served HTML carries the four hero chips before any script runs",
+    res.ok && chips.length === 4, `${res.status}, chips in the body: ${chips.join(", ") || "none"}`);
+
+  // The regression this whole PR exists for. Kept as its own row and worded as the defect, so
+  // that if the gate is ever written back the failure names what went wrong rather than a count.
+  ok("the served HTML carries the puzzle sentence, which no server render carried before",
+    has(/solves a short puzzle instead of a CAPTCHA/),
+    has(/solves a short puzzle instead of a CAPTCHA/) ? `present in ${html.length} bytes`
+      : `absent from ${html.length} bytes - the status gate is back`);
+
+  // Unknown, not a figure: a server render has been told nothing, and a number in these bytes
+  // would be a number invented before the wallet was asked.
+  const untold = ["wallet", "node", "miner", "sends"].every((n) => {
+    const i = html.indexOf(`data-chip="${n}"`);
+    return i >= 0 && /unknown/i.test(html.slice(i, i + 400));
+  });
+  ok("and every one of them says unknown in those bytes, not a figure",
+    untold, untold ? "all four unknown" : "a chip carries a value the server was never told");
+
+  ok("and the ops chip is absent from a server render, which has heard nothing about the box",
+    !html.includes('data-chip="box"'), html.includes('data-chip="box"') ? "OPS ATTENTION in the served HTML" : "absent");
+
+  // THE TWO LINKS, IN THE BYTES. Found by SDE-Infra with a mutant that SURVIVED: the four rows
+  // above cover the chips, the puzzle sentence, the unknown values and the ops chip, and not
+  // these - so the standard `mounted` + useEffect pattern could make both links client-only,
+  // produce no hydration mismatch, no console error and no red row, and put the exact defect
+  // this PR exists to fix straight back onto the hero. They proved it was not a no-op by reading
+  // the served bytes: 27,544 -> 27,411 and `class="morelink"` 1 -> 0, with chips and puzzle
+  // untouched. Four rows covering four of six things is a gap the totals cannot show.
+  const statusLink = /class="tag more"/.test(html);
+  const analyticsLink = /class="morelink"/.test(html);
+  ok("the served HTML carries both hero links, not just the chips",
+    statusLink && analyticsLink,
+    `tag more ${statusLink ? "present" : "ABSENT"}, morelink ${analyticsLink ? "present" : "ABSENT"} in ${html.length} bytes`);
+
+  // And their words, because an element with the right class and no text is a link to nothing.
+  ok("and both say what they are for in those bytes",
+    /Full status/.test(html) && /drips this week/.test(html),
+    `"Full status" ${/Full status/.test(html) ? "y" : "n"}, "drips this week" ${/drips this week/.test(html) ? "y" : "n"}`);
+}
+
 async function checkMinerPanel(page) {
   // S3 REPLACED THE DISCLOSURE. The miner used to live behind a "More details" toggle in
   // the legacy status view; the design's Status view has no disclosure at all, because
@@ -1172,6 +1329,31 @@ async function checkMinerPanel(page) {
     ok(`and says whether it is answering, beside it`,
       backend.dot && (backend.on === "true" || backend.on === "false"), JSON.stringify(backend));
   }
+  // ── THE HERO CHIPS AND THE STATUS VIEW SAY THE SAME WORDS ─────────────────────────
+  //
+  // Not that the chips show SOMETHING - that they agree with the card one click away. The hero
+  // is the half a visitor reads first and the status view is where they go to check it, so a
+  // disagreement between them is the worst place on the page to put one. The chips import their
+  // words from statusView.ts rather than deriving them again (R-24), and this is what makes that
+  // a checked fact rather than a convention: a second derivation would have to produce the same
+  // string to pass, which is most of the value of having one.
+  await showView(page, "status");
+  const viewWords = await page.evaluate(() => {
+    const scope = document.querySelector('[data-testid="view-status"]');
+    const pick = (k) => scope?.querySelector(`[data-status-key="${k}"]`)?.closest("[data-tone]")?.getAttribute("data-tone") ?? null;
+    const minerEl = scope?.querySelector('[data-status-key="miner"]');
+    return { minerWord: (minerEl?.textContent || "").trim(), minerTone: pick("miner") };
+  });
+  await showView(page, "claim");
+  const chipWords = await page.evaluate(() => {
+    const el = document.querySelector('.hero-copy .chips [data-chip="miner"] b');
+    const btn = document.querySelector('.hero-copy .chips [data-chip="miner"]');
+    return { word: (el?.textContent || "").trim(), tone: btn?.dataset.tone ?? null };
+  });
+  ok("the hero's miner chip says what the status view says, word and tone",
+    !!chipWords.word && chipWords.word === viewWords.minerWord && chipWords.tone === viewWords.minerTone,
+    `hero "${chipWords.word}"/${chipWords.tone} against view "${viewWords.minerWord}"/${viewWords.minerTone}`);
+
   // ── THE CARD TITLES: THEIR GLYPHS, THEIR SIZE AND THEIR FACE ───────────────────────
   //
   // All three of these went unnoticed through three rounds for the same reason: a heading
@@ -2040,6 +2222,8 @@ try {
     ok("and the address is in the body", req.body.includes(`"address":"${lookupAddr}"`), req.body.slice(0, 60));
     ok("and the page answers that a shielded balance is private", /Shielded balances are private/.test(await page.locator("#lans").innerText()));
   }
+  await checkOpsChipFollowsTheBox(browser);
+  await checkServedHtmlCarriesTheHero();
   await checkMinerPanel(page);
   // The claim flow below drives input.input and button.btn-primary, which belong to the
   // claim view. Leave the nav where the rest of this file expects to find things.

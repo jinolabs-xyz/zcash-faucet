@@ -27,6 +27,8 @@ import {
   reserveTone,
   minerWord,
   minerTone,
+  boxTone,
+  sendsTone,
   acceptSentence,
   backendHost,
 } from "@/lib/statusView";
@@ -281,15 +283,4 @@ export function StatusCards({ status, network }: { status: ViewStatus | null; ne
  * build has not heard of must not be painted green by a `!== "bad"` test, which is how
  * an unrecognised value ends up reassuring.
  */
-function sendsTone(state: string | undefined): Tone {
-  if (state === "ok") return "ok";
-  if (state === "degraded") return "warn";
-  if (state === "failing") return "bad";
-  return "unknown";
-}
 
-function boxTone(state: string | undefined): Tone {
-  if (state === "ok") return "ok";
-  if (state === "attention") return "warn";
-  return "unknown";
-}
