@@ -3356,6 +3356,45 @@ async function checkNarrowViewport(browser, base) {
     await ctx.close();
   }
 
+  // THE COLLAPSE ITSELF, NOT JUST ITS SYMPTOM (#623, found on the rendered screen by SDE-App).
+  // My first fix moved the breakpoints below .grid3's base rule and ABOVE .grid2's, so .grid3
+  // collapsed and .grid2 stayed two-across at every width - the identical defect one selector
+  // along, inside the fix for it. The visible consequence was the Tools balance-lookup input at
+  // 28px on a 320 screen, for a testnet address of 35 characters.
+  //
+  // ASSERTING THE COLUMN COUNT RATHER THAN THE INPUT'S WIDTH, because the width was a SYMPTOM:
+  // the input is squeezed by the grid it sits in, so a row on the input alone would go green the
+  // moment someone widened the input inside a grid that is still wrong. A single-track value is
+  // the property the design actually specifies.
+  for (const w of [320, 360, 390]) {
+    const ctx = await browser.newContext({ viewport: { width: w, height: 800 }, hasTouch: true });
+    const page = await ctx.newPage();
+    await page.goto(base + "/", { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(400);
+    const tab = page.locator(".seg button").filter({ hasText: /tools/i }).first();
+    if (await tab.count()) { await tab.click().catch(() => {}); await page.waitForTimeout(300); }
+    const r = await page.evaluate(() => {
+      const g2 = document.querySelector(".grid2");
+      const inp = document.querySelector('.view[data-view="tools"] input:not([type=hidden])');
+      const cols = g2 ? getComputedStyle(g2).gridTemplateColumns : "";
+      return {
+        present: !!g2, cols, tracks: cols ? cols.trim().split(/\s+/).length : 0,
+        inputW: inp ? +inp.getBoundingClientRect().width.toFixed(1) : -1,
+        cw: document.documentElement.clientWidth,
+      };
+    });
+    // Partner: a .grid2 that is not in the DOM has one track by vacuity.
+    ok(`${w}px tools: the two-up grid is actually rendered, so the row below is about something`,
+      r.present, `.grid2 ${r.present ? "found" : "NOT in the DOM"}`);
+    ok(`${w}px tools: the two-up grid has collapsed to a single column`,
+      r.tracks === 1, `grid-template-columns: ${r.cols || "(none)"} - ${r.tracks} track(s), want 1`);
+    // And the consequence a reader actually meets, pinned to the viewport rather than a magic
+    // pixel count: this is the view's primary control and a 35-character address goes in it.
+    ok(`${w}px tools: the address input is not squeezed to a sliver by its grid`,
+      r.inputW >= r.cw * 0.4, `input ${r.inputW}px against a ${r.cw}px viewport, want >= 40%`);
+    await ctx.close();
+  }
+
   // CLIPPED-AND-UNREACHABLE, at the four widths where it was measured. Status is the view that
   // carries the operations tags ("miner unwatched", "sends unknown"), which are the labels that
   // ran past the edge; the other two views are covered by the 320 loop above.
