@@ -350,6 +350,7 @@ export default function Home() {
   // to.
   const cardRef = useRef<HTMLElement | null>(null);
   const cardFrom = useRef<number | null>(null);
+  const cardAnim = useRef<Animation | null>(null);
   const [addr, setAddr] = useState("");
   const [touched, setTouched] = useState(false);
   // PAPER IS THE DEFAULT NOW (the approved redesign is a light design). A visitor who
@@ -980,33 +981,38 @@ export default function Home() {
     phase, fail.kind, refusal?.kind ?? "", network,
     refilling ? "r" : "", refillHealthy ? "h" : "", powState ? "p" : "", tx ? "t" : "",
   ].join("|");
-  // THE PAINTED HEIGHT COMES FROM THE PREVIOUS COMMIT, recorded by the effect at the bottom of
-  // this pair. That ordering is the whole trick and it is why there is a pair at all.
+  // FROM IS THE PAINTED HEIGHT AT THE MOMENT OF THE CHANGE. TO IS THE NATURAL HEIGHT.
+  // Round two got the second one wrong and the sweep could not see it.
   //
-  // The preview reads `wasH` before it swaps the panel. React has no equivalent moment: a layout
-  // effect runs after the commit, and a layout-effect CLEANUP runs after the children's DOM
-  // mutations too, so both measure the NEW height - I shipped the cleanup version and the sweep
-  // said "NO height animation registered at all" on all 24 transitions, because `from` and `to`
-  // were the same number. Reading the ref during render does see the old box, and `react-hooks`
-  // rejects it in six places, correctly: a ref read during render is not safe under concurrent
-  // rendering and I am not going to disable the rule to keep a trick.
+  // TO: measuring `getBoundingClientRect()` while OUR animation is still running returns the
+  // INTERPOLATED value, not the height the new phase wants. `|to - from|` then comes out under a
+  // pixel, the effect returns early, and the real change lands in a single frame when the old
+  // animation ends - into success 411 -> 602 in ONE frame at 1440, 215px. The sweep called that
+  // "the content settled afterwards"; it was not, the content was in the DOM from the first
+  // frame and the target was stale. So our own animation is cancelled BEFORE `to` is measured.
   //
-  // Effects in one commit run in declaration order. The animator below is declared FIRST, so it
-  // reads `cardFrom` while it still holds the height recorded at the END of the previous commit
-  // - the box as it was painted, interpolation included, which is what lets a change arriving
-  // mid-flight continue from where the card visibly is. The recorder then overwrites it for next
-  // time. No ref is touched during render.
+  // FROM: while that animation is running the box IS the interpolated value, so measuring
+  // BEFORE the cancel gives exactly what is on screen - which is the preview's `wasH`, and it is
+  // what lets a change arriving mid-flight continue from where the card visibly is. With nothing
+  // running the painted height is the one the recorder stored at the end of the last commit,
+  // which is current precisely because without an animation the height only moves on a render.
+  //
+  // The Animation object is held in a ref rather than found through `getAnimations()`: it needs
+  // no second feature check, and the cancel reaches our animation and nothing else - the mascot
+  // and the entrance animations share this document.
   useLayoutEffect(() => {
     const el = cardRef.current;
     if (!el) return;
-    const from = cardFrom.current;
-    // First paint has nothing to animate from.
-    if (from == null) return;
-    // `animate` is checked BEFORE anything else on the element: a browser with `animate` and no
+    // Checked before anything else on the element: a browser with `animate` and no
     // `getAnimations` used to reach a crash here instead of the plain swap.
     if (typeof el.animate !== "function") return;
     if (typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    const to = el.getBoundingClientRect().height;
+    const running = cardAnim.current;
+    const painted = el.getBoundingClientRect().height;
+    const from = running && running.playState === "running" ? painted : cardFrom.current;
+    if (running) { running.cancel(); cardAnim.current = null; }
+    if (from == null) return;                       // first paint has nothing to animate from
+    const to = el.getBoundingClientRect().height;   // natural: ours is cancelled
     // A change under a pixel is not a phase change, it is a countdown digit changing width.
     if (Math.abs(to - from) < 1) return;
     const previous = el.style.overflow;
@@ -1016,11 +1022,13 @@ export default function Home() {
       { duration: 460, easing: "cubic-bezier(.16,1,.3,1)" },
     );
     run.id = CARD_HEIGHT_ANIM;
-    run.onfinish = () => { el.style.overflow = previous; };
-    run.oncancel = () => { el.style.overflow = previous; };
+    cardAnim.current = run;
+    const restore = () => { el.style.overflow = previous; if (cardAnim.current === run) cardAnim.current = null; };
+    run.onfinish = restore;
+    run.oncancel = restore;
   }, [cardPhaseKey]);
   // THE RECORDER, and it must stay BELOW the animator. No dependency array on purpose: it runs
-  // after every commit, so whatever it stores is always "the height as of the last paint".
+  // after every commit, so what it stores is always the height as of the last paint.
   useLayoutEffect(() => {
     const el = cardRef.current;
     if (el) cardFrom.current = el.getBoundingClientRect().height;

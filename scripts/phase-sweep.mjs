@@ -137,6 +137,17 @@ for (const [W, H] of VIEWPORTS) {
     const after = await geom(page);
     await page.waitForTimeout(400);
     const settled = await geom(page);
+    // THE NATURAL HEIGHT, with any of the card's own animation cancelled first. Reading the box
+    // while one runs returns the interpolated value, which is exactly the defect this round is
+    // about - the sweep has to measure the way the fixed code measures or it cannot see it.
+    const natural = await page.evaluate(() => {
+      const el = document.querySelector("#claim");
+      if (!el) return null;
+      if (typeof el.getAnimations === "function") {
+        for (const a of el.getAnimations()) if (a.id === "card-height") a.cancel();
+      }
+      return el.getBoundingClientRect().height;
+    });
 
     const moved = Math.abs(after.copy - anchor.copy) > 0.5 || Math.abs(after.fox - anchor.fox) > 0.5 || Math.abs(after.h1 - anchor.h1) > 0.5;
     const delta = Math.abs(after.card - before.card);
@@ -169,8 +180,14 @@ for (const [W, H] of VIEWPORTS) {
     // holds: one animation, from somewhere else, over the preview's own duration and easing, and
     // FINISHED rather than cancelled. The last of those four is the one that catches the defect
     // this round is about, and the first three are why `duration: 1` cannot pass it.
+    // TIED TO A MEASURED HEIGHT AT BOTH ENDS, because round two tied them to nothing: it asked
+    // only that from and to differ by a pixel, so `to = from + 10` passed the whole sweep at
+    // 57/0 while the card snapped. `to` must be the height the card actually settles at with
+    // no animation of ours running - measured below by cancelling first - and `from` must be
+    // where it started, which for a transition out of rest is the height before the change.
     const covering = anims.find((a) =>
-      Math.abs(a.from - a.to) > 1
+      Math.abs(a.to - natural) <= 1.5
+      && Math.abs(a.from - a.to) > 1
       && a.opts.duration === 460
       && a.opts.easing === "cubic-bezier(.16,1,.3,1)"
       && a.state === "finished");
@@ -183,8 +200,8 @@ for (const [W, H] of VIEWPORTS) {
         anims.length === 0
           ? `${Math.round(before.card)} -> ${Math.round(after.card)} with NO height animation registered at all`
           : covering
-            ? `animated ${covering.from.toFixed(1)} -> ${covering.to.toFixed(1)}px over ${covering.opts.duration}ms, finished${Math.abs(settled.card - after.card) > 1 ? `; then ${Math.round(settled.card)}px as the phase's own content settled` : ""}`
-            : `${Math.round(after.card)}px settled, and no animation finished the travel: ${anims.map((a) => `${a.from.toFixed(0)}->${a.to.toFixed(0)} ${a.opts.duration}ms ${a.state}`).join(", ") || "none registered"}`);
+            ? `animated ${covering.from.toFixed(1)} -> ${covering.to.toFixed(1)}px over ${covering.opts.duration}ms, finished, ending at the natural ${natural == null ? "?" : natural.toFixed(1)}px`
+            : `natural ${natural == null ? "?" : Math.round(natural)}px, and no animation finished the travel to it: ${anims.map((a) => `${a.from.toFixed(0)}->${a.to.toFixed(0)} ${a.opts.duration}ms ${a.state}`).join(", ") || "none registered"}`);
     } else {
       console.log(`  --   ${W}: "${ph.name}" changed the card by ${delta.toFixed(1)}px, too little to judge the animation`);
     }
