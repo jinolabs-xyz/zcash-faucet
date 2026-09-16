@@ -229,6 +229,31 @@ const specCss = readFileSync(SPEC, "utf8");
 const shipCss = SHIPPED.map((f) => readFileSync(f, "utf8")).join("\n");
 const spec = rules(specCss);
 const ship = rules(shipCss);
+// DROPPED IS A QUESTION ABOUT THE APP, NOT ABOUT THIS INVOCATION'S SHEETS, and computing it
+// from `ship` was wrong in a way nothing could see until the slice gate opened.
+//
+// ADDED and CHANGED are per-sheet by nature: "this sheet ships a rule the spec does not have",
+// "this sheet ships it differently". Routing those by @spec is right. DROPPED asks the opposite
+// question - "does the app ship this design rule ANYWHERE" - and both vendored specs are
+// WHOLE-PAGE documents cut from one design, so they overlap heavily. A rule the shell spec
+// carries is very often shipped by redesign-hero.css or redesign-card.css, which declare the
+// index spec and are therefore absent from this invocation's `ship`. It then reads as missing.
+//
+// Measured on the tree that exposed it: of 206 rules reported DROPPED against the S1 shell
+// spec, 141 were shipped in a sheet routed to the other spec. Two thirds of the gate's output
+// was false, and only ever visible once the transcription completed and DROPPED began to bite.
+// THE UNION IS `shouldCompare` PLUS `SHIPPED`, and the fixture caught me taking only the first.
+// A discovered sheet may not exist on disk - the slice-gate fixture imports one it deliberately
+// never creates - and a sheet passed on the command line may not be discovered, which is exactly
+// the fixture shape the tests use. Taking only the walk made `shipAnywhere` SMALLER than `ship`
+// for those, so DROPPED got worse rather than better: 1 became 2 in
+// "a rule the spec has and we dropped is reported but not gated mid-transcription".
+const shipAnywhere = rules(
+  [...new Set([...shouldCompare, ...SHIPPED])]
+    .filter((f) => existsSync(f))
+    .map((f) => readFileSync(f, "utf8"))
+    .join("\n"),
+);
 
 // Keys beginning with `_` are notes to the reader, not declarations. Without this the file's own
 // header comment was reported as a stale departure, which my own stale check caught on its first
@@ -289,7 +314,7 @@ const sameBodies = (a, b) => {
 };
 const added = [...ship.keys()].filter((s) => !spec.has(s));
 const changed = [...ship.keys()].filter((s) => spec.has(s) && !sameBodies(ship.get(s), spec.get(s)));
-const dropped = [...spec.keys()].filter((s) => !ship.has(s));
+const dropped = [...spec.keys()].filter((s) => !shipAnywhere.has(s));
 
 // DROPPED IS NOT A FAULT UNTIL THE TRANSCRIPTION IS FINISHED, and pretending otherwise makes
 // this unusable: against S1 the spec has 255 rules and the shell ships 84, so 177 "dropped"
@@ -349,11 +374,25 @@ const sliceFacts = (() => {
   if (!decl || !Array.isArray(decl.facts) || decl.facts.length === 0) return null;
   return decl;
 })();
-const sliceInTree = sliceFacts
-  ? sliceFacts.facts.every((f) => existsSync(f.file) && readFileSync(f.file, "utf8").includes(f.contains))
-  : null;
+// A FACT MAY HAVE MORE THAN ONE TRUE SPELLING, and the third instance of that in this file is
+// what forced this. The S2 slice's first fact asked whether `src/app/page.tsx` contains
+// "./redesign-card.css". SDE-App's card sheet is imported by `src/components/Shell.tsx` as
+// "@/app/redesign-card.css" - a different file AND a different spelling - so the fact read false
+// on precisely the tree it exists to detect, exactly like the page-in-shell string did before
+// SDE-UI caught it. The failure direction is the dangerous one: the slice never reads as live,
+// DROPPED is never gated for that spec, and thirty-one rules go unchecked for ever while the
+// gate reports itself healthy.
+//
+// So a fact is EITHER {file, contains} or {anyOf: [{file, contains}, ...]}, and anyOf holds when
+// any branch does. The branches are spellings of one claim, not separate claims - a fact that
+// needs two things to be true is still two facts.
+const factHolds = (f) => {
+  const one = (g) => existsSync(g.file) && readFileSync(g.file, "utf8").includes(g.contains);
+  return Array.isArray(f.anyOf) ? f.anyOf.some(one) : one(f);
+};
+const sliceInTree = sliceFacts ? sliceFacts.facts.every(factHolds) : null;
 if (sliceFacts) {
-  const held = sliceFacts.facts.filter((f) => existsSync(f.file) && readFileSync(f.file, "utf8").includes(f.contains)).length;
+  const held = sliceFacts.facts.filter(factHolds).length;
   console.log(`  slice gate: ${held}/${sliceFacts.facts.length} facts hold${sliceInTree ? "" : `, so DROPPED is not gated yet - ${sliceFacts.why}`}`);
 }
 const transcriptionComplete = sliceFacts ? sliceInTree : (wiredViews.length === 4 && pagesInShell.length === 3);

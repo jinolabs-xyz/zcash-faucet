@@ -580,3 +580,86 @@ test("a later rule killing a property does not hide a DIFFERENT property it also
   });
   assert.equal(r.code, 1, r.out);
 });
+
+// ── DROPPED IS A QUESTION ABOUT THE APP, NOT ABOUT ONE INVOCATION ────────────────────────
+//
+// Both vendored specs are whole PAGE documents cut from one design, so they overlap: a rule the
+// shell spec carries is often shipped by a sheet that declares the INDEX spec. Computing DROPPED
+// from this invocation's sheets alone reported those as missing. Measured on the tree that
+// exposed it - once the slice gate opened and DROPPED began to bite - 206 rules were reported
+// dropped against the S1 shell spec and 170 of them were shipped in a sheet routed elsewhere.
+// Two thirds of the gate's output was false, and nothing could see it while DROPPED was ungated.
+test("a rule shipped by a sheet routed to ANOTHER spec is not reported as dropped", () => {
+  const r = runParity({
+    spec: "/* @spec design/spec/spec.css */\n.a{color:red}\n.b{color:blue}\n",
+    shipped: "/* @spec design/spec/spec.css */\n.a{color:red}\n",
+    entry: 'import "./shipped.css";\nimport "./other.css";\nexport default function P(){return <b data-view="claim"/>}',
+    sheets: { "other.css": "/* @spec design/spec/other.css */\n.b{color:blue}\n" },
+    specs: { "other.css": ".b{color:blue}\n" },
+  });
+  // `.b` lives in other.css, which declares a different spec and is absent from this invocation.
+  // The app ships it, so it is not a dropped rule of the design.
+  assert.match(r.out, /dropped 0/, r.out);
+});
+
+test("and a rule NO sheet ships is still reported as dropped", () => {
+  const r = runParity({
+    spec: "/* @spec design/spec/spec.css */\n.a{color:red}\n.b{color:blue}\n",
+    shipped: "/* @spec design/spec/spec.css */\n.a{color:red}\n",
+    entry: 'import "./shipped.css";\nimport "./other.css";\nexport default function P(){return <b data-view="claim"/>}',
+    sheets: { "other.css": "/* @spec design/spec/other.css */\n.c{color:green}\n" },
+    specs: { "other.css": ".c{color:green}\n" },
+  });
+  // The mutant for the row above: if the union swallowed everything, this would read 0 too.
+  assert.match(r.out, /dropped 1/, r.out);
+});
+
+// ── A SLICE FACT MAY HAVE MORE THAN ONE TRUE SPELLING ───────────────────────────────────
+//
+// The S2 slice's import fact named `src/app/page.tsx` and "./redesign-card.css". The sheet
+// shipped imported by `src/components/Shell.tsx` as "@/app/redesign-card.css" - a different file
+// AND a different spelling - so the fact read false on precisely the tree it exists to detect,
+// DROPPED was never gated for that spec, and thirty-one rules went unchecked while the gate
+// reported itself healthy. Third instance of this shape in this file.
+test("a slice fact holds when ANY of its spellings holds, not only the first", () => {
+  const r = runParity({
+    spec: ".a{color:red}\n.gone{color:blue}\n",
+    shipped: "/* @spec design/spec/spec.css */\n.a{color:red}\n",
+    shell: 'import "@/app/card.css";\nexport default function Shell(){return <div className="stage"/>}',
+    entry: 'import "./shipped.css";\nimport "./card.css";\nexport default function P(){return <b data-view="claim"/>}',
+    sheets: { "card.css": "/* @spec design/spec/card.css */\n.gone{color:blue}\n" },
+    specs: { "card.css": ".gone{color:blue}\n" },
+    departures: {
+      _slice: {
+        why: "the card slice",
+        facts: [{ anyOf: [
+          { file: "src/app/page.tsx", contains: "./nowhere.css" },
+          { file: "src/components/Shell.tsx", contains: "@/app/card.css" },
+        ] }],
+      },
+    },
+  });
+  assert.match(r.out, /slice gate: 1\/1 facts hold/, r.out);
+  assert.match(r.out, /the transcription is complete, so DROPPED is gated too/, r.out);
+});
+
+test("and an anyOf whose every spelling is absent does NOT hold", () => {
+  const r = runParity({
+    spec: ".a{color:red}\n.gone{color:blue}\n",
+    shipped: "/* @spec design/spec/spec.css */\n.a{color:red}\n",
+    shell: 'export default function Shell(){return <div className="stage"/>}',
+    entry: 'import "./shipped.css";\nexport default function P(){return <b data-view="claim"/>}',
+    departures: {
+      _slice: {
+        why: "the card slice",
+        facts: [{ anyOf: [
+          { file: "src/app/page.tsx", contains: "./card.css" },
+          { file: "src/components/Shell.tsx", contains: "@/app/card.css" },
+        ] }],
+      },
+    },
+  });
+  // The mutant: `.some()` on an empty match set must be false, not vacuously true.
+  assert.match(r.out, /slice gate: 0\/1 facts hold/, r.out);
+  assert.match(r.out, /DROPPED is not gated yet/, r.out);
+});
