@@ -165,7 +165,18 @@ html[data-theme]{background:var(--page)}
 /* The spec has this as `.comp > .view.hero`. Our four views sit inside a <main class="views">
  * landmark rather than directly in .comp, so the child combinator would match nothing at all -
  * it computed padding-top 0. Same rule, our structure. */
-.views > .view.hero{flex:1 1 auto;min-height:0;justify-content:flex-start;padding-top:calc(2.5*var(--u))}
+/* BOTH STRUCTURES, because S5 added the second one. The spec writes this as
+ * `.comp > .view.hero`. S2a rescoped it to `.views >` for the index, whose hero sits inside
+ * `<main class="views">` - correct then, and it silently stopped matching when the subpages
+ * arrived: the Shell puts their view DIRECTLY in `.comp`, exactly as the snapshot's own subpages
+ * do, so the rule matched nothing there and every element on /terms, /donate and /fund sat
+ * `calc(2.5*var(--u))` - 35 px - above where the design puts it.
+ *
+ * `.view.sub` overrides the justify-content and the min-height in the snapshot too (a (0,2,0)
+ * tie that source order gives it), so centring is right. `padding-top` is the property nothing
+ * overrides, and it is the one that went missing. */
+.views > .view.hero,
+.comp > .view.hero{flex:1 1 auto;min-height:0;justify-content:flex-start;padding-top:calc(2.5*var(--u))}
 @media (max-width:64rem){
   /* THE ONE-COLUMN DECLARATION IS DROPPED, and the gap is kept. In the snapshot this rule is
    * DEAD: the later mascot section holds three columns down to 56rem, so `grid-template-

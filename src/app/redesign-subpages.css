@@ -1,0 +1,99 @@
+/* @spec design/spec/S2-S5-20260915T2224Z-subpages/terms.css */
+/*
+ * /terms, /donate and /fund inside the shared shell, transcribed VERBATIM from the
+ * approved snapshot (redesign-frozen/S2-S5-20260915T2224Z, the "subpages" block at
+ * terms.html:380-396). Values are copied rather than retyped: if a number here disagrees
+ * with the preview, one of the two is a typo.
+ *
+ * SLICED BY RULE BLOCK, NEVER BY LINE. A line filter takes half of a wrapped rule and
+ * produces a sheet with unbalanced braces that still parses into something plausible -
+ * SDE-App caught exactly that on S2b's slice by counting braces rather than reading the
+ * diff, and it is L4's detector applied to CSS.
+ *
+ * THESE PAGES HAVE NO MASCOT, which is the whole reason the grid has its own name. The
+ * hero on the index is copy, fox and card; here it is copy and card, so `.hero-grid.two`
+ * re-columns it rather than leaving a hole where the fox was.
+ */
+
+/* ===== subpages: the hero's grid without the mascot ===== */
+.hero-grid.two{grid-template-columns:1.1fr 1fr}
+.hero-copy .lede a{color:var(--accent-text);font-weight:600}
+.card.feature .panel .lbl{display:block;margin-bottom:calc(.5*var(--u))}
+
+/* An address is the payload of two of these three pages, so it is a block that can be
+ * selected in one gesture and cannot be truncated: `word-break:break-all` on a unified
+ * address is the difference between copying it and copying most of it. */
+.addr{display:block;word-break:break-all;font:500 calc(.95*var(--u))/1.45 var(--mono);color:var(--ink);background:var(--prompt-bg);border:calc(.06*var(--u)) solid var(--prompt-border);border-radius:calc(.6*var(--u));padding:calc(.8*var(--u)) calc(1*var(--u));margin:0 0 calc(.9*var(--u))}
+.addr.small{font-size:calc(.85*var(--u));margin:calc(.6*var(--u)) 0}
+.card-copy .tag{margin-top:calc(.6*var(--u))}
+
+/* The only irreversible action on the site gets the warn colour, in the mono face, beside
+ * the address rather than under the fold. */
+.warn-line{font:500 calc(.8*var(--u))/1.4 var(--mono);color:var(--warn-text);margin:calc(.7*var(--u)) 0 0}
+
+/* `.hint` IS IN THE SNAPSHOT (donate.html 203-204) and was in no app sheet at all, so every
+ * hint on these pages rendered at the body's size and colour. Dropped by the slice rather than
+ * decided against - it sits above the marker the subpages block starts at. */
+.hint{font-size:calc(.85*var(--u));color:var(--muted);min-height:1.4em;margin:0}
+.hint[data-tone="bad"]{color:var(--bad-text)}
+
+.terms{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:calc(1.2*var(--u)) calc(2.2*var(--u));width:100%;align-items:start}
+.terms h2{margin:0 0 calc(.3*var(--u));color:var(--ink-3);font:600 calc(1.05*var(--u))/1.2 var(--sans-semibold);letter-spacing:calc(-.02*var(--u))}
+.terms p{margin:0 0 calc(.6*var(--u));color:var(--muted);font-size:calc(.86*var(--u));line-height:1.45}
+.terms p b{color:var(--ink);font-weight:600}
+.terms a{color:var(--accent-text);font-weight:600}
+
+/* THE SUBPAGE CARD, TRANSCRIBED, and it is three rules the slice dropped because the block I
+ * took them from sat above the marker I sliced at. The snapshot declares them at donate.html
+ * 147-149 and they are the reason these pages fit: a flex column that is allowed to be at most
+ * the stage's height, with the panel taking the slack and the copy fixed.
+ *
+ * WITHOUT THEM S2a's PLACEHOLDER DECIDES THE CARD. `redesign-hero.css:202` is
+ * `.stage .card.claim{padding:7% 8.4% 7.5%}` at (0,2,0), written for the index's claim card,
+ * and it lands on these cards too - with production's addresses configured that padding pushes
+ * /donate to a scrollHeight of 924 at 1440x900 and cuts the footer by 6 px at 1536x864. CI
+ * never saw it because CI configures no addresses, so the cards are short there; the review
+ * found it by rendering the page the way production renders it.
+ *
+ * (0,3,0) against S2a's (0,2,0), scoped to the subpage view rather than raised globally,
+ * because the index's claim card SHOULD keep its padding - it is one card's placeholder, not a
+ * mistake to undo everywhere. */
+.view.sub .card.claim{padding:0;max-height:100%;display:flex;flex-direction:column}
+.view.sub .card.claim > .panel{flex:1 1 auto;min-height:0;overflow:auto}
+.view.sub .card.claim > .card-copy{flex:none}
+
+.view.sub{min-height:calc(100dvh - 30*var(--u));justify-content:center}
+
+@media (max-height:840px){.card.feature .panel{padding:5.5% 6% 6%}.addr{font-size:calc(.88*var(--u));padding:calc(.6*var(--u)) calc(.9*var(--u))}.card-copy{padding:5% 8.4% 5.5%}}
+/* THE COPY CONTROL KEEPS THE DESIGN'S CHIP AND CLEARS OUR OWN FLOOR.
+ *
+ * Putting this button in `.tag` - which is what the snapshot uses for it (donate.html:482) -
+ * is right, and it immediately went red: `.tag` is `height:calc(2.15*var(--u))`, 26 px at the
+ * mobile unit, against the 44 px tap-target floor ui-smoke enforces on an iPhone 13 viewport.
+ * Four rows, /donate and /fund in both themes.
+ *
+ * The snapshot never contemplated that floor - it is our accessibility rule, not the design's -
+ * so this is not a transcription question. The chip keeps its shape where a pointer is precise
+ * and grows to the floor where a finger is not. `min-height` rather than `height`, so the chip
+ * is never SHORTER than the design at any width, only taller where it has to be.
+ *
+ * I found this by running the suite after making the change, not before: the check that caught
+ * it is one somebody wrote months ago for the claim page, doing its job on a page it predates. */
+@media (max-width:56rem){.view.sub .tag{min-height:44px}}
+
+@media (max-width:56rem){.hero-grid.two{grid-template-columns:1fr}.terms{grid-template-columns:1fr}}
+
+/* ===== NOT IN THE PREVIEW, and each one is here for a measured reason ===============
+ *
+ * The preview's pages are static HTML served beside index.html, so they inherit the
+ * index's stylesheet wholesale. In the app they are their own routes and the legacy
+ * `globals.css` is still loaded under them, which means the transcription only replaces
+ * what it NAMES (LESSONS L20). These are the properties globals sets on selectors this
+ * sheet uses and the snapshot never mentions, found with the same detector that caught
+ * `.tag`'s uppercase and the `html` background on the index.
+ */
+/* globals.css styles `code` with the old palette's surface and a border radius of 0. The
+ * design's address block sets its own background, border and radius but says nothing about
+ * these two, so without this an address renders in the retired palette inside a correct
+ * box. */
+.addr{background-clip:padding-box;box-shadow:none}
