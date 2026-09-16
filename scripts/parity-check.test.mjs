@@ -16,7 +16,7 @@ import { execFileSync } from "node:child_process";
 const SCRIPT = "scripts/parity-check.mjs";
 
 /** Run the checker in its own directory with the given fixtures; return {code, out}. */
-function runParity({ spec, shipped, departures, pages, shell, entry, args }) {
+function runParity({ spec, shipped, departures, pages, shell, entry, args, sheets, specs }) {
   const dir = mkdtempSync(join(tmpdir(), "parity-"));
   try {
     mkdirSync(join(dir, "design", "spec"), { recursive: true });
@@ -32,6 +32,8 @@ function runParity({ spec, shipped, departures, pages, shell, entry, args }) {
     }
     // src/app/page.tsx, for the imported-sheet discovery.
     if (entry !== undefined) writeFileSync(join(dir, "src", "app", "page.tsx"), entry);
+    for (const [name, body] of Object.entries(sheets || {})) writeFileSync(join(dir, "src", "app", name), body);
+    for (const [name, body] of Object.entries(specs || {})) writeFileSync(join(dir, "design", "spec", name), body);
     if (shell !== undefined) {
       mkdirSync(join(dir, "src", "components"), { recursive: true });
       writeFileSync(join(dir, "src", "components", "Shell.tsx"), shell);
@@ -180,44 +182,45 @@ test("a reversed fallback pair is not parity", () => {
   assert.equal(r.code, 1);
 });
 
-// A SHEET THE APP IMPORTS IS EITHER COMPARED OR DECLARED (CTO red-team). redesign-hero.css was
-// not compared at all - the CI step named two sheets by hand and the app imported three - so
-// eight divergences sat on main unseen. The list is discovered from the entry file now, and the
-// gap, where a slice's spec has not been frozen, has to be written down rather than forgotten.
+// EVERY IMPORTED SHEET NAMES ITS OWN SPEC (CTO ruling on the red-team's finding 3).
+// `_uncompared` was my first answer and was refused: a sheet imported and not compared is the
+// hole this check exists to close, and labelling the hole makes the green mean less. So each
+// sheet declares `@spec <path>` on its first line and is compared against that document.
 const ENTRY_TWO = 'import "./shipped.css";\nimport "./other.css";\n';
+const DECL = (p) => `/* @spec ${p} */\n`;
 
-test("a sheet the app imports that is neither compared nor declared is a failure", () => {
-  const r = runParity({ spec: SPEC, shipped: SPEC, entry: ENTRY_TWO });
-  assert.equal(r.code, 1);
-  assert.match(r.out, /src\/app\/other\.css/);
-  assert.match(r.out, /neither compared nor declared/);
-});
-
-test("and declaring it _uncompared with a reason passes, and says so out loud", () => {
+test("an imported sheet that declares no spec is a failure", () => {
   const r = runParity({
     spec: SPEC, shipped: SPEC, entry: ENTRY_TWO,
-    departures: { _uncompared: { "src/app/other.css": "its spec slice is not frozen yet" } },
+    sheets: { "other.css": ".b{color:red}\n" },
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.out, /(does|do) not declare a spec/);
+});
+
+test("and a declaration naming a spec that is not vendored is a failure", () => {
+  const r = runParity({
+    spec: SPEC, shipped: DECL("design/spec/spec.css") + SPEC, entry: ENTRY_TWO,
+    sheets: { "other.css": DECL("design/spec/nope.css") + ".b{color:red}\n" },
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.out, /which is not vendored/);
+});
+
+test("and a sheet compared against a spec it does not declare is a failure", () => {
+  const r = runParity({
+    spec: SPEC, shipped: DECL("design/spec/other-slice.css") + SPEC, entry: 'import "./shipped.css";\n',
+    specs: { "other-slice.css": SPEC },
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.out, /but is being compared against/);
+});
+
+test("and a sheet declaring the spec it is compared against passes", () => {
+  const r = runParity({
+    spec: SPEC, shipped: DECL("design/spec/spec.css") + SPEC, entry: 'import "./shipped.css";\n',
   });
   assert.equal(r.code, 0);
-  assert.match(r.out, /other\.css is NOT compared - its spec slice is not frozen yet/);
-});
-
-test("a sheet declared _uncompared and ALSO compared is a contradiction", () => {
-  const r = runParity({
-    spec: SPEC, shipped: SPEC, entry: 'import "./shipped.css";\n',
-    departures: { _uncompared: { "src/app/shipped.css": "stale" } },
-  });
-  assert.equal(r.code, 1);
-  assert.match(r.out, /is declared "_uncompared" and is being compared/);
-});
-
-test("and an _uncompared entry the app no longer imports is stale", () => {
-  const r = runParity({
-    spec: SPEC, shipped: SPEC, entry: 'import "./shipped.css";\n',
-    departures: { _uncompared: { "src/app/gone.css": "no longer imported" } },
-  });
-  assert.equal(r.code, 1);
-  assert.match(r.out, /Stale declaration/);
 });
 
 // THE GATE'S ON DIRECTION HAD NO TEST (CTO red-team). Everything above drives the gate while it
