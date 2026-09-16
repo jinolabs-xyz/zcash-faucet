@@ -1259,3 +1259,116 @@ check "and OPERATIONS.md sends the operator to that same path" \
 # doc that blurred the two would hand a deploy's mistake to a human instead of fixing it.
 check "and says plainly that clearing the marker does not start the miner" \
   "grep -qE 'Removing the marker does [*]{0,2}not[*]{0,2} start the miner' '$REPO/OPERATIONS.md'"
+
+echo "== repo: the redesign's browser checks are wired, gated on a WIRING fact, and the sheets are held"
+# THE GATE, pinned on both sides. Each check decides whether it APPLIES from a fact in the
+# tree; the middle state - the fact is true, the selector is missing - is a FAILURE rather
+# than a shrug, because a check that shrugs at a rename passes for ever after one.
+#
+# AND THE FACT IS A WIRING FACT, NOT A FILENAME (SDE-App, review of #562, after my first
+# version keyed on a component file existing). A component lands in one PR and the view is
+# wired in another, so a file marker goes true while the page is still the old markup and a
+# correct tree goes red. What says the mascot is wired is page.tsx rendering it.
+check "the mascot check gates on page.tsx rendering <Mascot>, not on a file existing" \
+  "grep -qF 'const wired = existsSync(PAGE) && /<Mascot' '$REPO/scripts/mascot-check.mjs' && ! grep -q 'existsSync(\"src/components' '$REPO/scripts/mascot-check.mjs'"
+check "and the image job's size gate reads the SAME wiring fact, so neither can skip alone" \
+  "grep -qF 'grep -qE '\\''<Mascot[[:space:]/>]'\\'' src/app/page.tsx' '$CIWF'"
+# AND A PAGE IS IN THE SHELL BY TWO FACTS, so the Shell extraction cannot switch this gate off
+# (SDE-UI, found on the same line in #572's checker, where it was going to ship twice). One
+# string in the page file was true when it was written and S5 moved it: a page joins the shell
+# by rendering <Shell>, and the shell OWNS the stage, so the page file has that string zero
+# times. Measured on S5's own branch: the old spelling reads 0 of 3 pages and plans 40 for ever
+# while calling three redesigned pages pre-redesign; this one reads 3 of 3 and plans the
+# ruling's 70. Round 5's defect inside out - that gate was off DURING the window it guards,
+# this one STOPS working at the slice it exists for.
+check "a page is in the shell by two facts, not by one string the extraction can move" \
+  "grep -qF 'SHELL_OWNS_STAGE = existsSync(SHELL_COMPONENT)' '$REPO/scripts/fit-check.mjs' && grep -qF 'SHELL_OWNS_STAGE && /<Shell' '$REPO/scripts/fit-check.mjs'"
+check "the fit check gates on the shell file S1 adds" \
+  "grep -qF 'const SHELL_MARKER = \"src/app/redesign-tokens.css\"' '$REPO/scripts/fit-check.mjs'"
+check "a wired page with no matching selector FAILS rather than passing quietly" \
+  "grep -q 'has no .mascot-riso at' '$REPO/scripts/mascot-check.mjs' && grep -q 'is in the tree but' '$REPO/scripts/fit-check.mjs'"
+check "both run in the ui job against the URL the smoke server already has" \
+  "grep -qF 'node scripts/fit-check.mjs \"\$UI_SMOKE_URL\"' '$CIWF' && grep -qF 'node scripts/mascot-check.mjs \"\$UI_SMOKE_URL\"' '$CIWF'"
+# WHAT THE RUN PLANS IS HELD TO THE RULING, not to its own arrays (SDE-App, review of #563).
+# Both counts derive FROM the arrays that drive the loops, so shrinking one leaves a run that
+# measured everything it happened to plan - three viewports to one recomputed the total and
+# every check stayed green. The numbers MASCOT.md names live beside the arrays now.
+# AND THE PRODUCT, NOT ONLY ITS FACTORS. Found by re-measuring my own body's mutant rows on the
+# current baseline rather than carrying their old numbers: editing RULING_COMBOS to a literal 4
+# left the repo suite at 202/0, because the three constants below are pinned and the line that
+# MULTIPLIES them was not. The script's own runtime guard still catches it, but the repo suite
+# claimed to and did not, which is the round-6 finding in a second place - the neighbours pinned,
+# the deciding line left out.
+check "the mascot check plans the combinations and sectors MASCOT.md names" \
+  "grep -qF 'const RULING_VIEWPORTS = 3;' '$REPO/scripts/mascot-check.mjs' && grep -qF 'const RULING_THEMES = 2;' '$REPO/scripts/mascot-check.mjs' && grep -qF 'const RULING_POINTER = 3;' '$REPO/scripts/mascot-check.mjs' && grep -qF 'const RULING_COMBOS = RULING_VIEWPORTS * RULING_THEMES;' '$REPO/scripts/mascot-check.mjs' && grep -q 'Change the arrays and these numbers together' '$REPO/scripts/mascot-check.mjs'"
+check "and its dimensions are MASCOT.md's three viewports, two themes and three sectors" \
+  "grep -qF 'const VIEWPORTS = [[1440, 900], [1100, 800], [390, 844]];' '$REPO/scripts/mascot-check.mjs' && grep -qF 'want: \"0% 50%\"' '$REPO/scripts/mascot-check.mjs' && grep -qF 'want: \"50% 0%\"' '$REPO/scripts/mascot-check.mjs' && grep -qF 'want: \"100% 100%\"' '$REPO/scripts/mascot-check.mjs'"
+check "the fit check plans its full 70 the same way" \
+  "grep -qF 'const RULING_COMBOS = 70;' '$REPO/scripts/fit-check.mjs' && grep -qF 'PLANNED !== RULING_COMBOS' '$REPO/scripts/fit-check.mjs'"
+check "and its dimensions carry the sizes the clipping actually appears at, not only the brief's" \
+  "grep -qF 'const SIZES = [[1440, 900], [1280, 800], [1920, 1080], [1366, 768], [1280, 720]];' '$REPO/scripts/fit-check.mjs' && grep -qF 'const VIEWS = [\"claim\", \"status\", \"analytics\", \"tools\"];' '$REPO/scripts/fit-check.mjs' && grep -qF 'const PAGES = [\"/terms\", \"/donate\", \"/fund\"];' '$REPO/scripts/fit-check.mjs'"
+# EVERY ARRAY THE COUNT MULTIPLIES, not the ones I happened to name (SDE-App, review of #563,
+# against their own finding as I had implemented it). THEMES was pinned nowhere, so cutting it
+# to one halved the coverage of both scripts while their own arithmetic still agreed with
+# itself. "Pin the arrays" has to mean all of them or it is a list with a hole in it.
+check "including THEMES, which both scripts multiply by and neither pinned" \
+  "grep -qF 'const THEMES = [\"paper\", \"ink\"];' '$REPO/scripts/fit-check.mjs' && grep -qF 'const THEMES = [\"paper\", \"ink\"];' '$REPO/scripts/mascot-check.mjs'"
+check "and the fit check holds sizes-times-themes from the FIRST slice, not only at the end" \
+  "grep -qF 'const RULING_SIZES = 5;' '$REPO/scripts/fit-check.mjs' && grep -qF 'const RULING_THEMES = 2;' '$REPO/scripts/fit-check.mjs' && grep -qF 'SIZES.length !== RULING_SIZES || THEMES.length !== RULING_THEMES' '$REPO/scripts/fit-check.mjs'"
+# FITS MEANS REACHABLE (CTO's ruling on #562, after their red-team found the clipped footer). The
+# arithmetic alone called a footer that had been CUT OFF and could not be scrolled to "SCROLLS",
+# on a build whose own suite read 130 ok while three links could not be clicked and prod has
+# maintenanceAddress set. A check that measures a page's height and not whether anyone can reach
+# what is on it is L1 in this file's own words: a proxy for the property.
+check "fits means the footer is on screen and its links are hit-testable, not just the numbers" \
+  "grep -qF 'document.elementFromPoint(x, y)' '$REPO/scripts/fit-check.mjs' && grep -qF 'r.links.every((l) => l.inView && l.reachable)' '$REPO/scripts/fit-check.mjs'"
+# THE CLAUSE THAT DECIDES, PINNED BEFORE ITS NEIGHBOURS. My first three pins held that the
+# ancestor walk RUNS and that its message EXISTS, and the CTO's round-5 mutant walked straight
+# between them: drop the clipping clause out of fitsNow and the walk still runs, the string is
+# still in the file, both greps pass, repo.sh stays at 199/0 - and a page hiding 216px of copy
+# is reported as 40 of 40 fitting. A check can only hold the line that makes a decision; the
+# lines around it are decoration. Pin the mutant the finding names FIRST, then its neighbours.
+check "the clipping walk DECIDES the verdict, rather than only printing inside it" \
+  "grep -A1 'const fitsNow = (r) =>' '$REPO/scripts/fit-check.mjs' | grep -qF '(r.clipping || []).length === 0 &&'"
+# AND THE SCROLL IT JUDGES AFTER MUST BE ONE A PERSON COULD PERFORM. `scrollTop = ...` moves an
+# overflow:hidden box perfectly well; the browser blocks the USER there, never the script. So on
+# the clamp the check reached the footer itself, found every link hit-testable and reported a
+# reachability a visitor does not have - and the row above named no links, because there were
+# none left unreachable. Measured on a clamp fixture: without the guard every row reads
+# "CLIPPED by an ancestor (div.stage hides 215px)" and stops; with it, the same row continues
+# "unreachable after scrolling: Donate TAZ, Terms, GitHub". Same defect as #562's ui-smoke
+# scrollIntoView, blocked earlier the same night in a second script by a second author.
+check "the check only scrolls a box a person could scroll" \
+  "grep -qF 'const oy = getComputedStyle(st).overflowY;' '$REPO/scripts/fit-check.mjs' && grep -qF 'if (oy !== \"hidden\" && oy !== \"clip\" && st.scrollHeight > st.clientHeight)' '$REPO/scripts/fit-check.mjs'"
+check "and a clipped row names the links a person then has to go and look at" \
+  "grep -qF 'CLIPPED by an ancestor (\${clipped})\${unreachable.length' '$REPO/scripts/fit-check.mjs'"
+check "and clipping is named as clipping, attributed to the ancestor that hides it" \
+  "grep -qF 'CLIPPED by an ancestor' '$REPO/scripts/fit-check.mjs' && grep -qF 'cs.overflowY === \"hidden\" || cs.overflowY === \"clip\"' '$REPO/scripts/fit-check.mjs'"
+# THE SCROLLER IS WHICHEVER ELEMENT SCROLLS - my own defect, caught by hand on the shell that
+# is now in production and BEFORE this gate was wired to anything. The first version read
+# `.stage` as the scroller; once the one-screen clamp came off, the DOCUMENT scrolls and
+# `.stage` does not, so the check called the correct shell CLIPPED. A gate that refuses the
+# right answer is worse than no gate - it would have blocked every correct PR behind it. The
+# two halves are held together because either one alone still reads the old way: the page is
+# scrolled by whichever box actually scrolls, AND the row says which box it judged.
+check "the check scrolls whichever box scrolls, the document included" \
+  "grep -qF 'st.scrollTop = st.scrollHeight;' '$REPO/scripts/fit-check.mjs' && grep -qF 'window.scrollTo(0, document.documentElement.scrollHeight);' '$REPO/scripts/fit-check.mjs'"
+check "and every row names the scroller it judged, so a wrong one is readable" \
+  "grep -qF 'scroller: stScrolls ? \".stage\" : \"document\"' '$REPO/scripts/fit-check.mjs' && grep -qF 'via \${o.scroller}' '$REPO/scripts/fit-check.mjs'"
+# THE SHEETS: served, and held at the size the owner ruled.
+# THE BOOP NAMES ITS LAYER (CTO red-team, review of #563): `span span` matches BOTH sprite
+# layers and the directions layer is opacity 1 always, so the old assertion was true before any
+# click and deleting the handler outright still passed 6/6.
+check "the boop finds the reactions layer by the sheet it paints, and asserts a RISE" \
+  "grep -qF '(getComputedStyle(l).backgroundImage || \"\").includes(which)' '$REPO/scripts/mascot-check.mjs' && grep -q 'before any click, so a rise cannot be observed' '$REPO/scripts/mascot-check.mjs'"
+# THE BYTE TEST IS THE CLAUSE THAT DECIDES, so it is pinned and not just the URLs around it.
+# Same re-measurement, same shape: replacing the whole RIFF/WEBP test with `true` left the repo
+# suite at 202/0. The URLs and the error string are the decoration; whether the body IS a WebP
+# is the assertion, and gating that on the content-type header instead of the bytes is the
+# exact mistake this check was rewritten to stop making.
+check "the sheets are checked over the wire before the pointer assertions, since a 404 passes them" \
+  "grep -qF '/mascots/fox-riso-directions.webp' '$REPO/scripts/mascot-check.mjs' && grep -qF '/mascots/fox-riso-reactions.webp' '$REPO/scripts/mascot-check.mjs' && grep -q 'is not served' '$REPO/scripts/mascot-check.mjs' && grep -qF 'body.subarray(0, 4).toString(\"latin1\") === \"RIFF\"' '$REPO/scripts/mascot-check.mjs' && grep -qF 'body.subarray(8, 12).toString(\"latin1\") === \"WEBP\"' '$REPO/scripts/mascot-check.mjs'"
+check "the image job measures each sheet against MASCOT.md's 300 KB and refuses a served PNG" \
+  "grep -qF 'LIMIT=307200' '$CIWF' && grep -q 'the sheets ship as WebP' '$CIWF'"
+check "and the CI context probe proves the sheets reach the image, both directions" \
+  "grep -qF '/ctx/public/mascots/fox-riso-directions.webp' '$CIWF' && grep -qF 'echo \"html\" > \"\$ctx/design/faucet-architecture.html\"' '$CIWF'"
