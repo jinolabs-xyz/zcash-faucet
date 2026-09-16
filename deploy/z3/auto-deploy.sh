@@ -140,12 +140,42 @@ ci_gate() {
   local repo; repo="$(ci_repo)"
   if [ -z "$repo" ]; then log "REFUSING $(git rev-parse --short "$REMOTE"): cannot tell which GitHub repo origin is, so cannot ask CI"; return 2; fi
   command -v jq >/dev/null 2>&1 || { log "REFUSING $(git rev-parse --short "$REMOTE"): jq is missing, cannot read CI's verdict"; return 2; }
-  local body err
+  # EVERY PAGE, NOT JUST THE FIRST (#514). `per_page=100` reads one page, and scheduled
+  # live-smoke runs attach to the SAME tip commit with newer ids. A tip that sits long enough to
+  # accumulate more than ~92 probe runs - about two weeks at the measured cadence - pushes CI's
+  # eight onto page two, and the gate then reads them as ABSENT. That fails safe (pending, then
+  # refuse after 45 minutes) but it refuses a good deploy for a reason that has nothing to do with
+  # the code, and the message names all eight jobs as missing, which sends an operator to CI to
+  # look at runs that are green.
+  #
+  # FOLLOWING `Link: rel=next` RATHER THAN ONE REQUEST PER JOB. `?check_name=` would also work and
+  # is tidier, but this call is UNAUTHENTICATED - 60 requests an hour from this box - and eight
+  # requests a tick would exhaust that in seven ticks. Pagination costs one request in the normal
+  # case and two when it matters.
+  #
+  # BOUNDED AT 5 PAGES. An unbounded follow is a loop controlled by a remote server; 500 runs is
+  # far past the ~100 that triggers this and a sixth page means something is wrong with the answer
+  # rather than with the count.
+  local body err hdr page_url all_runs pages
   err="$(mktemp)"
-  body="$(curl -fsS --max-time 20 -H 'Accept: application/vnd.github+json' \
-          "$CI_API/repos/$repo/commits/$REMOTE/check-runs?per_page=100" 2>"$err")" \
-    || { log "REFUSING $(git rev-parse --short "$REMOTE"): could not read check-runs from $CI_API ($(tr '\n' ' ' < "$err" | cut -c1-200))"; rm -f "$err"; return 2; }
+  page_url="$CI_API/repos/$repo/commits/$REMOTE/check-runs?per_page=100"
+  all_runs="[]"
+  pages=0
+  while [ -n "$page_url" ] && [ "$pages" -lt 5 ]; do
+    pages=$((pages + 1))
+    hdr="$(mktemp)"
+    body="$(curl -fsS --max-time 20 -D "$hdr" -H 'Accept: application/vnd.github+json' "$page_url" 2>"$err")" \
+      || { log "REFUSING $(git rev-parse --short "$REMOTE"): could not read check-runs from $CI_API ($(tr '\n' ' ' < "$err" | cut -c1-200))"; rm -f "$err" "$hdr"; return 2; }
+    all_runs="$(printf '%s' "$body" | jq -c --argjson acc "$all_runs" '$acc + (.check_runs // [])' 2>/dev/null)" \
+      || { log "REFUSING $(git rev-parse --short "$REMOTE"): check-runs response did not parse"; rm -f "$err" "$hdr"; return 2; }
+    # `Link: <url>; rel="next"` - the only field this needs, and absent on the last page.
+    page_url="$(tr -d '\r' < "$hdr" | grep -i '^link:' | tr ',' '\n' | grep 'rel="next"' | sed -n 's/.*<\(.*\)>.*/\1/p' | head -n1)"
+    rm -f "$hdr"
+  done
   rm -f "$err"
+  body="$(printf '%s' "$all_runs" | jq -c '{check_runs: .}' 2>/dev/null)" \
+    || { log "REFUSING $(git rev-parse --short "$REMOTE"): check-runs response did not parse"; return 2; }
+  [ "$pages" -lt 5 ] || log "note: read $pages pages of check-runs for $(git rev-parse --short "$REMOTE"); if a required job still reads absent the answer is larger than this gate follows"
   # One line per required job: "<name> <status> <conclusion>" for its NEWEST run
   # (a rerun supersedes the run it replaced), or "<name> absent -" when it has no run.
   local verdicts
