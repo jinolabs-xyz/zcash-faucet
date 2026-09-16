@@ -93,8 +93,14 @@ export function classifyChainIdentity(f: IdentityFacts): IdentityVerdict {
         : f.ourBranchId === null
           ? "our node does not report"
           : "the independent source does not report";
+    // `.trim()` on BOTH sides, because a truthy-but-blank detail brackets whitespace. SDE-UI
+    // found "zallet: " and " " reaching the old guard and rendering "( )" - a dangling bracket
+    // one space wide, and my own row missed it because a denylist of three spellings cannot be
+    // complete.
     const because =
-      f.ourBranchId === null && f.ourBranchIdDetail ? ` (${f.ourBranchIdDetail})` : "";
+      f.ourBranchId === null && f.ourBranchIdDetail?.trim()
+        ? ` (${f.ourBranchIdDetail.trim()})`
+        : "";
     return {
       state: "cannot-verify",
       reason: `${missing} a consensus branch id${because}, so whether we share rules is unestablished`,

@@ -113,13 +113,32 @@ test("and it does not blame our side's cause when THEIRS is the silent one", () 
   assert.doesNotMatch(v.reason, /Method not found/);
 });
 
-// Absent detail degrades to the plain sentence, never to a worse one: a dangling "()" or the
-// word "undefined" in front of an operator is its own defect.
+// Absent detail degrades to the plain sentence, never to a worse one.
+//
+// ASSERTED AS A POSITIVE SHAPE, NOT A DENYLIST, and that is the correction. This read
+// `doesNotMatch(/\(\)|undefined|null/)`, which SDE-UI walked straight past: "( )" is a dangling
+// bracket one space wide and matches none of the three. A list of spellings you thought of
+// cannot be complete. The rule that IS complete: if the sentence has a bracket, the bracket has
+// something in it.
+//
+// " " is in the loop because it is the value that broke the old row, and "zallet: " because it
+// is REACHABLE rather than merely constructible - a JSON-RPC error with an empty message and no
+// code builds exactly that.
 test("and an unknown cause reads clean rather than empty-bracketed", () => {
-  for (const d of [undefined, null, ""]) {
+  for (const d of [undefined, null, "", " ", "   ", "\t"]) {
     const v = classifyChainIdentity({ ...ok, ourBranchId: null, ourBranchIdDetail: d });
-    assert.match(v.reason, /our node does not report a consensus branch id, so/, String(d));
-    assert.doesNotMatch(v.reason, /\(\)|undefined|null/, String(d));
+    assert.match(v.reason, /our node does not report a consensus branch id, so/, JSON.stringify(d));
+    const bracket = v.reason.match(/\(([^)]*)\)/);
+    assert.equal(bracket, null, `a blank detail still bracketed: ${JSON.stringify(v.reason)}`);
+  }
+});
+
+test("and any bracket it DOES print has content in it", () => {
+  for (const d of ["zallet: Method not found (-32601)", "zallet unreachable: timeout", "x"]) {
+    const v = classifyChainIdentity({ ...ok, ourBranchId: null, ourBranchIdDetail: d });
+    const bracket = v.reason.match(/\(([^)]*)/);
+    assert.notEqual(bracket, null, `expected a bracket for ${JSON.stringify(d)}`);
+    assert.ok((bracket?.[1] ?? "").trim().length > 0, `empty bracket for ${JSON.stringify(d)}`);
   }
 });
 

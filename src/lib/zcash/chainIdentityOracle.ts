@@ -59,6 +59,32 @@ export function branchIdFromRpc(json: BranchIdRpc): string | null {
   return json.result?.consensus?.chaintip ?? json.result?.consensusBranchId ?? null;
 }
 
+export interface RpcEnvelope extends BranchIdRpc {
+  error?: { code?: number; message?: string } | null;
+}
+
+/**
+ * The sentence for WHY our lookup came back empty, or null when it did not.
+ *
+ * EXPORTED AND PURE BECAUSE NOTHING DRIVES THE HTTP PATH. SDE-UI's block on #619: no test
+ * asserted any of these strings, so the one hardcoded in chainIdentity.test.ts was tied to
+ * nothing that builds it, and the template could change under every green row. That is L38
+ * aimed at this PR - a literal a checker introduces is a third copy nothing verifies. Now the
+ * test drives the function that writes it.
+ *
+ * `.trim() ||` rather than `??`: `??` substitutes only null and undefined, so a JSON-RPC error
+ * carrying `message: ""` built the string "zallet: " - truthy, so the renderer bracketed it, and
+ * the operator got "(zallet: )". An error object with an empty message is squarely inside the
+ * shape this code decided to trust, so it is handled here rather than guarded downstream.
+ */
+export function failureDetail(json: RpcEnvelope): string | null {
+  if (json.error) {
+    const msg = json.error.message?.trim() || "RPC error";
+    return `zallet: ${msg}${json.error.code != null ? ` (${json.error.code})` : ""}`;
+  }
+  return branchIdFromRpc(json) === null ? "zallet answered without a consensus branch id" : null;
+}
+
 /**
  * WHY our side was silent, when it was. Null alone cannot say whether the method is absent, the
  * auth is wrong, or the node is unreachable - three different owners behind one value - and on
@@ -85,7 +111,6 @@ async function ourBranchId(): Promise<string | null> {
       lastOurFailure = `zallet answered HTTP ${res.status}`;
       return null;
     }
-    const json = (await res.json()) as BranchIdRpc & { error?: { code?: number; message?: string } };
     // A JSON-RPC ERROR ARRIVES AT HTTP 200, so `res.ok` is true and the old code fell straight
     // through to the parse, where a missing `result` returned null exactly as a missing FIELD
     // would. Measured on prod 2026-09-16: zallet answers 200 with
@@ -93,13 +118,9 @@ async function ourBranchId(): Promise<string | null> {
     // getblockchaininfo at all (#533 cites the source tree). "The method does not exist" and
     // "the node did not fill in the field" are different problems with different owners, and
     // they were the same null.
-    if (json.error) {
-      lastOurFailure = `zallet: ${json.error.message ?? "RPC error"}${json.error.code != null ? ` (${json.error.code})` : ""}`;
-      return null;
-    }
-    const id = branchIdFromRpc(json);
-    lastOurFailure = id === null ? "zallet answered without a consensus branch id" : null;
-    return id;
+    const json = (await res.json()) as RpcEnvelope;
+    lastOurFailure = failureDetail(json);
+    return json.error ? null : branchIdFromRpc(json);
   } catch (e) {
     lastOurFailure = `zallet unreachable: ${e instanceof Error ? e.message : "unknown"}`;
     return null;
