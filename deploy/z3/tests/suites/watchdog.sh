@@ -42,7 +42,7 @@ wd_env() {
   # The first case that set the grace to 0 failed in CI and passed alone.
   unset STUB_READY_EXTERNAL STUB_CURL_RC STUB_READY_REFS STUB_READY_USEDHEIGHT WATCHDOG_NODE_CONFIRMED_LAG_LIMIT
   unset STUB_SLOWLOOP STUB_ALERT_FAIL_N STUB_ALERT_FAIL_RC WATCHDOG_RECOVERY_MIN_UPTIME
-  unset WATCHDOG_CLOCK_FILE WATCHDOG_CLOCK_STEP STUB_CRASHLOOP STUB_HEAL_FIXES STUB_ZEBRA_BLOCKS STUB_ZEBRA_EST STUB_ZEBRA_ADVANCE STUB_ZEBRA_STUCK_CALLS \
+  unset STUB_CRASHLOOP STUB_HEAL_FIXES STUB_READY_REFHASH STUB_READY_REFHEIGHT STUB_ZEBRA_ADVANCE STUB_ZEBRA_BLOCKS STUB_ZEBRA_EST STUB_ZEBRA_HASH STUB_ZEBRA_STUCK_CALLS WATCHDOG_CLOCK_FILE WATCHDOG_CLOCK_STEP \
         WATCHDOG_NODE_HEAL_ENABLED WATCHDOG_NODE_STOPS_MINER WATCHDOG_MINER_HEARTBEAT WATCHDOG_MINER_UNIT STUB_START_FAIL \
         WATCHDOG_SIGNAL_MATCH STUB_READY_CANBUILD STUB_READY_CANBUILD_ONCE \
         STUB_READY STUB_READY_REASON STUB_READY_FAIL_UNTIL STUB_HEALTH
@@ -1403,6 +1403,64 @@ check "RELOADING: it is still attributed to us, because watchdog.sh:974 counts i
   "grep -q 'most likely ours' '$T/alerts.log'"
 check "RELOADING: and the operator is still told to stop it first, naming the state they will see" \
   "grep -q 'systemd says reloading' '$T/alerts.log'"
+
+# THE HISTORY HALF (#533 step 2, R-20). Four cases, and the two that must stay SILENT matter as
+# much as the one that pages: this rung's contract is "fail on proof, not on cannot-verify", so an
+# unshipped app half and an unreadable node are both required to do nothing.
+echo "== watchdog: a hash MISMATCH at a settled height is proof of a fork, and it parks and pages"
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFHEIGHT=4350180 STUB_READY_REFHASH=00000000aaaaaaaabbbbbbbbccccccccdddddddd
+export STUB_ZEBRA_HASH=00000000eeeeeeeeffffffff1111111122222222
+wd_run 2
+check "pages, naming the height and BOTH hashes so a human can check it against an explorer" \
+  "grep -q 'at height 4350180 our node has block 00000000eeeeeeeeffffffff1111111122222222' '$T/alerts.log' && grep -q 'independent source has 00000000aaaaaaaabbbbbbbbccccccccdddddddd' '$T/alerts.log'"
+check "calls it PROOF rather than the ahead-by-N evidence the other rung uses" \
+  "grep -q 'this is PROOF' '$T/alerts.log'"
+check "writes the park marker, because the marker is what stops the next deploy starting the miner" \
+  "[ -f '$T/park/$FORK_MARKER_REL' ]"
+# THE RULING, AS A TEST, same as the AHEAD rung's: the marker gates STARTS and stopping a running
+# unit stays the owner's. #533 says this rung "stops the miner"; watchdog.sh records the CTO
+# red-team ruling that it does not, and the ruling is what ships.
+check "and it does NOT stop the miner itself, because that stays the owner's" \
+  "! grep -q 'systemctl stop zcash-testnet-miner' '$STUB_LOG'"
+check "pages once for the episode, not once per sweep" \
+  "[ \"\$(grep -c 'this is PROOF' '$T/alerts.log')\" = 1 ]"
+
+echo "== watchdog: the SAME block at that height is not a fork, and says nothing at all"
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFHEIGHT=4350180 STUB_READY_REFHASH=00000000AAAAAAAABBBBBBBBCCCCCCCCDDDDDDDD
+export STUB_ZEBRA_HASH=00000000aaaaaaaabbbbbbbbccccccccdddddddd
+wd_run 2
+# CASE-INSENSITIVE ON PURPOSE, and the two knobs above differ only in case: chainIdentity.ts:94
+# already records that sources differ on hex case and that a case difference is not a fork. A rung
+# that paged on that would page on every sweep forever.
+check "a case difference is not a fork, so nothing is paged" \
+  "! grep -q 'this is PROOF' '$T/alerts.log'"
+check "and nothing is parked" "[ ! -f '$T/park/$FORK_MARKER_REL' ]"
+
+echo "== watchdog: no reference block on /api/ready is silence, not a fork"
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_ZEBRA_HASH=00000000eeeeeeeeffffffff1111111122222222
+wd_run 2
+# This is the state on the day this lands, because the app half is not shipped. It has to be
+# silent AND it has to say why once, so the rung turning itself on later is visible in the journal.
+check "says once that there is no reference to compare, and touches nothing" \
+  "[ \"\$(grep -c 'history check: no reference block' '$T/run.log')\" = 1 ]"
+check "and pages nothing" "! grep -q 'this is PROOF' '$T/alerts.log'"
+check "and parks nothing" "[ ! -f '$T/park/$FORK_MARKER_REL' ]"
+
+echo "== watchdog: a node that will not give us a hash is cannot-tell, never a fork"
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFHEIGHT=4350180 STUB_READY_REFHASH=00000000aaaaaaaabbbbbbbbccccccccdddddddd
+wd_run 2
+# STUB_ZEBRA_HASH unset: the node answers the heights call and refuses this one. An absent answer
+# from OUR side must never become evidence about THEIR chain - that is the whole asymmetry.
+check "pages nothing when we cannot read our own hash" "! grep -q 'this is PROOF' '$T/alerts.log'"
+check "and parks nothing" "[ ! -f '$T/park/$FORK_MARKER_REL' ]"
 
 echo "== watchdog: two references that DISAGREE cannot establish a fork, so nothing happens"
 wd_fork_env
