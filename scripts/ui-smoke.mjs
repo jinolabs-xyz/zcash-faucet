@@ -538,6 +538,15 @@ async function checkCardInnerPadding(browser) {
       ok(`${vp.width}x${vp.height}: and every .phase actually on screen wears it too`,
         r.liveBoxes.every(dressed),
         `${r.liveBoxes.filter(dressed).length} of ${r.liveCount} dressed`);
+    } else {
+      // SAYING IT DID NOT RUN IS PART OF RUNNING IT. Guarding was right - `[].every()` is true,
+      // so an unguarded row would report a clean pass over nothing - but a guard with no else
+      // prints neither ok nor FAIL, and a row that can vanish silently is exactly what this file
+      // objects to three hundred lines up. The rule itself is covered unconditionally by the
+      // probe row above, so this is a note about coverage and not an unasserted claim.
+      // Found by SDE-Infra reading assertions I am not allowed to review myself.
+      ok(`${vp.width}x${vp.height}: (no .phase was on screen, so only the rule was measured, not a live panel)`,
+        true, "all thirteen sit behind a state; the page under test is the form");
     }
 
     await c.close();
