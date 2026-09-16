@@ -1,0 +1,194 @@
+{
+  "_": "Every divergence from the frozen spec, with the reason it exists. scripts/parity-check.mjs fails on a divergence that is not declared here AND on a declaration that no longer describes one, so this file cannot quietly become a list of things the check has stopped looking at. Keys beginning with _ are notes, not declarations. Reasons are the ones the code already carries in src/app/redesign-shell.css; this is where a reviewer reads them all at once.",
+  "_uncompared": {
+    "src/app/redesign-hero.css": "S2a's sheet. The only vendored spec is S1's shell.css and the S2 snapshot ships no CSS at all - its styles are inline in index.html - so there is nothing to compare this against yet. Comparing it to S1's shell reports nine divergences that are not divergences: that document is not about the hero. Freeze an S2 spec the way S1's was frozen and move this sheet into the comparison; until then this line is the record that it is NOT covered."
+  },
+  "_spec": "design/spec/S1-20260915T1938Z/shell.css, the <style> blocks of the frozen S1 snapshot the shell was transcribed from.",
+  "_clamp": "The three below are one departure in three rules: the design's one-screen clamp, overridden while the views still hold pre-redesign content. Shipping it clipped the footer by 30 to 93px at ordinary laptop sizes with three links unreachable. It returns with the content designed for it, S2 to S5, enforced per slice by scripts/fit-check.mjs.",
+  "_form": "Each entry names WHY it differs and WHAT we ship. The body matters: declared by selector alone, a second, different change to an already-declared rule inherits the old label - measured, an added outline on .badge .dot passed. Regenerate the bodies with PARITY_PRINT=1 node scripts/parity-check.mjs <spec> <shipped...> and keep the why.",
+  ".badge[data-state=DEGRADED],.badge[data-state=EMPTY],.badge[data-state=NOT READY]": {
+    "kind": "override",
+    "why": "Same: real states the preview has no swatch for.",
+    "shipped": "color:var(--bad-text)"
+  },
+  ".badge[data-state=PREPARING],.badge[data-state=TOPPING UP]": {
+    "kind": "override",
+    "why": "The preview's badge knows LIVE and SYNCING. Our phase machine says more, and those words were already carrying meaning on the page before the redesign.",
+    "shipped": "color:var(--warn-text)"
+  },
+  ".brand .home .brand-mark": {
+    "kind": "override",
+    "why": "Our mark is an SVG component where the preview's is a canvas, so the preview's canvas rules do not apply to it.",
+    "shipped": "width:calc(1.45*var(--u)); height:calc(1.45*var(--u)); color:var(--ink-3)"
+  },
+  ".brand .home:focus-visible": {
+    "kind": "override",
+    "why": "RE-SCOPED TO OUTRANK globals.css, AND IT ADDS ONE DECLARATION, NAMED. The re-scoping is as above - one ancestor, so it outranks the legacy sheet. What it adds beyond the design's body is:\n  outline-color:var(--accent-text)\nwhich closes globals.css:100 `:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }`. The same WCAG 1.4.11 correction as `html :focus-visible`, applied where the masthead's home link needs it. Round three's reason said \"the same correction one level up\" and pointed at nothing, because the entry it referred to had itself been rewritten to claim sameness.\nNamed per the CTO's round-three ruling: an `override` whose body adds to the spec's names each addition and the globals.css rule it closes, or it is a `divergence`. Round three pasted \"SAME DECLARATIONS\" onto this entry and it was false - the checker's own sameBodies says so.",
+    "shipped": "outline-color:var(--accent-text) || outline:calc(.15*var(--u)) solid var(--accent); outline-offset:calc(.25*var(--u))"
+  },
+  ".ftr nav a,.hdr-right nav a": {
+    "kind": "override",
+    "why": "WCAG 1.4.3 needs 4.5:1 and the preview's --muted is 4.41:1 on --page. --label is 4.96:1, the next token up rather than a new colour.",
+    "shipped": "color:var(--label)"
+  },
+  ".stage": {
+    "kind": "override",
+    "why": "The one-screen clamp overridden: height:auto with min-height, and container-type:inline-size, because size containment needs a definite height in both axes and 1cqw goes with it.",
+    "shipped": "container-type:inline-size; height:auto; min-height:100dvh; overflow:visible || container:stage / size; height:100dvh; overflow:auto; --u:clamp(10.5px,calc(1cqw * var(--cards-scale)),14px)"
+  },
+  ".view.legacy-measure > *": {
+    "kind": "divergence",
+    "why": "Transitional, one view at a time as S2 to S5 land: the moved pre-redesign content keeps the 760px measure it was written for, inside a full-width view. src/app/legacyMeasure.test.ts fails in both directions on it and ui-smoke measures the width itself.",
+    "shipped": "width:100%; max-width:760px"
+  },
+  ".views": {
+    "kind": "override",
+    "why": "Our own <main> landmark around the four sections. The preview puts them straight into .comp; a landmark is an accessibility requirement a static preview does not have to meet.",
+    "shipped": "display:flex; flex-direction:column; gap:calc(2.6*var(--u)); flex:1; width:100%; min-width:0"
+  },
+  ":focus-visible": {
+    "kind": "override",
+    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `:focus-visible`; the rule is shipped as `html :focus-visible`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs.",
+    "shipped": ""
+  },
+  "@media (max-width:32rem) | .seg button": {
+    "kind": "override",
+    "why": "WCAG 2.5.5 target size at the phone breakpoint: 26px to 44px.",
+    "shipped": "flex:1; padding:0 || min-height:44px"
+  },
+  "@media (max-width:32rem) | .strip": {
+    "kind": "override",
+    "why": "WCAG 2.5.5 target size at the phone breakpoint: 32px to 44px.",
+    "shipped": "height:auto; min-height:44px || padding-right:calc(.35*var(--u))"
+  },
+  "@media (min-width:56rem) | .comp": {
+    "kind": "override",
+    "why": "The same override: the spec pins .comp to 100dvh here.",
+    "shipped": "height:100dvh || height:auto; min-height:100dvh"
+  },
+  "@media (min-width:56rem) | .stage": {
+    "kind": "override",
+    "why": "The same override at the desktop breakpoint, where the spec sets overflow:hidden.",
+    "shipped": "overflow:hidden || overflow:visible"
+  },
+  ".blindfold": {
+    "kind": "divergence",
+    "why": "THE MASCOT'S INNER DOM IS THE `page-mascot` PACKAGE'S, NOT OURS. The design draws the fox from its own markup - .m-body, .m-head, .m-head-img, .m-tails, .blindfold inside .mascot-frame - and we render <Mascot/> from the package instead, which ships its own structure and its own styling. Transcribing these would be a second, competing description of a DOM we do not author; the first time the package changed its internals ours would be dead CSS pointing at elements that no longer exist. The visual result is checked where it can be: scripts/mascot-check.mjs measures the rendered fox in the page rather than the rules behind it.",
+    "shipped": ""
+  },
+  ".comp > .view.hero": {
+    "kind": "override",
+    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `.comp > .view.hero`; the rule is shipped as `.views > .view.hero, .comp > .view.hero`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs.",
+    "shipped": ""
+  },
+  ".entrance-pending .hero-mascot": {
+    "kind": "divergence",
+    "why": "THE MASCOT'S INNER DOM IS THE `page-mascot` PACKAGE'S, NOT OURS. The design draws the fox from its own markup - .m-body, .m-head, .m-head-img, .m-tails, .blindfold inside .mascot-frame - and we render <Mascot/> from the package instead, which ships its own structure and its own styling. Transcribing these would be a second, competing description of a DOM we do not author; the first time the package changed its internals ours would be dead CSS pointing at elements that no longer exist. The visual result is checked where it can be: scripts/mascot-check.mjs measures the rendered fox in the page rather than the rules behind it.",
+    "shipped": ""
+  },
+  ".iconbtn": {
+    "kind": "override",
+    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `.iconbtn`; the rule is shipped as `html .iconbtn`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs.",
+    "shipped": ""
+  },
+  ".iconbtn:hover": {
+    "kind": "override",
+    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `.iconbtn:hover`; the rule is shipped as `html .iconbtn:hover`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs.",
+    "shipped": ""
+  },
+  ".m-body": {
+    "kind": "divergence",
+    "why": "THE MASCOT'S INNER DOM IS THE `page-mascot` PACKAGE'S, NOT OURS. The design draws the fox from its own markup - .m-body, .m-head, .m-head-img, .m-tails, .blindfold inside .mascot-frame - and we render <Mascot/> from the package instead, which ships its own structure and its own styling. Transcribing these would be a second, competing description of a DOM we do not author; the first time the package changed its internals ours would be dead CSS pointing at elements that no longer exist. The visual result is checked where it can be: scripts/mascot-check.mjs measures the rendered fox in the page rather than the rules behind it.",
+    "shipped": ""
+  },
+  ".m-body,.m-head,.m-head-img,.blindfold": {
+    "kind": "divergence",
+    "why": "THE MASCOT'S INNER DOM IS THE `page-mascot` PACKAGE'S, NOT OURS. The design draws the fox from its own markup - .m-body, .m-head, .m-head-img, .m-tails, .blindfold inside .mascot-frame - and we render <Mascot/> from the package instead, which ships its own structure and its own styling. Transcribing these would be a second, competing description of a DOM we do not author; the first time the package changed its internals ours would be dead CSS pointing at elements that no longer exist. The visual result is checked where it can be: scripts/mascot-check.mjs measures the rendered fox in the page rather than the rules behind it.",
+    "shipped": ""
+  },
+  ".m-head": {
+    "kind": "divergence",
+    "why": "THE MASCOT'S INNER DOM IS THE `page-mascot` PACKAGE'S, NOT OURS. The design draws the fox from its own markup - .m-body, .m-head, .m-head-img, .m-tails, .blindfold inside .mascot-frame - and we render <Mascot/> from the package instead, which ships its own structure and its own styling. Transcribing these would be a second, competing description of a DOM we do not author; the first time the package changed its internals ours would be dead CSS pointing at elements that no longer exist. The visual result is checked where it can be: scripts/mascot-check.mjs measures the rendered fox in the page rather than the rules behind it.",
+    "shipped": ""
+  },
+  ".m-head-img": {
+    "kind": "divergence",
+    "why": "THE MASCOT'S INNER DOM IS THE `page-mascot` PACKAGE'S, NOT OURS. The design draws the fox from its own markup - .m-body, .m-head, .m-head-img, .m-tails, .blindfold inside .mascot-frame - and we render <Mascot/> from the package instead, which ships its own structure and its own styling. Transcribing these would be a second, competing description of a DOM we do not author; the first time the package changed its internals ours would be dead CSS pointing at elements that no longer exist. The visual result is checked where it can be: scripts/mascot-check.mjs measures the rendered fox in the page rather than the rules behind it.",
+    "shipped": ""
+  },
+  ".m-tails": {
+    "kind": "divergence",
+    "why": "THE MASCOT'S INNER DOM IS THE `page-mascot` PACKAGE'S, NOT OURS. The design draws the fox from its own markup - .m-body, .m-head, .m-head-img, .m-tails, .blindfold inside .mascot-frame - and we render <Mascot/> from the package instead, which ships its own structure and its own styling. Transcribing these would be a second, competing description of a DOM we do not author; the first time the package changed its internals ours would be dead CSS pointing at elements that no longer exist. The visual result is checked where it can be: scripts/mascot-check.mjs measures the rendered fox in the page rather than the rules behind it.",
+    "shipped": ""
+  },
+  ".mascot-frame": {
+    "kind": "divergence",
+    "why": "THE MASCOT'S INNER DOM IS THE `page-mascot` PACKAGE'S, NOT OURS. The design draws the fox from its own markup - .m-body, .m-head, .m-head-img, .m-tails, .blindfold inside .mascot-frame - and we render <Mascot/> from the package instead, which ships its own structure and its own styling. Transcribing these would be a second, competing description of a DOM we do not author; the first time the package changed its internals ours would be dead CSS pointing at elements that no longer exist. The visual result is checked where it can be: scripts/mascot-check.mjs measures the rendered fox in the page rather than the rules behind it.",
+    "shipped": ""
+  },
+  ".stage .ftr nav a:hover,.stage .hdr-right nav a:hover,.stage .seg a:hover": {
+    "kind": "override",
+    "why": "#575's LEGACY HOVER DEFEAT. globals.css paints a:hover from the retired palette and the design's hover rules name no colour, so there is nothing in the transcription to overwrite it. These restore the design's intent - underline, no colour change - by naming the design's own values at a specificity globals cannot beat.",
+    "shipped": "color:var(--ink)"
+  },
+  ".stage a:hover": {
+    "kind": "override",
+    "why": "RE-SCOPED TO OUTRANK globals.css, AND IT ADDS ONE DECLARATION, NAMED. The re-scoping is as above - one ancestor, so it outranks the legacy sheet. What it adds beyond the design's body is:\n  color:var(--accent-text), and the design's text-decoration:underline is not ours to keep here\nwhich closes globals.css:98 `a:hover { color: var(--color-accent-800); }`. globals paints hover from the retired palette and the design's hover rule names no colour, so there was nothing in the transcription to overwrite it. This restores the design's intent at a specificity globals cannot beat. The design's own `.ftr nav a:hover` and `.hdr-right nav a:hover` are (0,2,1) against this (0,1,1) and still win.\nNamed per the CTO's round-three ruling: an `override` whose body adds to the spec's names each addition and the globals.css rule it closes, or it is a `divergence`. Round three pasted \"SAME DECLARATIONS\" onto this entry and it was false - the checker's own sameBodies says so.",
+    "shipped": "color:var(--accent-text)"
+  },
+  ".tag": {
+    "kind": "override",
+    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `.tag`; the rule is shipped as `.stage .tag`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs.",
+    "shipped": ""
+  },
+  ".tag.more": {
+    "kind": "divergence",
+    "why": "NOT A RE-SCOPING AT ALL, AND ROUND THREE SAID IT WAS. There is no `.tag.more` rule in any sheet we ship - re-scoped or otherwise - so this is a design rule we do not carry, which is a `divergence` and not an `override`. The hero's own `.hero-copy .chips .tag.more` sets `margin-left:auto` and the accent colour on a DIFFERENT, more specific selector for the chips row; the design's bare `.tag.more` is not transcribed anywhere. Declared as the debt it is until a slice carries it.",
+    "shipped": ""
+  },
+  "@media (max-width:56rem) | .mascot-frame": {
+    "kind": "divergence",
+    "why": "THE MASCOT'S INNER DOM IS THE `page-mascot` PACKAGE'S, NOT OURS. The design draws the fox from its own markup - .m-body, .m-head, .m-head-img, .m-tails, .blindfold inside .mascot-frame - and we render <Mascot/> from the package instead, which ships its own structure and its own styling. Transcribing these would be a second, competing description of a DOM we do not author; the first time the package changed its internals ours would be dead CSS pointing at elements that no longer exist. The visual result is checked where it can be: scripts/mascot-check.mjs measures the rendered fox in the page rather than the rules behind it.",
+    "shipped": ""
+  },
+  "a": {
+    "kind": "override",
+    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `a`; the rule is shipped as `html a`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs.",
+    "shipped": ""
+  },
+  "body": {
+    "kind": "override",
+    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `body`; the rule is shipped as `html body`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs.",
+    "shipped": ""
+  },
+  "html .iconbtn": {
+    "kind": "override",
+    "why": "RE-SCOPED TO OUTRANK globals.css, AND THE BODY IS THE SPEC'S. Verified with the checker's own comparison: our declarations and the design's are the same set, only the selector carries one more ancestor - `html` for element rules, `.stage` for page furniture - so it outranks the legacy sheet on specificity rather than on source order. The spec's key and ours therefore differ while the CSS does not, which the checker reports as one dropped rule plus one added rule: the same divergence twice.",
+    "shipped": "display:inline-grid; place-items:center; width:calc(2.4*var(--u)); height:calc(2.4*var(--u)); border-radius:calc(.5*var(--u)); border:calc(.06*var(--u)) solid var(--hair); background:none; cursor:pointer; color:var(--muted)"
+  },
+  "html .iconbtn:hover": {
+    "kind": "override",
+    "why": "RE-SCOPED TO OUTRANK globals.css, AND THE BODY IS THE SPEC'S. Verified with the checker's own comparison: our declarations and the design's are the same set, only the selector carries one more ancestor - `html` for element rules, `.stage` for page furniture - so it outranks the legacy sheet on specificity rather than on source order. The spec's key and ours therefore differ while the CSS does not, which the checker reports as one dropped rule plus one added rule: the same divergence twice.",
+    "shipped": "color:var(--ink)"
+  },
+  "html :focus-visible": {
+    "kind": "override",
+    "why": "RE-SCOPED TO OUTRANK globals.css, AND IT ADDS ONE DECLARATION, NAMED. The re-scoping is as above - one ancestor, so it outranks the legacy sheet. What it adds beyond the design's body is:\n  outline-color:var(--accent-text)\nwhich closes globals.css:100 `:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }`. WCAG 1.4.11: globals.css's own header measures the raw accent at 3.76 on paper and 4.30 on ink. A focus ring's floor is 3.0 so the accent passes for the ring itself, but this is the correction that keeps the ring's colour on the text-safe token where the ring sits against text. The round-three entry dropped this reason entirely and replaced it with a false claim of sameness.\nNamed per the CTO's round-three ruling: an `override` whose body adds to the spec's names each addition and the globals.css rule it closes, or it is a `divergence`. Round three pasted \"SAME DECLARATIONS\" onto this entry and it was false - the checker's own sameBodies says so.",
+    "shipped": "outline-color:var(--accent-text) || outline:calc(.16*var(--u)) solid var(--accent); outline-offset:calc(.2*var(--u)); border-radius:calc(.4*var(--u))"
+  },
+  "html a": {
+    "kind": "override",
+    "why": "RE-SCOPED TO OUTRANK globals.css, AND IT ADDS ONE DECLARATION, NAMED. The re-scoping is as above - one ancestor, so it outranks the legacy sheet. What it adds beyond the design's body is:\n  text-underline-offset:auto\nwhich closes globals.css:97 `a { color: var(--color-accent-text); text-underline-offset: 3px; }`. The design's own sheet names no underline offset, so every anchor inherited the retired 3px under a transcription that looked complete. This is #575's declared SEVENTH leak, and naming the property in the design's own sheet is the closing move #575 itself specified.\nNamed per the CTO's round-three ruling: an `override` whose body adds to the spec's names each addition and the globals.css rule it closes, or it is a `divergence`. Round three pasted \"SAME DECLARATIONS\" onto this entry and it was false - the checker's own sameBodies says so.",
+    "shipped": "color:var(--accent-text); text-decoration:none; text-underline-offset:auto"
+  },
+  "html body": {
+    "kind": "override",
+    "why": "RE-SCOPED TO OUTRANK globals.css, AND THE BODY IS THE SPEC'S. Verified with the checker's own comparison: our declarations and the design's are the same set, only the selector carries one more ancestor - `html` for element rules, `.stage` for page furniture - so it outranks the legacy sheet on specificity rather than on source order. The spec's key and ours therefore differ while the CSS does not, which the checker reports as one dropped rule plus one added rule: the same divergence twice.",
+    "shipped": "background:var(--page); color:var(--ink); font:400 15px/1.5 var(--sans); -webkit-font-smoothing:antialiased; text-rendering:geometricPrecision; text-wrap:pretty"
+  },
+  ".tip": {
+    "kind": "divergence",
+    "why": "A GAP, NOT A DECISION, and it is declared here only so the gate can measure the other two hundred rules rather than stopping on this one. The design's drips chart carries a hover tooltip - the rule at shell.css:287, the element at index.html:637 inside the Analytics chart - and we ship neither. Filed as #594 against the sheet owner rather than declared away quietly. When the tooltip ships, this entry stops describing a divergence and the checker demands its removal, which is the property that stops this line becoming permanent.",
+    "shipped": ""
+  }
+}

@@ -1,0 +1,1167 @@
+<!doctype html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Zcash Testnet Faucet</title>
+<script>
+(function(){ try{var t=localStorage.getItem('faucet-theme'); if(t==='ink'||t==='paper') document.documentElement.dataset.theme=t;}catch(e){}
+ if(!matchMedia('(prefers-reduced-motion: reduce)').matches && Element.prototype.animate){ document.documentElement.classList.add('entrance-pending'); window.__entranceFallback=setTimeout(function(){document.documentElement.classList.remove('entrance-pending','entrance-active')},3000);} })();
+</script>
+<style>
+/* ===== 1. Tokens ===== */
+:root{
+  --page:#f0f0f0; --surface:#fff; --panel:#fffaf6;
+  --ink:#282828; --ink-2:#292929; --ink-3:#151515; --muted:#6f6f6f; --label:#676767;
+  --orange:#ff6900; --orange-soft:#ffdfca; --orange-line:#f27624;
+  --accent:var(--orange);            /* marks: today's bar, LIVE ring, focus ring, glyphs */
+  --accent-text:#ae1800;             /* accent that carries small text, 7.2:1 on white */
+  --display-accent:var(--orange);    /* big display figures; set to var(--accent-text) for strict AA */
+  --cta-text:#fff;                   /* CTA label; set to var(--ink) for strict AA */
+  --cta:linear-gradient(100deg,#ff9b5b 0%,#ff8840 38%,#ff6b05 100%);
+  --green:#4d8c35; --green-text:#3f7429;
+  --warn:#c9891f; --warn-text:#8a5a12;
+  --bad:#c8342b; --bad-text:#b3261e;
+  --unknown:#8a857f;
+  --border:rgb(255 233 218 / 96%); --hair:#efe6df; --prompt-border:#beb4ae; --prompt-bg:rgb(255 255 255 / 32%);
+  --bar-soft:#ffdbc4; --tag-bg:rgb(255 255 255 / 95%);
+  --panel-bg:radial-gradient(circle at 50% 78%,rgb(255 225 207 / 30%),transparent 47%),linear-gradient(180deg,rgb(255 255 255 / 96%),rgb(255 248 243 / 94%));
+  --panel-bg-feature:radial-gradient(circle at 74% 46%,rgb(255 225 204 / 70%),transparent 48%),linear-gradient(180deg,rgb(255 255 255 / 96%),rgb(255 242 232 / 97%));
+  --shadow-a:rgb(44 35 29 / 11%); --shadow-b:rgb(44 35 29 / 3.5%);
+  --sans:"Segoe UI Variable","Segoe UI",Arial,Helvetica,sans-serif;
+  --sans-semibold:"Segoe UI Semibold","Segoe UI Variable Display","Segoe UI",Arial,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --ease-place:cubic-bezier(.16,1,.3,1); --ease-wipe:cubic-bezier(.24,.86,.28,1);
+  --cards-scale:1;
+}
+html[data-theme="ink"]{
+  --page:#171615; --surface:#201e1d; --panel:#262220;
+  --ink:#f3f2f2; --ink-2:#f3f2f2; --ink-3:#fff; --muted:#b5b0ab; --label:#b5b0ab;
+  --accent-text:#ff9783; --green:#35c46a; --green-text:#35c46a; --warn:#e0a43a; --warn-text:#e0a43a; --bad:#ff7b70; --bad-text:#ff7b70;
+  --border:rgb(255 233 218 / 9%); --hair:#36312e; --prompt-border:#554d48; --prompt-bg:#1a1817;
+  --bar-soft:#4d3b2f; --tag-bg:#292524; --orange-soft:#2f231c; --orange-line:#ff8a3d; --unknown:#8a857f;
+  --panel-bg:radial-gradient(circle at 50% 78%,rgb(255 150 90 / 8%),transparent 47%),linear-gradient(180deg,#262220,#221f1e);
+  --panel-bg-feature:radial-gradient(circle at 74% 46%,rgb(255 150 90 / 14%),transparent 48%),linear-gradient(180deg,#282321,#221f1e);
+  --shadow-a:rgb(0 0 0 / 45%); --shadow-b:rgb(0 0 0 / 25%);
+  color-scheme:dark;
+}
+/* ===== 2. Base ===== */
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--page);color:var(--ink);font:400 15px/1.5 var(--sans);-webkit-font-smoothing:antialiased;text-rendering:geometricPrecision;text-wrap:pretty}
+a{color:var(--accent-text);text-decoration:none}
+a:hover{text-decoration:underline}
+button,input,select{font:inherit;color:inherit}
+:focus-visible{outline:calc(.16*var(--u)) solid var(--accent);outline-offset:calc(.2*var(--u));border-radius:calc(.4*var(--u))}
+[hidden]{display:none !important}
+.num{font-variant-numeric:tabular-nums}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+canvas.g{width:calc(1.3*var(--u));height:calc(1.3*var(--u));display:inline-block;vertical-align:-.18em;flex:none}
+
+/* ===== 3. Stage + composition (container units) ===== */
+.stage{container:stage / size;height:100dvh;overflow:auto;--u:clamp(10.5px,calc(1cqw * var(--cards-scale)),14px)}
+.comp{width:min(81.71cqw,1360px);margin:0 auto;padding:calc(2.8*var(--u)) 0 calc(2*var(--u));font-size:var(--u);display:flex;flex-direction:column;gap:calc(2.6*var(--u));min-height:100dvh;box-sizing:border-box}
+.comp > .ftr{margin-top:auto}
+@media (min-width:56rem){.comp{height:100dvh}.stage{overflow:hidden}}
+@media (max-height:780px) and (min-width:64rem){:root{--cards-scale:.9}}
+@media (max-height:660px) and (min-width:64rem){:root{--cards-scale:.8}}
+
+/* ===== 4. Card shell (Falcon recipe) ===== */
+.card{position:relative;background:var(--surface);border:calc(.075*var(--u)) solid var(--border);border-radius:calc(1.59*var(--u));overflow:hidden;
+  box-shadow:calc(.32*var(--u)) calc(.9*var(--u)) calc(1.42*var(--u)) var(--shadow-a),0 calc(.14*var(--u)) calc(.42*var(--u)) var(--shadow-b)}
+.panel{position:relative;margin:0 2.55%;padding:7.5% 7.5% 8%;border-radius:calc(1.28*var(--u)) calc(1.28*var(--u)) calc(1.08*var(--u)) calc(1.08*var(--u));background:var(--panel-bg);display:flex;flex-direction:column;gap:calc(1.1*var(--u))}
+.card.feature .panel{margin:0 2%;background:var(--panel-bg-feature)}
+.card-copy{position:relative;padding:7% 8.4% 7.5%}
+.card-copy h2{margin:0 0 calc(.5*var(--u));color:var(--ink-2);font:600 calc(1.86*var(--u))/1.04 var(--sans-semibold);letter-spacing:calc(-.125*var(--u));text-wrap:balance}
+.card.feature .card-copy h2{font-size:calc(2.17*var(--u));letter-spacing:calc(-.09*var(--u))}
+.card-copy p{margin:0;color:var(--muted);font-size:calc(1.18*var(--u));font-weight:500;line-height:1.28;letter-spacing:calc(-.04*var(--u))}
+.card-copy p + p{margin-top:calc(.7*var(--u))}
+.corner-icon{display:none}
+.corner-icon canvas.g{width:52%;height:52%}
+.entrance-pending .card,.entrance-pending .hero-copy,.entrance-pending .strip,.entrance-pending .seg{opacity:0}
+@media (prefers-reduced-motion:reduce){.entrance-pending .card,.entrance-pending .hero-copy,.entrance-pending .strip,.entrance-pending .seg{opacity:1}}
+.entrance-active .card,.entrance-active .panel,.entrance-active .card-copy,.entrance-active .card-copy h2,.entrance-active .card-copy p,.entrance-active .corner-icon{will-change:transform,opacity,clip-path}
+
+/* small type helpers */
+.lbl{color:var(--label);font:500 calc(.8*var(--u))/1.3 var(--mono)}
+.metric{display:flex;flex-direction:column;gap:calc(.3*var(--u))}
+.metric-row{display:flex;align-items:baseline;gap:calc(1*var(--u));flex-wrap:wrap}
+.metric strong{color:var(--display-accent);font-size:calc(2.2*var(--u));font-weight:600;font-family:var(--sans-semibold);line-height:.95;letter-spacing:calc(-.04*var(--u));font-variant-numeric:tabular-nums}
+.metric .delta{color:var(--green-text);font:500 calc(.85*var(--u))/1.3 var(--mono)}
+.metric .delta[data-tone="warn"]{color:var(--warn-text)}.metric .delta[data-tone="bad"]{color:var(--bad-text)}
+
+/* tag pills */
+.tag{font-family:inherit;display:inline-flex;align-items:center;gap:calc(.5*var(--u));height:calc(2.15*var(--u));padding:0 calc(.9*var(--u));border-radius:calc(.5*var(--u));background:var(--tag-bg);color:var(--ink);
+  font-size:calc(.84*var(--u));font-weight:500;letter-spacing:0;border:calc(.06*var(--u)) solid var(--hair);white-space:nowrap;text-decoration:none;cursor:default}
+.tag b{font-weight:600;font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:calc(.8*var(--u))}
+.tag .sdot{width:calc(.55*var(--u));height:calc(.55*var(--u));border-radius:50%;background:var(--unknown)}
+.tag[data-tone="ok"] .sdot{background:var(--green)}.tag[data-tone="warn"] .sdot{background:var(--warn)}.tag[data-tone="bad"] .sdot{background:var(--bad)}
+.tag.ops{color:var(--warn-text);border-color:var(--warn);letter-spacing:calc(.04*var(--u))}
+button.tag,a.tag{cursor:pointer;transition:box-shadow .18s,transform .18s}
+button.tag:hover,a.tag:hover{border-color:var(--muted)}
+.tag.ink{background:var(--ink);color:var(--surface);border-color:var(--ink)}
+.tag.ink:hover{background:var(--ink-3)}
+
+/* ===== 5. Header (bare) ===== */
+.hdr{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:calc(1.6*var(--u))}
+.hdr-right{justify-self:end}
+.brand{display:flex;align-items:center;gap:calc(.9*var(--u));white-space:nowrap}
+.brand .name{font:600 calc(1.15*var(--u))/1 var(--sans-semibold);letter-spacing:calc(-.035*var(--u));color:var(--ink-3)}
+.brand .home{display:inline-flex;align-items:center;gap:calc(.7*var(--u));color:inherit;text-decoration:none;border-radius:calc(.6*var(--u))}
+.brand .home:hover .name{color:var(--accent-text)}
+.brand .home:focus-visible{outline:calc(.15*var(--u)) solid var(--accent);outline-offset:calc(.25*var(--u))}
+.brand .home canvas.g{width:calc(1.45*var(--u));height:calc(1.45*var(--u));color:var(--ink-3);vertical-align:0}
+.brand .badge{margin-left:calc(.9*var(--u));padding-left:calc(.9*var(--u));border-left:calc(.06*var(--u)) solid var(--hair)}
+.badge{display:inline-flex;align-items:center;gap:calc(.6*var(--u));margin-left:calc(.6*var(--u));font:700 calc(.8*var(--u))/1 var(--mono);letter-spacing:calc(.08*var(--u));color:var(--muted)}
+.badge .ring{display:grid;place-items:center;width:calc(1*var(--u));height:calc(1*var(--u))}
+.badge .dot{width:calc(.6*var(--u));height:calc(.6*var(--u));border-radius:50%;background:var(--unknown)}
+.badge[data-state="LIVE"]{color:var(--green-text)}
+.badge[data-state="LIVE"] .dot{background:var(--green);box-shadow:0 0 0 calc(.16*var(--u)) var(--surface),0 0 0 calc(.28*var(--u)) var(--accent)}
+.badge[data-state="SYNCING"]{color:var(--warn-text)}.badge[data-state="SYNCING"] .dot{background:var(--warn)}
+.strip{display:flex;align-items:center;gap:calc(.8*var(--u));height:calc(2.7*var(--u));max-width:calc(19*var(--u));padding:0;border:0;background:none;cursor:pointer;color:var(--ink);border-bottom:calc(.12*var(--u)) solid transparent;border-radius:0}
+.strip:hover{border-bottom-color:var(--ink)}
+.strip canvas{width:calc(6.6*var(--u));height:calc(1.8*var(--u));display:block}
+.strip .kv{display:flex;align-items:center;gap:calc(.4*var(--u));font-size:calc(.8*var(--u));color:var(--muted);font-weight:500;white-space:nowrap}
+.strip .kv b{font:600 calc(.78*var(--u))/1 var(--sans);font-variant-numeric:tabular-nums;color:var(--ink)}
+.strip .kv b{font-size:calc(.95*var(--u))}
+.hdr-right{display:flex;align-items:center;gap:calc(1.2*var(--u))}
+.hdr-right nav{display:flex;gap:calc(1.2*var(--u));font-size:calc(.95*var(--u));font-weight:500}
+.hdr-right nav a{color:var(--muted)}.hdr-right nav a:hover{color:var(--ink);text-decoration:none}
+.iconbtn{display:inline-grid;place-items:center;width:calc(2.4*var(--u));height:calc(2.4*var(--u));border-radius:calc(.5*var(--u));border:calc(.06*var(--u)) solid var(--hair);background:none;cursor:pointer;color:var(--muted)}
+.iconbtn:hover{color:var(--ink)}
+
+/* ===== 6. Status strip ===== */
+.chips{display:flex;flex-wrap:wrap;gap:calc(.5*var(--u)) calc(1.4*var(--u))}
+.hero-copy .chips{padding-top:calc(.6*var(--u));border-top:calc(.06*var(--u)) solid var(--hair);width:100%}
+.hero-copy .chips .tag{height:auto;padding:calc(.3*var(--u)) 0;border:0;border-bottom:calc(.06*var(--u)) solid transparent;border-radius:0;background:none;color:var(--muted);font-weight:500;cursor:pointer}
+.hero-copy .chips .tag:hover{color:var(--ink);border-bottom-color:var(--ink)}
+.hero-copy .chips .tag b{color:var(--ink)}
+.hero-copy .chips .tag.more{color:var(--accent-text);margin-left:auto}
+
+/* ===== 7. Views (one section at a time) ===== */
+.view{display:flex;flex-direction:column;gap:calc(2*var(--u));align-items:center;width:100%}
+.comp > .view.hero{flex:1 1 auto;min-height:0;justify-content:flex-start;padding-top:calc(2.5*var(--u))}
+.view.hero .hero-grid{flex:1 1 auto;min-height:0;height:100%}
+.card.claim{max-height:100%;display:flex;flex-direction:column}
+.card.claim > .panel{flex:1 1 auto;min-height:0;overflow:auto}
+.card.claim > .card-copy{flex:none}
+.hero-grid{display:grid;grid-template-columns:1.1fr 1fr;gap:calc(4.5*var(--u));align-items:center;width:100%}
+.hero-copy{display:flex;flex-direction:column;gap:calc(1.5*var(--u));align-items:flex-start}
+.eyebrow{margin:0;font-size:calc(.8*var(--u));color:var(--muted)}
+.hero-copy h1{margin:0;color:var(--ink-3);font:600 calc(3.7*var(--u))/1 var(--sans-semibold);letter-spacing:calc(-.12*var(--u));text-wrap:balance}
+.lede{margin:0;font-size:calc(1.3*var(--u));color:var(--muted);font-weight:500;line-height:1.4;letter-spacing:calc(-.02*var(--u));max-width:34em}
+.lede b{color:var(--ink);font-weight:600}
+.lede.small{font-size:calc(1.05*var(--u))}
+.chev{font-size:1.25em;line-height:1;opacity:.7;margin-left:.15em}
+.tag.more{color:var(--accent-text)}
+.morelink{display:inline-flex;align-items:center;gap:calc(.35*var(--u));font-size:calc(.95*var(--u));font-weight:600;color:var(--accent-text)}
+.morelink:hover{text-decoration:underline}
+.vhead{width:100%}
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:calc(1.8*var(--u));width:100%;align-items:stretch}
+/* preview: equal cards. The grid stretches the shells; the panels share one height so the three headings sit on one line; the copy takes the rest. */
+.grid3 .card{display:flex;flex-direction:column}
+.grid3 .card .panel{min-height:calc(14.5*var(--u));justify-content:flex-start}
+.grid3 .card .card-copy{flex:1}
+.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:calc(1.8*var(--u));width:100%;align-items:stretch}
+.grid2 .card{display:flex;flex-direction:column}
+.grid2 .card .panel{min-height:calc(14.5*var(--u));justify-content:flex-start}
+.grid2 .card .card-copy{flex:1}
+/* preview: the lookup is one row, the button the height of the field */
+#lookupform{display:flex;gap:calc(.6*var(--u));align-items:stretch;margin-top:calc(.6*var(--u))}
+#lookupform .prompt{flex:1;min-width:0}
+#lookupform .tag.ink{height:auto;padding-inline:calc(1.3*var(--u));font-size:calc(.95*var(--u));white-space:nowrap;border-radius:calc(.6*var(--u))}
+.vhead h2{margin:0;font:600 calc(1.86*var(--u))/1.04 var(--sans-semibold);letter-spacing:calc(-.125*var(--u));color:var(--ink-2)}
+.vhead p{margin:calc(.4*var(--u)) 0 0;font-size:calc(.95*var(--u));color:var(--muted);font-weight:500}
+.seg{display:flex;gap:calc(1.8*var(--u));justify-self:center}
+.seg button{border:0;background:none;height:calc(2.2*var(--u));padding:0;font-size:calc(.95*var(--u));font-weight:500;color:var(--muted);cursor:pointer;white-space:nowrap;transition:color .18s;border-bottom:calc(.12*var(--u)) solid transparent;border-radius:0}
+.seg button:hover,.seg a:hover{color:var(--ink)}
+.seg a{display:inline-flex;align-items:center;height:calc(2.2*var(--u));font-size:calc(.95*var(--u));font-weight:500;color:var(--muted);text-decoration:none;white-space:nowrap;border-bottom:calc(.12*var(--u)) solid transparent}
+.seg a[aria-current]{color:var(--ink);border-bottom-color:var(--orange)}
+.seg button[aria-current]{color:var(--ink);border-bottom-color:var(--orange)}
+.linkbtn{background:none;border:0;padding:0;align-self:flex-start;color:var(--accent-text);font-size:calc(.9*var(--u));font-weight:600;cursor:pointer}
+.linkbtn:hover{text-decoration:underline}
+
+/* claim card internals */
+.assistant-head{display:flex;align-items:center;gap:calc(.9*var(--u));color:var(--accent-text);font-size:calc(1.15*var(--u));font-weight:700;letter-spacing:calc(-.04*var(--u))}
+.assistant-head .ring{width:calc(2.16*var(--u));height:calc(2.16*var(--u));border-radius:50%;background:var(--orange-soft);display:grid;place-items:center;color:var(--orange)}
+.assistant-head .ring canvas.g{width:48%;height:48%}
+.claim h1{margin:0;color:var(--ink-3);font:600 calc(2.75*var(--u))/1.02 var(--sans-semibold);letter-spacing:calc(-.09*var(--u));text-wrap:balance}
+.tabs{display:flex;gap:calc(.4*var(--u))}
+.tabs button{white-space:nowrap;border:calc(.06*var(--u)) solid var(--hair);background:none;height:calc(2*var(--u));padding:0 calc(.9*var(--u));border-radius:calc(.5*var(--u));font-size:calc(.85*var(--u));font-weight:600;color:var(--muted);cursor:pointer}
+.tabs button[aria-selected="true"]{background:var(--ink);color:var(--surface);border-color:var(--ink)}
+.tabs button[data-parked] small{font-weight:500;margin-left:calc(.5*var(--u));opacity:.8}
+.fieldwrap{display:flex;flex-direction:column;gap:calc(.45*var(--u))}
+.label{display:flex;justify-content:space-between;align-items:center;font-size:calc(.85*var(--u));color:var(--label);font-weight:500}
+.abadge{font:500 calc(.75*var(--u))/1 var(--mono);color:var(--muted)}
+.abadge:empty{visibility:hidden}
+.abadge[data-kind="shielded"]{color:var(--green-text)}.abadge[data-kind="public"]{color:var(--warn-text)}
+.prompt{width:100%;padding:calc(.95*var(--u)) calc(1.1*var(--u));border:calc(.06*var(--u)) solid var(--prompt-border);border-radius:calc(.6*var(--u));background:var(--prompt-bg);color:var(--ink);font:475 calc(1.03*var(--u))/1.31 var(--mono);letter-spacing:calc(-.02*var(--u))}
+.prompt::placeholder{color:var(--muted)}
+.prompt[aria-invalid="true"]{border-color:var(--bad)}
+.hint{font-size:calc(.85*var(--u));color:var(--muted);min-height:1.4em;margin:0}
+.hint[data-tone="bad"]{color:var(--bad-text)}
+.actions{display:flex;flex-direction:column;gap:calc(.9*var(--u))}
+.actrow{display:flex;justify-content:space-between;align-items:center;gap:calc(.8*var(--u));flex-wrap:wrap}
+.automate{display:flex;align-items:center;justify-content:space-between;gap:calc(.8*var(--u));width:100%;height:calc(3.3*var(--u));padding-inline:calc(1.3*var(--u)) calc(1.1*var(--u));border:0;border-radius:calc(.6*var(--u));background:var(--orange);color:var(--cta-text);
+  font-size:calc(1.05*var(--u));font-weight:600;line-height:1;letter-spacing:calc(-.01*var(--u));cursor:pointer;transition:background .18s}
+.automate:hover{background:#f06200}
+.automate canvas.magic{display:none}
+.automate::after{content:"→";font-size:1.15em;font-weight:400}
+.automate:disabled{background:var(--orange-soft);color:var(--accent-text);cursor:default}
+.automate:disabled::after{content:none}
+.fine{font-size:calc(.9*var(--u));color:var(--muted);margin:0;line-height:1.4;font-weight:500}
+.fine b{font-weight:600;color:var(--ink)}
+.keybox{padding:calc(.9*var(--u)) calc(1.1*var(--u));border:calc(.06*var(--u)) dashed var(--prompt-border);border-radius:calc(.86*var(--u));background:var(--prompt-bg);font-size:calc(.85*var(--u));color:var(--muted)}
+.keybox .mono{display:block;word-break:break-all;margin:calc(.4*var(--u)) 0 calc(.7*var(--u));font-size:calc(.8*var(--u));color:var(--ink)}
+.lower{display:flex;flex-direction:column;gap:calc(.9*var(--u))}
+
+/* phase cards */
+.phase{padding:calc(.85*var(--u)) calc(1.1*var(--u));border:calc(.06*var(--u)) solid var(--hair);border-radius:calc(.6*var(--u));background:var(--surface)}
+.kicker{font:500 calc(.78*var(--u))/1.2 var(--mono);color:var(--accent-text)}
+.phase h3{margin:calc(.35*var(--u)) 0 calc(.3*var(--u));color:var(--ink-3);font-size:calc(1.34*var(--u));font-weight:500;line-height:1.1;letter-spacing:calc(-.05*var(--u))}
+.phase p{margin:0;font-size:calc(.95*var(--u));color:var(--muted);font-weight:475;line-height:1.35}
+.phase .row{display:flex;flex-wrap:wrap;gap:calc(.6*var(--u));align-items:center;margin-top:calc(.7*var(--u))}
+.phase .figs{display:flex;gap:calc(1.4*var(--u));margin-top:calc(.8*var(--u));font:calc(.72*var(--u))/1.2 var(--mono);color:var(--muted)}
+.phase .figs b{display:block;font-size:calc(1.1*var(--u));color:var(--display-accent);font-weight:700}
+.prog{height:calc(.6*var(--u));border-radius:999px;background:var(--orange-soft);overflow:hidden;margin-top:calc(.9*var(--u))}
+.prog i{display:block;height:100%;width:var(--w,40%);background:var(--orange);border-radius:999px;transition:width .2s}
+.prog.hatch i{background:repeating-linear-gradient(135deg,var(--orange) 0 6px,#ff9b5b 6px 12px);background-size:17px 17px;animation:stripe 1s linear infinite}
+@keyframes stripe{to{background-position:17px 0}}
+.steps{list-style:none;margin:calc(.8*var(--u)) 0 0;padding:0;display:grid;gap:calc(.45*var(--u));font-size:calc(.95*var(--u))}
+.steps li{display:flex;align-items:center;gap:calc(.7*var(--u));color:var(--muted)}
+.steps li[data-done]{color:var(--ink)}
+.mark{width:calc(1.15*var(--u));height:calc(1.15*var(--u));border-radius:50%;border:calc(.1*var(--u)) solid var(--prompt-border);position:relative;flex:none}
+li[data-done] .mark{border-color:var(--green);background:var(--green)}
+li[data-done] .mark::after{content:"";position:absolute;left:31%;top:10%;width:22%;height:50%;border:solid #fff;border-width:0 calc(.12*var(--u)) calc(.12*var(--u)) 0;transform:rotate(45deg)}
+li[data-active] .mark{border-color:var(--orange);border-top-color:transparent;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.receipt{display:grid;grid-template-columns:auto 1fr;gap:calc(.25*var(--u)) calc(1*var(--u));margin-top:calc(.6*var(--u));font-size:calc(.82*var(--u));line-height:1.3}
+.receipt dt{color:var(--label)}
+.receipt dd{margin:0;word-break:break-all}
+.ref{font-size:calc(.75*var(--u));color:var(--muted);margin-top:calc(.8*var(--u))}
+
+/* status card */
+.metrics{display:grid;grid-template-columns:1fr 1fr;gap:calc(1*var(--u))}
+.status details summary{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between}
+.status summary::-webkit-details-marker{display:none}
+.status summary h2{margin:0;padding-right:0}
+.status summary .chev{width:calc(.55*var(--u));height:calc(.55*var(--u));border:solid var(--muted);border-width:0 calc(.1*var(--u)) calc(.1*var(--u)) 0;transform:rotate(45deg);transition:transform .18s;margin-right:16%}
+.status details[open] summary .chev{transform:rotate(-135deg)}
+.rows{margin:calc(.9*var(--u)) 0 0;padding:0;display:grid;font-size:calc(.86*var(--u))}
+.rows > div{display:flex;justify-content:space-between;gap:calc(.8*var(--u));padding:calc(.5*var(--u)) 0;border-top:calc(.06*var(--u)) solid var(--hair)}
+.rows dt{color:var(--muted);font-weight:500;display:flex;align-items:center;gap:calc(.5*var(--u))}
+.rows dd{margin:0;text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:calc(.8*var(--u));color:var(--ink)}
+.rows .group{border-top:0;padding:calc(.9*var(--u)) 0 calc(.2*var(--u));font:700 calc(.7*var(--u))/1 var(--sans);letter-spacing:calc(.05*var(--u));text-transform:uppercase;color:var(--label)}
+.word[data-tone="ok"]{color:var(--green-text)}.word[data-tone="warn"]{color:var(--warn-text)}.word[data-tone="bad"]{color:var(--bad-text)}.word[data-tone="unknown"]{color:var(--muted)}
+.rdot{display:inline-block;width:calc(.5*var(--u));height:calc(.5*var(--u));border-radius:50%;background:var(--unknown);margin-right:calc(.4*var(--u));vertical-align:.05em}
+.rdot[data-on="true"]{background:var(--green)}
+
+/* tools card */
+.tool form{display:flex;gap:calc(.6*var(--u))}
+.tool .prompt{flex:1;min-width:0}
+.ans{font-size:calc(.88*var(--u));color:var(--muted);margin:0;min-height:1.4em;font-weight:500}
+
+/* ===== 8. Footer (bare) ===== */
+.ftr{display:flex;flex-wrap:wrap;justify-content:space-between;gap:calc(.6*var(--u)) calc(1.2*var(--u));font-size:calc(.9*var(--u));font-weight:500;color:var(--muted)}
+.ftr nav{display:flex;gap:calc(1.2*var(--u))}
+.ftr nav a{color:var(--muted)}.ftr nav a:hover{color:var(--ink);text-decoration:none}
+
+/* ===== 9. Analytics panel ===== */
+.pcards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-auto-rows:minmax(0,auto);gap:calc(1.4*var(--u));width:100%;align-items:stretch}
+@media (max-height:840px){.pc{padding:calc(.8*var(--u)) calc(1.2*var(--u))}.pc .figs{margin-top:calc(.3*var(--u))}.vhead p{display:none}.pcards{gap:calc(1*var(--u))}.view{gap:calc(1.2*var(--u))}}
+.pcards > .pc:first-child{grid-column:span 2}
+.pc{background:var(--surface);border:calc(.075*var(--u)) solid var(--border);border-radius:calc(1.59*var(--u));padding:calc(1.2*var(--u)) calc(1.5*var(--u));min-width:0;box-shadow:calc(.32*var(--u)) calc(.9*var(--u)) calc(1.42*var(--u)) var(--shadow-a),0 calc(.14*var(--u)) calc(.42*var(--u)) var(--shadow-b)}
+@media (max-width:76rem){.pcards{grid-template-columns:repeat(2,minmax(0,1fr))}.pcards > .pc.wide{grid-column:auto}}
+@media (max-width:56rem){.pcards{grid-template-columns:1fr}.pcards > .pc:first-child,.pcards > .pc.wide{grid-column:auto}}
+.pc h3{flex-wrap:wrap}
+.pc .figs .big b{font-size:clamp(calc(1.2*var(--u)),1.6vw,calc(1.8*var(--u)))}
+.pc .figs b{overflow-wrap:anywhere}
+.pc.wide{grid-column:auto}
+.pc.wide .figs{flex-direction:column;gap:calc(.55*var(--u))}
+.pc.wide .figs > span{display:grid;grid-template-columns:1fr auto;align-items:baseline;column-gap:calc(1*var(--u))}
+.pc.wide .figs > span > b{grid-column:2;white-space:nowrap;text-align:right;display:flex;align-items:center;justify-content:flex-end;gap:calc(.4*var(--u))}
+.pc.wide .figs > span > span{grid-column:2;text-align:right;font-size:calc(.72*var(--u));color:var(--muted)}
+.pc.wide .figs .rdot{margin-right:0}
+.pc h3{margin:0 0 calc(.9*var(--u));font-size:calc(1.1*var(--u));font-weight:600;display:flex;align-items:center;gap:calc(.6*var(--u));color:var(--ink-2)}
+.pc h3 canvas.g{color:var(--orange)}
+.pc h3 .tag{margin-left:auto;height:calc(1.8*var(--u));font-family:var(--mono);font-size:calc(.78*var(--u))}
+.pc > canvas,.pc .chart > canvas{width:100%;display:block}
+.pc .chart{position:relative}
+.tip{position:absolute;pointer-events:none;background:var(--ink);color:var(--surface);font:calc(.75*var(--u))/1 var(--mono);font-variant-numeric:tabular-nums;padding:calc(.45*var(--u)) calc(.6*var(--u));border-radius:calc(.5*var(--u));transform:translate(-50%,-100%);white-space:nowrap}
+.tot{display:flex;gap:calc(1.8*var(--u));margin-top:calc(.8*var(--u));padding-top:calc(.8*var(--u));border-top:calc(.06*var(--u)) solid var(--hair);font-size:calc(.78*var(--u));color:var(--label);font-weight:500}
+.tot b{display:block;font-size:calc(1.5*var(--u));font-weight:600;color:var(--display-accent);font-variant-numeric:tabular-nums;letter-spacing:calc(-.03*var(--u))}
+.pc .sent{font-size:calc(.9*var(--u));color:var(--muted);margin:calc(.6*var(--u)) 0 0;font-weight:500}
+.pc .figs{display:flex;flex-wrap:wrap;gap:calc(1.2*var(--u)) calc(2*var(--u));margin-top:calc(.7*var(--u));font-size:calc(.78*var(--u));color:var(--label);font-weight:500}
+.pc .figs b{display:block;font:700 calc(1.15*var(--u))/1.2 var(--mono);color:var(--ink);letter-spacing:calc(-.02*var(--u))}
+.pc .figs .big b{font-size:calc(1.8*var(--u));color:var(--display-accent);font-family:var(--sans);letter-spacing:calc(-.04*var(--u))}
+.legend{display:flex;flex-wrap:wrap;gap:calc(1*var(--u));margin-top:calc(.6*var(--u));font:500 calc(.78*var(--u))/1 var(--sans);color:var(--muted)}
+.legend i{display:inline-block;width:calc(.6*var(--u));height:calc(.6*var(--u));border-radius:50%;margin-right:calc(.4*var(--u))}
+
+/* ===== 10. Demo bar (not part of the product) ===== */
+.demo{position:fixed;right:12px;bottom:12px;z-index:5;display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--ink);color:var(--surface);border-radius:999px;font:12px/1 var(--mono)}
+.demo select{background:var(--surface);color:var(--ink);border:0;border-radius:999px;padding:5px 8px;font:12px var(--mono)}
+
+/* ===== 11. Spec sheet ===== */
+.spec{max-width:1200px;margin:0 auto;padding:0 16px 48px;font-size:13px;color:var(--muted)}
+.spec summary{cursor:pointer;font-weight:600;color:var(--ink)}
+.spec table{border-collapse:collapse;margin:8px 0 18px;width:100%;font-variant-numeric:tabular-nums}
+.spec th,.spec td{text-align:left;padding:5px 8px;border-top:1px solid var(--hair);vertical-align:top}
+.spec th{color:var(--label);font-weight:600}
+.spec h4{margin:18px 0 4px;color:var(--ink)}
+.spec code{font-family:var(--mono);font-size:12px}
+
+/* ===== 12. Breakpoints ===== */
+@media (max-width:64rem){
+  .stage{--u:clamp(10.5px,1.45cqw,13px)}
+  .comp{width:min(92cqw,1360px)}
+  .hdr{grid-template-columns:1fr auto;grid-template-areas:"brand right" "seg seg"}
+  .brand{grid-area:brand}.hdr-right{grid-area:right}.seg{grid-area:seg;justify-self:center}
+  .hero-grid{grid-template-columns:1fr;gap:calc(2.5*var(--u))}
+  .view.hero{min-height:0}
+  .hero-copy h1{font-size:calc(3*var(--u))}
+  .grid3{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .grid3 > :last-child{grid-column:1 / -1}
+}
+@media (max-width:32rem){
+  .stage{container-type:inline-size;height:auto;overflow:visible;--u:12px}
+  .comp{width:auto;padding:12px 14px 28px;gap:12px}
+  .hdr{grid-template-columns:1fr auto;grid-template-areas:"brand right" "seg seg";gap:10px}
+  .brand{grid-area:brand;flex-wrap:wrap;row-gap:6px}.hdr-right{grid-area:right}.seg{grid-area:seg;justify-self:stretch}
+  .seg button{flex:1;padding:0}
+  .strip .kv.all,.strip .kv.week span{display:none}
+  .strip{padding-right:calc(.35*var(--u))}
+  .view{gap:14px}
+  .hero-copy h1{font-size:clamp(27px,7.4vw,40px)}
+  .hero-copy{gap:12px}
+  .hero-copy .chips .tag.more{margin-left:0}
+  .grid3,.grid2{grid-template-columns:1fr}
+  .grid3 > :last-child{grid-column:auto}
+  .claim h1{font-size:clamp(27px,7.4vw,40px)}
+  .metrics{grid-template-columns:1fr}
+  .pcards{grid-template-columns:1fr}
+  .demo{left:12px;right:auto}
+}
+
+/* ===== 13. Reduced motion ===== */
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none !important;transition:none !important}}
+
+/* ===== preview: the mascot (page-mascot, owner ruling 2026-09-15) ===== */
+/* Two 3x3 sprite sheets. The pointer's angle picks a head pose, a click shows an expression for half a second.
+   Same geometry as the npm component: background-size 300% makes each cell a clean 0/50/100% step. */
+.hero-grid{grid-template-columns:1fr minmax(0,.62fr) 1.05fr;align-items:start}
+.hero-copy,.hero-mascot{padding-top:calc(1.2*var(--u))}
+.card.claim{will-change:height}
+.hero-mascot{margin:0;display:flex;flex-direction:column;align-items:center;gap:calc(.6*var(--u));min-width:0}
+.mascot-riso{position:relative;display:block;flex:none;width:100%;max-width:calc(22*var(--u));aspect-ratio:1;padding:0;border:0;background:transparent;appearance:none;cursor:pointer;user-select:none;touch-action:manipulation}
+.mascot-riso:focus-visible{outline:calc(.15*var(--u)) solid var(--accent-text);outline-offset:calc(.4*var(--u));border-radius:50%}
+.m-squash{position:relative;display:block;width:100%;height:100%;transform-origin:50% 78%}
+.m-dir,.m-react{position:absolute;inset:0;background-size:300% 300%;background-repeat:no-repeat;background-position:50% 50%}
+.m-dir{background-image:url(mascot/fox-riso-directions.webp)}
+.m-react{background-image:url(mascot/fox-riso-reactions.webp);opacity:0}
+.mascot-cap{font-size:calc(.9*var(--u));color:var(--muted);text-align:center;max-width:17em;line-height:1.35}
+@media (max-width:56rem){.hero-grid{grid-template-columns:1fr}.mascot-riso{max-width:min(52vw,240px)}}   /* narrow: copy, then the fox, then the claim card, in source order */
+/* ===== preview: footer attributions (owner ruling 2026-09-15) ===== */
+.ftr{flex-wrap:wrap;row-gap:calc(.8*var(--u))}
+.ftr-attrib{display:flex;align-items:center;gap:calc(1.2*var(--u));order:-1}
+@media (min-width:56rem){.ftr{align-items:center}.ftr-attrib{order:0}}
+.footer-brand{display:inline-flex;line-height:0}
+.lockup{display:block;width:218px;height:36px}
+.lockup-dark{display:none}
+[data-theme="ink"] .lockup-light{display:none}
+[data-theme="ink"] .lockup-dark{display:block}
+.footer-note{font-size:calc(.72*var(--u));letter-spacing:.05em;color:var(--muted)}
+
+/* ===== receipt actions: even grid ===== */
+.phase[data-phase="sent"] .row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:calc(.6*var(--u))}
+.phase[data-phase="sent"] .row .tag{justify-content:center;width:100%}
+</style>
+</head>
+<body>
+<div class="stage">
+<div class="comp" id="comp" data-example="true" data-endpoint="/api/status" data-poll-ms="15000">
+
+  <header class="hdr">
+    <div class="brand">
+      <a class="home" href="/" aria-label="Zcash Testnet Faucet, home"><canvas class="g" data-glyph="brand" aria-hidden="true"></canvas><span class="name">Zcash Testnet Faucet</span></a>
+      <span class="badge" id="badge" data-state="UNKNOWN" data-field="derived.badge"><span class="ring"><span class="dot"></span></span><span class="txt">NOT READY</span></span>
+    </div>
+    <nav class="seg" id="seg" aria-label="Sections">
+      <button type="button" data-view="claim" aria-current="page">Claim</button>
+      <button type="button" data-view="status">Status</button>
+      <button type="button" data-view="analytics">Analytics</button>
+      <button type="button" data-view="tools">Tools</button>
+    </nav>
+    <div class="hdr-right">
+      <button class="strip" id="strip" type="button" aria-label="Open usage analytics">
+        <canvas id="spark" role="img" aria-label="" data-field="drips.byDay"></canvas>
+        <span class="kv week"><b class="num" data-field="drips.last7d">74</b><span>this week</span></span>
+        <span class="kv all"><b class="num" data-field="drips.allTime">178</b><span>all time</span></span>
+      </button>
+      <button class="iconbtn" id="theme" type="button" aria-label="Switch to ink theme" aria-pressed="false"><canvas class="g" data-glyph="theme" aria-hidden="true"></canvas></button>
+    </div>
+  </header>
+
+  <section class="view hero" data-view="claim" aria-label="Claim">
+    <div class="hero-grid">
+      <div class="hero-copy">
+        <p class="eyebrow mono">Zcash testnet faucet</p>
+        <h1 id="h1">Get free testnet ZEC</h1>
+        <p class="lede"><b><span data-field="dripTaz">0.1</span> TAZ</b> per address, every 24 hours.</p>
+        <p class="lede small">Your browser solves a short puzzle instead of a CAPTCHA. A few seconds, longer on a phone, and you can cancel it.</p>
+        <div class="chips" id="chips" aria-label="Faucet status">
+        <button class="tag" type="button" data-view="status" data-chip="wallet"><span class="sdot"></span>wallet <b data-field="balanceTaz">4,471 TAZ</b></button>
+        <button class="tag" type="button" data-view="status" data-chip="node"><span class="sdot"></span>node <b data-field="node.nodeHeight">4,348,028</b><b data-field="derived.heightDiffChip">(+8 vs network)</b></button>
+        <button class="tag" type="button" data-view="status" data-chip="miner"><span class="sdot"></span>miner <b data-field="derived.minerWord">mining</b></button>
+        <button class="tag" type="button" data-view="status" data-chip="sends"><span class="sdot"></span>sends <b data-field="sends.state">ok</b></button>
+        <button class="tag ops" type="button" data-view="status" data-chip="box" hidden>OPS ATTENTION</button>
+        <button class="tag more" type="button" data-view="status">Full status →</button>
+      </div>
+        <a class="morelink" href="#analytics" data-view="analytics"><span class="num" data-field="drips.last7d">74</span> drips this week. Usage analytics →</a>
+      </div>
+      <figure class="hero-mascot" aria-label="The faucet's fox, turning to follow your pointer">
+        <button class="mascot-riso" type="button" id="mascot" aria-label="Boop the faucet fox">
+          <span class="m-squash"><span class="m-dir"></span><span class="m-react"></span></span>
+        </button>
+        <figcaption class="mascot-cap">He knows you're here. He can't see the transaction. Nobody can.</figcaption>
+      </figure>
+      <article class="card claim feature" id="claim" aria-labelledby="h1">
+        <div class="panel">
+          <div class="tabs" role="tablist" aria-label="Network">
+          <button role="tab" aria-selected="true" id="tab-taz" data-net="TAZ">TAZ</button>
+          <button role="tab" aria-selected="false" id="tab-ctaz" data-net="cTAZ" data-parked>cTAZ<small>Coming soon</small></button>
+        </div>
+        <div class="fieldwrap">
+          <label class="label" for="addr"><span>Testnet address</span><span class="abadge" id="abadge" data-kind=""></span></label>
+          <input class="prompt" id="addr" type="text" autocomplete="off" spellcheck="false" placeholder="u1… / ztestsapling1… / tm…" aria-describedby="hint">
+          <p class="hint" id="hint"></p>
+        </div>
+        <div class="lower" id="lower">
+          <div class="actions" id="actions">
+            <div class="keybox" id="keybox" hidden>
+              <b>Throwaway key (example)</b>, shown once, never stored.
+              <span class="mono" id="keytext"></span>
+              <button class="tag" id="copykey" type="button"><canvas class="g" data-glyph="copy" aria-hidden="true"></canvas> Copy the key first</button>
+            </div>
+            <button class="automate" id="go" type="button" data-accent><span>Request <span data-field="dripTaz">0.1</span> TAZ</span><canvas class="magic" data-sparkle-icon aria-hidden="true"></canvas></button>
+            <button class="linkbtn" id="gen" type="button">Make a throwaway address and key</button>
+          </div>
+          <div class="phase" data-phase="getting-ready" hidden>
+            <div class="kicker">Getting ready</div><h3>Syncing the node</h3>
+            <p>Our node is catching up with the network. Sends start when it is ready.</p>
+            <div class="prog" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100" data-field="node.syncPercent"><i style="--w:100%"></i></div>
+            <div class="figs"><span><b class="num" data-field="node.syncPercent">100</b>% synced</span><span><b class="mono" data-field="node.nodeHeight">4,348,028</b>height</span></div>
+          </div>
+          <div class="phase" data-phase="not-ready" hidden>
+            <div class="kicker">Not ready</div><h3>The faucet is having a problem</h3>
+            <p>The node is not ready to send right now. You can queue the request, and it sends when the node is ready.</p>
+          </div>
+          <div class="phase" data-phase="queued" hidden>
+            <div class="kicker">Queued</div><h3>You're in line</h3>
+            <p>Your address is in the queue and sends when the node is ready. You can close this tab.</p>
+            <div class="figs"><span><b class="num" data-field="queueDepth">0</b>ahead of you</span></div>
+          </div>
+          <div class="phase" data-phase="topping-up" hidden>
+            <div class="kicker">Topping up the reserve</div><h3>Refilling from the main wallet</h3>
+            <p>Claims resume when the reserve is back above the line.</p>
+            <div class="prog hatch" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="60" aria-label="Refill progress"><i style="--w:60%"></i></div>
+          </div>
+          <div class="phase" data-phase="reserve-low" hidden>
+            <div class="kicker">Reserve</div><h3>The reserve is low</h3>
+            <p>Claims still work. A refill is due, and if it runs out this page says so.</p>
+            <div class="figs"><span><b class="num" data-field="reserve.spendableTaz">4,471</b>spendable TAZ</span><span><b class="num" data-field="reserve.lowTaz">5</b>low mark</span></div>
+          </div>
+          <div class="phase" data-phase="not-taking" hidden>
+            <div class="kicker">Not taking claims</div><h3>Sends are failing on our side right now</h3>
+            <p data-field="sends.reason">9 of the last 9 sends landed</p>
+          </div>
+          <div class="phase" data-phase="empty" hidden>
+            <div class="kicker">Empty</div><h3>The faucet is out of TAZ right now</h3>
+            <p>If you have testnet ZEC to spare, a donation refills it for everyone.</p>
+            <div class="row"><code class="mono" id="donaddr" style="font-size:calc(.72*var(--u));word-break:break-all;flex:1 1 12em">utest1example0donation0address0for0the0faucet0qqqqqqqqqqqqqqqqqqqq</code><button class="tag" type="button" data-copytext="#donaddr"><canvas class="g" data-glyph="copy" aria-hidden="true"></canvas> Copy address</button></div>
+          </div>
+          <div class="phase" data-phase="human-check" hidden>
+            <div class="kicker">Human check, no CAPTCHA</div><h3>Checking you're human…</h3>
+            <p>Usually about 12 s on this device. It is a lottery, so it can run longer.</p>
+            <div class="prog hatch" role="progressbar" aria-label="Puzzle progress, indeterminate"><i style="--w:45%"></i></div>
+            <div class="figs"><span><b class="num" id="pow-bits">18</b>bits</span><span><b class="num" id="pow-hashes">0</b>hashes</span><span><b class="num" id="pow-secs">0</b>seconds</span></div>
+            <div class="row"><button class="tag" type="button" data-goto="ready">Cancel</button></div>
+          </div>
+          <div class="phase" data-phase="sending" hidden>
+            <div class="kicker">Sending, keep this tab open</div><h3>Building the shielded transaction</h3>
+            <ul class="steps">
+              <li data-done><span class="mark"></span>Puzzle accepted</li>
+              <li data-done><span class="mark"></span>Address checked</li>
+              <li data-active><span class="mark"></span>Broadcast to our node</li>
+            </ul>
+            <div class="prog hatch" role="progressbar" aria-label="Send progress, indeterminate"><i style="--w:70%"></i></div>
+          </div>
+          <div class="phase" data-phase="sent" hidden>
+            <div class="kicker">Sent</div><h3>0.1 TAZ is on its way</h3>
+            <dl class="receipt">
+              <dt>Amount</dt><dd class="mono"><span data-field="dripTaz">0.1</span> TAZ</dd>
+              <dt>To</dt><dd class="mono" id="r-addr">utest1…</dd>
+              <dt>Chain</dt><dd class="mono">Zcash testnet</dd>
+              <dt>txid</dt><dd class="mono" id="r-txid">7f3a9c1e2b4d6f8a0c2e4b6d8f0a2c4e6b8d0f2a4c6e8b0d2f4a6c8e0b2d4f6a</dd>
+              <dt>Status</dt><dd id="r-conf">seen by our node, <span class="num" id="r-n">2</span> confirmations</dd>
+            </dl>
+            <div class="row">
+              <button class="tag" type="button" data-copytext="#r-txid"><canvas class="g" data-glyph="copy" aria-hidden="true"></canvas> Copy txid</button>
+              <button class="tag" type="button" id="copyreceipt"><canvas class="g" data-glyph="copy" aria-hidden="true"></canvas> Copy receipt</button>
+              <a class="tag" id="r-explorer" href="https://testnet.cipherscan.app/" rel="noopener" target="_blank">View on Cipherscan ↗</a>
+              <button class="tag ink" type="button" data-goto="ready">Another address</button>
+            </div>
+          </div>
+          <div class="phase" data-phase="already-claimed" hidden>
+            <div class="kicker">Already claimed</div><h3>This address got a drip in the last 24 h</h3>
+            <p>One drip per address per day keeps the reserve for everyone. <span class="num" data-countdown>Try again in 3600s</span></p>
+          </div>
+          <div class="phase" data-phase="connection-limit" hidden>
+            <div class="kicker">Connection limit</div><h3>Too many requests from this connection</h3>
+            <p><span class="num" data-countdown>Try again in 600s</span></p>
+          </div>
+          <div class="phase" data-phase="network-limit" hidden>
+            <div class="kicker">Network limit</div><h3>Too many requests from this network</h3>
+            <p><span class="num" data-countdown>Try again in 1800s</span></p>
+          </div>
+          <div class="phase" data-phase="daily-cap" hidden>
+            <div class="kicker">Faucet daily cap</div><h3>Today's drips are spent</h3>
+            <p>The cap resets at midnight UTC. <span class="num" data-countdown>Try again in 14400s</span></p>
+          </div>
+          <div class="phase" data-phase="send-failed" hidden>
+            <div class="kicker">Send failed</div><h3>The transaction didn't go through</h3>
+            <p>Nothing was deducted from your allowance. You can try again now.</p>
+            <div class="row"><button class="tag ink" type="button" data-goto="human-check">Try again</button></div>
+            <div class="ref mono">ref <a href="/terms">req_9f2c7a</a></div>
+          </div>
+          <div class="phase" data-phase="couldnt-take" hidden>
+            <div class="kicker">Couldn't take that request</div><h3>Something in the request didn't check out</h3>
+            <p>Most often the address is for the wrong network or has a typo.</p>
+            <div class="row"><button class="tag ink" type="button" data-goto="ready" data-focus="#addr">Edit the address</button></div>
+            <div class="ref mono">ref <a href="/terms">req_4b81e0</a></div>
+          </div>
+          <div class="phase" data-phase="restarting" hidden>
+            <div class="kicker">Restarting</div><h3>The faucet is restarting</h3>
+            <p>This takes under a minute. Your request was not sent.</p>
+            <div class="row"><button class="tag ink" type="button" data-goto="ready">Try again</button></div>
+            <div class="ref mono">ref <a href="/terms">req_c05d13</a></div>
+          </div>
+        </div>
+        <p class="sr" id="live" aria-live="polite"></p>
+        </div>
+        <div class="card-copy">
+          <h2>Shielded z→z</h2>
+          <p>Sent from the shielded wallet on our own node, so nothing on chain ties the drip to you.</p>
+          <span class="corner-icon" aria-hidden="true"><canvas class="g" data-glyph="sends"></canvas></span>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <section class="view" data-view="status" aria-label="Status" hidden>
+    <div class="vhead"><h2>Status</h2><p>What the node can prove right now, polled every 15 s. One word per state, and the details are for the operator.</p></div>
+    <div class="grid3">
+      <article class="card">
+        <div class="panel">
+          <div class="metric">
+            <span class="lbl">Node height</span>
+            <div class="metric-row"><strong data-field="node.nodeHeight">4,348,028</strong></div>
+            <span class="delta" id="node-delta" data-field="derived.heightDelta">↑ +8 vs network</span>
+          </div>
+          <div>
+            <span class="lbl">Sync <span data-field="node.syncPercent">100</span>%</span>
+            <div class="prog" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100" data-field="node.syncPercent" style="margin-top:calc(.5*var(--u))"><i style="--w:100%"></i></div>
+          </div>
+        </div>
+        <div class="card-copy">
+          <h2>Node</h2>
+          <dl class="rows">
+            <div><dt>Our height</dt><dd><span data-field="node.nodeHeight">4,348,028</span></dd></div>
+            <div><dt>Independent reference</dt><dd><span data-field="node.externalHeight">4,348,020</span></dd></div>
+            <div><dt>Backend</dt><dd><span class="rdot" data-field="backend.reachable" data-on="true"></span><span data-field="backend.endpoint">testnet.zec.rocks:443</span></dd></div></dl>
+          <span class="corner-icon" aria-hidden="true"><canvas class="g" data-glyph="network"></canvas></span>
+        </div>
+      </article>
+      <article class="card">
+        <div class="panel">
+          <div class="metric">
+            <span class="lbl">Wallet</span>
+            <div class="metric-row"><strong data-field="balanceTaz">4,471 TAZ</strong></div>
+            <span class="delta" data-field="derived.dripsLeftDelta">≈ 44,700 drips left</span>
+          </div>
+          <canvas id="c-reserve-mini" height="46" role="img" data-field="reserve"></canvas>
+        </div>
+        <div class="card-copy">
+          <h2>Wallet</h2>
+          <dl class="rows">
+            <div><dt>Spendable</dt><dd><span data-field="reserve.spendableTaz">4,471</span> TAZ</dd></div>
+            <div><dt>Reserve line</dt><dd><span data-field="reserve.targetTaz">15</span> · low <span data-field="reserve.lowTaz">5</span></dd></div>
+            <div><dt>Drip</dt><dd><span data-field="dripTaz">0.1</span> TAZ · 24h cooldown</dd></div>
+            <div class="ctaz" hidden><div class="group">cTAZ</div></div>
+            <div class="ctaz" hidden><dt>cTAZ</dt><dd class="word" data-tone="unknown">parked</dd></div></dl>
+          <span class="corner-icon" aria-hidden="true"><canvas class="g" data-glyph="reserve"></canvas></span>
+        </div>
+      </article>
+      <article class="card">
+        <div class="panel">
+          <div class="metric">
+            <span class="lbl">Blocks accepted by our node</span>
+            <div class="metric-row"><strong data-field="miner.submittedAccepted">255</strong></div>
+            <span class="delta" data-field="derived.acceptDelta">↑ 76% accepted by our node</span>
+          </div>
+          <div class="chips" style="justify-content:flex-start;gap:calc(.5*var(--u))">
+            <span class="tag" data-chip2="miner"><span class="sdot"></span>miner <b data-field="derived.minerWord">mining</b></span>
+            <span class="tag" data-chip2="sends"><span class="sdot"></span>sends <b data-field="sends.state">ok</b></span>
+            <span class="tag" data-chip2="box"><span class="sdot"></span>box <b data-field="box.state">ok</b></span>
+          </div>
+        </div>
+        <div class="card-copy">
+          <h2>Operations</h2>
+          <dl class="rows">
+            <div><dt>Miner</dt><dd><span class="word" data-field="derived.minerWord" data-tone="ok">mining</span> · template <span data-field="miner.templateAgoSeconds">7</span>s</dd></div>
+            <div><dt>Solved / accepted / rejected</dt><dd><span data-field="miner.solvedCount">334</span> / <span data-field="miner.submittedAccepted">255</span> / <span data-field="miner.submittedRejected">79</span></dd></div>
+            <div><dt>Sends</dt><dd><span class="word" data-field="sends.state" data-tone="ok">ok</span> · <span data-field="sends.reason">9 of the last 9 sends landed</span></dd></div>
+            <div><dt>Box</dt><dd><span class="word" data-field="box.state" data-tone="ok">ok</span></dd></div></dl>
+          <span class="corner-icon" aria-hidden="true"><canvas class="g" data-glyph="miner"></canvas></span>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <section class="view" data-view="analytics" aria-label="Usage analytics" hidden>
+    <div class="vhead"><h2>Usage</h2><p>Aggregate counts by UTC day from <code class="mono">/api/status</code>. Nothing per user is collected, so nothing per user is shown.</p></div>
+    <div class="pcards">
+      <div class="pc">
+        <h3><canvas class="g" data-glyph="drips" aria-hidden="true"></canvas>Drips per day, 30 days</h3>
+        <div class="chart"><canvas id="c-drips" height="140" role="img" tabindex="0" data-field="drips.byDay"></canvas><div class="tip" id="tip" hidden></div></div>
+        <div class="tot">
+          <span>this week<b data-field="drips.last7d">74</b></span>
+          <span>30 days<b data-field="drips.last30d">142</b></span>
+          <span>all time<b data-field="drips.allTime">178</b></span>
+        </div>
+      </div>
+      <div class="pc">
+        <h3><canvas class="g" data-glyph="reserve" aria-hidden="true"></canvas>Wallet reserve<span class="tag word" id="rs-state" data-tone="ok">ok</span></h3>
+        <canvas id="c-reserve" height="92" role="img" data-field="reserve"></canvas>
+        <p class="sent" data-field="derived.reserveSentence">4,471 TAZ · reserve line 15 · about 44,700 drips at 0.1</p>
+        <div class="figs"><span class="big">spendable<b data-field="reserve.spendableTaz">4,471</b></span><span>low<b data-field="reserve.lowTaz">5</b></span><span>target<b data-field="reserve.targetTaz">15</b></span></div>
+      </div>
+      <div class="pc">
+        <h3><canvas class="g" data-glyph="miner" aria-hidden="true"></canvas>Miner<span class="tag word" data-field="derived.minerWord" data-tone="ok">mining</span></h3>
+        <canvas id="c-miner" height="34" role="img" data-field="miner"></canvas>
+        <div class="legend"><span><i style="background:var(--orange)"></i>accepted <span data-field="miner.submittedAccepted">255</span></span><span><i style="background:var(--bar-soft)"></i>rejected <span data-field="miner.submittedRejected">79</span></span></div>
+        <p class="sent" data-field="derived.acceptSentence">76% accepted by our node</p>
+        <div class="figs"><span>template age<b><span data-field="miner.templateAgoSeconds">7</span>s</b></span><span>last beat<b><span data-field="miner.beatAgoSeconds">2</span>s</b></span><span>solved<b data-field="miner.solvedCount">334</b></span></div>
+      </div>
+      <div class="pc">
+        <h3><canvas class="g" data-glyph="sends" aria-hidden="true"></canvas>Sends, last 15 min<span class="tag word" data-field="sends.state" data-tone="ok">ok</span></h3>
+        <canvas id="c-sends" height="34" role="img" data-field="sends"></canvas>
+        <div class="legend"><span><i style="background:var(--green)"></i>ok <span data-field="sends.ok">9</span></span><span><i style="background:var(--bad)"></i>failed <span data-field="sends.failed">0</span></span><span><i style="background:var(--unknown)"></i>unknown <span data-field="sends.unknown">0</span></span><span><i style="background:var(--warn)"></i>refused <span data-field="sends.refused">1</span></span></div>
+        <p class="sent" data-field="sends.reason">9 of the last 9 sends landed</p>
+      </div>
+      <div class="pc wide">
+        <h3><canvas class="g" data-glyph="network" aria-hidden="true"></canvas>Network</h3>
+        <div class="figs">
+          <span class="big">our height<b data-field="node.nodeHeight">4,348,028</b></span>
+          <span class="big">independent reference<b data-field="node.externalHeight">4,348,020</b></span>
+          <span>difference<b data-field="derived.heightDiff">+8</b><span data-field="derived.heightNote">ahead, normal for a node that mines</span></span>
+          <span>sync<b data-field="derived.syncLabel">100.00%</b></span>
+          <span>backend<b><span class="rdot" data-field="backend.reachable" data-on="true"></span><span data-field="backend.endpoint">testnet.zec.rocks:443</span></b></span>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section class="view" data-view="tools" aria-label="Tools" hidden>
+    <div class="vhead"><h2>Tools</h2><p>A balance lookup for testnet addresses, and how the faucet is run.</p></div>
+    <div class="grid2">
+      <article class="card">
+        <div class="panel">
+          <span class="lbl" id="lookup-l">Balance lookup</span>
+          <form id="lookupform"><input class="prompt" id="laddr" type="text" placeholder="Testnet address" aria-labelledby="lookup-l" autocomplete="off" spellcheck="false"><button class="tag ink" type="submit">Look up</button></form>
+          <p class="ans" id="lans"></p>
+        </div>
+        <div class="card-copy">
+          <h2>Balance lookup</h2>
+          <p>Transparent balances are public on chain. Shielded balances are private. Provide a viewing key in a wallet to see this.</p>
+          <span class="corner-icon" aria-hidden="true"><canvas class="g" data-glyph="reserve"></canvas></span>
+        </div>
+      </article>
+      <article class="card">
+        <div class="panel">
+          <div class="metric">
+            <span class="lbl">Where the TAZ comes from</span>
+            <div class="metric-row"><strong><span data-field="miner.submittedAccepted">255</span> blocks</strong></div>
+            <span class="delta" data-field="derived.acceptDelta">↑ 76% accepted by our node</span>
+          </div>
+        </div>
+        <div class="card-copy">
+          <h2>How it works</h2>
+          <p>The faucet runs its own Zcash testnet node and shielded wallet. Nothing is delegated to a hosted service, and the page shows what the node can prove.</p>
+          <p data-field="derived.sourceSentence">The TAZ comes from blocks our node mines (255 accepted so far) and from donations.</p>
+          <p>It can run empty. When it does, this page says so and the button waits for a refill instead of promising one.</p>
+          <span class="corner-icon" aria-hidden="true"><canvas class="g" data-glyph="miner"></canvas></span>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <footer class="ftr">
+    <span>No accounts, no cookies, no trackers. Addresses and IPs are hashed, never stored raw.</span>
+    <nav><a href="/donate">Donate TAZ</a><a href="/fund">Fund ZEC</a><a href="/terms">Terms</a><a href="https://github.com/jinolabs-xyz/zcash-faucet" rel="noopener">GitHub</a></nav>
+    <div class="ftr-attrib">
+      <!-- The Jino Labs lockup is the brand kit's file, native size (16px mark, 11px cap height minimum); one per theme. -->
+      <a class="footer-brand" href="https://jinolabs.xyz"><img class="lockup lockup-light" src="brand/powered-by-light.svg" alt="Powered by Jino Labs" width="218" height="36"><img class="lockup lockup-dark" src="brand/powered-by-dark.svg" alt="" width="218" height="36" aria-hidden="true"></a>
+    </div>
+  </footer>
+</div>
+</div>
+
+
+
+
+<script>
+(() => {
+'use strict';
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const tok = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const fmt = n => Number(n).toLocaleString('en-US');
+const DPR = () => window.devicePixelRatio || 1;
+
+/* ---------- example data (§4) ---------- */
+const days = (() => {
+  const counts = [3,2,4,1,3,2,5,3,2,4,3,2,1,4,3,5,2,3,4,3,2,4,3, 8,11,9,12,10,13,11];
+  const start = Date.UTC(2026, 7, 16);
+  return counts.map((c, i) => ({ day: new Date(start + i * 864e5).toISOString().slice(0, 10), count: c }));
+})();
+const EXAMPLE = {
+  drips: { allTime: 178, last7d: 74, last30d: 142, byDay: days },
+  balanceTaz: 4471.32, reserve: { targetTaz: 15, lowTaz: 5, refilling: false, spendableTaz: 4471.32 },
+  dripTaz: 0.1, cooldownSeconds: 86400,
+  node: { ready: true, height: 4348028, nodeHeight: 4348028, externalHeight: 4348020, syncPercent: 100, frozen: false, behind: false, tipStalledMs: 27806, networkQuiet: true },
+  miner: { state: 'running', active: true, solvedCount: 334, submittedAccepted: 255, submittedRejected: 79, templateAgoSeconds: 7, beatAgoSeconds: 2 },
+  sends: { state: 'ok', ok: 9, failed: 0, unknown: 0, refused: 1, reason: '9 of the last 9 sends landed' },
+  box: { state: 'ok' }, backend: { reachable: true, endpoint: 'https://testnet.zec.rocks:443' },
+  queueDepth: 0, challenge: 'pow'
+};
+let S = EXAMPLE;
+
+/* ---------- canvas helpers ---------- */
+function prep(c, w, h) {
+  const d = DPR(); c.width = Math.max(1, Math.round(w * d)); c.height = Math.max(1, Math.round(h * d));
+  const x = c.getContext('2d'); x.setTransform(d, 0, 0, d, 0, 0); x.clearRect(0, 0, w, h); return x;
+}
+function rr(x, X, Y, W, H, R) { R = Math.min(R, W / 2, H / 2); x.beginPath(); x.moveTo(X + R, Y); x.arcTo(X + W, Y, X + W, Y + H, R); x.arcTo(X + W, Y + H, X, Y + H, R); x.arcTo(X, Y + H, X, Y, R); x.arcTo(X, Y, X + W, Y, R); x.closePath(); }
+
+/* glyphs, drawn at their CSS size in currentColor */
+function glyph(c) {
+  const name = c.dataset.glyph, r = c.getBoundingClientRect(), s = r.width || 16, k = s / 16;
+  const x = prep(c, s, s), col = getComputedStyle(c).color;
+  x.scale(k, k); x.strokeStyle = col; x.fillStyle = col; x.lineWidth = 1.5; x.lineCap = x.lineJoin = 'round';
+  const P = (...pts) => { x.beginPath(); pts.forEach((p, i) => i ? x.lineTo(...p) : x.moveTo(...p)); };
+  switch (name) {
+    case 'brand': x.lineWidth = 1.4; x.beginPath(); x.arc(8, 8, 6.9, 0, 7); x.stroke();
+      P([5.3, 5], [10.7, 5], [5.3, 11], [10.7, 11]); x.stroke(); P([8, 3.2], [8, 5]); x.stroke(); P([8, 11], [8, 12.8]); x.stroke(); break;
+    case 'live': x.beginPath(); x.arc(8, 8, 5.5, 0, 7); x.stroke(); x.beginPath(); x.arc(8, 8, 2, 0, 7); x.fill(); break;
+    case 'syncing': x.beginPath(); x.arc(8, 8, 5.5, -1.2, 3.6); x.stroke(); P([11.2, 2.4], [11.6, 5.6], [8.4, 5.9]); x.stroke(); break;
+    case 'drips': x.beginPath(); x.moveTo(8, 2.5); x.bezierCurveTo(8, 5, 3.5, 8, 3.5, 10.5); x.arc(8, 10.5, 4.5, Math.PI, 0, true); x.bezierCurveTo(12.5, 8, 8, 5, 8, 2.5); x.stroke(); break;
+    case 'reserve': x.strokeRect(3.5, 2.5, 9, 11); x.fillRect(3.5, 8.5, 9, 5); break;
+    case 'miner': P([4, 12.5], [11.5, 5]); x.stroke(); x.beginPath(); x.moveTo(7.5, 3.2); x.quadraticCurveTo(11.5, 2.4, 13.4, 6.8); x.stroke(); break;
+    case 'sends': P([3, 8], [13, 8]); x.stroke(); P([9.5, 4.5], [13, 8], [9.5, 11.5]); x.stroke(); break;
+    case 'network': [[3.2, 12.2], [12.8, 12.2], [8, 3.8]].forEach(p => { x.beginPath(); x.arc(p[0], p[1], 1.6, 0, 7); x.fill(); }); P([3.8, 10.8], [7.4, 5.2]); x.stroke(); P([12.2, 10.8], [8.6, 5.2]); x.stroke(); P([5, 12.2], [11, 12.2]); x.stroke(); break;
+    case 'theme': x.beginPath(); x.arc(8, 8, 5.5, 0, 7); x.stroke(); x.beginPath(); x.arc(8, 8, 5.5, -Math.PI / 2, Math.PI / 2); x.fill(); break;
+    case 'copy': x.strokeRect(5.5, 5.5, 8, 8); P([10.5, 3.5], [2.5, 3.5], [2.5, 11.5]); x.stroke(); break;
+    case 'external': P([7, 3.5], [3.5, 3.5], [3.5, 12.5], [12.5, 12.5], [12.5, 9]); x.stroke(); P([8.5, 3.5], [12.5, 3.5], [12.5, 7.5]); x.stroke(); P([12.5, 3.5], [7, 9]); x.stroke(); break;
+  }
+}
+const drawGlyphs = () => $$('canvas[data-glyph]').forEach(glyph);
+
+/* Falcon sparkle icon (CTA) */
+const SPARKLES = [{ x: .01, y: .01, size: .50 }, { x: .28, y: .26, size: .72 }];
+const STAR = [[.50, .06], [.59, .41], [.94, .50], [.59, .59], [.50, .94], [.41, .59], [.06, .50], [.41, .41]];
+function roundedPolygon(x, pts, k) {
+  const n = pts.length, mid = (a, b) => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k];
+  x.beginPath();
+  const a0 = mid(pts[0], pts[1]); x.moveTo(...a0);
+  for (let i = 1; i <= n; i++) { const p = pts[i % n], prev = pts[(i - 1) % n], next = pts[(i + 1) % n]; const b = mid(p, prev), a = mid(p, next); x.lineTo(...b); x.quadraticCurveTo(p[0], p[1], a[0], a[1]); }
+  x.closePath();
+}
+function drawSparkle(c) {
+  const r = c.getBoundingClientRect(), w = r.width || 18, h = r.height || 18, x = prep(c, w, h);
+  SPARKLES.forEach(s => {
+    const size = Math.min(w, h) * s.size, pts = STAR.map(p => [s.x * w + p[0] * size, s.y * h + p[1] * size]);
+    roundedPolygon(x, pts, .34);
+    x.fillStyle = 'rgba(255,220,202,.55)'; x.strokeStyle = '#fff'; x.lineWidth = Math.max(1.1, size * .15); x.lineCap = x.lineJoin = 'round';
+    x.shadowColor = 'rgba(255,255,255,.78)'; x.shadowBlur = size * .06; x.fill(); x.stroke(); x.shadowBlur = 0; x.shadowColor = 'transparent';
+  });
+}
+
+/* ---------- charts ---------- */
+const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const dlabel = d => { const t = new Date(d + 'T00:00:00Z'); return MON[t.getUTCMonth()] + ' ' + t.getUTCDate(); };
+const dow = d => new Date(d + 'T00:00:00Z').getUTCDay();
+
+function bars(x, by, L, T, iw, ih, hover, soft) {
+  const n = by.length, max = Math.max(1, ...by.map(d => d.sent)), gap = Math.max(1, iw / n * .3), bw = (iw - gap * (n - 1)) / n;
+  by.forEach((d, i) => {
+    const bh = Math.max(bw, (d.sent / max) * ih), bx = L + i * (bw + gap), by0 = T + ih - bh;
+    if (i === n - 1) { x.save(); x.shadowColor = 'rgba(255,105,0,.28)'; x.shadowBlur = Math.max(3, iw * .012); x.fillStyle = tok('--orange'); rr(x, bx - bw * .05, by0, bw * 1.1, bh, bw); x.fill(); x.restore(); }
+    else { x.fillStyle = i === hover ? tok('--orange-line') : (soft || tok('--bar-soft')); rr(x, bx, by0, bw, bh, bw); x.fill(); }
+  });
+  return { bw, gap, max, n };
+}
+function drawSpark() {
+  const c = $('#spark'), r = c.getBoundingClientRect(), w = r.width || 80, h = r.height || 22, x = prep(c, w, h), by = S.drips.byDay;
+  bars(x, by, 0, 1, w, h - 2, -1, '#f0955a');
+  c.setAttribute('aria-label', `Drips per day, last 30 days: ${S.drips.last7d} this week, ${S.drips.allTime} all time, ${by.length ? by[by.length - 1].sent : 0} today.`);
+}
+let hover = -1;
+function drawDrips() {
+  const c = $('#c-drips'), by = S.drips.byDay, r = c.getBoundingClientRect(), w = r.width || 400, h = 140;
+  const x = prep(c, w, h), L = 26, B = 22, T = 10, iw = w - L - 4, ih = h - T - B, mean = S.drips.last7d / 7;
+  const g = bars(x, by, L, T, iw, ih, hover);
+  x.font = '10px ' + tok('--mono'); x.fillStyle = tok('--label'); x.strokeStyle = tok('--hair'); x.lineWidth = 1; x.textAlign = 'right'; x.textBaseline = 'middle';
+  [0, g.max].forEach(v => { const y = T + ih - (v / g.max) * ih; x.fillText(String(v), L - 6, y); });
+  x.textAlign = 'center'; x.textBaseline = 'top';
+  by.forEach((d, i) => { const cx = L + i * (g.bw + g.gap) + g.bw / 2; x.fillStyle = tok('--label'); if (dow(d.day) === 1) { x.fillRect(cx - .5, T + ih + 3, 1, 4); x.fillText('Mon ' + d.day.slice(8).replace(/^0/, ''), cx, T + ih + 9); } else x.fillRect(cx - .5, T + ih + 3, 1, 2); });
+  const my = T + ih - (mean / g.max) * ih;
+  x.strokeStyle = tok('--muted'); x.setLineDash([3, 3]); x.beginPath(); x.moveTo(L, my + .5); x.lineTo(w - 4, my + .5); x.stroke(); x.setLineDash([]);
+  x.textAlign = 'right'; x.textBaseline = 'bottom'; x.fillStyle = tok('--muted'); x.fillText('7-day mean ' + mean.toFixed(1), w - 6, my - 2);
+  c._geo = { L, bw: g.bw, gap: g.gap, n: g.n };
+  c.setAttribute('aria-label', `Drips per day for the last 30 days. ${S.drips.last30d} drips in 30 days, ${S.drips.last7d} this week, mean ${mean.toFixed(1)} per day over 7 days, busiest day ${g.max}. ${by.length ? by[by.length - 1].sent : 0} today.`);
+}
+function drawReserve(c, mini) {
+  const r = c.getBoundingClientRect(), w = r.width || 400, h = mini ? 46 : 92, x = prep(c, w, h);
+  const R = S.reserve, ticks = [1, 10, 100, 1000, 10000], lg = v => Math.log10(Math.max(1, v)) / 4.3, L = 2, iw = w - 4, y = mini ? 14 : 30, bh = mini ? 10 : 14;
+  x.fillStyle = tok('--bar-soft'); rr(x, L, y, iw, bh, bh / 2); x.fill();
+  const fw = lg(R.spendableTaz) * iw; x.fillStyle = tok('--orange'); rr(x, L, y, fw, bh, bh / 2); x.fill();
+  if (R.refilling) { x.save(); x.beginPath(); x.rect(L + fw, y, Math.min(iw - fw, lg(R.targetTaz * 3) * iw), bh); x.clip(); x.strokeStyle = tok('--orange-line'); x.lineWidth = 2; for (let i = -bh; i < iw; i += 7) { x.beginPath(); x.moveTo(L + fw + i, y + bh); x.lineTo(L + fw + i + bh, y); x.stroke(); } x.restore(); }
+  x.font = (mini ? 9 : 10) + 'px ' + tok('--mono'); x.textAlign = 'center'; x.textBaseline = 'top'; x.fillStyle = tok('--label');
+  ticks.forEach(v => { const tx = L + lg(v) * iw; x.fillRect(tx - .5, y + bh + 2, 1, 3); x.fillText(v >= 1000 ? (v / 1000) + 'k' : String(v), tx, y + bh + 6); });
+  // Marks on a log scale crowd each other (500 and 1000 are 4% of the bar apart), so the labels take
+  // different rows: low under the axis, target above the bar, the balance above the bar at the far right,
+  // and the target label steps down a row if the balance label would sit on it.
+  const marks = [['low ' + R.lowTaz, R.lowTaz, '--bad'], ['target ' + R.targetTaz, R.targetTaz, '--warn']];
+  marks.forEach(([lab, v, col]) => { const tx = L + lg(v) * iw; x.fillStyle = tok(col); x.fillRect(tx - .75, y - (mini ? 4 : 8), 1.5, bh + (mini ? 4 : 8) + (mini ? 0 : 4)); });
+  if (!mini) {
+    x.fillStyle = tok('--muted'); x.textBaseline = 'bottom';
+    const balLab = R.spendableTaz == null ? 'balance unknown' : fmt(Math.round(R.spendableTaz)) + ' TAZ';
+    x.textAlign = 'right'; x.fillText(balLab, L + iw, y - 3);
+    const balLeft = L + iw - x.measureText(balLab).width - 8;
+    const tTx = L + lg(R.targetTaz) * iw, tLab = marks[1][0], tW = x.measureText(tLab).width;
+    if (tTx + 4 + tW > balLeft) { x.textAlign = 'right'; x.fillText(tLab, L + iw, y - 14); } else { x.textAlign = 'left'; x.fillText(tLab, tTx + 4, y - 3); }
+    x.textBaseline = 'top'; x.textAlign = 'center'; x.fillText(marks[0][0], L + lg(R.lowTaz) * iw, y + bh + 19);
+  }
+  const drips = Math.round(R.spendableTaz / S.dripTaz / 100) * 100;
+  c.setAttribute('aria-label', `Wallet reserve: ${fmt(Math.round(R.spendableTaz))} TAZ spendable against a low mark of ${R.lowTaz} and a target of ${R.targetTaz}, about ${fmt(drips)} drips at ${S.dripTaz}. ${R.refilling ? 'Topping up.' : ''}`);
+}
+function segBar(c, segs, label) {
+  const r = c.getBoundingClientRect(), w = r.width || 400, h = 34, x = prep(c, w, h), tot = segs.reduce((a, s) => a + s.v, 0) || 1;
+  let px = 0; x.fillStyle = tok('--bar-soft'); rr(x, 0, 10, w, 14, 7); x.fill();
+  x.save(); rr(x, 0, 10, w, 14, 7); x.clip();
+  segs.forEach(s => { if (!s.v) return; const sw = s.v / tot * w; x.fillStyle = tok(s.c); x.fillRect(px, 10, Math.max(sw - 1.5, 1), 14); px += sw; });
+  x.restore(); c.setAttribute('aria-label', label);
+}
+function drawMiner() {
+  const M = S.miner, tot = M.submittedAccepted + M.submittedRejected, pct = tot ? Math.round(M.submittedAccepted / tot * 100) : 0;
+  segBar($('#c-miner'), [{ v: M.submittedAccepted, c: '--orange' }, { v: M.submittedRejected, c: '--bar-soft' }], `Miner: ${M.submittedAccepted} accepted and ${M.submittedRejected} rejected by our node, ${pct}% accepted. Template ${M.templateAgoSeconds} seconds old, last beat ${M.beatAgoSeconds} seconds ago.`);
+}
+function drawSends() {
+  const X = S.sends;
+  segBar($('#c-sends'), [{ v: X.ok, c: '--green' }, { v: X.failed, c: '--bad' }, { v: X.unknown, c: '--unknown' }, { v: X.refused, c: '--warn' }], `Sends in the last 15 minutes: ${X.state}. ${X.ok} ok, ${X.failed} failed, ${X.unknown} unknown, ${X.refused} refused. ${X.reason}.`);
+}
+function drawPanel() { if (view !== 'analytics') return; drawDrips(); drawReserve($('#c-reserve'), false); drawMiner(); drawSends(); }
+function drawAll() { drawGlyphs(); drawSpark(); drawReserve($('#c-reserve-mini'), true); $$('[data-sparkle-icon]').forEach(drawSparkle); drawPanel(); }
+
+/* ---------- status → DOM ---------- */
+const tone = w => ({ ok: 'ok', mining: 'ok', running: 'ok', attention: 'warn', degraded: 'warn', stalled: 'warn', 'no signal': 'bad', parked: 'unknown', unknown: 'unknown', low: 'bad', 'topping up': 'warn' })[w] || 'unknown';
+function minerWord(m, box) {
+  if (m.state === 'parked' || (box && box.minerUnit === 'inactive')) return 'parked';
+  if (m.beatAgoSeconds > 60 || m.state === 'unknown') return 'no signal';
+  if (m.state === 'running' && m.active) return 'mining';
+  return 'stalled';
+}
+function badgeWord(s) {
+  if (s.node.syncPercent < 100 && !s.node.ready) return 'SYNCING';
+  if (s.node.ready && s.backend.reachable && s.box.state === 'ok') return 'LIVE';
+  return 'NOT READY';
+}
+function applyStatus(s) {
+  if (!s.drips.byDay) s.drips.byDay = [];  /* preview: prod until 9ad2f69 deploys */
+  S = s;
+  const diff = s.node.nodeHeight - s.node.externalHeight, mw = minerWord(s.miner, s.box), sgn = (diff >= 0 ? '+' : '') + diff;
+  const tot = s.miner.submittedAccepted + s.miner.submittedRejected, pct = tot ? Math.round(s.miner.submittedAccepted / tot * 100) : 0;
+  const drips = Math.round(s.reserve.spendableTaz / s.dripTaz / 100) * 100;
+  const V = {
+    'drips.allTime': fmt(s.drips.allTime), 'drips.last7d': fmt(s.drips.last7d), 'drips.last30d': fmt(s.drips.last30d),
+    'balanceTaz': s.balanceTaz == null ? 'unknown' : fmt(Math.round(s.balanceTaz)) + ' TAZ', 'dripTaz': String(s.dripTaz), 'queueDepth': fmt(s.queueDepth),
+    'reserve.targetTaz': fmt(s.reserve.targetTaz), 'reserve.lowTaz': fmt(s.reserve.lowTaz), 'reserve.spendableTaz': s.reserve.spendableTaz == null ? 'unknown' : fmt(Math.round(s.reserve.spendableTaz)),
+    'node.height': fmt(s.node.height), 'node.nodeHeight': fmt(s.node.nodeHeight), 'node.externalHeight': fmt(s.node.externalHeight), 'node.syncPercent': s.node.syncPercent == null ? 'unknown' : (Math.floor(s.node.syncPercent * 100) / 100).toFixed(2), 'derived.syncLabel': s.node.syncPercent == null ? 'unknown' : (Math.floor(s.node.syncPercent * 100) / 100).toFixed(2) + '%',
+    'miner.solvedCount': fmt(s.miner.solvedCount), 'miner.submittedAccepted': fmt(s.miner.submittedAccepted), 'miner.submittedRejected': fmt(s.miner.submittedRejected),
+    'miner.templateAgoSeconds': String(s.miner.templateAgoSeconds), 'miner.beatAgoSeconds': String(s.miner.beatAgoSeconds),
+    'sends.state': s.sends.state, 'sends.ok': String(s.sends.ok), 'sends.failed': String(s.sends.failed), 'sends.unknown': String(s.sends.unknown), 'sends.refused': String(s.sends.refused), 'sends.reason': s.sends.reason,
+    'box.state': s.box.state, 'backend.endpoint': s.backend.endpoint.replace(/^https?:\/\//, ''),
+    'derived.minerWord': mw, 'derived.heightDiff': sgn, 'derived.heightDiffChip': `(${sgn} vs network)`,
+    'derived.heightDelta': sgn + ' vs network' + (diff > 0 ? ', ahead' : diff < 0 ? ', behind' : ''),
+    'derived.heightNote': diff > 0 ? 'ahead, normal for a node that mines' : diff < 0 ? 'behind the reference' : 'level with the reference',
+    'derived.tipAge': Math.round(s.node.tipStalledMs / 1000) + 's', 'derived.acceptSentence': `${pct}% accepted by our node`, 'derived.acceptDelta': `${pct}% accepted by our node`,
+    'derived.dripsLeftDelta': s.reserve.spendableTaz == null ? 'balance unknown' : `about ${fmt(drips)} drips at ${s.dripTaz}`,
+    'derived.reserveSentence': s.reserve.spendableTaz == null ? `spendable balance unknown right now · reserve line ${s.reserve.targetTaz}` : `${fmt(Math.round(s.reserve.spendableTaz))} TAZ · reserve line ${s.reserve.targetTaz} · about ${fmt(drips)} drips at ${s.dripTaz}`,
+    'derived.sourceSentence': `The TAZ comes from blocks our node mines (${fmt(s.miner.submittedAccepted)} accepted so far) and from donations.`
+  };
+  $$('[data-field]').forEach(el => {
+    const k = el.dataset.field;
+    if (k === 'backend.reachable') { el.dataset.on = String(!!s.backend.reachable); return; }
+    if (el.getAttribute('role') === 'progressbar') { if (k === 'node.syncPercent') { el.setAttribute('aria-valuenow', s.node.syncPercent); el.firstElementChild.style.setProperty('--w', s.node.syncPercent + '%'); } return; }
+    if (el.tagName === 'CANVAS') return;
+    if (k in V) { el.textContent = V[k]; if (el.classList.contains('word')) el.dataset.tone = tone(V[k]); }
+  });
+  $('#node-delta').dataset.tone = diff < -2 ? 'warn' : 'ok';
+  const b = $('#badge'), bw = badgeWord(s); b.dataset.state = bw; $('.txt', b).textContent = bw;
+  const wt = s.reserve.spendableTaz <= s.reserve.lowTaz ? 'bad' : s.reserve.spendableTaz < s.reserve.targetTaz ? 'warn' : 'ok';
+  $('[data-chip="wallet"]').dataset.tone = wt;
+  $('[data-chip="node"]').dataset.tone = s.node.ready ? 'ok' : 'warn';
+  $$('[data-chip="miner"],[data-chip2="miner"]').forEach(e => e.dataset.tone = tone(mw));
+  $$('[data-chip="sends"],[data-chip2="sends"]').forEach(e => e.dataset.tone = tone(s.sends.state));
+  $('[data-chip2="box"]').dataset.tone = tone(s.box.state);
+  $('[data-chip="box"]').hidden = s.box.state === 'ok';
+  const rs = s.reserve.refilling ? 'topping up' : wt === 'bad' ? 'low' : 'ok'; $('#rs-state').textContent = rs; $('#rs-state').dataset.tone = tone(rs);
+  drawSpark(); drawReserve($('#c-reserve-mini'), true); drawPanel();
+}
+let misses = 0;
+async function poll() {
+  try {
+    const r = await fetch($('#comp').dataset.endpoint, { cache: 'no-store' });
+    if (!r.ok) throw 0; applyStatus(await r.json()); misses = 0; $('#comp').dataset.example = 'false';
+  } catch { if (++misses >= 2 && $('#comp').dataset.example === 'false') { const b = $('#badge'); b.dataset.state = 'NOT READY'; $('.txt', b).textContent = 'NOT READY'; } }
+}
+
+/* ---------- phases ---------- */
+const PHASES = {
+  'ready':            { btn: 'Request 0.1 TAZ', live: 'Ready. Paste a testnet address to request 0.1 TAZ.' },
+  'getting-ready':    { btn: 'Checking status…', dis: true, live: 'Getting ready. The node is syncing.' },
+  'not-ready':        { btn: 'Queue it, sends when the node is ready', live: 'Not ready. You can queue the request.' },
+  'queued':           { btn: null, live: 'Queued. Your address is in line.' },
+  'topping-up':       { btn: 'Topping up, back in a moment', dis: true, live: 'Topping up the reserve.' },
+  'reserve-low':      { btn: 'Request 0.1 TAZ', live: 'The reserve is low. Claims still work.' },
+  'not-taking':       { btn: null, live: 'Not taking claims. Sends are failing on our side.' },
+  'empty':            { btn: 'Waiting for a refill', dis: true, live: 'Empty. The faucet is out of TAZ.' },
+  'human-check':      { btn: null, live: 'Checking you are human. Your browser is solving a puzzle; you can cancel.' },
+  'sending':          { btn: null, live: 'Sending. Keep this tab open.' },
+  'sent':             { btn: null, live: 'Sent. 0.1 TAZ is on its way; the receipt is below.' },
+  'already-claimed':  { btn: null, live: 'Already claimed. Try again later.' },
+  'connection-limit': { btn: null, live: 'Connection limit reached. Try again later.' },
+  'network-limit':    { btn: null, live: 'Network limit reached. Try again later.' },
+  'daily-cap':        { btn: null, live: 'Faucet daily cap reached. Try again later.' },
+  'send-failed':      { btn: null, live: 'Send failed. You can try again.' },
+  'couldnt-take':     { btn: null, live: 'Could not take that request. Edit the address.' },
+  'restarting':       { btn: null, live: 'Restarting. Try again in a minute.' }
+};
+let phase = 'ready', keyCopied = false, keyShown = false, powT = null, cdT = null;
+window.__faucetPreview = { setPhase: p => setPhase(p), phases: () => Object.keys(PHASES) };   /* test hook: the sweeps drive the phases through this */
+function setGoLabel(text) { $('#go').firstElementChild.textContent = text; }
+function setPhase(p, opts = {}) {
+  const card = $('#claim'), wasH = card ? card.getBoundingClientRect().height : 0, prev = phase;
+  phase = p; const cfg = PHASES[p], lower = $('#lower');
+  $$('.phase', lower).forEach(el => el.hidden = el.dataset.phase !== p);
+  if (card && !REDUCED && prev !== p) {
+    const nowH = card.getBoundingClientRect().height;
+    if (Math.abs(nowH - wasH) > 1) { card.style.overflow = 'hidden'; card.animate([{ height: wasH + 'px' }, { height: nowH + 'px' }], { duration: 460, easing: 'cubic-bezier(.16,1,.3,1)' }).onfinish = () => { card.style.overflow = ''; }; }
+    const panel = $(`.phase[data-phase="${p}"]`); if (panel) panel.animate([{ opacity: 0, transform: 'translateY(10px)' }, { opacity: 1, transform: 'none' }], { duration: 380, delay: 90, easing: 'cubic-bezier(.16,1,.3,1)', fill: 'backwards' });
+    const acts = $('#actions'); if (acts && !acts.hidden && cfg.btn !== null) acts.animate([{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: 320, delay: 60, easing: 'cubic-bezier(.16,1,.3,1)', fill: 'backwards' });
+  }
+  const showActions = cfg.btn !== null; $('#actions').hidden = !showActions;
+  if (showActions) { const go = $('#go'), needKey = keyShown && !keyCopied; setGoLabel(needKey ? 'Copy the key first' : cfg.btn); go.disabled = !!cfg.dis || needKey; }
+  $('#live').textContent = cfg.live; { const ps = $('#phasesel'); if (ps) ps.value = p; }
+  if (p === 'sent') { const ex = $('#r-explorer'); if (ex) ex.href = 'https://testnet.cipherscan.app/tx/' + $('#r-txid').textContent.trim(); }
+  clearInterval(powT); clearInterval(cdT);
+  if (p === 'human-check') { let h = 0, t0 = Date.now(); powT = setInterval(() => { h += 2400 + Math.random() * 900; $('#pow-hashes').textContent = fmt(Math.round(h)); $('#pow-secs').textContent = ((Date.now() - t0) / 1000).toFixed(1); }, 250); }
+  const cd = $(`.phase[data-phase="${p}"] [data-countdown]`);
+  if (cd) { let n = parseInt(cd.textContent.match(/\d+/)[0], 10); cdT = setInterval(() => { n = Math.max(0, n - 1); cd.textContent = `Try again in ${n}s`; }, 1000); }
+  if (opts.focus) $(opts.focus)?.focus();
+  drawGlyphs();
+  if (!REDUCED) { lower.getAnimations().forEach(a => a.cancel()); lower.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 180 }); }
+}
+
+/* ---------- address field ---------- */
+function classify(a) {
+  a = a.trim(); if (!a) return { kind: '', label: '', msg: '' };
+  if (/^utest1[a-z0-9]{20,}$/i.test(a) || /^u1[a-z0-9]{20,}$/i.test(a)) return { kind: 'shielded', label: 'Unified · shielded', msg: '' };
+  if (/^ztestsapling1[a-z0-9]{20,}$/i.test(a)) return { kind: 'shielded', label: 'Sapling · shielded', msg: '' };
+  if (/^tm[a-km-zA-HJ-NP-Z1-9]{30,}$/.test(a)) return { kind: 'public', label: 'Transparent · public', msg: 'Transparent addresses are public on chain. A shielded address keeps the drip private.' };
+  if (/^(zs1|t1|t3)/.test(a)) return { kind: '', label: '', msg: "That's a mainnet address; this faucet sends testnet TAZ.", bad: true };
+  return { kind: '', label: '', msg: "That doesn't look like a testnet address.", bad: true };
+}
+$('#addr').addEventListener('input', e => {
+  const r = classify(e.target.value), b = $('#abadge'), h = $('#hint');
+  b.dataset.kind = r.kind; b.textContent = r.label; h.textContent = r.msg; h.dataset.tone = r.bad ? 'bad' : ''; e.target.setAttribute('aria-invalid', String(!!r.bad));
+  $('#r-addr').textContent = e.target.value || 'utest1…';
+});
+$('#gen').addEventListener('click', () => {
+  const hex = n => [...crypto.getRandomValues(new Uint8Array(n))].map(b => b.toString(16).padStart(2, '0')).join('');
+  $('#keytext').textContent = 'secret-extended-key-test1' + hex(36) + ' (example)';
+  $('#addr').value = 'utest1' + hex(30); $('#addr').dispatchEvent(new Event('input'));
+  keyShown = true; keyCopied = false; $('#keybox').hidden = false; setPhase(phase);
+});
+$('#copykey').addEventListener('click', async e => { await copy($('#keytext').textContent, e.currentTarget); keyCopied = true; setPhase(phase); });
+$('#go').addEventListener('click', () => {
+  if (phase === 'not-ready') return setPhase('queued');
+  const r = classify($('#addr').value); if (!r.kind) { $('#addr').focus(); $('#hint').textContent = r.msg || 'Paste a testnet address first.'; $('#hint').dataset.tone = 'bad'; return; }
+  setPhase('human-check'); setTimeout(() => phase === 'human-check' && setPhase('sending'), 3000); setTimeout(() => phase === 'sending' && setPhase('sent'), 5200);
+});
+async function copy(text, btn) {
+  try { await navigator.clipboard.writeText(text); } catch {}
+  if (!btn) return; const html = btn.innerHTML; btn.textContent = 'Copied'; setTimeout(() => { btn.innerHTML = html; drawGlyphs(); }, 1200);
+}
+document.addEventListener('click', e => {
+  const c = e.target.closest('[data-copytext]'); if (c) copy($(c.dataset.copytext).textContent, c);
+  const g = e.target.closest('[data-goto]'); if (g) setPhase(g.dataset.goto, { focus: g.dataset.focus });
+});
+$('#copyreceipt').addEventListener('click', e => copy(`Zcash testnet faucet receipt\namount: ${S.dripTaz} TAZ\nto: ${$('#r-addr').textContent}\nchain: Zcash testnet\ntxid: ${$('#r-txid').textContent}\n${$('#r-conf').textContent}`, e.currentTarget));
+
+$$('.tabs [role=tab]').forEach(t => t.addEventListener('click', () => {
+  $$('.tabs [role=tab]').forEach(o => o.setAttribute('aria-selected', String(o === t)));
+  const ctaz = t.dataset.net === 'cTAZ'; $$('.ctaz').forEach(r => r.hidden = !ctaz);
+  if (ctaz) { $('#go').disabled = true; setGoLabel('Coming soon'); } else setPhase(phase);
+}));
+
+$('#lookupform').addEventListener('submit', e => {
+  e.preventDefault(); const r = classify($('#laddr').value), a = $('#lans');
+  a.textContent = r.kind === 'shielded' ? 'Shielded balances are private. Provide a viewing key in a wallet to see this.' : r.kind === 'public' ? '0.3 TAZ across 2 outputs (example)' : (r.msg || 'Paste a testnet address first.');
+});
+
+/* ---------- theme ---------- */
+function setTheme(t) {
+  document.documentElement.dataset.theme = t; const b = $('#theme');
+  b.setAttribute('aria-pressed', String(t === 'ink')); b.setAttribute('aria-label', t === 'ink' ? 'Switch to paper theme' : 'Switch to ink theme');
+  try { localStorage.setItem('faucet-theme', t); } catch {}
+  requestAnimationFrame(drawAll);
+}
+$('#theme').addEventListener('click', () => setTheme(document.documentElement.dataset.theme === 'ink' ? 'paper' : 'ink'));
+
+/* ---------- analytics panel ---------- */
+const VIEWS = ['claim', 'status', 'analytics', 'tools'];
+let view = 'claim';
+function setView(v, push = true) {
+  if (!VIEWS.includes(v)) v = 'claim'; view = v;
+  $$('.view').forEach(s => s.hidden = s.dataset.view !== v);
+  $$('#seg button').forEach(b => b.dataset.view === v ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current'));
+  if (push) history.replaceState(null, '', v === 'claim' ? location.pathname : '#' + v);
+  drawAll();
+  if (!REDUCED && push) $(`.view[data-view="${v}"]`).animate([{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: 220, easing: 'cubic-bezier(.16,1,.3,1)' });
+}
+{ const h = location.hash.replace('#', ''); if (h && h !== 'claim') setView(h, false); }
+document.addEventListener('click', e => { const b = e.target.closest('[data-view]:not(.view)'); if (b) { e.preventDefault(); setView(b.dataset.view); } });
+$('#strip').addEventListener('click', () => setView('analytics'));
+addEventListener('hashchange', () => setView(location.hash.slice(1), false));
+addEventListener('keydown', e => { if (e.key === 'Escape' && view !== 'claim' && !e.defaultPrevented) setView('claim'); });
+const cd = $('#c-drips'), tip = $('#tip');
+function showTip(i) {
+  const by = S.drips.byDay; if (i < 0 || i >= by.length) { tip.hidden = true; hover = -1; drawDrips(); return; }
+  if (i !== hover) { hover = i; drawDrips(); }
+  const g = cd._geo, px = g.L + i * (g.bw + g.gap) + g.bw / 2;
+  tip.hidden = false; tip.textContent = `${by[i].sent} drips · ${dlabel(by[i].day)}`; tip.style.left = px + 'px'; tip.style.top = '-6px';
+}
+cd.addEventListener('pointermove', e => { const g = cd._geo; if (!g) return; const x = e.clientX - cd.getBoundingClientRect().left; showTip(Math.floor((x - g.L) / (g.bw + g.gap))); });
+cd.addEventListener('pointerleave', () => showTip(-1));
+cd.addEventListener('keydown', e => { if (e.key === 'ArrowRight') showTip(Math.min(hover + 1, 29)); if (e.key === 'ArrowLeft') showTip(Math.max(hover - 1, 0)); if (e.key === 'Escape' && hover >= 0) { showTip(-1); e.stopPropagation(); } });
+
+/* ---------- demo select ---------- */
+const sel = $('#phasesel');   /* the prototype's phase selector is gone from the page; the hook stays null-safe */
+if (sel) { Object.keys(PHASES).forEach(k => { const o = document.createElement('option'); o.value = k; o.textContent = k; sel.append(o); }); sel.addEventListener('change', () => setPhase(sel.value)); }
+
+/* ---------- entrance (Falcon choreography, once) ---------- */
+function reveal() { clearTimeout(window.__entranceFallback); document.documentElement.classList.remove('entrance-pending', 'entrance-active'); }
+function enter() {
+  const root = document.documentElement;
+  if (!root.classList.contains('entrance-pending') || window.__entranceStarted) return;
+  window.__entranceStarted = true;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const anims = [];
+    try {
+      const vw = innerWidth, vh = innerHeight, compact = vw <= 512, rise = compact ? 11 : 16;
+      const place = 'cubic-bezier(.16,1,.3,1)', wipe = 'cubic-bezier(.24,.86,.28,1)';
+      const cards = $$('.card').map(el => ({ el, r: el.getBoundingClientRect() })).filter(c => c.r.bottom > 0 && c.r.top < vh);
+      const topMin = Math.min(...cards.map(c => c.r.top)), singleRow = cards.every(c => Math.abs(c.r.top - topMin) <= Math.max(4, vh * .04));
+      const cx = vw / 2;
+      const ordered = singleRow ? [...cards].sort((a, b) => (a.el.id === 'claim' ? -1 : b.el.id === 'claim' ? 1 : Math.abs(a.r.left + a.r.width / 2 - cx) - Math.abs(b.r.left + b.r.width / 2 - cx))) : [...cards].sort((a, b) => a.r.top - b.r.top || a.r.left - b.r.left);
+      const A = (el, kf, o) => { if (el) anims.push(el.animate(kf, Object.assign({ fill: 'both' }, o))); };
+      ordered.forEach((c, i) => {
+        const primary = singleRow && c.el.id === 'claim';
+        const delay = singleRow ? (primary ? 60 : 245 + (i - 1) * 85) : 70 + i * 115;
+        const off = c.r.left + c.r.width / 2 - cx, drift = singleRow && !primary ? -Math.sign(off) * Math.min(vw * .018, 7) : 0;
+        A(c.el, [{ opacity: 0, transform: `translate3d(${drift}px,${rise}px,0) scale(.985)` }, { opacity: 1, transform: 'none' }], { duration: compact ? 780 : primary ? 960 : 900, delay, easing: place });
+        A($('.panel', c.el), [{ opacity: 0, transform: 'scale(.994)', clipPath: `inset(0 0 ${compact ? 26 : 34}% 0)` }, { opacity: 1, transform: 'none', clipPath: 'inset(0 0 0 0)' }], { duration: compact ? 620 : 720, delay: delay + 200, easing: wipe });
+        A($('.card-copy', c.el), [{ opacity: 0, transform: `translate3d(0,${compact ? 8 : 11}px,0)` }, { opacity: 1, transform: 'none' }], { duration: compact ? 540 : 620, delay: delay + 330, easing: place });
+        const uncover = [{ opacity: 0, clipPath: 'inset(-30% 0 100% 0)' }, { opacity: 1, clipPath: 'inset(-30% 0 -30% 0)' }];
+        A($('.card-copy h2', c.el), uncover, { duration: compact ? 470 : 540, delay: delay + 350, easing: wipe });
+        $$('.card-copy p', c.el).forEach(p => A(p, uncover, { duration: compact ? 430 : 490, delay: delay + 450, easing: wipe }));
+        $$('.corner-icon, [data-accent]', c.el).forEach(el => A(el, [{ opacity: 0, transform: 'scale(.88)' }, { opacity: 1, transform: 'none' }], { duration: compact ? 340 : 400, delay: delay + 540, easing: place }));
+      });
+      [['.hero-copy', 200], ['#strip', 330], ['#seg', 330]].forEach(([s, delay]) => A($(s), [{ opacity: 0, transform: `translate3d(0,${rise}px,0)` }, { opacity: 1, transform: 'none' }], { duration: 900, delay, easing: place }));
+      root.classList.add('entrance-active'); root.classList.remove('entrance-pending');
+      Promise.all(anims.map(a => a.finished)).then(() => { anims.forEach(a => a.cancel()); reveal(); }, () => { anims.forEach(a => a.cancel()); reveal(); });
+    } catch { anims.forEach(a => a.cancel()); reveal(); }
+  }));
+}
+
+/* ---------- boot ---------- */
+try { const t = localStorage.getItem('faucet-theme'); if (t) document.documentElement.dataset.theme = t; } catch {}
+$('#theme').setAttribute('aria-pressed', String(document.documentElement.dataset.theme === 'ink'));
+setView(location.hash.slice(1) || 'claim', false); applyStatus(EXAMPLE); drawAll(); setPhase('ready'); enter();
+poll(); setInterval(poll, +$('#comp').dataset.pollMs);
+let rz; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(drawAll, 80); });
+new ResizeObserver(() => { $$('[data-sparkle-icon]').forEach(drawSparkle); drawGlyphs(); }).observe($('#comp'));
+})();
+</script>
+
+<script>
+/* preview: page-mascot's behaviour, ported line for line from the npm component (page-mascot 0.1.0, MIT) so the
+   preview shows what S2 ships. Nine head poses by the pointer's angle with a dead zone and hysteresis; a click shows
+   blink then a payoff for half a second; four quick clicks make him dizzy; the squash honours reduced motion. */
+(function () {
+  var btn = document.getElementById('mascot'); if (!btn) return;
+  var squash = btn.querySelector('.m-squash'), dir = btn.querySelector('.m-dir'), react = btn.querySelector('.m-react');
+  var DIRECTIONS = ['up-left','up','up-right','left','center','right','down-left','down','down-right'];
+  var REACTIONS = ['blink','heart','sparkle','surprised','wink','bashful','sleepy','dizzy','delighted'];
+  var CLOCKWISE = ['right','down-right','down','down-left','left','up-left','up','up-right'];
+  var SECTOR = Math.PI * 2 / CLOCKWISE.length, HYSTERESIS = 0.12, DEAD_ZONE = 70;
+  var PAYOFFS = ['heart','sparkle','delighted'], BOOP_PAYOFF = 120, BOOP_END = 560, SQUASH_MS = 420, DIZZY_AFTER = 4, DIZZY_WINDOW = 1600, DIZZY_END = 1100;
+  var SQUASH = [{ transform: 'scale(1, 1)', easing: 'ease-in' }, { transform: 'scale(1.10, 0.86)', offset: 0.18, easing: 'ease-out' }, { transform: 'scale(0.95, 1.08)', offset: 0.45, easing: 'ease-in-out' }, { transform: 'scale(1.03, 0.97)', offset: 0.72, easing: 'ease-in-out' }, { transform: 'scale(1, 1)' }];
+  function cell(i) { return ((i % 3) * 50) + '% ' + (Math.floor(i / 3) * 50) + '%'; }
+  function wrap(a) { return Math.atan2(Math.sin(a), Math.cos(a)); }
+  function setDirection(d) { dir.style.backgroundPosition = cell(DIRECTIONS.indexOf(d)); }
+  function setReaction(r) { react.style.backgroundPosition = cell(REACTIONS.indexOf(r || 'blink')); react.style.opacity = r ? 1 : 0; dir.style.opacity = r ? 0 : 1; }
+  if (matchMedia('(hover: hover) and (pointer: fine)').matches) {
+    var sector = -1, pointer = null;
+    var aim = function () {
+      if (!pointer) return;
+      var box = btn.getBoundingClientRect(), dx = pointer.x - (box.left + box.width / 2), dy = pointer.y - (box.top + box.height / 2);
+      if (Math.hypot(dx, dy) < DEAD_ZONE) { sector = -1; setDirection('center'); return; }
+      var angle = Math.atan2(dy, dx);
+      if (sector !== -1 && Math.abs(wrap(angle - sector * SECTOR)) < SECTOR / 2 + HYSTERESIS) return;
+      sector = (Math.round(angle / SECTOR) + CLOCKWISE.length) % CLOCKWISE.length;
+      setDirection(CLOCKWISE[sector]);
+    };
+    addEventListener('pointermove', function (e) { pointer = { x: e.clientX, y: e.clientY }; aim(); }, { passive: true });
+    addEventListener('scroll', aim, { passive: true });
+  }
+  var timers = [], boops = { count: 0, at: 0 };
+  btn.addEventListener('click', function () {
+    timers.forEach(clearTimeout); timers = [];
+    var later = function (ms, next) { timers.push(setTimeout(function () { setReaction(next); }, ms)); };
+    var now = Date.now();
+    boops.count = now - boops.at < DIZZY_WINDOW ? boops.count + 1 : 1; boops.at = now;
+    if (boops.count >= DIZZY_AFTER) { boops.count = 0; setReaction('dizzy'); later(DIZZY_END, null); }
+    else { setReaction('blink'); later(BOOP_PAYOFF, PAYOFFS[(boops.count - 1) % PAYOFFS.length]); later(BOOP_END, null); }
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    squash.animate(SQUASH, { duration: SQUASH_MS, easing: 'linear' });
+  });
+})();
+</script>
+</body>
+</html>

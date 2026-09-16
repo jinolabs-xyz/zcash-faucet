@@ -1,3 +1,4 @@
+/* @spec design/spec/S1-20260915T1938Z/shell.css */
 /*
  * The redesigned site's SHELL: the stage, the header, the segmented nav, the four view
  * sections, the pinned footer and the entrance.
@@ -175,10 +176,28 @@ html .iconbtn:hover{color:var(--ink)}
 .badge[data-state="PREPARING"],.badge[data-state="TOPPING UP"]{color:var(--warn-text)}
 .badge[data-state="DEGRADED"],.badge[data-state="EMPTY"],.badge[data-state="NOT READY"]{color:var(--bad-text)}
 
-/* The dot's colour is written inline from the phase machine (it has always been), so the
- * preview's per-state dot rules would fight it. The ring keeps the design's geometry and
- * lets the inline fill win. */
-.badge .dot{width:calc(.6*var(--u));height:calc(.6*var(--u));border-radius:50%}
+/* THERE IS DELIBERATELY NO SECOND `.badge .dot` RULE HERE, and the one that was removed is worth
+ * a note so nobody restores it (#586). It read
+ *
+ *   .badge .dot{width:calc(.6*var(--u));height:calc(.6*var(--u));border-radius:50%}
+ *
+ * under a comment saying the dot's colour is written inline from the phase machine, so the
+ * preview's per-state rules "would fight it" and this rule "lets the inline fill win".
+ *
+ * IT DID NOTHING, in three senses, and the comment was wrong about the first:
+ *   - an inline style beats any stylesheet rule, so there was never a fight to win. Shell.tsx:181
+ *     writes `style={{ background: ... }}` on every render, on every page - `CHECKING_BADGE` sets
+ *     it to `transparent` on the subpages, the phase machine sets it on the index - so the
+ *     declaration above it never paints in the first place;
+ *   - every property it declared was byte-identical to the rule at the top of this file, so it
+ *     overrode nothing; and
+ *   - a later rule that never NAMES a property cannot remove it, so the `background` it was
+ *     written to drop stayed exactly where it was.
+ *
+ * The rule it was trying to correct is the transcription's, near the top, and that one stays:
+ * the frozen spec carries `background:var(--unknown)` and the parity check compares against it.
+ * Nothing renders differently for any of this, which is why nothing caught it - it was a comment
+ * asserting a behaviour the CSS did not have. */
 
 /* ===== Accessibility corrections to the transcription =====
  * Four rules that deliberately depart from the preview. The design was approved on how it
