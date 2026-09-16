@@ -350,6 +350,11 @@ export default function Home() {
   // to.
   const cardRef = useRef<HTMLElement | null>(null);
   const cardFrom = useRef<number | null>(null);
+  const cardPending = useRef<number | null>(null);
+  const cardTarget = useRef<number | null>(null);
+  const cardOrigin = useRef<number | null>(null);
+  const cardOverflow = useRef<string | null>(null);
+  const cardRaf = useRef<number | null>(null);
   const cardAnim = useRef<Animation | null>(null);
   const [addr, setAddr] = useState("");
   const [touched, setTouched] = useState(false);
@@ -957,43 +962,39 @@ export default function Home() {
   // animated the way the frozen preview animates it: 460ms, cubic-bezier(.16,1,.3,1), the box
   // and nothing inside it.
   //
-  // ONLY ON A PHASE CHANGE, AND THE `from` IS THE PAINTED HEIGHT. The first version ran on every
-  // render and cancelled whatever was in flight, so any render inside the 460ms snapped the rest
-  // of the travel: into success 463 -> 602 was cancelled at 9ms, a 139px single-frame step. The
-  // status phases only looked right because the local doubles answer in under a millisecond; at
-  // production's 790ms TTFB every status transition would have been cancelled at about 210ms,
-  // and since a status change is TWO renders the first animation died before its first frame.
-  // Found by the CTO's red-team on #583.
+  // THE HEIGHT IS THE TRIGGER, NOT THE PHASE. This ran on a `cardPhaseKey` of eight state
+  // values for two rounds, and the key was always going to be a list somebody forgets to add
+  // to. It was: the status body changes the card's height without changing any of the eight,
+  // nothing animates that, and out of `fault` the card stepped 17.9px in one frame and then
+  // animated smoothly the rest of the way. The CTO found it; the sweep reproduces it at both
+  // widths on the production-latency pass. "The phase changed" and "the card's height changed"
+  // were two spellings of one boundary, and only one of them is the thing the eye sees.
   //
-  // `cardFrom` is filled in the CLEANUP, which React runs BEFORE the DOM mutation of the next
-  // commit. That is the React equivalent of the preview reading `wasH` before it swaps the
-  // panel, and it is what makes cancelling unnecessary: the height we animate FROM is the height
-  // the card is actually painted at, interpolation included, so a change arriving mid-flight
-  // continues from where the card visibly is instead of jumping back.
+  // So there is no dependency array and no key: every commit measures, and a height that moved
+  // is animated whatever moved it. The two costs of that are handled rather than avoided.
+  //
+  //   RESTARTING. Running per commit is how the first version broke - it cancelled whatever was
+  //   in flight, so a render inside the 460ms snapped the rest of the travel (into success
+  //   463 -> 602 cancelled at 9ms, a 139px step; at production's 790ms TTFB every status
+  //   transition died before its first frame). A continuation fixes that without a key: if the
+  //   target has not moved, the animation is re-created with its ORIGINAL endpoints and its
+  //   clock carried across, so it resumes rather than starting again. If the target HAS moved,
+  //   the card continues from where it visibly is.
+  //
+  //   MEASURING OUR OWN ANIMATION. `getBoundingClientRect()` returns the INTERPOLATED height
+  //   while one runs, so `to` is read only after ours is cancelled - otherwise `|to - from|`
+  //   comes out under a pixel, the effect returns early, and the real change lands in one frame
+  //   when the old animation ends (411 -> 602 in ONE frame at 1440). Round two called that "the
+  //   content settled afterwards". It was not: the content was in the DOM from the first frame
+  //   and the target was stale.
+  //
+  // `from` is the interpolated box while ours plays - which is exactly what is on screen - and
+  // otherwise the last PAINTED height, which the recorder below is careful to mean literally.
   //
   // Reduced motion is read in JS and that is load-bearing: globals.css:264 and
   // redesign-shell.css:142 both kill `animation` and `transition` under prefers-reduced-motion,
   // and a Web Animations API animation is NEITHER, so left to the stylesheet it would play at
   // full size for exactly the people who asked it not to.
-  const cardPhaseKey = [
-    phase, fail.kind, refusal?.kind ?? "", network,
-    refilling ? "r" : "", refillHealthy ? "h" : "", powState ? "p" : "", tx ? "t" : "",
-  ].join("|");
-  // FROM IS THE PAINTED HEIGHT AT THE MOMENT OF THE CHANGE. TO IS THE NATURAL HEIGHT.
-  // Round two got the second one wrong and the sweep could not see it.
-  //
-  // TO: measuring `getBoundingClientRect()` while OUR animation is still running returns the
-  // INTERPOLATED value, not the height the new phase wants. `|to - from|` then comes out under a
-  // pixel, the effect returns early, and the real change lands in a single frame when the old
-  // animation ends - into success 411 -> 602 in ONE frame at 1440, 215px. The sweep called that
-  // "the content settled afterwards"; it was not, the content was in the DOM from the first
-  // frame and the target was stale. So our own animation is cancelled BEFORE `to` is measured.
-  //
-  // FROM: while that animation is running the box IS the interpolated value, so measuring
-  // BEFORE the cancel gives exactly what is on screen - which is the preview's `wasH`, and it is
-  // what lets a change arriving mid-flight continue from where the card visibly is. With nothing
-  // running the painted height is the one the recorder stored at the end of the last commit,
-  // which is current precisely because without an animation the height only moves on a render.
   //
   // The Animation object is held in a ref rather than found through `getAnimations()`: it needs
   // no second feature check, and the cancel reaches our animation and nothing else - the mascot
@@ -1006,31 +1007,96 @@ export default function Home() {
     if (typeof el.animate !== "function") return;
     if (typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     const running = cardAnim.current;
+    const playing = !!running && running.playState === "running";
     const painted = el.getBoundingClientRect().height;
-    const from = running && running.playState === "running" ? painted : cardFrom.current;
+    const elapsed = playing && typeof running.currentTime === "number" ? running.currentTime : 0;
     if (running) { running.cancel(); cardAnim.current = null; }
-    if (from == null) return;                       // first paint has nothing to animate from
     const to = el.getBoundingClientRect().height;   // natural: ours is cancelled
+    // OUR OWN ANIMATION, STILL HEADED WHERE IT WAS. Running per commit means a countdown tick
+    // inside the 460ms lands here, and restarting from the interpolated height with a fresh
+    // 460ms would stretch the travel every time one arrived - the slow-motion version of the
+    // defect the red-team found. If the target has not moved, the same animation is re-created
+    // with its original endpoints and its clock carried over, which is a continuation rather
+    // than a restart. If the target HAS moved, the card continues from where it visibly is.
+    const continuing = playing && cardTarget.current != null && Math.abs(to - cardTarget.current) < 1;
+    const from = continuing ? cardOrigin.current : (playing ? painted : cardFrom.current);
+    if (from == null) return;                       // first paint has nothing to animate from
     // A change under a pixel is not a phase change, it is a countdown digit changing width.
     if (Math.abs(to - from) < 1) return;
-    const previous = el.style.overflow;
+    // CAPTURED ONCE PER RUN OF ANIMATIONS, not once per animation. Re-reading it on a
+    // continuation reads back the "hidden" the previous one set, and restoring THAT leaves the
+    // inline style behind for good.
+    if (cardOverflow.current == null) cardOverflow.current = el.style.overflow;
     el.style.overflow = "hidden";
     const run = el.animate(
       [{ height: `${from}px` }, { height: `${to}px` }],
       { duration: 460, easing: "cubic-bezier(.16,1,.3,1)" },
     );
+    if (continuing) { try { run.currentTime = elapsed; } catch { /* a clock we cannot set is not worth failing over */ } }
     run.id = CARD_HEIGHT_ANIM;
     cardAnim.current = run;
-    const restore = () => { el.style.overflow = previous; if (cardAnim.current === run) cardAnim.current = null; };
+    cardOrigin.current = from;
+    cardTarget.current = to;
+    const restore = () => {
+      if (cardAnim.current !== run) return;         // superseded: the new one owns the element
+      cardAnim.current = null;
+      el.style.overflow = cardOverflow.current ?? "";
+      cardOverflow.current = null;
+      // THE SETTLED HEIGHT, RECORDED HERE, because an animation ending is not a render. Nothing
+      // re-runs the recorder below when the card comes to rest, so without this `cardFrom` stays
+      // at whatever it held before the animation and the next transition starts from a height
+      // the card left 460ms ago.
+      const settled = el.getBoundingClientRect().height;
+      cardFrom.current = settled;
+      cardPending.current = settled;
+    };
     run.onfinish = restore;
     run.oncancel = restore;
-  }, [cardPhaseKey]);
+  });
   // THE RECORDER, and it must stay BELOW the animator. No dependency array on purpose: it runs
-  // after every commit, so what it stores is always the height as of the last paint.
+  // after every commit.
+  //
+  // WHAT IT MEASURES IS NOT YET ON SCREEN. A layout effect runs after the DOM is mutated and
+  // before the frame paints, so a commit that is followed by ANOTHER commit in the same frame
+  // is measured and then never shown. Two commits in one frame is not exotic here - it is what
+  // a status poll does, the body arriving and the phase deriving from it - and the card was
+  // animating from the height of the one in between. Measured by the sweep at both widths and
+  // both speeds: painted 616.1, animation 598 -> 580. The 18px from 616 to 598 was travelled in
+  // the animation's first frame, so it reads as a snap and then a smooth 18px, and both
+  // endpoints agree with the code. The CTO found it on `fault` -> `empty`; the sweep now ties
+  // `from` to the last painted height, which is what makes it visible.
+  //
+  // So the measurement is held as PENDING and only becomes `cardFrom` when a frame boundary has
+  // passed, which is the point at which it was painted. rAF is the boundary: it fires once per
+  // frame, after that frame's commits, so a value promoted there is one the frame showed.
+  // Scheduled only while something is pending rather than as a standing loop - an idle card
+  // should not wake the compositor sixty times a second - and the callback does no layout, it
+  // copies a number.
   useLayoutEffect(() => {
     const el = cardRef.current;
-    if (el) cardFrom.current = el.getBoundingClientRect().height;
+    if (!el) return;
+    // NOT WHILE OUR OWN ANIMATION IS RUNNING. This effect fires in the same commit as the
+    // animator above and AFTER it, so the box it measures is the animation that was just
+    // created, at time zero - which is `from`, which came from here. `cardFrom` then feeds
+    // itself and never moves again: every animation on the page started from 472.39px, the
+    // height of the first paint, while the card was visibly somewhere else. The sweep caught it
+    // as 18 rows failing at once with a constant `from`.
+    //
+    // While one of ours is in flight the animator does not consult `cardFrom` anyway - it reads
+    // the live interpolated box, which is what is actually on screen - and `restore` above puts
+    // the settled height back when it ends.
+    if (cardAnim.current) return;
+    cardPending.current = el.getBoundingClientRect().height;
+    if (cardRaf.current != null) return;
+    if (typeof requestAnimationFrame !== "function") { cardFrom.current = cardPending.current; return; }
+    cardRaf.current = requestAnimationFrame(() => {
+      cardRaf.current = null;
+      cardFrom.current = cardPending.current;
+    });
   });
+  useEffect(() => () => {
+    if (cardRaf.current != null && typeof cancelAnimationFrame === "function") cancelAnimationFrame(cardRaf.current);
+  }, []);
   const c = check(addr);
   const badgeShow = c.ok || ("label" in c && !!c.label);
   const remain = Math.max(0, cooldownEnd - now);
@@ -1639,10 +1705,25 @@ export default function Home() {
           const when = fail.retryAt != null
             ? new Date(fail.retryAt).toLocaleString(undefined, { hour: "2-digit", minute: "2-digit", weekday: "short", timeZoneName: "short" })
             : null;
+          // THE SNAPSHOT'S WORDS WHERE THEY ARE TRUE, ours only where they are not, and the
+          // falsehood named. The owner approved the design's copy, so preference does not
+          // outrank it: `daily-cap` and `couldnt-take` are the snapshot's kicker and heading
+          // verbatim, and the ticker rewrite is gone - "Today's drips are spent" is true on
+          // either network and does not need to say which.
+          //
+          // The three that stand are declared in the PR body with what is false about the
+          // snapshot's line for that state:
+          //   send-failed  one panel, three kinds. "The transaction didn't go through" is not
+          //                true of `pow`: the human check failed, so no transaction was ever
+          //                attempted. Each kicker says which thing failed and that the wallet
+          //                is untouched, which is what makes "Try again" safe to press.
+          //   restarting   the snapshot has one state and the 23:08Z mapping gives this panel
+          //                two, busy and held. There are no approved words for either.
+          //   lost-track   not in the approved set at all.
           const kick =
             k === "held" ? "Our side, not yours"
             : k === "busy" ? "Busy, nothing left the wallet"
-            : k === "cap" ? `Today\u2019s ${networkFacts(network).ticker} budget is spent`
+            : k === "cap" ? "Faucet daily cap"
             : k === "unknown" ? "Submitted, outcome unknown"
             : k === "bad" ? "Couldn\u2019t take that request"
             : k === "pow" ? "Human check failed, nothing was claimed"
@@ -1651,9 +1732,9 @@ export default function Home() {
           const head =
             k === "held" ? "Not right now."
             : k === "busy" ? "Every send slot is taken."
-            : k === "cap" ? `The faucet has paid out its daily ${networkFacts(network).ticker}.`
+            : k === "cap" ? "Today\u2019s drips are spent"
             : k === "unknown" ? "We lost track of your drip."
-            : k === "bad" ? "Something in the request needs fixing."
+            : k === "bad" ? "Something in the request didn\u2019t check out"
             : "That didn\u2019t go through.";
           // Which sentence follows theirs. The server's own is shown as sent; the
           // page adds only what it knows and the server does not: the clock, the

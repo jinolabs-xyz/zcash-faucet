@@ -95,7 +95,7 @@ for (const [W, H] of VIEWPORTS) {
       // a 1ms one satisfy identically - `duration: 1` survived the whole sweep at 29/0. And an
       // animation that is CANCELLED two frames in registered exactly like one that ran, which is
       // the defect this round is about: the card snapped and the sweep applauded.
-      const rec = { frames: null, opts: null, state: "running" };
+      const rec = { frames: null, opts: null, state: "running", at: performance.now() };
       try { rec.frames = JSON.parse(JSON.stringify(frames)); } catch { /* ignore */ }
       try { rec.opts = JSON.parse(JSON.stringify(opts)); } catch { /* ignore */ }
       window.__cardAnims.push(rec);
@@ -104,6 +104,29 @@ for (const [W, H] of VIEWPORTS) {
       a.finished.then(() => { rec.state = "finished"; }, () => { rec.state = "cancelled"; });
       return a;
     };
+    // EVERY PAINTED FRAME, because the keyframes alone cannot say whether the card SNAPPED.
+    // The wrapper above proves an animation ran from A to B; it says nothing about the card
+    // moving un-animated between two animations, which is the 20px step out of `fault` the
+    // CTO found: the status body changes the height without changing `cardPhaseKey`, nothing
+    // animates it, and the next animation's `from` is the height AFTER the step - so both
+    // endpoints agree with the code and the user still saw a jump.
+    //
+    // rAF runs after the commit's layout effects and before that frame's paint, so a sample
+    // here is the height that frame is about to paint, and the last sample STRICTLY BEFORE an
+    // animate() call is the last height actually on screen. That is what `from` has to equal.
+    // `running` is carried on each sample so a large frame-to-frame step can be attributed to
+    // an animation playing rather than counted as a snap.
+    window.__cardFrames = [];
+    (function sample() {
+      const c = document.querySelector("#claim");
+      if (c) {
+        const running = typeof c.getAnimations === "function"
+          && c.getAnimations().some((a) => a.id === "card-height" && a.playState === "running");
+        window.__cardFrames.push([performance.now(), c.getBoundingClientRect().height, running]);
+        if (window.__cardFrames.length > 6000) window.__cardFrames.splice(0, 3000);
+      }
+      requestAnimationFrame(sample);
+    })();
   });
   await page.waitForFunction((s) => (document.querySelector("p.sr-only[role=status]")?.textContent ?? "").includes(s), PHASES[0].says, { timeout: 15000 })
     .catch(() => {});
@@ -118,7 +141,7 @@ for (const [W, H] of VIEWPORTS) {
     current = ph;
     // The page polls /api/status every 4s (page.tsx:489), so the new body arrives on its
     // own. Sample the card mid-flight first, THEN wait for the phase to settle.
-    await page.evaluate(() => { window.__cardAnims = []; });
+    await page.evaluate(() => { window.__cardAnims = []; window.__cardFrames = []; });
     const t0 = Date.now();
     let reached = false;
     while (Date.now() - t0 < 9000) {
@@ -163,7 +186,7 @@ for (const [W, H] of VIEWPORTS) {
       .map((r) => {
         const f = r && r.frames;
         if (!Array.isArray(f) || f.length < 2 || !f[0] || !f[1] || f[0].height == null || f[1].height == null) return null;
-        return { from: parseFloat(f[0].height), to: parseFloat(f[1].height), opts: r.opts || {}, state: r.state };
+        return { from: parseFloat(f[0].height), to: parseFloat(f[1].height), opts: r.opts || {}, state: r.state, at: r.at };
       })
       .filter((a) => a && !Number.isNaN(a.from) && !Number.isNaN(a.to));
     // FOUR THINGS, NOT ONE. It must end where the card settled, start somewhere else, carry the
@@ -185,6 +208,25 @@ for (const [W, H] of VIEWPORTS) {
     // 57/0 while the card snapped. `to` must be the height the card actually settles at with
     // no animation of ours running - measured below by cancelling first - and `from` must be
     // where it started, which for a transition out of rest is the height before the change.
+    // THE LAST HEIGHT ACTUALLY ON SCREEN before the animation was created. Both ends were
+    // supposed to be tied and only `to` was: `from` had to differ from `to` by a pixel and
+    // nothing more, so an animation could start from a height the card was never at and the
+    // row stayed green. rAF samples before the frame paints, so the last sample STRICTLY
+    // earlier than the animate() call is the last painted height.
+    const framesSeen = await page.evaluate(() => window.__cardFrames ?? []);
+    const paintedBefore = (at) => {
+      let h = null;
+      for (const [t, ht] of framesSeen) { if (t < at) h = ht; else break; }
+      return h;
+    };
+    // `from` IS A PROXY AND THE PAINTED FRAMES ARE THE AUTHORITY, which cost a round to learn.
+    // Tying `from` to the last painted height caught the real defect - the recorder storing a
+    // height from a commit that never reached the screen - and then went wrong the moment the
+    // animator learned to CONTINUE an animation instead of restarting it: a continuation keeps
+    // the original `from` keyframe and advances its clock, so it legitimately reads 616 -> 580
+    // while the card is visibly at 582 and perfectly smooth. The keyframe describes the
+    // animation; only the frames describe the card. So the tie is gone from here and the row
+    // below does the work, on what was actually painted.
     const covering = anims.find((a) =>
       Math.abs(a.to - natural) <= 1.5
       && Math.abs(a.from - a.to) > 1
@@ -192,6 +234,33 @@ for (const [W, H] of VIEWPORTS) {
       && a.opts.easing === "cubic-bezier(.16,1,.3,1)"
       && a.state === "finished");
     const jumped = delta > 1 && !covering;
+
+    // THE STEP THE ANIMATION SHOULD HAVE ABSORBED, which the keyframes cannot show. Out of
+    // `fault` the status body changes the card's height WITHOUT changing `cardPhaseKey`:
+    // nothing animates that, the next animation's `from` is the height after it, and both
+    // endpoints then agree with the code while the user saw a 20px jump.
+    //
+    // Scoped to the window between the phase changing and the first animate() call. A step
+    // AFTER an animation has finished is the other thing - `degraded` settles 611 -> 592 as
+    // the sends reason arrives, a content change inside one phase, which the ruling does not
+    // animate and should not. This row must not fail that, so it does not look at it.
+    // SKIPPED ONLY WHEN AN ANIMATION HELD THE CARD ACROSS BOTH SAMPLES. The first version
+    // skipped any pair where EITHER end was animating, which quietly excluded the one frame
+    // that matters: the step from the last un-animated height into an animation's opening
+    // frame is exactly where a snap hides, and `r1` alone was enough to hide it.
+    //
+    // Whole transition, not just the window before the first animate(). The animator is driven
+    // by the height now rather than by a phase key, so a content change inside one phase -
+    // `degraded` settling as its sends reason arrives - is animated like any other and no
+    // longer needs excusing.
+    let preSnap = 0, preSnapPair = "";
+    for (let i = 1; i < framesSeen.length; i++) {
+      const [, h0, r0] = framesSeen[i - 1];
+      const [, h1, r1] = framesSeen[i];
+      if (r0 && r1) continue;                         // in flight at both ends: travel, not a step
+      const d = Math.abs(h1 - h0);
+      if (d > preSnap) { preSnap = d; preSnapPair = `${h0.toFixed(1)} -> ${h1.toFixed(1)}`; }
+    }
 
     t(`${W} ${speed}: entering "${ph.name}" moves neither the hero copy, the fox nor the h1`, !moved,
       `copy ${before.copy}->${after.copy} fox ${before.fox}->${after.fox} h1 ${before.h1}->${after.h1}`);
@@ -201,10 +270,103 @@ for (const [W, H] of VIEWPORTS) {
           ? `${Math.round(before.card)} -> ${Math.round(after.card)} with NO height animation registered at all`
           : covering
             ? `animated ${covering.from.toFixed(1)} -> ${covering.to.toFixed(1)}px over ${covering.opts.duration}ms, finished, ending at the natural ${natural == null ? "?" : natural.toFixed(1)}px`
-            : `natural ${natural == null ? "?" : Math.round(natural)}px, and no animation finished the travel to it: ${anims.map((a) => `${a.from.toFixed(0)}->${a.to.toFixed(0)} ${a.opts.duration}ms ${a.state}`).join(", ") || "none registered"}`);
+            : `natural ${natural == null ? "?" : Math.round(natural)}px, and no animation finished the travel to it: ${anims.map((a) => { const pb = paintedBefore(a.at); return `${a.from.toFixed(0)}->${a.to.toFixed(0)} ${a.opts.duration}ms ${a.state} (last painted before it: ${pb == null ? "none" : pb.toFixed(1)})`; }).join(", ") || "none registered"}`);
+      t(`${W} ${speed}: the card never jumps on its way into "${ph.name}"`, preSnap <= 2,
+        preSnap > 2
+          ? `un-animated ${preSnapPair} (${preSnap.toFixed(1)}px) between two painted frames`
+          : `largest step between two painted frames with no animation across both: ${preSnap.toFixed(1)}px`);
     } else {
       console.log(`  --   ${W}: "${ph.name}" changed the card by ${delta.toFixed(1)}px, too little to judge the animation`);
     }
+  }
+
+  // ===== TWO CLIPPING BOXES ON ONE AXIS =====
+  // The height animation puts `overflow:hidden` on the CARD for 460ms and the design puts
+  // `overflow:auto` on the `.panel` inside it. Nobody had measured what they do to each other.
+  //
+  // WHAT THE MEASUREMENT SAID, and it is not what the design intends. `.card.claim` carries
+  // `max-height:100%`, but its containing block is `div.hero-grid`, whose height is auto - a
+  // percentage max-height against an indefinite height does not resolve, so it computes to
+  // `none`. The card is therefore NOT bounded, `flex:1 1 auto` on the panel has no slack to
+  // take, and the panel never scrolls: with a 1200px probe inside it the panel measured
+  // 1559 client and 1559 scroll, scrollTop refused to move off 0, and the CARD grew to 1702px
+  // in a 900px viewport.
+  //
+  // That is a consequence of a decision already taken, not a new defect. The one-screen clamp
+  // on the stage was deliberately removed because it swallowed content taller than the
+  // viewport; without it nothing above the card has a definite height, and the design's inner
+  // scroll box cannot work. So this row does not assert the design's behaviour - we chose the
+  // other one - it asserts what OUR choice has to deliver: a panel too tall for the screen
+  // makes the page scroll and stays reachable, rather than being swallowed.
+  {
+    const reach = await page.evaluate(() => {
+      const card = document.querySelector("#claim");
+      const panel = card && card.querySelector(":scope > .panel");
+      if (!card || !panel) return { ok: false, why: card ? "no .panel inside the card" : "no card" };
+      const probe = document.createElement("div");
+      probe.id = "tall-probe";
+      probe.style.cssText = "height:1200px;background:transparent";
+      panel.appendChild(probe);
+      const cardH = card.getBoundingClientRect().height;
+      const panelScrolls = (() => { panel.scrollTop = 150; const m = panel.scrollTop; panel.scrollTop = 0; return m > 0; })();
+      const target = probe.getBoundingClientRect().bottom + window.scrollY - window.innerHeight + 40;
+      window.scrollTo(0, Math.max(0, target));
+      const r = probe.getBoundingClientRect();
+      const x = Math.round(r.left + r.width / 2);
+      const y = Math.round(r.bottom - 20);
+      const hit = document.elementFromPoint(x, y);
+      const out = { ok: true, cardH, viewportH: window.innerHeight, panelScrolls,
+                    docScrollable: document.documentElement.scrollHeight > window.innerHeight + 1,
+                    reachable: !!(hit && (hit === probe || probe.contains(hit) || hit.contains(probe))),
+                    hit: hit ? (hit.id || hit.className || hit.tagName) : "nothing" };
+      probe.remove();
+      window.scrollTo(0, 0);
+      return out;
+    });
+    t(`${W} ${speed}: a panel too tall for the screen is reachable, not swallowed`,
+      reach.ok && reach.docScrollable && reach.reachable,
+      reach.ok
+        ? `card grew to ${Math.round(reach.cardH)}px in a ${reach.viewportH}px viewport, page scrollable ${reach.docScrollable}, bottom of the probe lands on ${reach.hit}; the design's inner scroll is inert here (panel scrolls: ${reach.panelScrolls})`
+        : reach.why);
+  }
+
+  // The other direction. While the card animates to a shorter height the content that no longer
+  // fits must be HIDDEN rather than spilling out below the card. Which box does the hiding is an
+  // implementation detail - the card's own `overflow:hidden` or the panel's `auto` - so the row
+  // asks the question the user can see: is anything from inside the card painting below it.
+  //
+  // The non-vacuity clause is the point. A card whose content fits has nothing to hide and would
+  // pass this on an empty promise, so the row also requires that there IS content out of view
+  // mid-flight. My first version asserted the panel's bottom fell past the card's, which is not
+  // what happens: the panel is `flex:1 1 auto`, so it shrinks WITH the card and scrolls its own
+  // content instead. That assertion failed on a card behaving correctly.
+  {
+    const clipping = await page.evaluate(async () => {
+      const card = document.querySelector("#claim");
+      const panel = card && card.querySelector(":scope > .panel");
+      if (!card || !panel) return { ok: false, why: "no card or panel" };
+      const from = card.getBoundingClientRect().height;
+      const to = Math.max(120, from - 220);
+      const run = card.animate([{ height: `${from}px` }, { height: `${to}px` }],
+        { duration: 460, easing: "cubic-bezier(.16,1,.3,1)" });
+      await new Promise((r) => setTimeout(r, 230));
+      const box = card.getBoundingClientRect();
+      const x = Math.round(box.left + box.width / 2);
+      const hit = document.elementFromPoint(x, Math.round(box.bottom + 12));
+      const out = {
+        ok: true, cardH: box.height, overflow: getComputedStyle(card).overflow,
+        hiddenContent: panel.scrollHeight - panel.clientHeight,
+        spills: !!(hit && card.contains(hit)),
+        hit: hit ? (hit.id || hit.className || hit.tagName) : "nothing",
+      };
+      run.cancel();
+      return out;
+    });
+    t(`${W} ${speed}: content the card has animated past is hidden, not spilled below it`,
+      clipping.ok && clipping.overflow === "hidden" && clipping.hiddenContent > 1 && !clipping.spills,
+      clipping.ok
+        ? `mid-flight card ${clipping.cardH.toFixed(1)}px, overflow ${clipping.overflow}, ${Math.round(clipping.hiddenContent)}px of content out of view, 12px below the card lands on ${clipping.hit}`
+        : clipping.why);
   }
 
   t(`${W} ${speed}: no console errors across the sweep`, errors.length === 0, errors.slice(0, 2).join(" | "));
