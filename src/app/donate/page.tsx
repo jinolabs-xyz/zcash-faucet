@@ -17,6 +17,7 @@
  * away says we do not is the same defect in new markup.
  */
 import { config, ZATOSHI_PER_TAZ } from "@/lib/config";
+import { dripsNow } from "@/lib/db";
 import { safeBalance } from "@/lib/zcash/send";
 import { readMinerHeartbeat } from "@/lib/miner/read";
 import { isActive } from "@/lib/miner/heartbeat";
@@ -36,6 +37,10 @@ export const metadata = {
 };
 
 export default async function Donate() {
+  // The strip's counts, read on the SERVER so they are in the HTML before anything
+  // hydrates. Same call /api/status makes. This replaced a client fetch the Shell could
+  // never read, and a count that needs a script is absent for the reader these pages are for.
+  const drips = await dripsNow();
   const donation = config.donationAddress.trim();
   const mining = config.miningAddress.trim();
   const maintenance = config.maintenanceAddress.trim();
@@ -52,7 +57,7 @@ export default async function Donate() {
   const spendable = balanceZat === null ? null : Number(balanceZat) / Number(ZATOSHI_PER_TAZ);
 
   return (
-    <Shell nav={{ kind: "links" }} badge={CHECKING_BADGE} status={{ maintenanceAddress: maintenance }}>
+    <Shell nav={{ kind: "links" }} badge={CHECKING_BADGE} status={{ maintenanceAddress: maintenance, drips }}>
       <section className="view hero sub" aria-label="Donate TAZ">
         <div className="hero-grid two">
           <div className="hero-copy">
@@ -73,9 +78,19 @@ export default async function Donate() {
                   on the site to get that wrong. */}
               The tank holds <b>{spendable == null ? "unknown" : `${Math.round(spendable).toLocaleString("en-US")} TAZ`}</b>. Supporting the
               running costs rather than the tank? That takes real mainnet ZEC, so{" "}
-              {/* Conditional for the same reason the footer link is: an unconditional link
-                  to a page that 404s is worse than no link. */}
-              {maintenance ? <a href="/fund">fund the project</a> : <span>that needs a mainnet address we do not have set</span>} instead.
+              {/* Conditional for the same reason the footer link is: an unconditional link to a
+                  page with nothing on it is worse than no link. THE FULL STOP LIVES IN EACH
+                  BRANCH, because "instead" belongs to the link and only to the link: hanging it
+                  outside the ternary gave the no-address deployment "...that needs a mainnet
+                  address we do not have set instead.", which is a sentence nobody wrote. Two
+                  endings, each one whole. */}
+              {maintenance ? (
+                <>
+                  <a href="/fund">fund the project</a> instead.
+                </>
+              ) : (
+                <span>that needs a mainnet address this deployment has not set.</span>
+              )}
             </p>
           </div>
           <article className="card claim feature">

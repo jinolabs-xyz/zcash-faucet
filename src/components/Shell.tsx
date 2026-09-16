@@ -113,35 +113,6 @@ function MoonIcon() {
   );
 }
 
-/**
- * ONE FETCH, ON MOUNT, FOR THE SUBPAGES ONLY.
- *
- * The index already polls and passes its own status down, so this must not run there or
- * the page would fetch twice for one masthead. On /terms, /donate and /fund nothing else
- * asks, and the ruling (CTO, 21:13Z) is explicit that a JavaScript reader should get the
- * live state rather than a permanent CHECKING.
- *
- * ONE FETCH RATHER THAN A POLL, because these are documents. The index polls because its
- * claim button depends on readiness changing under the reader; a terms page does not, and
- * three pages quietly polling a status endpoint is a cost with no reader behind it.
- *
- * FAILURE IS SILENT AND LEAVES CHECKING IN PLACE. No error state, no retry: the badge's
- * job here is to say what we know, and "we asked and could not tell" is the same thing to
- * a reader as "we have not asked yet". What it must never do is assert a state.
- */
-function useSubpageStatus(enabled: boolean): ShellStatus | null {
-  const [status, setStatus] = useState<ShellStatus | null>(null);
-  useEffect(() => {
-    if (!enabled) return;
-    let alive = true;
-    fetch("/api/status")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (alive && d) setStatus(d as ShellStatus); })
-      .catch(() => {});
-    return () => { alive = false; };
-  }, [enabled]);
-  return status;
-}
 
 export function Shell({
   nav,
@@ -173,8 +144,18 @@ export function Shell({
   // is the same precondition as the server-rendered version: something that owns "what word
   // describes the faucet right now" and can be asked by more than one page. Counts are
   // different and are fetched: a drip total is a fact we were handed, not a verdict we made.
-  const fetched = useSubpageStatus(nav.kind === "links");
-  const shown = status ?? fetched;
+  // THE COUNTS COME FROM THE SERVER, and this used to be a client fetch that could never be
+  // read. `shown = status ?? fetched` took the page's own object whenever it was non-null, and
+  // all three subpages always pass one - so the request fired on every subpage mount, cost a
+  // 460 to 770 ms round trip, and was discarded, while the strip rendered dashes where the
+  // snapshot shows counts.
+  //
+  // Fetching harder was the wrong repair. These pages are `force-dynamic` and already read the
+  // server directly, and their whole point is being readable with no script running: a count
+  // that arrives after hydration is absent for exactly the reader this design is for. So each
+  // page passes `drips` from `countDrips`, the same call `/api/status` makes, and the strip is
+  // correct in the HTML before anything hydrates. One fewer request per view, and no state.
+  const shown = status;
   const shownBadge = badge;
 
   return (

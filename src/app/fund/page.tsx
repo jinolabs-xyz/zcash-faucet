@@ -13,6 +13,7 @@
  * blank where an address should be.
  */
 import { config } from "@/lib/config";
+import { dripsNow } from "@/lib/db";
 import { CopyAddress } from "../donate/CopyAddress";
 import { Shell, CHECKING_BADGE } from "@/components/Shell";
 
@@ -27,11 +28,15 @@ export const metadata = {
   description: "Mainnet ZEC toward the server and the domain that run this faucet.",
 };
 
-export default function Fund() {
+export default async function Fund() {
+  // The strip's counts, read on the SERVER so they are in the HTML before anything
+  // hydrates. Same call /api/status makes. This replaced a client fetch the Shell could
+  // never read, and a count that needs a script is absent for the reader these pages are for.
+  const drips = await dripsNow();
   const maintenance = config.maintenanceAddress.trim();
 
   return (
-    <Shell nav={{ kind: "links" }} badge={CHECKING_BADGE} status={{ maintenanceAddress: maintenance }}>
+    <Shell nav={{ kind: "links" }} badge={CHECKING_BADGE} status={{ maintenanceAddress: maintenance, drips }}>
       <section className="view hero sub" aria-label="Fund the project">
         <div className="hero-grid two">
           <div className="hero-copy">

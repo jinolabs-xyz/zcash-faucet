@@ -34,7 +34,15 @@ export function CopyAddress({ address, label }: { address: string; label: string
 
   return (
     <>
-      <button className="btn btn-secondary btn-sm" onClick={() => void copy()}>
+      {/* `.tag`, WHICH IS WHAT THE SNAPSHOT USES for this control (donate.html:482), not the
+          legacy `btn btn-secondary btn-sm` from globals.css. Those three classes are styled by
+          the retired sheet alone, so the copy button was the one control on these pages still
+          wearing the old design.
+          DEPARTURE, DECLARED: the snapshot's button also carries `<canvas class="g"
+          data-glyph="copy">`. The glyph module lands with #567 and duplicating it here would
+          give one component two definitions, so the control ships with the design's shape and
+          without its icon, and the icon follows in the slice that owns glyphs. */}
+      <button className="tag" type="button" onClick={() => void copy()}>
         {copied ? "Copied ✓" : "Copy address"}
       </button>
       <span className="sr-only" role="status">{copied ? `${label} copied.` : ""}</span>

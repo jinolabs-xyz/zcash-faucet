@@ -376,6 +376,19 @@ let seedOnce: Promise<void> | null = null;
  * otherwise. Returns null when the ledger will not answer: an unknown count is not
  * zero, same rule as the balance.
  */
+/**
+ * The drip counts as of now, for a server component.
+ *
+ * `countDrips` takes the clock so its callers can be tested at a fixed instant, and that is
+ * right. But a React server component may not read the clock during render - `Date.now()` in a
+ * component body is an impure call and the lint rule says so correctly. This wrapper does the
+ * reading, one level out, so the pages ask a plain async function for a fact and the testable
+ * signature underneath keeps its parameter.
+ */
+export async function dripsNow(network: DripNetwork = "taz"): Promise<DripCounts | null> {
+  return countDrips(Date.now(), network);
+}
+
 export async function countDrips(nowMs: number, network: DripNetwork = "taz"): Promise<DripCounts | null> {
   try {
     // A rejected seed must not be cached: awaiting a poisoned promise forever

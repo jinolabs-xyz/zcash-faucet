@@ -15,6 +15,7 @@
  * tell what they are agreeing to has not been told anything, whatever the word count says.
  */
 import { config } from "@/lib/config";
+import { dripsNow } from "@/lib/db";
 import { Shell, CHECKING_BADGE } from "@/components/Shell";
 
 export const runtime = "nodejs";
@@ -25,12 +26,16 @@ export const metadata = {
   description: "Who operates this faucet, and on what basis it is provided.",
 };
 
-export default function Terms() {
+export default async function Terms() {
+  // The strip's counts, read on the SERVER so they are in the HTML before anything
+  // hydrates. Same call /api/status makes. This replaced a client fetch the Shell could
+  // never read, and a count that needs a script is absent for the reader these pages are for.
+  const drips = await dripsNow();
   const { operator, operatorUrl, contact, network } = config;
   const host = operatorUrl ? operatorUrl.replace(/^https?:\/\//, "") : null;
 
   return (
-    <Shell nav={{ kind: "links" }} badge={CHECKING_BADGE} status={{ maintenanceAddress: config.maintenanceAddress.trim() }}>
+    <Shell nav={{ kind: "links" }} badge={CHECKING_BADGE} status={{ maintenanceAddress: config.maintenanceAddress.trim(), drips }}>
       <section className="view hero sub" aria-label="Terms of use">
         <div className="hero-copy" style={{ width: "100%" }}>
           <p className="eyebrow mono">Zcash testnet faucet</p>
@@ -58,14 +63,20 @@ export default function Terms() {
                 one fact in two sections is how they drift apart, and a trademark statement
                 that drifts is the one you cannot afford to lose. */}
             <p>
-              This faucet is operated by <b>{operator}</b>
+              {/* NO <b>, because the snapshot has none (terms.html:425). The name is
+                  config-driven and that departure is argued above; the EMPHASIS was not
+                  argued anywhere, it just crept in. */}
+              This faucet is operated by {operator}
               {host ? <> (<a href={operatorUrl}>{host}</a>)</> : null}, an independent community project, not
               affiliated with, sponsored by, or endorsed by the Electric Coin Company or the Zcash Foundation.
             </p>
 
             <h2>What you get</h2>
             <p>
-              Testnet ZEC (TAZ) on the Zcash <b>{network}</b> network, free of charge, for testing and development.{" "}
+              {/* The snapshot reads "on the Zcash testnet," - no emphasis and no second
+                  noun. `{network}` stays config-driven so a fork publishes its own; the <b>
+                  and the word "network" were drift on a page whose wording is the product. */}
+              Testnet ZEC (TAZ) on the Zcash {network}, free of charge, for testing and development.{" "}
               <b>TAZ has no monetary value</b> and is not a currency, a security, an investment, or a promise of
               anything. It cannot be exchanged for money, and we do not buy it back.
             </p>

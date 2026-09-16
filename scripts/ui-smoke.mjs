@@ -1702,6 +1702,59 @@ async function checkSubpages(browser, base) {
 }
 
 /**
+ * /donate WITH A REAL ADDRESS IN IT, which is the configuration CI never runs.
+ *
+ * The review found /donate scrolling on production: `redesign-hero.css`'s `.stage .card.claim`
+ * padding, written for the index's claim card, lands on the subpage cards too, and with a
+ * 166-character unified address the card grows past the stage - scrollHeight 924 against a 900
+ * viewport, footer cut by 6 px at 1536x864.
+ *
+ * CI COULD NOT SEE IT because it configures no addresses, and it cannot be given them without
+ * editing a workflow file two other PRs are holding. So this reproduces the height that matters
+ * rather than waiting for the env: a production-length address in the panel, then measure. The
+ * DOM measured is the DOM the configured page renders - a `code.addr` of 166 characters in the
+ * same panel - and the property is the card's geometry, which does not care where the string
+ * came from. A check that can only run in a configuration nobody runs is the SKIP problem in a
+ * different coat.
+ */
+async function checkDonateFitsWithAnAddress(browser, base) {
+  const ADDR = "utest1" + "q".repeat(160);          // 166 chars, production's shape
+  for (const [w, h] of [[1440, 900], [1536, 864], [1280, 800]]) {
+    const ctx = await browser.newContext({ viewport: { width: w, height: h } });
+    const page = await ctx.newPage();
+    await page.goto(base + "/donate", { waitUntil: "networkidle" });
+
+    const injected = await page.evaluate((addr) => {
+      const panel = document.querySelector(".card.claim .panel, .card.feature .panel");
+      if (!panel) return false;
+      let el = panel.querySelector("code.addr");
+      if (!el) {                                     // the not-configured page renders none
+        el = document.createElement("code");
+        el.className = "addr";
+        panel.insertBefore(el, panel.querySelector(".hint"));
+      }
+      el.textContent = addr;
+      return true;
+    }, ADDR);
+    await page.waitForTimeout(150);
+
+    const fit = await page.evaluate(() => {
+      const stage = document.querySelector(".stage");
+      const ftr = document.querySelector("footer.ftr");
+      return {
+        over: stage ? stage.scrollHeight - stage.clientHeight : -1,
+        footerBottom: ftr ? Math.round(ftr.getBoundingClientRect().bottom) : -1,
+        viewport: window.innerHeight,
+      };
+    });
+    ok(`/donate with a ${ADDR.length}-char address still fits one screen at ${w}x${h}`,
+      injected && fit.over <= 1 && fit.footerBottom <= fit.viewport + 1,
+      `stage overflows by ${fit.over}px, footer bottom ${fit.footerBottom} against viewport ${fit.viewport}`);
+    await ctx.close();
+  }
+}
+
+/**
  * ONE DEFINITION OF THE MASTHEAD, and a count that must be exactly one.
  *
  * The header lived inline in page.tsx while the index was the only page that had one. S5 gives
@@ -2084,6 +2137,7 @@ try {
   await checkMobile(browser, BASE);
 
   await checkSubpages(browser, BASE);
+  await checkDonateFitsWithAnAddress(browser, BASE);
   checkSingleHeader();
 
   // Last, because it navigates away and intentionally hits a 404.

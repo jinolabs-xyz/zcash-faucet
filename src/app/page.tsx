@@ -328,7 +328,6 @@ export default function Home() {
   // PAPER IS THE DEFAULT NOW (the approved redesign is a light design). A visitor who
   // has chosen a theme keeps it: the stored key is unchanged, so only people who never
   // toggled see the new default.
-  const [theme, setTheme] = useState<"paper" | "ink">("paper");
   const [view, setView] = useState<View>("claim");
   const [tx, setTx] = useState<Tx | null>(null);
   const [copied, setCopied] = useState<CopyTarget | null>(null);
@@ -593,17 +592,11 @@ export default function Home() {
   }, [tx?.txid]);
 
   useEffect(() => () => { powWorker.current?.terminate(); powWorker.current = null; }, []);
-  useEffect(() => { const t = localStorage.getItem("zfaucet_theme"); if (t === "paper" || t === "ink") setTheme(t); }, []);
-  useEffect(() => {
-    localStorage.setItem("zfaucet_theme", theme);
-    // The app shell is a div, so switching its class leaves the document element
-    // on the old colour and the overscroll bounce shows the wrong one (#143).
-    // Same reason for theme-color: it paints the browser's own chrome.
-    document.documentElement.dataset.theme = theme;
-    document
-      .querySelector('meta[name="theme-color"]')
-      ?.setAttribute("content", theme === "ink" ? "#171615" : "#f0f0f0");
-  }, [theme]);
+  // THE THEME LIVES IN THE SHELL NOW, and this page kept a second copy of it: a state nothing
+  // rendered from, plus an effect still writing `zfaucet_theme` and `data-theme` on every
+  // change. Two writers to one key with no coordination, where the only reason they agreed is
+  // that both happened to start at "paper". The Shell owns the toggle, the storage and the
+  // document attribute for all four pages; a page that renders <Shell> does not get a vote.
 
   // Solve the server's proof-of-work challenge in a worker so the tab never
   // freezes. Resolves with the solution to hand back with the claim. Rejects with
