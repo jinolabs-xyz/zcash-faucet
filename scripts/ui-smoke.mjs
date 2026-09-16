@@ -1582,6 +1582,71 @@ async function checkSubpages(browser, base) {
       nav.every((n, i) => n.tag === "A" && n.href === NAV[i][1]),
       JSON.stringify(nav));
 
+    // THE CARD'S OWN BOX, asserted as a PROPERTY rather than as geometry, and that choice is
+    // the finding. I first pinned this as "the page fits one screen with a 166-char address",
+    // which is the shape the review reported (scrollHeight 924 at 1440x900). That assertion
+    // SURVIVED the mutant that removes all three `.card.claim` rules: on this stack the card
+    // still fits at every viewport I run, so the overflow the reviewer saw does not reproduce
+    // here and a geometric check cannot fail for it on my machine.
+    //
+    // Geometry depends on the content, the font and the viewport chrome. What the fix actually
+    // establishes does not: the subpage card carries the snapshot's box (donate.html 147-149)
+    // instead of S2a's index placeholder, so `padding` is 0 and `max-height` is a real clamp.
+    // Asserting the rule's effect is the assertion that can fail wherever it is run.
+    if (path !== "/terms") {
+      const card = await page.evaluate(() => {
+        const el = document.querySelector(".view.sub .card.claim");
+        if (!el) return null;
+        const cs = getComputedStyle(el);
+        return { pad: [cs.paddingTop, cs.paddingRight, cs.paddingBottom, cs.paddingLeft].map(parseFloat),
+                 maxHeight: cs.maxHeight, display: cs.display, panelOverflow:
+                   (() => { const p2 = el.querySelector(":scope > .panel"); return p2 ? getComputedStyle(p2).overflowY : "(no panel)"; })() };
+      });
+      ok(`${path} card wears the snapshot's box, not the index's placeholder padding`,
+        !!card && card.pad.every((v) => v === 0) && card.maxHeight !== "none" && card.display === "flex",
+        card ? `padding ${card.pad.join("/")}px, max-height ${card.maxHeight}, display ${card.display}, panel overflow-y ${card.panelOverflow}` : "no subpage card");
+    }
+
+    // THE DESIGN'S TOP PADDING, which is the 35 px the review measured. `.comp > .view.hero`
+    // carries `padding-top:calc(2.5*var(--u))` and S2a had rescoped it to `.views >` for the
+    // index, so it stopped matching when these pages began rendering their view directly in
+    // `.comp`. Nothing failed: every element simply sat 35 px high, which is what an unmatched
+    // selector looks like from the outside.
+    const heroPad = await page.evaluate(() => {
+      const view = document.querySelector(".view.hero.sub");
+      if (!view) return null;
+      const probe = document.createElement("div");
+      probe.style.cssText = "position:absolute;visibility:hidden;width:var(--u)";
+      view.appendChild(probe);
+      const u = probe.getBoundingClientRect().width;
+      probe.remove();
+      return { padTop: parseFloat(getComputedStyle(view).paddingTop), u, want: 2.5 * u };
+    });
+    ok(`${path} sits where the design puts it, not ${"2.5"} units above`,
+      !!heroPad && heroPad.u > 0 && Math.abs(heroPad.padTop - heroPad.want) < 1,
+      heroPad ? `padding-top ${heroPad.padTop}px against 2.5*${heroPad.u.toFixed(2)}=${heroPad.want.toFixed(1)}px` : "no hero view");
+
+    // THE CONTROLS WEAR THE DESIGN'S CLASS, not the retired sheet's. The snapshot's copy
+    // control is a `.tag` (donate.html:482); ours was `btn btn-secondary btn-sm`, three classes
+    // that only globals.css styles, so it was the last control on these pages still dressed by
+    // the sheet the redesign replaces. Asserted by ABSENCE of the legacy classes as well as
+    // presence of the design's, because adding `tag` beside them would satisfy a presence-only
+    // check while changing nothing.
+    const controls = await page.evaluate(() => {
+      const out = [];
+      for (const b of document.querySelectorAll(".view.sub button")) {
+        const cls = (b.className || "").toString();
+        out.push({ text: (b.textContent || "").trim().slice(0, 14), cls,
+                   legacy: /\bbtn(-|\b)/.test(cls), design: /\btag\b/.test(cls) });
+      }
+      return out;
+    });
+    const dressed = controls.filter((c) => c.legacy || !c.design);
+    ok(`${path} controls wear the design's class, not the retired sheet's`,
+      controls.length === 0 || dressed.length === 0,
+      controls.length === 0 ? "no controls on this page"
+        : dressed.map((c) => `${c.text}="${c.cls}"`).join(", ") || `${controls.length} control(s), all .tag`);
+
     // THE BADGE NEVER ASSERTS A STATE IT HAS NOT ESTABLISHED (ruling 21:13Z, #573). NOT READY
     // or UNKNOWN as a first paint to someone reading the terms is a false claim about a
     // service that may be perfectly healthy.
