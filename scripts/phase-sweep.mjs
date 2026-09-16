@@ -299,34 +299,45 @@ for (const [W, H] of VIEWPORTS) {
   // other one - it asserts what OUR choice has to deliver: a panel too tall for the screen
   // makes the page scroll and stays reachable, rather than being swallowed.
   {
+    // TWO THINGS WERE WRONG WITH THIS ROW AND THE CLAMP MUTANT FOUND BOTH. It scrolled `window`,
+    // but `.stage` is `height:100dvh;overflow:auto` (redesign-shell.css:43), so the document is
+    // not the scroller and `window.scrollTo` moved nothing. And it counted a hit as reachable
+    // when the hit CONTAINED the probe - which any ancestor does, so `document.body` passed it.
+    // Restoring the one-screen clamp left the row green at 89/0 while the content was genuinely
+    // swallowed. `scrollIntoView` walks whatever the real scroll container is, and the hit test
+    // now only accepts the marker itself or something inside it.
     const reach = await page.evaluate(() => {
       const card = document.querySelector("#claim");
       const panel = card && card.querySelector(":scope > .panel");
       if (!card || !panel) return { ok: false, why: card ? "no .panel inside the card" : "no card" };
       const probe = document.createElement("div");
       probe.id = "tall-probe";
-      probe.style.cssText = "height:1200px;background:transparent";
+      probe.style.cssText = "height:1200px";
+      const marker = document.createElement("span");
+      marker.id = "tall-probe-end";
+      marker.textContent = "end";
+      marker.style.cssText = "display:block;height:24px;margin-top:1176px";
+      probe.appendChild(marker);
       panel.appendChild(probe);
       const cardH = card.getBoundingClientRect().height;
-      const panelScrolls = (() => { panel.scrollTop = 150; const m = panel.scrollTop; panel.scrollTop = 0; return m > 0; })();
-      const target = probe.getBoundingClientRect().bottom + window.scrollY - window.innerHeight + 40;
-      window.scrollTo(0, Math.max(0, target));
-      const r = probe.getBoundingClientRect();
+      marker.scrollIntoView({ block: "center" });
+      const r = marker.getBoundingClientRect();
       const x = Math.round(r.left + r.width / 2);
-      const y = Math.round(r.bottom - 20);
+      const y = Math.round(r.top + r.height / 2);
       const hit = document.elementFromPoint(x, y);
-      const out = { ok: true, cardH, viewportH: window.innerHeight, panelScrolls,
-                    docScrollable: document.documentElement.scrollHeight > window.innerHeight + 1,
-                    reachable: !!(hit && (hit === probe || probe.contains(hit) || hit.contains(probe))),
-                    hit: hit ? (hit.id || hit.className || hit.tagName) : "nothing" };
+      const out = {
+        ok: true, cardH, viewportH: window.innerHeight,
+        inView: r.top >= 0 && r.bottom <= window.innerHeight + 1,
+        reachable: !!(hit && (hit === marker || marker.contains(hit))),
+        hit: hit ? (hit.id || hit.className || hit.tagName) : "nothing",
+      };
       probe.remove();
-      window.scrollTo(0, 0);
       return out;
     });
     t(`${W} ${speed}: a panel too tall for the screen is reachable, not swallowed`,
-      reach.ok && reach.docScrollable && reach.reachable,
+      reach.ok && reach.inView && reach.reachable,
       reach.ok
-        ? `card grew to ${Math.round(reach.cardH)}px in a ${reach.viewportH}px viewport, page scrollable ${reach.docScrollable}, bottom of the probe lands on ${reach.hit}; the design's inner scroll is inert here (panel scrolls: ${reach.panelScrolls})`
+        ? `card grew to ${Math.round(reach.cardH)}px in a ${reach.viewportH}px viewport; scrolled into view: ${reach.inView}; the bottom of the probe lands on ${reach.hit}`
         : reach.why);
   }
 

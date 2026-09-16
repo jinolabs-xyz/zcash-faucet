@@ -350,11 +350,8 @@ export default function Home() {
   // to.
   const cardRef = useRef<HTMLElement | null>(null);
   const cardFrom = useRef<number | null>(null);
-  const cardPending = useRef<number | null>(null);
   const cardTarget = useRef<number | null>(null);
   const cardOrigin = useRef<number | null>(null);
-  const cardOverflow = useRef<string | null>(null);
-  const cardRaf = useRef<number | null>(null);
   const cardAnim = useRef<Animation | null>(null);
   const [addr, setAddr] = useState("");
   const [touched, setTouched] = useState(false);
@@ -1023,11 +1020,12 @@ export default function Home() {
     if (from == null) return;                       // first paint has nothing to animate from
     // A change under a pixel is not a phase change, it is a countdown digit changing width.
     if (Math.abs(to - from) < 1) return;
-    // CAPTURED ONCE PER RUN OF ANIMATIONS, not once per animation. Re-reading it on a
-    // continuation reads back the "hidden" the previous one set, and restoring THAT leaves the
-    // inline style behind for good.
-    if (cardOverflow.current == null) cardOverflow.current = el.style.overflow;
-    el.style.overflow = "hidden";
+    // NO INLINE `overflow:hidden`. The sheet already clips this box - redesign-hero.css:23 is
+    // `.card{...overflow:hidden...}` - so setting it per animation, capturing the previous value
+    // and restoring it was three moving parts guarding something already true, and the capture
+    // had a bug of its own: a continuation read back the "hidden" the last animation set, so the
+    // restore left the inline style behind permanently. The sweep asserts the clipping against
+    // the sheet, which is where it lives.
     const run = el.animate(
       [{ height: `${from}px` }, { height: `${to}px` }],
       { duration: 460, easing: "cubic-bezier(.16,1,.3,1)" },
@@ -1040,15 +1038,12 @@ export default function Home() {
     const restore = () => {
       if (cardAnim.current !== run) return;         // superseded: the new one owns the element
       cardAnim.current = null;
-      el.style.overflow = cardOverflow.current ?? "";
-      cardOverflow.current = null;
       // THE SETTLED HEIGHT, RECORDED HERE, because an animation ending is not a render. Nothing
       // re-runs the recorder below when the card comes to rest, so without this `cardFrom` stays
       // at whatever it held before the animation and the next transition starts from a height
       // the card left 460ms ago.
       const settled = el.getBoundingClientRect().height;
       cardFrom.current = settled;
-      cardPending.current = settled;
     };
     run.onfinish = restore;
     run.oncancel = restore;
@@ -1085,18 +1080,16 @@ export default function Home() {
     // While one of ours is in flight the animator does not consult `cardFrom` anyway - it reads
     // the live interpolated box, which is what is actually on screen - and `restore` above puts
     // the settled height back when it ends.
+    // This held the measurement PENDING and promoted it on the next animation frame, so that
+    // only a height a frame had actually painted could become `cardFrom`. It was the right fix
+    // for the keyed animator, where a commit could be measured and then skipped. Driving the
+    // animator off the height removed the situation: there is no skipped commit any more,
+    // because a commit that changes the height IS a transition and animates itself. Deleting
+    // the promotion changed no row of the sweep - 89/0 either way - so it is gone rather than
+    // kept as belt-and-braces nothing tests.
     if (cardAnim.current) return;
-    cardPending.current = el.getBoundingClientRect().height;
-    if (cardRaf.current != null) return;
-    if (typeof requestAnimationFrame !== "function") { cardFrom.current = cardPending.current; return; }
-    cardRaf.current = requestAnimationFrame(() => {
-      cardRaf.current = null;
-      cardFrom.current = cardPending.current;
-    });
+    cardFrom.current = el.getBoundingClientRect().height;
   });
-  useEffect(() => () => {
-    if (cardRaf.current != null && typeof cancelAnimationFrame === "function") cancelAnimationFrame(cardRaf.current);
-  }, []);
   const c = check(addr);
   const badgeShow = c.ok || ("label" in c && !!c.label);
   const remain = Math.max(0, cooldownEnd - now);
