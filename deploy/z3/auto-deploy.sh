@@ -175,7 +175,11 @@ ci_gate() {
   rm -f "$err"
   body="$(printf '%s' "$all_runs" | jq -c '{check_runs: .}' 2>/dev/null)" \
     || { log "REFUSING $(git rev-parse --short "$REMOTE"): check-runs response did not parse"; return 2; }
-  [ "$pages" -lt 5 ] || log "note: read $pages pages of check-runs for $(git rev-parse --short "$REMOTE"); if a required job still reads absent the answer is larger than this gate follows"
+  # WHAT THE NOTE IS FOR: saying the read was TRUNCATED, not that it was long. Counting pages
+  # cannot tell those apart - an answer that is exactly five pages is complete, and warning about
+  # it sends someone looking for runs that are not there (SDE-UI, review of #634). A next-link
+  # still in hand when the loop stops is the truncation itself.
+  [ -z "$page_url" ] || log "note: stopped after $pages pages of check-runs for $(git rev-parse --short "$REMOTE") with more still offered; if a required job reads absent the answer is larger than this gate follows"
   # One line per required job: "<name> <status> <conclusion>" for its NEWEST run
   # (a rerun supersedes the run it replaced), or "<name> absent -" when it has no run.
   local verdicts

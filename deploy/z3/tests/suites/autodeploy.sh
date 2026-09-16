@@ -40,7 +40,7 @@ ad_env() {
   export STUB_CHECKS_JSON="$T/check-runs.json" STUB_CURL_LOG="$T/curl.calls"
   # One page unless a case asks for more. Clearing these HERE and not at the end of the cases
   # that set them is what keeps a later case from inheriting a paginating API.
-  unset STUB_CHECKS_PAGE2 STUB_CHECKS_ALWAYS_NEXT
+  unset STUB_CHECKS_PAGE2 STUB_CHECKS_ALWAYS_NEXT STUB_CHECKS_PAGES STUB_CHECKS_LAST
   : > "$STUB_CURL_LOG"
   cat > "$T/bin/curl" <<'CURL'
 #!/usr/bin/env bash
@@ -70,6 +70,17 @@ case "$*" in
       # that ends this.
       [ -n "$hdrfile" ] && printf 'HTTP/2 200\r\n%s\r\n\r\n' "$nexthdr" > "$hdrfile"
       cat "$STUB_CHECKS_JSON"
+    elif [ -n "${STUB_CHECKS_PAGES:-}" ]; then
+      # An answer that is exactly N pages and then ENDS. The page number is how many check-runs
+      # calls are already in the log, this one included, because the log line is written above.
+      n="$(grep -c 'check-runs' "$STUB_CURL_LOG")"
+      if [ "$n" -lt "$STUB_CHECKS_PAGES" ]; then
+        [ -n "$hdrfile" ] && printf 'HTTP/2 200\r\n%s\r\n\r\n' "$nexthdr" > "$hdrfile"
+        cat "$STUB_CHECKS_JSON"
+      else
+        [ -n "$hdrfile" ] && printf 'HTTP/2 200\r\n\r\n' > "$hdrfile"
+        cat "${STUB_CHECKS_LAST:-$STUB_CHECKS_JSON}"
+      fi
     elif [ -n "${STUB_CHECKS_PAGE2:-}" ] && [ -f "$STUB_CHECKS_PAGE2" ]; then
       case "$*" in
         *page=2*)
@@ -828,10 +839,26 @@ CALLS="$(grep -c 'check-runs' "$STUB_CURL_LOG" || true)"
 check "an API that always offers another page is read exactly 5 times, not forever" \
   "[ '$CALLS' = 5 ]"
 check "and hitting the bound says so, so 'absent' is not read as 'CI never ran'" \
-  "grep -q 'read 5 pages of check-runs' '$T/ci-loop.log'"
+  "grep -q 'stopped after 5 pages of check-runs' '$T/ci-loop.log'"
 check "and it did not ship a commit whose required jobs it never found" \
   "[ ! -s '$REDEPLOY_LOG' ]"
 unset STUB_CHECKS_ALWAYS_NEXT
+
+echo "== auto-deploy: an answer that is exactly as long as the bound is COMPLETE, not truncated"
+# Counting pages cannot tell a five-page answer that ENDED from one that was cut off, and warning
+# about the first sends an operator looking for runs that do not exist (SDE-UI, review of #634).
+ad_env
+export AUTODEPLOY_STATE_FILE="$T/last-processed"
+ad_advance src/page.tsx
+export STUB_CHECKS_PAGES=5 STUB_CHECKS_LAST="$T/check-runs.last.json"
+ci_fixture probe:completed:success
+ci_fixture_into "$STUB_CHECKS_LAST" 100 green
+bash "$AD" > "$T/ci-exactly5.log" 2>&1
+check "a five-page answer is read to its end and ships" \
+  "[ $? -eq 0 ] && [ -s '$REDEPLOY_LOG' ]"
+check "and it is not reported as truncated, because a fifth page that ends IS the whole answer" \
+  "! grep -q 'stopped after' '$T/ci-exactly5.log'"
+unset STUB_CHECKS_PAGES STUB_CHECKS_LAST
 
 echo "== auto-deploy: the fork-park marker refuses to restart even an ACTIVE miner (R-12)"
 # THE SEQUENCE THIS EXISTS FOR, 2026-09-15: a deploy started a miner that had been parked,
