@@ -220,3 +220,67 @@ test("and an _uncompared entry the app no longer imports is stale", () => {
   assert.match(r.out, /Stale declaration/);
 });
 
+// THE GATE'S ON DIRECTION HAD NO TEST (CTO red-team). Everything above drives the gate while it
+// is OFF: `transcriptionComplete` hardcoded false stayed 11/11 and repo 213/0, and `divergent`
+// never including `dropped` stayed 11/11 too. A gate whose whole purpose is to start enforcing
+// DROPPED at the end of the transcription had no case in which it enforced anything - which is
+// the same defect as an assertion that cannot fail, aimed at the half nobody was looking at.
+const ALL_VIEWS = ["claim", "status", "analytics", "tools"]
+  .map((v) => `<section data-view="${v}">x</section>`).join("\n");
+const SHELL_SRC = 'export function Shell(){ return <div className="stage" /> }\n';
+const PAGE_IN_SHELL = 'import { Shell } from "@/components/Shell";\nexport default function P(){ return <Shell>x</Shell> }\n';
+const ALL_PAGES = { terms: PAGE_IN_SHELL, donate: PAGE_IN_SHELL, fund: PAGE_IN_SHELL };
+// The spec has a rule we do not ship: DROPPED, and only gated once everything has landed.
+const SPEC_WITH_EXTRA = ".a{color:red}\n.gone{color:blue}\n";
+
+test("with everything wired, a DROPPED rule is a divergence and fails", () => {
+  const r = runParity({
+    spec: SPEC_WITH_EXTRA, shipped: ".a{color:red}\n",
+    entry: ALL_VIEWS, shell: SHELL_SRC, pages: ALL_PAGES,
+  });
+  assert.match(r.out, /transcription is complete \(4 views wired, 3 pages in the shell\)/);
+  assert.equal(r.code, 1);
+  assert.match(r.out, /\.gone/);
+});
+
+test("and the same tree with one view unwired leaves DROPPED ungated", () => {
+  const threeViews = ["claim", "status", "analytics"]
+    .map((v) => `<section data-view="${v}">x</section>`).join("\n");
+  const r = runParity({
+    spec: SPEC_WITH_EXTRA, shipped: ".a{color:red}\n",
+    entry: threeViews, shell: SHELL_SRC, pages: ALL_PAGES,
+  });
+  assert.match(r.out, /3\/4 views wired/);
+  assert.equal(r.code, 0);
+});
+
+test("and with one page out of the shell, likewise", () => {
+  const r = runParity({
+    spec: SPEC_WITH_EXTRA, shipped: ".a{color:red}\n",
+    entry: ALL_VIEWS, shell: SHELL_SRC,
+    pages: { ...ALL_PAGES, fund: "export default function P(){ return <div>x</div> }\n" },
+  });
+  assert.match(r.out, /2\/3 pages in the shell/);
+  assert.equal(r.code, 0);
+});
+
+// AND THE VIEW READER ITSELF, which had no fixture at all: a view still carrying
+// `legacy-measure` is NOT wired, which is the distinction the reader exists to make. The real
+// markup puts the class and the attribute on ONE element - `<section className="view
+// legacy-measure" data-view="status">` - and that is the shape asserted here.
+//
+// My first version of this fixture NESTED a view section inside a legacy-measure section and it
+// reported 4 of 4. That is true of the reader - it scans back to the nearest `<section` and a
+// nested one hides the outer class - but it is not a shape the app produces, so asserting it
+// would have been testing an invented page. Left as a note instead: the guard is positional,
+// and wrapping the views in a legacy container would defeat it silently.
+test("a view still marked legacy-measure does not count as wired", () => {
+  const legacy = '<section class="view legacy-measure" data-view="tools">x</section>\n'
+    + ["claim", "status", "analytics"].map((v) => `<section data-view="${v}">x</section>`).join("\n");
+  const r = runParity({
+    spec: SPEC_WITH_EXTRA, shipped: ".a{color:red}\n",
+    entry: legacy, shell: SHELL_SRC, pages: ALL_PAGES,
+  });
+  assert.match(r.out, /3\/4 views wired/);
+});
+
