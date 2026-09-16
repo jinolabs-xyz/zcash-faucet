@@ -1483,6 +1483,19 @@ async function showView(page, v) {
   await page.locator(`[data-testid="view-${v}"]`).waitFor({ state: "visible", timeout: 5000 });
 }
 
+// THE DEFAULT IS BLIND TO `visibility` AND `opacity`, which is the whole of the #595 finding:
+// bare `checkVisibility()` returns true for `visibility:hidden` and for `opacity:0`, so a row
+// named PAINTED passed an element no reader could see. These are the spec's option names; the
+// older aliases (`checkVisibilityCSS`, `checkOpacity`) mean the same two things and Chromium
+// honours both, measured from two directions - the CTO's red-team on the spec names, SDE-App on
+// the aliases - and the ruling is to use the spec's.
+//
+// I first passed all four as insurance against the Playwright pin moving. Dropped: the mutants
+// below are that insurance and they are a better one. If `visibility:hidden` or `opacity:0` ever
+// stops turning these rows red, the object is being ignored and the run says so - which is what
+// a silently-ignored option looks like from the outside, and no amount of spelling prevents it.
+const VIS_OPTS = { visibilityProperty: true, opacityProperty: true, contentVisibilityAuto: true };
+
 async function checkPuzzleSentenceWithdraws(browser) {
   // BOTH SIDES OF THE GATE. Every row this branch shipped asserts the sentence is PRESENT, so
   // `|| true` survives all of them - the CTO's red-team put it in and the suite stayed 245/0.
@@ -1510,16 +1523,32 @@ async function checkPuzzleSentenceWithdraws(browser) {
 
     // PAINT, NOT TEXT. `textContent` still reads an element carrying `hidden`, and so do the
     // served-bytes rows - the red-team's third finding is that `hidden` on the sentence survives
-    // every row this branch has. `checkVisibility()` is the browser's own answer to "would a
-    // reader see this", and it accounts for hidden, display:none, visibility and empty boxes.
-    const r = await p.evaluate((re) => {
+    // every row this branch had.
+    //
+    // AND THE FIRST SPELLING OF THIS ROW WAS THE SAME MISTAKE ONE LAYER DOWN. I wrote that bare
+    // `checkVisibility()` "accounts for hidden, display:none, visibility and empty boxes". It does
+    // not: in Chromium the visibility and opacity checks are OPT-IN, so `visibility:hidden` on the
+    // sentence survived the whole suite at 274/0 with this row printing "1 painted". The row's
+    // NAME said painted and its instrument answered a narrower question - which is L35's escape
+    // hatch exactly, in the row I wrote to close an escape hatch.
+    //
+    // It matters here rather than in theory: the shipped sheets already carry
+    // `.entrance-pending .hero-copy{opacity:0}` for this element, so the property this row could
+    // not see is one a stylesheet on this page already sets. Found by the CTO's red-team.
+    // VIS_OPTS is passed IN rather than closed over: the body of an evaluate runs in the browser,
+    // where a Node-scope constant does not exist. The first spelling of this referenced it
+    // directly and the suite died at row 80 with "VIS_OPTS is not defined" - which is the run
+    // doing its job, and the reason a row is not finished when it typechecks.
+    const r = await p.evaluate(([re, visOpts]) => {
       const els = [...document.querySelectorAll("p")].filter((el) => new RegExp(re).test(el.textContent || ""));
       return {
         inDom: els.length,
-        visible: els.filter((el) => (el.checkVisibility ? el.checkVisibility() : el.getClientRects().length > 0)).length,
+        visible: els.filter((el) => (el.checkVisibility
+          ? el.checkVisibility(visOpts)
+          : el.getClientRects().length > 0)).length,
         hidden: els.map((el) => el.hasAttribute("hidden")),
       };
-    }, SENTENCE.source);
+    }, [SENTENCE.source, VIS_OPTS]);
 
     ok(`${label}: the puzzle sentence is ${wantVisible ? "painted" : "withdrawn"}`,
       wantVisible ? r.visible === 1 : r.visible === 0,
@@ -1544,11 +1573,15 @@ async function checkFirstPaintSentenceIsPainted(browser) {
   await p.waitForSelector(".hero-copy", { timeout: 15_000 }).catch(() => {});
   await p.waitForTimeout(500);
 
-  const r = await p.evaluate(() => {
+  const r = await p.evaluate((visOpts) => {
     const sentence = [...document.querySelectorAll("p")]
       .find((el) => /solves a short puzzle instead of a CAPTCHA/.test(el.textContent || ""));
     const chips = [...document.querySelectorAll('.hero-copy .chips [data-chip]')];
-    const seen = (el) => !!el && (el.checkVisibility ? el.checkVisibility() : el.getClientRects().length > 0);
+    // The same options as the row above, and for the same reason: bare checkVisibility() is blind
+    // to `visibility` and `opacity`, which is how a "painted" row passes an invisible element.
+    const seen = (el) => !!el && (el.checkVisibility
+      ? el.checkVisibility(visOpts)
+      : el.getClientRects().length > 0);
     return {
       sentenceInDom: !!sentence,
       sentencePainted: seen(sentence),
@@ -1556,7 +1589,7 @@ async function checkFirstPaintSentenceIsPainted(browser) {
       chips: chips.length,
       chipsPainted: chips.filter(seen).length,
     };
-  });
+  }, VIS_OPTS);
 
   ok("before the status arrives, the puzzle sentence is not merely present but PAINTED",
     r.sentencePainted && r.sentenceBox > 0,
@@ -1607,13 +1640,30 @@ async function checkOpsChipFollowsTheBox(browser) {
         tone: el ? el.getAttribute("data-tone") : null,
         text: el ? (el.textContent || "").trim() : "",
         sendsTone: sends ? sends.getAttribute("data-tone") : null,
+        siblingChips: document.querySelectorAll('.hero-copy .chips [data-chip]').length,
       };
     });
     visited.push(state);
 
+    // THE POSITIVE CONTROL, AND WHAT IT DOES NOT COVER, because I measured the boundary rather
+    // than describing it. "Absent" is satisfied by a query that finds nothing anywhere, so each
+    // run also reports how many chips the same selection style finds: an absence beside four
+    // presences is an absence, an absence beside nothing is a broken page or a broken container
+    // selector. That is what this catches - the chips failing to render at all.
+    //
+    // It does NOT catch a typo in `[data-chip="box"]` itself. The mutant says so: renaming the
+    // attribute leaves the element matching `[data-chip]`, so the sibling count still reads five
+    // and both absence rows still pass - only the `attention` row goes red (`tone null`). So the
+    // `attention` case remains the anchor for this specific selector, exactly as the red-team
+    // said, and this control is a second, different guard rather than a replacement for it.
+    // Stating the limit because a control whose reach is assumed is the thing it exists to
+    // prevent. (CTO red-team, #595.)
     ok(`box ${state}: the ops chip is ${shouldShow ? "shown" : "absent"}`,
-      r.present === shouldShow,
-      r.present ? `present, tone ${r.tone}, "${r.text}"` : "absent");
+      r.present === shouldShow && r.siblingChips >= 4,
+      r.siblingChips < 4
+        ? `only ${r.siblingChips} sibling chips found - the chip selection is broken, so "absent" means nothing`
+        : r.present ? `present, tone ${r.tone}, "${r.text}" (beside ${r.siblingChips} other chips)`
+                    : `absent (beside ${r.siblingChips} other chips, so the selection works)`);
 
     if (shouldShow) {
       ok(`box ${state}: and it is toned ${wantTone}, from statusView's map`,
@@ -1706,8 +1756,8 @@ async function checkServedHtmlCarriesTheHero() {
   // argument, and that count is the only thing keeping it honest. `<a[^>]+class=` cannot be
   // manufactured by the payload, which spells props as JSON (`className`) rather than as HTML
   // attributes, so a future string that DOES get duplicated cannot fake a green here.
-  const statusLink = /<button[^>]+class="tag more"/.test(html);
-  const analyticsLink = /<a[^>]+class="morelink"/.test(html);
+  const statusLink = /<button\s[^>]*class="tag more"/.test(html);
+  const analyticsLink = /<a\s[^>]*class="morelink"/.test(html);
   ok("the served HTML carries both hero links, not just the chips",
     statusLink && analyticsLink,
     `tag more ${statusLink ? "present" : "ABSENT"}, morelink ${analyticsLink ? "present" : "ABSENT"} in ${html.length} bytes`);

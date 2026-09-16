@@ -69,6 +69,22 @@ export function heightDeltaText(diff: number | null): string {
  * taken in the one state where the thing you are varying does not vary.
  *
  * Verified against the frozen snapshot directly rather than on the reported value.
+ *
+ * DEPARTURE, DECLARED: THE DIGITS ARE GROUPED AND THE SNAPSHOT'S ARE NOT. index.html:896 builds
+ * the value as `sgn = (diff >= 0 ? '+' : '') + diff` - raw concatenation, no separator - while the
+ * snapshot's `fmt` (toLocaleString, index.html:732) is used for the heights either side of it and
+ * NOT for this. So at a delta of four thousand the design reads `(+4000 vs network)` and we read
+ * `(+4,000 vs network)`.
+ *
+ * Kept grouped, for one reason: `heightDeltaText` groups, it has shipped in the status view since
+ * S3, and the two are the same number one click apart. Matching the snapshot here would make the
+ * hero chip and the status card disagree about how to write four thousand, which is the exact
+ * R-24 shape this file exists to prevent - and it would be a disagreement introduced deliberately
+ * to remove one that no reader can see until the node is a thousand blocks out.
+ *
+ * Marked rather than matched, because the red-team's point stands whichever way it goes: unmarked,
+ * it is a difference from the design that nobody chose. If the design is later taken as the
+ * authority on separators, this comment is where to start and `heightDeltaText` moves with it.
  */
 export function heightDiffChip(diff: number | null): string | null {
   if (diff === null) return null;
@@ -268,8 +284,7 @@ export function ctazWord(ctaz: { enabled?: boolean; servable?: boolean } | null 
  * copy, and three copies of one derivation is how a page comes to disagree with itself about
  * what word describes the faucet (R-24). One definition, three importers.
  *
- * THE "failing" BRANCH IS UNREACHABLE, and the declaration that used to sit here was wrong about
- * why it mattered. It read as a live behavioural departure from the approved preview - the
+ * THERE IS NO "failing" BRANCH, and there was one until the #595 round. It read as a live behavioural departure from the approved preview - the
  * preview's `tone()` map has no "failing" key, ours returns `bad` - which invites a reader to
  * believe the hero and the preview show different things for a failing sender.
  *
@@ -280,16 +295,20 @@ export function ctazWord(ctaz: { enabled?: boolean; servable?: boolean } | null 
  * and it is the same dead-branch shape as the ops chip's `boxState === "failing" ? "bad" : "warn"`,
  * which DID cause a visible defect because its sibling branch swallowed the real states.
  *
- * The line stays rather than being deleted, deliberately. It costs nothing, it is the mapping we
- * would want if the union ever gains the state, and deleting it would be a behaviour change made
- * on my own judgement in a follow-up whose job is declarations and rows. What changes here is the
- * claim: this is dead code with a correct intention, not a shipped divergence. Found by the CTO's
- * red-team (#591 finding 4).
+ * I FIRST KEPT THE LINE AND GAVE A FALSE REASON FOR IT: "deleting it is a behaviour change". It
+ * is not. SDE-App traced the path I had not - `readSendHealth` returns `SendHealthState`, and the
+ * trailing `return "unknown"` already covers any string outside the union - so removal is
+ * observationally identical and there was never a behaviour to change. I asserted a consequence
+ * without walking the one function that disproves it, in the same comment where I corrected
+ * someone else for declaring a difference nobody can observe.
+ *
+ * Removed on the CTO's ruling: an unreachable branch is reachable or it goes. The trailing
+ * `return "unknown"` is what a value outside the union gets, which is what the branch was for.
+ * Found by the CTO's red-team (#591 finding 4), traced by SDE-App (#595).
  */
 export function sendsTone(state: string | undefined): "ok" | "warn" | "bad" | "unknown" {
   if (state === "ok") return "ok";
   if (state === "degraded") return "warn";
-  if (state === "failing") return "bad";
   return "unknown";
 }
 
