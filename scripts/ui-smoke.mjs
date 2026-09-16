@@ -1638,26 +1638,35 @@ async function checkSubpages(browser, base) {
       !!heroPad && heroPad.u > 0 && Math.abs(heroPad.padTop - heroPad.want) < 1,
       heroPad ? `padding-top ${heroPad.padTop}px against 2.5*${heroPad.u.toFixed(2)}=${heroPad.want.toFixed(1)}px` : "no hero view");
 
-    // THE CONTROLS WEAR THE DESIGN'S CLASS, not the retired sheet's. The snapshot's copy
-    // control is a `.tag` (donate.html:482); ours was `btn btn-secondary btn-sm`, three classes
-    // that only globals.css styles, so it was the last control on these pages still dressed by
-    // the sheet the redesign replaces. Asserted by ABSENCE of the legacy classes as well as
-    // presence of the design's, because adding `tag` beside them would satisfy a presence-only
-    // check while changing nothing.
+    // EACH CONTROL WEARS THE DESIGN'S CLASS FOR ITS POSITION, which is two classes and not one.
+    //
+    // The snapshot has TWO copy controls and they are deliberately different. The one in the
+    // PANEL - the page's primary action, handing over the address it exists for - is `.automate`
+    // (donate.html:428): full width, calc(3.3*var(--u)) tall, orange, arrow from `::after`. The
+    // one in the CARD-COPY beside the mining address is `.tag` (donate.html:435), the small
+    // chip. #576 shipped `.tag` for both, which made the primary action the same size and weight
+    // as the secondary one, and the check written then asserted exactly that - "all .tag" - so
+    // it could not have caught it. An assertion that encodes the mistake cannot report it.
+    //
+    // Still asserted by ABSENCE of the legacy classes too: adding the right class beside
+    // `btn btn-secondary btn-sm` would satisfy a presence-only check while changing nothing.
     const controls = await page.evaluate(() => {
       const out = [];
       for (const b of document.querySelectorAll(".view.sub button")) {
         const cls = (b.className || "").toString();
-        out.push({ text: (b.textContent || "").trim().slice(0, 14), cls,
-                   legacy: /\bbtn(-|\b)/.test(cls), design: /\btag\b/.test(cls) });
+        const where = b.closest(".panel") ? "panel" : b.closest(".card-copy") ? "card-copy" : "elsewhere";
+        out.push({ text: (b.textContent || "").trim().slice(0, 14), cls, where,
+                   legacy: /\bbtn(-|\b)/.test(cls),
+                   want: where === "panel" ? "automate" : "tag" });
       }
       return out;
     });
-    const dressed = controls.filter((c) => c.legacy || !c.design);
-    ok(`${path} controls wear the design's class, not the retired sheet's`,
-      controls.length === 0 || dressed.length === 0,
+    const wrong = controls.filter((c) => c.legacy || !new RegExp(`\\b${c.want}\\b`).test(c.cls));
+    ok(`${path} each control wears the design's class for where it sits`,
+      controls.length === 0 || wrong.length === 0,
       controls.length === 0 ? "no controls on this page"
-        : dressed.map((c) => `${c.text}="${c.cls}"`).join(", ") || `${controls.length} control(s), all .tag`);
+        : wrong.length ? wrong.map((c) => `${c.text} in ${c.where} wants .${c.want}, has "${c.cls}"`).join("; ")
+        : controls.map((c) => `${c.where}=.${c.want}`).join(", "));
 
     // THE BADGE NEVER ASSERTS A STATE IT HAS NOT ESTABLISHED (ruling 21:13Z, #573). NOT READY
     // or UNKNOWN as a first paint to someone reading the terms is a false claim about a

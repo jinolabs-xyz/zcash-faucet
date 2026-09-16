@@ -136,7 +136,7 @@ export default async function Donate() {
               {mining ? (
                 <>
                   <code className="addr small" id="mine">{mining}</code>
-                  <CopyAddress address={mining} label="Mining address" />
+                  <CopyAddress address={mining} label="Mining address" variant="chip" />
                 </>
               ) : (
                 <p className="hint">

@@ -20,6 +20,25 @@
 .hero-copy .lede a{color:var(--accent-text);font-weight:600}
 .card.feature .panel .lbl{display:block;margin-bottom:calc(.5*var(--u))}
 
+/* THE PANEL'S OWN CONTROL, transcribed (donate.html 207-213). The page's primary action is a
+ * full-width orange bar with the arrow supplied by `::after`, not the small chip - the chip is
+ * what the design puts beside the MINING address in the card-copy. Both exist; #576 shipped the
+ * chip for both and made the primary action look like the secondary one.
+ *
+ * `canvas.magic` is display:none in the snapshot's own sheet, so it is carried here for the
+ * cascade rather than rendered: a later slice that adds the sparkle canvas gets the rule already
+ * in place, and today it styles nothing because nothing renders it.
+ *
+ * At calc(3.3*var(--u)) this control clears the 44 px tap floor on its own - 46.2 px at the
+ * desktop unit - which is why the floor override below still names `.tag` and not this. */
+.automate{display:flex;align-items:center;justify-content:space-between;gap:calc(.8*var(--u));width:100%;height:calc(3.3*var(--u));padding-inline:calc(1.3*var(--u)) calc(1.1*var(--u));border:0;border-radius:calc(.6*var(--u));background:var(--orange);color:var(--cta-text);
+  font-size:calc(1.05*var(--u));font-weight:600;line-height:1;letter-spacing:calc(-.01*var(--u));cursor:pointer;transition:background .18s}
+.automate:hover{background:#f06200}
+.automate canvas.magic{display:none}
+.automate::after{content:"\2192";font-size:1.15em;font-weight:400}
+.automate:disabled{background:var(--orange-soft);color:var(--accent-text);cursor:default}
+.automate:disabled::after{content:none}
+
 /* An address is the payload of two of these three pages, so it is a block that can be
  * selected in one gesture and cannot be truncated: `word-break:break-all` on a unified
  * address is the difference between copying it and copying most of it. */

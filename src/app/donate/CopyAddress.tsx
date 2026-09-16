@@ -7,7 +7,27 @@
  */
 import { useState } from "react";
 
-export function CopyAddress({ address, label }: { address: string; label: string }) {
+/**
+ * TWO CONTROLS, TWO CLASSES, because the design has two (#589, from the review of #576).
+ *
+ * The PANEL control - the one handing over the address the page exists for - is `.automate`
+ * in the snapshot (donate.html:428): full width, `calc(3.3*var(--u))` tall, orange, with a
+ * `→` from `::after`. The one in the card-copy beside the mining address is `.tag`
+ * (donate.html:435), the small chip. I shipped `.tag` for both in #576, which made the page's
+ * primary action the same size and weight as its secondary one.
+ *
+ * `variant` rather than a boolean so the call site says which control it is rather than
+ * which one it is not.
+ */
+export function CopyAddress({
+  address,
+  label,
+  variant = "panel",
+}: {
+  address: string;
+  label: string;
+  variant?: "panel" | "chip";
+}) {
   const [copied, setCopied] = useState(false);
 
   // Clipboard is unavailable on http origins and in some in-app browsers, so
@@ -42,8 +62,12 @@ export function CopyAddress({ address, label }: { address: string; label: string
           data-glyph="copy">`. The glyph module lands with #567 and duplicating it here would
           give one component two definitions, so the control ships with the design's shape and
           without its icon, and the icon follows in the slice that owns glyphs. */}
-      <button className="tag" type="button" onClick={() => void copy()}>
-        {copied ? "Copied ✓" : "Copy address"}
+      {/* The arrow the design puts on `.automate` comes from `::after`, so the label is the
+          only child here - and the snapshot's `canvas.magic` is `display:none` in its own
+          sheet (donate.html:210), so transcribing it would add an element that renders
+          nothing. The chip keeps the plain label. */}
+      <button className={variant === "panel" ? "automate" : "tag"} type="button" onClick={() => void copy()}>
+        <span>{copied ? "Copied ✓" : "Copy address"}</span>
       </button>
       <span className="sr-only" role="status">{copied ? `${label} copied.` : ""}</span>
     </>
