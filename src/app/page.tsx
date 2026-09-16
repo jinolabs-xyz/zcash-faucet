@@ -350,7 +350,6 @@ export default function Home() {
   // to.
   const cardRef = useRef<HTMLElement | null>(null);
   const cardFrom = useRef<number | null>(null);
-  const cardPrevKey = useRef<string | null>(null);
   const [addr, setAddr] = useState("");
   const [touched, setTouched] = useState(false);
   // PAPER IS THE DEFAULT NOW (the approved redesign is a light design). A visitor who
@@ -981,28 +980,26 @@ export default function Home() {
     phase, fail.kind, refusal?.kind ?? "", network,
     refilling ? "r" : "", refillHealthy ? "h" : "", powState ? "p" : "", tx ? "t" : "",
   ].join("|");
-  // THE PAINTED HEIGHT IS READ DURING RENDER, which is the only moment it still exists.
+  // THE PAINTED HEIGHT COMES FROM THE PREVIOUS COMMIT, recorded by the effect at the bottom of
+  // this pair. That ordering is the whole trick and it is why there is a pair at all.
   //
-  // The preview reads `wasH` before it swaps the panel. React has no such moment in an effect:
-  // a layout effect runs after the commit, and a layout-effect CLEANUP runs after the children's
-  // DOM mutations too, so both of them measure the NEW height. I shipped the cleanup version and
-  // the sweep said "NO height animation registered at all" on every transition, because `from`
-  // and `to` were the same number.
+  // The preview reads `wasH` before it swaps the panel. React has no equivalent moment: a layout
+  // effect runs after the commit, and a layout-effect CLEANUP runs after the children's DOM
+  // mutations too, so both measure the NEW height - I shipped the cleanup version and the sweep
+  // said "NO height animation registered at all" on all 24 transitions, because `from` and `to`
+  // were the same number. Reading the ref during render does see the old box, and `react-hooks`
+  // rejects it in six places, correctly: a ref read during render is not safe under concurrent
+  // rendering and I am not going to disable the rule to keep a trick.
   //
-  // Render runs before the mutation, so here the box is still the old one - interpolation
-  // included, which is what makes a change arriving mid-flight continue from where the card
-  // visibly is instead of snapping back. Writing a ref during render is the documented FLIP
-  // shape; the value is read by nothing but the effect below.
-  if (cardPrevKey.current !== cardPhaseKey) {
-    cardPrevKey.current = cardPhaseKey;
-    const painted = cardRef.current;
-    cardFrom.current = painted ? painted.getBoundingClientRect().height : null;
-  }
+  // Effects in one commit run in declaration order. The animator below is declared FIRST, so it
+  // reads `cardFrom` while it still holds the height recorded at the END of the previous commit
+  // - the box as it was painted, interpolation included, which is what lets a change arriving
+  // mid-flight continue from where the card visibly is. The recorder then overwrites it for next
+  // time. No ref is touched during render.
   useLayoutEffect(() => {
     const el = cardRef.current;
     if (!el) return;
     const from = cardFrom.current;
-    cardFrom.current = null;
     // First paint has nothing to animate from.
     if (from == null) return;
     // `animate` is checked BEFORE anything else on the element: a browser with `animate` and no
@@ -1022,6 +1019,12 @@ export default function Home() {
     run.onfinish = () => { el.style.overflow = previous; };
     run.oncancel = () => { el.style.overflow = previous; };
   }, [cardPhaseKey]);
+  // THE RECORDER, and it must stay BELOW the animator. No dependency array on purpose: it runs
+  // after every commit, so whatever it stores is always "the height as of the last paint".
+  useLayoutEffect(() => {
+    const el = cardRef.current;
+    if (el) cardFrom.current = el.getBoundingClientRect().height;
+  });
   const c = check(addr);
   const badgeShow = c.ok || ("label" in c && !!c.label);
   const remain = Math.max(0, cooldownEnd - now);
