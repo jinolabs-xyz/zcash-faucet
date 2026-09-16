@@ -3886,6 +3886,14 @@ try {
   ok("#515: the receipt for B rendered, so the absence below is an absence on a real receipt",
     /[0-9a-f]{10}/.test(bodyB) && bodyB.includes(addrB.slice(-6)),
     `names B (…${addrB.slice(-6)}) and carries a txid`);
+  // A LOCATOR THAT MATCHES NOTHING IS INDISTINGUISHABLE FROM AN ABSENCE, and this row's whole
+  // content is an absence. So the same mechanism is pointed at a control that MUST be on this
+  // receipt first: if `getByRole` can find "Copy txid" here, a zero for the key button is the
+  // page's answer rather than the locator's. Without this the row would report clean on a build
+  // where the accessible name changed and it had stopped matching anything at all.
+  ok("#515: the receipt is reachable by the same locator the gate below uses",
+    (await page.getByRole("button", { name: /Copy txid/ }).count()) === 1,
+    "Copy txid found by role, so a zero below is an absence and not a broken selector");
   ok("#515: and it does NOT offer the key for A, which is not the address that was paid",
     (await page.getByRole("button", { name: "Copy spending key" }).count()) === 0,
     `A ends …${keyA.slice(-6)}, paid …${addrB.slice(-6)}`);
