@@ -73,6 +73,55 @@ test("THE 13:06Z CASE: a source 113 blocks behind cannot pass a node the other s
   assert.equal(refs.sources.hosh?.stale, false, "our fetch was seconds old; hosh's number was not");
 });
 
+test("each source's height is flat too, so the watchdog can print WHY it could not tell", () => {
+  // #600 step 3, SDE-Infra writing the consumer. When `corroborated` is false the watchdog's
+  // journal says only "cannot tell", and the issue asks it to print the spread and the two
+  // heights it saw so an incident can be read without the app. Those live two levels down under
+  // `sources.hosh.height`, which is the reach `usedHeight` already exists to avoid.
+  plant({ hosh: { height: 4_349_918, ageMs: 12_000 }, lightwalletd: { height: 4_349_928, ageMs: 34_000 } });
+  const refs = getTipReferences(NOW);
+  assert.equal(refs.hoshHeight, 4_349_918);
+  assert.equal(refs.lightwalletdHeight, 4_349_928);
+  // THE THREE NUMBERS MUST BE ON ONE CLOCK. A reader subtracting the two flat heights has to
+  // get the spread; if these were sampled separately from the spread they could disagree and
+  // the journal line would be self-contradicting at exactly the moment someone is reading it.
+  assert.equal(
+    Math.abs(refs.lightwalletdHeight! - refs.hoshHeight!), refs.spreadBlocks,
+    "the flat heights must reproduce spreadBlocks, or the journal line contradicts itself",
+  );
+  assert.equal(refs.hoshHeight, refs.sources.hosh!.height);
+  assert.equal(refs.lightwalletdHeight, refs.sources.lightwalletd!.height);
+});
+
+test("a source that never answered is null; one that answered and went stale keeps its height", () => {
+  // MY FIRST VERSION OF THIS ASSERTED THE OPPOSITE and the suite refused it, correctly. I wrote
+  // `stale.hoshHeight === null` on the reasoning that a watchdog must tell a DARK reference from
+  // a LAGGING one. The reasoning is sound and the design decision was already made the other way:
+  // `sources` reports a stale entry WITH its height and marks it unusable -- there is a row for it
+  // above, "a stale reference is still reported, and still cannot be used" -- because the height a
+  // dark source last knew is evidence, and throwing it away to encode one bit loses it.
+  //
+  // So the flat field MIRRORS `sources` exactly and adds no opinion. Usability is already carried
+  // by `used` and `usedHeight`, which go null together; a consumer asking "may I judge against
+  // this" reads those, and one asking "what did each source last say" reads these.
+  plant({ hosh: { height: 4_349_918, ageMs: REFERENCE_MAX_AGE_MS + 1 }, lightwalletd: { height: 4_349_928, ageMs: 10_000 } });
+  const stale = getTipReferences(NOW);
+  assert.equal(stale.hoshHeight, 4_349_918, "a stale source keeps the height it last reported");
+  assert.equal(stale.hoshHeight, stale.sources.hosh!.height, "flat mirrors nested, with no opinion of its own");
+  assert.equal(stale.used, "lightwalletd", "and staleness is carried by `used`, not by the height");
+  assert.equal(stale.lightwalletdHeight, 4_349_928);
+
+  plant({ lightwalletd: { height: 4_349_928, ageMs: 10_000 } });
+  const absent = getTipReferences(NOW);
+  assert.equal(absent.hoshHeight, null, "a source that never answered is null, not 0");
+  assert.equal(absent.lightwalletdHeight, 4_349_928);
+
+  // AND THE ANTI-VACUITY PARTNER: every assertion above is `=== null`, which a field that was
+  // ALWAYS null would satisfy perfectly. This is the case where hosh does answer.
+  plant({ hosh: { height: 4_349_900, ageMs: 5_000 }, lightwalletd: { height: 4_349_928, ageMs: 10_000 } });
+  assert.equal(getTipReferences(NOW).hoshHeight, 4_349_900, "hoshHeight is not simply always null");
+});
+
 test("usedHeight is the height of the source `used` names, flat, for a reader that cannot nest", () => {
   // The watchdog parses with grep, sed and cut by design, so tipReferences.sources[used]
   // .height is out of reach two levels down and reaching for it with a brace-bounded grep
