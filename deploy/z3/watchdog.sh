@@ -556,6 +556,17 @@ zebra_chain_heights() {
   printf '%s %s' "$blocks" "$est"
 }
 
+# IS THE MINER RUNNING, ONE DEFINITION. Two rungs need this judgement and #571 is the issue
+# about a third copy of a word going stale, so a second copy of the SET was the same defect one
+# PR later - found by SDE-UI on review of #533 step 2. "activating" and "reloading" are units
+# about to extend this chain (red-team, #560): a stop line keyed on exactly "active" leaves a
+# starting miner with no instruction at all, and the whole point of #618 is that the three words
+# are one decision rather than three spellings.
+miner_unit_is_running() {
+  case "${1:-}" in active|activating|reloading) return 0 ;; esac
+  return 1
+}
+
 # OUR BLOCK HASH AT A HEIGHT, for the history half of the fork detector (#533 step 2).
 #
 # Mirrors zebra_chain_heights deliberately: same container, same cookie, same no-jq parse. The
@@ -1041,10 +1052,9 @@ check_history_against_reference() {
   fi
 
   stop_first=""
-  case "$(systemctl is-active "$MINER_UNIT" 2>/dev/null)" in
-    active|activating|reloading)
-      stop_first="The miner unit is still running and extending this chain: stop it by hand FIRST (systemctl stop $MINER_UNIT). " ;;
-  esac
+  if miner_unit_is_running "$(systemctl is-active "$MINER_UNIT" 2>/dev/null)"; then
+    stop_first="The miner unit is still running and extending this chain: stop it by hand FIRST (systemctl stop $MINER_UNIT). "
+  fi
   if [ -f "$FORK_PARK_MARKER" ]; then
     park="${stop_first}A park marker is written ($FORK_PARK_MARKER): no deploy and no watchdog heal will START the miner while that file exists."
   else
@@ -1113,7 +1123,7 @@ heal_self_mined_fork() {
   # "activating" IS a unit that is about to extend this chain (red-team, same review): keying the
   # stop line on the word being exactly "active" left a starting miner with no instruction at all.
   local miner_running=0
-  case "$miner_word" in active|activating|reloading) miner_running=1 ;; esac
+  miner_unit_is_running "$miner_word" && miner_running=1
   if [ "$miner_running" = "1" ] && [ -n "$started_age" ] && [ "$started_age" -gt "$FORK_MINER_MIN_SECS" ]; then
     mins=$(( started_age / 60 ))
     who="our miner is ${miner_word} and its heartbeat says it started ${mins} min ago, so this chain is most likely ours"

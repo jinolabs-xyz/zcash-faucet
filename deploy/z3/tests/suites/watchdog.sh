@@ -1426,6 +1426,13 @@ check "and it does NOT stop the miner itself, because that stays the owner's" \
   "! grep -q 'systemctl stop zcash-testnet-miner' '$STUB_LOG'"
 check "pages once for the episode, not once per sweep" \
   "[ \"\$(grep -c 'this is PROOF' '$T/alerts.log')\" = 1 ]"
+# AND THIS RUNG'S OWN USE OF THE RUNNING-STATE DECISION, which the mutant above caught only
+# through the AHEAD rung's rows. wd_fork_env leaves the unit active, so the page has to lead with
+# the stop instruction - the same ruling the other rung follows, reached through the same one
+# definition (miner_unit_is_running) rather than a second copy of the word list. Without this row
+# the history rung could stop asking the question entirely and #618's rows would still be green.
+check "and it leads with the stop instruction, because the unit is running and the marker gates STARTS" \
+  "grep -q 'still running and extending this chain: stop it by hand FIRST' '$T/alerts.log'"
 
 echo "== watchdog: the SAME block at that height is not a fork, and says nothing at all"
 wd_fork_env
