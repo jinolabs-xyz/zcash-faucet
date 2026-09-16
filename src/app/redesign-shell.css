@@ -32,7 +32,7 @@ html body{background:var(--page);color:var(--ink);font:400 15px/1.5 var(--sans);
 html a{color:var(--accent-text);text-decoration:none}
 a:hover{text-decoration:underline}
 button,input,select{font:inherit;color:inherit}
-:focus-visible{outline:calc(.16*var(--u)) solid var(--accent);outline-offset:calc(.2*var(--u));border-radius:calc(.4*var(--u))}
+html :focus-visible{outline:calc(.16*var(--u)) solid var(--accent);outline-offset:calc(.2*var(--u));border-radius:calc(.4*var(--u))}
 [hidden]{display:none !important}
 .num{font-variant-numeric:tabular-nums}
 .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
@@ -194,7 +194,7 @@ html .iconbtn:hover{color:var(--ink)}
  *    to the people it exists for. --accent-text #ae1800 is 6.29:1, and the design already
  *    describes it as "accent that carries small text": the same decision, one element
  *    over. The geometry is the preview's, unchanged. */
-:focus-visible{outline-color:var(--accent-text)}
+html :focus-visible{outline-color:var(--accent-text)}
 /*    AND the brand link's own ring, which is a separate rule at higher specificity. The
  *    preview sets the full `outline` shorthand on `.brand .home:focus-visible` with
  *    --accent, and three classes beat the bare pseudo-class above, so correcting only the

@@ -164,8 +164,11 @@ const COLOUR_LIB = `
  * body that rendered nothing, would all report "no deltas" and go green. So the flip is
  * verified by reading the href order back, and the node count carries a floor. */
 async function checkChunkOrderIdentity(browser) {
-  const PROPS = ["fontFamily", "backgroundColor", "color", "lineHeight", "fontSize", "fontWeight", "borderColor", "borderRadius", "letterSpacing"];
+  // outline* is here because of the keyboard pass below: a focus ring is the one part of the
+  // page a rest-state snapshot cannot see, and it was the sixth leak.
+  const PROPS = ["fontFamily", "backgroundColor", "color", "lineHeight", "fontSize", "fontWeight", "borderColor", "borderRadius", "letterSpacing", "outlineColor", "outlineStyle", "outlineWidth"];
   for (const theme of ["paper", "ink"]) {
+  for (const keyboard of [false, true]) {
     const c = await browser.newContext({ viewport: DESKTOP });
     const p = await c.newPage();
     await p.goto(BASE, { waitUntil: "networkidle" });
@@ -185,6 +188,23 @@ async function checkChunkOrderIdentity(browser) {
       return out;
     }, PROPS);
 
+    // A REST-STATE SNAPSHOT CANNOT SEE A FOCUS RING, and that is where the sixth leak was:
+    // `:focus-visible` in globals ties with the transcription's at (0,1,0), so under a flip
+    // every keyboard ring on the page took the retired accent while this check read zero.
+    // Tab moves focus with KEYBOARD modality, which is what `:focus-visible` matches on.
+    let focused = "(rest)";
+    if (keyboard) {
+      for (let i = 0; i < 3; i++) await p.keyboard.press("Tab");
+      focused = await p.evaluate(() => {
+        const a = document.activeElement;
+        if (!a || a === document.body) return "";
+        return `${a.tagName.toLowerCase()}${a.id ? "#" + a.id : ""}${a.matches(":focus-visible") ? " :focus-visible" : " NOT focus-visible"}`;
+      });
+      // Without this the keyboard pass is a second copy of the rest pass wearing a different
+      // label - the exact vacuity this check was rebuilt to avoid.
+      ok(`${theme}: the keyboard pass actually lands on a focus ring`,
+        !!focused && focused.includes(":focus-visible"), focused || "nothing took focus");
+    }
     const linksBefore = await order();
     const before = await snap();
     await p.evaluate(() => {
@@ -208,12 +228,13 @@ async function checkChunkOrderIdentity(browser) {
         if (!first) first = `<${a.tag}${a.cls ? " ." + a.cls.split(" ")[0] : ""}> ${PROPS[k]} ${a.v[k]} -> ${b2.v[k]}`;
       }
     }
-    ok(`${theme}: the page is identical with the CSS chunks linked in the other order`,
+    ok(`${theme}${keyboard ? ", keyboard-focused," : ","} the page is identical with the CSS chunks linked in the other order`,
       flipped && before.length >= 50 && moved === 0,
       !flipped ? `the flip did not take: ${linksBefore.length} stylesheet(s)`
         : before.length < 50 ? `only ${before.length} nodes rendered, too few to judge`
         : `${moved} of ${before.length} nodes moved, ${deltas} deltas; first: ${first}`);
     await c.close();
+  }
   }
 }
 
