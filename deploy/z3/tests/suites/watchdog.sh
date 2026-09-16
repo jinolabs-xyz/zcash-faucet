@@ -1182,8 +1182,15 @@ echo "== watchdog: the confirmed limit is a BOUNDARY, and it is measured from bo
 # rung fires on tonight's episode; it cannot tell 25 from 5 or from 50, so every one of those
 # would pass it. The team learned this on #566 in CSS the same week - a fix that moves a defect
 # by a pixel looks identical to one that removes it if you only sample the ends - and a
-# threshold is the same shape of claim. So: 24 behind a corroborated tip is inside the budget
-# and 26 is outside it, on the SHIPPED default, with nothing else changed between the two.
+# threshold is the same shape of claim.
+#
+# AND TWO POINTS EITHER SIDE ARE NOT ENOUGH, which the CTO's red-team caught: with a strict
+# `-gt`, "24 silent and 26 fires" is satisfied by a limit of 24 just as well as by 25, and by
+# `-ge` at 25. Both survive at 293/0. What pins the number is the value ON the limit: at exactly
+# 25 the rung must be SILENT, which is false for a limit of 24 and false for `-ge`. So the
+# boundary is three points - inside, on, and past - and the step-8 boundary further down already
+# had this shape, with a comment saying `-ge` would go unnoticed. I read that comment while
+# writing this and still wrote two points.
 wd_node_env
 unset WATCHDOG_NODE_CONFIRMED_LAG_LIMIT   # the shipped 25 is the subject
 echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
@@ -1194,6 +1201,23 @@ check "24 behind a corroborated tip does not start the ladder" \
   "! grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
 check "and does not stop the miner" \
   "! grep -q 'systemctl stop zcash-testnet-miner.service' '$STUB_LOG'"
+check "and nothing is dropped or cleared on a lag inside the budget" \
+  "[ -f '$STUB_VOLROOT/z3-testnet-chain/non_finalized_state/backup.bin' ] && [ -f '$STUB_VOLROOT/z3-testnet-chain/network/testnet.peers' ]"
+check "and the journal does not call it a stall" \
+  "! grep -q 'zebra stalled' '$T/run.log'"
+
+# EXACTLY ON THE LIMIT, which is the case that makes the other two mean 25 rather than "some
+# number between 24 and 26". `-gt` means 25 is inside; a limit of 24 or a `-ge` would fire here.
+wd_node_env
+unset WATCHDOG_NODE_CONFIRMED_LAG_LIMIT
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4351410 STUB_ZEBRA_EST=4351410
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4351435  # exactly 25 behind: ON the limit
+wd_run 3
+check "exactly 25 behind, the limit itself, does not start the ladder" \
+  "! grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
+check "and the journal does not call the limit itself a stall" \
+  "! grep -q 'zebra stalled' '$T/run.log'"
 
 wd_node_env
 unset WATCHDOG_NODE_CONFIRMED_LAG_LIMIT
