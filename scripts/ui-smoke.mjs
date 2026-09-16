@@ -3847,6 +3847,49 @@ try {
   const copied = String(await page.evaluate(() => navigator.clipboard.readText().catch(() => "")));
   ok("copy txid puts a 64-hex txid on the clipboard", /^[0-9a-f]{64}$/.test(copied), copied.slice(0, 16));
 
+  // ===== #515: PAY B WHILE HOLDING A's KEY, AND THE RECEIPT MUST NOT OFFER A's KEY =====
+  // page.tsx:1672 gates the receipt's key on `genKey && genKey.address === tx.to`. The suite
+  // covered generate -> copy -> pay THE GENERATED ADDRESS, so a regression to `genKey &&` alone
+  // stayed green: every case that reached a receipt had paid the address the key belonged to.
+  //
+  // WHY THIS CASE MUST NOT CLICK "Another address", which is the trap I nearly walked into.
+  // `again()` (page.tsx:824) does `setGenKey(null)`, so after it the receipt offers no key
+  // whatever the addresses are - and `genKey &&` would ALSO offer none. A row placed there
+  // passes for the wrong reason and misses the exact regression it was written for. The input is
+  // overwritten in place instead, so `genKey` is still A while `tx.to` is B, which is the only
+  // arrangement where the two spellings of the guard disagree.
+  await page.getByRole("button", { name: /Another address/ }).click();
+  await page.getByRole("button", { name: "Make a throwaway address and key" }).first().click();
+  await page.waitForFunction(
+    () => (document.querySelector("[data-testid=address-input]")?.value ?? "").length > 100,
+    null, { timeout: 30_000 });
+  const keyA = await page.getByTestId("address-input").inputValue();
+  // THE PRECONDITION, ASSERTED RATHER THAN ASSUMED: a key exists in this session. Without it the
+  // gate below is satisfied by `genKey` being null and proves nothing - the partner has to show
+  // the subject was set up, not merely that the page rendered (SDE-Infra's signature rule, #628).
+  ok("#515: a throwaway key is held before the mismatched claim, so the gate below has a subject",
+    await page.getByTestId("generated-key").isVisible(), `generated address ${keyA.length} chars`);
+
+  const addrB = await freshAddress();
+  await page.getByTestId("address-input").fill(addrB);
+  const submitB = page.getByTestId("claim-button");
+  // The key is UNSEEN - never copied, never revealed. keyUnseen() only blocks when the address in
+  // the box IS the generated one, so paying B is allowed with A's key still unread. That is the
+  // issue's scenario exactly, and it is what makes the receipt's guard the only thing standing
+  // between a stranger's address and someone else's spending key.
+  ok("#515: and the claim is allowed, because the unseen-key gate is about the address in the box",
+    await submitB.isEnabled(), (await submitB.textContent())?.trim());
+  await submitB.click();
+  await page.getByTestId("sent-badge").waitFor({ timeout: 120_000 });
+
+  const bodyB = await page.textContent("body");
+  ok("#515: the receipt for B rendered, so the absence below is an absence on a real receipt",
+    /[0-9a-f]{10}/.test(bodyB) && bodyB.includes(addrB.slice(-6)),
+    `names B (…${addrB.slice(-6)}) and carries a txid`);
+  ok("#515: and it does NOT offer the key for A, which is not the address that was paid",
+    (await page.getByRole("button", { name: "Copy spending key" }).count()) === 0,
+    `A ends …${keyA.slice(-6)}, paid …${addrB.slice(-6)}`);
+
   // After the TAZ claim, so the TAZ path is proven unregressed before the new one runs.
   await checkCtazToggle(page, BASE);
 
