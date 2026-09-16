@@ -79,17 +79,56 @@ export default async function Donate() {
             </p>
           </div>
           <article className="card claim feature">
-            <div className="panel">
-              <span className="lbl">Donate TAZ, shielded</span>
-              <code className="addr" id="don">{donation}</code>
-              <CopyAddress address={donation} label="Donation address" />
-              <p className="hint">Arrives shielded. Testnet only, so it costs you nothing and goes straight back out as drips.</p>
-            </div>
+            {/* NO ADDRESS IS A STATE THIS PAGE MUST RENDER, and mine did not until an existing
+                api-integration case caught it. The snapshot hardcodes an address and never
+                draws this state, so transcribing it literally left an EMPTY code box with a
+                Copy address button beside it - a control that copies nothing, on the page
+                whose entire job is handing over an address. The page this replaces said "No
+                address configured" plainly.
+
+                So the state is composed in the design's own shapes rather than invented in a
+                new one, the same way /fund's is: the lbl says what is missing, the hint says
+                what an operator does about it, and no copy button is offered for something
+                that is not there. Second time tonight that a check somebody else wrote months
+                ago found an unstated gap in my transcription. */}
+            {donation ? (
+              <div className="panel">
+                <span className="lbl">Donate TAZ, shielded</span>
+                <code className="addr" id="don">{donation}</code>
+                <CopyAddress address={donation} label="Donation address" />
+                <p className="hint">Arrives shielded. Testnet only, so it costs you nothing and goes straight back out as drips.</p>
+              </div>
+            ) : (
+              <div className="panel">
+                <span className="lbl">No address configured</span>
+                <p className="hint">
+                  This deployment has not published a donation address, so there is nothing to send to here. If you
+                  run it, set <code className="mono">FAUCET_DONATION_ADDRESS</code>.
+                </p>
+              </div>
+            )}
             <div className="card-copy">
               <h2>Or point a miner at us</h2>
               <p>Transparent, because a coinbase cannot pay a shielded output. Any block that survives funds the faucet.</p>
-              <code className="addr small" id="mine">{mining}</code>
-              <CopyAddress address={mining} label="Mining address" />
+              {/* THE SAME GAP, ONE BLOCK LOWER, and it is the reason to sweep rather than to fix
+                  what a check happened to point at. The api case that caught the donation block
+                  keys on the donation sentence and cannot see this one, so a deployment with no
+                  mining address configured got an empty box and a Copy button that copies an
+                  empty string, on the same page, four lines down. SDE-App's note on the block
+                  asked for a pass over every not-configured path on every page this PR touches
+                  rather than the two that happened to have checks. This is what the pass found,
+                  and the sweep's other reads are named in the PR body. */}
+              {mining ? (
+                <>
+                  <code className="addr small" id="mine">{mining}</code>
+                  <CopyAddress address={mining} label="Mining address" />
+                </>
+              ) : (
+                <p className="hint">
+                  No mining address is configured here, so there is nowhere to point hashpower. If you run it,
+                  set <code className="mono">FAUCET_MINING_ADDRESS</code>.
+                </p>
+              )}
             </div>
           </article>
         </div>

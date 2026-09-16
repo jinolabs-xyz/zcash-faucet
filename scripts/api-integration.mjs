@@ -709,6 +709,13 @@ try {
   ok(`A /donate SHOWS the ${DONATION_UA.length}-char donation address exactly`, visible.includes(DONATION_UA));
   ok(`A /donate SHOWS the ${MINING_TADDR.length}-char mining address exactly`, visible.includes(MINING_TADDR));
   ok("A /donate shows no truncated form of either address", !visible.includes("\u2026"));
+  // THE OTHER DIRECTION OF THE COUPLING CASE B PINS, because one direction is half a property:
+  // a page that said "No address configured" unconditionally would satisfy every B assertion.
+  // Two controls, one per address, in the configuration where both are set.
+  const copyControls = (visible.match(/Copy address/g) ?? []).length;
+  ok("A /donate offers one copy control per address it has", copyControls === 2, `${copyControls} controls`);
+  ok("A /donate does not claim to be missing an address it has",
+    !/No address configured/i.test(visible) && !/No mining address is configured/i.test(visible));
   ok("A main page links to /donate", /href="\/donate"/.test(await (await fetch(BASE_A + "/")).text()));
 
   /* ── A: faucet happy path, then every rejection ──────────────────────── */
@@ -770,7 +777,30 @@ try {
   const donateB = await fetch(BASE_B + "/donate");
   const donateBHtml = await donateB.text();
   ok("B GET /donate still renders without a configured address", donateB.status === 200, `status ${donateB.status}`);
-  ok("B /donate says there is nothing to send to", /No address configured|not published a donation address/i.test(donateBHtml));
+  // THE SENTENCE CHANGED WITH THE DESIGN, THE PROPERTY DID NOT (CTO ruling, 23:48Z). The page
+  // this replaces said "No address configured" inside a bordered block; the redesigned page
+  // says it in the design's own card, with the operator hint beside it. Both halves are pinned
+  // because the first is what a VISITOR needs (there is nothing to send to) and the second is
+  // what an OPERATOR needs (which variable to set), and a page that dropped either would still
+  // match a looser pin.
+  //
+  // NOT WEAKENED TO A STATUS CODE OR A BARE "donate": this case exists because the page once
+  // rendered an empty address box with a Copy button beside it, which is worse than saying
+  // nothing, and only the SENTENCE distinguishes those two.
+  //
+  // SCRIPT TAGS STRIPPED FIRST, the same way case A's address checks do it. Next embeds the
+  // RSC payload in the HTML, so a bare /Copy address/ against the raw document can match text
+  // that no visitor is shown, and a negative assertion is exactly where that goes wrong
+  // quietly.
+  const visibleB = donateBHtml.replace(/<script[\s\S]*?<\/script>/g, "");
+  ok("B /donate says there is nothing to send to", /No address configured/i.test(visibleB));
+  ok("B /donate tells the operator which variable to set", /FAUCET_DONATION_ADDRESS/.test(visibleB));
+  ok("B /donate offers no copy control for an address it does not have", !/Copy address/i.test(visibleB));
+  // THE SECOND ADDRESS ON THE SAME PAGE, found by sweeping rather than by a check pointing at
+  // it. This app has no mining address either, and the card-copy block had the identical
+  // defect one block below the one this case caught.
+  ok("B /donate says the same about the mining address it does not have",
+    /No mining address is configured/i.test(visibleB));
 
   /* ── B: /api/tx per-IP limiter (#90) ─────────────────────────────────── */
   // TX_LOOKUP_RATE_MAX is 3 on this app. A real txid is not needed: the limiter

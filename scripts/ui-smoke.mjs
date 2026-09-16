@@ -1126,19 +1126,46 @@ async function checkSubpages(browser, base) {
   // spelling used innerText and read 0 chars against a page that was perfectly correct - the
   // stack simply had no FAUCET_DONATION_ADDRESS configured, which CI does not set either.
   //
-  // So the assertion is that the element is there and says the SAME THING with and without a
-  // script, which is never vacuous (the element must exist) and is true whether or not an
-  // address is configured. The length check rides along only when there is one to check.
-  const addrOff = await plain.locator("#don").textContent();
+  // So the assertion is on the PANEL rather than on the address element, and it is the same
+  // assertion in both configurations. My first spelling read `#don` and required it to exist,
+  // which pinned the defect I was in the middle of fixing: at a2aa54b the page rendered
+  // `<code id="don">` holding an empty string whatever was configured, so "the element is
+  // there" was true for the wrong reason, and giving the page its missing not-configured state
+  // would have turned that green assertion red. An assertion that goes red when the code gets
+  // MORE correct is pinning the bug, not the behaviour.
+  //
+  // What the page actually promises is that whatever /donate says about an address, it says it
+  // with no script running. That holds with an address and without one, so there is no SKIP
+  // here any more: the no-address run now covers the not-configured state instead of covering
+  // nothing.
+  const panelOff = (await plain.locator(".card.feature .panel").first().textContent()) ?? "";
   await page.goto(base + "/donate", { waitUntil: "networkidle" });
-  const addrOn = await page.locator("#don").textContent();
-  ok("/donate's address element is server rendered, not script dependent",
-    addrOff !== null && addrOff === addrOn, `off ${JSON.stringify(addrOff)}, on ${JSON.stringify(addrOn)}`);
-  if ((addrOn ?? "").trim().length > 0) {
+  const panelOn = (await page.locator(".card.feature .panel").first().textContent()) ?? "";
+  ok("/donate's address panel is server rendered, not script dependent",
+    panelOff.trim().length > 0 && panelOff === panelOn,
+    `off ${JSON.stringify(panelOff.trim().slice(0, 60))}, on ${JSON.stringify(panelOn.trim().slice(0, 60))}`);
+
+  // AND THE TWO RENDERINGS AGREE ABOUT WHICH STATE THEY ARE IN. Counts, not text, because a
+  // script that hydrated a different branch would show up here as 1 against 0 whatever the
+  // strings said.
+  const donOff = await plain.locator("#don").count();
+  const donOn = await page.locator("#don").count();
+  ok("/donate agrees with itself about whether it has an address, script or no script",
+    donOff === donOn, `off ${donOff}, on ${donOn}`);
+
+  if (donOn === 1) {
     ok("and when an address is configured it arrives whole without a script",
-      (addrOff ?? "").trim().length > 40, `${(addrOff ?? "").trim().length} chars`);
+      (await plain.locator("#don").textContent() ?? "").trim().length > 40,
+      `${(await plain.locator("#don").textContent() ?? "").trim().length} chars`);
+    ok("and it offers the control that copies it",
+      (await plain.locator("#don").count()) === 1 && /Copy address/.test(panelOff), panelOff.trim().slice(0, 80));
   } else {
-    console.log("SKIP: no FAUCET_DONATION_ADDRESS on this run, so the address LENGTH was not covered");
+    // THE OTHER HALF OF THE COUPLING, and the configuration CI actually runs. No address means
+    // the page says so and offers no control for the thing it does not have.
+    ok("and with no address configured it says so rather than showing an empty box",
+      /No address configured/i.test(panelOff), panelOff.trim().slice(0, 80));
+    ok("and offers no copy control for an address it does not have",
+      !/Copy address/.test(panelOff), panelOff.trim().slice(0, 80));
   }
   await noJs.close();
   await ctx.close();
