@@ -171,7 +171,14 @@ that was missing on 2026-09-15: the existing gate reads the unit's state word, w
 protects a miner the owner stopped and cannot protect one a heal stopped, because by the
 time a deploy lands anything may have started it again.
 
+**ON THE BOX.** Every command below reads a path that exists only there, and `cat` on a
+missing file answers "No such file or directory" whether the marker is absent, the directory
+was never created, or you are on your laptop. Those are three different answers and the shell
+gives them the same words.
+
 ```bash
+ssh root@zcashfaucet.jinolabs.xyz
+
 # is it parked, and why
 sudo cat /var/lib/faucet-watchdog/miner-parked-by-fork-heal
 # the file carries the instant and the heights that triggered it
@@ -590,8 +597,17 @@ authorisation means what the operator thinks it means.
 # WRITE, and only on the user's explicit say-so
 sed -i 's/^FAUCET_SHIELD_COINBASE=false/FAUCET_SHIELD_COINBASE=true/' \
   /opt/zcash-faucet/deploy/z3/faucet.env
-cd /opt/zcash-faucet/deploy/z3 && docker compose restart faucet
+cd /opt/zcash-faucet/deploy/z3 && docker compose -f docker-compose.faucet.yml up -d faucet
 ```
+
+**`up -d`, NOT `restart`, and `-f` on both.** This page said `docker compose restart faucet`
+until 2026-09-16, and it fails twice. `deploy/z3` holds only `docker-compose.faucet.yml`, so
+without `-f` compose answers *"no configuration file provided: not found"*. And `restart`
+restarts the container against the configuration it already has: change `faucet.env`, run it,
+and the old value is still in the process. Measured that evening while turning
+`FAUCET_CTAZ_ENABLED` off - `restart` reported success and `printenv` in the container still
+read `true`. `up -d` recreates it against the changed file, and `uptimeSeconds` on
+`/api/status` drops to single digits, which is how you know it really happened.
 
 **The read that proves it:**
 
@@ -613,7 +629,7 @@ This is the step that recreates the incident if it goes wrong, so watch for
 **confirmation** rather than for the attempt.
 
 ```sh
-docker compose logs -f --since 5m faucet | grep '\[reserve\]'
+docker compose -f docker-compose.faucet.yml logs -f --since 5m faucet | grep '\[reserve\]'
 ```
 
 Read the verdict, not the vibe. #174 makes each outcome distinct on purpose:
@@ -778,7 +794,7 @@ So once the transparent balance at the miner address has stopped falling:
 # back to the real marks
 sed -i.bak 's/^FAUCET_RESERVE_LOW_TAZ=.*/FAUCET_RESERVE_LOW_TAZ=5/;s/^FAUCET_RESERVE_TARGET_TAZ=.*/FAUCET_RESERVE_TARGET_TAZ=15/' \
   /opt/zcash-faucet/deploy/z3/faucet.env
-cd /opt/zcash-faucet/deploy/z3 && docker compose restart faucet
+cd /opt/zcash-faucet/deploy/z3 && docker compose -f docker-compose.faucet.yml up -d faucet
 ```
 
 **The read that proves it:** `.reserve.refilling` is `false` and `.reserve.emptySweeps`
@@ -925,8 +941,8 @@ several clients race to become the master before the control socket exists. Warm
 it once, then fan out:
 
 ```bash
-ssh -o ControlMaster=yes -o ControlPersist=10m -fN root@<box>   # open the master
-ssh -O check root@<box>                                        # confirm it is up
+ssh -o ControlMaster=yes -o ControlPersist=10m -fN root@zcashfaucet.jinolabs.xyz   # open the master
+ssh -O check root@zcashfaucet.jinolabs.xyz                                        # confirm it is up
 # now run the parallel work
 ```
 

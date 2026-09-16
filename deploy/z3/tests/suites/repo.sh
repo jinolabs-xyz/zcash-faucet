@@ -1763,3 +1763,40 @@ check "and there are unit tests to check at all, so the row above is not countin
 check "the doubles announce the port they are bound to, not the one they were asked for" \
   "grep -q 'srv.address().port' '$REPO/scripts/fake-zallet.mjs' && grep -q 'srv.address().port' '$REPO/scripts/fake-crosslink.mjs'"
 
+echo "== repo: the runbook's commands can be run from where it says to run them"
+# A RUNBOOK COMMAND THAT CANNOT WORK IS WORSE THAN A MISSING ONE, because the failure reads like a
+# finding. On 2026-09-16 the owner followed this page twice and got two answers that looked like
+# discoveries and were neither:
+#   `cat /var/lib/faucet-watchdog/miner-parked-by-fork-heal` on a LAPTOP -> "No such file or
+#     directory", identical to the answer from the box, and the page had no ssh line above it.
+#   `cd .../deploy/z3 && docker compose restart faucet` -> "no configuration file provided: not
+#     found", because that directory holds only docker-compose.faucet.yml.
+#
+# These rows tie the page to what is on disk. They cannot check that a command WORKS - only the box
+# can - but they catch the two shapes that have actually bitten: a compose call in a directory with
+# no default-named file, and an unresolved placeholder standing where a host should be.
+OPS="$REPO/OPERATIONS.md"
+check "OPERATIONS.md exists, so the rows below are reading something" '[ -s "$OPS" ]'
+
+# deploy/z3 has no docker-compose.yml, so every invocation naming that directory needs -f. Counted
+# rather than grepped for absence: `! grep -q` under pipefail is a false pass.
+Z3_NAKED="$(grep -n 'zcash-faucet/deploy/z3 && docker compose' "$OPS" | grep -vc 'compose -f docker-compose.faucet.yml' || true)"
+check "every runbook compose call in deploy/z3 passes -f, because that directory has no default-named compose file" \
+  '[ "$Z3_NAKED" = "0" ]'
+check "and the file it names is the one that is actually there" \
+  '[ -f "$REPO/deploy/z3/docker-compose.faucet.yml" ] && [ ! -f "$REPO/deploy/z3/docker-compose.yml" ] && [ ! -f "$REPO/deploy/z3/compose.yaml" ]'
+
+# An unresolved placeholder is the same defect as a missing line: the reader supplies something and
+# it is not checkable. <box> was the one that sent the owner to a laptop.
+PLACEHOLDER="$(grep -c 'root@<box>' "$OPS" || true)"
+check "the runbook names a real ssh host rather than an unresolved <box> placeholder" \
+  '[ "$PLACEHOLDER" = "0" ]'
+
+# NOT ADDING A MARKER-PATH ROW HERE. I wrote one and my own mutant refused it: renaming the
+# watchdog's marker to `...-healing` left my `grep -q "miner-parked-by-fork-heal"` matching, because
+# the new name CONTAINS the old one - a substring pass dressed as a check. The mutant killed
+# :1337's row instead of mine, which is the tell. That row already ties the marker across the three
+# files and does it by composing FORK_PARK_DIR with the basename rather than spelling the joined
+# path, so it is both stricter and there first. A weaker duplicate beside it is noise that would
+# read like coverage.
+
