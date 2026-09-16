@@ -220,6 +220,29 @@ async function checkChunkOrderIdentity(browser) {
     }
     const linksBefore = await order();
     const before = await snap();
+
+    // THE LANDING, RE-POINTED AT THE PANEL. `before.length >= 50` was the whole coverage guard,
+    // and it only says the page rendered something - it cannot say this check ever looked at the
+    // claim card. The rest of the page (shell, hero, footer, nav) clears 50 nodes on its own, so
+    // if the card failed to render, or rendered without the wrappers it now has, every row below
+    // would still report the page identical under a chunk flip: green, and blind to the exact
+    // structure #583 introduces.
+    //
+    // This is the L33/L34 shape. The chunk-order flip is only evidence about the elements that
+    // were IN the snapshot, and until now nothing pinned which those were. So the subjects are
+    // named, and the identity row itself is gated on them: an identity result that never saw the
+    // panel is not a weaker pass, it is a different measurement.
+    const landed = await p.evaluate(() => ({
+      panel: document.querySelectorAll(".card.claim > .panel").length,
+      copy: document.querySelectorAll(".card.claim > .card-copy").length,
+      phase: document.querySelectorAll(".card.claim .phase").length,
+    }));
+    // `.phase` is deliberately NOT required here: all thirteen are behind a state and this check
+    // loads the form, so demanding one would fail on a true page. The wrappers are the structure
+    // the fold-in adds and the structure this check must be shown to have covered.
+    ok(`${theme}${keyboard ? ", keyboard-focused," : ","} the chunk-order snapshot actually contains the card's panel and copy block`,
+      landed.panel === 1 && landed.copy === 1,
+      `panel ${landed.panel}, card-copy ${landed.copy} (want 1, 1); phase ${landed.phase} at rest, not required`);
     await p.evaluate(() => {
       const ls = [...document.querySelectorAll('link[rel="stylesheet"]')];
       if (ls.length < 2) return;
@@ -242,9 +265,10 @@ async function checkChunkOrderIdentity(browser) {
       }
     }
     ok(`${theme}${keyboard ? ", keyboard-focused," : ","} the page is identical with the CSS chunks linked in the other order`,
-      flipped && before.length >= 50 && moved === 0,
+      flipped && before.length >= 50 && landed.panel === 1 && landed.copy === 1 && moved === 0,
       !flipped ? `the flip did not take: ${linksBefore.length} stylesheet(s)`
         : before.length < 50 ? `only ${before.length} nodes rendered, too few to judge`
+        : (landed.panel !== 1 || landed.copy !== 1) ? `the card's structure was not in the snapshot (panel ${landed.panel}, card-copy ${landed.copy}), so this says nothing about it`
         : `${moved} of ${before.length} nodes moved, ${deltas} deltas; first: ${first}`);
     await c.close();
   }
@@ -404,6 +428,11 @@ async function checkLegacyPalette(browser) {
  * shape of every vacuous assertion this suite has had to fix. Fewer than six text nodes is a
  * red line, not a quiet pass. */
 async function checkCardInnerPadding(browser) {
+  // RE-BASELINED for the .panel/.card-copy fold-in (CTO 06:46Z). The card's inner inset is no
+  // longer the card's own padding: `.card.claim` is a flex column with the padding living on
+  // `.panel` (redesign-hero.css:25, 7.5% 7.5% 8%). The card-edge row below still measures the
+  // composite, so deleting the panel's padding still turns it red - that is why it stays as it
+  // is rather than being re-pointed. What it could NOT see is the boxes one level in.
   for (const vp of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
     const c = await browser.newContext({ viewport: vp });
     const p = await c.newPage();
@@ -426,12 +455,200 @@ async function checkCardInnerPadding(browser) {
         const gap = Math.min(b.left - cr.left, cr.right - b.right);
         if (!worst || gap < worst.gap) worst = { gap: Math.round(gap * 10) / 10, text: t.slice(0, 40) };
       }
-      return { measured, worst, missing: false };
+
+      // THE BOXES ONE LEVEL IN. A container with no rule of its own is invisible to every
+      // content assertion and to the card-edge row above: its children still lay out, still
+      // carry their own type, and still clear the CARD. The only thing missing is the box.
+      const px = (v) => Math.round(parseFloat(v) * 10) / 10 || 0;
+      const box = (el) => {
+        const cs = getComputedStyle(el);
+        // BOTH background properties. `--panel-bg-feature` and `--surface` are gradients, which
+        // land in background-IMAGE; reading backgroundColor alone reports rgba(0, 0, 0, 0) on a
+        // fully painted panel and would have called the peach gradient missing.
+        return {
+          padT: px(cs.paddingTop), padL: px(cs.paddingLeft),
+          bor: px(cs.borderTopWidth), rad: px(cs.borderTopLeftRadius),
+          bg: cs.backgroundColor, bgImg: cs.backgroundImage,
+          painted: cs.backgroundImage !== "none"
+            || (cs.backgroundColor !== "rgba(0, 0, 0, 0)" && cs.backgroundColor !== "transparent"),
+        };
+      };
+      const panel = card.querySelector(":scope > .panel");
+
+      // NO `.phase` IS ON SCREEN AT REST, and that is not a bug: every one of the thirteen is
+      // behind a state (`syncing`, `checking`, `queued`, `reserve-low`, `sent`...), and the page
+      // this check loads is the form. Measuring "the rendered ones" therefore measured nothing
+      // and the row could only ever report that it had nothing to say.
+      //
+      // So the subject is MADE. A bare `<div class="phase">` appended to the real panel, in the
+      // real cascade, on the real page, is exactly the selector the design states a rule for;
+      // what it computes to is what any of the thirteen will compute to when its state arrives.
+      // This is a claim about the RULE, and it is worth being explicit that it is not a claim
+      // about any particular panel's markup (L33) - a phase that shipped without the class would
+      // still be bare and this row would still be green.
+      const probe = document.createElement("div");
+      probe.className = "phase";
+      probe.setAttribute("data-ui-smoke", "phase-probe");
+      probe.innerHTML = "<h3>probe</h3><p>probe</p>";
+      (panel || card).appendChild(probe);
+      const probeBox = box(probe);
+      probe.remove();
+
+      // And if the run happens to have caught a real one, it is measured too rather than assumed.
+      const live = [...card.querySelectorAll(".phase")].filter((el) => el.getClientRects().length);
+
+      return {
+        measured, worst, missing: false,
+        panelBox: panel ? box(panel) : null,
+        probeBox,
+        liveCount: live.length,
+        liveBoxes: live.map(box),
+      };
     });
+
     const detail = r.missing ? "no .card.claim on the page"
       : `${r.measured} text nodes, worst ${r.worst ? r.worst.gap : "-"}px on "${r.worst ? r.worst.text : "-"}"`;
     ok(`${vp.width}x${vp.height}: every text node in the claim card clears the card's own edge by 8px`,
       !r.missing && r.measured >= 6 && !!r.worst && r.worst.gap >= 8, detail);
+
+    // The panel is where that clearance now comes from, so it is named rather than inferred.
+    // Without this row the card-edge number above could be produced by a padding that moved
+    // somewhere else entirely and the re-baseline would have measured nothing about the fold-in.
+    const pb = r.panelBox;
+    ok(`${vp.width}x${vp.height}: the claim card's inset lives on .panel, and the panel is painted`,
+      !!pb && pb.padT > 0 && pb.padL > 0 && pb.painted,
+      pb ? `panel padding ${pb.padT}/${pb.padL}px, radius ${pb.rad}px, bg-color ${pb.bg}, bg-image ${pb.bgImg.slice(0, 60)}`
+         : "no .card.claim > .panel in the DOM");
+
+    // EVERY RENDERED .phase WEARS THE DESIGN'S BOX. The design states the container
+    // (`padding:calc(.85*var(--u)) calc(1.1*var(--u));border:calc(.06*var(--u)) solid var(--hair);
+    // border-radius:calc(.6*var(--u));background:var(--surface)`) and we ship eight DESCENDANT
+    // rules and no rule for the container itself - so each panel renders as flow content where
+    // the design has a bordered card. Nothing already in this file could see it: the children
+    // are styled, the text is right, and the card-edge clearance is unchanged.
+    const q = r.probeBox;
+    const dressed = (b) => !!b && b.padT > 0 && b.padL > 0 && b.bor > 0 && b.rad > 0 && b.painted;
+    ok(`${vp.width}x${vp.height}: a .phase inside the card wears the design's box (padding, border, radius, surface)`,
+      dressed(q),
+      q ? `padding ${q.padT}/${q.padL}px, border ${q.bor}px, radius ${q.rad}px, bg-color ${q.bg}, bg-image ${q.bgImg.slice(0, 40)}`
+        : "the probe element did not attach");
+    // Kept separate so a run that DOES catch a live panel says so rather than folding into the
+    // rule row - one number covering two subjects is how a measurement stops naming its own state.
+    if (r.liveCount > 0) {
+      ok(`${vp.width}x${vp.height}: and every .phase actually on screen wears it too`,
+        r.liveBoxes.every(dressed),
+        `${r.liveBoxes.filter(dressed).length} of ${r.liveCount} dressed`);
+    }
+
+    await c.close();
+  }
+}
+
+async function checkTallCardStaysReachable(browser) {
+  // THE TALL PROBE. The one-screen clamp was removed on purpose, so "the card is taller than the
+  // viewport" is NOT the defect and must not be asserted against - App measured the card at
+  // 1702px in a 900px viewport and that is the intended consequence. What must stay true either
+  // way is the reader can still get to the bottom of it.
+  //
+  // This matters because two rules we ship describe a scroll box that does not exist in our
+  // layout: `.card.claim{max-height:100%}` resolves against a grid track with an auto height, so
+  // the percentage never resolves, and `.card.claim > .panel{overflow:auto}` therefore never has
+  // an overflow to scroll (panel measured 1559 client / 1559 scroll, scrollTop stuck at 0). They
+  // are inert today. The day someone makes the clamp resolve, `overflow:auto` starts clipping -
+  // and if the panel still cannot scroll, the tail of the card becomes unreachable with no error
+  // anywhere. That is the state this probe exists to catch, and it is a property of the CAUSE
+  // rather than of today's content, which is the whole lesson of checkFooterReachable below.
+  for (const vp of [{ width: 1280, height: 720 }, { width: 390, height: 844 }]) {
+    const c = await browser.newContext({ viewport: vp });
+    const p = await c.newPage();
+    await p.goto(BASE, { waitUntil: "networkidle" });
+    await p.waitForSelector(".card.claim", { timeout: 15_000 }).catch(() => {});
+
+    const r = await p.evaluate((vh) => {
+      const card = document.querySelector(".card.claim");
+      const panel = card && card.querySelector(":scope > .panel");
+      if (!card || !panel) return { missing: true };
+
+      const cardBefore = card.getBoundingClientRect().height;
+
+      // Make the content tall rather than waiting for a state that happens to be tall. A probe
+      // that only fires when today's copy overflows is a probe on today's copy (L1).
+      const spacer = document.createElement("div");
+      spacer.setAttribute("data-ui-smoke", "tall-spacer");
+      spacer.style.height = (vh * 2) + "px";
+      const marker = document.createElement("p");
+      marker.id = "ui-smoke-tall-marker";
+      marker.textContent = "TALL PROBE TAIL";
+      panel.appendChild(spacer);
+      panel.appendChild(marker);
+
+      const cardAfter = card.getBoundingClientRect().height;
+
+      // Walk marker -> document and collect every ancestor that hides what it cannot scroll.
+      // "Hidden AND overflowing AND not scrollable" is the precise shape of unreachable; an
+      // ancestor that hides but fits is clipping nothing, and one that scrolls is reachable.
+      const clips = [];
+      for (let el = marker; el && el !== document.documentElement; el = el.parentElement) {
+        const cs = getComputedStyle(el);
+        const hides = (v) => v === "hidden" || v === "clip";
+        const overflows = el.scrollHeight - el.clientHeight > 1;
+        if (!overflows) continue;
+        if (!hides(cs.overflowY)) continue;
+        // AND THAT IS THE WHOLE TEST. My first version then asked whether the element could be
+        // scrolled, by setting scrollTop and reading it back - and an `overflow:hidden` box
+        // ANSWERS YES, because hidden suppresses the scrollbar and the wheel, not the property.
+        // So the escape hatch declared every clipped box reachable and the row survived the one
+        // mutant written to kill it. A reader has no scrollTop. hidden means unreachable.
+        clips.push(`${el.tagName.toLowerCase()}${el.className ? "." + String(el.className).trim().split(/\s+/)[0] : ""} overflow-y:${cs.overflowY} ${el.scrollHeight}>${el.clientHeight}`);
+      }
+
+      // And the direct question, independent of the walk: can it be brought on screen at all?
+      marker.scrollIntoView({ block: "center" });
+      const mr = marker.getBoundingClientRect();
+      const onScreen = mr.bottom > 0 && mr.top < window.innerHeight && mr.height > 0;
+
+      const panelScroll = panel.scrollHeight, panelClient = panel.clientHeight;
+      const panelFacts = `panel ${panelScroll} scroll / ${panelClient} client, overflow-y:${getComputedStyle(panel).overflowY}`;
+      spacer.remove();
+      marker.remove();
+      return { missing: false, cardBefore: Math.round(cardBefore), cardAfter: Math.round(cardAfter), grew: cardAfter - cardBefore, clips, onScreen, panelFacts, panelScroll, panelClient };
+    }, vp.height);
+
+    const label = `${vp.width}x${vp.height}`;
+    if (r.missing) {
+      ok(`${label}: the tall probe found the claim card`, false, "no .card.claim > .panel in the DOM");
+      await c.close();
+      continue;
+    }
+
+    // ENGAGEMENT GUARD. If the injected height did not actually make the card taller than the
+    // viewport, everything below is a rest-state reading wearing a tall label - the same vacuity
+    // that made the first version of the hover pass and the footer pass worthless.
+    // ENGAGEMENT, STATED FOR BOTH REGIMES. The first version of this guard asked only whether the
+    // card had grown past the viewport, which is what happens while `max-height:100%` does not
+    // resolve. Restore the clamp and it resolves, the card stops growing, the guard fails - and
+    // it fails in exactly the configuration where reachability matters MOST: a fixed box with
+    // more content than fits. A guard that only holds in one of the two layouts is a guard on
+    // the layout, not on the probe (L34).
+    //
+    // What the probe actually needs is that the injection created an overflow SOMEWHERE for the
+    // layout to deal with: either the card outgrew the screen, or the panel now holds more than
+    // its box. Either way there is something to reach, which is the premise of the rows below.
+    const cardOverflows = r.cardAfter > vp.height;
+    const panelOverflows = r.panelScroll - r.panelClient > 1;
+    ok(`${label}: the tall probe actually creates an overflow for the layout to handle`,
+      cardOverflows || panelOverflows,
+      `card ${r.cardBefore} -> ${r.cardAfter}px in a ${vp.height}px viewport (+${Math.round(r.grew)}), ${r.panelFacts}`
+      + `; ${cardOverflows ? "card overflows the screen" : "card fits"}, ${panelOverflows ? "panel overflows its box" : "panel fits"}`);
+
+    ok(`${label}: with the card taller than the screen, nothing clips its tail without scrolling it`,
+      r.clips.length === 0,
+      r.clips.length ? r.clips.join("; ") : `no unreachable clip; ${r.panelFacts}`);
+
+    ok(`${label}: the bottom of a tall claim card can still be brought on screen`,
+      r.onScreen === true,
+      r.onScreen ? `marker reachable; ${r.panelFacts}` : `scrollIntoView left the tail off screen; ${r.panelFacts}`);
+
     await c.close();
   }
 }
@@ -1054,7 +1271,17 @@ async function checkRefusalCards(browser, base, address) {
       expect: async (c) => ok("kind busy is busy, with Try again", /busy, nothing left the wallet/.test(c.text) && c.buttons.includes("try again"), c.text.split("\n")[0]) },
     { name: "the daily cap", status: 503, body: { error: "Faucet daily cap reached. Please come back tomorrow.", kind: "cap", retryAfterSeconds: 5400, nextAt: new Date(Date.now() + 5_400_000).toISOString() },
       expect: async (c) => {
-        ok("kind cap says the budget is spent, with the time it resets", /today's taz budget is spent/.test(c.text) && /room again around .*\d{1,2}:\d{2}/.test(c.text), c.text.split("\n")[0]);
+        // A CONJUNCTION MUST SAY WHICH HALF BROKE. This row tests two independent things - the
+        // wording and the reset time - and printed `c.text.split("\n")[0]`, the kicker, which is
+        // neither of them. On 2026-09-16 it cost a wrong finding: the detail read "faucet daily
+        // cap", I concluded the reset time had been dropped, and the reset time was never touched
+        // (verified across three refs: the clause is present on all of them, the wording is not).
+        // A failure message that cannot distinguish its own conjuncts can only be read by guessing.
+        const capWords = /today's taz budget is spent/.test(c.text);
+        const capWhen = /room again around .*\d{1,2}:\d{2}/.test(c.text);
+        ok("kind cap says the budget is spent, with the time it resets", capWords && capWhen,
+          capWords && capWhen ? c.text.split("\n")[0]
+            : `${capWords ? "wording ok" : "WORDING missing"}, ${capWhen ? "reset time ok" : "RESET TIME missing"} - card: ${c.text.replace(/\s+/g, " ").slice(0, 160)}`);
         ok("and offers no Try again", !c.buttons.some((b) => /try again/.test(b)), c.buttons.join("|"));
       } },
     { name: "an unknown outcome", status: 504, body: { error: "Your drip was submitted but we lost track of it before it confirmed. Do not retry yet: if it went through, the coins are on their way. Check the address in a few minutes." },
@@ -2000,6 +2227,7 @@ try {
   await checkAppearance(page);
   await checkFooterReachable(browser);
   await checkCardInnerPadding(browser);
+  await checkTallCardStaysReachable(browser);
   await checkLegacyPalette(browser);
   await checkChunkOrderIdentity(browser);
   // WHERE THE TAZ COMES FROM follows the status (R-39). Under this stack there is no
