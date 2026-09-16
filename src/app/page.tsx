@@ -1586,7 +1586,7 @@ export default function Home() {
                   either way: hiding it on cTAZ would leave someone hunting for a txid the
                   receipt never mentions. `tx.txid` decides it, not `tx.network`. */}
               <dt>txid</dt>
-              <dd className="mono" title={tx.txid ?? undefined}>{tx.txid ? short(tx.txid, 10, 8) : "not reported by this network"}</dd>
+              <dd className="mono" title={tx.txid ?? undefined}>{tx.txid ? short(tx.txid, 10, 8) : "none, this network returns none"}</dd>
               <dt>Status</dt>
               <dd>
                 {txSeen === null

@@ -130,3 +130,17 @@ li[data-active] .mark{border-color:var(--orange);border-top-color:transparent;an
  * "receipt actions: even grid" section). */
 .phase[data-phase="sent"] .row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:calc(.6*var(--u))}
 .phase[data-phase="sent"] .row .tag{justify-content:center;width:100%}
+
+/* THE 44px TAP FLOOR, ON THE INDEX CARD. redesign-subpages.css:90 has
+ * `@media (max-width:56rem){.view.sub .tag{min-height:44px}}` - scoped to the subpages, and the
+ * index is not a `.view.sub`, so the card's own chips had no floor at all. `.tag` is
+ * `height:calc(2.15*var(--u))` and `.tabs button` is `calc(2*var(--u))`: 26px and 24px against a
+ * 44px floor, measured by ui-smoke at three mobile viewports (TAZ 24, beta 24, Copy txid /
+ * receipt / spending key 26). Introduced here - the old controls were `.btn`, which carried its
+ * own floor, and the transcription to `.tag` took that away with it.
+ *
+ * In this sheet rather than on the base `.tag` rule: `.tag` is SDE-UI's in the ownership split,
+ * and the index card is what is missing a floor, not the chip everywhere. */
+@media (max-width:56rem){
+  .card.claim .tag,.card.claim .tabs button{min-height:44px}
+}
