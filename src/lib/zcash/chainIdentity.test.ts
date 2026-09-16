@@ -59,6 +59,48 @@ test("a missing branch id is cannot-verify, not agreement", () => {
   assert.equal(isChainProblem(v), false);
 });
 
+// WHICH SIDE IS SILENT, and the three cases are distinguished because they have different
+// owners and different fixes. Prod reported this state long enough to be committed as a
+// fixture and nobody could tell from the reason whether it was our node or the reference.
+// It was ours, and establishing that took reading the oracle and then querying the public
+// lightwalletd by hand.
+test("and it names OUR node when ours is the silent one", () => {
+  const v = classifyChainIdentity({ ...ok, ourBranchId: null });
+  assert.equal(v.state, "cannot-verify");
+  assert.match(v.reason, /our node does not report/);
+  // Not the other side, or the sentence sends someone to the wrong system.
+  assert.doesNotMatch(v.reason, /independent source does not report/);
+});
+
+test("and it names the INDEPENDENT SOURCE when theirs is the silent one", () => {
+  const v = classifyChainIdentity({ ...ok, theirBranchId: null });
+  assert.equal(v.state, "cannot-verify");
+  assert.match(v.reason, /independent source does not report/);
+  assert.doesNotMatch(v.reason, /our node does not report/);
+});
+
+test("and it says so plainly when BOTH are silent, rather than blaming one", () => {
+  const v = classifyChainIdentity({ ...ok, ourBranchId: null, theirBranchId: null });
+  assert.equal(v.state, "cannot-verify");
+  assert.match(v.reason, /neither our node nor the independent source/);
+});
+
+// THE ANTI-VACUITY PARTNER. Every row above matches a phrase, so a reason that named the
+// side and dropped the QUESTION would satisfy all three - "our node does not report" alone
+// tells an operator nothing about what is unestablished. This pins the half that survived
+// from the original sentence, and it is the half that says why anyone should care.
+test("naming the side does not cost the sentence its point", () => {
+  for (const f of [
+    { ...ok, ourBranchId: null },
+    { ...ok, theirBranchId: null },
+    { ...ok, ourBranchId: null, theirBranchId: null },
+  ]) {
+    const v = classifyChainIdentity(f);
+    assert.match(v.reason, /consensus branch id/, JSON.stringify(f));
+    assert.match(v.reason, /whether we share rules is unestablished/, JSON.stringify(f));
+  }
+});
+
 test("a missing hash is cannot-verify, and says rules still matched", () => {
   // The partial result is worth keeping: rules agreeing is real information even when
   // history could not be checked.

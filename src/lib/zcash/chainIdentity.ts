@@ -71,9 +71,25 @@ export function classifyChainIdentity(f: IdentityFacts): IdentityVerdict {
   }
 
   if (f.ourBranchId === null || f.theirBranchId === null) {
+    // WHICH SIDE, because the two have different owners and different fixes. This said "a
+    // consensus branch id is missing" for all three shapes, and on 2026-09-16 that sentence
+    // cost an investigation: prod had been reporting it long enough to be committed as a
+    // fixture (status.prod.json:184), and nobody could tell from the outside whether our node
+    // or the reference was the silent one. It was ours - the oracle asks the WALLET a
+    // node-level question - but establishing that took reading the oracle, then querying the
+    // public lightwalletd by hand to eliminate the other side.
+    //
+    // The state is deliberately unchanged. This is a claim about the LOOKUP, not the chain,
+    // and naming the side makes it a better claim about the lookup, not a stronger one.
+    const missing =
+      f.ourBranchId === null && f.theirBranchId === null
+        ? "neither our node nor the independent source reports"
+        : f.ourBranchId === null
+          ? "our node does not report"
+          : "the independent source does not report";
     return {
       state: "cannot-verify",
-      reason: "a consensus branch id is missing, so whether we share rules is unestablished",
+      reason: `${missing} a consensus branch id, so whether we share rules is unestablished`,
     };
   }
 
