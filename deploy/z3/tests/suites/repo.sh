@@ -1486,8 +1486,16 @@ check "and a declaration names the body it declares, so a second change cannot i
 # about whether the design is being ignored or protected. SDE-UI found the case on #576 - the
 # design's own copy control is 26px at the mobile unit, under the 44px tap target ui-smoke
 # enforces, so a FAITHFUL transcription broke a rule that lives outside the spec. CTO ruling.
+# AND `shipped` MAY BE THE EMPTY STRING, WHICH IS A BODY RATHER THAN A MISSING FIELD. This was
+# written when only ADDED and CHANGED were gated, so every declaration described a rule we ship and
+# every body was non-empty. DROPPED became enforceable the day the transcription completed, and a
+# rule the spec has and we ship NOWHERE declares the body "" - there is nothing else it could say.
+# Requiring truthiness put the two gates in direct contradiction: parity-check compares the declared
+# body against the shipped one, so "" is the only value that passes there, and any sentinel this
+# check would have accepted reads as DECLARED WITH A DIFFERENT BODY. `is not None` keeps the intent
+# whole: the field stays mandatory, and shipping the rule later still makes the declaration stale.
 check "every declaration in every departures file carries all three halves, kind included" \
-  "python3 -c \"import json,sys,glob; fs=glob.glob('$REPO/design/spec/*/departures.json'); sys.exit(1 if not fs else (1 if [k for f in fs for k,v in json.load(open(f)).items() if not k.startswith('_') and not (isinstance(v,dict) and v.get('why') and v.get('shipped') and v.get('kind') in ('divergence','override'))] else 0))\""
+  "python3 -c \"import json,sys,glob; fs=glob.glob('$REPO/design/spec/*/departures.json'); sys.exit(1 if not fs else (1 if [k for f in fs for k,v in json.load(open(f)).items() if not k.startswith('_') and not (isinstance(v,dict) and v.get('why') and v.get('shipped') is not None and v.get('kind') in ('divergence','override'))] else 0))\""
 check "and the checker refuses a declaration that does not name its kind, rather than defaulting" \
   "grep -qF 'UNKINDED DECLARATION' '$REPO/scripts/parity-check.mjs' && grep -qF 'means both means neither' '$REPO/scripts/parity-check.mjs'"
 check "and every vendored spec has one beside it, so a slice cannot depart undeclared" \
