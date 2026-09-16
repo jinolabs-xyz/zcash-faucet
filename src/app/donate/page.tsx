@@ -110,7 +110,7 @@ export default async function Donate() {
               <div className="panel">
                 <span className="lbl">Donate TAZ, shielded</span>
                 <code className="addr" id="don">{donation}</code>
-                <CopyAddress address={donation} label="Donation address" />
+                <CopyAddress address={donation} label="Donation address" variant="panel" />
                 <p className="hint">Arrives shielded. Testnet only, so it costs you nothing and goes straight back out as drips.</p>
               </div>
             ) : (
@@ -136,7 +136,7 @@ export default async function Donate() {
               {mining ? (
                 <>
                   <code className="addr small" id="mine">{mining}</code>
-                  <CopyAddress address={mining} label="Mining address" />
+                  <CopyAddress address={mining} label="Mining address" variant="chip" />
                 </>
               ) : (
                 <p className="hint">
