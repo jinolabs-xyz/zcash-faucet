@@ -92,7 +92,15 @@ export function heightDiffChip(diff: number | null): string | null {
   return `(${sgn} vs network)`;
 }
 
-/** The sentence under the difference on the network card. */
+/**
+ * The sentence under the difference on the network card.
+ *
+ * NO DEPARTURE IS DECLARED HERE AND THAT IS DELIBERATE, said because the function above this one
+ * carries a DEPARTURE block and silence beside it reads like an oversight. The snapshot's
+ * `derived.heightNote` (index.html:910) is the same three-way sentence on the same input, so
+ * there is nothing to declare - unlike `heightDiffChip`, where we group digits and the design
+ * does not.
+ */
 export function heightNote(diff: number | null): string {
   if (diff === null) return "nothing to compare against";
   if (diff > 0) return "ahead, normal for a node that mines";
@@ -285,7 +293,7 @@ export function ctazWord(ctaz: { enabled?: boolean; servable?: boolean } | null 
  * what word describes the faucet (R-24). One definition, three importers.
  *
  * THERE IS NO "failing" BRANCH, and there was one until the #595 round. It read as a live behavioural departure from the approved preview - the
- * preview's `tone()` map has no "failing" key, ours returns `bad` - which invites a reader to
+ * preview's `tone()` map has no "failing" key, ours RETURNED `bad` - which invited a reader to
  * believe the hero and the preview show different things for a failing sender.
  *
  * They cannot. `SendHealthState` is `"ok" | "degraded" | "unknown"` (zcash/sendHealth.ts:119) and
@@ -306,7 +314,7 @@ export function ctazWord(ctaz: { enabled?: boolean; servable?: boolean } | null 
  * `return "unknown"` is what a value outside the union gets, which is what the branch was for.
  * Found by the CTO's red-team (#591 finding 4), traced by SDE-App (#595).
  */
-export function sendsTone(state: string | undefined): "ok" | "warn" | "bad" | "unknown" {
+export function sendsTone(state: string | undefined): "ok" | "warn" | "unknown" {
   if (state === "ok") return "ok";
   if (state === "degraded") return "warn";
   return "unknown";
@@ -315,8 +323,14 @@ export function sendsTone(state: string | undefined): "ok" | "warn" | "bad" | "u
 /** The box's tone, for the hero chip and the status view's row. Moved here from StatusCards
  *  for the reason `sendsTone` was (R-24): the hero derived its own, and a second derivation is
  *  a second thing to keep true. `publicBox()` emits only ok | attention | unknown, so those are
- *  the three cases and there is no fourth to guess at. */
-export function boxTone(state: string | undefined): "ok" | "warn" | "bad" | "unknown" {
+ *  the three cases and there is no fourth to guess at.
+ *
+ *  AND THE RETURN TYPE OFFERS NO `"bad"`, for the same reason `sendsTone`'s does not: nothing here
+ *  returns it. `PublicBoxState` is ok | attention | unknown (boxLabel.ts:78) and neither branch
+ *  below produces `bad`, so advertising it in the signature invites a caller to write a `bad` case
+ *  that can never run. Found by SDE-Infra reviewing #614 - the same dead-branch shape I had just
+ *  narrowed five lines up, and I walked past it while narrowing that one. */
+export function boxTone(state: string | undefined): "ok" | "warn" | "unknown" {
   if (state === "ok") return "ok";
   if (state === "attention") return "warn";
   return "unknown";
