@@ -1464,8 +1464,8 @@ export default function Home() {
                   <i />
                 </div>
                 <div className="figs">
-                  <span><b className="num">{syncPct != null ? syncPct.toFixed(2) : "—"}</b>% synced</span>
-                  <span><b className="mono">{height != null ? num(height) : "—"}</b>height</span>
+                  <span><b className="num">{syncPct != null ? syncPct.toFixed(2) : "-"}</b>% synced</span>
+                  <span><b className="mono">{height != null ? num(height) : "-"}</b>height</span>
                 </div>
               </>
             )}
@@ -1505,7 +1505,7 @@ export default function Home() {
               You can close this tab.
             </p>
             <div className="figs">
-              <span><b className="num">{status?.queueDepth != null ? num(status.queueDepth) : "—"}</b>ahead of you</span>
+              <span><b className="num">{status?.queueDepth != null ? num(status.queueDepth) : "-"}</b>ahead of you</span>
             </div>
           </div>
         )}
@@ -1518,8 +1518,8 @@ export default function Home() {
             <h3>The reserve is low</h3>
             <p>Claims still work. A refill is due, and if it runs out this page says so.</p>
             <div className="figs">
-              <span><b className="num">{reserve?.spendableTaz != null ? num(Math.floor(reserve.spendableTaz)) : "—"}</b>spendable TAZ</span>
-              <span><b className="num">{reserve?.lowTaz != null ? num(reserve.lowTaz) : "—"}</b>low mark</span>
+              <span><b className="num">{reserve?.spendableTaz != null ? num(Math.floor(reserve.spendableTaz)) : "-"}</b>spendable TAZ</span>
+              <span><b className="num">{reserve?.lowTaz != null ? num(reserve.lowTaz) : "-"}</b>low mark</span>
             </div>
           </div>
         )}

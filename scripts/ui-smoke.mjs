@@ -3228,6 +3228,76 @@ async function checkTabAffordanceAndLimits(browser, base) {
   await ctx.close();
 }
 
+// NO EM DASH REACHES A VISITOR. The owner asked for this twice and the second time was about
+// copy that had already been rewritten, so the rule is not "write the next sentence without one",
+// it is that the character does not reach the page at all.
+//
+// THE PROSE WAS ALREADY CLEAN AND THAT IS EXACTLY WHY THIS ROW EXISTS. What survived was five
+// U+2014 used as "no value yet" in the numeric slots - "\u2014% synced", "\u2014 height" - which read as
+// copy to the person looking at the screen and as a placeholder to the person writing the JSX.
+// They also did not come from the design: the frozen S2 snapshot contains zero of them.
+//
+// DRIVEN, NOT OBSERVED AT REST, because that is the whole difficulty. Every one of those five is
+// behind a null, so a page with a healthy backend renders none of them and a check that only
+// loaded the page would go green against all five. So the status is served back with the fields
+// nulled and the placeholders forced onto the screen before anything is asserted.
+async function checkNoEmDashReachesTheReader(browser, base) {
+  const EM = "\u2014";
+  const base0 = await (await fetch(`${base}/api/status`)).json();
+
+  // Null everything a placeholder hangs off. If a future null-placeholder is added on a field not
+  // in this list the row will not see it, so the count assertion below is what keeps this honest:
+  // it fails if the driven page stops rendering placeholders at all.
+  const nulled = JSON.parse(JSON.stringify(base0));
+  nulled.queueDepth = null;
+  nulled.node = { ...(nulled.node ?? {}), syncPct: null, height: null, ready: false };
+  nulled.reserve = { ...(nulled.reserve ?? {}), spendableTaz: null, lowTaz: null, refilling: true };
+  nulled.empty = true;
+  nulled.balanceTaz = 0;
+
+  for (const [label, payload] of [["as served", null], ["with every figure null", nulled]]) {
+    const ctx = await browser.newContext({ viewport: DESKTOP });
+    const page = await ctx.newPage();
+    if (payload) {
+      await page.route("**/api/status", (route) =>
+        route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(payload) }));
+    }
+    await page.goto(base, { waitUntil: "networkidle" });
+    await page.waitForTimeout(300);
+    const r = await page.evaluate((em) => {
+      const txt = document.body.innerText || "";
+      const hits = [];
+      // The offending line, not just a count. "an em dash is on the page" costs a reader a hunt
+      // through the whole document; naming the line is the difference from a diagnosis.
+      for (const line of txt.split("\n")) if (line.includes(em)) hits.push(line.trim().slice(0, 60));
+      // SCOPED TO THE CLAIM CARD, AND THAT IS THE WHOLE OF THE PARTNER'S VALUE (SDE-UI, review).
+      // `.figs b` page-wide also matches AnalyticsCards' three figure blocks
+      // (AnalyticsCards.tsx:180, :217, :273), which have nothing to do with the nulled status and
+      // render regardless. Measured: with all four claim-card `.figs` removed the page-wide count
+      // was still 11 and the partner stayed GREEN - so it certified "the placeholders were on
+      // screen" using slots from a different view, which is exactly the vacuity it exists to rule
+      // out. The claim card is `<article id="claim">` (page.tsx:1252-1884) and all four live
+      // inside it, so the id is both the tightest anchor and the one that cannot drift with a
+      // class rename.
+      return { hits, figs: document.querySelectorAll("#claim .figs b").length };
+    }, EM);
+    ok(`${label}: no em dash reaches the reader`,
+      r.hits.length === 0,
+      r.hits.length ? `${r.hits.length} line(s): ${JSON.stringify(r.hits.slice(0, 4))}` : `clean, ${r.figs} figure slot(s) on screen`);
+    // THE ANTI-VACUITY PARTNER. Without it the driven pass proves nothing: if the null payload
+    // stopped rendering figures - a markup change, a guard added upstream - there would be no
+    // placeholder on the page and "no em dash" would be true because nothing was there at all.
+    //
+    // Counted inside the claim card only, for the reason in the evaluate above: the first spelling
+    // counted page-wide and could be satisfied by a view the nulled payload does not touch.
+    if (payload) {
+      ok(`${label}: and the placeholders were actually on screen to be checked`,
+        r.figs > 0, `${r.figs} claim-card figure slot(s) rendered under the nulled status, want > 0`);
+    }
+    await ctx.close();
+  }
+}
+
 async function checkTapFloor(browser, base) {
   const WIDTHS = [[375, 812], [600, 900], [1024, 768], [1440, 900]];
   const PAGES = [["/", "index"], ["/donate", "donate"], ["/terms", "terms"], ["/fund", "fund"]];
@@ -3650,6 +3720,7 @@ try {
   // go red when something more basic is broken.
   await checkTabAffordanceAndLimits(browser, BASE);
   await checkFooterHeldAgainstGrowth(browser, BASE);
+  await checkNoEmDashReachesTheReader(browser, BASE);
   await checkTapFloor(browser, BASE);
   await checkMobile(browser, BASE);
 
