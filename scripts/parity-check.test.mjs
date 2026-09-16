@@ -546,3 +546,37 @@ test("THE FALLBACK PATTERN IS UNTOUCHED: one property declared twice keeps its o
   });
   assert.equal(r.code, 1, r.out);
 });
+
+// THE CASE THE CTO NAMED, which is the real one from S2's spec: the same selector twice at the
+// same specificity, so the later rule's font-size kills the earlier clamp IN THE PREVIEW. A
+// shipped sheet carrying only the winner is what the browser applies; carrying the dead clamp
+// is what #567 round one did, and it rendered 23.04px where the preview rendered 25.2.
+const CLAMP = "font-size:clamp(calc(1.2*var(--u)),1.6vw,calc(1.8*var(--u)))";
+const FIXED = "font-size:calc(1.8*var(--u));color:var(--display-accent)";
+
+test("a spec declaration killed by a later rule for the same selector is not required of the sheet", () => {
+  const r = runParity({
+    spec: `.big b{${CLAMP}}\n.big b{${FIXED}}\n.b{color:blue}\n`,
+    shipped: `.big b{${FIXED}}\n.b{color:blue}\n`,
+    departures: {},
+  });
+  assert.equal(r.code, 0, r.out);
+});
+
+test("and the reverse is still a divergence: shipping the clamp where the spec's winner is fixed", () => {
+  const r = runParity({
+    spec: `.big b{${FIXED}}\n.b{color:blue}\n`,
+    shipped: `.big b{${CLAMP}}\n.b{color:blue}\n`,
+    departures: {},
+  });
+  assert.equal(r.code, 1, r.out);
+});
+
+test("a later rule killing a property does not hide a DIFFERENT property it also sets", () => {
+  const r = runParity({
+    spec: `.big b{font-size:1px;color:red}\n.big b{font-size:2px}\n.b{color:blue}\n`,
+    shipped: `.big b{font-size:2px}\n.b{color:blue}\n`,   // colour dropped
+    departures: {},
+  });
+  assert.equal(r.code, 1, r.out);
+});
