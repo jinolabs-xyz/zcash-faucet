@@ -41,6 +41,16 @@ mk_scratch() {  # sets global T
 # arithmetic, and the separator is matched as [.,] because EPOCHREALTIME uses the
 # locale's decimal point and CI's runner is not guaranteed to be C.
 HARNESS_TIMING="${HARNESS_TIMING:-${TMPDIR:-/tmp}/harness-timing.$$}"
+# KEEP THE VALUE, DROP THE EXPORT. If this path arrives already exported, every child
+# process sees it - and repo.sh alone starts ten nested run-tests.sh runs, each of which
+# sources this file, truncates the path at the line below and deletes it at the EXIT
+# trap. The parent goes on appending to a file that is no longer the one it reported,
+# and the "where the time went" table silently loses every row recorded before the first
+# nested run: measured on this tree at 34 rows surviving out of 216 checks. Doing it at the
+# call sites instead was tried and does not work - `env -u HARNESS_TIMING` on ALL TEN of them
+# still measures 34, because the loss is not the nested runs reading the variable, and an
+# eleventh nested run would have to remember anyway.
+export -n HARNESS_TIMING
 : > "$HARNESS_TIMING"
 _hz_prev=$(( ${EPOCHREALTIME/[.,]/} ))
 _hz_mark() {
