@@ -267,27 +267,45 @@ async function checkHoverUnderAFlip(browser) {
     await p.waitForTimeout(300);
 
     const links = await p.$$("a[href]");
-    const sweep = async () => {
+    // COLOUR IS NOT THE ONLY THING A HOVER TIE CAN DECIDE. globals and the transcription both
+    // have opinions about underlines and backgrounds on a hovered link, and a tie in any of them
+    // is the same defect in a different property. Reading colour alone would have caught
+    // tonight's instance and missed the next one.
+    const PROPS = ["color", "textDecorationLine", "textDecorationColor", "backgroundColor"];
+    const sweep = async (hovering = true) => {
       const seen = [];
       for (const el of links) {
         const box = await el.boundingBox().catch(() => null);
         if (!box || box.width < 2 || box.height < 2) continue;
-        await p.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-        await p.waitForTimeout(25);
+        if (hovering) {
+          await p.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+          await p.waitForTimeout(25);
+        }
         // NAME the link, because the one that moves here is an icon link with no text at all -
         // the first run reported "  rgb(174,24,0) -> rgb(124,20,5)" with an empty name, which is
         // a row that cannot say what it found.
-        seen.push(await el.evaluate((n) => {
+        seen.push(await el.evaluate((n, ps) => {
           const name = (n.textContent || "").trim() || n.getAttribute("aria-label")
             || (n.className || "").toString().split(" ")[0] || n.getAttribute("href") || "(link)";
-          return `${name.slice(0, 22)}|${getComputedStyle(n).color}`;
-        }));
+          const cs = getComputedStyle(n);
+          return `${name.slice(0, 22)}|${ps.map((k) => cs[k]).join(" ")}`;
+        }, PROPS));
       }
       await p.mouse.move(2, 2);
       return seen;
     };
 
+    // AND THE POINTER HAS TO ACTUALLY ENGAGE, or this is the rest pass wearing a label. The
+    // link-count floor below proves there were links to measure; it cannot prove that hovering
+    // them changed anything. If pointer events were disabled, or the hover never landed, every
+    // reading would be a rest reading, "0 moved" would be true, and the cell would go green
+    // while staying unvisited - which is the failure this whole check exists to end.
+    const atRest = await sweep(false);
     const before = await sweep();
+    const reacts = before.filter((v, i) => atRest[i] !== v).length;
+    ok(`${theme}: hovering actually changes something, so this is not the rest pass relabelled`,
+      reacts > 0, `${reacts} of ${before.length} links react to hover`);
+
     await p.evaluate(() => {
       const ls = [...document.querySelectorAll('link[rel="stylesheet"]')];
       if (ls.length >= 2) ls[0].parentNode.insertBefore(ls[ls.length - 1], ls[0]);
@@ -306,7 +324,7 @@ async function checkHoverUnderAFlip(browser) {
     // and a floor equal to today's count is a pin on the link count wearing a guard's clothes:
     // it would go red the next time the design drops a footer link, for a reason that has
     // nothing to do with the cascade.
-    ok(`${theme}: no link's HOVER colour changes when the CSS chunks are linked in the other order`,
+    ok(`${theme}: no link's HOVER styling changes when the CSS chunks are linked in the other order`,
       before.length >= 4 && moved === 0,
       before.length < 4 ? `only ${before.length} links hovered, too few to judge`
         : `${before.length} links hovered, ${moved} moved${first ? "; first: " + first : ""}`);
