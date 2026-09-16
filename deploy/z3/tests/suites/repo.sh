@@ -1514,3 +1514,144 @@ check "and the check reports what the spec has and we DROPPED, not only what we 
   "grep -qF 'in the spec, not shipped' '$REPO/scripts/parity-check.mjs'"
 check "a rule moved into a media query is not counted as parity" \
   "grep -qF 'context ?' '$REPO/scripts/parity-check.mjs' && grep -qF 'prelude.startsWith(\"@\")' '$REPO/scripts/parity-check.mjs'"
+
+echo "== repo: the rollback decision and the reason strings it decides on"
+# #607. redeploy.sh does not roll back when the faucet is unhealthy for a reason a rollback
+# cannot fix, and it tells those apart by matching the app's own reason string with a literal
+# glob. #604 shipped BOTH halves of that coupling in one commit - it renamed "node syncing" to
+# "wallet re-scanning" in readiness.ts and widened the glob in the same breath - and left
+# nothing holding them together afterwards. Measured on b501b51: rename one side only and
+# npm test is 900/0, the redeploy suite is 183/0, and production emits a reason the glob does
+# not match. A chain outage then rolls back a good image, which is the failure #228 added the
+# reason string to prevent, arriving by a different door.
+#
+# This is the deploy-must-assert-its-own-outcome shape: both files are individually correct
+# and the SYSTEM is wrong, so no suite that reads one file can see it.
+RB="$REPO/deploy/z3/redeploy.sh"
+RDY="$REPO/src/lib/readiness.ts"
+
+# THE GLOB SIDE. Every literal inside a *"..."* case pattern, from every arm in the file, so
+# a new arm is covered without being listed here - a list is what missed live-smoke.yml at
+# the top of this suite.
+RB_LITERALS="$(grep -oE '\*"[^"]+"\*' "$RB" | sed 's/^\*"//;s/"\*$//' | sort -u)"
+# The multi-literal arms specifically: reason_is_not_the_code() carries the chain set, and
+# the "NOT ROLLING BACK ... the cause is the CHAIN" log 380 lines later carries it AGAIN.
+# Two copies of one decision, and updating one is the cheapest way to break this.
+RB_CHAIN="$(grep -oE '\*"[^"]+"\*(\|\*"[^"]+"\*)+' "$RB" | sort -u)"
+RB_CHAIN_SITES="$(grep -cE '\*"[^"]+"\*(\|\*"[^"]+"\*)+' "$RB")"
+RB_LEGACY="$(sed -n 's/^[[:space:]]*#[[:space:]]*LEGACY-REASON:[[:space:]]*\(.*[^ ]\)[[:space:]]*--.*/\1/p' "$RB" | sort -u)"
+
+check "redeploy.sh decides on reason strings at all, so the reader below has something to read" \
+  '[ -n "$RB_LITERALS" ]'
+# Written out rather than passed to check(): the expressions read the variables above, and
+# inside a quoted check string shellcheck cannot see that use and calls them dead. Saying the
+# counts in the failure is worth more than the one-liner anyway.
+if [ "$RB_CHAIN_SITES" -ge 2 ]; then
+  ok "the chain set is written at more than one call site"
+else
+  bad "the chain set is written at more than one call site (found $RB_CHAIN_SITES)"
+fi
+RB_CHAIN_DISTINCT="$(printf '%s\n' "$RB_CHAIN" | wc -l | tr -d ' ')"
+if [ -n "$RB_CHAIN" ] && [ "$RB_CHAIN_DISTINCT" = "1" ]; then
+  ok "and every call site globs on the SAME set, so one cannot be updated alone"
+else
+  bad "and every call site globs on the SAME set, so one cannot be updated alone ($RB_CHAIN_DISTINCT distinct pattern(s) across $RB_CHAIN_SITES site(s))"
+fi
+
+# THE APP SIDE, with comments removed, and that is the whole difficulty. The prose above the
+# re-scanning return QUOTES the spelling it replaced - `This said "node syncing"` - so a plain
+# grep of readiness.ts finds "node syncing" twice and reports a string as emitted because a
+# paragraph mentions it. That is a false pass in the exact check written to prevent one. Only
+# whole-line comments are stripped and the result is asserted to contain none, so a trailing
+# comment fails loudly here instead of being read as code.
+RDY_CODE="$(awk '/^export function readinessReason/,/^}/' "$RDY" | grep -vE '^[[:space:]]*(//|\*|/\*)')"
+check "readinessReason() was found and it returns something" \
+  '[ -n "$RDY_CODE" ] && printf "%s\n" "$RDY_CODE" | grep -q "return \""'
+check "and no comment survived the strip, since the comments quote spellings that are gone" \
+  '! printf "%s\n" "$RDY_CODE" | grep -q "//"'
+
+# ONLY WHAT IS RETURNED, which is the difference between reading the function and reading
+# the reasons. Reading every string in the body admits `=== "unsafe"` and the raw `if (...)`
+# lines, and then a glob literal could be satisfied by a constant that is declared and never
+# returned - the coupling broken, the row green. So: flattened, cut at statement boundaries,
+# and only the text after a `return` survives. The ternary spans four lines and is one
+# statement, which is why it is flattened first rather than read line by line.
+#
+# Then interpolation holes and string delimiters both become separators, so no chunk spans a
+# hole: `node ${lag} blocks behind the network` must not be readable as "node blocks behind
+# the network", a phrase the app never emits. What is left over is the ternary's own
+# condition (`lag == null ?`), harmless, and bounded by the phrase assertion below.
+RDY_EMITS="$(printf '%s\n' "$RDY_CODE" | tr '\n' ' ' | tr ';' '\n' \
+  | grep 'return' | sed 's/.*return //' \
+  | awk '{ gsub(/\$\{[^}]*\}/, "\n"); gsub(/["`]/, "\n"); print }')"
+check "every literal the rollback decides on is a phrase, not a word this reader could find in code" \
+  '! printf "%s\n" "$RB_LITERALS" | grep -qv " "'
+
+RB_UNEMITTED=""
+while IFS= read -r lit; do
+  [ -n "$lit" ] || continue
+  printf '%s\n' "$RDY_EMITS" | grep -qF "$lit" && continue
+  printf '%s\n' "$RB_LEGACY" | grep -qxF "$lit" && continue
+  RB_UNEMITTED="$RB_UNEMITTED [$lit]"
+done <<EOF
+$RB_LITERALS
+EOF
+if [ -z "$RB_UNEMITTED" ]; then
+  ok "every string the rollback matches on is one readinessReason() still emits, or a declared LEGACY-REASON"
+else
+  bad "every string the rollback matches on is one readinessReason() still emits, or a declared LEGACY-REASON (matched by nothing:$RB_UNEMITTED)"
+fi
+
+# And the exception cannot outlive what it excepts. A LEGACY-REASON naming a literal the glob
+# no longer carries is a note about a decision that has already been reversed, and it would
+# silently license the next rename of that same string.
+RB_STALE=""
+while IFS= read -r lit; do
+  [ -n "$lit" ] || continue
+  printf '%s\n' "$RB_LITERALS" | grep -qxF "$lit" || RB_STALE="$RB_STALE [$lit]"
+done <<EOF
+$RB_LEGACY
+EOF
+if [ -z "$RB_STALE" ]; then
+  ok "and every LEGACY-REASON declared is one the glob still carries"
+else
+  bad "and every LEGACY-REASON declared is one the glob still carries (declared, not globbed:$RB_STALE)"
+fi
+
+# THE EXCLUSION, which is the other half of the decision and is the one #596 ruled on by name:
+# "wallet balance unknown" is the IMAGE's fault - a broken build really can fail to reach the
+# wallet, and a rollback really does fix that - so it must keep falling through to the rollback.
+# Widening the glob to *"wallet"* would swallow it along with the re-scanning reason and turn a
+# recoverable outage into a page nobody can act on. Only this one is pinned: it is the only
+# exclusion redeploy.sh states in so many words, and pinning the others would be asserting a
+# decision nobody recorded. Matched the way the shell matches, from the literals just read.
+RB_WRONG=""
+RB_EXCLUDED="wallet balance unknown"
+# AND THE STRING THIS ROW PROTECTS HAS TO BE ONE THE PRODUCT STILL SAYS. Found by SDE-UI reviewing
+# this PR, and it is the defect this whole file is about, one layer up and inside the gate that
+# fixes it: every GLOB literal is tied back to readinessReason() by the row above, and the one
+# literal tied to nothing was the one written HERE. Their mutant survived at 236/0 - rename
+# "wallet balance unknown" to "wallet balance unavailable" in readiness.ts and its test, then add
+# *"balance unavailable"* to both chain arms, and the rollback starts treating a wallet-balance
+# outage as not-the-code's-fault while this row reports the exclusion intact. Every other row is
+# honestly green: it is still a phrase, readinessReason genuinely emits it, and both sites agree.
+#
+# This does NOT guess the new spelling, which is the point. It refuses to go vacuous in silence:
+# the moment the product stops saying what RB_EXCLUDED says, the row below is protecting a string
+# nothing emits and this one says so.
+if printf '%s\n' "$RDY_EMITS" | grep -qF "$RB_EXCLUDED"; then
+  ok "and that reason is one readinessReason() still emits, so a rename cannot quietly make the row below vacuous"
+else
+  bad "and that reason is one readinessReason() still emits, so a rename cannot quietly make the row below vacuous (nothing emits [$RB_EXCLUDED], so the exclusion row is protecting a string the app no longer says)"
+fi
+while IFS= read -r lit; do
+  [ -n "$lit" ] || continue
+  case "$RB_EXCLUDED" in *"$lit"*) RB_WRONG="$RB_WRONG [$RB_EXCLUDED <- $lit]" ;; esac
+done <<EOF
+$RB_LITERALS
+EOF
+if [ -z "$RB_WRONG" ]; then
+  ok "and the reason #596 ruled IS the image's fault still falls through to a rollback"
+else
+  bad "and the reason #596 ruled IS the image's fault still falls through to a rollback (now swallowed:$RB_WRONG)"
+fi
