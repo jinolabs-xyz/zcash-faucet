@@ -1252,6 +1252,23 @@ async function checkMinerPanel(page) {
   // every comma and the token does not, so comparing the raw strings compares FORMATTING and
   // goes red on two spellings of the same stack - which is what my first version did.
   const face = (v) => v.replace(/["']/g, "").replace(/\s*,\s*/g, ",").trim().toLowerCase();
+  // THE CHIP'S OWN BOX, because the raise that put it there has to be asserted or it is a
+  // change nobody can see go wrong. `globals.css:151` and the transcription's `.tag` were both
+  // (0,1,0) and disagree about exactly these two: padding `5px 8px` against `0 calc(.9*var(--u))`
+  // and border-radius `0` against `calc(.5*var(--u))`. Whichever won was link order, which Next
+  // does not promise. Vertical padding and a rounded corner tell the two apart with no shared
+  // value between them.
+  const chip = await page.evaluate(() => {
+    const el = document.querySelector('[data-testid="view-analytics"] .pc h3 .tag');
+    if (!el) return null;
+    const cs = getComputedStyle(el);
+    return { padTop: parseFloat(cs.paddingTop), padBottom: parseFloat(cs.paddingBottom),
+             radius: parseFloat(cs.borderTopLeftRadius), transform: cs.textTransform };
+  });
+  ok("the status chip wears the design's box, not the legacy one globals still declares",
+    !!chip && chip.padTop === 0 && chip.padBottom === 0 && chip.radius > 1 && chip.transform === "none",
+    chip ? `padding ${chip.padTop}/${chip.padBottom}px, radius ${chip.radius}px, text-transform ${chip.transform}` : "no chip");
+
   ok("the analytics card title uses the design's face, not the one globals gives every heading",
     !!h3 && face(h3.family) === face(h3.sans) && face(h3.family) !== face(h3.heading),
     h3 ? `${h3.family} against --sans ${h3.sans}` : "no h3");
