@@ -228,6 +228,28 @@ if (missing.length) {
 const specCss = readFileSync(SPEC, "utf8");
 const shipCss = SHIPPED.map((f) => readFileSync(f, "utf8")).join("\n");
 const spec = rules(specCss);
+// A VENDORED HEADER THAT CLOSES ITSELF TURNS ITS OWN PROSE INTO SELECTORS, and this file has
+// now done it twice. `*/` is a comment terminator WHEREVER it appears - comments do not nest -
+// so a header sentence containing `design/spec/*/ directory` ends the header at the `*/` and
+// everything after it is parsed as CSS. The symptom is not an error: it is a plausible-looking
+// divergence whose selector is a paragraph, plus a REAL rule below it silently re-keyed, which
+// is how it survived a round the first time.
+//
+// The spec is a golden file, so the fault is always in the file rather than in the parser: a CSS
+// parser is right to end that comment. This refuses to report parity over a spec that parsed
+// prose, and says where to look.
+// THE DETECTOR IS THE COMMENT'S OWN LEADING ASTERISKS, not the key's length. Length was the
+// first spelling and it was wrong: `@media (prefers-reduced-motion:reduce) | .entrance-pending
+// .card,.entrance-pending .hero-copy,...` is 150 characters of entirely legitimate selector, so
+// a length rule fails the S1 spec on a rule that is exactly right. What prose carries and a
+// selector does not is the ` * ` of a wrapped block comment, or a `/*` that never got stripped.
+const prose = [...spec.keys()].filter((k) => / \* /.test(k) || k.includes("/*"));
+if (prose.length) {
+  console.error(`parity: ${SPEC} parsed ${prose.length} selector(s) that look like prose, so its header comment closed early.`);
+  console.error(`A header must not contain \`*/\` - spell a path as design/spec/<snapshot>/ rather than design/spec/*/.`);
+  console.error(`First: ${prose[0].slice(0, 120)}...`);
+  process.exit(1);
+}
 const ship = rules(shipCss);
 // DROPPED IS A QUESTION ABOUT THE APP, NOT ABOUT THIS INVOCATION'S SHEETS, and computing it
 // from `ship` was wrong in a way nothing could see until the slice gate opened.

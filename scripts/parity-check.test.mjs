@@ -663,3 +663,32 @@ test("and an anyOf whose every spelling is absent does NOT hold", () => {
   assert.match(r.out, /slice gate: 0\/1 facts hold/, r.out);
   assert.match(r.out, /DROPPED is not gated yet/, r.out);
 });
+
+// ── A VENDORED HEADER THAT CLOSES ITSELF TURNS ITS OWN PROSE INTO SELECTORS ──────────────
+//
+// `*/` terminates a comment wherever it appears - comments do not nest - so a header sentence
+// containing `design/spec/*/ directory` ends the header there and the rest parses as CSS. Found
+// in the subpages spec, where it produced a "divergence" whose selector was a paragraph AND
+// re-keyed the real rule below it, which is how it survived a round.
+test("a spec whose header comment closes early is refused, not reported as divergence", () => {
+  const r = runParity({
+    // The hazard must be followed by more header lines and then a rule, which is the real
+    // file's shape: the prose only becomes a SELECTOR when a rule's `{` follows it.
+    spec: "/* VENDORED FROM THE SNAPSHOT\n * one parity invocation per design/spec/*/ directory.\n * NOT A SLICE of index.css, it carries the whole page.\n */\n.a{color:red}\n",
+    shipped: ".a{color:red}\n",
+  });
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /look like prose, so its header comment closed early/, r.out);
+});
+
+test("and a long but legitimate selector list is NOT mistaken for prose", () => {
+  // The mutant for the row above. The first spelling of this guard used key LENGTH, which fails
+  // the real S1 spec: `@media (prefers-reduced-motion:reduce) | .entrance-pending .card,...` is
+  // 150 characters of entirely correct selector.
+  const long = ".entrance-pending .card,.entrance-pending .hero-copy,.entrance-pending .strip,.entrance-pending .ftr,.entrance-pending .hdr,.entrance-pending .comp";
+  const r = runParity({
+    spec: `/* a well-formed header */\n@media (prefers-reduced-motion:reduce){${long}{opacity:1}}\n`,
+    shipped: `@media (prefers-reduced-motion:reduce){${long}{opacity:1}}\n`,
+  });
+  assert.doesNotMatch(r.out, /look like prose/, r.out);
+});

@@ -12,7 +12,7 @@
  * DIRECTORY, so a second spec beside S2-S5's index.css would share one departures file and each
  * would report the other's declarations as stale - the collision that already cost a round when
  * the file was flat. repo.sh gates the same shape from outside: one parity invocation per
- * design/spec/*/ directory.
+ * design/spec/<snapshot>/ directory.
  *
  * NOT A SLICE OF index.css. terms.html's style block is 298 brace-lines against index.html's
  * 283: it carries the whole page plus these seventeen. Measured: of the 13 selectors below,
