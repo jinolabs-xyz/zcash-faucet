@@ -16,7 +16,7 @@ import { execFileSync } from "node:child_process";
 const SCRIPT = "scripts/parity-check.mjs";
 
 /** Run the checker in its own directory with the given fixtures; return {code, out}. */
-function runParity({ spec, shipped, departures, pages, shell, entry, args, sheets, specs, env }) {
+function runParity({ spec, shipped, departures, pages, shell, entry, args, sheets, specs, env, markupSelectors }) {
   const dir = mkdtempSync(join(tmpdir(), "parity-"));
   try {
     mkdirSync(join(dir, "design", "spec"), { recursive: true });
@@ -39,6 +39,7 @@ function runParity({ spec, shipped, departures, pages, shell, entry, args, sheet
       writeFileSync(join(dir, "src", "components", "Shell.tsx"), shell);
     }
     writeFileSync(join(dir, "design", "spec", "spec.css"), spec);
+    if (markupSelectors !== undefined) writeFileSync(join(dir, "design", "spec", "markup.selectors"), `# the design's own markup\n${markupSelectors}`);
     writeFileSync(join(dir, "src", "app", "shipped.css"), shipped);
     if (departures !== undefined) writeFileSync(join(dir, "design", "spec", "departures.json"), JSON.stringify(departures, null, 2));
     writeFileSync(join(dir, "scripts", "parity-check.mjs"), readFileSync(SCRIPT, "utf8"));
@@ -691,4 +692,37 @@ test("and a long but legitimate selector list is NOT mistaken for prose", () => 
     shipped: `@media (prefers-reduced-motion:reduce){${long}{opacity:1}}\n`,
   });
   assert.doesNotMatch(r.out, /look like prose/, r.out);
+});
+
+// ── A RULE THE DESIGN'S OWN PAGE NEVER USES IS NOT A RULE WE FAILED TO SHIP ──────────────
+//
+// The snapshot's stylesheet carries `.demo`, `.spec`, `.metrics`, `.assistant-head` and thirty
+// more whose selectors match nothing in its own markup. Counted as DROPPED they were 36 of the
+// 92 divergences this gate reported the day the slice gate armed, and they would have buried the
+// real ones. They cannot go in departures.json either: that file holds a `divergence` or an
+// `override`, and dead design CSS is neither.
+test("a spec rule whose selector the design's own markup never uses is not dropped", () => {
+  const r = runParity({
+    spec: ".a{color:red}\n.demo{color:blue}\n",
+    shipped: ".a{color:red}\n",
+    markupSelectors: "a\n",           // the design's page uses `.a` and nothing else
+  });
+  assert.match(r.out, /dropped 0/, r.out);
+  assert.match(r.out, /1 spec rule\(s\) the design's own markup never uses/, r.out);
+});
+
+test("and a rule the design DOES use is still dropped when we ship it nowhere", () => {
+  // The mutant for the row above: an inventory that swallowed everything would read 0 here.
+  const r = runParity({
+    spec: ".a{color:red}\n.demo{color:blue}\n",
+    shipped: ".a{color:red}\n",
+    markupSelectors: "a\ndemo\n",     // now the design's page uses `.demo` too
+  });
+  assert.match(r.out, /dropped 1/, r.out);
+});
+
+test("with no inventory beside the spec, every unshipped rule still counts and it says so", () => {
+  const r = runParity({ spec: ".a{color:red}\n.demo{color:blue}\n", shipped: ".a{color:red}\n" });
+  assert.match(r.out, /dropped 1/, r.out);
+  assert.match(r.out, /no markup\.selectors beside this spec/, r.out);
 });

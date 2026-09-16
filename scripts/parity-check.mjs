@@ -21,6 +21,7 @@
  * has stopped looking at.
  */
 import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { join, dirname } from "node:path";
 
 const SPEC = process.argv[2];
 const SHIPPED = process.argv.slice(3);
@@ -336,7 +337,30 @@ const sameBodies = (a, b) => {
 };
 const added = [...ship.keys()].filter((s) => !spec.has(s));
 const changed = [...ship.keys()].filter((s) => spec.has(s) && !sameBodies(ship.get(s), spec.get(s)));
-const dropped = [...spec.keys()].filter((s) => !shipAnywhere.has(s));
+// A RULE THE DESIGN'S OWN PAGE NEVER USES IS NOT A RULE WE FAILED TO SHIP. The snapshot's
+// stylesheet carries `.demo`, `.spec`, `.metrics`, `.assistant-head` and thirty-odd more whose
+// selectors match nothing in its own markup - dead CSS in the design. Counted as DROPPED they
+// were 37 of the 92 divergences this gate reported the day the slice gate armed, and they would
+// have buried the real ones.
+//
+// They cannot go in departures.json: an entry there is a `divergence` (a debt of ours) or an
+// `override` (a floor of ours), and dead design CSS is neither - recording it as either makes
+// that file mean both, which its own rules forbid. So the markup inventory is vendored beside
+// the spec and they are excluded here, counted out loud rather than silently.
+//
+// A bare element selector (`body`, `a`) has no class or id to look up and is always live.
+const INVENTORY = join(dirname(SPEC), "markup.selectors");
+const usedNames = existsSync(INVENTORY)
+  ? new Set(readFileSync(INVENTORY, "utf8").split("\n").filter((l) => l && !l.startsWith("#")))
+  : null;
+const inDesignMarkup = (sel) => {
+  if (!usedNames) return true;
+  const names = [...sel.matchAll(/[.#]([A-Za-z0-9_-]+)/g)].map((m) => m[1]);
+  return names.length === 0 || names.every((n) => usedNames.has(n));
+};
+const droppedAll = [...spec.keys()].filter((s) => !shipAnywhere.has(s));
+const deadInDesign = droppedAll.filter((s) => !inDesignMarkup(s));
+const dropped = droppedAll.filter(inDesignMarkup);
 
 // DROPPED IS NOT A FAULT UNTIL THE TRANSCRIPTION IS FINISHED, and pretending otherwise makes
 // this unusable: against S1 the spec has 255 rules and the shell ships 84, so 177 "dropped"
@@ -477,6 +501,8 @@ if (process.env.PARITY_PRINT === "1") {
 console.log(`parity: ${ship.size} shipped rules against ${spec.size} in the spec`);
 const byKind = (k) => Object.keys(declared).filter((s) => kindOf(declared[s]) === k).length;
 console.log(`  added ${added.length}  changed ${changed.length}  dropped ${dropped.length}  declared ${Object.keys(declared).length}`);
+if (deadInDesign.length) console.log(`  and ${deadInDesign.length} spec rule(s) the design's own markup never uses, which are not ours to ship (markup.selectors)`);
+if (!usedNames) console.log(`  no markup.selectors beside this spec, so every unshipped rule counts as dropped - vendor one with scripts/vendor-markup-selectors.mjs`);
 console.log(`  of the declared: ${byKind("divergence")} divergence(s) from the design, ${byKind("override")} override(s) of it`);
 // AND THE REASON IT IS NOT GATED IS THE REASON, not the views count. When a spec carries slice
 // facts the slice gate decides (line 318) and the views/pages tally is not consulted at all - so
