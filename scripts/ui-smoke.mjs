@@ -3308,7 +3308,13 @@ async function checkNarrowViewport(browser, base) {
   // past the right edge while the document does NOT scroll is unreachable: there is no gesture
   // that brings it into view. A page that overflows at least lets the reader drag to the end of
   // the sentence. "miner unwatched" was 19.6px past the edge at 360 with scrollWidth == 360.
-  const SURFACES = [["/", "claim"], ["/", "status"], ["/", "analytics"],
+  // FOUR TABS IN THE NAV, SO FOUR VIEWS IN THIS LIST. Tools (page.tsx:1904) was missing from the
+  // first version of these rows and from the other attempt at #623 - the owner found it. It is the
+  // same lesson as the viewport list one paragraph down, one level up: a row cannot fail at a width
+  // nobody opens, and it cannot fail in a VIEW nobody opens either. The header overhang is identical
+  // across all four, so the fix covers Tools whether or not it is listed - but that is luck, and
+  // only a row survives someone editing ToolsCards next month.
+  const SURFACES = [["/", "claim"], ["/", "status"], ["/", "analytics"], ["/", "tools"],
                     ["/donate", null], ["/fund", null], ["/terms", null], ["/limits", null]];
 
   for (const [path, view] of SURFACES) {
