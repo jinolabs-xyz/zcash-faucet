@@ -1838,3 +1838,47 @@ check "the fork-park block itself tells the operator to ssh to the box before re
 # path, so it is both stricter and there first. A weaker duplicate beside it is noise that would
 # read like coverage.
 
+echo "== repo: no other workflow can impersonate a required CI job"
+# #514 part 1. auto-deploy's ci_gate selects check-runs by `.name` with no workflow or check-suite
+# filter and takes the NEWEST id per name, so a job in ANOTHER workflow sharing an id with a
+# required CI job would override CI's verdict - and newer wins, which on a tip live-smoke keeps
+# touching is always the impostor. Nothing collides today (live-smoke's only job is `probe`) and
+# the gate cannot tell; this row keeps that true.
+#
+# THE SET EQUALITY IS ALREADY HELD ABOVE, at "the gate requires exactly the jobs ci.yml defines",
+# and my first version of this re-asserted it with a WEAKER reader: `[a-z]` only, no tolerance for
+# a trailing comment - which is precisely the first-cut bug the comment at :237 records having
+# already been fixed once. Three of my four rows were redundant and one of them was a regression
+# dressed as a check. GATE_JOBS and the awk below are reused from there rather than re-derived.
+#
+# SCANNED UNDER `jobs:` ONLY: a whole-file scan also matches the `on:` triggers, so `push` and
+# `schedule` would read as job ids. I hit that enumerating the collision surface by hand.
+CLASH=""
+SCANNED=0
+for wf in "$REPO"/.github/workflows/*.yml "$REPO"/.github/workflows/*.yaml; do
+  [ -e "$wf" ] || continue
+  case "$wf" in *ci.yml) continue ;; esac
+  SCANNED=$((SCANNED + 1))
+  for id in $(awk '/^jobs:/{injobs=1; next} injobs && /^  [A-Za-z_][A-Za-z0-9_-]*:[[:space:]]*(#.*)?$/ {sub(/^  /, ""); sub(/:.*$/, ""); print}' "$wf"); do
+    for n in $GATE_JOBS; do
+      [ "$id" = "$n" ] && CLASH="$CLASH [$(basename "$wf"):$id]"
+    done
+  done
+done
+if [ -z "$CLASH" ]; then
+  ok "no other workflow declares a job id auto-deploy treats as CI's verdict"
+else
+  bad "no other workflow declares a job id auto-deploy treats as CI's verdict (the newer run would win:$CLASH)"
+fi
+
+# AND THE LOOP ABOVE ACTUALLY READ SOMETHING. With one workflow in the tree it never runs and
+# reports agreement it never tested - the empty-set shape, which three of us shipped this week.
+#
+# COUNTED INSIDE THE LOOP, not by a second find() beside it, and the difference is the whole value
+# of the row (SDE-UI, review of #634). Derived separately, the two cannot contradict each other for
+# the reason that actually happens: the glob stops matching - the directory is renamed, the
+# workflows move, someone writes `workflow/` - and `find` on its own hard-coded path still says
+# "1 other workflow" while the loop reads nothing. Both rows green, nothing checked. Sharing the
+# traversal means the only way the partner can be green is that the loop really walked a file.
+check "and the loop above actually read a workflow, so it is not reporting agreement on an empty set" \
+  "[ $SCANNED -ge 1 ]"

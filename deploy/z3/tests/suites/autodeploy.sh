@@ -38,12 +38,62 @@ ad_env() {
   # fixture file and logs the URL, so a case can assert the SHA that was asked about.
   # Anything else is refused: the script has no other business on the network.
   export STUB_CHECKS_JSON="$T/check-runs.json" STUB_CURL_LOG="$T/curl.calls"
+  # One page unless a case asks for more. Clearing these HERE and not at the end of the cases
+  # that set them is what keeps a later case from inheriting a paginating API.
+  unset STUB_CHECKS_PAGE2 STUB_CHECKS_ALWAYS_NEXT STUB_CHECKS_PAGES STUB_CHECKS_LAST
   : > "$STUB_CURL_LOG"
   cat > "$T/bin/curl" <<'CURL'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${STUB_CURL_LOG:?}"
+# -D <file> is the header dump. The real API paginates with `Link: <url>; rel="next"`, and the
+# gate follows it (#514), so the stub has to be able to answer in more than one page or the
+# pagination case would be testing nothing. STUB_CHECKS_PAGE2 unset = one page, exactly as before.
+hdrfile=""
+prev=""
+for a in "$@"; do
+  [ "$prev" = "-D" ] && hdrfile="$a"
+  prev="$a"
+done
 case "$*" in
-  *check-runs*) [ -f "${STUB_CHECKS_JSON:?}" ] || { echo "curl: (22) The requested URL returned error: 503" >&2; exit 22; }; cat "$STUB_CHECKS_JSON" ;;
+  *check-runs*)
+    [ -f "${STUB_CHECKS_JSON:?}" ] || { echo "curl: (22) The requested URL returned error: 503" >&2; exit 22; }
+    # A real Link carries several relations; rel="next" is the only one the gate reads, and it is
+    # deliberately NOT first here, so a stub that took "the first URL in the header" would hand
+    # back rel="last" and the case would pass for the wrong reason.
+    # The URLs have to be check-runs URLs: this stub refuses anything else, exactly as the script
+    # has no other business on the network, so a next-link pointing elsewhere would be answered
+    # with a connection error and the case would read as "pagination broke the gate".
+    nexturl="https://api.example/repos/o/r/commits/x/check-runs?per_page=100"
+    nexthdr="link: <$nexturl&page=9>; rel=\"last\", <$nexturl&page=2>; rel=\"next\""
+    if [ -n "${STUB_CHECKS_ALWAYS_NEXT:-}" ]; then
+      # A server that never stops offering a next page. The gate's own bound is the only thing
+      # that ends this.
+      [ -n "$hdrfile" ] && printf 'HTTP/2 200\r\n%s\r\n\r\n' "$nexthdr" > "$hdrfile"
+      cat "$STUB_CHECKS_JSON"
+    elif [ -n "${STUB_CHECKS_PAGES:-}" ]; then
+      # An answer that is exactly N pages and then ENDS. The page number is how many check-runs
+      # calls are already in the log, this one included, because the log line is written above.
+      n="$(grep -c 'check-runs' "$STUB_CURL_LOG")"
+      if [ "$n" -lt "$STUB_CHECKS_PAGES" ]; then
+        [ -n "$hdrfile" ] && printf 'HTTP/2 200\r\n%s\r\n\r\n' "$nexthdr" > "$hdrfile"
+        cat "$STUB_CHECKS_JSON"
+      else
+        [ -n "$hdrfile" ] && printf 'HTTP/2 200\r\n\r\n' > "$hdrfile"
+        cat "${STUB_CHECKS_LAST:-$STUB_CHECKS_JSON}"
+      fi
+    elif [ -n "${STUB_CHECKS_PAGE2:-}" ] && [ -f "$STUB_CHECKS_PAGE2" ]; then
+      case "$*" in
+        *page=2*)
+          [ -n "$hdrfile" ] && printf 'HTTP/2 200\r\n\r\n' > "$hdrfile"
+          cat "$STUB_CHECKS_PAGE2" ;;
+        *)
+          [ -n "$hdrfile" ] && printf 'HTTP/2 200\r\n%s\r\n\r\n' "$nexthdr" > "$hdrfile"
+          cat "$STUB_CHECKS_JSON" ;;
+      esac
+    else
+      [ -n "$hdrfile" ] && printf 'HTTP/2 200\r\n\r\n' > "$hdrfile"
+      cat "$STUB_CHECKS_JSON"
+    fi ;;
   *) exit 7 ;;
 esac
 CURL
@@ -96,8 +146,12 @@ RD
 # Write a check-runs fixture. Each argument is "name:status:conclusion" (conclusion may be
 # "-" for null); the bare word `green` is all eight jobs completed+success. Ids ascend in
 # argument order, so a later argument with the same name is the NEWER run.
-ci_fixture() {
-  local i=0 rows="" spec
+ci_fixture() { ci_fixture_into "$STUB_CHECKS_JSON" 0 "$@"; }
+
+# As above, but into a named file with ids counting up from $2 - so a second page can carry
+# ids ABOVE page one's and a rerun that landed there still reads as the newer run.
+ci_fixture_into() {
+  local out="$1" i="$2" n0="$2" rows="" spec; shift 2
   if [ "$1" = "green" ]; then
     set -- app:completed:success smoke:completed:success ui:completed:success api-tests:completed:success \
            audit:completed:success shell:completed:success miner:completed:success image:completed:success
@@ -108,7 +162,7 @@ ci_fixture() {
     [ "$co" = "-" ] && co=null || co="\"$co\""
     rows="$rows{\"id\":$i,\"name\":\"$n\",\"status\":\"$st\",\"conclusion\":$co},"
   done
-  printf '{"total_count":%s,"check_runs":[%s]}\n' "$i" "${rows%,}" > "$STUB_CHECKS_JSON"
+  printf '{"total_count":%s,"check_runs":[%s]}\n' "$((i - n0))" "${rows%,}" > "$out"
 }
 
 # Move main forward in the remote, touching exactly the paths asked for.
@@ -747,6 +801,64 @@ rm -f "$STUB_CHECKS_JSON"
 bash "$AD" > "$T/ci-why.log" 2>&1
 check "the refusal carries curl's own words, not only 'could not read'" \
   "grep -q 'could not read check-runs from' '$T/ci-why.log' && grep -q 'The requested URL returned error: 503' '$T/ci-why.log'"
+
+echo "== auto-deploy: CI'S VERDICT CAN BE ON PAGE TWO (#514)"
+# per_page=100 is one page. Scheduled live-smoke runs attach to the SAME tip commit with newer
+# ids, so a tip that sits long enough pushes CI's eight required runs off page one, and a
+# single-page read calls all eight ABSENT. Page one here is nothing but probes.
+ad_env
+export AUTODEPLOY_STATE_FILE="$T/last-processed"
+ad_advance src/page.tsx
+export STUB_CHECKS_PAGE2="$T/check-runs.p2.json"
+ci_fixture probe:completed:success probe:completed:success probe:completed:success
+ci_fixture_into "$STUB_CHECKS_PAGE2" 100 green
+bash "$AD" > "$T/ci-page2.log" 2>&1
+check "a green commit whose required runs are all on page two still ships" \
+  "[ $? -eq 0 ] && [ -s '$REDEPLOY_LOG' ]"
+check "and it got there by following rel=next, not by reading page one twice" \
+  "grep -q 'page=2' '$STUB_CURL_LOG'"
+# ANTI-VACUITY, and the one that matters: page ONE was read, and read FIRST. If the gate had
+# somehow started at page two, the row above would be green while the bug was untouched.
+check "and page one was still the first thing asked for" \
+  "head -n1 '$STUB_CURL_LOG' | grep -q 'per_page=100' && ! head -n1 '$STUB_CURL_LOG' | grep -q 'page=2'"
+# The single-page read does not log the word "absent" - it logs the pending line, naming all
+# eight. That line IS the operator-facing damage: eight green jobs reported as not yet run.
+check "and it did not report eight green jobs as still waiting on CI" \
+  "! grep -q 'pending:' '$T/ci-page2.log'"
+
+echo "== auto-deploy: following rel=next is BOUNDED, so a server cannot spin the box"
+# The follow is a loop whose continue-condition comes from the other end of the network. This
+# API offers a next page forever; the bound is the only thing that stops it.
+ad_env
+export AUTODEPLOY_STATE_FILE="$T/last-processed"
+ad_advance src/page.tsx
+export STUB_CHECKS_ALWAYS_NEXT=1
+ci_fixture probe:completed:success
+bash "$AD" > "$T/ci-loop.log" 2>&1
+CALLS="$(grep -c 'check-runs' "$STUB_CURL_LOG" || true)"
+check "an API that always offers another page is read exactly 5 times, not forever" \
+  "[ '$CALLS' = 5 ]"
+check "and hitting the bound says so, so 'absent' is not read as 'CI never ran'" \
+  "grep -q 'stopped after 5 pages of check-runs' '$T/ci-loop.log'"
+check "and it did not ship a commit whose required jobs it never found" \
+  "[ ! -s '$REDEPLOY_LOG' ]"
+unset STUB_CHECKS_ALWAYS_NEXT
+
+echo "== auto-deploy: an answer that is exactly as long as the bound is COMPLETE, not truncated"
+# Counting pages cannot tell a five-page answer that ENDED from one that was cut off, and warning
+# about the first sends an operator looking for runs that do not exist (SDE-UI, review of #634).
+ad_env
+export AUTODEPLOY_STATE_FILE="$T/last-processed"
+ad_advance src/page.tsx
+export STUB_CHECKS_PAGES=5 STUB_CHECKS_LAST="$T/check-runs.last.json"
+ci_fixture probe:completed:success
+ci_fixture_into "$STUB_CHECKS_LAST" 100 green
+bash "$AD" > "$T/ci-exactly5.log" 2>&1
+check "a five-page answer is read to its end and ships" \
+  "[ $? -eq 0 ] && [ -s '$REDEPLOY_LOG' ]"
+check "and it is not reported as truncated, because a fifth page that ends IS the whole answer" \
+  "! grep -q 'stopped after' '$T/ci-exactly5.log'"
+unset STUB_CHECKS_PAGES STUB_CHECKS_LAST
 
 echo "== auto-deploy: the fork-park marker refuses to restart even an ACTIVE miner (R-12)"
 # THE SEQUENCE THIS EXISTS FOR, 2026-09-15: a deploy started a miner that had been parked,
