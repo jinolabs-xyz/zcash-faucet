@@ -192,6 +192,25 @@ jobs:
       # reserve would ship behind unit tests alone.
       FAUCET_CTAZ_ENABLED: "true"
       CROSSLINK_RPC_URL: http://127.0.0.1:28611/
+      # THE CONFIGURED /donate AND /fund, which this job has never rendered (#605). Handing
+      # over an address is the entire purpose of those two pages; with these unset both
+      # render their not-configured card, and every row written to hold in either
+      # configuration quietly takes the else branch. Nothing was red - the configured
+      # assertions simply never ran where it counts.
+      #
+      # FABRICATED, AND THEY READ AS FABRICATED ON SIGHT. These are shown to a visitor as
+      # somewhere to send money, so a plausible-looking fixture is the wrong kind of fixture:
+      # if this block ever escaped into a real deployment the page would be offering an
+      # address nobody can spend to, and the only thing standing between that and a lost
+      # donation is whether a person notices. Same shape as the api-tests job's doubles.
+      FAUCET_DONATION_ADDRESS: utest1cafakedonationaddressusedadtestsneverusethesezecfunds
+      FAUCET_MINING_ADDRESS: tmUiVxo1bbZLP5z6KYfM4dh3PcX5wkd7on8
+      # MAINNET-SHAPED ON PURPOSE. config.ts:426 runs this one through mainnetUnifiedOrEmpty(),
+      # which returns "" for a testnet address and for anything failing the u1 bech32m shape -
+      # and an empty maintenanceAddress is indistinguishable from an unset one, so a typo here
+      # gives a GREEN run measuring exactly the state this change exists to stop measuring.
+      # ui-smoke asserts the env reaches the page rather than trusting that it did.
+      FAUCET_MAINTENANCE_ADDRESS: u1cafakeaddressusedadtestsneverusethesezecfundsarenatreal
       # THE READ-SIDE BACKEND, POINTED AT A DOUBLE (#588). Unset, config.ts falls through
       # to https://testnet.zec.rocks:443, so `pingBackend()` reached a third party on every
       # run of this job and the index card's PHASE - and so its height - followed that call.

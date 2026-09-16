@@ -2844,11 +2844,52 @@ async function checkPanelControlIsTheDesignsBar(browser, base) {
         `${r.panelButtons} button(s) in the panel, ${r.barsInPanel} of them .automate - set FAUCET_DONATION_ADDRESS/FAUCET_MAINTENANCE_ADDRESS to measure the configured path`);
     }
 
+    // AND WHEN THE RUNNER DID SET ONE, IT HAS TO HAVE ARRIVED (#605). `configured` is read off
+    // the DOM a few lines up, deliberately, because what matters is what the page did - this is
+    // the half that was missing, not a contradiction of it: nothing told the runner when what it
+    // set failed to reach the page, and the two are different questions.
+    //
+    // It matters most for /fund. config.ts:426 puts FAUCET_MAINTENANCE_ADDRESS through
+    // mainnetUnifiedOrEmpty(), which returns "" for a testnet address AND for anything failing
+    // the u1 bech32m shape, so a typo in ci.yml is INDISTINGUISHABLE from leaving it unset: the
+    // page renders its not-configured card, the branch above takes the else, and the job is green
+    // while measuring the exact state #605 was filed to stop measuring. This file already says so
+    // at the /fund 200 check - "empty when UNSET **or when config validation REJECTS it**" - and
+    // then nothing acted on it.
+    //
+    // ONE-DIRECTIONAL, and that is not laziness. Run the smoke script without these vars against
+    // a server that has them and the page is configured while the env is not; a biconditional
+    // would go red on a page behaving perfectly, which is this file's own rule about an assertion
+    // that reddens when the code gets MORE correct. The implication catches the typo and cannot
+    // fail on a split environment.
+    //
+    // Donation and mining are unvalidated today (config.ts:402, :407 are plain `?? ""`), so for
+    // those the implication holds trivially. Stated anyway: it costs a comparison and it is what
+    // notices the day one of them gains a validator.
+    const addrEnv = path === "/fund" ? "FAUCET_MAINTENANCE_ADDRESS" : "FAUCET_DONATION_ADDRESS";
+    const addrSet = !!(process.env[addrEnv] || "").trim();
+    ok(`${path}: an address in ${addrEnv} reaches the page, rather than being silently dropped`,
+      !addrSet || r.configured,
+      addrSet
+        ? (r.configured
+            ? "set, and the page rendered it"
+            : `set, and the page rendered its NOT-configured card - config rejected the value, so every row above measured the wrong configuration`)
+        : "not set for this run, so there is nothing to have arrived");
+
     // THE CHIP IS BEHIND A CONFIGURED MINING ADDRESS, which my first version did not check: with
     // FAUCET_MINING_ADDRESS unset the page renders a `.hint` instead and the row failed with "no
     // .tag chip found" on a correct page. The runner now configures one, so this is a real
     // measurement rather than a skip - and the guard stays, naming the reason, so the row cannot
     // quietly become a no-op if that env goes away.
+    // THE CHIP IS SKIPPED WHEN IT IS ABSENT, so a mining address that never arrives takes the
+    // measurement with it and says nothing. Same implication, same reason as above.
+    if (hasChip) {
+      const minSet = !!(process.env.FAUCET_MINING_ADDRESS || "").trim();
+      ok(`${path}: an address in FAUCET_MINING_ADDRESS reaches the page as a chip`,
+        !minSet || !!r.chip,
+        minSet ? (r.chip ? `set, chip rendered as "${r.chip.cls}"` : "set, and NO .tag chip rendered - the chip row below measured nothing")
+               : "not set for this run, so there is no chip to expect");
+    }
     if (hasChip && r.chip) {
       ok(`${path}: the mining chip stays a chip`,
         !!r.chip && /\btag\b/.test(r.chip.cls) && !/\bautomate\b/.test(r.chip.cls) && r.chip.h < want - 4,
