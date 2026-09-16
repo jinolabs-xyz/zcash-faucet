@@ -1252,6 +1252,25 @@ check "the runner prints the slowest checks and counts the ones over 10s" \
   "grep -qF 'where the time went' '$REPO/deploy/z3/tests/run-tests.sh' && grep -qF '\$1 > 10000000' '$REPO/deploy/z3/tests/run-tests.sh'"
 # AND THE ONE CASE THAT BROKE THE RULE STAYS FIXED. A pin on the knobs, not on a duration:
 # timing assertions go red on a loaded runner, which teaches people to re-run CI.
+# AND THE SHIPPED DEFAULTS ARE ANCHORED, because removing the sleep removed the only thing that
+# ran them (SDE-App, review of this PR, and it is my own memory's lesson used against me). Before
+# this PR the ready-gate case exercised ZSNAP_READY_TRIES=10 and ZSNAP_READY_WAIT=30 by sitting
+# through them - incidentally, which is exactly why it cost 270 seconds. THE 4m32s AND THE
+# COVERAGE WERE THE SAME FACT. Now all three uses in the suite are overrides, so 10 could become
+# 1 and 30 could become 0 and the harness would stay green, on the two numbers that gate a
+# stale-snapshot export.
+#
+# Text pins rather than a restored sleep: what is at risk is the VALUE, and a test that spends
+# four and a half minutes to read two integers is the thing this PR exists to delete.
+check "the shipped ready-probe count is anchored, not only overridden in the suite" \
+  "grep -qF 'ZSNAP_READY_TRIES=\"\${ZSNAP_READY_TRIES:-10}\"' '$REPO/deploy/z3/zsnap-export.sh'"
+check "and the shipped gap between probes" \
+  "grep -qF 'ZSNAP_READY_WAIT=\"\${ZSNAP_READY_WAIT:-30}\"' '$REPO/deploy/z3/zsnap-export.sh'"
+# AND THE OPERATOR'S SENTENCE IS DERIVED FROM THEM, not typed beside them. The refusal says
+# "over ~N min", and N is computed from the two knobs; a literal there would go stale the first
+# time either number moved, and the operator would be told a duration the script does not wait.
+check "and the refusal's ~N min is computed from those two, so it cannot go stale" \
+  "grep -qF 'over ~\$((ZSNAP_READY_TRIES * ZSNAP_READY_WAIT / 60)) min' '$REPO/deploy/z3/zsnap-export.sh'"
 check "zsnap's ready-gate case overrides the probe knobs instead of sleeping 4.5 minutes" \
   "grep -qF 'STUB_READY=0 ZSNAP_READY_TRIES=2 ZSNAP_READY_WAIT=1 bash \"\$EXPORT\" > \"\$T/gate.log\"' '$REPO/deploy/z3/tests/suites/zsnap.sh'"
 

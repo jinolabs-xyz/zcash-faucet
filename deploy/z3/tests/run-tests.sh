@@ -479,7 +479,15 @@ if [ -s "${HARNESS_TIMING:-/nonexistent}" ]; then
   # output on this PR rather than locally, where the message does not appear.
   sort -rn "$HARNESS_TIMING" | awk -F'\t' 'NR<=8 {printf "  %7.1fs  %s\n", $1/1000000, $2}'
   slow="$(awk -F'\t' '$1 > 10000000' "$HARNESS_TIMING" | wc -l | tr -d ' ')"
-  [ "$slow" -gt 0 ] && echo "  ($slow check(s) waited over 10s - each one should be able to say which property needs it)"
+  # AN `if`, NOT `[ ... ] && echo`. SDE-App checked whether this tail could fail a GREEN run and
+  # found it safe only by accident: `run-tests.sh` carries no `set -e`, and the last statement of
+  # the file is the fail test, so the non-zero this line returns when nothing is slow never
+  # reaches anything. That is a hazard resting on two facts a future edit could change
+  # independently. The `if` returns zero either way, so the next person to add `-e` to this file
+  # does not have to know any of it.
+  if [ "$slow" -gt 0 ]; then
+    echo "  ($slow check(s) waited over 10s - each one should be able to say which property needs it)"
+  fi
 fi
 # shellcheck disable=SC2154
 [ "$fail" -eq 0 ]
