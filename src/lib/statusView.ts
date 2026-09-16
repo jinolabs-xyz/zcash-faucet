@@ -190,6 +190,13 @@ export function reserveWord(
   // from components is a dependency running the wrong way for one string.
   if (reserveTone(reserve) === "unknown") return "unknown";
   if (reserve?.refilling) return "topping up";
+  // `warn` FOLDS INTO "ok" AND THAT IS THE DESIGN, NOT AN OVERSIGHT (SDE-App asked for this
+  // line on the #567 re-verdict, so the next reader does not "fix" it). `reserveTone`
+  // returns warn between the low mark and the target, and index.html:932 keys the chip on
+  // `wt === 'bad'` alone - at-or-below the LOW mark - so a reserve that is merely under its
+  // target reads "ok" here. The tone still says warn, and the reserve BAR shows the gap;
+  // the chip is deliberately quieter than the bar. Making warn reachable through the chip
+  // would be a departure from the approved design, not a correction of this function.
   return reserveTone(reserve) === "bad" ? "low" : "ok";
 }
 

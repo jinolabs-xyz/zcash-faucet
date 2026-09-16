@@ -44,7 +44,16 @@
 .metric .delta[data-tone="warn"]{color:var(--warn-text)}.metric .delta[data-tone="bad"]{color:var(--bad-text)}
 
 /* tag pills */
-.tag{font-family:inherit;display:inline-flex;align-items:center;gap:calc(.5*var(--u));height:calc(2.15*var(--u));padding:0 calc(.9*var(--u));border-radius:calc(.5*var(--u));background:var(--tag-bg);color:var(--ink);
+/* RAISED FOR THE SAME REASON AS THE FIVE ABOVE, and it went live with this PR rather than
+ * with #575. `globals.css:151` is `.tag` at (0,1,0) and so is this rule, and they disagree
+ * about `padding` (5px 8px against 0 calc(.9*var(--u))), `border-radius` (0 against
+ * calc(.5*var(--u))), `font-size`, `font-weight` and `letter-spacing`. Which one wins is link
+ * order, which Next does not promise - the exact dependency #575 removed everywhere else.
+ *
+ * #575's review could not see it because `.tag` matched ZERO elements on that tree: the chips
+ * arrive with these views. `.stage .tag{text-transform:none}` one file over raised a single
+ * property out of the same tie; this raises the rest of it. (0,2,0) against globals' (0,1,0). */
+.stage .tag{font-family:inherit;display:inline-flex;align-items:center;gap:calc(.5*var(--u));height:calc(2.15*var(--u));padding:0 calc(.9*var(--u));border-radius:calc(.5*var(--u));background:var(--tag-bg);color:var(--ink);
   font-size:calc(.84*var(--u));font-weight:500;letter-spacing:0;border:calc(.06*var(--u)) solid var(--hair);white-space:nowrap;text-decoration:none;cursor:default}
 .tag b{font-weight:600;font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:calc(.8*var(--u))}
 .tag .sdot{width:calc(.55*var(--u));height:calc(.55*var(--u));border-radius:50%;background:var(--unknown)}
