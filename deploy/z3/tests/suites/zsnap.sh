@@ -619,7 +619,36 @@ check "and it says the payload was intact, so nobody re-exports for nothing" \
 
 # A CHUNK WITH ONE BYTE CHANGED. The old check never opened a chunk, so this passed it
 # even in the world where its hash comparison had been right.
-cp -r "$VDIR" "$T/vt"; printf 'x' | dd of="$T/vt/snapshot/chunks/hash_by_height.zsnap" bs=1 seek=100 conv=notrunc 2>/dev/null
+#
+# THE TAMPER IS A FLIP, NOT A CONSTANT, and that is the whole of #580. Writing a literal 'x'
+# into a fixture built from /dev/urandom is a no-op whenever the byte there is ALREADY 0x78 -
+# one run in 256. The archive then verifies clean, --verify-only exits 0, and the two checks
+# below go red on a tree with nothing wrong with it. Seen on #572 at a2ec080, which is not
+# within a mile of zsnap. A control that quietly becomes a no-op is the same class as an
+# assertion that cannot fail; this one just picks its runs at random.
+#
+# XOR 0xFF cannot coincide with what is there, so the tamper is a change on every run and on
+# every fixture, including a future one that is not random at all.
+#
+# AND A TAMPER THAT COULD NOT BE APPLIED SAYS SO, rather than letting the two checks below go
+# red with the flake's own signature. The suite runs under `set -uo pipefail` and no `-e`, so a
+# heredoc that raises does not stop anything: the tar would proceed on an UNTAMPERED tree, the
+# archive would verify clean, and the reader would see exactly the two failures #580 was about
+# and reach for "flake" a second time. `f.read(1)[0]` raises on a fixture shorter than 101
+# bytes, which is the realistic way this returns - someone shrinks the fixture to make the
+# suite faster. Named here so that failure is one line and not an afternoon.
+cp -r "$VDIR" "$T/vt"
+if ! python3 - "$T/vt/snapshot/chunks/hash_by_height.zsnap" <<'TAMPER'
+import sys
+with open(sys.argv[1], "r+b") as f:
+    f.seek(100); b = f.read(1)
+    if len(b) != 1:
+        sys.exit("fixture is shorter than 101 bytes, so offset 100 cannot be flipped")
+    f.seek(100); f.write(bytes([b[0] ^ 0xFF]))
+TAMPER
+then
+  bad "the verify fixture could not be tampered at offset 100, so the two checks below prove nothing"
+fi
 tar -C "$T/vt" -cf - snapshot | zstd -q -o "$T/tampered.tar.zst"
 bash "$EXPORT" --verify-only "$T/tampered.tar.zst" "$VHASH" > "$T/vtamp.log" 2>&1
 check "a chunk with one byte changed is caught" "[ $? -ne 0 ]"
