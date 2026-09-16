@@ -3,6 +3,7 @@
 // (e2e-smoke.mjs) proves the API works. Nothing before this proved that the
 // page wired to that API works.
 //
+//   rm -f data/faucet.db data/faucet.db-wal data/faucet.db-shm   # see below
 //   npm run build
 //   node scripts/fake-zallet.mjs &                 # PORT=28299 wallet double
 //   PORT=28324 node scripts/fake-hosh.mjs &        # tip oracle fixture, see below
@@ -12,6 +13,17 @@
 //   RATE_LIMIT_SALT=ui-smoke HOSH_URL=http://127.0.0.1:28324/ TIP_ORACLE_ENDPOINT= \
 //   FAUCET_CTAZ_ENABLED=true CROSSLINK_RPC_URL=http://127.0.0.1:28611/ \
 //   FAUCET_CTAZ_RPC_SOCKET= PORT=3120 npm start
+//
+// CLEAR THE DB FIRST, AND IT IS NOT HOUSEKEEPING. This suite drives a real claim on every
+// run, so the rows accumulate in data/faucet.db. Drive it enough times on one worktree and the
+// app starts REFUSING claims: the run then hangs 120 s on `waiting for getByTestId('sent-badge')`
+// and dies with a 503 in the console, about a hundred assertions in. It reads exactly like a
+// slow machine, and on a busy box you will diagnose it as one - I did, and told two other seats
+// so, after my worktree reached 212 claims rows and a 4 MB -wal. The tell that it is not load is
+// that a quiet box fails identically.
+//
+// All three files, not just the db: a stale -wal or -shm against a fresh db reports as "disk I/O
+// error", which is its own afternoon.
 //
 // TWO OF THOSE ARE EMPTY ON PURPOSE AND BOTH COST SOMEBODY AN AFTERNOON.
 // TIP_ORACLE_ENDPOINT= stands the oracle's direct leg down: it fetches both references
