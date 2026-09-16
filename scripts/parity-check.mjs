@@ -376,9 +376,15 @@ console.log(`parity: ${ship.size} shipped rules against ${spec.size} in the spec
 const byKind = (k) => Object.keys(declared).filter((s) => kindOf(declared[s]) === k).length;
 console.log(`  added ${added.length}  changed ${changed.length}  dropped ${dropped.length}  declared ${Object.keys(declared).length}`);
 console.log(`  of the declared: ${byKind("divergence")} divergence(s) from the design, ${byKind("override")} override(s) of it`);
+// AND THE REASON IT IS NOT GATED IS THE REASON, not the views count. When a spec carries slice
+// facts the slice gate decides (line 318) and the views/pages tally is not consulted at all - so
+// printing "mid-transcription (4/4 views wired, 3/3 pages in the shell)" the moment #567 and #576
+// land would state its own contradiction and send the next reader to wire views that are wired.
 console.log(transcriptionComplete
-  ? "  the transcription is complete (4 views wired, 3 pages in the shell), so DROPPED is gated too"
-  : `  mid-transcription (${wiredViews.length}/4 views wired, ${pagesInShell.length}/3 pages in the shell): ${dropped.length} dropped rules are the slices that have not landed, and are not gated yet`);
+  ? "  the transcription is complete, so DROPPED is gated too"
+  : sliceFacts
+    ? `  held by the slice gate, not by the views: ${dropped.length} dropped rules are not gated yet (${wiredViews.length}/4 views wired, ${pagesInShell.length}/3 pages in the shell, which this spec does not consult)`
+    : `  mid-transcription (${wiredViews.length}/4 views wired, ${pagesInShell.length}/3 pages in the shell): ${dropped.length} dropped rules are the slices that have not landed, and are not gated yet`);
 for (const s of undeclared) {
   const why = added.includes(s) ? "not in the spec" : changed.includes(s) ? "declarations differ" : "in the spec, not shipped";
   console.error(`  UNDECLARED (${why}): ${s}`);
