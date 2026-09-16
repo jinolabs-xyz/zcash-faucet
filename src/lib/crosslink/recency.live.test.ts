@@ -8,14 +8,17 @@
  */
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
 import { readingFor, canServeCtaz } from "./recency.ts";
+import { spawnFake, type Fake } from "../testing/spawnFake.ts";
 
-const PORT = 28497;
-let node: ChildProcess;
+// KERNEL-PICKED PORT (#603). This file bound 28497 and derived a second double at PORT+1. A fixed
+// port that is already taken does not fail the spawn loudly - the test's own fetch reaches whoever
+// is listening and the case fails on a wrong value.
+let node: Fake;
+const started: Fake[] = [];
 
-const rpc = async (method: string, params: unknown[] = []) => {
-  const res = await fetch(`http://127.0.0.1:${PORT}/`, {
+const rpc = async (method: string, params: unknown[] = [], port = node.port) => {
+  const res = await fetch(`http://127.0.0.1:${port}/`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
@@ -34,14 +37,13 @@ const up = async () => {
 };
 
 before(async () => {
-  node = spawn("node", ["scripts/fake-crosslink.mjs"], {
-    env: { ...process.env, PORT: String(PORT) },
-    stdio: "ignore",
-  });
-  assert.ok(await up(), "the crosslink double never came up");
+  node = await spawnFake("scripts/fake-crosslink.mjs");
+  started.push(node);
+  assert.ok(await up(), `the crosslink double announced :${node.port} but never answered an RPC`);
 });
 
-after(() => { node?.kill(); });
+// Every double, including any started inside a case.
+after(() => { for (const f of started) f.stop(); });
 
 test("the gate reads the double's reply as ready, so the shapes agree", async () => {
   const { result } = await rpc("get_tfl_recency_status");
@@ -85,15 +87,15 @@ test("there is no balance method to call, which is why the panel says unknown", 
 });
 
 test("a node with TFL off is not-activated, not ready", async () => {
-  const off = spawn("node", ["scripts/fake-crosslink.mjs"], {
-    env: { ...process.env, PORT: String(PORT + 1), TFL_ACTIVATED: "false" },
-    stdio: "ignore",
-  });
+  // Its own kernel-picked port, not `PORT + 1`. Deriving a second port by adding one assumes a
+  // range is free because one port in it was, which is the same bet the fixed port lost.
+  const off = await spawnFake("scripts/fake-crosslink.mjs", { TFL_ACTIVATED: "false" });
+  started.push(off);
   try {
     let res: { error?: { message: string } } | null = null;
     for (let i = 0; i < 60; i++) {
       try {
-        res = await (await fetch(`http://127.0.0.1:${PORT + 1}/`, {
+        res = await (await fetch(`http://127.0.0.1:${off.port}/`, {
           method: "POST", headers: { "content-type": "application/json" },
           body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "get_tfl_recency_status", params: [] }),
         })).json();
@@ -103,5 +105,5 @@ test("a node with TFL off is not-activated, not ready", async () => {
     assert.match(res?.error?.message ?? "", /not activated/i);
     // An error reply is not a reading, so the gate refuses rather than guessing.
     assert.equal(canServeCtaz(readingFor(null, Date.now()).state, 100, 100, "rpc"), false);
-  } finally { off.kill(); }
+  } finally { off.stop(); }
 });

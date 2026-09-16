@@ -1,13 +1,22 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
 import type { AddressInfo } from "./address.ts";
+import { spawnFake, type Fake } from "../testing/spawnFake.ts";
 
 // Runs the production ZalletSender against scripts/fake-zallet.mjs, so the
 // balance and send behaviour is covered on the path that actually ships.
-const RPC_PORT = 28451;
+//
+// THE DOUBLE COMES UP BEFORE THE IMPORT, on a kernel-picked port (#603). This file used to bind
+// 28451 and set ZALLET_RPC_URL from it at module load. When something else held that port the
+// spawn lost the bind, `balance()` reached the OTHER listener, and the suite reported
+// `1500000000n !== 100000000n` -- a wrong value with no hint that a port was the cause. Three
+// people nearly published that as a code defect on 2026-09-16.
+//
+// The spawn has to happen up here rather than in `before` because send.ts reads ZALLET_RPC_URL
+// when it is imported, and the port is not knowable until the child announces it.
+const wallet: Fake = await spawnFake("scripts/fake-zallet.mjs", { BALANCE_TAZ: "1" });
 process.env.FAUCET_SENDER = "zallet";
-process.env.ZALLET_RPC_URL = `http://127.0.0.1:${RPC_PORT}/`;
+process.env.ZALLET_RPC_URL = `http://127.0.0.1:${wallet.port}/`;
 process.env.ZALLET_ACCOUNT = "test-account";
 process.env.ZALLET_ADDRESS = "utest1testfaucet";
 process.env.ZALLET_MIN_CONF = "0";
@@ -18,13 +27,9 @@ const { getSender, safeBalance } = await import("./send.ts");
 const TM: AddressInfo = { valid: true, kind: "transparent", shielded: false };
 const req = (amountZat: bigint) => ({ toAddress: "tmTestRecipient", addressInfo: TM, amountZat });
 
-let wallet: ChildProcess;
 before(async () => {
-  wallet = spawn("node", ["scripts/fake-zallet.mjs"], {
-    env: { ...process.env, PORT: String(RPC_PORT), BALANCE_TAZ: "1" },
-    stdio: "ignore",
-    detached: true,
-  });
+  // The child already announced its port, so it is listening. This confirms it answers the RPC
+  // the sender actually uses, which announcing does not.
   for (let i = 0; i < 60; i++) {
     try {
       await getSender().balance();
@@ -33,11 +38,9 @@ before(async () => {
       await new Promise((r) => setTimeout(r, 250));
     }
   }
-  throw new Error("fake-zallet did not come up");
+  throw new Error(`fake-zallet announced :${wallet.port} but never answered a balance call`);
 });
-after(() => {
-  try { process.kill(-wallet.pid!, "SIGKILL"); } catch { /* already gone */ }
-});
+after(() => wallet.stop());
 
 test("the configured sender is the shielded one", () => {
   assert.equal(getSender().name, "zallet");

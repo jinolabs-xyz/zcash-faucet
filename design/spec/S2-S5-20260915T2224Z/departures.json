@@ -123,11 +123,6 @@
     "why": "RE-SCOPED TO OUTRANK globals.css, SAME DECLARATIONS (#575). The legacy sheet styles the same element at the same specificity, so the design's own selector loses on source order alone. One ancestor is added - `html` for element rules, `.stage` for page furniture - which raises specificity without changing what is painted. The spec's key and ours therefore differ while the CSS does not, which the checker reports as one dropped rule plus one added rule: the same divergence twice.",
     "shipped": ""
   },
-  ".tip": {
-    "kind": "divergence",
-    "why": "A GAP, NOT A DECISION, and it is declared here only so the gate can measure the other two hundred rules. The design's drips chart carries a hover tooltip (shell.css:287, index.html:637) and we ship neither the rule nor the element. Filed as #594 against the sheet owner. When it ships, this entry stops describing a divergence and the checker will demand its removal - which is the property that stops this line becoming permanent.",
-    "shipped": ""
-  },
   ".views > .view.hero, .comp > .view.hero": {
     "kind": "override",
     "why": "OUR LANDMARK, NOT A #575 RE-SCOPING, and round three mislabelled it. The spec has this as `.comp > .view.hero`. Our four views sit inside a `<main class=\"views\">` landmark rather than directly in `.comp`, so the design's child combinator matched nothing at all and computed padding-top 0. The selector carries BOTH spellings so the rule applies in our structure and still describes the design's. Same declarations as the spec - verified - but the reason is the landmark, and globals.css has nothing to do with it.",

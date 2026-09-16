@@ -171,7 +171,19 @@ case "${1:-}" in
     echo "$1"
     ;;
   exec)
-    # docker exec <container> ... : the only exec in the stack is the watchdog asking
+    # GETBLOCKHASH FIRST, because it is a different question with a different answer shape and
+    # the getblockchaininfo reply below would satisfy neither. The watchdog's history rung
+    # (#533 step 2) asks for our block hash at a settled height; STUB_ZEBRA_HASH is what we
+    # answer, and leaving it unset models a node that will not answer, which is the state every
+    # suite that predates this rung is already in. The height is echoed back in the id so a test
+    # can prove we were asked about the height the reference named rather than some other one.
+    case "$*" in
+      *getblockhash*)
+        [ -n "${STUB_ZEBRA_HASH:-}" ] || exit 1
+        printf '{"result":"%s","error":null,"id":"watchdog"}\n' "$STUB_ZEBRA_HASH"
+        exit 0 ;;
+    esac
+    # docker exec <container> ... : the other exec in the stack is the watchdog asking
     # zebra's JSON-RPC for getblockchaininfo. Answer from STUB_ZEBRA_BLOCKS and
     # STUB_ZEBRA_EST. STUB_ZEBRA_ADVANCE=1 raises blocks by one per call through a counter
     # file, so a "syncing" node advances across the sweeps of one run. STUB_ZEBRA_BLOCKS

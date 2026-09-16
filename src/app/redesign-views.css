@@ -178,6 +178,11 @@
 .pc h3 .tag{margin-left:auto;height:calc(1.8*var(--u));font-family:var(--mono);font-size:calc(.78*var(--u))}
 .pc > canvas,.pc .chart > canvas{width:100%;display:block}
 .pc .chart{position:relative}
+/* THE DRIPS TOOLTIP (#594), transcribed from design/spec/S1-20260915T1938Z/shell.css:287. The
+ * only rule in the S1 spec that the design's own page uses and we shipped nowhere - not a
+ * departure, just never carried across. `.pc .chart` above was already `position:relative`, and
+ * drawDrips already painted a hovered bar, so the two halves were waiting for this one. */
+.tip{position:absolute;pointer-events:none;background:var(--ink);color:var(--surface);font:calc(.75*var(--u))/1 var(--mono);font-variant-numeric:tabular-nums;padding:calc(.45*var(--u)) calc(.6*var(--u));border-radius:calc(.5*var(--u));transform:translate(-50%,-100%);white-space:nowrap}
 
 .tot{display:flex;gap:calc(1.8*var(--u));margin-top:calc(.8*var(--u));padding-top:calc(.8*var(--u));border-top:calc(.06*var(--u)) solid var(--hair);font-size:calc(.78*var(--u));color:var(--label);font-weight:500}
 .tot b{display:block;font-size:calc(1.5*var(--u));font-weight:600;color:var(--display-accent);font-variant-numeric:tabular-nums;letter-spacing:calc(-.03*var(--u))}

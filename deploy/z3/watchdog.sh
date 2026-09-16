@@ -97,6 +97,8 @@ FORK_AHEAD_BLOCKS="${WATCHDOG_FORK_AHEAD_BLOCKS:-150}"   # ahead of the highest 
 FORK_MINER_MIN_SECS="${WATCHDOG_FORK_MINER_MIN_SECS:-600}" # miner alive this long = it could have built this
 alerted_fork=0
 fork_cannot_tell_logged=0   # the cannot-tell line is a state, said once, and re-armed when it ends
+alerted_history_fork=0
+history_cannot_tell_logged=0   # same shape: a missing reference is a STATE, not a per-sweep event
 
 # Poison auto-heal (step 5). Restarting zallet cannot fix a crash whose cause is a row
 # in wallet.db, so the watchdog runs the repair tools when it sees that exact signature.
@@ -432,6 +434,19 @@ container_uptime() {
   started="${started%%.*}"; started="${started%Z}Z"
   epoch="$(date -u -d "$started" +%s 2>/dev/null)" || return 0
   case "$epoch" in ''|*[!0-9]*) return 0 ;; esac
+  # RAW `date`, NOT wd_now, AND THAT IS DELIBERATE (#626 review - SDE-UI and SDE-App reached it
+  # independently). `epoch` came from docker's StartedAt, a real instant produced OUTSIDE this
+  # process, so the only clock it can be subtracted from is the real one. Under the suite's driven
+  # clock this reads about -39,600,000 (1750000100 - a real StartedAt epoch), and the guard below
+  # swallows it. THAT MAGNITUDE IS THE POINT, and I had it wrong first: I wrote "-1.75 billion",
+  # which is only the degenerate path where CLOCK_FILE is set and the file is missing, and a
+  # number that size looks broken to anyone who sees it. -39 million is the kind of absurd a
+  # guard eats quietly - a plausible wrong number rather than an error, which is the worse
+  # failure. Corrected by SDE-App on review, who computed both paths rather than reading mine.
+  # The hazard is not a bug today; it is the tidy-up that
+  # converts "the remaining date calls" for consistency, and a comment is what stops that edit.
+  # A test cannot: it would have to pin the ABSENCE of a conversion, which is the denylist shape
+  # all three of us have shipped once this week.
   local up=$(( $(date -u +%s) - epoch ))
   [ "$up" -ge 0 ] || return 0
   echo "$up"
@@ -460,6 +475,8 @@ ts_age() {
   local ts="$1" epoch
   [ -n "$ts" ] || { printf ''; return; }
   epoch="$(date -u -d "$ts" +%s 2>/dev/null)" || { printf ''; return; }
+  # RAW `date` for the same reason as the sibling above: `epoch` is parsed from a timestamp the
+  # miner wrote, so its zero point is the real clock and nothing else can be subtracted here.
   printf '%s' "$(( $(date -u +%s) - epoch ))"
 }
 
@@ -562,6 +579,33 @@ zebra_chain_heights() {
   case "$blocks" in ''|*[!0-9]*) return 0 ;; esac
   case "$est" in ''|*[!0-9]*) est="$blocks" ;; esac
   printf '%s %s' "$blocks" "$est"
+}
+
+# IS THE MINER RUNNING, ONE DEFINITION. Two rungs need this judgement and #571 is the issue
+# about a third copy of a word going stale, so a second copy of the SET was the same defect one
+# PR later - found by SDE-UI on review of #533 step 2. "activating" and "reloading" are units
+# about to extend this chain (red-team, #560): a stop line keyed on exactly "active" leaves a
+# starting miner with no instruction at all, and the whole point of #618 is that the three words
+# are one decision rather than three spellings.
+miner_unit_is_running() {
+  case "${1:-}" in active|activating|reloading) return 0 ;; esac
+  return 1
+}
+
+# OUR BLOCK HASH AT A HEIGHT, for the history half of the fork detector (#533 step 2).
+#
+# Mirrors zebra_chain_heights deliberately: same container, same cookie, same no-jq parse. The
+# height is passed as an ARGUMENT to sh rather than interpolated into the JSON, so the quoting
+# has one level instead of three and nothing this function builds depends on the caller having
+# validated the number - though the caller does.
+#
+# Empty means we could not read it, which is never evidence of anything. That is the whole
+# discipline of this rung: fail on proof, not on cannot-verify (#533).
+zebra_block_hash() {
+  local name="$1" height="$2" out
+  [ -n "$name" ] && [ -n "$height" ] || return 0
+  out="$(docker exec "$name" sh -lc 'CK=$(cat /run/auth/.cookie 2>/dev/null || cat /var/run/auth/.cookie 2>/dev/null); curl -s --max-time 10 -u "$CK" --data-binary "{\"jsonrpc\":\"1.0\",\"id\":\"watchdog\",\"method\":\"getblockhash\",\"params\":[$1]}" -H content-type:text/plain http://127.0.0.1:18232/' _ "$height" 2>/dev/null)" || return 0
+  printf '%s' "$out" | sed -n 's/.*"result":"\([0-9a-fA-F][0-9a-fA-F]*\)".*/\1/p' | head -n1
 }
 
 # STEP 7: NODE SYNC-STALL RECOVERY. Two facts together, because either alone lies. A node
@@ -957,6 +1001,106 @@ ticks=0
 # starting the miner and the page can wait two seconds behind it.
 #
 # IT DROPS NOTHING - see FORK_AHEAD_BLOCKS above for why a rewind here would be a lie.
+# THE HISTORY HALF OF THE FORK DETECTOR (#533 step 2, risk register R-20).
+#
+# The rung above asks "are we ahead of a tip two references agree on". This asks a different and
+# stronger question: at a height both sides have settled on, do we and the network have the SAME
+# BLOCK. A hash mismatch at depth is proof of a split; being ahead is only evidence of one.
+#
+# DELIBERATELY NOT GATED ON `corroborated`, and that is the point of building it. #600 found that
+# corroboration reads false most of the time on a fast-block day - the tolerance is a block COUNT
+# absorbing a disagreement measured in SECONDS - and while it is false the rung above cannot act.
+# Two independent sources agreeing about a TIP is what that rung needs; one source's hash at a
+# settled HEIGHT needs no second opinion, because a wrong hash is not a matter of timing. So this
+# keeps working in exactly the condition that paralyses the other, which is the condition
+# 2026-09-15 happened in.
+#
+# FAIL ON PROOF, NOT ON CANNOT-VERIFY - the register's phrasing and the whole contract here. An
+# unshipped app half, an absent field, an unreachable zebra and an unparseable hash all act on
+# NOTHING and say so once. Only two hashes that both parsed and differ will park and page.
+#
+# IT DOES NOT STOP THE MINER. That is the ruling recorded below at the AHEAD rung (CTO red-team,
+# finding 2): the marker gates STARTS, and stopping a running unit stays the owner's. #533's
+# wording predates that ruling and I am not reversing it from an issue; the page leads with the
+# stop INSTRUCTION when the unit is running, exactly as the other rung does.
+#
+# WHAT IT READS, and why the fields are flat: `referenceHeight` and `referenceHash` sit at the top
+# level of /api/ready beside `usedHeight`, for the reason usedHeight is there at all - this script
+# parses with grep, sed and cut, and two levels down is the #391 greedy-match trap. The app picks
+# the height and publishes it; we do not derive our own, so the two processes cannot disagree about
+# where they looked.
+check_history_against_reference() {
+  local name="$1" ref_h ref_hash ours_hash lower_ours lower_ref park stop_first hist_word
+  [ "$FORK_HEAL_ENABLED" = "1" ] || return 0
+  [ -n "$name" ] || return 0
+
+  ref_h="$(printf '%s' "${ready_body:-}" | grep -o '"referenceHeight":[0-9][0-9]*' | head -n1 | cut -d: -f2)"
+  ref_hash="$(printf '%s' "${ready_body:-}" | grep -o '"referenceHash":"[0-9a-fA-F]*"' | head -n1 | cut -d'"' -f4)"
+  case "$ref_h" in ''|*[!0-9]*) ref_h="" ;; esac
+
+  # NO REFERENCE IS THE NORMAL STATE UNTIL THE APP HALF SHIPS, so this lands dark and turns itself
+  # on the day those fields appear. Said once per episode for the reason the rung below says its
+  # cannot-tell once: a state repeated every 30 s is noise that trains an operator to skim.
+  if [ -z "$ref_h" ] || [ -z "$ref_hash" ]; then
+    if [ "$history_cannot_tell_logged" != "1" ]; then
+      log "history check: no reference block on /api/ready (height=${ref_h:-absent}, hash=${ref_hash:+present}${ref_hash:-absent}), so nothing is compared and nothing is touched. Silent until this changes."
+      history_cannot_tell_logged=1
+    fi
+    return 0
+  fi
+
+  ours_hash="$(zebra_block_hash "$name" "$ref_h")"
+  if [ -z "$ours_hash" ]; then
+    if [ "$history_cannot_tell_logged" != "1" ]; then
+      log "history check: the reference says $ref_h but zebra did not give us a hash at that height, so nothing is compared. Silent until this changes."
+      history_cannot_tell_logged=1
+    fi
+    return 0
+  fi
+  history_cannot_tell_logged=0
+
+  # CASE-INSENSITIVE, inherited rather than rediscovered: chainIdentity.ts:94 already records that
+  # sources differ on hex case and that a case difference is not a fork.
+  lower_ours="$(printf '%s' "$ours_hash" | tr '[:upper:]' '[:lower:]')"
+  lower_ref="$(printf '%s' "$ref_hash" | tr '[:upper:]' '[:lower:]')"
+  if [ "$lower_ours" = "$lower_ref" ]; then alerted_history_fork=0; return 0; fi
+
+  # PROOF. Same order as the rung below - marker first, then the page - and the page describes what
+  # is TRUE by reading the marker back rather than trusting the write.
+  if [ ! -f "$FORK_PARK_MARKER" ]; then
+    mkdir -p "$FORK_PARK_DIR" 2>/dev/null
+    if printf '%s history fork: at height %s ours %s, the independent reference %s\n' \
+         "$(date -u +%FT%TZ)" "$ref_h" "$ours_hash" "$ref_hash" >> "$FORK_PARK_MARKER" 2>/dev/null; then
+      log "wrote $FORK_PARK_MARKER; auto-deploy will refuse to start $MINER_UNIT until a human clears it"
+    else
+      log "ERROR: could not write $FORK_PARK_MARKER, so auto-deploy will NOT refuse to start $MINER_UNIT"
+    fi
+  fi
+
+  # AND IT CARRIES SYSTEMD'S OWN WORD, like the rung twelve lines down (SDE-UI, review). My first
+  # version said only "still running", which is the #571 -> #618 flattening reintroduced one
+  # function along: three rounds established that a unit reported `activating` must not be
+  # described to an operator as though it were `active`, and this rung undid it in the next PR.
+  # Nobody caught it because nothing drove a running miner through this page - the absence of a
+  # `systemctl stop` CALL was asserted and the presence of the stop INSTRUCTION was not.
+  stop_first=""
+  hist_word="$(systemctl is-active "$MINER_UNIT" 2>/dev/null)" || true
+  if miner_unit_is_running "$hist_word"; then
+    stop_first="The miner unit is still running (systemd says ${hist_word}) and extending this chain: stop it by hand FIRST (systemctl stop $MINER_UNIT). "
+  fi
+  if [ -f "$FORK_PARK_MARKER" ]; then
+    park="${stop_first}A park marker is written ($FORK_PARK_MARKER): no deploy and no watchdog heal will START the miner while that file exists."
+  else
+    park="${stop_first}THE MINER IS NOT PARKED: $FORK_PARK_MARKER could not be written, so the next auto-deploy tick WILL start the miner again. Stop the miner by hand first."
+  fi
+
+  if [ "$alerted_history_fork" = "0" ]; then
+    danger "at height $ref_h our node has block $ours_hash and an independent source has $ref_hash. Same height, different block: we are on a different chain, and this is PROOF rather than the ahead-by-N evidence the other check uses. $park Nothing has been rewound: a drop of the non-finalized state only reaches ~100 blocks and cannot undo a split at depth. WHAT TO DO: reimport a snapshot per SNAPSHOTS.md, then clear the marker per OPERATIONS.md once the node is back on the network's chain."; rc=$?
+    paged "$rc" && alerted_history_fork=1
+  fi
+  return 0
+}
+
 heal_self_mined_fork() {
   local name="$1" blocks corr used_h ahead miner_word started_age who mins
   [ "$FORK_HEAL_ENABLED" = "1" ] || return 0
@@ -1012,7 +1156,7 @@ heal_self_mined_fork() {
   # "activating" IS a unit that is about to extend this chain (red-team, same review): keying the
   # stop line on the word being exactly "active" left a starting miner with no instruction at all.
   local miner_running=0
-  case "$miner_word" in active|activating|reloading) miner_running=1 ;; esac
+  miner_unit_is_running "$miner_word" && miner_running=1
   if [ "$miner_running" = "1" ] && [ -n "$started_age" ] && [ "$started_age" -gt "$FORK_MINER_MIN_SECS" ]; then
     mins=$(( started_age / 60 ))
     who="our miner is ${miner_word} and its heartbeat says it started ${mins} min ago, so this chain is most likely ours"
@@ -1318,6 +1462,7 @@ while true; do
   # may have just restarted the node; reads this sweep's /api/ready body (fetched in 4) and
   # zebra directly.
   heal_self_mined_fork "$zebra" "$zebra_heights"
+  check_history_against_reference "$zebra"
 
   # Bounded only under test. Production leaves MAX_TICKS at 0 and never exits,
   # and the sleep is skipped on the final tick so a suite is not paying for it.
