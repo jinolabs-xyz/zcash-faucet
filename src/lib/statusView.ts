@@ -251,6 +251,16 @@ export function sendsTone(state: string | undefined): "ok" | "warn" | "bad" | "u
   return "unknown";
 }
 
+/** The box's tone, for the hero chip and the status view's row. Moved here from StatusCards
+ *  for the reason `sendsTone` was (R-24): the hero derived its own, and a second derivation is
+ *  a second thing to keep true. `publicBox()` emits only ok | attention | unknown, so those are
+ *  the three cases and there is no fourth to guess at. */
+export function boxTone(state: string | undefined): "ok" | "warn" | "bad" | "unknown" {
+  if (state === "ok") return "ok";
+  if (state === "attention") return "warn";
+  return "unknown";
+}
+
 /**
  * The node chip's tone, transcribed from index.html:927 - `s.node.ready ? 'ok' : 'warn'`.
  *

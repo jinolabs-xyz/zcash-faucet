@@ -27,6 +27,7 @@ import {
   reserveTone,
   minerWord,
   minerTone,
+  boxTone,
   sendsTone,
   acceptSentence,
   backendHost,
@@ -283,8 +284,3 @@ export function StatusCards({ status, network }: { status: ViewStatus | null; ne
  * an unrecognised value ends up reassuring.
  */
 
-function boxTone(state: string | undefined): Tone {
-  if (state === "ok") return "ok";
-  if (state === "attention") return "warn";
-  return "unknown";
-}

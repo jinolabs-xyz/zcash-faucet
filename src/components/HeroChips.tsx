@@ -32,6 +32,7 @@ import {
   minerTone,
   nodeChipTone,
   reserveTone,
+  boxTone,
   sendsTone,
 } from "@/lib/statusView";
 
@@ -102,9 +103,20 @@ export function HeroChips({
             the snapshot carries `hidden` on this chip and the script clears it. Hidden here
             means not rendered: an element with `hidden` is still in the accessibility tree for
             some assistive technology, and "OPS ATTENTION" read out on a healthy faucet is worse
-            than the chip being absent. */}
-        {boxState && boxState !== "ok" ? (
-          <button className="tag ops" type="button" data-chip="box" data-tone={boxState === "failing" ? "bad" : "warn"} onClick={() => onView("status")}>
+            than the chip being absent.
+
+            ATTENTION ONLY, AND UNKNOWN IS NOT ATTENTION. The first version was `boxState &&
+            boxState !== "ok"`, with `boxState === "failing" ? "bad" : "warn"`. `publicBox()`
+            emits exactly ok | attention | unknown, so "failing" was a branch nothing could
+            reach and the whole non-ok half collapsed to warn - which meant a box that has simply
+            not reported showed OPS ATTENTION in a warning tone, next to a miner chip and a sends
+            chip both quietly saying `unknown`. boxLabel.ts had already decided this in words -
+            "'attention' would claim a fault the box never reported" - and the chip claimed it
+            anyway. Found by SDE-Infra on the #591 review; the shape is R-24 again, two places
+            deciding one thing and only one of them reading the rule. The tone now comes from
+            `boxTone` in statusView.ts, which the status view uses for the same state. */}
+        {boxState === "attention" ? (
+          <button className="tag ops" type="button" data-chip="box" data-tone={boxTone(boxState)} onClick={() => onView("status")}>
             OPS ATTENTION
           </button>
         ) : null}

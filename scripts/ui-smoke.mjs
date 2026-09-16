@@ -1150,6 +1150,71 @@ async function showView(page, v) {
   await page.locator(`[data-testid="view-${v}"]`).waitFor({ state: "visible", timeout: 5000 });
 }
 
+async function checkOpsChipFollowsTheBox(browser) {
+  // THE OPS CHIP SAYS WHAT THE BOX SAID, AND UNKNOWN IS NOT ATTENTION.
+  //
+  // Found by SDE-Infra on review. The chip was gated `boxState && boxState !== "ok"` with a tone
+  // of `boxState === "failing" ? "bad" : "warn"`, and `publicBox()` emits exactly
+  // ok | attention | unknown - so "failing" was unreachable, the whole non-ok half collapsed to
+  // warn, and a box that simply had not reported showed OPS ATTENTION in a warning tone beside a
+  // miner chip and a sends chip both quietly reading `unknown`.
+  //
+  // Nothing already here could see it. The first-paint and served-HTML rows both check the chip
+  // is ABSENT, and at first paint `status` is null, so `boxState` is undefined and the old gate
+  // was falsy too - it passed those rows honestly and was still wrong the moment a status
+  // arrived. The state has to be driven to be measured at all.
+  const base = await (await fetch(`${BASE}/api/status`)).json();
+  const CASES = [
+    ["ok", false, null],
+    ["attention", true, "warn"],
+    ["unknown", false, null],
+  ];
+  const visited = [];
+  for (const [state, shouldShow, wantTone] of CASES) {
+    const c = await browser.newContext({ viewport: DESKTOP });
+    const p = await c.newPage();
+    await p.route("**/api/status", (route) => {
+      const body = JSON.parse(JSON.stringify(base));
+      body.box = { ...(body.box ?? {}), state };
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+    });
+    await p.goto(BASE, { waitUntil: "domcontentloaded" });
+    await p.waitForSelector(".hero-copy .chips", { timeout: 15_000 }).catch(() => {});
+    // The chip arrives with the status, so give the island a moment to have decided either way.
+    await p.waitForTimeout(600);
+
+    const r = await p.evaluate(() => {
+      const el = document.querySelector('.hero-copy .chips [data-chip="box"]');
+      const sends = document.querySelector('.hero-copy .chips [data-chip="sends"]');
+      return {
+        present: !!el,
+        tone: el ? el.getAttribute("data-tone") : null,
+        text: el ? (el.textContent || "").trim() : "",
+        sendsTone: sends ? sends.getAttribute("data-tone") : null,
+      };
+    });
+    visited.push(state);
+
+    ok(`box ${state}: the ops chip is ${shouldShow ? "shown" : "absent"}`,
+      r.present === shouldShow,
+      r.present ? `present, tone ${r.tone}, "${r.text}"` : "absent");
+
+    if (shouldShow) {
+      ok(`box ${state}: and it is toned ${wantTone}, from statusView's map`,
+        r.tone === wantTone, `tone ${r.tone}`);
+    } else {
+      // The comparison that makes "absent" mean something: a chip that never renders in ANY
+      // state would pass all three absence rows, so the attention case above is what proves the
+      // element exists at all, and this notes what the row beside it was saying at the time.
+      ok(`box ${state}: (nothing claimed about the box; sends chip beside it reads ${r.sendsTone})`,
+        true, `no ops chip, sends tone ${r.sendsTone}`);
+    }
+    await c.close();
+  }
+  ok("the ops chip was measured in every box state it has",
+    visited.length === CASES.length, visited.join(", "));
+}
+
 async function checkServedHtmlCarriesTheHero() {
   // THE BYTES THE SERVER SENDS, WITH NO BROWSER IN THE WAY.
   //
@@ -1187,6 +1252,24 @@ async function checkServedHtmlCarriesTheHero() {
 
   ok("and the ops chip is absent from a server render, which has heard nothing about the box",
     !html.includes('data-chip="box"'), html.includes('data-chip="box"') ? "OPS ATTENTION in the served HTML" : "absent");
+
+  // THE TWO LINKS, IN THE BYTES. Found by SDE-Infra with a mutant that SURVIVED: the four rows
+  // above cover the chips, the puzzle sentence, the unknown values and the ops chip, and not
+  // these - so the standard `mounted` + useEffect pattern could make both links client-only,
+  // produce no hydration mismatch, no console error and no red row, and put the exact defect
+  // this PR exists to fix straight back onto the hero. They proved it was not a no-op by reading
+  // the served bytes: 27,544 -> 27,411 and `class="morelink"` 1 -> 0, with chips and puzzle
+  // untouched. Four rows covering four of six things is a gap the totals cannot show.
+  const statusLink = /class="tag more"/.test(html);
+  const analyticsLink = /class="morelink"/.test(html);
+  ok("the served HTML carries both hero links, not just the chips",
+    statusLink && analyticsLink,
+    `tag more ${statusLink ? "present" : "ABSENT"}, morelink ${analyticsLink ? "present" : "ABSENT"} in ${html.length} bytes`);
+
+  // And their words, because an element with the right class and no text is a link to nothing.
+  ok("and both say what they are for in those bytes",
+    /Full status/.test(html) && /drips this week/.test(html),
+    `"Full status" ${/Full status/.test(html) ? "y" : "n"}, "drips this week" ${/drips this week/.test(html) ? "y" : "n"}`);
 }
 
 async function checkMinerPanel(page) {
@@ -2139,6 +2222,7 @@ try {
     ok("and the address is in the body", req.body.includes(`"address":"${lookupAddr}"`), req.body.slice(0, 60));
     ok("and the page answers that a shielded balance is private", /Shielded balances are private/.test(await page.locator("#lans").innerText()));
   }
+  await checkOpsChipFollowsTheBox(browser);
   await checkServedHtmlCarriesTheHero();
   await checkMinerPanel(page);
   // The claim flow below drives input.input and button.btn-primary, which belong to the
