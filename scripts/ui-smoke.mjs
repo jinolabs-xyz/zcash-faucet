@@ -465,21 +465,48 @@ async function checkFooterReachable(browser) {
     // viewport". It is that `.stage` is HIDING content a pointer cannot reveal: overflow
     // hidden with more content in it than fits. That is true whether or not the document
     // overflows, and it is what leaves the footer links unreachable.
+    // MEASURED WITH A TALL PROBE THIS CHECK INSERTS, and it took three tries to get here.
+    //
+    // First it escaped on "the document does not overflow", which under the clamp is always
+    // true - the stage clips instead of pushing the document taller - so it went green on the
+    // exact defect. Then it read `scrollHeight - clientHeight`, which is 0 even while content
+    // is clipped, because `.stage` carries `container: stage / size` and size containment makes
+    // scrollHeight equal clientHeight. Then it walked descendant rectangles, and the furthest
+    // was `.comp`, which is sized to the stage.
+    //
+    // The third answer is the one the red-team had already given me: THE SHIPPED PAGE FITS ONE
+    // SCREEN TODAY, so restoring the clamp clips nothing and no passive measurement of the real
+    // content can go red. A check that only fails when the content happens to be too tall is a
+    // check that fails on someone else's future commit, not on this one.
+    //
+    // So it asks the question actively, the way the tag and hover checks do: put something in
+    // the stage that IS taller than a screen, and see whether the page can still reach it. With
+    // the stage as it ships the box grows and the document scrolls; under the clamp the probe
+    // is swallowed and a wheel cannot get to it. That is true whatever today's content weighs.
     const stage = await p.evaluate(() => {
       const el = document.querySelector(".stage");
       if (!el) return null;
       const cs = getComputedStyle(el);
-      return {
-        overflowY: cs.overflowY,
-        buried: Math.round(el.scrollHeight - el.clientHeight),
-        docOver: Math.round(document.documentElement.scrollHeight - innerHeight),
-      };
+      const host = el.querySelector(".comp") ?? el;
+      const probe = document.createElement("div");
+      probe.id = "tall-probe";
+      probe.style.cssText = "height:1200px;width:1px;flex:none";
+      host.appendChild(probe);
+      const r = el.getBoundingClientRect();
+      const buried = Math.round(probe.getBoundingClientRect().bottom - (r.top + el.clientHeight));
+      const inserted = !!probe.getBoundingClientRect().height;
+      probe.remove();
+      // AFTER the probe is gone. Measured with it still in, this reported the page as 1109px
+      // past the fold and turned the wheel assertion below into a false red against a document
+      // that no longer overflowed - a probe of mine poisoning the next check.
+      const docOver = Math.round(document.documentElement.scrollHeight - innerHeight);
+      return { overflowY: cs.overflowY, buried, docOver, inserted };
     });
-    const clips = !!stage && /hidden|clip/.test(stage.overflowY);
-    ok(`${label}: the stage is not hiding content a wheel cannot reveal`,
-      !!stage && !(clips && stage.buried > 1),
+    ok(`${label}: content taller than the viewport is not swallowed by the stage`,
+      !!stage && stage.inserted && stage.buried <= 1,
       !stage ? "no .stage on the page"
-        : `overflow-y ${stage.overflowY}, ${stage.buried}px past its own box`);
+        : !stage.inserted ? "the probe did not render, so nothing was measured"
+        : `overflow-y ${stage.overflowY}, a 1200px probe sits ${stage.buried}px past the stage's own box`);
 
     // And a REAL wheel, through the browser rather than a dispatched event, on the pages that
     // are taller than the viewport. This one can still be inapplicable - it says so rather
