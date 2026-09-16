@@ -258,13 +258,26 @@ async function checkChunkOrderIdentity(browser) {
     await p.evaluate(() => {
       const ls = [...document.querySelectorAll('link[rel="stylesheet"]')];
       if (ls.length < 2) return;
-      ls[0].parentNode.insertBefore(ls[ls.length - 1], ls[0]);   // last chunk linked first
+      // REVERSE THE WHOLE LIST, not "last to the front". Moving only the last sheet turns
+      // [A,B,C] into [C,A,B]: A and B keep their relative order, so a tie between them is never
+      // exercised and this check cannot see it. With exactly two sheets the two operations are
+      // the same thing, which is why it went unnoticed - the defect is invisible until the page
+      // links a third, and Next splits CSS per route. Inserting each sheet before the original
+      // first one, from the back, reverses in place without moving them past the rest of <head>.
+      const anchor = ls[0];
+      for (let i = ls.length - 1; i >= 1; i--) anchor.parentNode.insertBefore(ls[i], anchor);
     });
     await p.waitForTimeout(400);
     const linksAfter = await order();
     const after = await snap();
 
     const flipped = linksBefore.length >= 2 && linksBefore.join() !== linksAfter.join();
+    // A PAGE THAT CHANGES SHAPE IS A CHANGE. `Math.min` walked only the shorter list, so a node
+    // that vanished between the sweeps counted as nothing - and worse, the comparison is
+    // POSITIONAL, so every index past the divergence compared two different elements and the row
+    // read noise as signal. Shape, not length: a node replaced one-for-one changes neither count.
+    const shape = (rows) => rows.map((r) => `${r.tag}.${r.cls}`).join(",");
+    const sameShape = shape(before) === shape(after);
     let moved = 0, deltas = 0, first = "";
     for (let i = 0; i < Math.min(before.length, after.length); i++) {
       const a = before[i], b2 = after[i];
@@ -277,13 +290,142 @@ async function checkChunkOrderIdentity(browser) {
       }
     }
     ok(`${theme}${keyboard ? ", keyboard-focused," : ","} the page is identical with the CSS chunks linked in the other order`,
-      flipped && before.length >= 50 && landed.panel === 1 && landed.copy === 1 && moved === 0,
+      flipped && sameShape && before.length >= 50 && landed.panel === 1 && landed.copy === 1 && moved === 0,
       !flipped ? `the flip did not take: ${linksBefore.length} stylesheet(s)`
+        : !sameShape ? `the page changed shape under the flip: ${before.length} nodes before, ${after.length} after`
         : before.length < 50 ? `only ${before.length} nodes rendered, too few to judge`
         : (landed.panel !== 1 || landed.copy !== 1) ? `the card's structure was not in the snapshot (panel ${landed.panel}, card-copy ${landed.copy}), so this says nothing about it`
         : `${moved} of ${before.length} nodes moved, ${deltas} deltas; first: ${first}`);
     await c.close();
   }
+  }
+}
+
+/* THE CELL NO OTHER CHECK VISITS: hover AND the chunk flip, in one pass.
+ *
+ * Found by SDE-UI reviewing this PR, and it is the sharpest thing anyone caught here. The
+ * `.stage a:hover` row in the body comes from DELETING the rule, which proves the RULE matters
+ * and says nothing about the RAISE - and the raise is what the PR is for. Restoring the tie,
+ * `.stage a:hover` back to a bare `a:hover`, survives the whole suite: the identity check flips
+ * the order at rest and under keyboard focus and never hovers, and the palette probe hovers and
+ * never flips. The tie needs both axes at once and nothing went there.
+ *
+ * States are a PRODUCT, not a list (L24). Theme x order x pointer is eight cells; checking both
+ * themes and both orders is four of them.
+ *
+ * Every visible link rather than one: UI's first two probes read `.tag`, which matches nothing on
+ * this tree, and then the first link on the page, which is a nav link with a more specific rule
+ * that wins at any order - an inconclusive read that would have looked like a refutation. Only
+ * enumerating them found footer-brand, the one that moves. */
+async function checkHoverUnderAFlip(browser) {
+  for (const theme of ["paper", "ink"]) {
+    const c = await browser.newContext({ viewport: DESKTOP });
+    const p = await c.newPage();
+    await p.goto(BASE, { waitUntil: "networkidle" });
+    await p.evaluate((t) => {
+      try { localStorage.setItem("zfaucet_theme", t); } catch {}
+      document.documentElement.dataset.theme = t;
+    }, theme);
+    await p.waitForTimeout(300);
+
+    // RE-QUERIED PER SWEEP, NOT COLLECTED ONCE. `p.$$` returns handles to the elements that
+    // existed when it ran, and the sweep below iterates them - so a link ADDED between the two
+    // sweeps is never hovered and never compared, and a link REMOVED is skipped only because its
+    // handle's boundingBox() returns null. The first of those is invisible; the second works by
+    // accident. Both are the frozen-list shape this file already guards elsewhere with array
+    // pins, and the guard belongs here too: the whole point of the row is that the page must not
+    // change under the flip, which cannot be asked of a list captured before it.
+    // COLOUR IS NOT THE ONLY THING A HOVER TIE CAN DECIDE. globals and the transcription both
+    // have opinions about underlines and backgrounds on a hovered link, and a tie in any of them
+    // is the same defect in a different property. Reading colour alone would have caught
+    // tonight's instance and missed the next one.
+    const PROPS = ["color", "textDecorationLine", "textDecorationColor", "backgroundColor"];
+    const sweep = async (hovering = true) => {
+      const seen = [];
+      for (const el of await p.$$("a[href]")) {
+        const box = await el.boundingBox().catch(() => null);
+        if (!box || box.width < 2 || box.height < 2) continue;
+        if (hovering) {
+          await p.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+          await p.waitForTimeout(25);
+        }
+        // NAME the link, because the one that moves here is an icon link with no text at all -
+        // the first run reported "  rgb(174,24,0) -> rgb(124,20,5)" with an empty name, which is
+        // a row that cannot say what it found.
+        seen.push(await el.evaluate((n, ps) => {
+          const name = (n.textContent || "").trim() || n.getAttribute("aria-label")
+            || (n.className || "").toString().split(" ")[0] || n.getAttribute("href") || "(link)";
+          const cs = getComputedStyle(n);
+          return `${name.slice(0, 22)}|${ps.map((k) => cs[k]).join(" ")}`;
+        }, PROPS));
+      }
+      await p.mouse.move(2, 2);
+      return seen;
+    };
+
+    // AND THE POINTER HAS TO ACTUALLY ENGAGE, or this is the rest pass wearing a label. The
+    // link-count floor below proves there were links to measure; it cannot prove that hovering
+    // them changed anything. If pointer events were disabled, or the hover never landed, every
+    // reading would be a rest reading, "0 moved" would be true, and the cell would go green
+    // while staying unvisited - which is the failure this whole check exists to end.
+    const atRest = await sweep(false);
+    const before = await sweep();
+    const reacts = before.filter((v, i) => atRest[i] !== v).length;
+    ok(`${theme}: hovering actually changes something, so this is not the rest pass relabelled`,
+      reacts > 0, `${reacts} of ${before.length} links react to hover`);
+
+    // AND THE FLIP HAS TO ACTUALLY TAKE, which this check was not asserting (SDE-Infra, peer
+    // review). `checkChunkOrderIdentity` twenty lines up refuses with "the flip did not take: N
+    // stylesheet(s)" when there are fewer than two sheets to reorder; this one moved the links
+    // and then compared, without ever asking whether anything moved. On a page serving one
+    // stylesheet the reorder is a no-op, every reading is identical, `moved === 0` is true, and
+    // the cell reports green having visited nothing - the same vacuity the engagement guard
+    // above exists to prevent, one axis over.
+    //
+    // LATENT RATHER THAN LIVE, and they said so in those words after counting: the built page
+    // serves exactly two sheets today. It matters because the CSS import graph is being
+    // rewritten this week by three PRs and Next decides the chunk count, not us.
+    const order = () => p.evaluate(() =>
+      [...document.querySelectorAll('link[rel="stylesheet"]')].map((l) => l.href));
+    const sheetsBefore = await order();
+    await p.evaluate(() => {
+      // The same reversal as the identity pass above, and deliberately the same code: two
+      // instruments that flip the cascade differently would disagree about what "the other
+      // order" means, and only one of them would be right.
+      const ls = [...document.querySelectorAll('link[rel="stylesheet"]')];
+      if (ls.length < 2) return;
+      const anchor = ls[0];
+      for (let i = ls.length - 1; i >= 1; i--) anchor.parentNode.insertBefore(ls[i], anchor);
+    });
+    await p.waitForTimeout(400);
+    const sheetsAfter = await order();
+    const flipped = sheetsBefore.length >= 2 && sheetsBefore.join() !== sheetsAfter.join();
+    const after = await sweep();
+
+    // Same as the identity pass: a link vanishing between sweeps is a change, not a non-event.
+    // SHAPE, NOT COUNT. `before.length === after.length` is satisfied by a page that swapped one
+    // link for another, which is a change this row exists to notice. The sweep already records a
+    // name per link, so comparing the names costs nothing and says what actually moved.
+    const names = (rows) => rows.map((r) => String(r).split("|")[0]).join(",");
+    const sameCount = names(before) === names(after);
+    let moved = 0, first = "";
+    for (let k = 0; k < Math.min(before.length, after.length); k++) {
+      if (before[k] === after[k]) continue;
+      moved++;
+      if (!first) first = `${before[k].split("|")[0]} ${before[k].split("|")[1]} -> ${after[k].split("|")[1]}`;
+    }
+    // The floor is the anti-vacuity: a page that rendered no links would otherwise report
+    // "0 moved" and go green. FOUR rather than six, deliberately - this tree hovers exactly six,
+    // and a floor equal to today's count is a pin on the link count wearing a guard's clothes:
+    // it would go red the next time the design drops a footer link, for a reason that has
+    // nothing to do with the cascade.
+    ok(`${theme}: no link's HOVER styling changes when the CSS chunks are linked in the other order`,
+      flipped && sameCount && before.length >= 4 && moved === 0,
+      !flipped ? `the flip did not take: ${sheetsBefore.length} stylesheet(s)`
+        : !sameCount ? `the link set changed under the flip: ${before.length} hovered before, ${after.length} after (${names(before)} -> ${names(after)})`
+        : before.length < 4 ? `only ${before.length} links hovered, too few to judge`
+        : `${sheetsBefore.length} stylesheets reversed; ${before.length} links hovered, ${moved} moved${first ? "; first: " + first : ""}`);
+    await c.close();
   }
 }
 
@@ -2905,6 +3047,7 @@ try {
   await checkLivePhasePanelsWearTheBox(browser);
   await checkLegacyPalette(browser);
   await checkChunkOrderIdentity(browser);
+  await checkHoverUnderAFlip(browser);
   // WHERE THE TAZ COMES FROM follows the status (R-39). Under this stack there is no
   // miner heartbeat, so the sentence has to be the not-mining one; the three
   // contradictory fixed sentences must be gone from the rendered page.
