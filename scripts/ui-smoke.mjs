@@ -2375,6 +2375,56 @@ function checkSingleHeader() {
   ok("and all four pages consume it", consumers.length === 4, `${consumers.length}/4: ${consumers.join(", ")}`);
 }
 
+// THE TAP FLOOR, ON EVERY SURFACE AND AT FOUR TOUCH WIDTHS.
+//
+// `checkMobile` below asserts a floor too, and it could not have caught what this one is for:
+// it runs at ONE width (375, iPhone 13) and selects `a.btn,a.theme-toggle,button,input`, so the
+// footer links, the segmented nav, `.home` and `.morelink` were never its subjects at any width.
+//
+// The defect that made this row exist: the floor used to be nine rules keyed on THREE different
+// triggers - `pointer: coarse`, `max-width:32rem` and `max-width:56rem`. A touch device wider
+// than 56rem satisfied none of the width ones, so on a 1024x768 tablet TWENTY controls sat under
+// the floor - every hero chip at 25.2px, the segmented nav at 28.6, the claim button at 42.9.
+// The count got WORSE as the screen got bigger: 6 at 375, 11 at 600, 20 at 1024. A suite that
+// only ever looks at a phone cannot see that shape, so this one looks at four widths.
+//
+// PROSE LINKS ARE NOT SUBJECTS. A link inside a sentence cannot be given a 44px box without
+// wrecking the paragraph and WCAG 2.5.8 exempts it, so they are reported and not failed - which
+// also means this row cannot be quietly satisfied by someone wrapping a control in a <p>.
+async function checkTapFloor(browser, base) {
+  const WIDTHS = [[375, 812], [600, 900], [1024, 768], [1440, 900]];
+  const PAGES = [["/", "index"], ["/donate", "donate"], ["/terms", "terms"], ["/fund", "fund"]];
+  for (const [w, h] of WIDTHS) {
+    const ctx = await browser.newContext({ viewport: { width: w, height: h }, hasTouch: true });
+    const page = await ctx.newPage();
+    for (const [path, label] of PAGES) {
+      await page.goto(base + path, { waitUntil: "domcontentloaded" });
+      await page.waitForTimeout(500);
+      const r = await page.evaluate(() => {
+        const small = [], prose = [];
+        const sel = 'button, a[href], input:not([type=hidden]), select, textarea, [role="tab"]';
+        for (const e of document.querySelectorAll(sel)) {
+          const b = e.getBoundingClientRect();
+          if (b.height === 0 && b.width === 0) continue;
+          const cs = getComputedStyle(e);
+          if (cs.display === "none" || cs.visibility === "hidden") continue;
+          if (b.height >= 44) continue;
+          const words = (e.textContent || e.getAttribute("aria-label") || "").trim().replace(/\s+/g, " ").slice(0, 22);
+          const cls = String(e.className || "").trim().split(/\s+/).filter(Boolean)[0];
+          const what = `${words ? words + " " : ""}[${e.tagName.toLowerCase()}${cls ? "." + cls : ""}] h=${Math.round(b.height)}`;
+          if (e.closest("p, li, dd, .fine, .hint, .ref, figcaption")) prose.push(what);
+          else small.push(what);
+        }
+        return { small, prose };
+      });
+      ok(`tap floor ${w}px touch ${label}: every control reaches 44px`,
+        r.small.length === 0,
+        r.small.slice(0, 4).join(", ") + (r.prose.length ? `  (${r.prose.length} prose link(s) exempt)` : ""));
+    }
+    await ctx.close();
+  }
+}
+
 async function checkMobile(browser, base) {
   const ctx = await browser.newContext({ ...devices["iPhone 13"], viewport: { width: 375, height: 812 } });
   const page = await ctx.newPage();
@@ -2739,6 +2789,7 @@ try {
   // The phone. Its own browser context, so it cannot disturb the desktop page above
   // it, and after the desktop claim so a mobile failure is never the first thing to
   // go red when something more basic is broken.
+  await checkTapFloor(browser, BASE);
   await checkMobile(browser, BASE);
 
   await checkSubpages(browser, BASE);
