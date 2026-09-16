@@ -1489,6 +1489,63 @@ check "RELOADING: it is still attributed to us, because watchdog.sh:974 counts i
 check "RELOADING: and the operator is still told to stop it first, naming the state they will see" \
   "grep -q 'systemd says reloading' '$T/alerts.log'"
 
+# #600 STEP 3: THE CANNOT-TELL LINE SAYS WHAT IT SAW. "cannot tell" names the verdict and not the
+# evidence, so an operator reading the journal had to open the app to learn whether the references
+# DISAGREED or one of them was simply absent - and #600 is about this line firing often, because
+# the tolerance is a block count absorbing a delay measured in seconds.
+#
+# THE TWO STATES MUST READ DIFFERENTLY, which is the whole row. A source that answered and is not
+# trusted prints its height beside "highest usable reference=none"; a source that never answered
+# prints "none". Those are opposite facts about the chain - the first is a reference we can compare
+# against later, the second is no reference at all - and before this they were one sentence.
+echo "== watchdog: cannot-tell names the two heights and the spread, not just the verdict"
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFS=disagree STUB_READY_USEDHEIGHT=4350000
+wd_run 2
+check "the journal carries BOTH source heights, so it can be read without the app" \
+  "grep -q 'hosh=4350000, lightwalletd=4349600' '$T/run.log'"
+check "and the spread it decided on, so the tolerance can be judged from the journal" \
+  "grep -q 'spread=400' '$T/run.log'"
+check "and it still says nothing was touched" \
+  "grep -q 'nothing is paged and nothing is touched' '$T/run.log'"
+
+echo "== watchdog: a reference that NEVER ANSWERED reads differently from one that is not trusted"
+# `none` means never answered. A stale source keeps its height and is excluded by `used`, so the
+# distinction has to survive into the journal or the line collapses a dark reference into a
+# lagging one - opposite conclusions about the chain (#630's contract, SDE-App).
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+# NO STUB_READY_USEDHEIGHT HERE ON PURPOSE. `none` empties every field, so the knob is ignored -
+# and left in place it reads like it is setting the height the case is about. It sent a reviewer
+# down a mutant that assigned empty to empty and survived, which looked like a missing assertion
+# and was an inert one (SDE-UI, review of #631).
+export STUB_READY_REFS=none
+wd_run 2
+check "a source that never answered prints none rather than a number" \
+  "grep -q 'hosh=none, lightwalletd=none' '$T/run.log'"
+check "and the spread is unknown rather than zero, because no spread was computed" \
+  "grep -q 'spread=unknown' '$T/run.log'"
+
+echo "== watchdog: a reference that ANSWERED but is NOT TRUSTED keeps its height in the journal"
+# THE THIRD STATE, and the one the comment at :979 calls the informative half. A stale source keeps
+# the height it last had and `used` excludes it, so the journal must show a NUMBER beside an unusable
+# reference. Neither existing case could reach it: `disagree` is two fresh sources and `none` empties
+# everything, so a height and "highest usable reference=none" had never appeared together and the
+# distinction rows were reading the easy half of it (SDE-UI, review of #631, who also found that the
+# stub could not express this state at all).
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFS=stale STUB_READY_USEDHEIGHT=4349918
+wd_run 2
+# ONE grep, not two, because the two facts have to be on ONE line to be read as one fact. Separate
+# greps would pass on a journal that said them in different sentences a minute apart.
+check "a source that answered but is not trusted prints its height beside an unusable reference" \
+  "grep -qE 'highest usable reference=none, ours [0-9]+; hosh=4349918, lightwalletd=none' '$T/run.log'"
+check "and it is the cannot-tell line saying it, so this is the state the sentence is written for" \
+  "grep -q 'fork check: cannot tell.*hosh=4349918' '$T/run.log'"
+check "and nothing is touched on a reference the app itself will not use" \
+  "[ ! -f '$T/park/$FORK_MARKER_REL' ] && ! grep -q 'blocks AHEAD' '$T/alerts.log'"
 # THE HISTORY HALF (#533 step 2, R-20). Four cases, and the two that must stay SILENT matter as
 # much as the one that pages: this rung's contract is "fail on proof, not on cannot-verify", so an
 # unshipped app half and an unreadable node are both required to do nothing.
