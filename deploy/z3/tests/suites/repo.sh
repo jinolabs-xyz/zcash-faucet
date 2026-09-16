@@ -1389,18 +1389,26 @@ check "the mascot check plans the combinations and sectors MASCOT.md names" \
   "grep -qF 'const RULING_VIEWPORTS = 3;' '$REPO/scripts/mascot-check.mjs' && grep -qF 'const RULING_THEMES = 2;' '$REPO/scripts/mascot-check.mjs' && grep -qF 'const RULING_POINTER = 3;' '$REPO/scripts/mascot-check.mjs' && grep -qF 'const RULING_COMBOS = RULING_VIEWPORTS * RULING_THEMES;' '$REPO/scripts/mascot-check.mjs' && grep -q 'Change the arrays and these numbers together' '$REPO/scripts/mascot-check.mjs'"
 check "and its dimensions are MASCOT.md's three viewports, two themes and three sectors" \
   "grep -qF 'const VIEWPORTS = [[1440, 900], [1100, 800], [390, 844]];' '$REPO/scripts/mascot-check.mjs' && grep -qF 'want: \"0% 50%\"' '$REPO/scripts/mascot-check.mjs' && grep -qF 'want: \"50% 0%\"' '$REPO/scripts/mascot-check.mjs' && grep -qF 'want: \"100% 100%\"' '$REPO/scripts/mascot-check.mjs'"
-check "the fit check plans its full 70 the same way" \
-  "grep -qF 'const RULING_COMBOS = 70;' '$REPO/scripts/fit-check.mjs' && grep -qF 'PLANNED !== RULING_COMBOS' '$REPO/scripts/fit-check.mjs'"
+check "the fit check plans its full 168 the same way" \
+  "grep -qF 'const RULING_COMBOS = 168;' '$REPO/scripts/fit-check.mjs' && grep -qF 'PLANNED !== RULING_COMBOS' '$REPO/scripts/fit-check.mjs'"
 check "and its dimensions carry the sizes the clipping actually appears at, not only the brief's" \
-  "grep -qF 'const SIZES = [[1440, 900], [1280, 800], [1920, 1080], [1366, 768], [1280, 720]];' '$REPO/scripts/fit-check.mjs' && grep -qF 'const VIEWS = [\"claim\", \"status\", \"analytics\", \"tools\"];' '$REPO/scripts/fit-check.mjs' && grep -qF 'const PAGES = [\"/terms\", \"/donate\", \"/fund\"];' '$REPO/scripts/fit-check.mjs'"
+  "grep -qF 'const SIZES = [[1440, 900], [1280, 800], [1920, 1080], [1366, 768], [1280, 720], [1024, 768]];' '$REPO/scripts/fit-check.mjs' && grep -qF 'const VIEWS = [\"claim\", \"status\", \"analytics\", \"tools\"];' '$REPO/scripts/fit-check.mjs' && grep -qF 'const PAGES = [\"/terms\", \"/donate\", \"/fund\"];' '$REPO/scripts/fit-check.mjs'"
 # EVERY ARRAY THE COUNT MULTIPLIES, not the ones I happened to name (SDE-App, review of #563,
 # against their own finding as I had implemented it). THEMES was pinned nowhere, so cutting it
 # to one halved the coverage of both scripts while their own arithmetic still agreed with
 # itself. "Pin the arrays" has to mean all of them or it is a list with a hole in it.
 check "including THEMES, which both scripts multiply by and neither pinned" \
   "grep -qF 'const THEMES = [\"paper\", \"ink\"];' '$REPO/scripts/fit-check.mjs' && grep -qF 'const THEMES = [\"paper\", \"ink\"];' '$REPO/scripts/mascot-check.mjs'"
+# AND POINTERS, WHICH IS THEMES ONE ROUND LATER. #598 added a pointer dimension to fit-check,
+# multiplied it into RULING_COMBOS, and pinned it nowhere - so dropping `["fine", false]` would
+# have halved the contract back to touch-only in two lines with every number below still
+# agreeing with itself, which is exactly what the paragraph four lines up says about THEMES.
+# The lesson was already written here, from SDE-App's own #563 review, and the next array still
+# arrived unpinned. Found by SDE-Infra reviewing #598.
+check "and POINTERS, the dimension #598 added and multiplied by" \
+  "grep -qF 'const POINTERS = [[\"fine\", false], [\"coarse\", true]];' '$REPO/scripts/fit-check.mjs'"
 check "and the fit check holds sizes-times-themes from the FIRST slice, not only at the end" \
-  "grep -qF 'const RULING_SIZES = 5;' '$REPO/scripts/fit-check.mjs' && grep -qF 'const RULING_THEMES = 2;' '$REPO/scripts/fit-check.mjs' && grep -qF 'SIZES.length !== RULING_SIZES || THEMES.length !== RULING_THEMES' '$REPO/scripts/fit-check.mjs'"
+  "grep -qF 'const RULING_SIZES = 6;' '$REPO/scripts/fit-check.mjs' && grep -qF 'const RULING_THEMES = 2;' '$REPO/scripts/fit-check.mjs' && grep -qF 'const RULING_POINTERS = 2;' '$REPO/scripts/fit-check.mjs' && grep -qF 'SIZES.length !== RULING_SIZES || THEMES.length !== RULING_THEMES || POINTERS.length !== RULING_POINTERS' '$REPO/scripts/fit-check.mjs'"
 # FITS MEANS REACHABLE (CTO's ruling on #562, after their red-team found the clipped footer). The
 # arithmetic alone called a footer that had been CUT OFF and could not be scrolled to "SCROLLS",
 # on a build whose own suite read 130 ok while three links could not be clicked and prod has
