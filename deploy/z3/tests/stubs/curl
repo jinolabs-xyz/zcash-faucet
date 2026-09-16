@@ -103,15 +103,15 @@ case "$*" in
       absent) refs="" ;;
       agree)
         [ -n "$uh" ] || { echo "stub curl: STUB_READY_REFS=agree needs STUB_READY_USEDHEIGHT" >&2; exit 64; }
-        refs=",\"tipReferences\":{\"sources\":{\"hosh\":{\"height\":${uh},\"ageSeconds\":2,\"stale\":false,\"host\":null},\"lightwalletd\":{\"height\":$((uh - 1)),\"ageSeconds\":9,\"stale\":false,\"host\":\"lwd\"}},\"spreadBlocks\":1,\"corroborated\":true,\"used\":\"hosh\",\"usedHeight\":${uh}}" ;;
+        refs=",\"tipReferences\":{\"sources\":{\"hosh\":{\"height\":${uh},\"ageSeconds\":2,\"stale\":false,\"host\":null},\"lightwalletd\":{\"height\":$((uh - 1)),\"ageSeconds\":9,\"stale\":false,\"host\":\"lwd\"}},\"spreadBlocks\":1,\"corroborated\":true,\"used\":\"hosh\",\"usedHeight\":${uh},\"hoshHeight\":${uh},\"lightwalletdHeight\":$((uh - 1))}" ;;
       disagree)
         [ -n "$uh" ] || { echo "stub curl: STUB_READY_REFS=disagree needs STUB_READY_USEDHEIGHT" >&2; exit 64; }
-        refs=",\"tipReferences\":{\"sources\":{\"hosh\":{\"height\":${uh},\"ageSeconds\":2,\"stale\":false,\"host\":null},\"lightwalletd\":{\"height\":$((uh - 400)),\"ageSeconds\":9,\"stale\":false,\"host\":\"lwd\"}},\"spreadBlocks\":400,\"corroborated\":false,\"used\":\"hosh\",\"usedHeight\":${uh}}" ;;
+        refs=",\"tipReferences\":{\"sources\":{\"hosh\":{\"height\":${uh},\"ageSeconds\":2,\"stale\":false,\"host\":null},\"lightwalletd\":{\"height\":$((uh - 400)),\"ageSeconds\":9,\"stale\":false,\"host\":\"lwd\"}},\"spreadBlocks\":400,\"corroborated\":false,\"used\":\"hosh\",\"usedHeight\":${uh},\"hoshHeight\":${uh},\"lightwalletdHeight\":$((uh - 400))}" ;;
       single)
         [ -n "$uh" ] || { echo "stub curl: STUB_READY_REFS=single needs STUB_READY_USEDHEIGHT" >&2; exit 64; }
-        refs=",\"tipReferences\":{\"sources\":{\"hosh\":{\"height\":${uh},\"ageSeconds\":2,\"stale\":false,\"host\":null}},\"spreadBlocks\":null,\"corroborated\":null,\"used\":\"hosh\",\"usedHeight\":${uh}}" ;;
+        refs=",\"tipReferences\":{\"sources\":{\"hosh\":{\"height\":${uh},\"ageSeconds\":2,\"stale\":false,\"host\":null}},\"spreadBlocks\":null,\"corroborated\":null,\"used\":\"hosh\",\"usedHeight\":${uh},\"hoshHeight\":${uh},\"lightwalletdHeight\":null}" ;;
       none)
-        refs=",\"tipReferences\":{\"sources\":{},\"spreadBlocks\":null,\"corroborated\":null,\"used\":null,\"usedHeight\":null}" ;;
+        refs=",\"tipReferences\":{\"sources\":{},\"spreadBlocks\":null,\"corroborated\":null,\"used\":null,\"usedHeight\":null,\"hoshHeight\":null,\"lightwalletdHeight\":null}" ;;
       *) echo "stub curl: unsupported reference shape: $shape" >&2; exit 64 ;;
     esac
     # AND THE NODE BLOCK'S externalHeight COMES OFF THE SAME SHAPE, so the two fields cannot

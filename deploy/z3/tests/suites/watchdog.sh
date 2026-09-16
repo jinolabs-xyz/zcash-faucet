@@ -1404,6 +1404,40 @@ check "RELOADING: it is still attributed to us, because watchdog.sh:974 counts i
 check "RELOADING: and the operator is still told to stop it first, naming the state they will see" \
   "grep -q 'systemd says reloading' '$T/alerts.log'"
 
+# #600 STEP 3: THE CANNOT-TELL LINE SAYS WHAT IT SAW. "cannot tell" names the verdict and not the
+# evidence, so an operator reading the journal had to open the app to learn whether the references
+# DISAGREED or one of them was simply absent - and #600 is about this line firing often, because
+# the tolerance is a block count absorbing a delay measured in seconds.
+#
+# THE TWO STATES MUST READ DIFFERENTLY, which is the whole row. A source that answered and is not
+# trusted prints its height beside "highest usable reference=none"; a source that never answered
+# prints "none". Those are opposite facts about the chain - the first is a reference we can compare
+# against later, the second is no reference at all - and before this they were one sentence.
+echo "== watchdog: cannot-tell names the two heights and the spread, not just the verdict"
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFS=disagree STUB_READY_USEDHEIGHT=4350000
+wd_run 2
+check "the journal carries BOTH source heights, so it can be read without the app" \
+  "grep -q 'hosh=4350000, lightwalletd=4349600' '$T/run.log'"
+check "and the spread it decided on, so the tolerance can be judged from the journal" \
+  "grep -q 'spread=400' '$T/run.log'"
+check "and it still says nothing was touched" \
+  "grep -q 'nothing is paged and nothing is touched' '$T/run.log'"
+
+echo "== watchdog: a reference that NEVER ANSWERED reads differently from one that is not trusted"
+# `none` means never answered. A stale source keeps its height and is excluded by `used`, so the
+# distinction has to survive into the journal or the line collapses a dark reference into a
+# lagging one - opposite conclusions about the chain (#630's contract, SDE-App).
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFS=none STUB_READY_USEDHEIGHT=4350000
+wd_run 2
+check "a source that never answered prints none rather than a number" \
+  "grep -q 'hosh=none, lightwalletd=none' '$T/run.log'"
+check "and the spread is unknown rather than zero, because no spread was computed" \
+  "grep -q 'spread=unknown' '$T/run.log'"
+
 echo "== watchdog: two references that DISAGREE cannot establish a fork, so nothing happens"
 wd_fork_env
 export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
