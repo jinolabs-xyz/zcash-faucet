@@ -30,6 +30,59 @@ if (!SPEC || SHIPPED.length === 0) {
 }
 const DEPARTURES = "design/spec/departures.json";
 
+// THE SHEETS ARE DISCOVERED, AND A HAND-WRITTEN LIST THAT MISSES ONE IS A FAILURE
+// (CTO red-team, review of this PR). `redesign-hero.css` was not compared at all: the CI step
+// named two sheets by hand, the app imports three, and eight divergences had been sitting on
+// main since #566 - every one of them reasoned in the file's own comments and none of them in
+// departures.json. A parity check that silently omits a sheet is worse than no parity check,
+// because the green is read as "the design is transcribed".
+//
+// So the list is not trusted. Whatever is passed must COVER what the app actually imports,
+// and the entry files are read for `import "./x.css"` rather than the sheets being enumerated
+// here - a list in this file would drift exactly the way the one in ci.yml did.
+const ENTRY_FILES = ["src/app/page.tsx", "src/app/layout.tsx"];
+const importedSheets = [...new Set(ENTRY_FILES.flatMap((f) => {
+  if (!existsSync(f)) return [];
+  return [...readFileSync(f, "utf8").matchAll(/^\s*import\s+"\.\/([\w.-]+\.css)"/gm)].map((m) => `src/app/${m[1]}`);
+}))];
+// globals.css is the pre-redesign sheet and is not part of the transcription; everything else
+// the entry files pull in is.
+const shouldCompare = importedSheets.filter((f) => !f.endsWith("/globals.css"));
+//
+// A SHEET WITH NO FROZEN SPEC IS NOT A DEPARTURE, IT IS AN UNCOMPARED SHEET, and the two must
+// not be written the same way. `redesign-hero.css` is S2a's; the only vendored spec is S1's
+// `shell.css`, and the S2 snapshot ships no CSS at all - its styles are inline in `index.html`.
+// Comparing the hero against S1's shell produced nine "undeclared divergences" that are nothing
+// of the sort: `.mascot-riso`, `html`, `.views > .view.hero` are not in that document because
+// that document is not about them. Declaring them as departures would have put nine invented
+// reasons in the file and made the check mean less, not more.
+//
+// So an imported sheet must be EITHER compared, OR named in departures.json under `_uncompared`
+// with a reason. The gap then lives in the same reviewed file as every deliberate departure,
+// and it cannot be closed by forgetting.
+const uncompared = (() => {
+  if (!existsSync(DEPARTURES)) return {};
+  const d = JSON.parse(readFileSync(DEPARTURES, "utf8"));
+  return d._uncompared && typeof d._uncompared === "object" ? d._uncompared : {};
+})();
+const missed = shouldCompare.filter((f) => !SHIPPED.includes(f) && !uncompared[f]);
+if (missed.length) {
+  console.error(`parity: the app imports ${missed.join(", ")} and ${missed.length > 1 ? "they are" : "it is"} neither compared nor declared.`);
+  console.error('Add the sheet to the CI step, or give it an entry under "_uncompared" in design/spec/departures.json saying which spec slice has not been frozen yet.');
+  process.exit(1);
+}
+for (const [f, why] of Object.entries(uncompared)) {
+  if (SHIPPED.includes(f)) {
+    console.error(`parity: ${f} is declared "_uncompared" and is being compared. Remove the declaration or the argument.`);
+    process.exit(1);
+  }
+  if (!shouldCompare.includes(f)) {
+    console.error(`parity: ${f} is declared "_uncompared" and the app does not import it. Stale declaration.`);
+    process.exit(1);
+  }
+  console.log(`parity: ${f} is NOT compared - ${why}`);
+}
+
 // THE AT-RULE IS PART OF THE KEY, because a rule that MOVED into a breakpoint is not the same
 // rule. A flat regex over `selector{...}` compares `.seg button` inside `@media (max-width:32rem)`
 // with `.seg button` at top level and calls them equal - so shifting a declaration into a
@@ -58,7 +111,11 @@ const rules = (css) => {
             // @keyframes and friends are compared whole, since their inner blocks are frames.
             else addRule(out, context ? `${context} && ${prelude}` : prelude, norm(body));
           } else {
-            addRule(out, context ? `${context} | ${prelude}` : prelude, body.split(";").map((d) => d.trim()).filter(Boolean).sort().join("; "));
+            // DECLARATION ORDER IS KEPT. Sorting made the body a SET of declarations and lost the
+            // one thing CSS uses order for inside a rule: a fallback pair. `display:-webkit-box;
+            // display:flex` and the same two reversed sort to the same string, so swapping them -
+            // which changes which value an old browser ends up with - read as parity.
+            addRule(out, context ? `${context} | ${prelude}` : prelude, body.split(";").map((d) => d.trim()).filter(Boolean).join("; "));
           }
           start = i + 1;
         }
@@ -100,8 +157,17 @@ const declared = Object.fromEntries(
   Object.entries(existsSync(DEPARTURES) ? JSON.parse(readFileSync(DEPARTURES, "utf8")) : {})
     .filter(([k]) => !k.startsWith("_")),
 );
+// SET EQUALITY, BOTH DIRECTIONS. CHANGED used to fire only when a shipped body was ABSENT from
+// the spec's set, which means a selector shipping a strict SUBSET of the spec's bodies read
+// clean: every body it had was in the spec, and the selector itself was present so DROPPED did
+// not see it either. Deleting a whole rule from a shipped sheet - the single most likely way to
+// lose a piece of the approved design - exited 0. Found by the CTO's red-team, who deleted
+// `.strip .kv b{font-size:calc(.95*var(--u))}` from redesign-shell.css and watched the strip
+// figures fall to .78u with the check silent; changing .95 to .96 was caught, because that ADDS
+// a body the spec does not have.
+const sameBodies = (a, b) => a.size === b.size && [...a].every((x) => b.has(x));
 const added = [...ship.keys()].filter((s) => !spec.has(s));
-const changed = [...ship.keys()].filter((s) => spec.has(s) && [...ship.get(s)].some((b) => !spec.get(s).has(b)));
+const changed = [...ship.keys()].filter((s) => spec.has(s) && !sameBodies(ship.get(s), spec.get(s)));
 const dropped = [...spec.keys()].filter((s) => !ship.has(s));
 
 // DROPPED IS NOT A FAULT UNTIL THE TRANSCRIPTION IS FINISHED, and pretending otherwise makes
