@@ -60,27 +60,41 @@ const shouldCompare = importedSheets.filter((f) => !f.endsWith("/globals.css"));
 // So an imported sheet must be EITHER compared, OR named in departures.json under `_uncompared`
 // with a reason. The gap then lives in the same reviewed file as every deliberate departure,
 // and it cannot be closed by forgetting.
-const uncompared = (() => {
-  if (!existsSync(DEPARTURES)) return {};
-  const d = JSON.parse(readFileSync(DEPARTURES, "utf8"));
-  return d._uncompared && typeof d._uncompared === "object" ? d._uncompared : {};
-})();
-const missed = shouldCompare.filter((f) => !SHIPPED.includes(f) && !uncompared[f]);
-if (missed.length) {
-  console.error(`parity: the app imports ${missed.join(", ")} and ${missed.length > 1 ? "they are" : "it is"} neither compared nor declared.`);
-  console.error('Add the sheet to the CI step, or give it an entry under "_uncompared" in design/spec/departures.json saying which spec slice has not been frozen yet.');
+//
+// EVERY SHEET NAMES ITS OWN SPEC, IN A LINE THE CHECKER READS (CTO ruling on finding 3).
+// `_uncompared` was my first answer and it was refused, for the right reason: a sheet that is
+// imported and not compared is the hole this check exists to close, and a label on the hole
+// makes the green mean less rather than more. So the hero is compared - against S2's spec,
+// vendored from the frozen snapshot in the same act S1's shell.css was - and every sheet
+// carries `@spec <path>` on its first line.
+//
+// The header comments already said which snapshot each sheet came from, in prose. Prose cannot
+// be checked, and one of them still names the LIVE share directory rather than a frozen
+// snapshot, which is the moving path this whole file exists to replace.
+const SPEC_DECL = /^\/\*\s*@spec\s+(\S+)\s*\*\//;
+const specOf = (f) => {
+  const first = readFileSync(f, "utf8").split("\n", 1)[0];
+  const m = first.match(SPEC_DECL);
+  return m ? m[1] : null;
+};
+const undeclaredSheets = shouldCompare.filter((f) => !specOf(f));
+if (undeclaredSheets.length) {
+  console.error(`parity: ${undeclaredSheets.join(", ")} ${undeclaredSheets.length > 1 ? "do" : "does"} not declare a spec.`);
+  console.error('Put `/* @spec design/spec/<snapshot>/<file>.css */` on the first line of the sheet, naming the vendored spec it was transcribed from.');
   process.exit(1);
 }
-for (const [f, why] of Object.entries(uncompared)) {
-  if (SHIPPED.includes(f)) {
-    console.error(`parity: ${f} is declared "_uncompared" and is being compared. Remove the declaration or the argument.`);
-    process.exit(1);
-  }
-  if (!shouldCompare.includes(f)) {
-    console.error(`parity: ${f} is declared "_uncompared" and the app does not import it. Stale declaration.`);
-    process.exit(1);
-  }
-  console.log(`parity: ${f} is NOT compared - ${why}`);
+const unvendored = shouldCompare.filter((f) => !existsSync(specOf(f)));
+if (unvendored.length) {
+  for (const f of unvendored) console.error(`parity: ${f} declares ${specOf(f)}, which is not vendored.`);
+  console.error("Vendor the spec from the frozen snapshot, with its manifest hash and the extraction command in the header, or correct the declaration.");
+  process.exit(1);
+}
+// And the sheets handed to THIS invocation must all belong to the spec it was given: comparing
+// a sheet against another slice's document is how nine non-divergences were nearly declared.
+const mismatched = SHIPPED.filter((f) => specOf(f) && specOf(f) !== SPEC);
+if (mismatched.length) {
+  for (const f of mismatched) console.error(`parity: ${f} declares ${specOf(f)} but is being compared against ${SPEC}.`);
+  process.exit(1);
 }
 
 // THE AT-RULE IS PART OF THE KEY, because a rule that MOVED into a breakpoint is not the same
