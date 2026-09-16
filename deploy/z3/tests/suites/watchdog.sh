@@ -1304,6 +1304,13 @@ check "and the marker carries the three numbers a human needs" \
   "grep -q 'ours 4350200, highest corroborated reference 4350000, ahead 200' '$T/park/$FORK_MARKER_REL'"
 check "pages, naming the direction rather than a lag" "grep -q '200 blocks AHEAD' '$T/alerts.log'"
 check "and attributes it to our miner, which its heartbeat can support" "grep -q 'most likely ours' '$T/alerts.log'"
+# THE WORD IS SYSTEMD'S, NOT OURS (#571). watchdog.sh:968 reads `systemctl is-active` and puts that
+# word in the page; before this, nothing grepped it, so reverting the substitution to a hard-coded
+# "active" left this suite at its full count. This row alone does NOT close that - a hard-coded
+# "active" satisfies it too. It is the anti-vacuity half: it says the sentence is THERE, so when
+# the activating case below goes red the reason is the WORD and not a missing sentence.
+check "and the page carries systemd's own word for the unit" \
+  "grep -q 'our miner is active' '$T/alerts.log'"
 check "and says what a human does next, both steps" \
   "grep -q 'SNAPSHOTS.md' '$T/alerts.log' && grep -q 'clear the marker' '$T/alerts.log'"
 # THE RULING, AS A TEST. A drop reaches ~100 blocks and this fork is 200, so a rewind here
@@ -1314,6 +1321,50 @@ check "and the peer cache survives" "[ -f '$STUB_VOLROOT/z3-testnet-chain/networ
 check "and zebra is not restarted for being ahead" "! grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
 check "and it does not stop the miner itself, because that stays the owner's" "! grep -q 'systemctl stop zcash-testnet-miner' '$STUB_LOG'"
 check "pages once for the episode, not once per sweep" "[ \"\$(grep -c 'blocks AHEAD' '$T/alerts.log')\" = 1 ]"
+
+# THE CASE A HARD-CODED WORD CANNOT SURVIVE (#571). The two rows above are both satisfied by a
+# literal "active", so neither is the gate. `activating` is a real state - a unit that has been
+# told to start and has not finished - and watchdog.sh:974 deliberately counts it as running,
+# because a starting miner is one that is about to extend this chain. So the page has to say
+# "activating", and a script that hard-codes "active" tells the operator the unit is up when it
+# is still coming up, on the one page whose job is saying who built these blocks.
+echo "== watchdog: a miner that is still ACTIVATING is named by that word, not by a hard-coded one"
+wd_fork_env
+echo activating > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4350000
+wd_run 2
+check "pages for the fork exactly as the active case does" "grep -q '200 blocks AHEAD' '$T/alerts.log'"
+check "and the attribution carries the word ACTIVATING, which no hard-coded string can produce" \
+  "grep -q 'our miner is activating' '$T/alerts.log'"
+check "and it is still attributed to us, because an activating unit is one that is about to mine" \
+  "grep -q 'most likely ours' '$T/alerts.log'"
+# The stop instruction keys on the same judgement (watchdog.sh:974, :1011): a unit that is coming
+# up still has to be stopped by hand before anyone touches the chain, and the sentence has to name
+# the state a human will see in `systemctl status` rather than a tidier one.
+check "and the operator is still told to stop it first, naming the state they will see" \
+  "grep -q 'systemd says activating' '$T/alerts.log'"
+
+# THE THIRD WORD, AND THE GATE ABOVE ONLY KNEW TWO OF THEM (SDE-UI, review of this PR). :974 counts
+# active|activating|reloading as running; the cases above drive active and activating, so DROPPING
+# `reloading` from that set changes real behaviour and nothing notices - 303/0 with it gone. That is
+# the same revert #571 is about, one word along, which is why it rides this PR rather than a follow-up.
+#
+# Same shape as the activating pair and not by design - it is what the code's structure produces.
+# The first row here is the anti-vacuity half: under the mutant the `else` branch still renders the
+# word, so it stays GREEN, and the two below it are the gate.
+echo "== watchdog: a miner RELOADING is counted as running too, and is named by that word"
+wd_fork_env
+echo reloading > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4350000
+wd_run 2
+check "RELOADING: the page carries systemd's own word, as it does for the other two states" \
+  "grep -q 'our miner is reloading' '$T/alerts.log'"
+check "RELOADING: it is still attributed to us, because watchdog.sh:974 counts it as running" \
+  "grep -q 'most likely ours' '$T/alerts.log'"
+check "RELOADING: and the operator is still told to stop it first, naming the state they will see" \
+  "grep -q 'systemd says reloading' '$T/alerts.log'"
 
 echo "== watchdog: two references that DISAGREE cannot establish a fork, so nothing happens"
 wd_fork_env
@@ -1368,6 +1419,8 @@ check "still parks, because nothing may start the miner onto this chain" "[ -f '
 check "still pages" "grep -q '200 blocks AHEAD' '$T/alerts.log'"
 check "calls the cause unexplained" "grep -q 'unexplained' '$T/alerts.log'"
 check "and does NOT claim our miner did it" "! grep -q 'most likely ours' '$T/alerts.log'"
+check "and still says which word systemd used, so the page is not silent about the unit" \
+  "grep -q 'our miner is inactive' '$T/alerts.log'"
 # THE ABSENCE HALF, which the active case cannot give me: with the unit inactive there is
 # nothing to stop, so telling a human to stop it first would send them to a command that does
 # nothing while the real instruction sits below it. My own mutation of the active case proved
