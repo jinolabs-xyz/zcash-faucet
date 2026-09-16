@@ -1477,8 +1477,16 @@ check "a declaration that no longer describes a divergence fails, so the list ca
 # .badge .dot passed with the selector declared.
 check "and a declaration names the body it declares, so a second change cannot inherit its label" \
   "grep -q 'DECLARED WITH A DIFFERENT BODY' '$REPO/scripts/parity-check.mjs' && grep -qF 'a declaration must name what we ship' '$REPO/scripts/parity-check.mjs'"
-check "every declaration in the file carries both halves" \
-  "python3 -c \"import json,sys; d=json.load(open('$REPO/design/spec/departures.json')); bad=[k for k,v in d.items() if not k.startswith('_') and not (isinstance(v,dict) and v.get('why') and v.get('shipped'))]; sys.exit(1 if bad else 0)\""
+# EVERY departures file, not one path. There is a file per vendored spec now: a single flat
+# one looked fine until the hero was compared against S2's document and all fifteen of S1's
+# declarations came back as stale, because they do not differ in a comparison they were never
+# about. A pin naming one path would have gone quiet the moment the second file appeared.
+check "every declaration in every departures file carries both halves" \
+  "python3 -c \"import json,sys,glob; fs=glob.glob('$REPO/design/spec/*/departures.json'); sys.exit(1 if not fs else (1 if [k for f in fs for k,v in json.load(open(f)).items() if not k.startswith('_') and not (isinstance(v,dict) and v.get('why') and v.get('shipped'))] else 0))\""
+check "and every vendored spec has one beside it, so a slice cannot depart undeclared" \
+  "python3 -c \"import sys,glob,os; specs=[d for d in glob.glob('$REPO/design/spec/*/') ]; sys.exit(0 if all(os.path.exists(d+'departures.json') for d in specs) else 1)\""
+check "and the CI step runs a comparison for every vendored spec" \
+  "[ \"\$(grep -c 'node scripts/parity-check.mjs design/spec/' '$CIWF')\" = \"\$(ls -d '$REPO'/design/spec/*/ | wc -l | tr -d ' ')\" ]"
 check "and the check reports what the spec has and we DROPPED, not only what we added" \
   "grep -qF 'in the spec, not shipped' '$REPO/scripts/parity-check.mjs'"
 check "a rule moved into a media query is not counted as parity" \

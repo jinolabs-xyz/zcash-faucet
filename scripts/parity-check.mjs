@@ -28,7 +28,13 @@ if (!SPEC || SHIPPED.length === 0) {
   console.error("usage: node scripts/parity-check.mjs <spec.css> <shipped.css...>");
   process.exit(2);
 }
-const DEPARTURES = "design/spec/departures.json";
+// DEPARTURES LIVE BESIDE THEIR SPEC, one file per vendored snapshot, because there is more
+// than one spec now. A single flat file keyed by selector looked fine until the hero was
+// compared against S2's document: every one of S1's fifteen declarations came back as
+// "STALE DEPARTURE, no longer differs, remove it", because they do not differ in a comparison
+// they were never about. Two comparisons would have spent for ever deleting each other's
+// declarations. The spec and the reasons we depart from it are one artefact.
+const DEPARTURES = SPEC.replace(/\/[^/]+$/, "/departures.json");
 
 // THE SHEETS ARE DISCOVERED, AND A HAND-WRITTEN LIST THAT MISSES ONE IS A FAILURE
 // (CTO red-team, review of this PR). `redesign-hero.css` was not compared at all: the CI step

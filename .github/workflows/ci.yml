@@ -81,7 +81,12 @@ jobs:
       # and a declaration that no longer describes a divergence FAILS, so the list cannot become
       # a place to hide one. It reports NOT APPLICABLE until the redesign CSS exists.
       - name: the shipped CSS matches the frozen spec, or says why not
-        run: node scripts/parity-check.mjs design/spec/S1-20260915T1938Z/shell.css src/app/redesign-shell.css src/app/redesign-tokens.css
+        run: |
+          # ONE INVOCATION PER VENDORED SPEC. Each sheet declares the snapshot it was
+          # transcribed from and the checker refuses to compare a sheet against a spec it
+          # does not declare, so these two lines cannot silently swap sheets between them.
+          node scripts/parity-check.mjs design/spec/S1-20260915T1938Z/shell.css src/app/redesign-shell.css src/app/redesign-tokens.css
+          node scripts/parity-check.mjs design/spec/S2-S5-20260915T2224Z/index.css src/app/redesign-hero.css
 
   smoke:
     runs-on: ubuntu-latest
