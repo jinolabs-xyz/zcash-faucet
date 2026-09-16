@@ -120,26 +120,40 @@ html .iconbtn:hover{color:var(--ink)}
 @media (prefers-reduced-motion:reduce){.entrance-pending .card,.entrance-pending .hero-copy,.entrance-pending .strip,.entrance-pending .seg{opacity:1}}
 .entrance-active .card,.entrance-active .panel,.entrance-active .card-copy,.entrance-active .card-copy h2,.entrance-active .card-copy p,.entrance-active .corner-icon{will-change:transform,opacity,clip-path}
 
-/* ===== 12. Breakpoints ===== */
+/* ===== 12. Breakpoints =====
+ * `.stage` ON THE .grid3/.grid2 RULES IS LOAD-BEARING, NOT TIDINESS (#623). Their base rule
+ * lives in redesign-views.css (`.grid3{grid-template-columns:repeat(3,...)}`), and Shell.tsx
+ * imports this file at line 32 and that one at line 34 - so the base rule is emitted AFTER
+ * these overrides and wins at equal specificity (0,1,0). The collapse was dead: measured on
+ * 734d9f4, the status view was still three 96px columns at 360px wide, which is what pushed
+ * "miner unwatched" and "unknown" past the right edge of a document that does not scroll.
+ * `.stage .grid3` is (0,2,0) and wins wherever it is emitted, so the rule no longer depends on
+ * import order. redesign-views.css:24 says these breakpoints belong here; this is what it
+ * takes for them to actually apply from here.
+ *
+ * `.pcards` is NOT the same case and is deliberately left alone: it carries its own
+ * breakpoints in redesign-views.css:127-128, after its own base rule, so it already collapses.
+ * The copy at line 145 below is redundant rather than broken.
+ */
 @media (max-width:64rem){
   .stage{--u:clamp(10.5px,1.45cqw,13px)}
   .comp{width:min(92cqw,1360px)}
   .hdr{grid-template-columns:1fr auto;grid-template-areas:"brand right" "seg seg"}
   .brand{grid-area:brand}.hdr-right{grid-area:right}.seg{grid-area:seg;justify-self:center}
-  .grid3{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .grid3 > :last-child{grid-column:1 / -1}
+  .stage .grid3{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .stage .grid3 > :last-child{grid-column:1 / -1}
 }
 @media (max-width:32rem){
   .stage{container-type:inline-size;height:auto;overflow:visible;--u:12px}
   .comp{width:auto;padding:12px 14px 28px;gap:12px}
   .hdr{grid-template-columns:1fr auto;grid-template-areas:"brand right" "seg seg";gap:10px}
-  .brand{grid-area:brand;flex-wrap:wrap;row-gap:6px}.hdr-right{grid-area:right}.seg{grid-area:seg;justify-self:stretch}
+  .brand{grid-area:brand;flex-wrap:wrap;row-gap:6px;min-width:0}.brand .home{white-space:normal;min-width:0}.hdr-right{grid-area:right}.seg{grid-area:seg;justify-self:stretch;min-width:0;flex-wrap:wrap;gap:calc(.7*var(--u))}
   .seg button{flex:1;padding:0}
   .strip .kv.all,.strip .kv.week span{display:none}
   .strip{padding-right:calc(.35*var(--u))}
   .view{gap:14px}
-  .grid3,.grid2{grid-template-columns:1fr}
-  .grid3 > :last-child{grid-column:auto}
+  .stage .grid3,.stage .grid2{grid-template-columns:1fr}
+  .stage .grid3 > :last-child{grid-column:auto}
   .claim h1{font-size:clamp(27px,7.4vw,40px)}
   .metrics{grid-template-columns:1fr}
   .pcards{grid-template-columns:1fr}
