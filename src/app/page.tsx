@@ -1312,7 +1312,13 @@ export default function Home() {
             AND aria-selected, never by colour alone. */}
         {showToggle && (phase === "ready" || phase === "checking" || phase === "syncing" || phase === "fault" || phase === "empty" || phase === "queued") && (
           <div>
-            <div role="tablist" aria-label="Which network to claim on" style={{ display: "flex", flexWrap: "wrap", gap: 0, border: "2px solid var(--color-text)" }}>
+            {/* THE SNAPSHOT'S TABS (index.html:415-418), with every behaviour the brutalist
+                version had. The design carries the selection with a filled pill and
+                `aria-selected`; the keyboard handling, the spelled-out accessible name and the
+                roving tabIndex below are ours and are not in the snapshot, because the snapshot
+                is a static mock and this is a real tablist. Transcribing a design does not mean
+                transcribing away the things a screen reader needs. */}
+            <div className="tabs" role="tablist" aria-label="Which network to claim on">
               {(["taz", "ctaz"] as const).map((n) => {
                 const f = networkFacts(n);
                 const on = network === n;
@@ -1339,31 +1345,13 @@ export default function Home() {
                       setNetwork(next);
                       document.getElementById(`net-tab-${next}`)?.focus();
                     }}
-                    style={{
-                      flex: "1 1 140px",
-                      padding: "10px 12px",
-                      minHeight: 44,
-                      border: "none",
-                      borderRight: n === "taz" ? "2px solid var(--color-text)" : undefined,
-                      background: on ? "var(--color-text)" : "transparent",
-                      color: on ? "var(--color-bg)" : "var(--color-text)",
-                      fontFamily: "var(--mono)",
-                      fontSize: 12,
-                      fontWeight: 700,
-                      letterSpacing: ".08em",
-                      cursor: "pointer",
-                      display: "flex",
-                      alignItems: "baseline",
-                      justifyContent: "center",
-                      gap: 8,
-                    }}
+                    // `data-parked` is the snapshot's own hook for the second tab's small
+                    // word (`.tabs button[data-parked] small`), so the word is styled by the
+                    // sheet rather than by an inline rule nobody can override.
+                    data-parked={f.beta ? "" : undefined}
                   >
-                    <span>{f.tab}</span>
-                    {f.beta && (
-                      <span style={{ fontSize: 9, letterSpacing: ".1em", textTransform: "uppercase", opacity: on ? 0.85 : 0.65 }}>
-                        {f.beta}
-                      </span>
-                    )}
+                    {f.tab}
+                    {f.beta && <small>{f.beta}</small>}
                   </button>
                 );
               })}
@@ -1397,12 +1385,24 @@ export default function Home() {
           </div>
         )}
 
+        {/* THE SNAPSHOT'S FIELD ROW (index.html:421-425): `.fieldwrap`, a `.label` carrying the
+              address-kind badge on its right, the `.prompt` input, and one `.hint` line under it.
+              The ids and testids are unchanged - `zaddr`, `address-input`, `addrmsg` - because
+              assertions written months ago key on them and a transcription that renames its own
+              hooks makes its suite green by deleting the subject. */}
         {(phase === "ready" || phase === "checking" || phase === "syncing" || phase === "fault" || phase === "empty" || phase === "degraded") && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
-            <label htmlFor="zaddr" style={{ ...kicker, color: muted(60) }}>Your testnet address</label>
-            <input id="zaddr" data-testid="address-input" className="input" type="text" spellCheck={false} autoComplete="off" autoCapitalize="off" placeholder="utest1… / ztestsapling… / tm…" value={addr} onChange={(e) => { setAddr(e.target.value); setTouched(false); }} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} aria-describedby="addrmsg" />
-            <div id="addrmsg" aria-live="polite" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 9, minHeight: 24 }}>
-              {badgeShow && "label" in c && <span className="tag tag-outline">{c.label}</span>}
+          <div className="fieldwrap">
+            <label className="label" htmlFor="zaddr">
+              <span>Your testnet address</span>
+              {/* `.abadge` is the design's own element for the kind word, and it is NOT a status
+                  chip: `.abadge` here, `.tag` in the hero, different owners. Empty `data-kind`
+                  when there is nothing to say, which is what `.abadge:empty` in the sheet hides. */}
+              <span className="abadge" data-kind={badgeShow && "label" in c ? (("priv" in c && c.priv === false) ? "public" : "shielded") : ""}>
+                {badgeShow && "label" in c ? c.label : ""}
+              </span>
+            </label>
+            <input id="zaddr" data-testid="address-input" className="prompt" type="text" spellCheck={false} autoComplete="off" autoCapitalize="off" placeholder="utest1… / ztestsapling… / tm…" value={addr} onChange={(e) => { setAddr(e.target.value); setTouched(false); }} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} aria-describedby="addrmsg" />
+            <div id="addrmsg" className="hint" aria-live="polite">
               {"priv" in c && c.priv === false && <span style={{ fontSize: 12, lineHeight: 1.45, color: muted(62) }}>Transparent address, so this drip will be visible on-chain.</span>}
               {/* THE DESIGN'S BAD COLOUR, not the retired palette's. These two carried inline
                   `var(--color-accent-800)` - #7c1405 paper, #ffc4b8 ink - from the sheet the
@@ -1410,7 +1410,7 @@ export default function Home() {
                   Found by the red-team's sweep for this shape (L20). */}
               {touched && "err" in c && c.err && <span style={{ fontSize: 12.5, lineHeight: 1.45, color: "var(--bad-text)", fontWeight: 500, maxWidth: "52ch" }}>{c.err}</span>}
               {genErr && <span style={{ fontSize: 12.5, lineHeight: 1.45, color: "var(--bad-text)", fontWeight: 500, maxWidth: "52ch" }}>{genErr}</span>}
-              {!addr.trim() && <button className="btn btn-ghost btn-sm" onClick={generate} style={{ padding: 0 }}>Make a throwaway address and key</button>}
+              {!addr.trim() && <button className="linkbtn" type="button" onClick={generate}>Make a throwaway address and key</button>}
             </div>
             {genKey && genKey.address === addr.trim() && (
               <div data-testid="generated-key" style={{ display: "flex", flexDirection: "column", gap: 8, padding: "12px 14px", border: "1px solid var(--color-divider)", borderRadius: 6 }}>
@@ -1428,9 +1428,13 @@ export default function Home() {
                 <p aria-live="polite" className="sr-only">{copied === "key" ? "Spending key copied." : ""}</p>
               </div>
             )}
-            <button data-testid="claim-button" className="btn btn-primary" onClick={() => void submit()} disabled={phase === "empty" || phase === "degraded" || (!!genKey && genKey.address === addr.trim() && !keyCopied && !keyShown)} style={{ width: "100%", justifyContent: "space-between" }}>
+            {/* THE SNAPSHOT'S PRIMARY ACTION (index.html:432). `.automate`, and the arrow comes
+                from `.automate::after` rather than an inline span - which is not only tidier:
+                `.automate:disabled::after{content:none}` takes the arrow away when the button is
+                disabled, and our inline span drew it in every state including "Waiting for a
+                refill". The design had thought about that and our markup had not. */}
+            <button data-testid="claim-button" className="automate" data-accent type="button" onClick={() => void submit()} disabled={phase === "empty" || phase === "degraded" || (!!genKey && genKey.address === addr.trim() && !keyCopied && !keyShown)}>
               <span>{genKey && genKey.address === addr.trim() && !keyCopied && !keyShown ? "Copy the key first" : phase === "checking" ? "Checking status…" : phase === "syncing" ? "Queue it, sends when the node is ready" : phase === "fault" ? "Queue it, sends when the faucet is back" : phase === "empty" ? (refilling && refillHealthy ? "Topping up, back in a moment" : "Waiting for a refill") : phase === "degraded" ? "Not taking claims right now" : "Request " + dripText}</span>
-              <span aria-hidden="true">→</span>
             </button>
             <p style={{ margin: 0, fontSize: 11.5, letterSpacing: ".02em", color: muted(55), fontFamily: "var(--mono)" }}>{dripText} · once per address / 24h · shielded z→z</p>
             {/* The puzzle explanation moved UP to the hero's second line (S2a), so it is
