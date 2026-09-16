@@ -1731,6 +1731,11 @@ echo "== repo: no unit test binds a fixed port, because a taken one reports a wr
 # published that red as a code defect. crosslinksend.test.ts bound 28611, which is ALSO ui-smoke's
 # lightwalletd double, so a smoke run on the same box was enough to do it.
 #
+# TEST-SUPPORT CODE COUNTS, NOT JUST *.test.ts (SDE-Infra reviewing this PR). src/lib/testing/ is
+# where a fixed port lands NEXT: a `PORT` default in a shared spawner is invisible to a scan of
+# test files and re-creates the defect for every caller at once, which is worse than the three
+# call sites this closes. The scan takes both.
+#
 # COMMENTS STRIPPED BEFORE READING, and that is not a detail. These files now DESCRIBE the ports
 # they used to bind, in the comment explaining why they no longer do, so a naive grep reports the
 # fix as the defect. Same trap as the #607 reader finding "node syncing" twice in prose.
@@ -1742,7 +1747,7 @@ while IFS= read -r f; do
   n="$(grep -vE '^[[:space:]]*(//|\*|/\*)' "$f" | grep -cE '\b28[0-9]{3}\b' || true)"
   [ "$n" = "0" ] || PORTED="$PORTED [$(basename "$f"):$n]"
 done <<EOF
-$(find "$REPO/src" -name '*.test.ts' 2>/dev/null)
+$(find "$REPO/src" -name '*.test.ts' -o -path '*/testing/*' -name '*.ts' 2>/dev/null)
 EOF
 check "no unit test binds a literal 28xxx port in code, so a busy box cannot fake an assertion" \
   "[ -z '$PORTED' ]"
