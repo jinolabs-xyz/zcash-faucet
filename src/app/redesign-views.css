@@ -48,6 +48,18 @@
 .prompt[aria-invalid="true"]{border-color:var(--bad)}
 .prog{height:calc(.6*var(--u));border-radius:999px;background:var(--orange-soft);overflow:hidden;margin-top:calc(.9*var(--u))}
 .prog i{display:block;height:100%;width:var(--w,40%);background:var(--orange);border-radius:999px;transition:width .2s}
+/* THE HATCHED BAR AND ITS KEYFRAME, transcribed (index.html 230-231). `.prog` and `.prog i`
+ * already shipped; this pair did not, and it is what the topping-up panel's refill bar is drawn
+ * with. Added here rather than in the card's sheet because this file owns `.prog` - SDE-App
+ * renders `.prog.hatch` inside four of the nineteen panels and defines neither selector, so the
+ * cascade has exactly one definition of each. Two definitions in two files is the cascade
+ * deciding by import order, which is what #575 spent four rounds removing.
+ *
+ * The keyframe travels with the rule that uses it: an animation name resolving to nothing fails
+ * silently - the bar simply sits still - which is the class of defect that does not announce
+ * itself. */
+.prog.hatch i{background:repeating-linear-gradient(135deg,var(--orange) 0 6px,#ff9b5b 6px 12px);background-size:17px 17px;animation:stripe 1s linear infinite}
+@keyframes stripe{to{background-position:17px 0}}
 
 /* ===== The three views' own furniture ============================================= */
 

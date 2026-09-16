@@ -220,6 +220,29 @@ async function checkChunkOrderIdentity(browser) {
     }
     const linksBefore = await order();
     const before = await snap();
+
+    // THE LANDING, RE-POINTED AT THE PANEL. `before.length >= 50` was the whole coverage guard,
+    // and it only says the page rendered something - it cannot say this check ever looked at the
+    // claim card. The rest of the page (shell, hero, footer, nav) clears 50 nodes on its own, so
+    // if the card failed to render, or rendered without the wrappers it now has, every row below
+    // would still report the page identical under a chunk flip: green, and blind to the exact
+    // structure #583 introduces.
+    //
+    // This is the L33/L34 shape. The chunk-order flip is only evidence about the elements that
+    // were IN the snapshot, and until now nothing pinned which those were. So the subjects are
+    // named, and the identity row itself is gated on them: an identity result that never saw the
+    // panel is not a weaker pass, it is a different measurement.
+    const landed = await p.evaluate(() => ({
+      panel: document.querySelectorAll(".card.claim > .panel").length,
+      copy: document.querySelectorAll(".card.claim > .card-copy").length,
+      phase: document.querySelectorAll(".card.claim .phase").length,
+    }));
+    // `.phase` is deliberately NOT required here: all thirteen are behind a state and this check
+    // loads the form, so demanding one would fail on a true page. The wrappers are the structure
+    // the fold-in adds and the structure this check must be shown to have covered.
+    ok(`${theme}${keyboard ? ", keyboard-focused," : ","} the chunk-order snapshot actually contains the card's panel and copy block`,
+      landed.panel === 1 && landed.copy === 1,
+      `panel ${landed.panel}, card-copy ${landed.copy} (want 1, 1); phase ${landed.phase} at rest, not required`);
     await p.evaluate(() => {
       const ls = [...document.querySelectorAll('link[rel="stylesheet"]')];
       if (ls.length < 2) return;
@@ -242,9 +265,10 @@ async function checkChunkOrderIdentity(browser) {
       }
     }
     ok(`${theme}${keyboard ? ", keyboard-focused," : ","} the page is identical with the CSS chunks linked in the other order`,
-      flipped && before.length >= 50 && moved === 0,
+      flipped && before.length >= 50 && landed.panel === 1 && landed.copy === 1 && moved === 0,
       !flipped ? `the flip did not take: ${linksBefore.length} stylesheet(s)`
         : before.length < 50 ? `only ${before.length} nodes rendered, too few to judge`
+        : (landed.panel !== 1 || landed.copy !== 1) ? `the card's structure was not in the snapshot (panel ${landed.panel}, card-copy ${landed.copy}), so this says nothing about it`
         : `${moved} of ${before.length} nodes moved, ${deltas} deltas; first: ${first}`);
     await c.close();
   }
@@ -275,8 +299,9 @@ async function checkLegacyPalette(browser) {
     // HOVERED ON A LINK THIS CHECK INSERTS, and the first version measured three links that
     // could not show the defect. It hovered `.ftr nav a`, which the footer's own (0,2,1) hover
     // rule already protects; `.seg button`, which is a button, so `a:hover` never matched it at
-    // all; and the first `main a`, which sits inside `.about-strip-line` whose (0,1,1) rule in
-    // globals sits AFTER `a:hover` and wins at any order. So a real link-order flip left the
+    // all; and the first `main a`, which sat inside `.about-strip-line` whose (0,1,1) rule in
+    // globals sat AFTER `a:hover` and won at any order. (That strip is gone as of the card
+    // redesign, and so is its rule - the reason the probe is injected rather than found is not.) So a real link-order flip left the
     // row green, and the 144/2 in the body came from a mutant that appends the retired rule
     // last - something a flip cannot produce. Found by the CTO's red-team.
     //
@@ -403,6 +428,11 @@ async function checkLegacyPalette(browser) {
  * shape of every vacuous assertion this suite has had to fix. Fewer than six text nodes is a
  * red line, not a quiet pass. */
 async function checkCardInnerPadding(browser) {
+  // RE-BASELINED for the .panel/.card-copy fold-in (CTO 06:46Z). The card's inner inset is no
+  // longer the card's own padding: `.card.claim` is a flex column with the padding living on
+  // `.panel` (redesign-hero.css:25, 7.5% 7.5% 8%). The card-edge row below still measures the
+  // composite, so deleting the panel's padding still turns it red - that is why it stays as it
+  // is rather than being re-pointed. What it could NOT see is the boxes one level in.
   for (const vp of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
     const c = await browser.newContext({ viewport: vp });
     const p = await c.newPage();
@@ -425,12 +455,296 @@ async function checkCardInnerPadding(browser) {
         const gap = Math.min(b.left - cr.left, cr.right - b.right);
         if (!worst || gap < worst.gap) worst = { gap: Math.round(gap * 10) / 10, text: t.slice(0, 40) };
       }
-      return { measured, worst, missing: false };
+
+      // THE BOXES ONE LEVEL IN. A container with no rule of its own is invisible to every
+      // content assertion and to the card-edge row above: its children still lay out, still
+      // carry their own type, and still clear the CARD. The only thing missing is the box.
+      const px = (v) => Math.round(parseFloat(v) * 10) / 10 || 0;
+      const box = (el) => {
+        const cs = getComputedStyle(el);
+        // BOTH background properties. `--panel-bg-feature` and `--surface` are gradients, which
+        // land in background-IMAGE; reading backgroundColor alone reports rgba(0, 0, 0, 0) on a
+        // fully painted panel and would have called the peach gradient missing.
+        return {
+          padT: px(cs.paddingTop), padL: px(cs.paddingLeft),
+          bor: px(cs.borderTopWidth), rad: px(cs.borderTopLeftRadius),
+          bg: cs.backgroundColor, bgImg: cs.backgroundImage,
+          painted: cs.backgroundImage !== "none"
+            || (cs.backgroundColor !== "rgba(0, 0, 0, 0)" && cs.backgroundColor !== "transparent"),
+        };
+      };
+      const panel = card.querySelector(":scope > .panel");
+
+      // NO `.phase` IS ON SCREEN AT REST, and that is not a bug: every one of the thirteen is
+      // behind a state (`syncing`, `checking`, `queued`, `reserve-low`, `sent`...), and the page
+      // this check loads is the form. Measuring "the rendered ones" therefore measured nothing
+      // and the row could only ever report that it had nothing to say.
+      //
+      // So the subject is MADE. A bare `<div class="phase">` appended to the real panel, in the
+      // real cascade, on the real page, is exactly the selector the design states a rule for;
+      // what it computes to is what any of the thirteen will compute to when its state arrives.
+      // This is a claim about the RULE, and it is worth being explicit that it is not a claim
+      // about any particular panel's markup (L33) - a phase that shipped without the class would
+      // still be bare and this row would still be green.
+      const probe = document.createElement("div");
+      probe.className = "phase";
+      probe.setAttribute("data-ui-smoke", "phase-probe");
+      probe.innerHTML = "<h3>probe</h3><p>probe</p>";
+      (panel || card).appendChild(probe);
+      const probeBox = box(probe);
+      probe.remove();
+
+      // And if the run happens to have caught a real one, it is measured too rather than assumed.
+      const live = [...card.querySelectorAll(".phase")].filter((el) => el.getClientRects().length);
+
+      return {
+        measured, worst, missing: false,
+        panelBox: panel ? box(panel) : null,
+        probeBox,
+        liveCount: live.length,
+        liveBoxes: live.map(box),
+      };
     });
+
     const detail = r.missing ? "no .card.claim on the page"
       : `${r.measured} text nodes, worst ${r.worst ? r.worst.gap : "-"}px on "${r.worst ? r.worst.text : "-"}"`;
     ok(`${vp.width}x${vp.height}: every text node in the claim card clears the card's own edge by 8px`,
       !r.missing && r.measured >= 6 && !!r.worst && r.worst.gap >= 8, detail);
+
+    // The panel is where that clearance now comes from, so it is named rather than inferred.
+    // Without this row the card-edge number above could be produced by a padding that moved
+    // somewhere else entirely and the re-baseline would have measured nothing about the fold-in.
+    const pb = r.panelBox;
+    ok(`${vp.width}x${vp.height}: the claim card's inset lives on .panel, and the panel is painted`,
+      !!pb && pb.padT > 0 && pb.padL > 0 && pb.painted,
+      pb ? `panel padding ${pb.padT}/${pb.padL}px, radius ${pb.rad}px, bg-color ${pb.bg}, bg-image ${pb.bgImg.slice(0, 60)}`
+         : "no .card.claim > .panel in the DOM");
+
+    // EVERY RENDERED .phase WEARS THE DESIGN'S BOX. The design states the container
+    // (`padding:calc(.85*var(--u)) calc(1.1*var(--u));border:calc(.06*var(--u)) solid var(--hair);
+    // border-radius:calc(.6*var(--u));background:var(--surface)`) and we ship eight DESCENDANT
+    // rules and no rule for the container itself - so each panel renders as flow content where
+    // the design has a bordered card. Nothing already in this file could see it: the children
+    // are styled, the text is right, and the card-edge clearance is unchanged.
+    const q = r.probeBox;
+    const dressed = (b) => !!b && b.padT > 0 && b.padL > 0 && b.bor > 0 && b.rad > 0 && b.painted;
+    ok(`${vp.width}x${vp.height}: a .phase inside the card wears the design's box (padding, border, radius, surface)`,
+      dressed(q),
+      q ? `padding ${q.padT}/${q.padL}px, border ${q.bor}px, radius ${q.rad}px, bg-color ${q.bg}, bg-image ${q.bgImg.slice(0, 40)}`
+        : "the probe element did not attach");
+    // Kept separate so a run that DOES catch a live panel says so rather than folding into the
+    // rule row - one number covering two subjects is how a measurement stops naming its own state.
+    if (r.liveCount > 0) {
+      ok(`${vp.width}x${vp.height}: and every .phase actually on screen wears it too`,
+        r.liveBoxes.every(dressed),
+        `${r.liveBoxes.filter(dressed).length} of ${r.liveCount} dressed`);
+    } else {
+      // SAYING IT DID NOT RUN IS PART OF RUNNING IT. Guarding was right - `[].every()` is true,
+      // so an unguarded row would report a clean pass over nothing - but a guard with no else
+      // prints neither ok nor FAIL, and a row that can vanish silently is exactly what this file
+      // objects to three hundred lines up. The rule itself is covered unconditionally by the
+      // probe row above, so this is a note about coverage and not an unasserted claim.
+      // Found by SDE-Infra reading assertions I am not allowed to review myself.
+      ok(`${vp.width}x${vp.height}: (no .phase was on screen, so only the rule was measured, not a live panel)`,
+        true, "all thirteen sit behind a state; the page under test is the form");
+    }
+
+    await c.close();
+  }
+}
+
+async function checkLivePhasePanelsWearTheBox(browser) {
+  // THE PROBE ROW ABOVE IS A CLAIM ABOUT THE RULE. This one is the claim about the MARKUP, and
+  // the CTO's red-team is why it exists: rename `class="phase"` on a single panel and the probe
+  // row stays green (the injected div still matches `.phase`), while the live row prints "only
+  // the rule was measured" as ok. The family passed over a real defect on a real panel. That is
+  // L33 exactly - I named it in the comment up there and then did not close it, which is worse
+  // than not having noticed.
+  //
+  // No `.phase` is on screen at rest because all thirteen sit behind a state, so the state is
+  // DRIVEN. The mutations are the ones `phase-sweep.mjs` uses (its PHASES array), deliberately,
+  // so the two instruments disagree loudly rather than quietly if either drifts.
+  const base = await (await fetch(`${BASE}/api/status`)).json();
+  const DRIVEN = [
+    ["syncing", (s2) => { s2.node = { ...(s2.node ?? {}), ready: false }; return s2; }],
+    ["fault", (s2) => { s2.backend = { ...(s2.backend ?? {}), reachable: false }; return s2; }],
+    ["empty", (s2) => { s2.empty = true; s2.balanceTaz = 0; if (s2.reserve) s2.reserve.refilling = false; return s2; }],
+    ["topping-up", (s2) => { s2.empty = true; s2.balanceTaz = 0;
+      s2.reserve = { ...(s2.reserve ?? { targetTaz: 100, lowTaz: 5, spendableTaz: 0 }), refilling: true, shieldCoinbase: true };
+      s2.miner = { ...(s2.miner ?? {}), active: true }; return s2; }],
+    ["degraded", (s2) => { s2.sends = { ...(s2.sends ?? {}), state: "degraded" }; return s2; }],
+  ];
+
+  const seen = [];
+  for (const [name, mutate] of DRIVEN) {
+    const c = await browser.newContext({ viewport: DESKTOP });
+    const p = await c.newPage();
+    await p.route("**/api/status", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(mutate(JSON.parse(JSON.stringify(base)))) }));
+    await p.goto(BASE, { waitUntil: "domcontentloaded" });
+    await p.waitForSelector("#claim", { timeout: 15_000 }).catch(() => {});
+    // The panel arrives with the status, not with the document.
+    await p.waitForSelector(".card.claim .phase", { timeout: 8_000 }).catch(() => {});
+
+    const r = await p.evaluate(() => {
+      const px = (v) => Math.round(parseFloat(v) * 10) / 10 || 0;
+      const live = [...document.querySelectorAll(".card.claim .phase")].filter((el) => el.getClientRects().length);
+      // What the card is actually showing, whatever it is called. If the class was renamed this
+      // still finds the panel by its data attribute, so the row can say "a panel is on screen and
+      // it is not a .phase" rather than the much weaker "no .phase found".
+      const byData = [...document.querySelectorAll(".card.claim [data-phase]")].filter((el) => el.getClientRects().length);
+      const box = (el) => {
+        const cs = getComputedStyle(el);
+        return { padT: px(cs.paddingTop), padL: px(cs.paddingLeft), bor: px(cs.borderTopWidth),
+          rad: px(cs.borderTopLeftRadius),
+          painted: cs.backgroundImage !== "none"
+            || (cs.backgroundColor !== "rgba(0, 0, 0, 0)" && cs.backgroundColor !== "transparent") };
+      };
+      return {
+        liveCount: live.length,
+        dataCount: byData.length,
+        names: byData.map((el) => el.getAttribute("data-phase")),
+        classes: byData.map((el) => String(el.className || "(none)")),
+        boxes: live.map(box),
+      };
+    });
+
+    const dressed = (b) => b.padT > 0 && b.padL > 0 && b.bor > 0 && b.rad > 0 && b.painted;
+    seen.push(`${name}->${r.names.join("/") || "none"}`);
+
+    // A panel is on screen AND it is a .phase. These are two different failures and the detail
+    // says which: a renamed class shows as dataCount 1, liveCount 0, and names the class it wore.
+    ok(`driving ${name}: the panel the card shows is a .phase`,
+      r.dataCount >= 1 && r.liveCount === r.dataCount,
+      r.dataCount < 1 ? "no [data-phase] panel rendered at all - the state did not drive"
+        : `${r.dataCount} panel(s) ${JSON.stringify(r.names)} but ${r.liveCount} matched .phase; classes ${JSON.stringify(r.classes)}`);
+
+    ok(`driving ${name}: and it wears the design's box`,
+      r.liveCount >= 1 && r.boxes.every(dressed),
+      r.liveCount < 1 ? "nothing matched .phase, so no box was measured"
+        : `${r.boxes.filter(dressed).length} of ${r.liveCount} dressed; first padding ${r.boxes[0].padT}/${r.boxes[0].padL}px, border ${r.boxes[0].bor}px, radius ${r.boxes[0].rad}px, painted ${r.boxes[0].painted}`);
+
+    await c.close();
+  }
+
+  // COVERAGE PIN, the same one this file already puts on its viewport loops: if this list is cut
+  // the suite gets quieter and stays green, which is the hole #563 was blocked for.
+  ok("the phase drive covered every state it names",
+    seen.length === DRIVEN.length, seen.join(", "));
+}
+
+async function checkTallCardStaysReachable(browser) {
+  // THE TALL PROBE. The one-screen clamp was removed on purpose, so "the card is taller than the
+  // viewport" is NOT the defect and must not be asserted against - App measured the card at
+  // 1702px in a 900px viewport and that is the intended consequence. What must stay true either
+  // way is the reader can still get to the bottom of it.
+  //
+  // This matters because two rules we ship describe a scroll box that does not exist in our
+  // layout: `.card.claim{max-height:100%}` resolves against a grid track with an auto height, so
+  // the percentage never resolves, and `.card.claim > .panel{overflow:auto}` therefore never has
+  // an overflow to scroll (panel measured 1559 client / 1559 scroll, scrollTop stuck at 0). They
+  // are inert today. The day someone makes the clamp resolve, `overflow:auto` starts clipping -
+  // and if the panel still cannot scroll, the tail of the card becomes unreachable with no error
+  // anywhere. That is the state this probe exists to catch, and it is a property of the CAUSE
+  // rather than of today's content, which is the whole lesson of checkFooterReachable below.
+  for (const vp of [{ width: 1280, height: 720 }, { width: 390, height: 844 }]) {
+    const c = await browser.newContext({ viewport: vp });
+    const p = await c.newPage();
+    await p.goto(BASE, { waitUntil: "networkidle" });
+    await p.waitForSelector(".card.claim", { timeout: 15_000 }).catch(() => {});
+
+    const r = await p.evaluate((vh) => {
+      const card = document.querySelector(".card.claim");
+      const panel = card && card.querySelector(":scope > .panel");
+      if (!card || !panel) return { missing: true };
+
+      const cardBefore = card.getBoundingClientRect().height;
+
+      // Make the content tall rather than waiting for a state that happens to be tall. A probe
+      // that only fires when today's copy overflows is a probe on today's copy (L1).
+      const spacer = document.createElement("div");
+      spacer.setAttribute("data-ui-smoke", "tall-spacer");
+      // `height` ALONE IS NOT TALL. The panel is a flex column, so a child with a height and a
+      // default `flex-shrink:1` is free to be squeezed back to nothing - which is exactly what
+      // happened the first time this probe met a resolving clamp: the panel reported 469 scroll
+      // against 469 client with 1440px of spacer supposedly inside it, the engagement guard said
+      // no overflow was created, and the reachability row underneath was never tested at all.
+      // min-height with flex:none is a floor flexbox cannot argue with.
+      spacer.style.flex = "none";
+      spacer.style.minHeight = (vh * 2) + "px";
+      const marker = document.createElement("p");
+      marker.id = "ui-smoke-tall-marker";
+      marker.textContent = "TALL PROBE TAIL";
+      panel.appendChild(spacer);
+      panel.appendChild(marker);
+
+      const cardAfter = card.getBoundingClientRect().height;
+
+      // Walk marker -> document and collect every ancestor that hides what it cannot scroll.
+      // "Hidden AND overflowing AND not scrollable" is the precise shape of unreachable; an
+      // ancestor that hides but fits is clipping nothing, and one that scrolls is reachable.
+      const clips = [];
+      for (let el = marker; el && el !== document.documentElement; el = el.parentElement) {
+        const cs = getComputedStyle(el);
+        const hides = (v) => v === "hidden" || v === "clip";
+        const overflows = el.scrollHeight - el.clientHeight > 1;
+        if (!overflows) continue;
+        if (!hides(cs.overflowY)) continue;
+        // AND THAT IS THE WHOLE TEST. My first version then asked whether the element could be
+        // scrolled, by setting scrollTop and reading it back - and an `overflow:hidden` box
+        // ANSWERS YES, because hidden suppresses the scrollbar and the wheel, not the property.
+        // So the escape hatch declared every clipped box reachable and the row survived the one
+        // mutant written to kill it. A reader has no scrollTop. hidden means unreachable.
+        clips.push(`${el.tagName.toLowerCase()}${el.className ? "." + String(el.className).trim().split(/\s+/)[0] : ""} overflow-y:${cs.overflowY} ${el.scrollHeight}>${el.clientHeight}`);
+      }
+
+      // And the direct question, independent of the walk: can it be brought on screen at all?
+      marker.scrollIntoView({ block: "center" });
+      const mr = marker.getBoundingClientRect();
+      const onScreen = mr.bottom > 0 && mr.top < window.innerHeight && mr.height > 0;
+
+      const panelScroll = panel.scrollHeight, panelClient = panel.clientHeight;
+      const panelFacts = `panel ${panelScroll} scroll / ${panelClient} client, overflow-y:${getComputedStyle(panel).overflowY}`;
+      spacer.remove();
+      marker.remove();
+      return { missing: false, cardBefore: Math.round(cardBefore), cardAfter: Math.round(cardAfter), grew: cardAfter - cardBefore, clips, onScreen, panelFacts, panelScroll, panelClient };
+    }, vp.height);
+
+    const label = `${vp.width}x${vp.height}`;
+    if (r.missing) {
+      ok(`${label}: the tall probe found the claim card`, false, "no .card.claim > .panel in the DOM");
+      await c.close();
+      continue;
+    }
+
+    // ENGAGEMENT GUARD. If the injected height did not actually make the card taller than the
+    // viewport, everything below is a rest-state reading wearing a tall label - the same vacuity
+    // that made the first version of the hover pass and the footer pass worthless.
+    // ENGAGEMENT, STATED FOR BOTH REGIMES. The first version of this guard asked only whether the
+    // card had grown past the viewport, which is what happens while `max-height:100%` does not
+    // resolve. Restore the clamp and it resolves, the card stops growing, the guard fails - and
+    // it fails in exactly the configuration where reachability matters MOST: a fixed box with
+    // more content than fits. A guard that only holds in one of the two layouts is a guard on
+    // the layout, not on the probe (L34).
+    //
+    // What the probe actually needs is that the injection created an overflow SOMEWHERE for the
+    // layout to deal with: either the card outgrew the screen, or the panel now holds more than
+    // its box. Either way there is something to reach, which is the premise of the rows below.
+    const cardOverflows = r.cardAfter > vp.height;
+    const panelOverflows = r.panelScroll - r.panelClient > 1;
+    ok(`${label}: the tall probe actually creates an overflow for the layout to handle`,
+      cardOverflows || panelOverflows,
+      `card ${r.cardBefore} -> ${r.cardAfter}px in a ${vp.height}px viewport (+${Math.round(r.grew)}), ${r.panelFacts}`
+      + `; ${cardOverflows ? "card overflows the screen" : "card fits"}, ${panelOverflows ? "panel overflows its box" : "panel fits"}`);
+
+    ok(`${label}: with the card taller than the screen, nothing clips its tail without scrolling it`,
+      r.clips.length === 0,
+      r.clips.length ? r.clips.join("; ") : `no unreachable clip; ${r.panelFacts}`);
+
+    ok(`${label}: the bottom of a tall claim card can still be brought on screen`,
+      r.onScreen === true,
+      r.onScreen ? `marker reachable; ${r.panelFacts}` : `scrollIntoView left the tail off screen; ${r.panelFacts}`);
+
     await c.close();
   }
 }
@@ -1002,6 +1316,41 @@ async function checkFirstPaint(page, base, address) {
     for (const k of ["node", "balance", "miner"]) {
       ok(`first paint states no ${k} it was not told`, cells[k] === UNTOLD, `${k}=${cells[k] ?? "missing"}`);
     }
+    // ── THE HERO'S CHIPS ARE IN THE FIRST PAINT, WHICH IS THE DEFECT THEY FIX ──────────
+    //
+    // The puzzle sentence was written `{status?.challenge === "pow" && ...}` and the index is a
+    // client island with `status` starting null, so the SERVER HTML omitted it on every
+    // deployment since it shipped. Nothing failed; the code was there; a reader with JavaScript
+    // off never saw it, and the owner found it missing from prod. Gating the chips the same way
+    // would have shipped that defect again in new markup, so this asserts the shape rather than
+    // the values: the chips exist before any status arrives.
+    const heroFirst = await page.evaluate(() => {
+      const chips = [...document.querySelectorAll(".hero-copy .chips [data-chip]")]
+        .map((b) => ({ name: b.dataset.chip, tone: b.dataset.tone ?? "(none)", text: (b.textContent || "").trim() }));
+      return {
+        chips,
+        more: !!document.querySelector(".hero-copy .chips .tag.more"),
+        analytics: (document.querySelector(".hero-copy .morelink")?.textContent || "").trim(),
+        puzzle: /solves a short puzzle instead of a CAPTCHA/.test(document.body.textContent || ""),
+      };
+    });
+    ok("first paint carries the four hero status chips",
+      ["wallet", "node", "miner", "sends"].every((n) => heroFirst.chips.some((c) => c.name === n)),
+      heroFirst.chips.map((c) => c.name).join(", ") || "no chips in the HTML");
+    ok("and each says unknown rather than a figure it has not been told",
+      heroFirst.chips.length > 0 && heroFirst.chips.every((c) => /unknown/.test(c.text)),
+      heroFirst.chips.map((c) => `${c.name}="${c.text}"`).join("; ") || "none");
+    // The ops chip is the one that must NOT be there: it is the word about the box, and a box we
+    // have not heard from is not a box in trouble.
+    ok("and no OPS ATTENTION before anything has been established",
+      !heroFirst.chips.some((c) => c.name === "box"),
+      heroFirst.chips.map((c) => c.name).join(", "));
+    ok("first paint carries both hero links",
+      heroFirst.more && /drips this week/.test(heroFirst.analytics),
+      `more=${heroFirst.more} analytics="${heroFirst.analytics}"`);
+    ok("first paint carries the puzzle sentence, which was absent from every served page before",
+      heroFirst.puzzle, heroFirst.puzzle ? "present" : "absent from the HTML");
+
     await showView(page, "claim");
 
     // The regression. Type and submit while status is still held.
@@ -1053,7 +1402,26 @@ async function checkRefusalCards(browser, base, address) {
       expect: async (c) => ok("kind busy is busy, with Try again", /busy, nothing left the wallet/.test(c.text) && c.buttons.includes("try again"), c.text.split("\n")[0]) },
     { name: "the daily cap", status: 503, body: { error: "Faucet daily cap reached. Please come back tomorrow.", kind: "cap", retryAfterSeconds: 5400, nextAt: new Date(Date.now() + 5_400_000).toISOString() },
       expect: async (c) => {
-        ok("kind cap says the budget is spent, with the time it resets", /today's taz budget is spent/.test(c.text) && /room again around .*\d{1,2}:\d{2}/.test(c.text), c.text.split("\n")[0]);
+        // A CONJUNCTION MUST SAY WHICH HALF BROKE. This row tests two independent things - the
+        // wording and the reset time - and printed `c.text.split("\n")[0]`, the kicker, which is
+        // neither of them. On 2026-09-16 it cost a wrong finding: the detail read "faucet daily
+        // cap", I concluded the reset time had been dropped, and the reset time was never touched
+        // (verified across three refs: the clause is present on all of them, the wording is not).
+        // A failure message that cannot distinguish its own conjuncts can only be read by guessing.
+        // RE-POINTED on the CTO's 08:12Z ruling. The old pin was `today's taz budget is spent`,
+        // which the 06:55Z copy ruling replaced with the snapshot's own heading - so the row was
+        // pinning wording that a later decision had retired, and failing a correct card. The
+        // ruling is: the design heading verbatim, and a real time from `nextAt` rather than a
+        // relative phrase. Both halves are still required; only the first one moved.
+        // The card text arrives through `norm`, which lowercases AND folds \u2018\u2019 to an
+        // ASCII apostrophe (line 1261). page.tsx writes the heading with a typographic one, so a
+        // regex carrying \u2019 matches nothing here - it would be pinning the source rather
+        // than the string this assertion is actually handed.
+        const capWords = /today's drips are spent/.test(c.text);
+        const capWhen = /room again around .*\d{1,2}:\d{2}/.test(c.text);
+        ok("kind cap says the budget is spent, with the time it resets", capWords && capWhen,
+          capWords && capWhen ? c.text.split("\n")[0]
+            : `${capWords ? "wording ok" : "WORDING missing"}, ${capWhen ? "reset time ok" : "RESET TIME missing"} - card: ${c.text.replace(/\s+/g, " ").slice(0, 160)}`);
         ok("and offers no Try again", !c.buttons.some((b) => /try again/.test(b)), c.buttons.join("|"));
       } },
     { name: "an unknown outcome", status: 504, body: { error: "Your drip was submitted but we lost track of it before it confirmed. Do not retry yet: if it went through, the coins are on their way. Check the address in a few minutes." },
@@ -1115,6 +1483,128 @@ async function showView(page, v) {
   await page.locator(`[data-testid="view-${v}"]`).waitFor({ state: "visible", timeout: 5000 });
 }
 
+async function checkOpsChipFollowsTheBox(browser) {
+  // THE OPS CHIP SAYS WHAT THE BOX SAID, AND UNKNOWN IS NOT ATTENTION.
+  //
+  // Found by SDE-Infra on review. The chip was gated `boxState && boxState !== "ok"` with a tone
+  // of `boxState === "failing" ? "bad" : "warn"`, and `publicBox()` emits exactly
+  // ok | attention | unknown - so "failing" was unreachable, the whole non-ok half collapsed to
+  // warn, and a box that simply had not reported showed OPS ATTENTION in a warning tone beside a
+  // miner chip and a sends chip both quietly reading `unknown`.
+  //
+  // Nothing already here could see it. The first-paint and served-HTML rows both check the chip
+  // is ABSENT, and at first paint `status` is null, so `boxState` is undefined and the old gate
+  // was falsy too - it passed those rows honestly and was still wrong the moment a status
+  // arrived. The state has to be driven to be measured at all.
+  const base = await (await fetch(`${BASE}/api/status`)).json();
+  const CASES = [
+    ["ok", false, null],
+    ["attention", true, "warn"],
+    ["unknown", false, null],
+  ];
+  const visited = [];
+  for (const [state, shouldShow, wantTone] of CASES) {
+    const c = await browser.newContext({ viewport: DESKTOP });
+    const p = await c.newPage();
+    await p.route("**/api/status", (route) => {
+      const body = JSON.parse(JSON.stringify(base));
+      body.box = { ...(body.box ?? {}), state };
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+    });
+    await p.goto(BASE, { waitUntil: "domcontentloaded" });
+    await p.waitForSelector(".hero-copy .chips", { timeout: 15_000 }).catch(() => {});
+    // The chip arrives with the status, so give the island a moment to have decided either way.
+    await p.waitForTimeout(600);
+
+    const r = await p.evaluate(() => {
+      const el = document.querySelector('.hero-copy .chips [data-chip="box"]');
+      const sends = document.querySelector('.hero-copy .chips [data-chip="sends"]');
+      return {
+        present: !!el,
+        tone: el ? el.getAttribute("data-tone") : null,
+        text: el ? (el.textContent || "").trim() : "",
+        sendsTone: sends ? sends.getAttribute("data-tone") : null,
+      };
+    });
+    visited.push(state);
+
+    ok(`box ${state}: the ops chip is ${shouldShow ? "shown" : "absent"}`,
+      r.present === shouldShow,
+      r.present ? `present, tone ${r.tone}, "${r.text}"` : "absent");
+
+    if (shouldShow) {
+      ok(`box ${state}: and it is toned ${wantTone}, from statusView's map`,
+        r.tone === wantTone, `tone ${r.tone}`);
+    } else {
+      // The comparison that makes "absent" mean something: a chip that never renders in ANY
+      // state would pass all three absence rows, so the attention case above is what proves the
+      // element exists at all, and this notes what the row beside it was saying at the time.
+      ok(`box ${state}: (nothing claimed about the box; sends chip beside it reads ${r.sendsTone})`,
+        true, `no ops chip, sends tone ${r.sendsTone}`);
+    }
+    await c.close();
+  }
+  ok("the ops chip was measured in every box state it has",
+    visited.length === CASES.length, visited.join(", "));
+}
+
+async function checkServedHtmlCarriesTheHero() {
+  // THE BYTES THE SERVER SENDS, WITH NO BROWSER IN THE WAY.
+  //
+  // The rows in checkFirstPaint read the DOM with the status request held, which is the right
+  // instrument for "the island renders chips before its data arrives" - but it is NOT the claim
+  // this PR is making. The claim is about the SERVED PAGE: that `{status?.challenge === "pow"}`
+  // meant the sentence never reached a reader with JavaScript off, on any deployment, ever. A
+  // hydrated DOM cannot testify to that no matter how early it is sampled, because by the time
+  // there is a DOM the island has already run (L33: the test exercises the mechanism, the
+  // invocation exercises the artefact). So this one asks the server and reads the response body.
+  const res = await fetch(`${BASE}/`, { headers: { accept: "text/html" } });
+  const html = await res.text();
+
+  const has = (re) => re.test(html);
+  const chips = ["wallet", "node", "miner", "sends"].filter((n) => html.includes(`data-chip="${n}"`));
+
+  ok("the served HTML carries the four hero chips before any script runs",
+    res.ok && chips.length === 4, `${res.status}, chips in the body: ${chips.join(", ") || "none"}`);
+
+  // The regression this whole PR exists for. Kept as its own row and worded as the defect, so
+  // that if the gate is ever written back the failure names what went wrong rather than a count.
+  ok("the served HTML carries the puzzle sentence, which no server render carried before",
+    has(/solves a short puzzle instead of a CAPTCHA/),
+    has(/solves a short puzzle instead of a CAPTCHA/) ? `present in ${html.length} bytes`
+      : `absent from ${html.length} bytes - the status gate is back`);
+
+  // Unknown, not a figure: a server render has been told nothing, and a number in these bytes
+  // would be a number invented before the wallet was asked.
+  const untold = ["wallet", "node", "miner", "sends"].every((n) => {
+    const i = html.indexOf(`data-chip="${n}"`);
+    return i >= 0 && /unknown/i.test(html.slice(i, i + 400));
+  });
+  ok("and every one of them says unknown in those bytes, not a figure",
+    untold, untold ? "all four unknown" : "a chip carries a value the server was never told");
+
+  ok("and the ops chip is absent from a server render, which has heard nothing about the box",
+    !html.includes('data-chip="box"'), html.includes('data-chip="box"') ? "OPS ATTENTION in the served HTML" : "absent");
+
+  // THE TWO LINKS, IN THE BYTES. Found by SDE-Infra with a mutant that SURVIVED: the four rows
+  // above cover the chips, the puzzle sentence, the unknown values and the ops chip, and not
+  // these - so the standard `mounted` + useEffect pattern could make both links client-only,
+  // produce no hydration mismatch, no console error and no red row, and put the exact defect
+  // this PR exists to fix straight back onto the hero. They proved it was not a no-op by reading
+  // the served bytes: 27,544 -> 27,411 and `class="morelink"` 1 -> 0, with chips and puzzle
+  // untouched. Four rows covering four of six things is a gap the totals cannot show.
+  const statusLink = /class="tag more"/.test(html);
+  const analyticsLink = /class="morelink"/.test(html);
+  ok("the served HTML carries both hero links, not just the chips",
+    statusLink && analyticsLink,
+    `tag more ${statusLink ? "present" : "ABSENT"}, morelink ${analyticsLink ? "present" : "ABSENT"} in ${html.length} bytes`);
+
+  // And their words, because an element with the right class and no text is a link to nothing.
+  ok("and both say what they are for in those bytes",
+    /Full status/.test(html) && /drips this week/.test(html),
+    `"Full status" ${/Full status/.test(html) ? "y" : "n"}, "drips this week" ${/drips this week/.test(html) ? "y" : "n"}`);
+}
+
 async function checkMinerPanel(page) {
   // S3 REPLACED THE DISCLOSURE. The miner used to live behind a "More details" toggle in
   // the legacy status view; the design's Status view has no disclosure at all, because
@@ -1172,6 +1662,31 @@ async function checkMinerPanel(page) {
     ok(`and says whether it is answering, beside it`,
       backend.dot && (backend.on === "true" || backend.on === "false"), JSON.stringify(backend));
   }
+  // ── THE HERO CHIPS AND THE STATUS VIEW SAY THE SAME WORDS ─────────────────────────
+  //
+  // Not that the chips show SOMETHING - that they agree with the card one click away. The hero
+  // is the half a visitor reads first and the status view is where they go to check it, so a
+  // disagreement between them is the worst place on the page to put one. The chips import their
+  // words from statusView.ts rather than deriving them again (R-24), and this is what makes that
+  // a checked fact rather than a convention: a second derivation would have to produce the same
+  // string to pass, which is most of the value of having one.
+  await showView(page, "status");
+  const viewWords = await page.evaluate(() => {
+    const scope = document.querySelector('[data-testid="view-status"]');
+    const pick = (k) => scope?.querySelector(`[data-status-key="${k}"]`)?.closest("[data-tone]")?.getAttribute("data-tone") ?? null;
+    const minerEl = scope?.querySelector('[data-status-key="miner"]');
+    return { minerWord: (minerEl?.textContent || "").trim(), minerTone: pick("miner") };
+  });
+  await showView(page, "claim");
+  const chipWords = await page.evaluate(() => {
+    const el = document.querySelector('.hero-copy .chips [data-chip="miner"] b');
+    const btn = document.querySelector('.hero-copy .chips [data-chip="miner"]');
+    return { word: (el?.textContent || "").trim(), tone: btn?.dataset.tone ?? null };
+  });
+  ok("the hero's miner chip says what the status view says, word and tone",
+    !!chipWords.word && chipWords.word === viewWords.minerWord && chipWords.tone === viewWords.minerTone,
+    `hero "${chipWords.word}"/${chipWords.tone} against view "${viewWords.minerWord}"/${viewWords.minerTone}`);
+
   // ── THE CARD TITLES: THEIR GLYPHS, THEIR SIZE AND THEIR FACE ───────────────────────
   //
   // All three of these went unnoticed through three rounds for the same reason: a heading
@@ -1894,7 +2409,16 @@ async function checkMobile(browser, base) {
       const small = [...document.querySelectorAll("a.btn,a.theme-toggle,button,input")]
         .filter((e) => { const b = e.getBoundingClientRect(); return b.height > 0 && b.height < 44; })
         .slice(0, 3)
-        .map((e) => `${(e.textContent || e.getAttribute("aria-label") || "").trim().slice(0, 22)} h=${Math.round(e.getBoundingClientRect().height)}`);
+        // NAME THE ELEMENT, NOT JUST ITS WORDS. An icon-only control has no text and no label to
+        // print, so this row used to report ` h=41` - a height with nothing attached to it, which
+        // is unactionable and cost real time this morning working out which control it meant.
+        // The tag and first class identify it whether or not it says anything.
+        .map((e) => {
+          const words = (e.textContent || e.getAttribute("aria-label") || "").trim().slice(0, 22);
+          const cls = String(e.className || "").trim().split(/\s+/).filter(Boolean)[0];
+          const what = `${e.tagName.toLowerCase()}${cls ? "." + cls : ""}`;
+          return `${words ? words + " " : ""}[${what}] h=${Math.round(e.getBoundingClientRect().height)}`;
+        });
       return { docW: document.documentElement.scrollWidth, vw, wide, covered: [...covered].slice(0, 3), small };
     });
     ok(`mobile ${label}: no horizontal overflow`, r.docW <= r.vw, `${r.docW} vs ${r.vw}${r.wide.length ? " :: " + r.wide.join(", ") : ""}`);
@@ -1999,6 +2523,8 @@ try {
   await checkAppearance(page);
   await checkFooterReachable(browser);
   await checkCardInnerPadding(browser);
+  await checkTallCardStaysReachable(browser);
+  await checkLivePhasePanelsWearTheBox(browser);
   await checkLegacyPalette(browser);
   await checkChunkOrderIdentity(browser);
   // WHERE THE TAZ COMES FROM follows the status (R-39). Under this stack there is no
@@ -2040,6 +2566,8 @@ try {
     ok("and the address is in the body", req.body.includes(`"address":"${lookupAddr}"`), req.body.slice(0, 60));
     ok("and the page answers that a shielded balance is private", /Shielded balances are private/.test(await page.locator("#lans").innerText()));
   }
+  await checkOpsChipFollowsTheBox(browser);
+  await checkServedHtmlCarriesTheHero();
   await checkMinerPanel(page);
   // The claim flow below drives input.input and button.btn-primary, which belong to the
   // claim view. Leave the nav where the rest of this file expects to find things.

@@ -29,7 +29,14 @@
 *{box-sizing:border-box}
 html,body{margin:0;height:100%}
 html body{background:var(--page);color:var(--ink);font:400 15px/1.5 var(--sans);-webkit-font-smoothing:antialiased;text-rendering:geometricPrecision;text-wrap:pretty}
-html a{color:var(--accent-text);text-decoration:none}
+/* `text-underline-offset` IS THE THIRD PROPERTY THIS RULE HAS TO NAME. globals.css:97 is
+ * `a{color;text-underline-offset:3px}`, and this rule was raised to `html a` to beat it - but a
+ * transcription replaces only what it NAMES, so the offset leaked to every anchor that
+ * underlines, and `a:hover{text-decoration:underline}` two lines down makes that every anchor on
+ * the page. The snapshot names the property zero times, so its value there is the initial one.
+ * Same shape as the `.phase h3` font-family leak: a rule that overrides a declaration has to
+ * cover all of it. Found by SDE-Infra. */
+html a{color:var(--accent-text);text-decoration:none;text-underline-offset:auto}
 a:hover{text-decoration:underline}
 button,input,select{font:inherit;color:inherit}
 html :focus-visible{outline:calc(.16*var(--u)) solid var(--accent);outline-offset:calc(.2*var(--u));border-radius:calc(.4*var(--u))}

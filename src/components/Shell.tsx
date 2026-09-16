@@ -32,6 +32,7 @@ import "@/app/redesign-tokens.css";
 import "@/app/redesign-shell.css";
 import "@/app/redesign-hero.css";
 import "@/app/redesign-views.css";
+import "@/app/redesign-card.css";
 import "@/app/redesign-subpages.css";
 
 import { useEffect, useState, type ReactNode } from "react";

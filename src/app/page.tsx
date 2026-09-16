@@ -1,6 +1,6 @@
 "use client";
 
-import { CSSProperties, useCallback, useEffect, useRef, useState } from "react";
+import { CSSProperties, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 // The redesign's tokens and shell, transcribed from the preview the owner approved on
 // 2026-09-15. Tokens first: the shell reads them.
 /* KEEP-BOTH, and the two sides removed different things rather than disagreeing.
@@ -19,11 +19,12 @@ import { CSSProperties, useCallback, useEffect, useRef, useState } from "react";
 import type { DripDay } from "./Sparkline";
 import { Mascot } from "@/components/Mascot";
 import { Shell } from "@/components/Shell";
+import { HeroChips } from "@/components/HeroChips";
 import { StatusCards } from "@/components/StatusCards";
 import { AnalyticsCards } from "@/components/AnalyticsCards";
 import { ToolsCards } from "@/components/ToolsCards";
 import type { PublicBox } from "@/lib/boxLabel";
-import { syncLabel, syncBarWidth } from "@/lib/syncLabel";
+import { syncBarWidth } from "@/lib/syncLabel";
 import { networkFacts, formatAmount, type FaucetNetwork } from "@/lib/network";
 import { incomeSentence } from "@/lib/incomeSentence";
 import { validateTestnetAddress } from "@/lib/zcash/address";
@@ -42,6 +43,10 @@ import type { MinerReading } from "@/lib/miner/heartbeat";
 // view survives a reload and can be linked to.
 type View = "claim" | "status" | "analytics" | "tools";
 const VIEWS: View[] = ["claim", "status", "analytics", "tools"];
+
+// Names the card's own height animation so the effect can cancel ITS animation and nobody
+// else's - the mascot and the entrance animations share this document.
+const CARD_HEIGHT_ANIM = "card-height";
 
 type Phase = "checking" | "syncing" | "fault" | "queued" | "empty" | "degraded" | "ready" | "submitting" | "success" | "cooldown" | "error";
 
@@ -323,6 +328,32 @@ const faultReason = (s: Status): string | null => {
 export default function Home() {
   const [status, setStatus] = useState<Status | null>(null);
   const [phase, setPhase] = useState<Phase>("checking");
+  // THE CARD ANIMATES ITS OWN HEIGHT AND NOTHING OUTSIDE IT MOVES (owner ruling, 18:56Z),
+  // animated the way the frozen preview animates it rather than through motion's `layout`.
+  //
+  // WHY NOT `layout`, WITH THE MEASUREMENT THAT DECIDED IT. `motion.article layout` works and
+  // the sweep goes green on it, but it costs a tap target: ui-smoke's mobile receipt check
+  // drops to 147/1 with the prop and is 148/0 without it, isolated by removing that one line
+  // and changing nothing else. A layout animation interpolates the box and the controls inside
+  // it measure just under the 44px floor while it runs. 43.9 is not a number a person notices;
+  // an accessibility floor that holds except during an animation is still a floor that does not
+  // hold, and this one had held at exactly 44.000 before.
+  //
+  // So it animates `height` directly, which is what the preview does (460ms,
+  // cubic-bezier(.16,1,.3,1)) and therefore what the owner was watching when they ruled. The
+  // box is the only thing that moves; nothing inside it is interpolated, so nothing inside it
+  // is measured wrong.
+  //
+  // Reduced motion is read in JS rather than left to the stylesheet, and that distinction is
+  // the point: globals.css:264 and redesign-shell.css:142 both kill `animation` and
+  // `transition` under prefers-reduced-motion, and a Web Animations API animation is NEITHER.
+  // It would sail straight through both rules and play for exactly the people who asked it not
+  // to.
+  const cardRef = useRef<HTMLElement | null>(null);
+  const cardFrom = useRef<number | null>(null);
+  const cardTarget = useRef<number | null>(null);
+  const cardOrigin = useRef<number | null>(null);
+  const cardAnim = useRef<Animation | null>(null);
   const [addr, setAddr] = useState("");
   const [touched, setTouched] = useState(false);
   // PAPER IS THE DEFAULT NOW (the approved redesign is a light design). A visitor who
@@ -413,7 +444,6 @@ export default function Home() {
   const ctaz = status?.ctaz?.enabled ? status.ctaz : null;
   // The toggle only exists when there is something to toggle to. One tab is not a
   // choice, and rendering it as one implies a second network that is not there.
-  const showToggle = !!ctaz;
 
   const drip = status?.dripTaz ?? 0.1;
   const dripText =
@@ -903,7 +933,6 @@ export default function Home() {
   const syncPct = node?.syncPercent ?? null;
   // Never rounds up to 100 while the node is unready: 99.994 printed as "100%" beside
   // a "Syncing" headline during the 2026-08-03 incident, which reads as a stuck page.
-  const syncText = syncLabel(syncPct, node?.ready === true);
   // What the queued card is waiting on. A claim queued behind a fault is waiting for
   // the faucet, not for a sync, and "syncing… / the moment the node is ready" over a
   // frozen node is the R-33 story again with a different kicker.
@@ -913,7 +942,6 @@ export default function Home() {
   // reading for the whole of 2026-09-07. Frozen says frozen, and the sync cell says how
   // far behind rather than how close.
   const height = node?.height ?? null;
-  const nodeHeight = node?.nodeHeight ?? null;
   const reserve = status?.reserve;
   const donation = status?.donationAddress?.trim() ?? "";
   // A refill running while we can still serve must read as healthy, not as an
@@ -926,6 +954,142 @@ export default function Home() {
   // Something is actually putting coins in: the miner is running and the shielding
   // step is not failing. Only then may the card promise that drips resume.
   const refillHealthy = !!status?.miner?.active && !!reserve?.shieldCoinbase && !(status && harvestFailing(status));
+
+  // THE CARD ANIMATES ITS OWN HEIGHT AND NOTHING OUTSIDE IT MOVES (owner ruling, 18:56Z),
+  // animated the way the frozen preview animates it: 460ms, cubic-bezier(.16,1,.3,1), the box
+  // and nothing inside it.
+  //
+  // THE HEIGHT IS THE TRIGGER, NOT THE PHASE. This ran on a `cardPhaseKey` of eight state
+  // values for two rounds, and the key was always going to be a list somebody forgets to add
+  // to. It was: the status body changes the card's height without changing any of the eight,
+  // nothing animates that, and out of `fault` the card stepped 17.9px in one frame and then
+  // animated smoothly the rest of the way. The CTO found it; the sweep reproduces it at both
+  // widths on the production-latency pass. "The phase changed" and "the card's height changed"
+  // were two spellings of one boundary, and only one of them is the thing the eye sees.
+  //
+  // So there is no dependency array and no key: every commit measures, and a height that moved
+  // is animated whatever moved it. The two costs of that are handled rather than avoided.
+  //
+  //   RESTARTING. Running per commit is how the first version broke - it cancelled whatever was
+  //   in flight, so a render inside the 460ms snapped the rest of the travel (into success
+  //   463 -> 602 cancelled at 9ms, a 139px step; at production's 790ms TTFB every status
+  //   transition died before its first frame). A continuation fixes that without a key: if the
+  //   target has not moved, the animation is re-created with its ORIGINAL endpoints and its
+  //   clock carried across, so it resumes rather than starting again. If the target HAS moved,
+  //   the card continues from where it visibly is.
+  //
+  //   MEASURING OUR OWN ANIMATION. `getBoundingClientRect()` returns the INTERPOLATED height
+  //   while one runs, so `to` is read only after ours is cancelled - otherwise `|to - from|`
+  //   comes out under a pixel, the effect returns early, and the real change lands in one frame
+  //   when the old animation ends (411 -> 602 in ONE frame at 1440). Round two called that "the
+  //   content settled afterwards". It was not: the content was in the DOM from the first frame
+  //   and the target was stale.
+  //
+  // `from` is the interpolated box while ours plays - which is exactly what is on screen - and
+  // otherwise the last PAINTED height, which the recorder below is careful to mean literally.
+  //
+  // Reduced motion is read in JS and that is load-bearing: globals.css:264 and
+  // redesign-shell.css:142 both kill `animation` and `transition` under prefers-reduced-motion,
+  // and a Web Animations API animation is NEITHER, so left to the stylesheet it would play at
+  // full size for exactly the people who asked it not to.
+  //
+  // The Animation object is held in a ref rather than found through `getAnimations()`: it needs
+  // no second feature check, and the cancel reaches our animation and nothing else - the mascot
+  // and the entrance animations share this document.
+  useLayoutEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    // Checked before anything else on the element: a browser with `animate` and no
+    // `getAnimations` used to reach a crash here instead of the plain swap.
+    if (typeof el.animate !== "function") return;
+    if (typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const running = cardAnim.current;
+    const playing = !!running && running.playState === "running";
+    const painted = el.getBoundingClientRect().height;
+    const elapsed = playing && typeof running.currentTime === "number" ? running.currentTime : 0;
+    if (running) { running.cancel(); cardAnim.current = null; }
+    const to = el.getBoundingClientRect().height;   // natural: ours is cancelled
+    // OUR OWN ANIMATION, STILL HEADED WHERE IT WAS. Running per commit means a countdown tick
+    // inside the 460ms lands here, and restarting from the interpolated height with a fresh
+    // 460ms would stretch the travel every time one arrived - the slow-motion version of the
+    // defect the red-team found. If the target has not moved, the same animation is re-created
+    // with its original endpoints and its clock carried over, which is a continuation rather
+    // than a restart. If the target HAS moved, the card continues from where it visibly is.
+    const continuing = playing && cardTarget.current != null && Math.abs(to - cardTarget.current) < 1;
+    const from = continuing ? cardOrigin.current : (playing ? painted : cardFrom.current);
+    if (from == null) return;                       // first paint has nothing to animate from
+    // A change under a pixel is not a phase change, it is a countdown digit changing width.
+    if (Math.abs(to - from) < 1) return;
+    // NO INLINE `overflow:hidden`. The sheet already clips this box - redesign-hero.css:23 is
+    // `.card{...overflow:hidden...}` - so setting it per animation, capturing the previous value
+    // and restoring it was three moving parts guarding something already true, and the capture
+    // had a bug of its own: a continuation read back the "hidden" the last animation set, so the
+    // restore left the inline style behind permanently. The sweep asserts the clipping against
+    // the sheet, which is where it lives.
+    const run = el.animate(
+      [{ height: `${from}px` }, { height: `${to}px` }],
+      { duration: 460, easing: "cubic-bezier(.16,1,.3,1)" },
+    );
+    if (continuing) { try { run.currentTime = elapsed; } catch { /* a clock we cannot set is not worth failing over */ } }
+    run.id = CARD_HEIGHT_ANIM;
+    cardAnim.current = run;
+    cardOrigin.current = from;
+    cardTarget.current = to;
+    const restore = () => {
+      if (cardAnim.current !== run) return;         // superseded: the new one owns the element
+      cardAnim.current = null;
+      // THE SETTLED HEIGHT, RECORDED HERE, because an animation ending is not a render. Nothing
+      // re-runs the recorder below when the card comes to rest, so without this `cardFrom` stays
+      // at whatever it held before the animation and the next transition starts from a height
+      // the card left 460ms ago.
+      const settled = el.getBoundingClientRect().height;
+      cardFrom.current = settled;
+    };
+    run.onfinish = restore;
+    run.oncancel = restore;
+  });
+  // THE RECORDER, and it must stay BELOW the animator. No dependency array on purpose: it runs
+  // after every commit.
+  //
+  // WHAT IT MEASURES IS NOT YET ON SCREEN. A layout effect runs after the DOM is mutated and
+  // before the frame paints, so a commit that is followed by ANOTHER commit in the same frame
+  // is measured and then never shown. Two commits in one frame is not exotic here - it is what
+  // a status poll does, the body arriving and the phase deriving from it - and the card was
+  // animating from the height of the one in between. Measured by the sweep at both widths and
+  // both speeds: painted 616.1, animation 598 -> 580. The 18px from 616 to 598 was travelled in
+  // the animation's first frame, so it reads as a snap and then a smooth 18px, and both
+  // endpoints agree with the code. The CTO found it on `fault` -> `empty`; the sweep now ties
+  // `from` to the last painted height, which is what makes it visible.
+  //
+  // So the measurement is held as PENDING and only becomes `cardFrom` when a frame boundary has
+  // passed, which is the point at which it was painted. rAF is the boundary: it fires once per
+  // frame, after that frame's commits, so a value promoted there is one the frame showed.
+  // Scheduled only while something is pending rather than as a standing loop - an idle card
+  // should not wake the compositor sixty times a second - and the callback does no layout, it
+  // copies a number.
+  useLayoutEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    // NOT WHILE OUR OWN ANIMATION IS RUNNING. This effect fires in the same commit as the
+    // animator above and AFTER it, so the box it measures is the animation that was just
+    // created, at time zero - which is `from`, which came from here. `cardFrom` then feeds
+    // itself and never moves again: every animation on the page started from 472.39px, the
+    // height of the first paint, while the card was visibly somewhere else. The sweep caught it
+    // as 18 rows failing at once with a constant `from`.
+    //
+    // While one of ours is in flight the animator does not consult `cardFrom` anyway - it reads
+    // the live interpolated box, which is what is actually on screen - and `restore` above puts
+    // the settled height back when it ends.
+    // This held the measurement PENDING and promoted it on the next animation frame, so that
+    // only a height a frame had actually painted could become `cardFrom`. It was the right fix
+    // for the keyed animator, where a commit could be measured and then skipped. Driving the
+    // animator off the height removed the situation: there is no skipped commit any more,
+    // because a commit that changes the height IS a transition and animates itself. Deleting
+    // the promotion changed no row of the sweep - 89/0 either way - so it is gone rather than
+    // kept as belt-and-braces nothing tests.
+    if (cardAnim.current) return;
+    cardFrom.current = el.getBoundingClientRect().height;
+  });
   const c = check(addr);
   const badgeShow = c.ok || ("label" in c && !!c.label);
   const remain = Math.max(0, cooldownEnd - now);
@@ -944,11 +1108,14 @@ export default function Home() {
     ["Broadcasting to the testnet", 0.15],
   ];
   let acc = 0, curStep = 0;
-  const proofSteps = steps.map(([label, w], i) => {
+  // A forEach, not a map whose array nobody reads. The legacy list rendered the returned
+  // objects; the transcribed `.steps` list renders `data-done`/`data-active` from `curStep`,
+  // which this loop sets. Keeping the map meant an unused array holding the only computation
+  // that matters, which reads as dead code and is not.
+  steps.forEach(([, w], i) => {
     const from = acc; acc += w;
     const done = proofFrac >= acc, active = !done && proofFrac >= from;
     if (active) curStep = i;
-    return { label, mark: done ? "done ✓" : active ? "···" : "", color: done || active ? "var(--color-text)" : muted(40) };
   });
   if (proofFrac >= 1) curStep = steps.length - 1;
 
@@ -993,7 +1160,17 @@ export default function Home() {
     : phase === "degraded" ? "Sends are failing right now, so the faucet is not taking claims. Nothing to do on your side."
     : phase === "submitting" ? (powState ? "Checking you are human. It runs on its own; there is a Cancel button if you would rather not wait." : "Sending your testnet ZEC. Keep this tab open.")
     : phase === "success" ? "Sent. Your testnet ZEC is on its way."
-    : phase === "cooldown" ? "Already claimed. A drip went out on this address or this connection in the last 24 hours."
+    // THREE PANELS, THREE SENTENCES. One `cooldown` phase renders `already-claimed`,
+    // `connection-limit` and `network-limit`, and this said the same thing for all three - so a
+    // screen reader user was told "this address or this connection", which is the page declining
+    // to say which, and the sweep could not witness the three apart either. The live region is
+    // the sweep's only witness that a phase was REACHED, so one sentence for three panels means
+    // two of them are measured by name and confirmed by nothing.
+    : phase === "cooldown" ? (
+        refusal?.kind === "subnet" ? "Too many requests from this network. This is a limit, not a fault."
+        : refusal?.kind === "connection" ? "Too many requests from this connection. This is a limit, not a fault."
+        : "Already claimed. This address had a drip in the last 24 hours."
+      )
     : phase === "error" ? (
         fail.kind === "held" ? "Not right now, on our side. " + errMsg
         : fail.kind === "busy" ? "The faucet is busy. Nothing left the wallet. " + errMsg
@@ -1007,7 +1184,6 @@ export default function Home() {
     : "Faucet ready.";
 
   const kicker: CSSProperties = { fontFamily: "var(--mono)", fontSize: 10, fontWeight: 700, letterSpacing: ".14em", textTransform: "uppercase", color: "var(--color-accent-text)" };
-  const rowLine: CSSProperties = { display: "flex", justifyContent: "space-between", gap: 12, padding: "8px 0", borderBottom: "1px solid var(--color-divider)", fontFamily: "var(--mono)", fontSize: 11.5 };
 
   return (
     // `app` stays on the outer element: it is what the smoke's theme and contrast checks
@@ -1048,9 +1224,23 @@ export default function Home() {
                   FAUCET_CHALLENGE=none would then promise a puzzle that never runs. The
                   wording is the snapshot's, which is also the post-ruling wording - the
                   version it replaces used a prose colon, which the owner has banned. */}
-              {status?.challenge === "pow" && (
+              {/* WITHDRAWN ON EVIDENCE, NOT WITHHELD UNTIL PROVEN (CTO ruling, 06:15Z). This read
+                  `status?.challenge === "pow"`, and since the index is a client island with
+                  `status` starting null, the SERVER HTML omitted this sentence on every
+                  deployment since it was written - a reader with JavaScript off never saw it,
+                  and the owner found it missing from prod while the code was here all along.
+                  It now renders in the first paint and is removed only when the status arrives
+                  and says this deployment runs no puzzle.
+                  CONSISTENT WITH THE BADGE RULING RATHER THAN AN EXCEPTION TO IT: the badge
+                  describes a LIVE service state that changes minute to minute, so asserting
+                  READY before establishing it is a false claim about now. This sentence
+                  describes how claiming works on this deployment - configuration, fixed for the
+                  life of the process. A permanent omission everywhere is the wrong side of that
+                  trade against a one-fetch flash on a test configuration. */}
+              {(status == null || status.challenge === "pow") && (
                 <p className="lede small">Your browser solves a short puzzle instead of a CAPTCHA. A few seconds, longer on a phone, and you can cancel it.</p>
               )}
+              <HeroChips status={status} onView={(v) => setView(v)} />
             </div>
             <figure className="hero-mascot" aria-label="The faucet's fox, turning to follow your pointer">
               <Mascot />
@@ -1059,141 +1249,20 @@ export default function Home() {
             {/* THE CARD SHELL, with the CURRENT claim markup inside it. S2b transcribes the
                 card's own contents and puts the phase changes on `motion`; this slice gives
                 them the shell they will live in, so the hero is real a merge earlier. */}
-            <article className="card claim feature" id="claim" aria-labelledby="h1">
+            <article className="card claim feature" id="claim" aria-labelledby="h1" ref={cardRef}>
+              {/* THE PANEL, which this card did not have. The design's claim card is
+                  article.card.claim.feature > div.panel + div.card-copy (index.html:429, :430,
+                  :553) and our content sat directly on the article, so `.panel` (hero.css:25),
+                  `.card.feature .panel` (:26) and `.card.claim > .panel` (card.css:21) were three
+                  rules in the tree matching nothing: no peach `--panel-bg-feature` gradient, no
+                  `gap:1.1u` between the field and the panels, and no scroll box for a panel
+                  taller than the card. `.stage .card.claim`'s padding was the hotfix standing in
+                  for this wrapper's margin+padding and comes out with it.
 
-        {/* TAZ only. Every number in it (sync percent, our block height, our node
-            height) is about OUR Zebra, and rendering it under a cTAZ hold would show
-            someone a progress bar for a chain their claim has nothing to do with. The
-            cTAZ equivalent is the readiness block above, which reads their node. */}
-        {phase === "syncing" && network === "taz" && (
-          <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 11 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
-              <span style={kicker}>Getting ready</span>
-              <span style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700 }}>{syncText ?? "starting…"}</span>
-            </div>
-            <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>Syncing the node. The faucet will be ready shortly.</h2>
-            <div role="progressbar" aria-label="Node sync progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={syncPct != null ? Math.min(syncPct, node?.ready === true ? 100 : 99.5) : undefined} style={{ height: 10, border: "2px solid var(--color-divider)", position: "relative", overflow: "hidden" }}>
-              <i aria-hidden="true" style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: syncBarWidth(syncPct, node?.ready === true), background: "repeating-linear-gradient(135deg,var(--color-accent) 0 3px,transparent 3px 7px)", backgroundSize: "26px 26px", animation: "hatch 1.1s linear infinite", opacity: syncPct != null ? 1 : 0.55 }} />
-            </div>
-            <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.5, color: muted(60) }}>
-              {height != null ? "Block " + num(height) + (nodeHeight ? " of " + num(nodeHeight) : "") + " · " : "Bringing the node online · "}first sync takes a while, one time. It becomes the real faucet automatically.
-            </p>
-          </div>
-        )}
-
-        {phase === "fault" && network === "taz" && (
-          <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 9 }}>
-            <span style={kicker}>Not ready</span>
-            <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>The faucet is having a problem.</h2>
-            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
-              {status ? `${(faultReason(status) ?? "something is not right").replace(/^./, (c) => c.toUpperCase())}. ` : ""}
-              Nothing to do on your side. It usually recovers on its own and the box pages a person if it does not;
-              this page re-checks every few seconds. You can queue your address and it sends when the faucet is back,
-              or check back in a while.
-            </p>
-            {holdDropped && (
-              <p data-testid="hold-dropped" style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: "var(--color-text)" }}>
-                We held your claim for {Math.round(HOLD_MAX_MS / 60_000)} minutes and the faucet did not recover, so we stopped
-                holding it rather than keep you waiting on it. Nothing was claimed and your cooldown is untouched; queue it
-                again if you like.
-              </p>
-            )}
-          </div>
-        )}
-
-        {phase === "queued" && queuedAddr && (
-          <div style={{ border: "2px solid var(--color-text)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 11 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
-              <span style={kicker}>Queued</span>
-              <span style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700 }}>{queuedBehindFault ? "not ready" : (syncText ?? "syncing…")}</span>
-            </div>
-            <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>You&apos;re in line. It sends on its own.</h2>
-            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
-              {queuedBehindFault && status ? `The faucet is having a problem: ${faultReason(status)}. ` : ""}
-              The moment the {queuedBehindFault ? "faucet is back" : "node is ready"}, {dripText} goes to <span style={{ fontFamily: "var(--mono)", fontSize: 11.5 }}>{short(queuedAddr, 12, 6)}</span>. Keep this tab open or come back later, your place survives a reload.
-            </p>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-              <button className="btn btn-secondary btn-sm" onClick={() => { setQueuedAddr(null); setQueuedAt(null); setHoldDropped(false); setPhase(basePhase(status, network)); }}>Cancel and change address</button>
-            </div>
-          </div>
-        )}
-
-        {phase === "ready" && refilling && network === "taz" && (
-          <div style={{ border: "1px solid var(--color-divider)", padding: "10px 14px", display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: "4px 12px", fontFamily: "var(--mono)", fontSize: 11.5 }}>
-            <span style={{ ...kicker, fontSize: 10 }}>Topping up</span>
-            <span style={{ color: muted(60) }}>The reserve is being topped up in the background. Claims are unaffected.</span>
-            {refillPct != null && <span style={{ fontWeight: 700, marginLeft: "auto" }}>{refillPct}%</span>}
-          </div>
-        )}
-
-        {phase === "empty" && refilling && network === "taz" && (
-          <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 11 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
-              <span style={kicker}>Topping up</span>
-              {reserve && (
-                <span style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700 }}>
-                  {(reserve.spendableTaz ?? 0).toFixed(1)} / {reserve.targetTaz.toFixed(0)} TAZ
-                </span>
-              )}
-            </div>
-            {/* "Drips resume in a moment" is only true when something is putting coins
-                in: a running miner and a shielding step that is not failing. With the
-                miner parked this card still renders (the loop is armed by the balance,
-                not the miner), and then it is just a low balance being watched. */}
-            <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>{refillHealthy ? "Topping up the reserve. Drips resume in a moment." : "The reserve is low."}</h2>
-            {refillPct != null && (
-              <div role="progressbar" aria-label="Reserve refill progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={refillPct} style={{ height: 10, border: "2px solid var(--color-divider)", position: "relative", overflow: "hidden" }}>
-                <i aria-hidden="true" style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: refillPct + "%", background: "repeating-linear-gradient(135deg,var(--color-accent) 0 3px,transparent 3px 7px)", backgroundSize: "26px 26px", animation: "hatch 1.1s linear infinite" }} />
-              </div>
-            )}
-            {/* Read off status, not asserted (R-39): this line was fixed text saying
-                "mining and shielding its own coins right now. Nothing is broken." and it
-                rendered beside a strip reading "miner no signal". */}
-            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
-              {incomeFrom(status) ?? "The balance is below the reserve line."}{" "}
-              {refillHealthy
-                ? "Nothing is broken: the balance dipped below the reserve line and it is being restored automatically."
-                : "The balance dipped below the reserve line, and until something puts coins in it stays there."}
-            </p>
-          </div>
-        )}
-
-        {phase === "degraded" && (
-          <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 9 }}>
-            <span style={kicker}>Not taking claims</span>
-            <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>Sends are failing on our side right now.</h2>
-            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
-              {status?.sends?.reason ? `${status.sends.reason.charAt(0).toUpperCase()}${status.sends.reason.slice(1)}. ` : ""}
-              This is watched on our side and usually clears within minutes. Nothing you do here will change it, and no proof-of-work is asked for
-              while it lasts; this page re-checks on its own, and the button comes back when sends land again.
-            </p>
-          </div>
-        )}
-        {phase === "empty" && !refilling && network === "taz" && (
-          <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 9 }}>
-            <span style={kicker}>Empty</span>
-            <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>The faucet is out of TAZ right now.</h2>
-            {/* Where the refill comes from is read off status, not asserted (R-39): this
-                card used to say "refilled by hand" beside a panel showing coinbase
-                shielding on and hundreds of accepted blocks. Do not promise a schedule
-                either way; a refill by mining takes a block win, a refill by hand takes
-                a person. */}
-            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
-              {incomeFrom(status) ?? "It gets refilled when funds arrive."} This can take a while. Nothing you did caused
-              it{donation ? ", and if you have spare TAZ the address below puts the faucet back up for everyone" : ""}.
-            </p>
-            {donation && (
-              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: "4px 10px", fontFamily: "var(--mono)", fontSize: 11.5 }}>
-                <span style={{ color: muted(55) }}>top it up</span>
-                <span style={{ fontWeight: 700, wordBreak: "break-all" }}>{short(donation, 16, 8)}</span>
-                <button className="btn btn-ghost btn-sm" onClick={() => void copy("donation", donation)} style={{ padding: 0 }}>
-                  {copied === "donation" ? "Copied ✓" : "Copy address"}
-                </button>
-                <a className="btn btn-ghost btn-sm" href="/donate" style={{ padding: 0 }}>Why, and how it helps →</a>
-              </div>
-            )}
-          </div>
-        )}
+                  The contents below keep their current indentation on purpose. Re-indenting 520
+                  lines to sit under one new div would bury the change in a 520-line diff, and
+                  this block is being read by three people today. */}
+              <div className="panel">
 
         {/* THE TOGGLE. A tablist rather than two buttons, because that is what it is:
             picking one of a set changes the panel below it, and a screen reader user
@@ -1203,12 +1272,35 @@ export default function Home() {
             Brutalist like everything else: 2px borders, square corners, the selected
             tab inverted. The selection is carried by the border weight, the inversion
             AND aria-selected, never by colour alone. */}
-        {showToggle && (phase === "ready" || phase === "checking" || phase === "syncing" || phase === "fault" || phase === "empty" || phase === "queued") && (
-          <div>
-            <div role="tablist" aria-label="Which network to claim on" style={{ display: "flex", flexWrap: "wrap", gap: 0, border: "2px solid var(--color-text)" }}>
+        {/* UNCONDITIONAL, per the CTO's 08:45Z ruling. This was gated on `showToggle` (cTAZ
+            enabled) AND on six phases, so the tabs were absent from the first paint - the design
+            draws them always, and a control that appears once data arrives reads as the page
+            changing its mind. The cTAZ tab is parked rather than hidden, which is what
+            `data-parked` and the word below are for.
+
+            No wrapper around the two: `.panel` is a flex column with a `gap`, and a wrapper
+            makes the tabs and the tabpanel note ONE flex item, so the gap stops applying
+            between them and the spacing falls back to whatever margin happens to be inline.
+            The design has `.tabs` as a direct child (index.html:431). */}
+            {/* THE SNAPSHOT'S TABS (index.html:415-418), with every behaviour the brutalist
+                version had. The design carries the selection with a filled pill and
+                `aria-selected`; the keyboard handling, the spelled-out accessible name and the
+                roving tabIndex below are ours and are not in the snapshot, because the snapshot
+                is a static mock and this is a real tablist. Transcribing a design does not mean
+                transcribing away the things a screen reader needs. */}
+            <div className="tabs" role="tablist" aria-label="Which network to claim on">
               {(["taz", "ctaz"] as const).map((n) => {
                 const f = networkFacts(n);
                 const on = network === n;
+                // THE RULING'S WORD, and the snapshot's (index.html:433): tab two reads "Coming
+                // soon". Not a hardcoded literal, because a label that is false whenever the
+                // feature is switched ON is a latent defect of its own. cTAZ is parked by the
+                // owner's 2026-09-08 decision, so "Coming soon" is what ships and what the first
+                // paint says - `ctaz` is null until a status body arrives. If it is ever
+                // switched on, the tab says what it is then instead. `f.beta` describes what the
+                // network IS; this says what a visitor can DO with it, which is the tab's job.
+                const parked = n === "ctaz" && !ctaz;
+                const word = n === "ctaz" ? (parked ? "Coming soon" : f.beta) : null;
                 return (
                   <button
                     key={n}
@@ -1220,7 +1312,7 @@ export default function Home() {
                     // name of "cTAZfeature net, beta" with no separator: a flex gap is
                     // a visual space, not a textual one. Verified in a browser, which
                     // is the only place that difference shows up.
-                    aria-label={f.beta ? `${f.tab}, ${f.beta}` : f.tab}
+                    aria-label={word ? `${f.tab}, ${word}` : f.tab}
                     // Only the selected tab is in the tab order, per the tablist
                     // pattern: arrow keys move within the set, Tab leaves it.
                     tabIndex={on ? 0 : -1}
@@ -1232,44 +1324,24 @@ export default function Home() {
                       setNetwork(next);
                       document.getElementById(`net-tab-${next}`)?.focus();
                     }}
-                    style={{
-                      flex: "1 1 140px",
-                      padding: "10px 12px",
-                      minHeight: 44,
-                      border: "none",
-                      borderRight: n === "taz" ? "2px solid var(--color-text)" : undefined,
-                      background: on ? "var(--color-text)" : "transparent",
-                      color: on ? "var(--color-bg)" : "var(--color-text)",
-                      fontFamily: "var(--mono)",
-                      fontSize: 12,
-                      fontWeight: 700,
-                      letterSpacing: ".08em",
-                      cursor: "pointer",
-                      display: "flex",
-                      alignItems: "baseline",
-                      justifyContent: "center",
-                      gap: 8,
-                    }}
+                    // `data-parked` is the snapshot's own hook for the second tab's small
+                    // word (`.tabs button[data-parked] small`), so the word is styled by the
+                    // sheet rather than by an inline rule nobody can override.
+                    data-parked={word ? "" : undefined}
                   >
-                    <span>{f.tab}</span>
-                    {f.beta && (
-                      <span style={{ fontSize: 9, letterSpacing: ".1em", textTransform: "uppercase", opacity: on ? 0.85 : 0.65 }}>
-                        {f.beta}
-                      </span>
-                    )}
+                    {f.tab}
+                    {word && <small>{word}</small>}
                   </button>
                 );
               })}
             </div>
             {/* Says what the selected network IS, under the tabs, because a four-letter
                 ticker does not tell anyone what chain they are about to be paid on. */}
-            <p id="net-panel" role="tabpanel" aria-labelledby={`net-tab-${network}`} style={{ margin: "9px 0 0", fontSize: 12.5, lineHeight: 1.5, color: muted(62) }}>
+            <p id="net-panel" role="tabpanel" aria-labelledby={`net-tab-${network}`} style={{ margin: 0, fontSize: 12.5, lineHeight: 1.5, color: muted(62) }}>
               {network === "ctaz"
                 ? "Crosslink is a feature net running an unreleased consensus change. Coins here are for trying that out, they are not testnet TAZ, and the chain can be reset without notice."
                 : "Public Zcash testnet. This is the one to use unless you know you want the other."}
             </p>
-          </div>
-        )}
 
         {/* The cTAZ node's own readiness, in the words the gate uses. Five states, and
             each says something different about what to do next. Shown only when it is
@@ -1290,12 +1362,30 @@ export default function Home() {
           </div>
         )}
 
-        {(phase === "ready" || phase === "checking" || phase === "syncing" || phase === "fault" || phase === "empty" || phase === "degraded") && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
-            <label htmlFor="zaddr" style={{ ...kicker, color: muted(60) }}>Your testnet address</label>
-            <input id="zaddr" data-testid="address-input" className="input" type="text" spellCheck={false} autoComplete="off" autoCapitalize="off" placeholder="utest1… / ztestsapling… / tm…" value={addr} onChange={(e) => { setAddr(e.target.value); setTouched(false); }} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} aria-describedby="addrmsg" />
-            <div id="addrmsg" aria-live="polite" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 9, minHeight: 24 }}>
-              {badgeShow && "label" in c && <span className="tag tag-outline">{c.label}</span>}
+        {/* THE SNAPSHOT'S FIELD ROW (index.html:421-425): `.fieldwrap`, a `.label` carrying the
+              address-kind badge on its right, the `.prompt` input, and one `.hint` line under it.
+              The ids and testids are unchanged - `zaddr`, `address-input`, `addrmsg` - because
+              assertions written months ago key on them and a transcription that renames its own
+              hooks makes its suite green by deleting the subject. */}
+        {/* THE FIELD IS NOT GATED ON A PHASE. It was, on six of them, so every result panel
+            replaced the tabs and the address field instead of appearing under them. The design
+            keeps both under every panel - index.html:430-441 sit ABOVE `#lower`, and the phases
+            are inside it - and the preview hides only `#actions` (`showActions = cfg.btn !== null`,
+            index.html:977). So the field stays and the BUTTON is what comes and goes, which is
+            also the honest arrangement: the address you typed does not stop existing because the
+            send failed. */}
+        <div className="fieldwrap">
+            <label className="label" htmlFor="zaddr">
+              <span>Your testnet address</span>
+              {/* `.abadge` is the design's own element for the kind word, and it is NOT a status
+                  chip: `.abadge` here, `.tag` in the hero, different owners. Empty `data-kind`
+                  when there is nothing to say, which is what `.abadge:empty` in the sheet hides. */}
+              <span className="abadge" data-kind={badgeShow && "label" in c ? (("priv" in c && c.priv === false) ? "public" : "shielded") : ""}>
+                {badgeShow && "label" in c ? c.label : ""}
+              </span>
+            </label>
+            <input id="zaddr" data-testid="address-input" className="prompt" type="text" spellCheck={false} autoComplete="off" autoCapitalize="off" placeholder="utest1… / ztestsapling… / tm…" value={addr} onChange={(e) => { setAddr(e.target.value); setTouched(false); }} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} aria-describedby="addrmsg" />
+            <div id="addrmsg" className="hint" aria-live="polite">
               {"priv" in c && c.priv === false && <span style={{ fontSize: 12, lineHeight: 1.45, color: muted(62) }}>Transparent address, so this drip will be visible on-chain.</span>}
               {/* THE DESIGN'S BAD COLOUR, not the retired palette's. These two carried inline
                   `var(--color-accent-800)` - #7c1405 paper, #ffc4b8 ink - from the sheet the
@@ -1303,8 +1393,24 @@ export default function Home() {
                   Found by the red-team's sweep for this shape (L20). */}
               {touched && "err" in c && c.err && <span style={{ fontSize: 12.5, lineHeight: 1.45, color: "var(--bad-text)", fontWeight: 500, maxWidth: "52ch" }}>{c.err}</span>}
               {genErr && <span style={{ fontSize: 12.5, lineHeight: 1.45, color: "var(--bad-text)", fontWeight: 500, maxWidth: "52ch" }}>{genErr}</span>}
-              {!addr.trim() && <button className="btn btn-ghost btn-sm" onClick={generate} style={{ padding: 0 }}>Make a throwaway address and key</button>}
             </div>
+        </div>
+        {/* THE LOWER BLOCK (index.html:441): `.actions`, then every panel, inside one box.
+            The panels rendered ABOVE the tabs before this, so the card read result, then tabs,
+            then field - the page telling you the outcome before it tells you what you asked.
+            `.lower` is a flex column with a gap, and that gap is the space between the button
+            and whichever panel is showing. */}
+        <div className="lower">
+        {/* `.actions` (index.html:442-449): the key box, the primary button, then the link
+            button under it. All three sat inside `.fieldwrap` - the button under the hint and
+            the link button INSIDE the hint's `aria-live` region, so a screen reader announced a
+            button every time the address text changed. Gated where the design gates it.
+
+            `degraded` keeps its disabled button where the design's `not-taking` has none: ours
+            says "Not taking claims right now" at the point of action, and removing it leaves the
+            control a visitor is reaching for silently absent. Declared departure. */}
+        {(phase === "ready" || phase === "checking" || phase === "syncing" || phase === "fault" || phase === "empty" || phase === "degraded") && (
+          <div className="actions">
             {genKey && genKey.address === addr.trim() && (
               <div data-testid="generated-key" style={{ display: "flex", flexDirection: "column", gap: 8, padding: "12px 14px", border: "1px solid var(--color-divider)", borderRadius: 6 }}>
                 <span style={{ ...kicker, color: muted(60) }}>{genKey.label}</span>
@@ -1321,141 +1427,259 @@ export default function Home() {
                 <p aria-live="polite" className="sr-only">{copied === "key" ? "Spending key copied." : ""}</p>
               </div>
             )}
-            <button data-testid="claim-button" className="btn btn-primary" onClick={() => void submit()} disabled={phase === "empty" || phase === "degraded" || (!!genKey && genKey.address === addr.trim() && !keyCopied && !keyShown)} style={{ width: "100%", justifyContent: "space-between" }}>
+            {/* THE SNAPSHOT'S PRIMARY ACTION (index.html:432). `.automate`, and the arrow comes
+                from `.automate::after` rather than an inline span - which is not only tidier:
+                `.automate:disabled::after{content:none}` takes the arrow away when the button is
+                disabled, and our inline span drew it in every state including "Waiting for a
+                refill". The design had thought about that and our markup had not. */}
+            <button data-testid="claim-button" className="automate" data-accent type="button" onClick={() => void submit()} disabled={phase === "empty" || phase === "degraded" || (!!genKey && genKey.address === addr.trim() && !keyCopied && !keyShown)}>
               <span>{genKey && genKey.address === addr.trim() && !keyCopied && !keyShown ? "Copy the key first" : phase === "checking" ? "Checking status…" : phase === "syncing" ? "Queue it, sends when the node is ready" : phase === "fault" ? "Queue it, sends when the faucet is back" : phase === "empty" ? (refilling && refillHealthy ? "Topping up, back in a moment" : "Waiting for a refill") : phase === "degraded" ? "Not taking claims right now" : "Request " + dripText}</span>
-              <span aria-hidden="true">→</span>
             </button>
             <p style={{ margin: 0, fontSize: 11.5, letterSpacing: ".02em", color: muted(55), fontFamily: "var(--mono)" }}>{dripText} · once per address / 24h · shielded z→z</p>
-            {/* The puzzle explanation moved UP to the hero's second line (S2a), so it is
-                read before the button rather than under it and the page says it once. R-38's
-                property is kept and strengthened; the copy is in the hero above. */}
+            {!addr.trim() && <button className="linkbtn" type="button" onClick={generate}>Make a throwaway address and key</button>}
           </div>
         )}
 
-        {phase === "submitting" && powState && (
-          <div style={{ border: "2px solid var(--color-text)", padding: "20px 16px", display: "flex", flexDirection: "column", gap: 13 }}>
-            <span style={kicker}>Human check, no CAPTCHA</span>
-            <h2 style={{ margin: 0, fontSize: 19, lineHeight: 1.25 }}>Checking you&apos;re human…</h2>
-            <div style={{ height: 10, border: "2px solid var(--color-text)", position: "relative", overflow: "hidden" }}>
-              <i style={{ position: "absolute", top: 0, bottom: 0, left: 0, right: 0, background: "repeating-linear-gradient(135deg,var(--color-accent) 0 3px,transparent 3px 7px)", backgroundSize: "26px 26px", animation: "hatch .9s linear infinite" }} />
-            </div>
-            <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.55, color: muted(62) }}>
-              Your browser is solving a small cryptographic puzzle so bots cannot drain the faucet. Nothing to click, nothing tracked.
-              {/* An estimate in seconds, not bits and hashes (R-38): ~10 s on a phone at 20
-                  bits and ~5 min at the 25-bit ceiling are facts a visitor can decide on. It is
-                  a lottery, so "usually about", never a countdown. */}
-              {" "}{powEstimate == null ? "Measuring how fast this device hashes…" : `Usually ${powEstimateText(powEstimate)} on this device; it is a lottery, so it can run longer.`}
+        {/* TAZ only. Every number in it (sync percent, our block height, our node
+            height) is about OUR Zebra, and rendering it under a cTAZ hold would show
+            someone a progress bar for a chain their claim has nothing to do with. The
+            cTAZ equivalent is the readiness block above, which reads their node. */}
+        {/* GETTING READY (index.html:449-454). The snapshot has ONE panel for our `checking`
+            and `syncing`; the 23:08Z ruling splits them by content: syncing shows the sync
+            percent because there is one, checking does not because there is nothing to show yet.
+            TAZ only - every number here is about OUR Zebra, and a progress bar under a cTAZ hold
+            is a bar for a chain the claim has nothing to do with. */}
+        {(phase === "syncing" || phase === "checking") && network === "taz" && (
+          <div className="phase" data-phase="getting-ready">
+            <div className="kicker">Getting ready</div>
+            <h3>{phase === "checking" ? "Checking the faucet's status" : "Syncing the node"}</h3>
+            <p>
+              {phase === "checking"
+                ? "Reading the node and the wallet. This takes a moment."
+                : "Our node is catching up with the network. Sends start when it is ready."}
             </p>
-            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-              <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: muted(50) }}>difficulty {powState.difficulty ?? "…"} bits · {powState.hashes.toLocaleString("en-US")} hashes · {Math.round(powState.ms / 1000)} s</span>
-              <button className="btn btn-ghost btn-sm" onClick={() => powCancel.current?.()} style={{ padding: 0 }}>Cancel</button>
-            </div>
+            {phase === "syncing" && (
+              <>
+                <div className="prog" role="progressbar" aria-label="Node sync progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={syncPct != null ? Math.min(syncPct, node?.ready === true ? 100 : 99.5) : undefined} style={{ ["--w" as string]: syncBarWidth(syncPct, node?.ready === true) }}>
+                  <i />
+                </div>
+                <div className="figs">
+                  <span><b className="num">{syncPct != null ? syncPct.toFixed(2) : "—"}</b>% synced</span>
+                  <span><b className="mono">{height != null ? num(height) : "—"}</b>height</span>
+                </div>
+              </>
+            )}
           </div>
         )}
 
-        {phase === "submitting" && !powState && (
-          <div style={{ border: "2px solid var(--color-text)", padding: "20px 16px", display: "flex", flexDirection: "column", gap: 13 }}>
-            <span style={kicker}>Sending, keep this tab open</span>
-            <h2 style={{ margin: 0, fontSize: 19, lineHeight: 1.25 }}>{steps[curStep][0]}…</h2>
-            <div style={{ height: 10, border: "2px solid var(--color-text)", position: "relative", overflow: "hidden" }}>
-              <i style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: Math.round(proofFrac * 100) + "%", background: "repeating-linear-gradient(135deg,var(--color-accent) 0 3px,transparent 3px 7px)", backgroundSize: "26px 26px", animation: "hatch .9s linear infinite" }} />
-            </div>
-            <div>
-              {proofSteps.map((s, i) => (
-                <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "7px 0", borderBottom: "1px solid var(--color-divider)", fontFamily: "var(--mono)", fontSize: 11.5, color: s.color }}>
-                  <span>{s.label}</span><span>{s.mark}</span>
-                </div>
-              ))}
-            </div>
-            <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.55, color: muted(62) }}>A shielded send builds a zero-knowledge proof before it can be broadcast. That is the wait. It is doing the privacy work.</p>
-          </div>
-        )}
-
-        {phase === "success" && tx && (
-          <div style={{ border: "2px solid var(--color-text)", display: "flex", flexDirection: "column" }}>
-            <div style={{ padding: 16, borderBottom: "2px solid var(--color-text)", display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, background: "var(--color-surface)" }}>
-              <span data-testid="sent-badge" style={{ fontFamily: "var(--mono)", fontSize: 10, fontWeight: 700, letterSpacing: ".14em", textTransform: "uppercase" }}>Sent ✓</span>
-              <span style={{ fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".08em", color: muted(55) }}>just now</span>
-            </div>
-            <div style={{ padding: "18px 16px", display: "flex", flexDirection: "column", gap: 14 }}>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-                {/* What was PAID, from the response, not what the form offered. cTAZ's
-                    amount is fixed by their node and ignores what we ask for, so the
-                    two can differ and only one of them is true. */}
-                <span style={{ fontSize: "clamp(30px,8vw,42px)", fontWeight: 800, letterSpacing: "-.03em", lineHeight: 1 }}>{tx.amountText}</span>
-                <span style={{ fontFamily: "var(--mono)", fontSize: 12, color: muted(55) }}>on its way</span>
-              </div>
-              <div>
-                {/* Full values in title + a copyable receipt below: the shortened
-                    forms are for reading, never the only way to get the data. */}
-                <div style={rowLine}><span style={{ color: muted(55) }}>to</span><span title={tx.to} style={{ fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "60%" }}>{short(tx.to, 12, 6)}</span></div>
-                {/* The row is here either way, and it answers the question either way.
-                    Hiding it on cTAZ would leave someone looking for a txid that the
-                    receipt never mentions, which reads as an omission rather than as
-                    the network's answer. `tx.txid` decides this, not `tx.network`: the
-                    page reports what came back. */}
-                <div style={rowLine}>
-                  <span style={{ color: muted(55) }}>txid</span>
-                  {tx.txid ? (
-                    <span title={tx.txid} style={{ fontWeight: 700 }}>{short(tx.txid, 10, 8)}</span>
-                  ) : (
-                    <span style={{ fontWeight: 700, textAlign: "right", maxWidth: "66%" }}>none, this network returns none</span>
-                  )}
-                </div>
-                {/* Only asked when there is something to ask about. /api/tx queries OUR
-                    node, which has never heard of a Crosslink transaction and could not
-                    look one up without an id anyway. */}
-                {tx.txid && (
-                  <div style={rowLine}>
-                    <span style={{ color: muted(55) }}>our node</span>
-                    <span style={{ fontWeight: 700, textAlign: "right", maxWidth: "62%" }}>
-                      {txSeen === null
-                        ? "checking…"
-                        : txSeen.known === true
-                          ? txSeen.confirmations
-                            ? `seen it, ${txSeen.confirmations} confirmation${txSeen.confirmations === 1 ? "" : "s"}`
-                            : "seen it, in the mempool"
-                          : txSeen.known === false
-                            ? "not seen yet"
-                            : "cannot say right now"}
-                    </span>
-                  </div>
-                )}
-                <div style={rowLine}>
-                  <span style={{ color: muted(55) }}>privacy</span>
-                  <span style={{ fontWeight: 700, textAlign: "right", maxWidth: "62%" }}>
-                    {tx.priv ? <span className="tag tag-outline" style={{ fontSize: 9 }}>shielded z→z</span> : "transparent, public on-chain"}
-                  </span>
-                </div>
-                <div style={rowLine}>
-                  <span style={{ color: muted(55) }}>network</span>
-                  {/* The chain's name and nothing else. Appending the beta marker read
-                      "Crosslink feature net · feature net, beta", which says the same
-                      thing twice and is the sort of line that only shows up once it is
-                      in front of you. The marker's job is done at the toggle, where it
-                      is a warning before the choice rather than a label after it. */}
-                  <span style={{ fontWeight: 700 }}>{networkFacts(tx.network).chain}</span>
-                </div>
-              </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-                {/* No copy-txid and no explorer link when there is no id: a disabled
-                    button offering something that does not exist is worse than the
-                    button not being there (#323 ruling). Both keyed off the data. */}
-                {tx.txid && <button className="btn btn-secondary btn-sm" onClick={() => void copy("txid", tx.txid!)}>{copied === "txid" ? "Copied ✓" : "Copy txid"}</button>}
-                <button className="btn btn-secondary btn-sm" onClick={() => void copy("receipt", receiptText(tx))}>{copied === "receipt" ? "Copied ✓" : "Copy receipt"}</button>
-                {genKey && genKey.address === tx.to && <button className="btn btn-secondary btn-sm" aria-label="Copy spending key" onClick={() => void copy("key", genKey.secret)}>{copied === "key" ? "Copied ✓" : "Copy spending key"}</button>}
-                {tx.explorerUrl && <a className="btn btn-secondary btn-sm" href={tx.explorerUrl} target="_blank" rel="noreferrer">Open in explorer ↗</a>}
-                <button className="btn btn-ghost btn-sm" onClick={again} style={{ padding: 0 }}>Another address</button>
-              </div>
-              <p aria-live="polite" className="sr-only">{copied === "txid" ? "Transaction id copied." : copied === "receipt" ? "Receipt copied." : ""}</p>
-              <p style={{ margin: 0, fontSize: 12, lineHeight: 1.5, color: muted(55) }}>
-                {!tx.txid
-                  ? networkFacts(tx.network).noTxidReason
-                  : tx.priv
-                    ? "Shielded sends take a moment to show up in an explorer, and the amount stays private there."
-                    : "It can take a minute to appear in an explorer while the transaction is mined."}
+        {/* NOT READY (index.html:455-458). The ruling: `fault` takes this panel, with the
+            button below reading "Queue it, sends when the faucet is back". The hold-dropped
+            line is ours and has no counterpart in the snapshot - it reports a claim we stopped
+            holding, which the mock has no state for - so it is declared rather than dropped. */}
+        {phase === "fault" && network === "taz" && (
+          <div className="phase" data-phase="not-ready">
+            <div className="kicker">Not ready</div>
+            <h3>The faucet is having a problem</h3>
+            <p>
+              {status ? `${(faultReason(status) ?? "something is not right").replace(/^./, (c2) => c2.toUpperCase())}. ` : ""}
+              Nothing to do on your side. You can queue the request, and it sends when the faucet is back.
+            </p>
+            {holdDropped && (
+              <p data-testid="hold-dropped">
+                We held your claim for {Math.round(HOLD_MAX_MS / 60_000)} minutes and the faucet did not recover, so we
+                stopped holding it rather than keep you waiting. Nothing was claimed and your cooldown is untouched.
               </p>
+            )}
+          </div>
+        )}
+
+        {/* QUEUED (index.html:459-463). One panel, two data states: `queuedBehindFault` picks
+            the sentence, which is what page.tsx already did for the live region. */}
+        {phase === "queued" && queuedAddr && (
+          <div className="phase" data-phase="queued">
+            <div className="kicker">Queued</div>
+            <h3>You&apos;re in line</h3>
+            <p>
+              {queuedBehindFault && status ? `The faucet is having a problem: ${faultReason(status)}. ` : ""}
+              Your address is in the queue and sends when the {queuedBehindFault ? "faucet is back" : "node is ready"}.
+              You can close this tab.
+            </p>
+            <div className="figs">
+              <span><b className="num">{status?.queueDepth != null ? num(status.queueDepth) : "—"}</b>ahead of you</span>
             </div>
+          </div>
+        )}
+
+        {/* RESERVE LOW (index.html:469-473): ready, and a refill is due. Claims still work,
+            which is the whole point of the panel being separate from `empty`. */}
+        {phase === "ready" && refilling && network === "taz" && (
+          <div className="phase" data-phase="reserve-low">
+            <div className="kicker">Reserve</div>
+            <h3>The reserve is low</h3>
+            <p>Claims still work. A refill is due, and if it runs out this page says so.</p>
+            <div className="figs">
+              <span><b className="num">{reserve?.spendableTaz != null ? num(Math.floor(reserve.spendableTaz)) : "—"}</b>spendable TAZ</span>
+              <span><b className="num">{reserve?.lowTaz != null ? num(reserve.lowTaz) : "—"}</b>low mark</span>
+            </div>
+          </div>
+        )}
+
+        {/* TOPPING UP (index.html:464-468): empty AND refilling AND the refill looks healthy.
+            The hatched bar is `.prog.hatch`, whose rule and keyframe are SDE-UI's; this renders
+            the element and defines neither, so the cascade has one definition of each. */}
+        {phase === "empty" && refilling && refillHealthy && network === "taz" && (
+          <div className="phase" data-phase="topping-up">
+            <div className="kicker">Topping up the reserve</div>
+            <h3>Refilling from the main wallet</h3>
+            <p>Claims resume when the reserve is back above the line.</p>
+            {/* `hatch` IS INERT ON THIS BRANCH AND THAT IS DELIBERATE. The stripes come from
+                `.prog.hatch i` and `@keyframes stripe` (index.html:230-231), which ship in
+                SDE-UI's #591 - the same sheet that owns `.prog` itself (redesign-views.css:49).
+                Until it merges this renders as a plain `.prog` bar: the right length, no
+                stripes, no motion. The class is written now rather than added later so the two
+                land together instead of the markup waiting on a rule nobody remembers to bring.
+                Declared to the CTO, 08:45Z. */}
+            <div
+              className="prog hatch"
+              role="progressbar"
+              aria-label="Refill progress"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={refillPct ?? undefined}
+              // The snapshot hard-codes `--w:60%`; ours is the real fraction of the target the
+              // reserve currently holds, which is the number the bar is claiming to show.
+              style={{ ["--w" as string]: `${refillPct ?? 0}%` }}
+            >
+              <i />
+            </div>
+          </div>
+        )}
+
+        {/* NOT TAKING CLAIMS (index.html:474-477). The reason sentence is `sends.reason`,
+            read off the status and never asserted: this card once said "refilled by hand"
+            beside a panel showing coinbase shielding on (R-39). */}
+        {phase === "degraded" && (
+          <div className="phase" data-phase="not-taking">
+            <div className="kicker">Not taking claims</div>
+            <h3>Sends are failing on our side right now</h3>
+            <p>
+              {status?.sends?.reason ? `${status.sends.reason.charAt(0).toUpperCase()}${status.sends.reason.slice(1)}. ` : ""}
+              This is watched on our side and usually clears within minutes. No proof-of-work is asked for while it
+              lasts; the button comes back when sends land again.
+            </p>
+          </div>
+        )}
+
+        {/* EMPTY (index.html:478-482). Widened from `!refilling` to "not topping up": a refill
+            that is running but NOT healthy (miner off, or shielding not permitted) is not
+            "topping up", and when `topping-up` took the healthy condition this state would
+            otherwise have had no panel at all. */}
+        {phase === "empty" && !(refilling && refillHealthy) && network === "taz" && (
+          <div className="phase" data-phase="empty">
+            <div className="kicker">Empty</div>
+            <h3>The faucet is out of TAZ right now</h3>
+            <p>If you have testnet ZEC to spare, a donation refills it for everyone.</p>
+            {donation && (
+              <div className="row">
+                <code className="mono">{donation}</code>
+                <button className="tag" type="button" onClick={() => void copy("donation", donation)}>
+                  {copied === "donation" ? "Copied ✓" : "Copy address"}
+                </button>
+                <a className="tag" href="/donate">Why, and how it helps →</a>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* HUMAN CHECK (index.html:483-489). The figures row is the snapshot's `.figs`; the
+            seconds estimate is ours and stays, because R-38 ruled that bits and hashes are not
+            a fact a visitor can decide on and "usually about" is. It is a lottery, never a
+            countdown. */}
+        {phase === "submitting" && powState && (
+          <div className="phase" data-phase="human-check">
+            <div className="kicker">Human check, no CAPTCHA</div>
+            <h3>Checking you&apos;re human…</h3>
+            <p>
+              Your browser is solving a small cryptographic puzzle so bots cannot drain the faucet. Nothing to click,
+              nothing tracked.{" "}
+              {powEstimate == null ? "Measuring how fast this device hashes…" : `Usually ${powEstimateText(powEstimate)} on this device; it is a lottery, so it can run longer.`}
+            </p>
+            <div className="prog hatch" role="progressbar" aria-label="Puzzle progress, indeterminate"><i /></div>
+            <div className="figs">
+              <span><b className="num">{powState.difficulty ?? "…"}</b>bits</span>
+              <span><b className="num">{powState.hashes.toLocaleString("en-US")}</b>hashes</span>
+              <span><b className="num">{Math.round(powState.ms / 1000)}</b>seconds</span>
+            </div>
+            <div className="row">
+              <button className="tag" type="button" onClick={() => powCancel.current?.()}>Cancel</button>
+            </div>
+          </div>
+        )}
+
+        {/* SENDING (index.html:490-499). The steps list is the snapshot's `.steps` with
+            `data-done`/`data-active`; the step the flow is actually on comes from `curStep`,
+            which the progress machinery already computes. */}
+        {phase === "submitting" && !powState && (
+          <div className="phase" data-phase="sending">
+            <div className="kicker">Sending, keep this tab open</div>
+            <h3>Building the shielded transaction</h3>
+            <ul className="steps">
+              {steps.map(([label], i) => (
+                <li key={label} data-done={i < curStep ? "" : undefined} data-active={i === curStep ? "" : undefined}>
+                  <span className="mark" />{label}
+                </li>
+              ))}
+            </ul>
+            <div className="prog hatch" role="progressbar" aria-label="Send progress, indeterminate"><i /></div>
+          </div>
+        )}
+
+        {/* SENT (index.html:500-515). The snapshot's `<dl class="receipt">` with the row set it
+            names, plus two rows it has no state for and we do: the spending key, when the
+            address was one we generated, and "our node" rather than a confirmations count we
+            do not always have. Every value is what came BACK, not what the form offered - cTAZ
+            fixes its own amount and ignores what we asked for, so the two can differ and only
+            one of them is true. */}
+        {phase === "success" && tx && (
+          <div className="phase" data-phase="sent">
+            <div className="kicker"><span data-testid="sent-badge">Sent ✓</span></div>
+            <h3>{tx.amountText} is on its way</h3>
+            <dl className="receipt">
+              <dt>Amount</dt><dd className="mono">{tx.amountText}</dd>
+              <dt>To</dt><dd className="mono" title={tx.to}>{short(tx.to, 12, 6)}</dd>
+              <dt>Chain</dt><dd className="mono">{networkFacts(tx.network).chain}</dd>
+              {/* The row is here whether or not there is an id, and it answers the question
+                  either way: hiding it on cTAZ would leave someone hunting for a txid the
+                  receipt never mentions. `tx.txid` decides it, not `tx.network`. */}
+              <dt>txid</dt>
+              <dd className="mono" title={tx.txid ?? undefined}>{tx.txid ? short(tx.txid, 10, 8) : "none, this network returns none"}</dd>
+              <dt>Status</dt>
+              <dd>
+                {txSeen === null
+                  ? "checking…"
+                  : txSeen.known === true
+                    ? txSeen.confirmations
+                      ? `seen by our node, ${txSeen.confirmations} confirmation${txSeen.confirmations === 1 ? "" : "s"}`
+                      : "seen by our node, in the mempool"
+                    : txSeen.known === false
+                      ? "not seen yet"
+                      : "cannot say right now"}
+              </dd>
+            </dl>
+            <div className="row">
+              {tx.txid && <button className="tag" type="button" onClick={() => void copy("txid", tx.txid!)}>{copied === "txid" ? "Copied ✓" : "Copy txid"}</button>}
+              <button className="tag" type="button" onClick={() => void copy("receipt", receiptText(tx))}>{copied === "receipt" ? "Copied ✓" : "Copy receipt"}</button>
+              {genKey && genKey.address === tx.to && (
+                <button className="tag" type="button" aria-label="Copy spending key" onClick={() => void copy("key", genKey.secret)}>{copied === "key" ? "Copied ✓" : "Copy spending key"}</button>
+              )}
+              {tx.explorerUrl && <a className="tag" href={tx.explorerUrl} target="_blank" rel="noreferrer">Open in explorer ↗</a>}
+              <button className="tag ink" type="button" onClick={again}>Another address</button>
+            </div>
+            <p className="fine">
+              {tx.network === "taz"
+                ? "Shielded sends take a moment to show up in an explorer, and the amount stays private there."
+                : "It can take a minute to appear in an explorer while the transaction is mined."}
+            </p>
           </div>
         )}
 
@@ -1489,42 +1713,61 @@ export default function Home() {
             // contradictory times on one card.
             const sub = r.kind === "subnet";
             return (
-              <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
-                <span style={kicker}>{sub ? "Network limit reached" : "Connection limit reached"}</span>
-                <h2 style={{ margin: 0, fontSize: 19, lineHeight: 1.25 }}>{sub ? "Your network is over its quota for now." : "This connection is out of drips for now."}</h2>
-                <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
-                  {r.reason || "Everyone on the same network shares this limit."}{" "}
-                  {!sub && whenText ? <>A slot frees at <strong>{whenText}</strong> (in {dur(remain)}).</> : null}
+              /* CONNECTION LIMIT and NETWORK LIMIT (index.html:520-527) are two panels in the
+                 snapshot and two situations here: a shared router is not a shared subnet, and
+                 the advice differs. A different address helps with neither, which is what the
+                 single old card wrongly offered. */
+              /* WHAT THIS ADDS TO THE SNAPSHOT, declared. index.html:519-527 is kicker, h3
+                 and one countdown line - no `.fine`, no `.row`. Both additions are here because
+                 the mock has nowhere to go and a real card does:
+                   `.fine`  "A different address will not help" - the single most likely next
+                            action after this refusal is to retype a different address, which
+                            costs a round trip and refuses identically. It also separates a
+                            LIMIT from an OUTAGE, which the panel otherwise looks exactly like.
+                   `.row`   one "Start over". Without it the card is terminal: the field is
+                            above it now, but nothing resets the phase, so the visitor is left
+                            on a dead panel until they reload. */
+              <div className="phase" data-phase={sub ? "network-limit" : "connection-limit"}>
+                <div className="kicker">{sub ? "Network limit" : "Connection limit"}</div>
+                <h3>{sub ? "Too many requests from this network" : "Too many requests from this connection"}</h3>
+                <p>
+                  {r?.reason || (sub ? "This network has had its share for now." : "This connection has had its share for now.")}{" "}
+                  {whenText ? <>Try again at <strong>{whenText}</strong> (in {dur(remain)}).</> : <>Try again in {dur(remain)}.</>}
                 </p>
-                <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
-                  The faucet is up. This is a limit, not a fault.
-                </p>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}><button className="btn btn-ghost btn-sm" onClick={again} style={{ padding: 0 }}>Start over</button></div>
+                <p className="fine">A different address will not help: the limit is on the connection, not the address. The faucet is up.</p>
+                <div className="row"><button className="tag" type="button" onClick={again}>Start over</button></div>
               </div>
             );
           }
           const rc = r?.receipt ?? null;
           return (
-            <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
-              <span style={kicker}>{rc ? "Already paid" : "Already claimed"}</span>
-              <h2 style={{ margin: 0, fontSize: 19, lineHeight: 1.25 }}>
-                {rc ? `This address got its ${rc.amountText}.` : "This address already claimed recently."}
-              </h2>
-              {rc?.txid && (
-                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
-                  <code data-testid="cooldown-txid" style={{ fontSize: 12, wordBreak: "break-all" }}>{rc.txid}</code>
-                  <button className="btn btn-secondary btn-sm" onClick={() => void copy("txid", rc.txid!)}>{copied === "txid" ? "Copied" : "Copy"}</button>
-                  {rc.explorerUrl && <a className="btn btn-secondary btn-sm" href={rc.explorerUrl} target="_blank" rel="noreferrer">Open in explorer ↗</a>}
-                </div>
-              )}
-              <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
-                {r?.reason || "This claim is on cooldown."}{" "}
+            /* ALREADY CLAIMED (index.html:516-519). The receipt is THIS BROWSER's own, never
+               asked of the server (that would be an address-to-txid oracle), and never shown
+               for a connection refusal where the blocking drip may be someone else's. */
+            /* SAME DECLARATION as the two limit panels, plus one more. index.html:516-518 is
+               kicker, h3 and a countdown; this adds `.fine`, a "Try a different address" row,
+               and - when this browser holds a receipt for the refused address - the txid with
+               its copy and explorer controls. The receipt row is the one worth defending: it is
+               THIS browser's own record, never asked of the server, and it answers the question
+               the refusal provokes ("what happened to my last one?") without an
+               address-to-txid oracle existing anywhere. The snapshot is a static mock with no
+               receipt to show, so its absence there is not a decision against it. */
+            <div className="phase" data-phase="already-claimed">
+              <div className="kicker">{rc ? "Already paid" : "Already claimed"}</div>
+              <h3>{rc ? `This address got its ${rc.amountText}` : "This address got a drip in the last 24 h"}</h3>
+              <p>
+                {r?.reason || "One drip per address per day keeps the reserve for everyone."}{" "}
                 {whenText ? <>The next drip for this address is available at <strong>{whenText}</strong> (in {dur(remain)}).</> : <>The next one is available in {dur(remain)}.</>}
               </p>
-              <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
-                The faucet is up. This is a limit, not a fault.
-              </p>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}><button className="btn btn-secondary btn-sm" onClick={again}>Try a different address</button></div>
+              {rc?.txid && (
+                <div className="row">
+                  <code className="mono" data-testid="cooldown-txid">{rc.txid}</code>
+                  <button className="tag" type="button" onClick={() => void copy("txid", rc.txid!)}>{copied === "txid" ? "Copied ✓" : "Copy txid"}</button>
+                  {rc.explorerUrl && <a className="tag" href={rc.explorerUrl} target="_blank" rel="noreferrer">Open in explorer ↗</a>}
+                </div>
+              )}
+              <p className="fine">The faucet is up. This is a limit, not a fault.</p>
+              <div className="row"><button className="tag ink" type="button" onClick={again}>Try a different address</button></div>
             </div>
           );
         })()}
@@ -1539,10 +1782,25 @@ export default function Home() {
           const when = fail.retryAt != null
             ? new Date(fail.retryAt).toLocaleString(undefined, { hour: "2-digit", minute: "2-digit", weekday: "short", timeZoneName: "short" })
             : null;
+          // THE SNAPSHOT'S WORDS WHERE THEY ARE TRUE, ours only where they are not, and the
+          // falsehood named. The owner approved the design's copy, so preference does not
+          // outrank it: `daily-cap` and `couldnt-take` are the snapshot's kicker and heading
+          // verbatim, and the ticker rewrite is gone - "Today's drips are spent" is true on
+          // either network and does not need to say which.
+          //
+          // The three that stand are declared in the PR body with what is false about the
+          // snapshot's line for that state:
+          //   send-failed  one panel, three kinds. "The transaction didn't go through" is not
+          //                true of `pow`: the human check failed, so no transaction was ever
+          //                attempted. Each kicker says which thing failed and that the wallet
+          //                is untouched, which is what makes "Try again" safe to press.
+          //   restarting   the snapshot has one state and the 23:08Z mapping gives this panel
+          //                two, busy and held. There are no approved words for either.
+          //   lost-track   not in the approved set at all.
           const kick =
             k === "held" ? "Our side, not yours"
             : k === "busy" ? "Busy, nothing left the wallet"
-            : k === "cap" ? `Today\u2019s ${networkFacts(network).ticker} budget is spent`
+            : k === "cap" ? "Faucet daily cap"
             : k === "unknown" ? "Submitted, outcome unknown"
             : k === "bad" ? "Couldn\u2019t take that request"
             : k === "pow" ? "Human check failed, nothing was claimed"
@@ -1551,13 +1809,20 @@ export default function Home() {
           const head =
             k === "held" ? "Not right now."
             : k === "busy" ? "Every send slot is taken."
-            : k === "cap" ? `The faucet has paid out its daily ${networkFacts(network).ticker}.`
+            : k === "cap" ? "Today\u2019s drips are spent"
             : k === "unknown" ? "We lost track of your drip."
-            : k === "bad" ? "Something in the request needs fixing."
+            : k === "bad" ? "Something in the request didn\u2019t check out"
             : "That didn\u2019t go through.";
           // Which sentence follows theirs. The server's own is shown as sent; the
           // page adds only what it knows and the server does not: the clock, the
           // address to watch, and that the address's cooldown is spent either way.
+          // THE CAP'S SENTENCE IS A COUNTDOWN, AND IT DOES NOT SAY MIDNIGHT. The snapshot's
+          // panel is `<p>The cap resets at midnight UTC. <span class="num" data-countdown>Try
+          // again in 14400s</span></p>`. The countdown is transcribed; the first clause is
+          // DROPPED and declared, because it is not true of this faucet: `src/lib/db/sql.ts:338`
+          // is `const since = o.now - 86_400`, a rolling 24-hour window, so nothing resets at
+          // midnight and a visitor told otherwise would come back at 00:01 to the same refusal.
+          // Per the CTO's 08:01Z ruling, which made the clause conditional on exactly this.
           const tail =
             k === "cap" && when ? ` It should have room again around ${when}.`
             : k === "held" && waitS > 0 ? ` You can try again in ${waitS}s.`
@@ -1565,67 +1830,57 @@ export default function Home() {
             : k === "unknown" ? " Its cooldown was spent on this claim, so a retry would be refused either way."
             : "";
           const tryAgain = k === "failed" || k === "pow" || k === "offline" || k === "busy" || k === "held";
+          // THE 23:08Z MAPPING, seven kinds onto five panels. `send-failed` takes only the
+          // three that really left nothing and really can retry; `restarting` takes busy AND
+          // held, one panel with two data states, the clock appearing only when there is one;
+          // and `unknown` gets `lost-track`, which is NOT in the approved design and is a
+          // declared addition, because `send-failed` says "Nothing was deducted, you can try
+          // again now" and for a submitted-but-unconfirmed drip all three of those are false.
+          const panel =
+            k === "cap" ? "daily-cap"
+            : k === "bad" ? "couldnt-take"
+            : k === "unknown" ? "lost-track"
+            : k === "busy" || k === "held" ? "restarting"
+            : "send-failed";
           return (
-            <div role="alert" style={{ border: "2px solid var(--color-accent)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 11 }}>
-              <span style={kicker}>{kick}</span>
-              <h2 style={{ margin: 0, fontSize: 19, lineHeight: 1.25 }}>{head}</h2>
-              <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(70), maxWidth: "52ch" }}>{errMsg}{tail}</p>
+            <div className="phase" data-phase={panel} role="alert">
+              <div className="kicker">{kick}</div>
+              <h3>{head}</h3>
+              <p>{errMsg}{tail}</p>
               {k === "unknown" && fail.address && (
-                <code data-testid="unknown-address" style={{ fontFamily: "var(--mono)", fontSize: 12, wordBreak: "break-all", color: "var(--color-text)" }}>{fail.address}</code>
+                <code className="mono" data-testid="unknown-address">{fail.address}</code>
               )}
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+              <div className="row">
                 {tryAgain && (
-                  <button data-testid="error-retry" className="btn btn-primary btn-sm" onClick={() => void submit()} disabled={k === "held" && waitS > 0}>
+                  <button data-testid="error-retry" className="tag ink" type="button" onClick={() => void submit()} disabled={k === "held" && waitS > 0}>
                     {k === "held" && waitS > 0 ? `Try again in ${waitS}s` : "Try again"}
                   </button>
                 )}
                 {k === "bad" && (
-                  <button data-testid="error-edit" className="btn btn-primary btn-sm" onClick={() => { setErrMsg(""); setPhase(basePhase(status, network)); }}>Edit the address</button>
+                  <button data-testid="error-edit" className="tag ink" type="button" onClick={() => { setErrMsg(""); setPhase(basePhase(status, network)); }}>Edit the address</button>
                 )}
-                <button className="btn btn-ghost btn-sm" onClick={again} style={{ padding: 0 }}>Start over</button>
+                <button className="tag" type="button" onClick={again}>Start over</button>
               </div>
               {fail.requestId && (
-                <p data-testid="request-id" style={{ margin: 0, fontFamily: "var(--mono)", fontSize: 11, color: muted(55) }}>
-                  ref {fail.requestId}{" "}
-                  <span style={{ fontFamily: "inherit" }}>· quote it if you <a href="/terms" style={{ color: "inherit" }}>write to us</a></span>
-                </p>
+                <div className="ref mono" data-testid="request-id">
+                  ref {fail.requestId} · quote it if you <a href="/terms">write to us</a>
+                </div>
               )}
             </div>
           );
         })()}
-
-        <div className="hr" style={{ margin: "6px 0 0" }} />
-
-        {/* Who we are, AFTER the thing you came to do. Above the form this was a
-            third and fourth block of type between the headline and the field, which
-            is brand copy standing in the way of an action. Below it, it is what you
-            read once the request is placed, which is when "who runs this" actually
-            becomes an interesting question. */}
-        <div className="about-strip">
-          <p className="self-hosted-claim">
-            <span>Own node</span>
-            <span>Own wallet</span>
-            <span>Shielded drips</span>
-          </p>
-          <p className="about-strip-line">
-            We run the whole stack ourselves, and the community keeps it full.{" "}
-            <a href="/donate">Chip in</a> if it saved you time.
-          </p>
-          {/* DRIPS SERVED, ON THE LANDING PAGE. It was rendered only inside More
-              details, where the owner looked straight past it while asking where
-              it was; a number nobody finds is not published. Absent stays absent
-              rather than rendering a zero, which would read as "never served
-              anyone" on the one line meant to show the opposite. The 7-day figure
-              rides along only when it is non-zero, so a quiet week says nothing
-              instead of advertising a nought. */}
-          {status?.drips && status.drips.allTime > 0 ? (
-            <p className="about-strip-line drips-line">
-              <strong>{num(status.drips.allTime)}</strong> {status.drips.allTime === 1 ? "drip" : "drips"} served
-              {status.drips.last7d > 0 ? <> · <strong>{num(status.drips.last7d)}</strong> in the last 7 days</> : null}
-            </p>
-          ) : null}
         </div>
 
+              </div>
+              {/* The design's second block, absent here entirely. `.corner-icon` is
+                  `display:none` unconditionally (hero.css:32, index.html:81), so the snapshot's
+                  <canvas class="g" data-glyph="sends"> inside it draws nothing at any width -
+                  it is omitted rather than transcribed into markup that needs a glyph painter to
+                  render something invisible. The h2 and p are verbatim. */}
+              <div className="card-copy">
+                <h2>Shielded z→z</h2>
+                <p>Sent from the shielded wallet on our own node, so nothing on chain ties the drip to you.</p>
+              </div>
             </article>
           </div>
         </section>
