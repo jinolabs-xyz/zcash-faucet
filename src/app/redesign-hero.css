@@ -179,3 +179,20 @@ html{background:var(--page)}
 @media (max-width:56rem){
   .mascot-riso{max-width:min(52vw,240px) !important}
 }
+
+/* ===== NOT IN THE SNAPSHOT: the legacy card's own inner padding =====
+ * The snapshot never draws this content, so nothing here is a transcription. In the design the
+ * card's copy lives in `.card-copy`, which carries `padding:7% 8.4% 7.5%` (line 27). The current
+ * claim content is not in that wrapper - the card's direct children are plain divs - so the card
+ * had NO inner padding at all and every text node sat 1px from its left border, inside the
+ * rounded corner: the tagline, the field's label, the OWN NODE strip, and the "1" of "189 drips
+ * served" clipped by the radius at 1440x900.
+ *
+ * It is not only the lower half. The controls look inset because an <input> and a <button> carry
+ * their own padding; the card's own is zero, measured on every direct child at left+1.0px.
+ *
+ * Shipped to production with the fox and found on a screenshot rather than by a probe, because
+ * every parity check measured a DESIGN element and this is CURRENT content inside a design
+ * container. ui-smoke now measures the card's own edge, which is true of whatever fills it.
+ * S2b replaces this block with the real panels and takes this rule with it. */
+.stage .card.claim{padding:7% 8.4% 7.5%}
