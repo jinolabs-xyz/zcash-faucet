@@ -42,7 +42,7 @@ wd_env() {
   # The first case that set the grace to 0 failed in CI and passed alone.
   unset STUB_READY_EXTERNAL STUB_CURL_RC STUB_READY_REFS STUB_READY_USEDHEIGHT WATCHDOG_NODE_CONFIRMED_LAG_LIMIT
   unset STUB_SLOWLOOP STUB_ALERT_FAIL_N STUB_ALERT_FAIL_RC WATCHDOG_RECOVERY_MIN_UPTIME
-  unset STUB_CRASHLOOP STUB_HEAL_FIXES STUB_ZEBRA_BLOCKS STUB_ZEBRA_EST STUB_ZEBRA_ADVANCE STUB_ZEBRA_STUCK_CALLS \
+  unset WATCHDOG_CLOCK_FILE WATCHDOG_CLOCK_STEP STUB_CRASHLOOP STUB_HEAL_FIXES STUB_ZEBRA_BLOCKS STUB_ZEBRA_EST STUB_ZEBRA_ADVANCE STUB_ZEBRA_STUCK_CALLS \
         WATCHDOG_NODE_HEAL_ENABLED WATCHDOG_NODE_STOPS_MINER WATCHDOG_MINER_HEARTBEAT WATCHDOG_MINER_UNIT STUB_START_FAIL \
         WATCHDOG_SIGNAL_MATCH STUB_READY_CANBUILD STUB_READY_CANBUILD_ONCE \
         STUB_READY STUB_READY_REASON STUB_READY_FAIL_UNTIL STUB_HEALTH
@@ -1066,19 +1066,57 @@ echo "== watchdog: a recovered episode resets the clock: failing, then ready, th
 # a fresh 'sends failing' would restart zallet on the first sweep (review of #531).
 wd_env
 export WATCHDOG_READY_GRACE_SECS=999999 STUB_READY_REASON="sends failing: 2 of the last 2 sends failed and none succeeded"
-# One process, two seconds between sweeps, a 7 s delay: failing at t0 and t2, ready at
-# t4 (the clock resets), failing at t6, t8, t10 (elapsed reaches ~4, never 7). Without
-# the reset the clock runs from t0 and the sweep at t8 restarts zallet. Three seconds
-# of margin below and one above, since a sweep costs stub calls on top of the interval;
-# a runner slow enough to spend three seconds a sweep would still stay under 7 on
-# the fixed side (reset at ~t9, sweeps at t12/t15/t18 give at most 6).
-export WATCHDOG_SENDS_RESTART_AFTER=7 WATCHDOG_SENDS_RESTART_BUDGET=999999 WATCHDOG_INTERVAL=2
+# THE CLOCK IS DRIVEN, NOT WAITED OUT (#570). This case used a 7 s threshold against sweeps two
+# seconds apart, so its whole margin was about three seconds of wall clock - and it failed 3 of
+# roughly 22 runs on 2026-09-15, every failure with three or more harness containers on the same
+# Mac and never when run alone. Four seats run the harness concurrently now, so that case reported
+# the wrong thing to whoever's run landed in the busy window.
+#
+# WATCHDOG_CLOCK_FILE makes each sweep exactly CLOCK_STEP seconds after the last one, whatever the
+# host is doing. Sweeps land at 100, 200, 300, 400, 500, 600 against a 250 s threshold: failing at
+# 100 and 200 (elapsed 100, under), ready at 300 (the clock resets), failing at 400, 500, 600 with
+# elapsed 0, 100, 200 - never 250. Without the reset the clock runs from 100 and the sweep at 400
+# is 300 elapsed, which trips it. The gap between 200 and 250 is now fifty seconds of MODEL time
+# that no amount of real load can eat.
+# STARTED AT A REAL EPOCH, NOT AT ZERO, and that is not cosmetic. The restart is gated twice:
+# on the episode's elapsed AND on `now - last_restart >= BUDGET`, where last_restart is 0 until
+# one is stamped. With the clock starting at 0 that second gate reads 400 >= 999999 and is FALSE
+# forever, so nothing can ever restart and the case passes whatever the reset does. My first
+# driven version did exactly that: the mutant below SURVIVED at 308/0 while the row asserting the
+# clock advanced stayed green, because the clock had advanced - it was the BUDGET that had gone
+# unreachable. An anti-vacuity row that watches the wrong quantity is not one.
+echo 1750000000 > "$T/episode.clock"
+export WATCHDOG_CLOCK_FILE="$T/episode.clock" WATCHDOG_CLOCK_STEP=100
+export WATCHDOG_SENDS_RESTART_AFTER=250 WATCHDOG_SENDS_RESTART_BUDGET=999999 WATCHDOG_INTERVAL=0
 export STUB_READY_SEQUENCE="0 0 1 0 0 0"
 echo running > "$STUB_CONTAINERS/faucet-web"; echo running > "$STUB_CONTAINERS/zallet"
 wd_run 6
 check "no zallet restart: the clock restarted with the second episode and never reached the delay" "! grep -q 'docker restart -t 30 zallet' '$T/stub.log'"
 check "and all six sweeps read readiness, so the sequence was consumed in full" "[ \"\$(cat '$T/stub.log.ready-count' 2>/dev/null)\" = 6 ]"
-unset STUB_READY_SEQUENCE WATCHDOG_INTERVAL
+# THE CLOCK REALLY MOVED, which is what stops this case passing because nothing happened. Six
+# sweeps at 100 leaves the file at 600; a clock that never ticked would leave it at 0 and every
+# elapsed comparison above would be 0 - trivially under any threshold, and green for the wrong
+# reason. This is the anti-vacuity partner for the whole case.
+check "and the driven clock advanced once per sweep, so the elapsed times above are real" \
+  "[ \"\$(cat '$T/episode.clock' 2>/dev/null)\" = 1750000600 ]"
+unset STUB_READY_SEQUENCE WATCHDOG_INTERVAL WATCHDOG_CLOCK_FILE WATCHDOG_CLOCK_STEP
+
+# AND THE SHIPPED PATH HAS NO CLOCK FILE, which is the other half of adding a testability knob.
+# An override that every case sets is an override whose default nothing exercises (the shape that
+# cost us the FAUCET_CTAZ_RPC_SOCKET afternoon), so one case runs with it unset and anchors that
+# the watchdog is reading real time.
+echo "== watchdog: with no clock file the watchdog reads the real clock, which is what ships"
+wd_env
+export WATCHDOG_READY_GRACE_SECS=999999 STUB_READY=0 STUB_READY_REASON="sends failing: 2 of the last 2 sends failed and none succeeded"
+export WATCHDOG_SENDS_RESTART_AFTER=0 WATCHDOG_SENDS_RESTART_BUDGET=999999
+echo running > "$STUB_CONTAINERS/faucet-web"; echo running > "$STUB_CONTAINERS/zallet"
+wd_run 1
+# AFTER=0 means the first failing sweep is already past the threshold, so the restart time it
+# stamps is `now`. With no clock file that has to be a real epoch - seconds since 1970, which is
+# past 1.7e9 - and a driven clock would have written a number near zero.
+check "the restart stamp is a real epoch second, not a driven counter" \
+  "[ \"\$(cat '$T/state/sends.zallet_restart_at.flaps' 2>/dev/null || echo 0)\" -gt 1700000000 ]"
+unset WATCHDOG_SENDS_RESTART_AFTER WATCHDOG_SENDS_RESTART_BUDGET STUB_READY_REASON
 
 echo "== watchdog: no zallet container found: no restart, and the budget is NOT spent"
 wd_env

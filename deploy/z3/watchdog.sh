@@ -180,6 +180,36 @@ node_stall_lag=0      # how far behind it was when the episode began
 # 0 = loop forever (production). Tests set this to run an exact number of sweeps.
 MAX_TICKS="${WATCHDOG_MAX_TICKS:-0}"
 
+# A SWEEP CLOCK THE SUITE CAN DRIVE, for timing cases only (#570). UNSET - which is every real
+# run, and the production path has no branch to get wrong - `wd_now` is `date -u +%s` and nothing
+# else. Set, it reads whole seconds from a file that advances by CLOCK_STEP once per sweep, so a
+# case can span an episode of any length in constant wall time.
+#
+# WHY THIS RATHER THAN A WIDER MARGIN: the case #570 is about failed 3 of ~22 runs on 2026-09-15,
+# always with three or more harness containers on the same Mac and never alone. Four seats run the
+# harness concurrently as a matter of course, so a timing-margin case reports the wrong thing to
+# whoever's run lands in the busy window, and it teaches re-run-until-green - the habit the mutant
+# gate exists to remove. A bigger margin postpones that; a clock the host cannot influence ends it.
+#
+# It ADVANCES once per sweep at the top of the loop and is only READ below, so two readers in one
+# sweep see the same instant, exactly as two `date` calls a millisecond apart would.
+CLOCK_FILE="${WATCHDOG_CLOCK_FILE:-}"
+CLOCK_STEP="${WATCHDOG_CLOCK_STEP:-60}"
+wd_now() {
+  [ -n "$CLOCK_FILE" ] || { date -u +%s; return 0; }
+  local t
+  t="$(cat "$CLOCK_FILE" 2>/dev/null)"
+  case "$t" in ''|*[!0-9]*) t=0 ;; esac
+  printf '%s' "$t"
+}
+wd_clock_tick() {
+  [ -n "$CLOCK_FILE" ] || return 0
+  local t
+  t="$(cat "$CLOCK_FILE" 2>/dev/null)"
+  case "$t" in ''|*[!0-9]*) t=0 ;; esac
+  echo $((t + CLOCK_STEP)) > "$CLOCK_FILE"
+}
+
 # Target containers, matched by name substring so exact compose prefixes and the
 # hand-run faucet-web container both resolve. Override any of these in the env.
 FAUCET_MATCH="${WATCHDOG_FAUCET_MATCH:-faucet-web}"
@@ -643,7 +673,7 @@ heal_node_if_stalled() {
   [ -n "$heights" ] || return 0
   blocks="${heights%% *}"; est="${heights##* }"
   prev="$node_last_height"; node_last_height="$blocks"
-  now="$(date -u +%s)"
+  now="$(wd_now)"
 
   # WHICH NUMBER "BEHIND" MEANS, and the whole rung turns on it (2026-09-15T20:35Z outage).
   # `estimatedheight` is zebra's own CLOCK extrapolation from the tip's timestamp at the target
@@ -1024,6 +1054,7 @@ heal_self_mined_fork() {
 
 while true; do
   ticks=$((ticks + 1))
+  wd_clock_tick
   zebra="$(find_container "$ZEBRA_MATCH")"
   zallet="$(find_container "$ZALLET_MATCH")"
   faucet="$(find_container "$FAUCET_MATCH")"
@@ -1091,7 +1122,7 @@ while true; do
 
   # 4: readiness alerting. Not-ready is normal during first sync / refill, so we
   # only page when it persists past the grace window, and only once per episode.
-  now="$(date -u +%s)"
+  now="$(wd_now)"
   # ONE fetch, and both the verdict and the reason come out of it. This used to probe
   # and then re-fetch for the reason, which spent two sequential 8s budgets against the
   # same endpoint: when readiness was slow the second fetch timed out too, so the page

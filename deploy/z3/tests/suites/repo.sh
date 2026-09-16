@@ -1655,3 +1655,70 @@ if [ -z "$RB_WRONG" ]; then
 else
   bad "and the reason #596 ruled IS the image's fault still falls through to a rollback (now swallowed:$RB_WRONG)"
 fi
+
+echo "== repo: the address env names the ui job sets, the smoke reads, and config actually consumes"
+# #605's guard compares process.env[NAME] against what the page rendered. NAME is a string literal
+# in scripts/ui-smoke.mjs, another in .github/workflows/ci.yml and a third in src/lib/config.ts, and
+# nothing tied the three. Rename one consistently across the product and the guard reads an env
+# nobody sets: `addrSet` is false, the row takes its NOT CHECKED branch, and it is GREEN while
+# checking nothing - which is the precise failure #605 exists to stop, reintroduced by the guard
+# written to stop it. SDE-UI's L38 found the same shape in #613's RB_EXCLUDED; this is that detector
+# run over my other change rather than waiting to be told twice.
+#
+# config.ts is the authority because it is what the product actually reads. The other two are
+# checked against it, never against each other.
+CFG_ENVS="$(grep -oE 'process\.env\.FAUCET_[A-Z_]*ADDRESS' "$REPO/src/lib/config.ts" | sed 's/^process\.env\.//' | sort -u)"
+check "config.ts reads address env vars at all, so the two readers below have something to agree with" \
+  '[ -n "$CFG_ENVS" ]'
+
+# The smoke's CODE, comments stripped: this file names these vars in prose constantly and a comment
+# mentioning one is not the same as the guard reading it - the same trap the #607 reader has.
+UIS_CODE="$(grep -vE '^[[:space:]]*(//|\*|/\*)' "$REPO/scripts/ui-smoke.mjs")"
+UIS_ENVS="$(printf '%s\n' "$UIS_CODE" | grep -oE 'FAUCET_[A-Z_]*ADDRESS' | sort -u)"
+# AN EMPTY SET ORPHANS NOTHING AND PASSES, which is this gate's own defect one turn further in
+# (SDE-UI, L38 on this PR). I guarded CFG_ENVS against emptiness fifteen lines up and did not
+# guard the other two: rename every FAUCET_*ADDRESS out of ui-smoke.mjs and UIS_ENVS comes back
+# empty, the loop below never runs, and the row reports green - so deleting the #605 guard this
+# PR exists to protect is invisible to the row protecting it. The detector's second question is
+# the one that catches it: not just what a constant is the truth of, but what the reader does
+# when it reads NOTHING.
+check "the smoke guards on address envs at all, so an empty read cannot pass as agreement" \
+  '[ -n "$UIS_ENVS" ]'
+UIS_ORPHAN=""
+while IFS= read -r n; do
+  [ -n "$n" ] || continue
+  printf '%s\n' "$CFG_ENVS" | grep -qxF "$n" || UIS_ORPHAN="$UIS_ORPHAN [$n]"
+done <<EOF
+$UIS_ENVS
+EOF
+if [ -z "$UIS_ORPHAN" ]; then
+  ok "every address env the smoke guards on is one config.ts reads, so a rename cannot leave it inert"
+else
+  bad "every address env the smoke guards on is one config.ts reads, so a rename cannot leave it inert (config reads no such var:$UIS_ORPHAN)"
+fi
+
+# And the ui job's side: a name set in CI that the product does not read configures nothing, and the
+# page then renders its not-configured card while ci.yml looks correct to a reader.
+# THE RANGE HAS TO SKIP ITS OWN OPENING LINE. `/^  ui:/,/^  [a-z...]:$/` opens AND closes on
+# `  ui:` itself, because the job header matches the end pattern too - the range yielded exactly
+# one line, CI_ENVS was empty, and the orphan loop below never ran. The row was vacuous from the
+# moment I wrote it, and the emptiness guard above is what surfaced it on its first run. Flagged
+# rather than quietly corrected: this is the same defect the guard exists for, found by the guard,
+# in the code that ships the guard.
+CI_ENVS="$(awk '/^  ui:$/{f=1;next} f && /^  [a-z][a-z0-9-]*:$/{f=0} f' "$CIWF" | grep -oE '^ +FAUCET_[A-Z_]*ADDRESS' | tr -d ' ' | sort -u)"
+# Same guard, same reason: the ui job going back to setting no address at all is exactly the
+# state #605 closed, and an empty set would let it through this row in silence.
+check "and the ui job sets address envs at all, so reverting #605 cannot pass as agreement" \
+  '[ -n "$CI_ENVS" ]'
+CI_ORPHAN=""
+while IFS= read -r n; do
+  [ -n "$n" ] || continue
+  printf '%s\n' "$CFG_ENVS" | grep -qxF "$n" || CI_ORPHAN="$CI_ORPHAN [$n]"
+done <<EOF
+$CI_ENVS
+EOF
+if [ -z "$CI_ORPHAN" ]; then
+  ok "and every address env the ui job sets is one config.ts reads, so CI cannot configure a variable nothing consumes"
+else
+  bad "and every address env the ui job sets is one config.ts reads, so CI cannot configure a variable nothing consumes (config reads no such var:$CI_ORPHAN)"
+fi
