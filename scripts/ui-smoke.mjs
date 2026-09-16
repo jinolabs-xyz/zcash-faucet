@@ -1153,6 +1153,23 @@ async function checkMinerPanel(page) {
   // which is the same fact under a better name: which indexer we are talking to, and
   // whether it is answering. Asserted here so "it moved" is a checked claim rather than a
   // sentence in a PR body, and so nobody adds a second row for it later.
+  // AND IT IS ASSERTED AGAINST THE ENDPOINT THE APP SAYS IT IS USING, not against the SHAPE of
+  // a public hostname (#590). The test was `/[a-z0-9.-]+\.[a-z]{2,}(:\d+)?/` on the rendered
+  // text - a proxy for "looks like a DNS name", which passes for `testnet.zec.rocks:443` and
+  // fails for `127.0.0.1:28612`. That is not the property: the view has to name THE indexer we
+  // are talking to, whichever one that is. Pointing the job at a double made the proxy fail on a
+  // view that was naming the backend perfectly correctly, which is how it was found.
+  //
+  // The app is the authority on what it is talking to, so ask it rather than pattern-matching.
+  const reportedBackend = await (async () => {
+    const res = await fetch(`${BASE}/api/status`);
+    const body = await res.json();
+    const endpoint = body?.backend?.endpoint ?? "";
+    try { return new URL(endpoint).host; } catch { return endpoint; }
+  })();
+  ok("the app reports a backend endpoint at all, so the rows below compare against something",
+    reportedBackend.length > 0, `endpoint host=${reportedBackend || "(empty)"}`);
+
   for (const view of ["status", "analytics"]) {
     await showView(page, view);
     const backend = await page.evaluate((v) => {
@@ -1165,7 +1182,8 @@ async function checkMinerPanel(page) {
       return { found: !!hit, value, dot: !!dot, on: dot?.getAttribute("data-on") ?? null };
     }, view);
     ok(`the ${view} view names the indexer we are talking to`,
-      backend.found && /[a-z0-9.-]+\.[a-z]{2,}(:\d+)?/i.test(backend.value), JSON.stringify(backend));
+      backend.found && backend.value.includes(reportedBackend),
+      JSON.stringify({ ...backend, expected: reportedBackend }));
     // The dot defaults to grey and only data-on="true" makes it green, so a backend we
     // have not heard from cannot render as reachable.
     ok(`and says whether it is answering, beside it`,
