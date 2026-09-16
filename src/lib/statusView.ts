@@ -229,6 +229,39 @@ export function ctazWord(ctaz: { enabled?: boolean; servable?: boolean } | null 
   return "parked";
 }
 
+/**
+ * The sends chip's tone, and it lives here because it had two homes already.
+ *
+ * `sendsTone` was defined identically in StatusCards.tsx and AnalyticsCards.tsx - I compared the
+ * bodies, 195 characters each, byte-identical today. The hero's chip would have been the third
+ * copy, and three copies of one derivation is how a page comes to disagree with itself about
+ * what word describes the faucet (R-24). One definition, three importers.
+ *
+ * DEPARTURE, DECLARED: the approved preview's `tone()` map (index.html:881) has no key for
+ * "failing", so a failing sender falls through its `|| 'unknown'` and the chip reads unknown.
+ * Ours reads BAD, which is what the status and analytics views have shipped since S3. A sender
+ * that is failing is not a sender we know nothing about, and introducing the preview's mapping
+ * here would make the hero chip disagree with the status card one click away - which is the
+ * defect this function exists in one place to prevent.
+ */
+export function sendsTone(state: string | undefined): "ok" | "warn" | "bad" | "unknown" {
+  if (state === "ok") return "ok";
+  if (state === "degraded") return "warn";
+  if (state === "failing") return "bad";
+  return "unknown";
+}
+
+/**
+ * The node chip's tone, transcribed from index.html:927 - `s.node.ready ? 'ok' : 'warn'`.
+ *
+ * Deliberately NOT heightTone, which is about how far behind the tip we are. A node can be ready
+ * and a few blocks back; the chip asks whether it is serving.
+ */
+export function nodeChipTone(ready: boolean | undefined): "ok" | "warn" | "unknown" {
+  if (ready === undefined) return "unknown";
+  return ready ? "ok" : "warn";
+}
+
 /* ── the miner ────────────────────────────────────────────────────────── */
 
 /**

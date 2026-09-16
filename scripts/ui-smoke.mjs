@@ -1002,6 +1002,41 @@ async function checkFirstPaint(page, base, address) {
     for (const k of ["node", "balance", "miner"]) {
       ok(`first paint states no ${k} it was not told`, cells[k] === UNTOLD, `${k}=${cells[k] ?? "missing"}`);
     }
+    // ── THE HERO'S CHIPS ARE IN THE FIRST PAINT, WHICH IS THE DEFECT THEY FIX ──────────
+    //
+    // The puzzle sentence was written `{status?.challenge === "pow" && ...}` and the index is a
+    // client island with `status` starting null, so the SERVER HTML omitted it on every
+    // deployment since it shipped. Nothing failed; the code was there; a reader with JavaScript
+    // off never saw it, and the owner found it missing from prod. Gating the chips the same way
+    // would have shipped that defect again in new markup, so this asserts the shape rather than
+    // the values: the chips exist before any status arrives.
+    const heroFirst = await page.evaluate(() => {
+      const chips = [...document.querySelectorAll(".hero-copy .chips [data-chip]")]
+        .map((b) => ({ name: b.dataset.chip, tone: b.dataset.tone ?? "(none)", text: (b.textContent || "").trim() }));
+      return {
+        chips,
+        more: !!document.querySelector(".hero-copy .chips .tag.more"),
+        analytics: (document.querySelector(".hero-copy .morelink")?.textContent || "").trim(),
+        puzzle: /solves a short puzzle instead of a CAPTCHA/.test(document.body.textContent || ""),
+      };
+    });
+    ok("first paint carries the four hero status chips",
+      ["wallet", "node", "miner", "sends"].every((n) => heroFirst.chips.some((c) => c.name === n)),
+      heroFirst.chips.map((c) => c.name).join(", ") || "no chips in the HTML");
+    ok("and each says unknown rather than a figure it has not been told",
+      heroFirst.chips.length > 0 && heroFirst.chips.every((c) => /unknown/.test(c.text)),
+      heroFirst.chips.map((c) => `${c.name}="${c.text}"`).join("; ") || "none");
+    // The ops chip is the one that must NOT be there: it is the word about the box, and a box we
+    // have not heard from is not a box in trouble.
+    ok("and no OPS ATTENTION before anything has been established",
+      !heroFirst.chips.some((c) => c.name === "box"),
+      heroFirst.chips.map((c) => c.name).join(", "));
+    ok("first paint carries both hero links",
+      heroFirst.more && /drips this week/.test(heroFirst.analytics),
+      `more=${heroFirst.more} analytics="${heroFirst.analytics}"`);
+    ok("first paint carries the puzzle sentence, which was absent from every served page before",
+      heroFirst.puzzle, heroFirst.puzzle ? "present" : "absent from the HTML");
+
     await showView(page, "claim");
 
     // The regression. Type and submit while status is still held.
@@ -1172,6 +1207,31 @@ async function checkMinerPanel(page) {
     ok(`and says whether it is answering, beside it`,
       backend.dot && (backend.on === "true" || backend.on === "false"), JSON.stringify(backend));
   }
+  // ── THE HERO CHIPS AND THE STATUS VIEW SAY THE SAME WORDS ─────────────────────────
+  //
+  // Not that the chips show SOMETHING - that they agree with the card one click away. The hero
+  // is the half a visitor reads first and the status view is where they go to check it, so a
+  // disagreement between them is the worst place on the page to put one. The chips import their
+  // words from statusView.ts rather than deriving them again (R-24), and this is what makes that
+  // a checked fact rather than a convention: a second derivation would have to produce the same
+  // string to pass, which is most of the value of having one.
+  await showView(page, "status");
+  const viewWords = await page.evaluate(() => {
+    const scope = document.querySelector('[data-testid="view-status"]');
+    const pick = (k) => scope?.querySelector(`[data-status-key="${k}"]`)?.closest("[data-tone]")?.getAttribute("data-tone") ?? null;
+    const minerEl = scope?.querySelector('[data-status-key="miner"]');
+    return { minerWord: (minerEl?.textContent || "").trim(), minerTone: pick("miner") };
+  });
+  await showView(page, "claim");
+  const chipWords = await page.evaluate(() => {
+    const el = document.querySelector('.hero-copy .chips [data-chip="miner"] b');
+    const btn = document.querySelector('.hero-copy .chips [data-chip="miner"]');
+    return { word: (el?.textContent || "").trim(), tone: btn?.dataset.tone ?? null };
+  });
+  ok("the hero's miner chip says what the status view says, word and tone",
+    !!chipWords.word && chipWords.word === viewWords.minerWord && chipWords.tone === viewWords.minerTone,
+    `hero "${chipWords.word}"/${chipWords.tone} against view "${viewWords.minerWord}"/${viewWords.minerTone}`);
+
   // ── THE CARD TITLES: THEIR GLYPHS, THEIR SIZE AND THEIR FACE ───────────────────────
   //
   // All three of these went unnoticed through three rounds for the same reason: a heading

@@ -77,8 +77,31 @@ button.tag:hover,a.tag:hover{border-color:var(--muted)}
 .lede b{color:var(--ink);font-weight:600}
 .lede.small{font-size:calc(1.05*var(--u))}
 .chev{font-size:1.25em;line-height:1;opacity:.7;margin-left:.15em}
+/* THE HERO'S CHIPS, transcribed (index.html 137-141). `.chips` itself already ships - it is the
+ * bare flex row - but the hero restyles its chips into a rule of underlined links rather than
+ * bordered pills, and without these two the chips render as pills on a page the design draws
+ * flat. S2a deferred them by declaration ("the hero status chips, above") and they are what the
+ * owner found missing from prod.
+ *
+ * L20 SWEEP RUN OVER BOTH SUBJECTS, not just the classes: globals.css declares NO `button`
+ * element rule, so nothing leaks into the chips; it declares `a` (globals.css:97), which reaches
+ * `.morelink` below. */
+.hero-copy .chips{padding-top:calc(.6*var(--u));border-top:calc(.06*var(--u)) solid var(--hair);width:100%}
+.hero-copy .chips .tag{height:auto;padding:calc(.3*var(--u)) 0;border:0;border-bottom:calc(.06*var(--u)) solid transparent;border-radius:0;background:none;color:var(--muted);font-weight:500;cursor:pointer}
+.hero-copy .chips .tag:hover{color:var(--ink);border-bottom-color:var(--ink)}
+.hero-copy .chips .tag b{color:var(--ink)}
+.hero-copy .chips .tag.more{color:var(--accent-text);margin-left:auto}
+
 .morelink{display:inline-flex;align-items:center;gap:calc(.35*var(--u));font-size:calc(.95*var(--u));font-weight:600;color:var(--accent-text)}
-.morelink:hover{text-decoration:underline}
+/* text-underline-offset NAMED HERE, which closes #575's declared seventh leak for the one
+ * element that now shows it. globals.css:97 sets `a{text-underline-offset:3px}` and the
+ * transcription names no competing value, so every anchor inherits 3px where the design has the
+ * browser default. #575 declared it out of scope with the right reason - only globals sets it, so
+ * no chunk-order flip can change it, and its own identity check is blind to a property it does
+ * not compare - and the closing move it named was "naming the property in the design's own
+ * sheet". This link is the first anchor on the page that UNDERLINES, so it is the first place
+ * the leak is visible, and this is that sheet. */
+.morelink:hover{text-decoration:underline;text-underline-offset:auto}
 .vhead{width:100%}
 .vhead h2{margin:0;font:600 calc(1.86*var(--u))/1.04 var(--sans-semibold);letter-spacing:calc(-.125*var(--u));color:var(--ink-2)}
 .vhead p{margin:calc(.4*var(--u)) 0 0;font-size:calc(.95*var(--u));color:var(--muted);font-weight:500}

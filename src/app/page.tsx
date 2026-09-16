@@ -19,6 +19,7 @@ import { CSSProperties, useCallback, useEffect, useRef, useState } from "react";
 import type { DripDay } from "./Sparkline";
 import { Mascot } from "@/components/Mascot";
 import { Shell } from "@/components/Shell";
+import { HeroChips } from "@/components/HeroChips";
 import { StatusCards } from "@/components/StatusCards";
 import { AnalyticsCards } from "@/components/AnalyticsCards";
 import { ToolsCards } from "@/components/ToolsCards";
@@ -1048,9 +1049,23 @@ export default function Home() {
                   FAUCET_CHALLENGE=none would then promise a puzzle that never runs. The
                   wording is the snapshot's, which is also the post-ruling wording - the
                   version it replaces used a prose colon, which the owner has banned. */}
-              {status?.challenge === "pow" && (
+              {/* WITHDRAWN ON EVIDENCE, NOT WITHHELD UNTIL PROVEN (CTO ruling, 06:15Z). This read
+                  `status?.challenge === "pow"`, and since the index is a client island with
+                  `status` starting null, the SERVER HTML omitted this sentence on every
+                  deployment since it was written - a reader with JavaScript off never saw it,
+                  and the owner found it missing from prod while the code was here all along.
+                  It now renders in the first paint and is removed only when the status arrives
+                  and says this deployment runs no puzzle.
+                  CONSISTENT WITH THE BADGE RULING RATHER THAN AN EXCEPTION TO IT: the badge
+                  describes a LIVE service state that changes minute to minute, so asserting
+                  READY before establishing it is a false claim about now. This sentence
+                  describes how claiming works on this deployment - configuration, fixed for the
+                  life of the process. A permanent omission everywhere is the wrong side of that
+                  trade against a one-fetch flash on a test configuration. */}
+              {(status == null || status.challenge === "pow") && (
                 <p className="lede small">Your browser solves a short puzzle instead of a CAPTCHA. A few seconds, longer on a phone, and you can cancel it.</p>
               )}
+              <HeroChips status={status} onView={(v) => setView(v)} />
             </div>
             <figure className="hero-mascot" aria-label="The faucet's fox, turning to follow your pointer">
               <Mascot />
