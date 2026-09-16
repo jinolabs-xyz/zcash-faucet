@@ -138,26 +138,6 @@
     "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `:focus-visible`; the rule is shipped as `html :focus-visible`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs.",
     "shipped": ""
   },
-  "@media (max-width:32rem) | #lookupform .prompt,#lookupform .tag.ink": {
-    "kind": "override",
-    "why": "A 44px TAP FLOOR THE DESIGN DOES NOT CARRY. The approved preview is a desktop mock and has no touch-target rule anywhere; shipping it as drawn puts 23-30px controls under a finger. SDE-App's #593 survey found NINE scoped floors across this codebase with THREE different triggers - (pointer:coarse), max-width:32rem and max-width:56rem - so a touch device at 1024px gets one answer and a narrow desktop window another. #593 replaces the scattered subjects AND unifies the trigger; these entries come out with it. Declared rather than dropped because a floor of ours the design cannot satisfy is exactly what an `override` is.",
-    "shipped": "min-height:44px"
-  },
-  "@media (max-width:56rem) | .card.claim .prompt,.card.claim .automate,.card.claim .linkbtn": {
-    "kind": "override",
-    "why": "A 44px TAP FLOOR THE DESIGN DOES NOT CARRY. The approved preview is a desktop mock and has no touch-target rule anywhere; shipping it as drawn puts 23-30px controls under a finger. SDE-App's #593 survey found NINE scoped floors across this codebase with THREE different triggers - (pointer:coarse), max-width:32rem and max-width:56rem - so a touch device at 1024px gets one answer and a narrow desktop window another. #593 replaces the scattered subjects AND unifies the trigger; these entries come out with it. Declared rather than dropped because a floor of ours the design cannot satisfy is exactly what an `override` is.",
-    "shipped": "min-height:44px"
-  },
-  "@media (max-width:56rem) | .card.claim .tag,.card.claim .tabs button": {
-    "kind": "override",
-    "why": "A 44px TAP FLOOR THE DESIGN DOES NOT CARRY. The approved preview is a desktop mock and has no touch-target rule anywhere; shipping it as drawn puts 23-30px controls under a finger. SDE-App's #593 survey found NINE scoped floors across this codebase with THREE different triggers - (pointer:coarse), max-width:32rem and max-width:56rem - so a touch device at 1024px gets one answer and a narrow desktop window another. #593 replaces the scattered subjects AND unifies the trigger; these entries come out with it. Declared rather than dropped because a floor of ours the design cannot satisfy is exactly what an `override` is.",
-    "shipped": "min-height:44px"
-  },
-  "@media (max-width:56rem) | .hero-copy .chips .tag": {
-    "kind": "override",
-    "why": "A 44px TAP FLOOR THE DESIGN DOES NOT CARRY. The approved preview is a desktop mock and has no touch-target rule anywhere; shipping it as drawn puts 23-30px controls under a finger. SDE-App's #593 survey found NINE scoped floors across this codebase with THREE different triggers - (pointer:coarse), max-width:32rem and max-width:56rem - so a touch device at 1024px gets one answer and a narrow desktop window another. #593 replaces the scattered subjects AND unifies the trigger; these entries come out with it. Declared rather than dropped because a floor of ours the design cannot satisfy is exactly what an `override` is.",
-    "shipped": "min-height:44px"
-  },
   "a": {
     "kind": "override",
     "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `a`; the rule is shipped as `html a`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs.",

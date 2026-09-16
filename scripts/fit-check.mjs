@@ -32,8 +32,16 @@ const BASE = process.argv[2] || process.env.UI_SMOKE_URL || "http://localhost:31
 // A fit check whose sizes cannot show the fault is arithmetic, not a gate, so the two most
 // common of those are in the list. Raised with the CTO rather than decided quietly, since it
 // widens what the ruling's number means.
-const SIZES = [[1440, 900], [1280, 800], [1920, 1080], [1366, 768], [1280, 720]];
+const SIZES = [[1440, 900], [1280, 800], [1920, 1080], [1366, 768], [1280, 720], [1024, 768]];
 const THEMES = ["paper", "ink"];
+// THE POINTER IS A DIMENSION OF THE CONTRACT NOW, and it was not before. Every pass ran with a
+// default (fine) pointer, so `any-pointer: coarse` never matched and the whole fit contract was
+// verified on a page the tap floor does not touch - while the floor grows about twenty controls
+// by up to 26px each. A contract checked only where the change does not apply is not checking
+// the change. Found by SDE-Infra reviewing #598.
+// 1024x768 joins SIZES for the same reason: it is the tablet the floor exists for and it was
+// outside the sizes entirely, so that device was outside the contract twice over.
+const POINTERS = [["fine", false], ["coarse", true]];
 const VIEWS = ["claim", "status", "analytics", "tools"];
 const PAGES = ["/terms", "/donate", "/fund"];
 
@@ -68,7 +76,7 @@ const PAGES_IN_SHELL = PAGES.filter((route) => {
   const text = readFileSync(src, "utf8");
   return text.includes('"stage"') || (SHELL_OWNS_STAGE && /<Shell[\s/>]/.test(text));
 });
-const RULING_COMBOS = 70;   // 5 sizes x 2 themes x (4 views + 3 pages), once every page is in the shell
+const RULING_COMBOS = 168;  // 6 sizes x 2 themes x 2 pointers x (4 views + 3 pages), once every page is in the shell
 // THE PART THAT DOES NOT DEPEND ON WHICH SLICES HAVE LANDED (SDE-App, review of #563). The
 // full count is only checkable at the end, so until then a shrunk array changed PLANNED and the
 // measured rows together and they agreed with each other - halving THEMES halved the coverage
@@ -76,14 +84,15 @@ const RULING_COMBOS = 70;   // 5 sizes x 2 themes x (4 views + 3 pages), once ev
 // first slice.
 // EACH ARRAY, NOT THEIR PRODUCT (CTO red-team, review of #563): padding one list while halving
 // the other keeps the product and silently drops a theme.
-const RULING_SIZES = 5;
+const RULING_SIZES = 6;
 const RULING_THEMES = 2;
-const RULING_VIEWPORT_PASSES = RULING_SIZES * RULING_THEMES;
-if (SIZES.length !== RULING_SIZES || THEMES.length !== RULING_THEMES) {
-  console.error(`fit-check: this file has ${SIZES.length} sizes and ${THEMES.length} themes, and the ruling is ${RULING_SIZES} and ${RULING_THEMES}. Change the arrays and these numbers together, deliberately, or neither.`);
+const RULING_POINTERS = 2;
+const RULING_VIEWPORT_PASSES = RULING_SIZES * RULING_THEMES * RULING_POINTERS;
+if (SIZES.length !== RULING_SIZES || THEMES.length !== RULING_THEMES || POINTERS.length !== RULING_POINTERS) {
+  console.error(`fit-check: this file has ${SIZES.length} sizes, ${THEMES.length} themes and ${POINTERS.length} pointers, and the ruling is ${RULING_SIZES}, ${RULING_THEMES} and ${RULING_POINTERS}. Change the arrays and these numbers together, deliberately, or neither.`);
   process.exit(1);
 }
-const PLANNED = SIZES.length * THEMES.length * (VIEWS.length + PAGES_IN_SHELL.length);
+const PLANNED = SIZES.length * THEMES.length * POINTERS.length * (VIEWS.length + PAGES_IN_SHELL.length);
 if (PAGES_IN_SHELL.length === PAGES.length && PLANNED !== RULING_COMBOS) {
   console.error(`fit-check: every page is in the shell, so this file should plan ${RULING_COMBOS} combinations and it plans ${PLANNED}. Change the arrays and this number together, deliberately, or neither.`);
   process.exit(1);
@@ -207,15 +216,19 @@ let missing = null;
 
 for (const [W, H] of SIZES) {
   for (const theme of THEMES) {
-    const page = await browser.newPage({ viewport: { width: W, height: H } });
-    const where = `${W}x${H} ${theme}`;
+   for (const [pname, hasTouch] of POINTERS) {
+    // A CONTEXT, not newPage({viewport}): hasTouch is a context option, and newPage's viewport
+    // shorthand cannot carry it. That is why every pass was fine-pointered before.
+    const ctx = await browser.newContext({ viewport: { width: W, height: H }, hasTouch });
+    const page = await ctx.newPage();
+    const where = `${W}x${H} ${theme} ${pname}`;
     page.on("pageerror", (e) => errors.push(`${where}: ${String(e)}`));
     page.on("console", (m) => { if (m.type() === "error") errors.push(`${where}: ${m.text()}`); });
     await page.goto(`${BASE}/`, { waitUntil: "networkidle" });
     // The shell is in the tree, so it must be on the page. Reported once, as a failure.
     if (await page.locator(".stage").count() === 0) {
       missing = `${SHELL_MARKER} is in the tree but ${BASE}/ has no .stage element at ${where}`;
-      await page.close();
+      await page.close(); await ctx.close();
       break;
     }
     // `zfaucet_theme` is the key layout.tsx's boot script reads; `faucet-theme` is the
@@ -253,9 +266,11 @@ for (const [W, H] of SIZES) {
       await page.evaluate(SCROLL_TO_BOTTOM);
       await page.waitForTimeout(150);
       const r = await page.evaluate(MEASURE);
-      rows.push({ size: `${W}x${H}`, theme, page: p, ...r, fits: r.sh >= 0 && fitsNow(r), themeKept: r.theme === theme });
+      rows.push({ size: `${W}x${H}`, theme, pointer: pname, page: p, ...r, fits: r.sh >= 0 && fitsNow(r), themeKept: r.theme === theme });
     }
     await page.close();
+    await ctx.close();
+   }
   }
   if (missing) break;
 }
