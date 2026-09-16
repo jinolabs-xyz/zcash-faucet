@@ -1,0 +1,38 @@
+/* VENDORED FROM THE FROZEN SNAPSHOT S2-S5-20260915T2224Z, the "subpages" section of the
+ * <style> block of terms.html, whose sha256 that snapshot's MANIFEST pins:
+ *   bcc3bab4b796b7385e8abf40c87e52d8e428b82c06abdcef61feabc90bafe5cb  ./terms.html
+ * Regenerate, from the snapshot directory, and diff rather than overwrite:
+ *   sed -n '/<style>/,$p' terms.html | sed '1d' | sed '/<\/style>/,$d' | sed -n '/===== subpages/,$p'
+ *
+ * SLICED BY THE SECTION MARKER, NOT BY LINE NUMBER. SDE-UI's sheet cites terms.html:380-396;
+ * line numbers move the first time anything above them is edited and the slice then takes half
+ * of a rule, which still parses into something plausible. The marker moves with its section.
+ *
+ * ITS OWN DIRECTORY, AND THAT IS ENFORCED RATHER THAN TIDY. departures.json is resolved per
+ * DIRECTORY, so a second spec beside S2-S5's index.css would share one departures file and each
+ * would report the other's declarations as stale - the collision that already cost a round when
+ * the file was flat. repo.sh gates the same shape from outside: one parity invocation per
+ * design/spec/*/ directory.
+ *
+ * NOT A SLICE OF index.css. terms.html's style block is 298 brace-lines against index.html's
+ * 283: it carries the whole page plus these seventeen. Measured: of the 13 selectors below,
+ * ZERO appear in the vendored index.css, which is why declaring that spec would have produced
+ * invented divergences rather than found real ones.
+ * A GOLDEN FILE. Do not edit it to make a check pass; move the snapshot and re-vendor.
+ */
+/* ===== subpages: the hero's grid without the mascot ===== */
+.hero-grid.two{grid-template-columns:1.1fr 1fr}
+.hero-copy .lede a{color:var(--accent-text);font-weight:600}
+.card.feature .panel .lbl{display:block;margin-bottom:calc(.5*var(--u))}
+.addr{display:block;word-break:break-all;font:500 calc(.95*var(--u))/1.45 var(--mono);color:var(--ink);background:var(--prompt-bg);border:calc(.06*var(--u)) solid var(--prompt-border);border-radius:calc(.6*var(--u));padding:calc(.8*var(--u)) calc(1*var(--u));margin:0 0 calc(.9*var(--u))}
+.addr.small{font-size:calc(.85*var(--u));margin:calc(.6*var(--u)) 0}
+.card-copy .tag{margin-top:calc(.6*var(--u))}
+.warn-line{font:500 calc(.8*var(--u))/1.4 var(--mono);color:var(--warn-text);margin:calc(.7*var(--u)) 0 0}
+.terms{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:calc(1.2*var(--u)) calc(2.2*var(--u));width:100%;align-items:start}
+.terms h2{margin:0 0 calc(.3*var(--u));color:var(--ink-3);font:600 calc(1.05*var(--u))/1.2 var(--sans-semibold);letter-spacing:calc(-.02*var(--u))}
+.terms p{margin:0 0 calc(.6*var(--u));color:var(--muted);font-size:calc(.86*var(--u));line-height:1.45}
+.terms p b{color:var(--ink);font-weight:600}
+.terms a{color:var(--accent-text);font-weight:600}
+.view.sub{min-height:calc(100dvh - 30*var(--u));justify-content:center}
+@media (max-height:840px){.card.feature .panel{padding:5.5% 6% 6%}.addr{font-size:calc(.88*var(--u));padding:calc(.6*var(--u)) calc(.9*var(--u))}.card-copy{padding:5% 8.4% 5.5%}}
+@media (max-width:56rem){.hero-grid.two{grid-template-columns:1fr}.terms{grid-template-columns:1fr}}
