@@ -43,6 +43,10 @@ import type { MinerReading } from "@/lib/miner/heartbeat";
 type View = "claim" | "status" | "analytics" | "tools";
 const VIEWS: View[] = ["claim", "status", "analytics", "tools"];
 
+// Names the card's own height animation so the effect can cancel ITS animation and nobody
+// else's - the mascot and the entrance animations share this document.
+const CARD_HEIGHT_ANIM = "card-height";
+
 type Phase = "checking" | "syncing" | "fault" | "queued" | "empty" | "degraded" | "ready" | "submitting" | "success" | "cooldown" | "error";
 
 // The two states where we cannot send yet, for different reasons: we have not asked,
@@ -349,6 +353,13 @@ export default function Home() {
   useLayoutEffect(() => {
     const el = cardRef.current;
     if (!el) return;
+    // CANCEL THE ONE IN FLIGHT BEFORE MEASURING, or this effect chases its own tail. It runs
+    // after every render, and `getBoundingClientRect()` on an element whose height is being
+    // animated returns the INTERPOLATED height - so a render landing mid-animation recorded a
+    // halfway value as the card's size and animated from there. The sweep caught it as pairs
+    // going the wrong way, `616->564, 564->616`, with the card settling at 510 and no
+    // animation ending there. Cancelling first means every measurement is the natural height.
+    for (const running of el.getAnimations()) if (running.id === CARD_HEIGHT_ANIM) running.cancel();
     const next = el.getBoundingClientRect().height;
     const prev = cardHeight.current;
     cardHeight.current = next;
@@ -363,6 +374,7 @@ export default function Home() {
       [{ height: `${prev}px` }, { height: `${next}px` }],
       { duration: 460, easing: "cubic-bezier(.16,1,.3,1)" },
     );
+    run.id = CARD_HEIGHT_ANIM;
     run.onfinish = () => { el.style.overflow = previous; };
     run.oncancel = () => { el.style.overflow = previous; };
   });

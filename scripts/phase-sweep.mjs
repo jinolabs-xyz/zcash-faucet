@@ -66,6 +66,25 @@ for (const [W, H] of VIEWPORTS) {
 
   await page.goto(BASE, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("#claim", { timeout: 15000 });
+  // RECORD THE ANIMATION rather than sampling geometry and hoping to catch it in flight. The
+  // first version polled the card's height and called the transition a jump if the sample was
+  // already most of the way to the new value - which is a statement about how fast the poll
+  // came round, not about the card. Under load one row read 86% of the way through a 460ms
+  // animation and failed on a tree where the animation was correct. A check whose verdict
+  // depends on machine load is a flake aimed at whoever runs it next.
+  //
+  // The card calls el.animate(); this wraps it and keeps the keyframes. It asks whether ANY
+  // animation since the phase changed starts at the height the card had BEFORE it - not the
+  // first one - because the effect runs per render and a countdown tick can register its own.
+  await page.evaluate(() => {
+    const el = document.querySelector("#claim");
+    window.__cardAnims = [];
+    const original = el.animate.bind(el);
+    el.animate = (frames, opts) => {
+      try { window.__cardAnims.push(JSON.parse(JSON.stringify(frames))); } catch { /* ignore */ }
+      return original(frames, opts);
+    };
+  });
   await page.waitForFunction((s) => (document.querySelector("p.sr-only[role=status]")?.textContent ?? "").includes(s), PHASES[0].says, { timeout: 15000 })
     .catch(() => {});
 
@@ -79,11 +98,12 @@ for (const [W, H] of VIEWPORTS) {
     current = ph;
     // The page polls /api/status every 4s (page.tsx:489), so the new body arrives on its
     // own. Sample the card mid-flight first, THEN wait for the phase to settle.
+    await page.evaluate(() => { window.__cardAnims = []; });
     const t0 = Date.now();
-    let reached = false, mid = null;
+    let reached = false;
     while (Date.now() - t0 < 9000) {
       const g = await geom(page);
-      if (g.says.includes(ph.says)) { if (mid == null) mid = g.card; reached = true; break; }
+      if (g.says.includes(ph.says)) { reached = true; break; }
     }
     if (!reached) { t(`${W}: phase "${ph.name}" was reached at all`, false, `live region still: "${(await geom(page)).says.slice(0, 60)}"`); continue; }
     await page.waitForTimeout(700);                       // past the 460ms the design animates
@@ -93,13 +113,28 @@ for (const [W, H] of VIEWPORTS) {
     const delta = Math.abs(after.card - before.card);
     transitions++;
     if (delta > 1) deltas++;
-    const jumped = delta > 1 && Math.abs(mid - before.card) > delta * 0.6;
+    // THE ANIMATION'S OWN ENDPOINTS, not a height measured up to four seconds earlier. The
+    // page polls /api/status every 4s, so `before.card` is taken and then the card can settle
+    // on its own before the phase actually flips - on the first transition it drifted 15px and
+    // failed a card that was animating correctly. What the ruling asks is that the card moved
+    // from its old size to its new one rather than snapping, and the keyframes say exactly
+    // that without reference to when anyone looked.
+    const anims = (await page.evaluate(() => window.__cardAnims ?? []))
+      .map((f) => (Array.isArray(f) && f.length >= 2 && f[0] && f[1] && f[0].height != null && f[1].height != null
+        ? { from: parseFloat(f[0].height), to: parseFloat(f[1].height) } : null))
+      .filter((a) => a && !Number.isNaN(a.from) && !Number.isNaN(a.to));
+    const covering = anims.find((a) => Math.abs(a.to - after.card) <= 1.5 && Math.abs(a.from - a.to) > 1);
+    const jumped = delta > 1 && !covering;
 
     t(`${W}: entering "${ph.name}" moves neither the hero copy, the fox nor the h1`, !moved,
       `copy ${before.copy}->${after.copy} fox ${before.fox}->${after.fox} h1 ${before.h1}->${after.h1}`);
     if (delta > 1) {
       t(`${W}: the card's height animates into "${ph.name}" from its old value`, !jumped,
-        `${Math.round(before.card)} -> ${Math.round(after.card)}, sampled mid-flight at ${Math.round(mid)}`);
+        anims.length === 0
+          ? `${Math.round(before.card)} -> ${Math.round(after.card)} with NO height animation registered at all`
+          : covering
+            ? `animated ${covering.from.toFixed(1)} -> ${covering.to.toFixed(1)}px`
+            : `${Math.round(after.card)}px settled, but no animation ended there: ${anims.map((a) => `${a.from.toFixed(0)}->${a.to.toFixed(0)}`).join(", ")}`);
     } else {
       console.log(`  --   ${W}: "${ph.name}" changed the card by ${delta.toFixed(1)}px, too little to judge the animation`);
     }
