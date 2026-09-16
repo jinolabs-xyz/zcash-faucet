@@ -456,5 +456,38 @@ echo
 # pass/fail are assigned in lib.sh, sourced above.
 # shellcheck disable=SC2154
 echo "$pass passed, $fail failed"
+
+# WHERE THE WALL CLOCK WENT. The rule this prints against: a case may not sleep longer
+# than the property it asserts requires. One case was breaking it by 4m32s - zsnap's
+# ready-gate case sat through ten 30s probes to assert a refusal that the case ninety
+# lines below asserts, plus the probe count, plus that no export was attempted, in two
+# seconds - and nobody saw it for months because a slow suite and a slow machine read
+# the same. This is the part that makes the NEXT one visible instead of waiting for
+# someone to time it by hand.
+#
+# Printed, never failed on: a budget that goes red would fire on a loaded runner and
+# teach people to re-run CI, which is the disease and not the cure. The number is here
+# so a reviewer can ask "what property needs 40 seconds?" and get an answer.
+# shellcheck disable=SC2154
+if [ -s "${HARNESS_TIMING:-/nonexistent}" ]; then
+  echo
+  echo "where the time went (wall clock before each result, slowest first):"
+  # `| head -8` would be the obvious spelling and it writes "sort: write failed: Broken pipe"
+  # into every run: head closes the pipe on its eighth line and sort takes SIGPIPE. Harmless,
+  # and it puts an error in the log of a green run, which is the kind of noise that teaches
+  # people to skim logs. awk reads to EOF and prints the first eight instead. Found in CI's own
+  # output on this PR rather than locally, where the message does not appear.
+  sort -rn "$HARNESS_TIMING" | awk -F'\t' 'NR<=8 {printf "  %7.1fs  %s\n", $1/1000000, $2}'
+  slow="$(awk -F'\t' '$1 > 10000000' "$HARNESS_TIMING" | wc -l | tr -d ' ')"
+  # AN `if`, NOT `[ ... ] && echo`. SDE-App checked whether this tail could fail a GREEN run and
+  # found it safe only by accident: `run-tests.sh` carries no `set -e`, and the last statement of
+  # the file is the fail test, so the non-zero this line returns when nothing is slow never
+  # reaches anything. That is a hazard resting on two facts a future edit could change
+  # independently. The `if` returns zero either way, so the next person to add `-e` to this file
+  # does not have to know any of it.
+  if [ "$slow" -gt 0 ]; then
+    echo "  ($slow check(s) waited over 10s - each one should be able to say which property needs it)"
+  fi
+fi
 # shellcheck disable=SC2154
 [ "$fail" -eq 0 ]

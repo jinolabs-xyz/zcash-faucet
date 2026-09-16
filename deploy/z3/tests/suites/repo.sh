@@ -1236,6 +1236,44 @@ check "the balance lookup takes the address in a POST body, and the page sends i
 check "the probe has tests, and npm test runs them" \
   "[ -f '$REPO/scripts/live-probe.test.mjs' ] && grep -q 'scripts/\*\*/\*.test.mjs' '$REPO/package.json'"
 
+echo "== repo: the harness reports where its own wall clock went"
+# THIS IS A TEXT PIN AND THAT IS ALL IT CAN BE from in here: repo.sh runs INSIDE the
+# harness, and the slowest-checks report is printed after every suite has finished, so
+# the thing it holds cannot be observed from a suite. Same limit as the node-script pins
+# - the behaviour is proved in the PR by running the harness and reading the report, and
+# by deleting the append and watching these go red. Pinned anyway, because the report is
+# the only thing that makes the NEXT four-minute sleeper visible without someone timing
+# the suite by hand, and a silent deletion would take that away with nothing saying so.
+check "every result records the wall clock before it, not the eval inside check()" \
+  "grep -qF '_hz_mark \"\$1\"; pass=' '$REPO/deploy/z3/tests/lib.sh' && grep -qF '_hz_mark \"\$1\"; fail=' '$REPO/deploy/z3/tests/lib.sh'"
+check "and does it with the bash builtin, so 2000-odd checks cost no subprocesses" \
+  "grep -qF 'EPOCHREALTIME/[.,]/' '$REPO/deploy/z3/tests/lib.sh' && ! grep -q '_hz_prev=\$(date' '$REPO/deploy/z3/tests/lib.sh'"
+check "the runner prints the slowest checks and counts the ones over 10s" \
+  "grep -qF 'where the time went' '$REPO/deploy/z3/tests/run-tests.sh' && grep -qF '\$1 > 10000000' '$REPO/deploy/z3/tests/run-tests.sh'"
+# AND THE ONE CASE THAT BROKE THE RULE STAYS FIXED. A pin on the knobs, not on a duration:
+# timing assertions go red on a loaded runner, which teaches people to re-run CI.
+# AND THE SHIPPED DEFAULTS ARE ANCHORED, because removing the sleep removed the only thing that
+# ran them (SDE-App, review of this PR, and it is my own memory's lesson used against me). Before
+# this PR the ready-gate case exercised ZSNAP_READY_TRIES=10 and ZSNAP_READY_WAIT=30 by sitting
+# through them - incidentally, which is exactly why it cost 270 seconds. THE 4m32s AND THE
+# COVERAGE WERE THE SAME FACT. Now all three uses in the suite are overrides, so 10 could become
+# 1 and 30 could become 0 and the harness would stay green, on the two numbers that gate a
+# stale-snapshot export.
+#
+# Text pins rather than a restored sleep: what is at risk is the VALUE, and a test that spends
+# four and a half minutes to read two integers is the thing this PR exists to delete.
+check "the shipped ready-probe count is anchored, not only overridden in the suite" \
+  "grep -qF 'ZSNAP_READY_TRIES=\"\${ZSNAP_READY_TRIES:-10}\"' '$REPO/deploy/z3/zsnap-export.sh'"
+check "and the shipped gap between probes" \
+  "grep -qF 'ZSNAP_READY_WAIT=\"\${ZSNAP_READY_WAIT:-30}\"' '$REPO/deploy/z3/zsnap-export.sh'"
+# AND THE OPERATOR'S SENTENCE IS DERIVED FROM THEM, not typed beside them. The refusal says
+# "over ~N min", and N is computed from the two knobs; a literal there would go stale the first
+# time either number moved, and the operator would be told a duration the script does not wait.
+check "and the refusal's ~N min is computed from those two, so it cannot go stale" \
+  "grep -qF 'over ~\$((ZSNAP_READY_TRIES * ZSNAP_READY_WAIT / 60)) min' '$REPO/deploy/z3/zsnap-export.sh'"
+check "zsnap's ready-gate case overrides the probe knobs instead of sleeping 4.5 minutes" \
+  "grep -qF 'STUB_READY=0 ZSNAP_READY_TRIES=2 ZSNAP_READY_WAIT=1 bash \"\$EXPORT\" > \"\$T/gate.log\"' '$REPO/deploy/z3/tests/suites/zsnap.sh'"
+
 echo "== repo: the fork-park marker is one path in three files, and the doc says what clearing it does NOT do"
 # THREE COPIES OF ONE PATH: watchdog.sh writes it, auto-deploy.sh refuses on it, and
 # OPERATIONS.md tells an operator where to look. A doc that names the wrong path is the
