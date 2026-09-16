@@ -20,7 +20,7 @@
  * is no longer a departure FAILS. An allowlist nobody prunes becomes a list of things the check
  * has stopped looking at.
  */
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 
 const SPEC = process.argv[2];
 const SHIPPED = process.argv.slice(3);
@@ -46,11 +46,49 @@ const DEPARTURES = SPEC.replace(/\/[^/]+$/, "/departures.json");
 // So the list is not trusted. Whatever is passed must COVER what the app actually imports,
 // and the entry files are read for `import "./x.css"` rather than the sheets being enumerated
 // here - a list in this file would drift exactly the way the one in ci.yml did.
-const ENTRY_FILES = ["src/app/page.tsx", "src/app/layout.tsx"];
-const importedSheets = [...new Set(ENTRY_FILES.flatMap((f) => {
-  if (!existsSync(f)) return [];
-  return [...readFileSync(f, "utf8").matchAll(/^\s*import\s+"\.\/([\w.-]+\.css)"/gm)].map((m) => `src/app/${m[1]}`);
-}))];
+//
+// AND THE ENTRY LIST WAS THE SAME BUG ONE LEVEL UP. Two files were named here by hand, which
+// held exactly as long as every import sat in `src/app/page.tsx`. #576 moves all four into
+// `src/components/Shell.tsx` and spells them `@/app/...` rather than `./...`, so BOTH halves of
+// the old discovery miss: the file is not read, and the spelling would not have matched if it
+// were. Measured on that branch with the listed version: `shouldCompare` comes back EMPTY, an
+// empty set satisfies every gate below, both CI invocations exit 0, and `redesign-subpages.css`
+// is never compared - a sheet that ships unchecked under a green tick.
+//
+// So nothing is listed. Every source file under src/ is read and both spellings are resolved.
+const SRC_ROOT = "src";
+const srcFiles = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+  const p = `${dir}/${e.name}`;
+  if (e.isDirectory()) return srcFiles(p);
+  return /\.(tsx|ts|jsx|js|mjs)$/.test(e.name) ? [p] : [];
+});
+const resolveSheet = (fromFile, spec) => {
+  if (spec.startsWith("@/")) return `src/${spec.slice(2)}`;
+  if (!spec.startsWith(".")) return null;           // a package import, not one of ours
+  const out = [];
+  for (const seg of `${fromFile.replace(/\/[^/]+$/, "")}/${spec}`.split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") out.pop();
+    else out.push(seg);
+  }
+  return out.join("/");
+};
+const sourceFiles = existsSync(SRC_ROOT) ? srcFiles(SRC_ROOT) : [];
+const allImports = sourceFiles.flatMap((f) =>
+  [...readFileSync(f, "utf8").matchAll(/^\s*import\s+"([^"]+\.css)"/gm)]
+    .map((m) => resolveSheet(f, m[1])).filter(Boolean));
+// THE WALK IS ITS OWN CANARY, anchored on the one import this repo has always had: `layout.tsx`
+// has imported `globals.css` since before the redesign existed. So in a tree that HAS a
+// `src/app/globals.css`, a walk returning no CSS import at all has broken rather than found
+// nothing - and the empty set it returns is indistinguishable, downstream, from "this tree has
+// no sheets", which is exactly the shape that let #576 through. Anchored on globals rather than
+// on "any source file", because a fixture with components that import no CSS is a legitimately
+// empty answer and not a broken walk; that distinction cost four fixtures on the first attempt.
+if (existsSync(`${SRC_ROOT}/app/globals.css`) && allImports.length === 0) {
+  console.error(`parity: ${sourceFiles.length} source files under src/ import no CSS at all, yet src/app/globals.css exists and the layout has always imported it. Sheet discovery is broken; refusing to report parity over an empty set.`);
+  process.exit(1);
+}
+const importedSheets = [...new Set(allImports)];
 // globals.css is the pre-redesign sheet and is not part of the transcription; everything else
 // the entry files pull in is.
 const shouldCompare = importedSheets.filter((f) => !f.endsWith("/globals.css"));
@@ -110,6 +148,18 @@ if (unvendored.length) {
 const mismatched = SHIPPED.filter((f) => specOf(f) && specOf(f) !== SPEC);
 if (mismatched.length) {
   for (const f of mismatched) console.error(`parity: ${f} declares ${specOf(f)} but is being compared against ${SPEC}.`);
+  process.exit(1);
+}
+// AND THE OTHER DIRECTION, WHICH THE COMMENT ABOVE HAS PROMISED SINCE THE SHEET LIST MOVED OUT
+// OF ci.yml AND THE CODE NEVER DID: every sheet the app imports that declares THIS spec has to
+// be in THIS invocation. Without it `shouldCompare` was only ever used to check that discovered
+// sheets exist, declare a spec, and have it vendored - all of which a sheet can pass while no
+// invocation ever compares a single one of its rules.
+const uncovered = shouldCompare.filter((f) => specOf(f) === SPEC && !SHIPPED.includes(f));
+if (uncovered.length) {
+  const many = uncovered.length > 1;
+  console.error(`parity: the app imports ${uncovered.join(", ")}, which declare${many ? "" : "s"} ${SPEC}, but ${many ? "they were" : "it was"} not passed to this invocation, so ${many ? "none of their rules are" : "not one of its rules is"} compared.`);
+  console.error(`Add ${uncovered.join(" ")} to the parity-check line for ${SPEC} in .github/workflows/ci.yml.`);
   process.exit(1);
 }
 
