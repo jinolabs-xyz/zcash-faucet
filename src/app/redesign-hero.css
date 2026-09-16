@@ -69,7 +69,13 @@ button.tag:hover,a.tag:hover{border-color:var(--muted)}
  * Only the hero's own rules. `.grid3`, `.grid2`, the analytics and status internals and the
  * claim card's contents are left where they are for the slices that own them.
  */
-.view.hero .hero-grid{flex:1 1 auto;min-height:0;height:100%}
+/* ONE ROW, AND IT IS DEFINITE. `.card.claim{max-height:100%}` resolves against the grid AREA,
+ * and an implicit `auto` row is sized BY its tallest item - so the card's max-height pointed at
+ * a row the card itself defined. Circular, so the browser treats it as `none` and the card grows
+ * past the viewport, which is how a tall panel pushed the footer down.
+ * `minmax(0,1fr)` makes the row exactly the grid's own height, so the percentage has something
+ * to resolve against and the panel's `overflow:auto` finally has a bound to scroll inside. */
+.view.hero .hero-grid{flex:1 1 auto;min-height:0;height:100%;grid-template-rows:minmax(0,1fr)}
 .hero-grid{display:grid;grid-template-columns:1.1fr 1fr;gap:calc(4.5*var(--u));align-items:center;width:100%}
 .hero-copy{display:flex;flex-direction:column;gap:calc(1.5*var(--u));align-items:flex-start}
 .eyebrow{margin:0;font-size:calc(.8*var(--u));color:var(--muted)}

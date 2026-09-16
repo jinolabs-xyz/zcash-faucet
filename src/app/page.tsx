@@ -1734,7 +1734,7 @@ export default function Home() {
                   {r?.reason || (sub ? "This network has had its share for now." : "This connection has had its share for now.")}{" "}
                   {whenText ? <>Try again at <strong>{whenText}</strong> (in {dur(remain)}).</> : <>Try again in {dur(remain)}.</>}
                 </p>
-                <p className="fine">A different address will not help: the limit is on the connection, not the address. The faucet is up.</p>
+                <p className="fine">A different address will not help. <a href="/limits">How limits work</a></p>
                 <div className="row"><button className="tag" type="button" onClick={again}>Start over</button></div>
               </div>
             );
@@ -1766,7 +1766,7 @@ export default function Home() {
                   {rc.explorerUrl && <a className="tag" href={rc.explorerUrl} target="_blank" rel="noreferrer">Open in explorer ↗</a>}
                 </div>
               )}
-              <p className="fine">The faucet is up. This is a limit, not a fault.</p>
+              <p className="fine">The faucet is up. <a href="/limits">How limits work</a></p>
               <div className="row"><button className="tag ink" type="button" onClick={again}>Try a different address</button></div>
             </div>
           );

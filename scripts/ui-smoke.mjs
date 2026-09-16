@@ -985,30 +985,139 @@ async function checkFooterReachable(browser) {
     // the stage that IS taller than a screen, and see whether the page can still reach it. With
     // the stage as it ships the box grows and the document scrolls; under the clamp the probe
     // is swallowed and a wheel cannot get to it. That is true whatever today's content weighs.
+    // THE FOURTH ANSWER, AND IT IS A CHANGE OF PREMISE, NOT A FIX. I am the author of the clamp
+    // this row now runs against, so I am saying plainly what moved rather than quietly editing an
+    // assertion until it went green.
+    //
+    // The version above required THE DOCUMENT TO GROW: put 1200px in `.comp`, and the page must
+    // get taller so a wheel can reach it. That was the right property for the page it was written
+    // for. The owner has since stated the opposite rule twice - "the footer should never move and
+    // there should not be any scrolling part" - and shipping it is what makes this row red. A
+    // growing document IS the defect now.
+    //
+    // What does not change is the thing the outage was about: CONTENT THAT EXISTS AND CANNOT BE
+    // REACHED. That is still the hazard, and under a clamp it is a bigger one, because
+    // `.stage{overflow:hidden}` will swallow anything no inner scroller catches. So the row keeps
+    // the probe and keeps the wheel, and asks the visitor's question instead of the layout's:
+    // CAN A POINTER GET TO THE BOTTOM OF IT? Page scroll and an inner scroller both count, because
+    // to a visitor's fingers they are the same gesture.
+    //
+    // This is why the property is the right one rather than the convenient one: it is green on the
+    // OLD page too, where the document grows and the wheel moves it. A rule that only holds after
+    // my change would be a rule written to fit my change.
+    //
+    // The probe goes where content actually goes - the view on screen - not into `.comp`, which
+    // holds the header, the nav and the footer and no growing content at all.
     const stage = await p.evaluate(() => {
       const el = document.querySelector(".stage");
       if (!el) return null;
       const cs = getComputedStyle(el);
-      const host = el.querySelector(".comp") ?? el;
+      const host = document.querySelector(".card.claim > .panel")
+        ?? [...document.querySelectorAll(".views > .view")].find((v) => v.getClientRects().length)
+        ?? el.querySelector(".comp") ?? el;
       const probe = document.createElement("div");
       probe.id = "tall-probe";
-      probe.style.cssText = "height:1200px;width:1px;flex:none";
+      // `flex:none` is not enough once the panel is bounded: it resolves to `flex:0 0 auto` and
+      // the item still shrinks below its content box. `min-height` is the only one with no
+      // competitor, and a probe that silently shrinks makes every row under it vacuous. On main
+      // this is a no-op - nothing there bounds the panel, so nothing squeezes the probe.
+      probe.style.cssText = "height:1200px;min-height:1200px;width:1px;flex:0 0 1200px";
       host.appendChild(probe);
-      const r = el.getBoundingClientRect();
-      const buried = Math.round(probe.getBoundingClientRect().bottom - (r.top + el.clientHeight));
-      const inserted = !!probe.getBoundingClientRect().height;
+      const inserted = probe.getBoundingClientRect().height >= 1200;
       probe.remove();
       // AFTER the probe is gone. Measured with it still in, this reported the page as 1109px
       // past the fold and turned the wheel assertion below into a false red against a document
       // that no longer overflowed - a probe of mine poisoning the next check.
       const docOver = Math.round(document.documentElement.scrollHeight - innerHeight);
-      return { overflowY: cs.overflowY, buried, docOver, inserted };
+      return { overflowY: cs.overflowY, docOver, inserted };
     });
-    ok(`${label}: content taller than the viewport is not swallowed by the stage`,
-      !!stage && stage.inserted && stage.buried <= 1,
+
+    // ASKED STRUCTURALLY, NOT KINETICALLY, and the wheel version that stood here was wrong in a
+    // way I could not have found from my own tree. SDE-UI ran it against unmodified origin/main:
+    // RED at 1280x720 and 1366x768, 865px and 852px below the fold. My claim that the new property
+    // was "green on the old page too" was false as measured, and that claim was the whole argument
+    // for re-premising a shipped row.
+    //
+    // What saved the premise was that they did not stop at the red. The content IS reachable on
+    // main at every size - the same probe, reached by other means at -217, -206 and -274px, with
+    // the document scrollable by 1139, 784 and 1101px. So main has no unreachability defect and
+    // the property holds there. TWELVE WHEEL EVENTS AT ONE POINT is what failed, not the property.
+    //
+    // AND THE ROW WAS NON-DETERMINISTIC, which is the part that would have cost someone else a
+    // day: at 1280x720 the SAME row gave -217 standalone and 865-below inside the full suite, same
+    // tree, same size. Rows before it leave the page in a scroll state it does not control, so it
+    // would have flaked in CI on an unrelated change and been blamed there.
+    //
+    // THE MECHANISM IS THE INDICTMENT. At 1366x768 the chain is div.panel(auto, 343px), then
+    // body(visible, 784px), then html. The panel eats the first 343px and the remainder does not
+    // chain the way a fixed budget of wheel events assumes. It fails exactly when an intermediate
+    // auto scroller exists - which is the thing THIS CHANGE CREATES. A kinetic probe would have
+    // got less reliable on my tree, not more, while appearing to endorse it.
+    //
+    // So the chain is walked instead: the probe is reachable if every ancestor between it and the
+    // document either does not clip, or clips and can scroll far enough to reveal it. No wheel
+    // budget, no dependence on what ran before, and it states the property directly.
+    //
+    // `hidden` IS NOT REACHABLE, and that exclusion is the point rather than a detail. An
+    // `overflow:hidden` box can still be scrolled programmatically, so counting it would call
+    // buried content reachable and hand back the exact false green this row exists to prevent.
+    // SDE-UI shipped that hatch on #609 and had to fix it; this is the same trap one layer up.
+    const reached = await p.evaluate(() => {
+      const host = document.querySelector(".card.claim > .panel")
+        ?? [...document.querySelectorAll(".views > .view")].find((v) => v.getClientRects().length)
+        ?? document.querySelector(".stage .comp") ?? document.querySelector(".stage");
+      const probe = document.createElement("div");
+      probe.id = "tall-probe";
+      probe.style.cssText = "height:1200px;min-height:1200px;width:1px;flex:0 0 1200px";
+      host.appendChild(probe);
+
+      // SCROLL THE CHAIN THE WAY A WHEEL WOULD, THEN LOOK. Walking the ancestors and comparing
+      // each one's scrollable extent against the probe's CURRENT offset is wrong, and this row
+      // caught me doing it: it reported `article.card(hidden,0) buries 1010px` on a tree where
+      // `div.panel` could scroll 1139px, because once the panel scrolls the probe moves up
+      // relative to the card too. The overflow was counted once per ancestor instead of once.
+      //
+      // So each scrollable ancestor is actually scrolled and the question is asked ONCE, at the
+      // end: is the probe inside the viewport and inside every box that clips it. Composition
+      // comes out right because the boxes have really moved.
+      //
+      // ONLY auto AND scroll ARE TOUCHED. `overflow:hidden` scrolls perfectly well from a script
+      // and not at all from a pointer, so scrolling one here would manufacture the false green
+      // this row exists to catch - the #609 hatch, one layer up.
+      const chain = [];
+      for (let el = probe.parentElement; el; el = el.parentElement) {
+        const cs = getComputedStyle(el);
+        if (cs.overflowY !== "visible") {
+          chain.push(`${el.tagName.toLowerCase()}${el.className ? "." + String(el.className).split(/\s+/)[0] : ""}(${cs.overflowY},${el.scrollHeight - el.clientHeight})`);
+          if (cs.overflowY === "auto" || cs.overflowY === "scroll") el.scrollTop = el.scrollHeight;
+        }
+        if (el === document.documentElement) break;
+      }
+      window.scrollTo(0, document.documentElement.scrollHeight);
+
+      // Now measure. A clipping ancestor that still cuts the probe off is the failure, and it is
+      // named, because "unreachable" without the box that buried it is a re-run rather than a
+      // diagnosis.
+      let blocked = null;
+      const pb = probe.getBoundingClientRect().bottom;
+      for (let el = probe.parentElement; el && !blocked; el = el.parentElement) {
+        const cs = getComputedStyle(el);
+        if (cs.overflowY !== "visible") {
+          const past = Math.round(pb - el.getBoundingClientRect().bottom);
+          if (past > 1) blocked = `${el.tagName.toLowerCase()}${el.className ? "." + String(el.className).split(/\s+/)[0] : ""}(${cs.overflowY}) still buries ${past}px at full scroll`;
+        }
+        if (el === document.documentElement) break;
+      }
+      if (!blocked && Math.round(pb - innerHeight) > 1) blocked = `${Math.round(pb - innerHeight)}px below the fold at full scroll`;
+      probe.remove();
+      return { blocked, chain: chain.join(" <- ") || "nothing clips" };
+    });
+    ok(`${label}: content taller than the viewport can still be reached`,
+      !!stage && stage.inserted && !reached.blocked,
       !stage ? "no .stage on the page"
-        : !stage.inserted ? "the probe did not render, so nothing was measured"
-        : `overflow-y ${stage.overflowY}, a 1200px probe sits ${stage.buried}px past the stage's own box`);
+        : !stage.inserted ? "the probe did not render at its full height, so nothing was measured"
+        : reached.blocked ? `${reached.blocked}; chain ${reached.chain}`
+        : `reachable, chain ${reached.chain}`);
 
     // And a REAL wheel, through the browser rather than a dispatched event, on the pages that
     // are taller than the viewport. This one can still be inapplicable - it says so rather
@@ -2843,6 +2952,148 @@ function checkSingleHeader() {
 // PROSE LINKS ARE NOT SUBJECTS. A link inside a sentence cannot be given a 44px box without
 // wrecking the paragraph and WCAG 2.5.8 exempts it, so they are reported and not failed - which
 // also means this row cannot be quietly satisfied by someone wrapping a control in a <p>.
+// THE THREE CLAIMS #610 MADE AND COULD NOT SUPPORT. SDE-UI blocked it for touching no test
+// file, and proved the point the right way round: they aimed mutants at each claim and published
+// the GREENS. Reverting the tab token, deleting both /limits links and deleting the limit card's
+// copy all left the suite at 290/0, so that number was never evidence about the change.
+//
+// THE CONTRAST ROW IS GATED AT 3.0, not at the 2.03 the first fix reached. ui-smoke.mjs:1063
+// argues borders are exempt from 1.4.11 because THE GLYPH identifies the control; a text-only tab
+// with `background:none` has no glyph, so its border is the only non-text thing saying "control",
+// which is the defect the owner reported. It is inside the gated scope, not outside it.
+// THE OWNER'S RULE, STATED TWICE: "the footer should never move and there should not be any
+// scrolling part". The claim card breaks it by growing - the panel swaps between thirteen phases
+// and the receipt is the tallest - and the growth used to travel straight out of `.comp`'s
+// `height:100dvh` into the document, because `main.views` sits at the flex default
+// `min-height:auto` and will not shrink below its content. Measured before the fix: 39px of page
+// overflow at 1440x900, 132px at 1440x720.
+//
+// WHY A SYNTHETIC PROBE AND NOT THE REAL PHASES. Driving a phase measures whichever panel is
+// tallest TODAY. The property is that growth of ANY size is absorbed, so the probe grows the panel
+// by a fixed 600px, which is far past any real panel and does not drift as the panels are edited.
+// The phases are still driven below for the no-scroll half, at rest and in the tallest state I can
+// reach, so the row is not purely hypothetical.
+async function checkFooterHeldAgainstGrowth(browser, base) {
+  for (const vp of [{ width: 1280, height: 720 }, { width: 1366, height: 768 }, { width: 1440, height: 900 }]) {
+    const label = `${vp.width}x${vp.height}`;
+    const ctx = await browser.newContext({ viewport: vp });
+    const page = await ctx.newPage();
+    await page.goto(base, { waitUntil: "networkidle" });
+    await page.waitForSelector(".card.claim", { timeout: 15_000 }).catch(() => {});
+
+    const before = await page.evaluate(() => {
+      const f = document.querySelector("footer.ftr");
+      return { footerTop: f ? Math.round(f.getBoundingClientRect().top) : null,
+        over: document.documentElement.scrollHeight - document.documentElement.clientHeight };
+    });
+    ok(`${label}: at rest the page does not scroll and the footer is on screen`,
+      before.footerTop !== null && before.over <= 1 && before.footerTop < vp.height,
+      `footer top ${before.footerTop}, document overflows by ${before.over}px`);
+
+    const after = await page.evaluate(() => {
+      const panel = document.querySelector(".card.claim > .panel");
+      if (!panel) return { grew: false };
+      const probe = document.createElement("div");
+      probe.setAttribute("data-ui-smoke", "growth-probe");
+      // `flex:0 0` AND `min-height`, because a bare `height:600px` child of this panel collapses -
+      // it measured 98.7px - and the footer then "held" against 98px of growth it had slack for
+      // while two rows went green proving nothing. The absorption row below is what caught it.
+      //
+      // THE CAUSE IS NOT "IT IS A COLUMN FLEX CONTAINER", which is what I first wrote and what
+      // SDE-UI measured and disproved. On origin/main the identical bare div comes back at a full
+      // 600px at all five sizes, because there the panel is UNBOUNDED - it reports zero internal
+      // scroll and the card grows 537 to 1153 instead. A flex child is only squeezed when its
+      // container has a bound to squeeze it against. Bounding the panel is exactly what the clamp
+      // does, so the collapse is a consequence OF this change and not a pre-existing trap: the
+      // guard is necessary here and a no-op on main.
+      probe.style.cssText = "flex:0 0 600px;min-height:600px;height:600px";
+      panel.appendChild(probe);
+      const f = document.querySelector("footer.ftr");
+      return { grew: true,
+        footerTop: Math.round(f.getBoundingClientRect().top),
+        over: document.documentElement.scrollHeight - document.documentElement.clientHeight,
+        // SCROLLED TO THE END AND THE PROBE'S BOTTOM LOOKED FOR, rather than comparing the
+        // internal scroll against the probe's height. The panel grows into whatever slack the
+        // card has before it starts scrolling, so that arithmetic lands wherever today's content
+        // leaves it - 501px at one size and 539px at another - and any threshold picked from
+        // those numbers is a threshold fitted to today's copy. Reachable or not reachable does
+        // not drift.
+        panelScroll: panel.scrollHeight - panel.clientHeight,
+        reachable: (() => {
+          panel.scrollTop = panel.scrollHeight;
+          return Math.round(probe.getBoundingClientRect().bottom - panel.getBoundingClientRect().bottom);
+        })() };
+    });
+
+    ok(`${label}: 600px of panel growth does not move the footer`,
+      after.grew && Math.abs(after.footerTop - before.footerTop) <= 1,
+      after.grew ? `footer top ${before.footerTop} -> ${after.footerTop}` : "no .card.claim > .panel to grow");
+    ok(`${label}: and the document still does not scroll`,
+      after.grew && after.over <= 1,
+      after.grew ? `document overflows by ${after.over}px after the probe` : "not measured");
+    // THE GROWTH WENT SOMEWHERE. Without this, a panel with `display:none` or a clipped card would
+    // pass the two rows above by swallowing the probe instead of scrolling it, which is the same
+    // defect one step along - content that exists and cannot be reached.
+    ok(`${label}: the panel absorbed it by scrolling itself, not by clipping it`,
+      after.grew && after.panelScroll > 0 && after.reachable <= 1,
+      after.grew ? `panel has ${after.panelScroll}px of internal scroll and the probe's bottom sits ${after.reachable}px past the panel's own box at full scroll`
+        : "no .card.claim > .panel to grow");
+
+    await ctx.close();
+  }
+}
+
+async function checkTabAffordanceAndLimits(browser, base) {
+  const rel = (a, b) => {
+    const l = (h) => {
+      const [r, g, bl] = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+      const f = (c) => (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+      return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(bl);
+    };
+    const [x, y] = [l(a), l(b)];
+    return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+  };
+  const hex = (rgb) => {
+    const m = rgb.match(/\d+/g);
+    return "#" + m.slice(0, 3).map((n) => (+n).toString(16).padStart(2, "0")).join("");
+  };
+
+  for (const theme of ["paper", "ink"]) {
+    const ctx = await browser.newContext({ viewport: DESKTOP });
+    const page = await ctx.newPage();
+    await page.goto(base, { waitUntil: "networkidle" });
+    await page.evaluate((t) => { localStorage.setItem("zfaucet_theme", t); document.documentElement.dataset.theme = t; }, theme);
+    await page.waitForTimeout(250);
+    const r = await page.evaluate(() => {
+      const b = [...document.querySelectorAll(".tabs button")].find((e) => e.getAttribute("aria-selected") !== "true");
+      if (!b) return null;
+      const cs = getComputedStyle(b);
+      // THE BACKGROUND IT SITS ON, not the page's. The tab is inside `.panel`, whose own
+      // background is a gradient - so the honest comparison walks up to the first ancestor with
+      // an opaque colour, which is what a reader's eye does.
+      let bg = "rgba(0, 0, 0, 0)", el = b;
+      while (el && (bg === "rgba(0, 0, 0, 0)" || bg === "transparent")) { bg = getComputedStyle(el).backgroundColor; el = el.parentElement; }
+      return { border: cs.borderTopColor, bg, width: cs.borderTopWidth };
+    });
+    ok(`${theme}: the unselected tab's border reaches 3.0:1, so it reads as a control`,
+      !!r && rel(hex(r.border), hex(r.bg)) >= 3.0,
+      r ? `border ${hex(r.border)} on ${hex(r.bg)} = ${rel(hex(r.border), hex(r.bg)).toFixed(2)}:1, width ${r.width}` : "no unselected tab");
+    await ctx.close();
+  }
+
+  // THE PAGE EXISTS AND THE CARDS REACH IT. A link to a 404 is worse than no link, and a page
+  // reachable from nowhere is the same defect one step along - R2 showed both can be deleted in
+  // silence.
+  const ctx = await browser.newContext({ viewport: DESKTOP });
+  const page = await ctx.newPage();
+  const res = await page.goto(base + "/limits", { waitUntil: "networkidle" });
+  const body = await page.locator(".view.sub").innerText().catch(() => "");
+  ok("/limits answers 200 and states the limits it enforces",
+    res?.status() === 200 && /Per address/.test(body) && /Per connection/.test(body) && /rolling/i.test(body),
+    `status ${res?.status()}, ${body.replace(/\s+/g, " ").slice(0, 90)}`);
+  await ctx.close();
+}
+
 async function checkTapFloor(browser, base) {
   const WIDTHS = [[375, 812], [600, 900], [1024, 768], [1440, 900]];
   const PAGES = [["/", "index"], ["/donate", "donate"], ["/terms", "terms"], ["/fund", "fund"]];
@@ -3262,6 +3513,8 @@ try {
   // The phone. Its own browser context, so it cannot disturb the desktop page above
   // it, and after the desktop claim so a mobile failure is never the first thing to
   // go red when something more basic is broken.
+  await checkTabAffordanceAndLimits(browser, BASE);
+  await checkFooterHeldAgainstGrowth(browser, BASE);
   await checkTapFloor(browser, BASE);
   await checkMobile(browser, BASE);
 

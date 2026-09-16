@@ -18,7 +18,7 @@
  */
 /* ===== 1. Tokens ===== */
 :root{
-  --page:#f0f0f0; --surface:#fff; --panel:#fffaf6;
+  --page:#f0f0f0; --surface:#fff; --panel:#fffaf6; --tab-border:#968981;
   --ink:#282828; --ink-2:#292929; --ink-3:#151515; --muted:#6f6f6f; --label:#676767;
   --orange:#ff6900; --orange-soft:#ffdfca; --orange-line:#f27624;
   --accent:var(--orange);            /* marks: today's bar, LIVE ring, focus ring, glyphs */
@@ -42,7 +42,7 @@
   --cards-scale:1;
 }
 html[data-theme="ink"]{
-  --page:#171615; --surface:#201e1d; --panel:#262220;
+  --page:#171615; --surface:#201e1d; --panel:#262220; --tab-border:#7d736b;
   --ink:#f3f2f2; --ink-2:#f3f2f2; --ink-3:#fff; --muted:#b5b0ab; --label:#b5b0ab;
   --accent-text:#ff9783; --green:#35c46a; --green-text:#35c46a; --warn:#e0a43a; --warn-text:#e0a43a; --bad:#ff7b70; --bad-text:#ff7b70;
   --border:rgb(255 233 218 / 9%); --hair:#36312e; --prompt-border:#554d48; --prompt-bg:#1a1817;

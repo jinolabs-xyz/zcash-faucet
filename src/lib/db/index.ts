@@ -133,8 +133,7 @@ async function whyBlocked(
         // whoever used the other slots, and "your connection" is the thing they can
         // actually reason about.
         reason:
-          `This connection has used all ${ipDailyMax} of its drips for the last ${Math.round(cooldownSeconds / 3600)} hours. ` +
-          "Everyone on the same network shares this limit, so a different address will not help. Try again later.",
+          `This connection has used all ${ipDailyMax} of its drips for the last ${Math.round(cooldownSeconds / 3600)} hours.`,
         retryAfterSeconds: Math.max(1, (row?.frees_at ?? now) - now),
       };
     }

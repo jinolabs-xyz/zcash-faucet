@@ -301,4 +301,47 @@ html :focus-visible{outline-color:var(--accent-text)}
  * what the phone breakpoint already switches to.
  */
 .stage{container-type:inline-size;height:auto;min-height:100dvh;overflow:visible}
-@media (min-width:56rem){.stage{overflow:visible}.comp{height:auto;min-height:100dvh}}
+@media (min-width:56rem){
+  /* THE CLAIM VIEW IS ONE SCREEN AGAIN, and only it. The owner's rule is that the footer never
+   * moves and the page never scrolls; the claim card broke it because a tall panel - the sent
+   * receipt is the worst - grew the document past the viewport and pushed the footer down.
+   * Measured before this: 39px over at 1440x900, 132px at 1440x720.
+   *
+   * WHY THIS CAN WORK NOW AND COULD NOT BEFORE. The clamp was removed in S2a because it
+   * SWALLOWED content: footer cut by 30-93px, Donate/Terms/GitHub unreachable by a pointer.
+   * That was a card with no inner scroll box. #583 gave it `div.panel`, and
+   * `.card.claim > .panel{overflow:auto}` is the design's own answer - the card stops growing
+   * and its contents scroll inside it. The reason the old objection does not apply is the
+   * `.panel` that did not exist then.
+   *
+   * `.comp` takes a DEFINITE height so `.view.hero > .hero-grid`'s `height:100%` resolves and
+   * `.card.claim{max-height:100%}` finally means something; without it that max-height is
+   * inert, which is what I measured on #598.
+   *
+   * NOT `.stage{overflow:hidden}`, which is the other half of the design's clamp: the status,
+   * analytics and tools views still hold pre-redesign content with no scroll box of their own,
+   * and hiding their overflow is exactly the swallow this removed. They keep page scroll. */
+  .stage{overflow:visible}
+  .comp{height:100dvh;min-height:100dvh}
+  /* `min-height:0` ON EVERY LINK OF THE CHAIN, and the one that was missing is the reason the
+   * first two attempts moved the number without fixing it. A flex item defaults to
+   * `min-height:auto`, which refuses to shrink below its content's min-content size - so
+   * `main.views` sat at 651px inside a 720px `.comp` whose children summed to 798, and the
+   * excess escaped as document height. The card was already bounded; the box holding it was
+   * not. Measured: comp 720, views 651, hero-grid 619, card 619, page over by 106. */
+  .comp > .views{min-height:0}
+  .comp > .view.hero{min-height:0}
+
+  /* EVERY VIEW, NOT JUST THE CLAIM ONE. Bounding `.comp` fixed the card and broke the status
+   * view: at 1024x768 it ran to 1081px inside a 768px box, spilled over the footer, and
+   * fit-check caught all four rows with "footer links unreachable after scrolling" - which is
+   * the exact failure the clamp was removed for in S2a.
+   *
+   * The claim card survives the clamp because #583 gave it `.panel{overflow:auto}`. The other
+   * views have no such box, so they get one here. That is the design's model applied evenly -
+   * each view is one screen and its own content scrolls inside it - and it is what the owner's
+   * rule actually asks for: the footer never moves, on every view, not only on the one that
+   * prompted the complaint. */
+  .views > .view{min-height:0}
+  .views > .view:not(.hero){overflow-y:auto}
+}
