@@ -1,5 +1,20 @@
 {
   "_": "Departures from design/spec/S2-S5-20260915T2224Z/index.css, the S2 slice. Each entry carries the body it declares, so a second, different change to the same rule cannot inherit this label.",
+  "_slice": {
+    "why": "S2's spec block is a whole page, so it carries about ninety card-internal rules that belong to S2b, which has no PR yet. DROPPED is enforced for this spec only once S2b is actually in the tree.",
+    "facts": [
+      {
+        "file": "src/app/page.tsx",
+        "contains": "./redesign-card.css",
+        "means": "the card sheet is APPLIED to the page. Not 'the file exists': src/app/redesign-card.css is committed inert on SDE-App's branch, imported by nothing, so the transcription could be reviewed before it could move a pixel. Presence would arm this gate with the card still the legacy block."
+      },
+      {
+        "file": "src/app/page.tsx",
+        "contains": "data-phase",
+        "means": "the markup the sheet styles is really rendering. The snapshot's own card is a stack of div.phase[data-phase], and the transcription keeps the attribute, so this is design-anchored rather than invented."
+      }
+    ]
+  },
   ".card.claim": {
     "why": "`will-change:height` for the panel animation, which the frozen preview does not need because its demo machine swaps panels without animating the box.",
     "shipped": "will-change:height"

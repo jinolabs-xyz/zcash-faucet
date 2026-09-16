@@ -79,10 +79,20 @@ const shouldCompare = importedSheets.filter((f) => !f.endsWith("/globals.css"));
 // snapshot, which is the moving path this whole file exists to replace.
 const SPEC_DECL = /^\/\*\s*@spec\s+(\S+)\s*\*\//;
 const specOf = (f) => {
+  if (!existsSync(f)) return null;
   const first = readFileSync(f, "utf8").split("\n", 1)[0];
   const m = first.match(SPEC_DECL);
   return m ? m[1] : null;
 };
+// AN IMPORT OF A SHEET THAT IS NOT THERE IS A NAMED FAILURE, not an ENOENT stack. Found by my
+// own slice-gate fixture, which imports a sheet it deliberately does not create: the discovery
+// read the path straight and the whole run died with `Error: ENOENT` and a node trace, which
+// tells a reader nothing about which import is wrong.
+const missingSheets = shouldCompare.filter((f) => !existsSync(f));
+if (missingSheets.length) {
+  console.error(`parity: the app imports ${missingSheets.join(", ")}, which ${missingSheets.length > 1 ? "do" : "does"} not exist.`);
+  process.exit(1);
+}
 const undeclaredSheets = shouldCompare.filter((f) => !specOf(f));
 if (undeclaredSheets.length) {
   console.error(`parity: ${undeclaredSheets.join(", ")} ${undeclaredSheets.length > 1 ? "do" : "does"} not declare a spec.`);
@@ -226,7 +236,36 @@ const pagesInShell = ["/terms", "/donate", "/fund"].filter((r) => {
   const src = readFileSync(f, "utf8");
   return src.includes('"stage"') || (shellOwnsStage && /<Shell[\s/>]/.test(src));
 });
-const transcriptionComplete = wiredViews.length === 4 && pagesInShell.length === 3;
+// AND A SLICE GATES ON ITS OWN FACTS, not on the shell's. A spec block is a whole PAGE, so
+// S2's carries the ninety card-internal rules that belong to S2b - which has no PR yet. Gating
+// DROPPED on "the shell transcription is complete" would turn main red for a slice that has
+// not shipped, the moment the slices that HAVE shipped finish. So a spec's departures file may
+// declare the facts that mean ITS slice is in the tree, and DROPPED is enforced for that spec
+// only when all of them hold.
+//
+// TWO FACTS, NOT ONE, AND NEITHER IS "THE FILE EXISTS" (SDE-App, asked for the S2b marker and
+// warning me off the obvious answer). `src/app/redesign-card.css` is ALREADY committed on their
+// branch, inert and imported by nothing, so that the transcription could be reviewed before it
+// could move a pixel. Gating on the file's presence would have armed DROPPED for ninety rules
+// the moment that groundwork merged, with the card still the legacy block. The facts that mean
+// the slice is live are that page.tsx IMPORTS the sheet and that page.tsx renders the markup
+// the sheet styles. Same shape as the page-in-shell pair, and the same reason: a file in a
+// directory is not a wiring.
+const sliceFacts = (() => {
+  if (!existsSync(DEPARTURES)) return null;
+  const d = JSON.parse(readFileSync(DEPARTURES, "utf8"));
+  const decl = d._slice;
+  if (!decl || !Array.isArray(decl.facts) || decl.facts.length === 0) return null;
+  return decl;
+})();
+const sliceInTree = sliceFacts
+  ? sliceFacts.facts.every((f) => existsSync(f.file) && readFileSync(f.file, "utf8").includes(f.contains))
+  : null;
+if (sliceFacts) {
+  const held = sliceFacts.facts.filter((f) => existsSync(f.file) && readFileSync(f.file, "utf8").includes(f.contains)).length;
+  console.log(`  slice gate: ${held}/${sliceFacts.facts.length} facts hold${sliceInTree ? "" : `, so DROPPED is not gated yet - ${sliceFacts.why}`}`);
+}
+const transcriptionComplete = sliceFacts ? sliceInTree : (wiredViews.length === 4 && pagesInShell.length === 3);
 
 const divergent = new Set(transcriptionComplete ? [...added, ...changed, ...dropped] : [...added, ...changed]);
 

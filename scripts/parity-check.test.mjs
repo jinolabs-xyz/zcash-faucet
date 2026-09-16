@@ -287,3 +287,63 @@ test("a view still marked legacy-measure does not count as wired", () => {
   assert.match(r.out, /3\/4 views wired/);
 });
 
+// A SLICE GATES ON ITS OWN FACTS, AND THEY ARE ANDed. A spec block is a whole page, so one
+// slice's spec carries rules belonging to a slice that has not shipped; gating DROPPED on
+// another slice's completeness turns main red for work nobody has done yet.
+//
+// NEITHER FACT IS "THE FILE EXISTS" (SDE-App, who warned me off the obvious answer): the card
+// sheet is committed INERT on their branch, imported by nothing, so presence is true while the
+// slice is not live. The facts are that the page imports it and that the markup it styles
+// renders - the same shape as page-renders-Shell AND Shell-owns-the-stage.
+const SLICE = (facts) => ({
+  _slice: { why: "the card slice has not shipped", facts },
+});
+const F_IMPORT = { file: "src/app/page.tsx", contains: "./card.css" };
+const F_MARKUP = { file: "src/app/page.tsx", contains: "data-phase" };
+
+test("with none of the slice's facts, DROPPED is not gated", () => {
+  const r = runParity({
+    spec: SPEC_WITH_EXTRA, shipped: ".a{color:red}\n",
+    entry: "export default function P(){ return <div/> }\n",
+    departures: SLICE([F_IMPORT, F_MARKUP]),
+  });
+  assert.match(r.out, /slice gate: 0\/2 facts hold/);
+  assert.equal(r.code, 0);
+});
+
+test("with only ONE of them, still not gated - they are ANDed", () => {
+  const r = runParity({
+    spec: SPEC_WITH_EXTRA, shipped: ".a{color:red}\n",
+    entry: 'import "./card.css";\nexport default function P(){ return <div/> }\n',
+    sheets: { "card.css": DECL("design/spec/spec.css") + ".x{color:red}\n" },
+    departures: SLICE([F_IMPORT, F_MARKUP]),
+  });
+  assert.match(r.out, /slice gate: 1\/2 facts hold/);
+  assert.equal(r.code, 0);
+});
+
+test("and with both, DROPPED is enforced for that spec", () => {
+  const r = runParity({
+    spec: SPEC_WITH_EXTRA, shipped: ".a{color:red}\n",
+    entry: 'import "./card.css";\nexport default function P(){ return <div data-phase="ready"/> }\n',
+    sheets: { "card.css": DECL("design/spec/spec.css") + ".x{color:red}\n" },
+    departures: SLICE([F_IMPORT, F_MARKUP]),
+  });
+  assert.match(r.out, /slice gate: 2\/2 facts hold/);
+  assert.equal(r.code, 1);
+  assert.match(r.out, /\.gone/);
+});
+
+// AND THE FILE MERELY EXISTING IS NOT ONE OF THE FACTS, which is the trap: a fact keyed on the
+// sheet being in the directory is TRUE while the slice is inert.
+test("a fact keyed on the sheet existing would arm early, so it is not what is declared", () => {
+  const r = runParity({
+    spec: SPEC_WITH_EXTRA, shipped: ".a{color:red}\n",
+    entry: "export default function P(){ return <div/> }\n",
+    sheets: { "card.css": ".x{color:red}\n" },
+    departures: SLICE([F_IMPORT, F_MARKUP]),
+  });
+  assert.match(r.out, /slice gate: 0\/2 facts hold/);
+  assert.equal(r.code, 0);
+});
+
