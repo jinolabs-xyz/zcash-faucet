@@ -121,6 +121,234 @@ const COLOUR_LIB = `
   `;
 
 /**
+ * NO LEGACY RULE STILL PAINTS THE REDESIGNED PAGE, read off the BUILT app in both themes.
+ *
+ * globals.css still ships beside the transcription and styles some of the same selectors. A
+ * transcription replaces only what it NAMES (L19), so every property the old rule set and the
+ * new one is silent about survives - three of them did: `.tag` kept `text-transform:uppercase`
+ * so the design's lower-case status words rendered OK PARKED UNWATCHED, `html` kept the old
+ * palette behind the overscroll, and `a:hover` painted every link `--color-accent-800` the
+ * moment a pointer touched it.
+ *
+ * THE FIXES USED TO DEPEND ON LINK ORDER AND NOW DEPEND ON SPECIFICITY, which is the reason
+ * this check exists rather than being a nicety. The build emits two CSS chunks; globals landed
+ * in one and the transcription in the other, and the fix won because the served page happened
+ * to link them in that order. Next does not promise it. Swapping that for specificity alone
+ * would trade a fix that depends on link order for one that depends on nobody reintroducing
+ * the old rule - so the VALUES are asserted here, and an order flip or a reintroduced rule is
+ * red rather than silent.
+ *
+ * Compared against the retired token RESOLVED ON THE PAGE, not against a hard-coded hex, so
+ * this keeps working if the old palette's value is ever edited.
+ */
+/* THE PAGE'S OWN IDENTITY MUST NOT DEPEND ON WHICH CSS CHUNK THE BUNDLER EMITS FIRST.
+ *
+ * This is the guard the redesign has been missing since #562, and it is the finding that
+ * outranked the five leaks it was found alongside. Next emits the legacy sheet and the
+ * transcription as TWO chunks, and the served page happens to link them in the order that
+ * makes the redesign win. Nothing promises that order. Both sheets set `body` background,
+ * colour and font at (0,0,1) - `redesign-shell.css` against `globals.css:73` - and both style
+ * the theme toggle at (0,1,0), `.iconbtn` against `.theme-toggle`, on the same button.
+ *
+ * Measured before the fix, by reordering the <link> tags on the built page: 100 of 118 nodes
+ * repainted, 234 property deltas in paper and 165 in ink. Font family Segoe UI Variable to
+ * Archivo, background, colour, line-height, the toggle's border. The five leaks that #575 is
+ * named for were the VISIBLE part of that; the rest was silent and the suite was 146/0
+ * through all of it.
+ *
+ * So this does not pin a list of values. It asserts the PROPERTY: flip the chunk order on the
+ * real built page and nothing may move. That is true of whatever the design grows next, where
+ * a list of values would go stale the first time a colour changed.
+ *
+ * WHY IT CANNOT PASS VACUOUSLY. A page with one stylesheet, or a flip that did not take, or a
+ * body that rendered nothing, would all report "no deltas" and go green. So the flip is
+ * verified by reading the href order back, and the node count carries a floor. */
+async function checkChunkOrderIdentity(browser) {
+  // outline* is here because of the keyboard pass below: a focus ring is the one part of the
+  // page a rest-state snapshot cannot see, and it was the sixth leak.
+  const PROPS = ["fontFamily", "backgroundColor", "color", "lineHeight", "fontSize", "fontWeight", "borderColor", "borderRadius", "letterSpacing", "outlineColor", "outlineStyle", "outlineWidth"];
+  for (const theme of ["paper", "ink"]) {
+  for (const keyboard of [false, true]) {
+    const c = await browser.newContext({ viewport: DESKTOP });
+    const p = await c.newPage();
+    await p.goto(BASE, { waitUntil: "networkidle" });
+    await p.evaluate((t) => {
+      try { localStorage.setItem("zfaucet_theme", t); } catch {}
+      document.documentElement.dataset.theme = t;
+    }, theme);
+    await p.waitForTimeout(300);
+
+    const order = () => p.evaluate(() => [...document.querySelectorAll('link[rel="stylesheet"]')].map((l) => l.href));
+    const snap = () => p.evaluate((PROPS) => {
+      const out = [];
+      document.querySelectorAll("body, body *").forEach((el) => {
+        const cs = getComputedStyle(el);
+        out.push({ tag: el.tagName.toLowerCase(), cls: (el.className || "").toString().slice(0, 30), v: PROPS.map((k) => cs[k]) });
+      });
+      return out;
+    }, PROPS);
+
+    // A REST-STATE SNAPSHOT CANNOT SEE A FOCUS RING, and that is where the sixth leak was:
+    // `:focus-visible` in globals ties with the transcription's at (0,1,0), so under a flip
+    // every keyboard ring on the page took the retired accent while this check read zero.
+    // Tab moves focus with KEYBOARD modality, which is what `:focus-visible` matches on.
+    let focused = "(rest)";
+    if (keyboard) {
+      for (let i = 0; i < 3; i++) await p.keyboard.press("Tab");
+      focused = await p.evaluate(() => {
+        const a = document.activeElement;
+        if (!a || a === document.body) return "";
+        return `${a.tagName.toLowerCase()}${a.id ? "#" + a.id : ""}${a.matches(":focus-visible") ? " :focus-visible" : " NOT focus-visible"}`;
+      });
+      // Without this the keyboard pass is a second copy of the rest pass wearing a different
+      // label - the exact vacuity this check was rebuilt to avoid.
+      ok(`${theme}: the keyboard pass actually lands on a focus ring`,
+        !!focused && focused.includes(":focus-visible"), focused || "nothing took focus");
+    }
+    const linksBefore = await order();
+    const before = await snap();
+    await p.evaluate(() => {
+      const ls = [...document.querySelectorAll('link[rel="stylesheet"]')];
+      if (ls.length < 2) return;
+      ls[0].parentNode.insertBefore(ls[ls.length - 1], ls[0]);   // last chunk linked first
+    });
+    await p.waitForTimeout(400);
+    const linksAfter = await order();
+    const after = await snap();
+
+    const flipped = linksBefore.length >= 2 && linksBefore.join() !== linksAfter.join();
+    let moved = 0, deltas = 0, first = "";
+    for (let i = 0; i < Math.min(before.length, after.length); i++) {
+      const a = before[i], b2 = after[i];
+      if (a.v.join("|") === b2.v.join("|")) continue;
+      moved++;
+      for (let k = 0; k < a.v.length; k++) {
+        if (a.v[k] === b2.v[k]) continue;
+        deltas++;
+        if (!first) first = `<${a.tag}${a.cls ? " ." + a.cls.split(" ")[0] : ""}> ${PROPS[k]} ${a.v[k]} -> ${b2.v[k]}`;
+      }
+    }
+    ok(`${theme}${keyboard ? ", keyboard-focused," : ","} the page is identical with the CSS chunks linked in the other order`,
+      flipped && before.length >= 50 && moved === 0,
+      !flipped ? `the flip did not take: ${linksBefore.length} stylesheet(s)`
+        : before.length < 50 ? `only ${before.length} nodes rendered, too few to judge`
+        : `${moved} of ${before.length} nodes moved, ${deltas} deltas; first: ${first}`);
+    await c.close();
+  }
+  }
+}
+
+async function checkLegacyPalette(browser) {
+  for (const theme of ["paper", "ink"]) {
+    const c = await browser.newContext({ viewport: DESKTOP });
+    const p = await c.newPage();
+    await p.goto(BASE, { waitUntil: "networkidle" });
+    await p.evaluate((t) => {
+      try { localStorage.setItem("zfaucet_theme", t); } catch {}
+      document.documentElement.dataset.theme = t;
+    }, theme);
+    await p.waitForTimeout(300);
+
+    // The retired accent, resolved through the page so the comparison is rgb against rgb.
+    const retired = await p.evaluate(() => {
+      const probe = document.createElement("span");
+      probe.style.color = "var(--color-accent-800)";
+      document.body.appendChild(probe);
+      const v = getComputedStyle(probe).color;
+      probe.remove();
+      return v;
+    });
+
+    // HOVERED ON A LINK THIS CHECK INSERTS, and the first version measured three links that
+    // could not show the defect. It hovered `.ftr nav a`, which the footer's own (0,2,1) hover
+    // rule already protects; `.seg button`, which is a button, so `a:hover` never matched it at
+    // all; and the first `main a`, which sits inside `.about-strip-line` whose (0,1,1) rule in
+    // globals sits AFTER `a:hover` and wins at any order. So a real link-order flip left the
+    // row green, and the 144/2 in the body came from a mutant that appends the retired rule
+    // last - something a flip cannot produce. Found by the CTO's red-team.
+    //
+    // A bare <a> in the stage has nothing protecting it, which is the surface the rule is
+    // about. Fixed-position so it is always reachable by a pointer, and still a DESCENDANT of
+    // .stage, which is what `.stage a:hover` keys on.
+    const probeColour = await (async () => {
+      await p.evaluate(() => {
+        const stage = document.querySelector(".stage") ?? document.body;
+        const a = document.createElement("a");
+        a.id = "hover-probe";
+        a.href = "/terms";
+        a.textContent = "probe";
+        a.style.cssText = "position:fixed;top:8px;left:8px;z-index:99999;padding:4px";
+        stage.appendChild(a);
+      });
+      await p.hover("#hover-probe").catch(() => {});
+      await p.waitForTimeout(120);
+      return p.locator("#hover-probe").evaluate((el) => getComputedStyle(el).color);
+    })();
+    ok(`${theme}: a bare link in the stage does not hover to the retired palette`,
+      !!probeColour && probeColour !== retired,
+      `retired ${retired}; probe hovered to ${probeColour}`);
+
+    // The other two need no pointer.
+    //
+    // THE TAG IS MEASURED ON AN ELEMENT THIS CHECK INSERTS, and the first version of it was
+    // vacuous for exactly the reason worth recording. It read the first `.tag` on the page and
+    // passed when there was none - and on a fresh landing page there IS none, because every
+    // `.tag` in the claim card is behind a phase or a receipt. So it reported
+    // "text-transform no tag" and went green having measured nothing, which is the shape I
+    // have blocked other people's checks for twice tonight.
+    //
+    // Inserting one into the stage measures the CASCADE, which is the property: does any rule
+    // still upper-case `.tag` inside this page. It is true or false whether or not the current
+    // phase happens to render one, and it cannot pass by absence.
+    const rest = await p.evaluate(() => {
+      const stage = document.querySelector(".stage") ?? document.body;
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = "probe";
+      stage.appendChild(tag);
+      const tagCase = getComputedStyle(tag).textTransform;
+      tag.remove();
+      const htmlBg = getComputedStyle(document.documentElement).backgroundColor;
+      const probe = document.createElement("span");
+      probe.style.color = "var(--page)";
+      document.body.appendChild(probe);
+      const page = getComputedStyle(probe).color;
+      probe.remove();
+      return { tagCase, htmlBg, page };
+    });
+    ok(`${theme}: the design's tags are not upper-cased by the legacy sheet`,
+      rest.tagCase === "none",
+      `text-transform ${rest.tagCase}`);
+    ok(`${theme}: the page's root paints the design's background, not the old one`,
+      rest.htmlBg === rest.page, `html ${rest.htmlBg} against --page ${rest.page}`);
+
+    // SELECTING TEXT DOES NOT HIGHLIGHT IT IN THE RETIRED PALETTE. globals.css:101 paints
+    // ::selection with --color-accent and the spec defines no selection colour at all, so it
+    // is a property the transcription was silent about and inherited whether it meant to or
+    // not (L20). Read off a real element's ::selection, not from the rule text.
+    const sel = await p.evaluate(() => {
+      // A DESCENDANT, not `.stage` itself. `.stage ::selection` matches elements INSIDE the
+      // stage, so reading it off `.stage` measures only globals' rule and reports the
+      // retired mix whether the fix is there or not - which is what it did.
+      const el = document.querySelector(".stage h1, .stage p, .stage a") ?? document.body;
+      const got = getComputedStyle(el, "::selection").backgroundColor;
+      // THE RETIRED VALUE AS THE OLD RULE WOULD PRODUCE IT, mix and all. Comparing the
+      // selection's 30% mix against the SOLID retired accent was my first version, and the
+      // two can never be equal, so it passed with the fix deleted - measured, 146/0.
+      const probe = document.createElement("span");
+      probe.style.backgroundColor = "color-mix(in srgb, var(--color-accent) 30%, transparent)";
+      document.body.appendChild(probe);
+      const retired = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return { got, retired };
+    });
+    ok(`${theme}: selecting text does not highlight it in the retired accent`,
+      sel.got !== sel.retired, `selection ${sel.got}, retired accent ${sel.retired}`);
+    await c.close();
+  }
+}
+
+/**
  * THE FOOTER IS REACHABLE BY A POINTER, at two desktop sizes.
  *
  * The design clamps the page to one screen (`.stage` height:100dvh, and above 56rem
@@ -195,7 +423,13 @@ async function checkCardInnerPadding(browser) {
 }
 
 async function checkFooterReachable(browser) {
+  // THE LOOP'S OWN COVERAGE IS PINNED. Cutting DESKTOP_ALT out of it left the suite at
+  // 132 ok, 0 fail, exit 0 - half the viewports and a clean green, which is the array-pin
+  // hole I blocked #563 for arriving in my own file. The sizes actually visited are
+  // asserted, so dropping one is a red line rather than a quieter suite.
+  const visited = [];
   for (const vp of [DESKTOP, DESKTOP_ALT]) {
+    visited.push(`${vp.width}x${vp.height}`);
     const c = await browser.newContext({ viewport: vp });
     const p = await c.newPage();
     await p.goto(BASE, { waitUntil: "networkidle" });
@@ -234,8 +468,91 @@ async function checkFooterReachable(browser) {
     ok(`${label}: nothing between the footer and the document clips content it cannot scroll`,
       clip.length === 0, clip.join("; ") || "no clipping ancestor");
 
+    // AND THE STAGE DOES NOT SWALLOW A WHEEL. The pair above says the footer is reachable and
+    // nothing clips it; this says the thing a visitor's fingers do actually moves the page.
+    // A clamped `.stage` leaves scrollTop pinned at 0 through any number of wheel events,
+    // which is what "six wheel events moved scrollTop from 0 to 0" meant in the original
+    // finding.
+    // TWO THINGS WENT WRONG HERE AND BOTH WERE MINE.
+    //
+    // The old version escaped on `documentElement.scrollHeight - innerHeight <= 0` and reported
+    // "the page fits, so there was nothing to scroll". Under the clamp the document NEVER
+    // overflows - `.stage` clips the overflow instead of pushing the document taller - so on
+    // the exact defect this check is named for it measured nothing and went green. And it
+    // dispatched synthetic WheelEvents, which are untrusted and scroll nothing at all, so the
+    // "six wheel events" it claimed to perform were six no-ops.
+    //
+    // The property that a clamped page actually breaks is not "the document is taller than the
+    // viewport". It is that `.stage` is HIDING content a pointer cannot reveal: overflow
+    // hidden with more content in it than fits. That is true whether or not the document
+    // overflows, and it is what leaves the footer links unreachable.
+    // MEASURED WITH A TALL PROBE THIS CHECK INSERTS, and it took three tries to get here.
+    //
+    // First it escaped on "the document does not overflow", which under the clamp is always
+    // true - the stage clips instead of pushing the document taller - so it went green on the
+    // exact defect. Then it read `scrollHeight - clientHeight`, which is 0 even while content
+    // is clipped, because `.stage` carries `container: stage / size` and size containment makes
+    // scrollHeight equal clientHeight. Then it walked descendant rectangles, and the furthest
+    // was `.comp`, which is sized to the stage.
+    //
+    // The third answer is the one the red-team had already given me: THE SHIPPED PAGE FITS ONE
+    // SCREEN TODAY, so restoring the clamp clips nothing and no passive measurement of the real
+    // content can go red. A check that only fails when the content happens to be too tall is a
+    // check that fails on someone else's future commit, not on this one.
+    //
+    // So it asks the question actively, the way the tag and hover checks do: put something in
+    // the stage that IS taller than a screen, and see whether the page can still reach it. With
+    // the stage as it ships the box grows and the document scrolls; under the clamp the probe
+    // is swallowed and a wheel cannot get to it. That is true whatever today's content weighs.
+    const stage = await p.evaluate(() => {
+      const el = document.querySelector(".stage");
+      if (!el) return null;
+      const cs = getComputedStyle(el);
+      const host = el.querySelector(".comp") ?? el;
+      const probe = document.createElement("div");
+      probe.id = "tall-probe";
+      probe.style.cssText = "height:1200px;width:1px;flex:none";
+      host.appendChild(probe);
+      const r = el.getBoundingClientRect();
+      const buried = Math.round(probe.getBoundingClientRect().bottom - (r.top + el.clientHeight));
+      const inserted = !!probe.getBoundingClientRect().height;
+      probe.remove();
+      // AFTER the probe is gone. Measured with it still in, this reported the page as 1109px
+      // past the fold and turned the wheel assertion below into a false red against a document
+      // that no longer overflowed - a probe of mine poisoning the next check.
+      const docOver = Math.round(document.documentElement.scrollHeight - innerHeight);
+      return { overflowY: cs.overflowY, buried, docOver, inserted };
+    });
+    ok(`${label}: content taller than the viewport is not swallowed by the stage`,
+      !!stage && stage.inserted && stage.buried <= 1,
+      !stage ? "no .stage on the page"
+        : !stage.inserted ? "the probe did not render, so nothing was measured"
+        : `overflow-y ${stage.overflowY}, a 1200px probe sits ${stage.buried}px past the stage's own box`);
+
+    // And a REAL wheel, through the browser rather than a dispatched event, on the pages that
+    // are taller than the viewport. This one can still be inapplicable - it says so rather
+    // than claiming a pass - because the check above is what carries the clamped case.
+    const beforeTop = await p.evaluate(() => document.documentElement.scrollTop);
+    await p.mouse.move(Math.round(vp.width / 2), Math.round(vp.height / 2));
+    await p.mouse.wheel(0, 600);
+    await p.waitForTimeout(200);
+    const movedBy = await p.evaluate((b) => document.documentElement.scrollTop - b, beforeTop);
+    if (stage && stage.docOver > 0) {
+      ok(`${label}: a real wheel scrolls the page when it is taller than the viewport`,
+        movedBy > 0, `${stage.docOver}px past the fold and scrollTop moved ${movedBy}`);
+    } else {
+      console.log(`  --   ${label}: the document does not overflow, so a wheel has nothing to move (the clip check above is what covers this)`);
+    }
+
+    // REACHED THE WAY A VISITOR REACHES IT, not the way a script can. This used
+    // `scrollIntoView({block:"end"})`, and the CTO's red-team found that it scrolls an
+    // `overflow:hidden` box PROGRAMMATICALLY where a wheel cannot - so on the clamped page it
+    // reported every link `in/hit` while only the sibling clip assertion went red. An
+    // assertion written to close an L1 that could not fail on its own defect, carried by its
+    // neighbour. `window.scrollTo` moves the document and is refused by a clipped box exactly
+    // as a wheel is.
     const r = await p.evaluate(() => {
-      document.querySelector(".ftr")?.scrollIntoView({ block: "end" });
+      window.scrollTo(0, document.documentElement.scrollHeight);
       const links = [...document.querySelectorAll(".ftr nav a")].map((a) => {
         const b = a.getBoundingClientRect();
         const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
@@ -254,6 +571,9 @@ async function checkFooterReachable(browser) {
         : r.links.map((l) => `${l.t}:${l.inView ? "in" : "OUT"}/${l.hit ? "hit" : "BLOCKED"}`).join("  "));
     await c.close();
   }
+  ok("the footer is checked at both declared desktop sizes",
+    visited.join(",") === `${DESKTOP.width}x${DESKTOP.height},${DESKTOP_ALT.width}x${DESKTOP_ALT.height}`,
+    visited.join(", ") || "no viewports visited");
 }
 
 async function checkAppearance(page) {
@@ -1116,6 +1436,8 @@ try {
   await checkAppearance(page);
   await checkFooterReachable(browser);
   await checkCardInnerPadding(browser);
+  await checkLegacyPalette(browser);
+  await checkChunkOrderIdentity(browser);
   // WHERE THE TAZ COMES FROM follows the status (R-39). Under this stack there is no
   // miner heartbeat, so the sentence has to be the not-mining one; the three
   // contradictory fixed sentences must be gone from the rendered page.
