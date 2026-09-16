@@ -1,24 +1,15 @@
-/* VENDORED FROM THE FROZEN SNAPSHOT S2-S5-20260915T2224Z, the WHOLE <style> block of
- * terms.html, which is vendored beside this file and whose sha256 the snapshot's MANIFEST pins:
- *   bcc3bab4b796b7385e8abf40c87e52d8e428b82c06abdcef61feabc90bafe5cb  ./terms.html
- * Regenerate, from this directory, and diff rather than overwrite:
- *   sed -n '/<style>/,$p' terms.html | sed '1d' | sed '/<\/style>/,$d'
- *
- * THE WHOLE PAGE, NOT THE SUBPAGES SECTION. This file used to be the 18 rules below the
- * `===== subpages` marker, and that fragment made every rule the page shares with the index -
- * .hint, .addr, the card column - read as something WE added and the design does not have. Five
- * reasons were written against that illusion before the CTO's round-three red-team caught it
- * (terms.html:136-138 has the .view.sub .card.claim trio my departures claimed the design had no
- * rule for). ADDED means "not in the design's page", so the spec has to BE the design's page.
- *
- * ITS OWN DIRECTORY, AND THAT IS ENFORCED RATHER THAN TIDY. departures.json is resolved per
- * directory, so a second spec beside S2-S5's index.css would share one departures file and each
- * would report the other's declarations as stale - the collision that already cost a round when
- * the file was flat. repo.sh gates the same shape from outside: one parity invocation per
- * design/spec/<snapshot>/ directory.
- *
- * A GOLDEN FILE. Do not edit it to make a check pass; move the snapshot and re-vendor.
- */
+<!doctype html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Terms · Zcash Testnet Faucet</title>
+<script>
+(function(){ try{var t=localStorage.getItem('faucet-theme'); if(t==='ink'||t==='paper') document.documentElement.dataset.theme=t;}catch(e){}
+ if(!matchMedia('(prefers-reduced-motion: reduce)').matches && Element.prototype.animate){ document.documentElement.classList.add('entrance-pending'); window.__entranceFallback=setTimeout(function(){document.documentElement.classList.remove('entrance-pending','entrance-active')},3000);} })();
+</script>
+<style>
 /* ===== 1. Tokens ===== */
 :root{
   --page:#f0f0f0; --surface:#fff; --panel:#fffaf6;
@@ -402,3 +393,148 @@ li[data-active] .mark{border-color:var(--orange);border-top-color:transparent;an
 .view.sub{min-height:calc(100dvh - 30*var(--u));justify-content:center}
 @media (max-height:840px){.card.feature .panel{padding:5.5% 6% 6%}.addr{font-size:calc(.88*var(--u));padding:calc(.6*var(--u)) calc(.9*var(--u))}.card-copy{padding:5% 8.4% 5.5%}}
 @media (max-width:56rem){.hero-grid.two{grid-template-columns:1fr}.terms{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="stage">
+<div class="comp" id="comp" data-endpoint="/api/status" data-poll-ms="15000">
+<header class="hdr">
+    <div class="brand">
+      <a class="home" href="/" aria-label="Zcash Testnet Faucet, home"><canvas class="g" data-glyph="brand" aria-hidden="true"></canvas><span class="name">Zcash Testnet Faucet</span></a>
+      <span class="badge" id="badge" data-state="UNKNOWN" data-field="derived.badge"><span class="ring"><span class="dot"></span></span><span class="txt">NOT READY</span></span>
+    </div>
+    <nav class="seg" aria-label="Sections"><a href="/">Claim</a><a href="/#status">Status</a><a href="/#analytics">Analytics</a><a href="/#tools">Tools</a></nav>
+    <div class="hdr-right">
+      <button class="strip" id="strip" type="button" aria-label="Open usage analytics">
+        <canvas id="spark" role="img" aria-label="" data-field="drips.byDay"></canvas>
+        <span class="kv week"><b class="num" data-field="drips.last7d">74</b><span>this week</span></span>
+        <span class="kv all"><b class="num" data-field="drips.allTime">178</b><span>all time</span></span>
+      </button>
+      <button class="iconbtn" id="theme" type="button" aria-label="Switch to ink theme" aria-pressed="false"><canvas class="g" data-glyph="theme" aria-hidden="true"></canvas></button>
+    </div>
+  </header>
+<section class="view hero sub" aria-label="Terms of use">
+  <div class="hero-copy" style="width:100%">
+    <p class="eyebrow mono">Zcash testnet faucet</p>
+    <h1>Terms of use.</h1>
+    <p class="lede">A free testnet tool, provided as is. Short, because terms nobody reads protect nobody.</p>
+  </div>
+  <div class="terms">
+    <div>
+      <h2>Who runs this</h2>
+      <p>This faucet is operated by Jino Labs (<a href="https://jinolabs.xyz">jinolabs.xyz</a>), an independent community project, not affiliated with, sponsored by, or endorsed by the Electric Coin Company or the Zcash Foundation.</p>
+      <h2>What you get</h2>
+      <p>Testnet ZEC (TAZ) on the Zcash testnet, free of charge, for testing and development. <b>TAZ has no monetary value</b> and is not a currency, a security, an investment, or a promise of anything. It cannot be exchanged for money, and we do not buy it back.</p>
+      <p>Amounts and limits shown on the site are current settings, not commitments, and may change at any time.</p>
+      <h2>Fair use</h2>
+      <p>Take what you need for testing. Do not bypass the rate limits, the proof-of-work gate, or the per-address cooldown, and do not use automation to drain the faucet. We may block requests, addresses or networks that do, so the tap stays available to everyone else.</p>
+    </div>
+    <div>
+      <h2>No warranty, and no uptime promise</h2>
+      <p>The service is provided “as is”, without warranty of any kind, express or implied, including fitness for a particular purpose. We do not guarantee that it will be available, that a request will succeed, or that a transaction will confirm.</p>
+      <p>To the fullest extent the law allows, Jino Labs is not liable for any loss or damage arising from use of this service, including lost time, lost test funds, or reliance on anything shown on the site. Testnet networks can be reset or reorganised by their operators, and that is outside our control.</p>
+      <h2>Donations</h2>
+      <p>Donations are voluntary and non-refundable. Testnet TAZ sent to the faucet goes back out as drips. Mainnet ZEC sent to the <a href="/fund">fund address</a> pays for the server and domain.</p>
+    </div>
+    <div>
+      <h2>Privacy</h2>
+      <p>No accounts, no cookies, no trackers. Your address and your IP are used only to derive a salted hash for rate limiting, kept until the purge window drops the row, and the raw values are never written to a log or a database. The footer of every page says the short form, hashed, never stored raw. Full detail is in <a href="https://github.com/jinolabs-xyz/zcash-faucet/blob/main/PRIVACY.md">PRIVACY.md</a>.</p>
+      <h2>Trademarks and licence</h2>
+      <p>Zcash and the Zcash mark belong to their owners and are used under the <a href="https://zfnd.org/zcash-trademark-policy/">Zcash Foundation’s trademark policy</a>. The faucet’s source is public on <a href="https://github.com/jinolabs-xyz/zcash-faucet">GitHub</a>.</p>
+      <h2>Contact and changes</h2>
+      <p>Questions and reports go to the repository’s issue tracker. These terms may change, and the version on this page is the one that applies.</p>
+    </div>
+  </div>
+</section>
+<footer class="ftr">
+    <span>No accounts, no cookies, no trackers. Addresses and IPs are hashed, never stored raw.</span>
+    <nav><a href="/donate">Donate TAZ</a><a href="/fund">Fund ZEC</a><a href="/terms">Terms</a><a href="https://github.com/jinolabs-xyz/zcash-faucet" rel="noopener">GitHub</a></nav>
+    <div class="ftr-attrib">
+      <!-- The Jino Labs lockup is the brand kit's file, native size (16px mark, 11px cap height minimum); one per theme. -->
+      <a class="footer-brand" href="https://jinolabs.xyz"><img class="lockup lockup-light" src="brand/powered-by-light.svg" alt="Powered by Jino Labs" width="218" height="36"><img class="lockup lockup-dark" src="brand/powered-by-dark.svg" alt="" width="218" height="36" aria-hidden="true"></a>
+    </div>
+  </footer>
+</div>
+</div>
+<script>
+const $ = (q, r = document) => r.querySelector(q), $$ = (q, r = document) => [...r.querySelectorAll(q)];
+const DPR = () => window.devicePixelRatio || 1;
+const tok = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function prep(c, w, h) {
+  const d = DPR(); c.width = Math.max(1, Math.round(w * d)); c.height = Math.max(1, Math.round(h * d));
+  const x = c.getContext('2d'); x.setTransform(d, 0, 0, d, 0, 0); x.clearRect(0, 0, w, h); return x;
+}
+function rr(x, X, Y, W, H, R) { R = Math.min(R, W / 2, H / 2); x.beginPath(); x.moveTo(X + R, Y); x.arcTo(X + W, Y, X + W, Y + H, R); x.arcTo(X + W, Y + H, X, Y + H, R); x.arcTo(X, Y + H, X, Y, R); x.arcTo(X, Y, X + W, Y, R); x.closePath(); }
+function glyph(c) {
+  const name = c.dataset.glyph, r = c.getBoundingClientRect(), s = r.width || 16, k = s / 16;
+  const x = prep(c, s, s), col = getComputedStyle(c).color;
+  x.scale(k, k); x.strokeStyle = col; x.fillStyle = col; x.lineWidth = 1.5; x.lineCap = x.lineJoin = 'round';
+  const P = (...pts) => { x.beginPath(); pts.forEach((p, i) => i ? x.lineTo(...p) : x.moveTo(...p)); };
+  switch (name) {
+    case 'brand': x.lineWidth = 1.4; x.beginPath(); x.arc(8, 8, 6.9, 0, 7); x.stroke();
+      P([5.3, 5], [10.7, 5], [5.3, 11], [10.7, 11]); x.stroke(); P([8, 3.2], [8, 5]); x.stroke(); P([8, 11], [8, 12.8]); x.stroke(); break;
+    case 'live': x.beginPath(); x.arc(8, 8, 5.5, 0, 7); x.stroke(); x.beginPath(); x.arc(8, 8, 2, 0, 7); x.fill(); break;
+    case 'syncing': x.beginPath(); x.arc(8, 8, 5.5, -1.2, 3.6); x.stroke(); P([11.2, 2.4], [11.6, 5.6], [8.4, 5.9]); x.stroke(); break;
+    case 'drips': x.beginPath(); x.moveTo(8, 2.5); x.bezierCurveTo(8, 5, 3.5, 8, 3.5, 10.5); x.arc(8, 10.5, 4.5, Math.PI, 0, true); x.bezierCurveTo(12.5, 8, 8, 5, 8, 2.5); x.stroke(); break;
+    case 'reserve': x.strokeRect(3.5, 2.5, 9, 11); x.fillRect(3.5, 8.5, 9, 5); break;
+    case 'miner': P([4, 12.5], [11.5, 5]); x.stroke(); x.beginPath(); x.moveTo(7.5, 3.2); x.quadraticCurveTo(11.5, 2.4, 13.4, 6.8); x.stroke(); break;
+    case 'sends': P([3, 8], [13, 8]); x.stroke(); P([9.5, 4.5], [13, 8], [9.5, 11.5]); x.stroke(); break;
+    case 'network': [[3.2, 12.2], [12.8, 12.2], [8, 3.8]].forEach(p => { x.beginPath(); x.arc(p[0], p[1], 1.6, 0, 7); x.fill(); }); P([3.8, 10.8], [7.4, 5.2]); x.stroke(); P([12.2, 10.8], [8.6, 5.2]); x.stroke(); P([5, 12.2], [11, 12.2]); x.stroke(); break;
+    case 'theme': x.beginPath(); x.arc(8, 8, 5.5, 0, 7); x.stroke(); x.beginPath(); x.arc(8, 8, 5.5, -Math.PI / 2, Math.PI / 2); x.fill(); break;
+    case 'copy': x.strokeRect(5.5, 5.5, 8, 8); P([10.5, 3.5], [2.5, 3.5], [2.5, 11.5]); x.stroke(); break;
+    case 'external': P([7, 3.5], [3.5, 3.5], [3.5, 12.5], [12.5, 12.5], [12.5, 9]); x.stroke(); P([8.5, 3.5], [12.5, 3.5], [12.5, 7.5]); x.stroke(); P([12.5, 3.5], [7, 9]); x.stroke(); break;
+  }
+}
+const drawGlyphs = () => $$('canvas[data-glyph]').forEach(glyph);
+const SPARKLES = [{ x: .01, y: .01, size: .50 }, { x: .28, y: .26, size: .72 }];
+const STAR = [[.50, .06], [.59, .41], [.94, .50], [.59, .59], [.50, .94], [.41, .59], [.06, .50], [.41, .41]];
+function roundedPolygon(x, pts, k) {
+  const n = pts.length, mid = (a, b) => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k];
+  x.beginPath();
+  const a0 = mid(pts[0], pts[1]); x.moveTo(...a0);
+  for (let i = 1; i <= n; i++) { const p = pts[i % n], prev = pts[(i - 1) % n], next = pts[(i + 1) % n]; const b = mid(p, prev), a = mid(p, next); x.lineTo(...b); x.quadraticCurveTo(p[0], p[1], a[0], a[1]); }
+  x.closePath();
+}
+function drawSparkle(c) {
+  const r = c.getBoundingClientRect(), w = r.width || 18, h = r.height || 18, x = prep(c, w, h);
+  SPARKLES.forEach(s => {
+    const size = Math.min(w, h) * s.size, pts = STAR.map(p => [s.x * w + p[0] * size, s.y * h + p[1] * size]);
+    roundedPolygon(x, pts, .34);
+    x.fillStyle = 'rgba(255,220,202,.55)'; x.strokeStyle = '#fff'; x.lineWidth = Math.max(1.1, size * .15); x.lineCap = x.lineJoin = 'round';
+    x.shadowColor = 'rgba(255,255,255,.78)'; x.shadowBlur = size * .06; x.fill(); x.stroke(); x.shadowBlur = 0; x.shadowColor = 'transparent';
+  });
+}
+function bars(x, by, L, T, iw, ih, hover, soft) {
+  const n = by.length, max = Math.max(1, ...by.map(d => d.sent)), gap = Math.max(1, iw / n * .3), bw = (iw - gap * (n - 1)) / n;
+  by.forEach((d, i) => {
+    const bh = Math.max(bw, (d.sent / max) * ih), bx = L + i * (bw + gap), by0 = T + ih - bh;
+    if (i === n - 1) { x.save(); x.shadowColor = 'rgba(255,105,0,.28)'; x.shadowBlur = Math.max(3, iw * .012); x.fillStyle = tok('--orange'); rr(x, bx - bw * .05, by0, bw * 1.1, bh, bw); x.fill(); x.restore(); }
+    else { x.fillStyle = i === hover ? tok('--orange-line') : (soft || tok('--bar-soft')); rr(x, bx, by0, bw, bh, bw); x.fill(); }
+  });
+  return { bw, gap, max, n };
+}
+const fmt = n => (n == null ? 'unknown' : Number(n).toLocaleString('en-US'));
+function setTheme(t) { document.documentElement.dataset.theme = t; const b = $('#theme'); b.setAttribute('aria-pressed', String(t === 'ink')); b.setAttribute('aria-label', t === 'ink' ? 'Switch to paper theme' : 'Switch to ink theme'); try { localStorage.setItem('faucet-theme', t); } catch {} requestAnimationFrame(drawAll); }
+$('#theme').addEventListener('click', () => setTheme(document.documentElement.dataset.theme === 'ink' ? 'paper' : 'ink'));
+let S = null;
+function drawSpark() { const c = $('#spark'); if (!c || !S || !S.drips || !S.drips.byDay) return; const r = c.getBoundingClientRect(), w = r.width || 80, h = r.height || 22, x = prep(c, w, h); bars(x, S.drips.byDay, 0, 1, w, h - 2, -1, '#f0955a'); }
+function drawAll() { drawGlyphs(); drawSpark(); $$('[data-sparkle-icon]').forEach(drawSparkle); }
+async function poll() {
+  try {
+    const r = await fetch('/api/status', { cache: 'no-store' }); if (!r.ok) throw 0; S = await r.json();
+    const b = $('#badge'); if (b) { const w = (S.node.syncPercent < 100 && !S.node.ready) ? 'SYNCING' : (S.node.ready && S.backend.reachable && S.box.state === 'ok') ? 'LIVE' : 'NOT READY'; b.dataset.state = w; const t = $('.txt', b); if (t) t.textContent = w; }
+    $$('[data-field="drips.last7d"]').forEach(e => e.textContent = fmt(S.drips && S.drips.last7d)); $$('[data-field="drips.allTime"]').forEach(e => e.textContent = fmt(S.drips && S.drips.allTime));
+    const d = $('[data-field="donationAddress"]'); if (d && S.donationAddress) d.textContent = S.donationAddress;
+    const m = $('[data-field="miningAddress"]'); if (m && S.miningAddress) m.textContent = S.miningAddress;
+    const bal = $('[data-field="balanceTaz"]'); if (bal) bal.textContent = S.balanceTaz == null ? 'unknown' : fmt(Math.round(S.balanceTaz)) + ' TAZ';
+    const inc = $('[data-field="derived.incomeSentence"]'); if (inc) inc.textContent = (S.box && S.box.minerUnit === 'inactive') ? 'The miner is parked right now, so what the faucet hands out is donated or topped up by hand. Donations keep drips going out either way.' : 'The faucet mines testnet blocks. What it hands out is mined, donated, or topped up by hand, and donations keep drips going out either way.';
+    drawAll();
+  } catch {}
+}
+$$('[data-copy]').forEach(btn => btn.addEventListener('click', async () => { const t = $(btn.dataset.copy); const label = btn.querySelector('span') || btn; const was = label.textContent; try { await navigator.clipboard.writeText(t.textContent.trim()); label.textContent = 'Copied'; setTimeout(() => label.textContent = was, 1400); } catch {} }));
+drawAll(); poll(); setInterval(poll, 15000);
+let rz; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(drawAll, 80); });
+document.documentElement.classList.remove('entrance-pending');
+</script>
+</body>
+</html>

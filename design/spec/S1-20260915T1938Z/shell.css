@@ -2,7 +2,12 @@
  * <style> blocks. This is a GOLDEN FILE: it is the spec scripts/parity-check.mjs
  * compares what we ship against, and the diff that updates it is the diff a reviewer
  * reads when the design moves. Do not edit it to make a check pass.
- * Regenerate: extract the <style> blocks of index.html from the named snapshot.
+ * The page it was cut from is vendored beside it and its sha256 is pinned here, against the
+ * snapshot's own MANIFEST - parity-check REFUSES TO RUN if the two disagree, so the page cannot
+ * be edited to excuse a rule:
+ *   6f41d237b5561f99827d5a43153307c11bf87415ae8edd0e1b59c55a0d6a0799  ./index.html
+ * Regenerate, from this directory, and diff rather than overwrite:
+ *   sed -n '/<style>/,$p' index.html | sed '1d' | sed '/<\/style>/,$d'
  */
 
 /* ===== 1. Tokens ===== */

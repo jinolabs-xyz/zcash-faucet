@@ -21,6 +21,7 @@
  * has stopped looking at.
  */
 import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 
 const SPEC = process.argv[2];
@@ -349,10 +350,55 @@ const changed = [...ship.keys()].filter((s) => spec.has(s) && !sameBodies(ship.g
 // the spec and they are excluded here, counted out loud rather than silently.
 //
 // A bare element selector (`body`, `a`) has no class or id to look up and is always live.
-const INVENTORY = join(dirname(SPEC), "markup.selectors");
-const usedNames = existsSync(INVENTORY)
-  ? new Set(readFileSync(INVENTORY, "utf8").split("\n").filter((l) => l && !l.startsWith("#")))
-  : null;
+// THE DESIGN'S OWN PAGE IS VENDORED BESIDE THE SPEC AND READ DIRECTLY. There is no generated
+// list any more, and that is the fix rather than a tidy-up: round three shipped a 36-rule
+// exclusion file that CI could not verify - no HTML in the repo, no hash, generated from
+// ~/.claude/ipc/share, a path repo.sh forbids this script to read. The CTO's red-team killed it
+// with the obvious mutant: delete `.brand .name` from the shell AND strike `name` from the list,
+// and the run exits 0. An exclusion list that can be edited to match the thing it excuses is not
+// evidence.
+//
+// Reading the page itself removes the tamper surface: to strike a name you must edit the vendored
+// HTML, and its sha256 is pinned in the spec's header against the snapshot's MANIFEST, which
+// repo.sh checks from outside. The names are derived the same way every time, so there is nothing
+// to regenerate and nothing to keep in step.
+//
+// SCRIPT-ADDED CLASSES COUNT. The preview toggles `entrance-pending` and `entrance-active` from
+// JS and they appear in no `class="..."`, so a sweep of markup alone would call them dead and
+// hide a real rule.
+const pageFile = readdirSync(dirname(SPEC)).filter((f) => f.endsWith(".html")).sort()[0];
+// AND THE PAGE IS PINNED, OR THIS REFUSES TO RUN. Reading the page instead of a generated list
+// moves the tamper surface rather than removing it: strike `class="name"` from the HTML and the
+// rule it excuses reads as dead in the design again, which is the round-three mutant one file
+// along. Measured - it still exited 0 after the list was gone.
+//
+// So the spec's header carries the page's sha256, taken from the snapshot's MANIFEST, and this
+// checks it before comparing anything. Editing the page to excuse a rule now fails here, and
+// updating the pin to match is a diff a reviewer reads next to the golden file it describes.
+if (pageFile) {
+  const want = /([0-9a-f]{64})\s+\.\/(\S+\.html)/.exec(specCss);
+  const got = createHash("sha256").update(readFileSync(join(dirname(SPEC), pageFile))).digest("hex");
+  if (!want) {
+    console.error(`parity: ${SPEC} vendors ${pageFile} but pins no sha256 for it. Put the MANIFEST line in the header: <sha256>  ./${pageFile}`);
+    process.exit(1);
+  }
+  if (want[2] !== pageFile || want[1] !== got) {
+    console.error(`parity: ${pageFile} does not match the sha256 ${SPEC} pins for ${want[2]}.`);
+    console.error(`  pinned ${want[1]}`);
+    console.error(`  actual ${got}`);
+    console.error(`A vendored page is a golden file. Re-vendor from the snapshot and update the pin in the same diff; do not edit it to make a check pass.`);
+    process.exit(1);
+  }
+}
+const usedNames = pageFile ? (() => {
+  const html = readFileSync(join(dirname(SPEC), pageFile), "utf8");
+  const names = new Set();
+  for (const m of html.matchAll(/class="([^"]*)"/g)) for (const c of m[1].split(/\s+/)) if (c) names.add(c);
+  for (const m of html.matchAll(/id="([^"]*)"/g)) if (m[1]) names.add(m[1]);
+  for (const m of html.matchAll(/classList\.(?:add|remove|toggle)\('([^']+)'\)/g)) names.add(m[1]);
+  for (const m of html.matchAll(/className\s*=\s*['"]([^'"]+)['"]/g)) for (const c of m[1].split(/\s+/)) if (c) names.add(c);
+  return names;
+})() : null;
 const inDesignMarkup = (sel) => {
   if (!usedNames) return true;
   const names = [...sel.matchAll(/[.#]([A-Za-z0-9_-]+)/g)].map((m) => m[1]);
@@ -501,8 +547,8 @@ if (process.env.PARITY_PRINT === "1") {
 console.log(`parity: ${ship.size} shipped rules against ${spec.size} in the spec`);
 const byKind = (k) => Object.keys(declared).filter((s) => kindOf(declared[s]) === k).length;
 console.log(`  added ${added.length}  changed ${changed.length}  dropped ${dropped.length}  declared ${Object.keys(declared).length}`);
-if (deadInDesign.length) console.log(`  and ${deadInDesign.length} spec rule(s) the design's own markup never uses, which are not ours to ship (markup.selectors)`);
-if (!usedNames) console.log(`  no markup.selectors beside this spec, so every unshipped rule counts as dropped - vendor one with scripts/vendor-markup-selectors.mjs`);
+if (deadInDesign.length) console.log(`  and ${deadInDesign.length} spec rule(s) ${pageFile} never uses, which are not ours to ship`);
+if (!usedNames) console.log(`  no .html vendored beside this spec, so every unshipped rule counts as dropped - vendor the page the spec was cut from`);
 console.log(`  of the declared: ${byKind("divergence")} divergence(s) from the design, ${byKind("override")} override(s) of it`);
 // AND THE REASON IT IS NOT GATED IS THE REASON, not the views count. When a spec carries slice
 // facts the slice gate decides (line 318) and the views/pages tally is not consulted at all - so

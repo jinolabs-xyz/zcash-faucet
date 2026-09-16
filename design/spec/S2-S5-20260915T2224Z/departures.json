@@ -35,7 +35,7 @@
   },
   ".tag": {
     "kind": "override",
-    "why": "RE-SCOPED TO OUTRANK globals.css, SAME DECLARATIONS (#575). The legacy sheet styles the same element at the same specificity, so the design's own selector loses on source order alone. One ancestor is added - `html` for element rules, `.stage` for page furniture - which raises specificity without changing what is painted. The spec's key and ours therefore differ while the CSS does not, which the checker reports as one dropped rule plus one added rule: the same divergence twice. Under the spec's own key we now ship nothing: this is the dropped half, and `.stage .tag` carries the body.",
+    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `.tag`; the rule is shipped as `.stage .tag`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs.",
     "shipped": ""
   },
   "@media (max-width:56rem) | .mascot-riso": {
@@ -50,17 +50,17 @@
   },
   ".comp > .view.hero": {
     "kind": "override",
-    "why": "RE-SCOPED TO OUTRANK globals.css, SAME DECLARATIONS (#575). The legacy sheet styles the same element at the same specificity, so the design's own selector loses on source order alone. One ancestor is added - `html` for element rules, `.stage` for page furniture - which raises specificity without changing what is painted. The spec's key and ours therefore differ while the CSS does not, which the checker reports as one dropped rule plus one added rule: the same divergence twice.",
+    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `.comp > .view.hero`; the rule is shipped as `.views > .view.hero, .comp > .view.hero`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs.",
     "shipped": ""
   },
   ".iconbtn": {
     "kind": "override",
-    "why": "RE-SCOPED TO OUTRANK globals.css, SAME DECLARATIONS (#575). The legacy sheet styles the same element at the same specificity, so the design's own selector loses on source order alone. One ancestor is added - `html` for element rules, `.stage` for page furniture - which raises specificity without changing what is painted. The spec's key and ours therefore differ while the CSS does not, which the checker reports as one dropped rule plus one added rule: the same divergence twice.",
+    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `.iconbtn`; the rule is shipped as `html .iconbtn`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs.",
     "shipped": ""
   },
   ".iconbtn:hover": {
     "kind": "override",
-    "why": "RE-SCOPED TO OUTRANK globals.css, SAME DECLARATIONS (#575). The legacy sheet styles the same element at the same specificity, so the design's own selector loses on source order alone. One ancestor is added - `html` for element rules, `.stage` for page furniture - which raises specificity without changing what is painted. The spec's key and ours therefore differ while the CSS does not, which the checker reports as one dropped rule plus one added rule: the same divergence twice.",
+    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `.iconbtn:hover`; the rule is shipped as `html .iconbtn:hover`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs.",
     "shipped": ""
   },
   ".m-dir": {
@@ -110,12 +110,12 @@
   },
   ".stage .tag": {
     "kind": "override",
-    "why": "RE-SCOPED TO OUTRANK globals.css, SAME DECLARATIONS (#575). The legacy sheet styles the same element at the same specificity, so the design's own selector loses on source order alone. One ancestor is added - `html` for element rules, `.stage` for page furniture - which raises specificity without changing what is painted. The spec's key and ours therefore differ while the CSS does not, which the checker reports as one dropped rule plus one added rule: the same divergence twice.",
+    "why": "RE-SCOPED TO OUTRANK globals.css, AND IT ADDS ONE DECLARATION, NAMED. The re-scoping is as above - one ancestor, so it outranks the legacy sheet. What it adds beyond the design's body is:\n  text-transform:none\nwhich closes globals.css:151-155 `.tag { ... text-transform: uppercase; ... }`. The legacy sheet upper-cases every tag at the same (0,1,0) specificity as the design's own `.tag`, so source order decided it and the design's tags shipped shouting. #575's review could not see it because `.tag` matched zero elements on that tree - the chips arrive with these views.\nNamed per the CTO's round-three ruling: an `override` whose body adds to the spec's names each addition and the globals.css rule it closes, or it is a `divergence`. Round three pasted \"SAME DECLARATIONS\" onto this entry and it was false - the checker's own sameBodies says so.",
     "shipped": "font-family:inherit; display:inline-flex; align-items:center; gap:calc(.5*var(--u)); height:calc(2.15*var(--u)); padding:0 calc(.9*var(--u)); border-radius:calc(.5*var(--u)); background:var(--tag-bg); color:var(--ink); font-size:calc(.84*var(--u)); font-weight:500; letter-spacing:0; border:calc(.06*var(--u)) solid var(--hair); white-space:nowrap; text-decoration:none; cursor:default || text-transform:none"
   },
   ".stage ::selection": {
     "kind": "override",
-    "why": "RE-SCOPED TO OUTRANK globals.css, SAME DECLARATIONS (#575). The legacy sheet styles the same element at the same specificity, so the design's own selector loses on source order alone. One ancestor is added - `html` for element rules, `.stage` for page furniture - which raises specificity without changing what is painted. The spec's key and ours therefore differ while the CSS does not, which the checker reports as one dropped rule plus one added rule: the same divergence twice.",
+    "why": "RE-SCOPED TO OUTRANK globals.css, AND IT ADDS ONE DECLARATION, NAMED. The re-scoping is as above - one ancestor, so it outranks the legacy sheet. What it adds beyond the design's body is:\n  background:color-mix(in srgb,var(--accent) 30%,transparent)\nwhich closes globals.css:101 `::selection { background: color-mix(in srgb, var(--color-accent) 30%, transparent); }`. Same shape, different token: globals highlights selected text in the RETIRED accent. `.stage ::selection` is (0,1,1) against globals' (0,0,1), so this is specificity rather than order.\nNamed per the CTO's round-three ruling: an `override` whose body adds to the spec's names each addition and the globals.css rule it closes, or it is a `divergence`. Round three pasted \"SAME DECLARATIONS\" onto this entry and it was false - the checker's own sameBodies says so.",
     "shipped": "background:color-mix(in srgb,var(--accent) 30%,transparent)"
   },
   ".tag.more": {
@@ -130,12 +130,12 @@
   },
   ".views > .view.hero, .comp > .view.hero": {
     "kind": "override",
-    "why": "RE-SCOPED TO OUTRANK globals.css, SAME DECLARATIONS (#575). The legacy sheet styles the same element at the same specificity, so the design's own selector loses on source order alone. One ancestor is added - `html` for element rules, `.stage` for page furniture - which raises specificity without changing what is painted. The spec's key and ours therefore differ while the CSS does not, which the checker reports as one dropped rule plus one added rule: the same divergence twice.",
+    "why": "OUR LANDMARK, NOT A #575 RE-SCOPING, and round three mislabelled it. The spec has this as `.comp > .view.hero`. Our four views sit inside a `<main class=\"views\">` landmark rather than directly in `.comp`, so the design's child combinator matched nothing at all and computed padding-top 0. The selector carries BOTH spellings so the rule applies in our structure and still describes the design's. Same declarations as the spec - verified - but the reason is the landmark, and globals.css has nothing to do with it.",
     "shipped": "flex:1 1 auto; min-height:0; justify-content:flex-start; padding-top:calc(2.5*var(--u))"
   },
   ":focus-visible": {
     "kind": "override",
-    "why": "RE-SCOPED TO OUTRANK globals.css, SAME DECLARATIONS (#575). The legacy sheet styles the same element at the same specificity, so the design's own selector loses on source order alone. One ancestor is added - `html` for element rules, `.stage` for page furniture - which raises specificity without changing what is painted. The spec's key and ours therefore differ while the CSS does not, which the checker reports as one dropped rule plus one added rule: the same divergence twice.",
+    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `:focus-visible`; the rule is shipped as `html :focus-visible`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs.",
     "shipped": ""
   },
   "@media (max-width:32rem) | #lookupform .prompt,#lookupform .tag.ink": {
@@ -160,17 +160,17 @@
   },
   "a": {
     "kind": "override",
-    "why": "RE-SCOPED TO OUTRANK globals.css, SAME DECLARATIONS (#575). The legacy sheet styles the same element at the same specificity, so the design's own selector loses on source order alone. One ancestor is added - `html` for element rules, `.stage` for page furniture - which raises specificity without changing what is painted. The spec's key and ours therefore differ while the CSS does not, which the checker reports as one dropped rule plus one added rule: the same divergence twice.",
+    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `a`; the rule is shipped as `html a`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs.",
     "shipped": ""
   },
   "body": {
     "kind": "override",
-    "why": "RE-SCOPED TO OUTRANK globals.css, SAME DECLARATIONS (#575). The legacy sheet styles the same element at the same specificity, so the design's own selector loses on source order alone. One ancestor is added - `html` for element rules, `.stage` for page furniture - which raises specificity without changing what is painted. The spec's key and ours therefore differ while the CSS does not, which the checker reports as one dropped rule plus one added rule: the same divergence twice.",
+    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `body`; the rule is shipped as `html body`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs.",
     "shipped": ""
   },
   "html[data-theme]": {
     "kind": "override",
-    "why": "RE-SCOPED TO OUTRANK globals.css, SAME DECLARATIONS (#575). The legacy sheet styles the same element at the same specificity, so the design's own selector loses on source order alone. One ancestor is added - `html` for element rules, `.stage` for page furniture - which raises specificity without changing what is painted. The spec's key and ours therefore differ while the CSS does not, which the checker reports as one dropped rule plus one added rule: the same divergence twice.",
+    "why": "RE-SCOPED TO OUTRANK globals.css, AND IT ADDS ONE DECLARATION, NAMED. The re-scoping is as above - one ancestor, so it outranks the legacy sheet. What it adds beyond the design's body is:\n  background:var(--page)\nwhich closes globals.css:72 `html { background: var(--color-bg); }`. globals paints the root with the OLD palette and nothing in the transcription names html's background, so the overscroll and rubber-band area behind the page kept the pre-redesign colour while the page itself was on --page. Only visible on a bounce, which is why nobody would find it by looking. The attribute selector is what outranks the bare `html`.\nNamed per the CTO's round-three ruling: an `override` whose body adds to the spec's names each addition and the globals.css rule it closes, or it is a `divergence`. Round three pasted \"SAME DECLARATIONS\" onto this entry and it was false - the checker's own sameBodies says so.",
     "shipped": "background:var(--page)"
   }
 }

@@ -5,16 +5,6 @@
     "why": "CLOSES TWO PROPERTIES globals.css SETS ON `code` THAT THE DESIGN DOES NOT NAME - #575's leak family, in SDE-UI's own words in the sheet: globals styles `code` with the retired palette's surface and a border radius of 0, and the design's address block sets its own background, border and radius while saying nothing about background-clip or box-shadow. Without these an address renders in the retired palette inside an otherwise correct box.",
     "shipped": "background-clip:padding-box; box-shadow:none || display:block; word-break:break-all; font:500 calc(.95*var(--u))/1.45 var(--mono); color:var(--ink); background:var(--prompt-bg); border:calc(.06*var(--u)) solid var(--prompt-border); border-radius:calc(.6*var(--u)); padding:calc(.8*var(--u)) calc(1*var(--u)); margin:0 0 calc(.9*var(--u))"
   },
-  ".hint": {
-    "kind": "override",
-    "why": "IN THE DESIGN, ABOVE OUR SLICE'S MARKER. `.hint` is in the snapshot at donate.html:203-204 and was in no app sheet at all, so every hint on these pages rendered at the body's size and colour. Our vendored spec is the slice of terms.html that begins at the `===== subpages` marker and this rule sits ABOVE that marker, so the spec cannot see it. Dropped by the slice rather than decided against: this is a limit of what we vendored, not a divergence from what was approved.",
-    "shipped": "font-size:calc(.85*var(--u)); color:var(--muted); min-height:1.4em; margin:0"
-  },
-  ".hint[data-tone=bad]": {
-    "kind": "override",
-    "why": "Same as `.hint`: in the design, above the marker our slice starts at.",
-    "shipped": "color:var(--bad-text)"
-  },
   ".view.sub .card.claim": {
     "kind": "override",
     "why": "THE SUBPAGE CARD IS A SCROLL BOX AND THE INDEX CARD IS NOT. The subpages put a long document inside the same `.card.claim` the index uses for a short form, so the card becomes a column that fills its view and hands the overflow to the panel. The design has no rule because its subpages are separate mocks rather than the index's card reused.",
@@ -34,5 +24,35 @@
     "kind": "override",
     "why": "A 44px TAP FLOOR THE DESIGN DOES NOT CARRY. The approved preview is a desktop mock with no touch-target rule anywhere. SDE-App's #593 survey found nine scoped floors across this codebase with three different triggers, and this is one of them; it comes out when #593 unifies the subjects and the trigger together.",
     "shipped": "min-height:44px"
+  },
+  "body": {
+    "kind": "override",
+    "shipped": "",
+    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `body`; the rule is shipped as `html body`, which carries the body and its reason. The subpages spec is the WHOLE terms.html style block, so it carries the shell rules this page shares with the index and reports them here too - one divergence, once per spec that contains it."
+  },
+  "a": {
+    "kind": "override",
+    "shipped": "",
+    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `a`; the rule is shipped as `html a`, which carries the body and its reason. The subpages spec is the WHOLE terms.html style block, so it carries the shell rules this page shares with the index and reports them here too - one divergence, once per spec that contains it."
+  },
+  ":focus-visible": {
+    "kind": "override",
+    "shipped": "",
+    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `:focus-visible`; the rule is shipped as `html :focus-visible`, which carries the body and its reason. The subpages spec is the WHOLE terms.html style block, so it carries the shell rules this page shares with the index and reports them here too - one divergence, once per spec that contains it."
+  },
+  ".iconbtn": {
+    "kind": "override",
+    "shipped": "",
+    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `.iconbtn`; the rule is shipped as `html .iconbtn`, which carries the body and its reason. The subpages spec is the WHOLE terms.html style block, so it carries the shell rules this page shares with the index and reports them here too - one divergence, once per spec that contains it."
+  },
+  ".iconbtn:hover": {
+    "kind": "override",
+    "shipped": "",
+    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `.iconbtn:hover`; the rule is shipped as `html .iconbtn:hover`, which carries the body and its reason. The subpages spec is the WHOLE terms.html style block, so it carries the shell rules this page shares with the index and reports them here too - one divergence, once per spec that contains it."
+  },
+  ".comp > .view.hero": {
+    "kind": "override",
+    "shipped": "",
+    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `.comp > .view.hero`; the rule is shipped as `.views > .view.hero, .comp > .view.hero`, which carries the body and its reason. The subpages spec is the WHOLE terms.html style block, so it carries the shell rules this page shares with the index and reports them here too - one divergence, once per spec that contains it."
   }
 }

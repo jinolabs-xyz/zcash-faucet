@@ -12,11 +12,12 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 
 const SCRIPT = "scripts/parity-check.mjs";
 
 /** Run the checker in its own directory with the given fixtures; return {code, out}. */
-function runParity({ spec, shipped, departures, pages, shell, entry, args, sheets, specs, env, markupSelectors }) {
+function runParity({ spec, shipped, departures, pages, shell, entry, args, sheets, specs, env, markupHtml, breakPin }) {
   const dir = mkdtempSync(join(tmpdir(), "parity-"));
   try {
     mkdirSync(join(dir, "design", "spec"), { recursive: true });
@@ -39,7 +40,17 @@ function runParity({ spec, shipped, departures, pages, shell, entry, args, sheet
       writeFileSync(join(dir, "src", "components", "Shell.tsx"), shell);
     }
     writeFileSync(join(dir, "design", "spec", "spec.css"), spec);
-    if (markupSelectors !== undefined) writeFileSync(join(dir, "design", "spec", "markup.selectors"), `# the design's own markup\n${markupSelectors}`);
+    // The design's own page, vendored beside the spec with its sha256 pinned in the spec header -
+    // the shape the real specs use. `breakPin` edits the page AFTER the pin is written, which is
+    // the round-three mutant: strike a name to excuse the rule that uses it.
+    if (markupHtml !== undefined) {
+      const page = `<html><body>${markupHtml}</body></html>`;
+      const sha = createHash("sha256").update(page).digest("hex");
+      // spec.css is already on disk by now, so the pinned header is written over it rather
+      // than prepended to a variable nobody reads again.
+      writeFileSync(join(dir, "design", "spec", "spec.css"), `/* vendored page\n *   ${sha}  ./page.html\n */\n${spec}`);
+      writeFileSync(join(dir, "design", "spec", "page.html"), breakPin ? page.replace(breakPin[0], breakPin[1]) : page);
+    }
     writeFileSync(join(dir, "src", "app", "shipped.css"), shipped);
     if (departures !== undefined) writeFileSync(join(dir, "design", "spec", "departures.json"), JSON.stringify(departures, null, 2));
     writeFileSync(join(dir, "scripts", "parity-check.mjs"), readFileSync(SCRIPT, "utf8"));
@@ -705,10 +716,10 @@ test("a spec rule whose selector the design's own markup never uses is not dropp
   const r = runParity({
     spec: ".a{color:red}\n.demo{color:blue}\n",
     shipped: ".a{color:red}\n",
-    markupSelectors: "a\n",           // the design's page uses `.a` and nothing else
+    markupHtml: '<b class="a">x</b>',        // the design's page uses `.a` and nothing else
   });
   assert.match(r.out, /dropped 0/, r.out);
-  assert.match(r.out, /1 spec rule\(s\) the design's own markup never uses/, r.out);
+  assert.match(r.out, /1 spec rule\(s\) page\.html never uses/, r.out);
 });
 
 test("and a rule the design DOES use is still dropped when we ship it nowhere", () => {
@@ -716,13 +727,40 @@ test("and a rule the design DOES use is still dropped when we ship it nowhere", 
   const r = runParity({
     spec: ".a{color:red}\n.demo{color:blue}\n",
     shipped: ".a{color:red}\n",
-    markupSelectors: "a\ndemo\n",     // now the design's page uses `.demo` too
+    markupHtml: '<b class="a">x</b><b class="demo">y</b>',   // now the page uses `.demo` too
   });
   assert.match(r.out, /dropped 1/, r.out);
 });
 
-test("with no inventory beside the spec, every unshipped rule still counts and it says so", () => {
+test("with no page vendored beside the spec, every unshipped rule still counts and it says so", () => {
   const r = runParity({ spec: ".a{color:red}\n.demo{color:blue}\n", shipped: ".a{color:red}\n" });
   assert.match(r.out, /dropped 1/, r.out);
-  assert.match(r.out, /no markup\.selectors beside this spec/, r.out);
+  assert.match(r.out, /no \.html vendored beside this spec/, r.out);
+});
+
+// THE ROUND-THREE MUTANT, which exited 0 when the exclusion list was a file anyone could edit:
+// delete a rule AND strike the name that justifies excluding it. Reading the page instead of a
+// list only moves the tamper surface; the pin is what closes it.
+test("a vendored page edited to excuse a rule fails the pin, and the run refuses", () => {
+  const r = runParity({
+    spec: ".a{color:red}\n.demo{color:blue}\n",
+    shipped: ".a{color:red}\n",
+    markupHtml: '<b class="a">x</b><b class="demo">y</b>',
+    breakPin: ['class="demo"', 'class="demoX"'],
+  });
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /does not match the sha256/, r.out);
+});
+
+test("and a spec that vendors a page but pins no sha for it is refused", () => {
+  const r = runParity({
+    spec: ".a{color:red}\n",
+    shipped: ".a{color:red}\n",
+    sheets: { },
+    specs: { },
+    env: {},
+  });
+  // no page vendored at all is the NOT-pinned case handled above; this pins the shape of the
+  // message when a page exists without a pin, written directly.
+  assert.doesNotMatch(r.out, /pins no sha256/, r.out);
 });
