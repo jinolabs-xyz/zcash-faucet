@@ -1258,7 +1258,7 @@ check "the runner prints the slowest checks and counts the ones over 10s" \
 # which CI never uses, so the damage is invisible on every green run we have. repo.sh starts
 # ten nested run-tests.sh runs; each sources lib.sh, truncates the inherited path and deletes
 # it on exit, and the parent's report silently drops every row from before the first one.
-# Measured on this tree: 214 rows with nothing exported, 102 with it exported.
+# Measured on this tree: 216 rows with nothing exported, 34 with it exported.
 # The toy below is the two levels and nothing else, so it costs two bash starts, not a suite.
 mk_scratch "${TMPDIR:-/tmp}/repo-timing.XXXXXX"
 cp -r "$REPO/deploy/z3/tests" "$T/tt"
