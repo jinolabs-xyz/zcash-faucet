@@ -3,13 +3,9 @@
 import { CSSProperties, useCallback, useEffect, useRef, useState } from "react";
 // The redesign's tokens and shell, transcribed from the preview the owner approved on
 // 2026-09-15. Tokens first: the shell reads them.
-import "./redesign-tokens.css";
-import "./redesign-shell.css";
-import "./redesign-hero.css";
-import { BrandMark } from "./BrandMark";
-import Link from "next/link";
-import { Sparkline, type DripDay } from "./Sparkline";
+import type { DripDay } from "./Sparkline";
 import { Mascot } from "@/components/Mascot";
+import { Shell } from "@/components/Shell";
 import { reserveRows } from "@/lib/reserveLabel";
 import { minerChip, minerRow, minerErrorRow, minerIsBad, readingFromStatus } from "@/lib/minerLabel";
 import { publicBoxRow, publicBoxChip, publicBoxIsBad, type PublicBox } from "@/lib/boxLabel";
@@ -237,21 +233,6 @@ function num(n: number | null | undefined) { return n == null ? "–" : n.toLoca
  * reader reaching for a toggle is looking for. The aria-label says the action out
  * loud because an icon alone does not.
  */
-function SunIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
-      <circle cx="12" cy="12" r="4.2" />
-      <path d="M12 2.4v2.4M12 19.2v2.4M4.2 4.2l1.7 1.7M18.1 18.1l1.7 1.7M2.4 12h2.4M19.2 12h2.4M4.2 19.8l1.7-1.7M18.1 5.9l1.7-1.7" />
-    </svg>
-  );
-}
-function MoonIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M20.5 14.6A8.6 8.6 0 1 1 9.4 3.5a6.9 6.9 0 0 0 11.1 11.1Z" />
-    </svg>
-  );
-}
 
 const muted = (pct: number): string => `color-mix(in srgb, var(--color-text) ${pct}%, transparent)`;
 const PROOF_SECONDS = 12; // estimated shielded-proof build time, for the progress feel
@@ -1078,118 +1059,18 @@ export default function Home() {
   return (
     // `app` stays on the outer element: it is what the smoke's theme and contrast checks
     // find, and the redesign has no reason to rename it.
-    <div className={"app " + (theme === "ink" ? "ink" : "")}>
-      {/* The stage owns the container query and defines --u, so every calc() in the shell
-          resolves inside here and nowhere else. The composition is the centred column the
-          design is laid out in, and the footer is its last flex child, which is what pins
-          the footer to the bottom on a short page (preview lines 364-366). */}
-      <div className="stage">
-        <div className="comp">
-      {/* THE REDESIGN'S HEADER (preview lines 367-388): brand, the phase word, the
-          segmented nav, the thirty-day strip and the theme toggle. Three grid columns so
-          the nav is centred on the page rather than on whatever the brand happens to
-          measure, which is why it is a grid and not a flex row. */}
-      <header className="hdr">
-        <div className="brand">
-          {/* ONE LINK HOME, mark and wordmark together, on the orange-soft disc (owner
-              ruling, 2026-09-16, preview line 378).
-
-              THIS DROPS THE z.cash HYPERLINK, AND THE QUESTION IT RAISED IS ANSWERED
-              (CTO, 19:38Z). Our old comment called the hyperlink "the trademark policy's
-              condition for showing the mark", and that was our own reading rather than the
-              policy's words: the condition is not to hold yourself out as official or
-              endorsed, which /terms states plainly and at length. The hyperlink was one way
-              of meeting it, not the requirement. So one anchor around mark and wordmark is
-              fine, and the attribution lives where someone actually reads it. */}
-          <Link className="home" href="/" aria-label="Zcash Testnet Faucet, home">
-            <BrandMark />
-            <span className="name">Zcash Testnet Faucet</span>
-          </Link>
-          <span className="badge" data-state={statusText} data-testid="status-badge">
-            <span className="ring">
-              <span
-                data-testid="status-dot"
-                className="dot"
-                aria-hidden="true"
-                // The pulse is INLINE and that is load-bearing: the reduced-motion rule is a
-                // global `* { animation: none !important }`, and only !important beats an
-                // inline declaration. A class here would keep animating for people who asked
-                // it not to, which the smoke checks both ways.
-                style={{ background: dot.fill, boxShadow: `0 0 0 2px ${dot.ring}`, animation: "pulse 2.6s ease-in-out infinite" }}
-              />
-            </span>
-            <span className="txt" data-testid="status-word">{statusText}</span>
-          </span>
-        </div>
-
-        {/* Buttons rather than links: the views are client state on one page, so an anchor
-            would promise a navigation that does not happen. The hash is written by the
-            handler, which keeps a view linkable without making the nav lie about what it
-            is. */}
-        <nav className="seg" aria-label="Sections">
-          {VIEWS.map((v) => (
-            <button
-              key={v}
-              type="button"
-              data-view={v}
-              data-testid={`nav-${v}`}
-              onClick={() => setView(v)}
-              {...(view === v ? { "aria-current": "page" as const } : {})}
-            >
-              {v === "claim" ? "Claim" : v === "status" ? "Status" : v === "analytics" ? "Analytics" : "Tools"}
-            </button>
-          ))}
-        </nav>
-
-        <div className="hdr-right">
-          {/* The strip is a shortcut INTO the analytics view, so it is a button that
-              switches views rather than a decoration that happens to show numbers. */}
-          <button
-            className="strip"
-            type="button"
-            data-testid="drips-strip"
-            onClick={() => setView("analytics")}
-            aria-label="Open usage analytics"
-          >
-            <Sparkline
-              byDay={status?.drips?.byDay ?? []}
-              last7d={status?.drips?.last7d ?? null}
-              allTime={status?.drips?.allTime ?? null}
-              theme={theme}
-            />
-            <span className="kv week">
-              <b className="num" data-testid="drips-7d">{status?.drips ? num(status.drips.last7d) : "–"}</b>
-              <span>this week</span>
-            </span>
-            <span className="kv all">
-              <b className="num" data-testid="drips-all">{status?.drips ? num(status.drips.allTime) : "–"}</b>
-              <span>all time</span>
-            </span>
-          </button>
-          {/* Keeps `theme-toggle` beside the design's `iconbtn`: the class is what the
-              smoke's 1.4.11 contrast guard finds, and losing it would retire a live
-              accessibility check by accident rather than on purpose. */}
-          <button
-            type="button"
-            data-testid="theme-toggle"
-            className="iconbtn theme-toggle"
-            onClick={() => setTheme((t) => (t === "ink" ? "paper" : "ink"))}
-            aria-pressed={theme === "ink"}
-            aria-label={theme === "ink" ? "Switch to light theme" : "Switch to dark theme"}
-            title={theme === "ink" ? "Light theme" : "Dark theme"}
-          >
-            {theme === "ink" ? <SunIcon /> : <MoonIcon />}
-          </button>
-        </div>
-      </header>
-      {/* THE FOUR VIEWS (preview lines 389-712). One is shown at a time and the rest
-          carry `hidden`, which the shell turns into display:none !important. They stay
-          inside <main> so the landmark survives the redesign: the preview drops it, and a
-          screen reader losing "main" is not a trade the design was asking for.
-
-          THE CONTENT INSIDE IS THIS SLICE'S ONLY UNCHANGED PART, on purpose. S1 moves it
-          and does not rewrite it, so a reviewer can see the shell landing without reading
-          a thousand lines of diff that say the same words in a different place. */}
+    // THE SHELL IS ONE COMPONENT NOW (src/components/Shell.tsx). S1 landed the stage,
+    // masthead and footer inline here, which was right while this was the only page. S5
+    // gives /terms, /donate and /fund the same chrome, and the snapshot's subpage header
+    // is byte-identical to this one apart from the nav, so a second copy would be a header
+    // that drifts. Moved rather than duplicated, and page.tsx moves onto it in the SAME
+    // commit as the pages, so there is never a moment with two definitions.
+    <Shell
+      nav={{ kind: "views", view, onView: (v: string) => setView(v as typeof view), views: VIEWS }}
+      badge={{ word: statusText, dot }}
+      status={status}
+      onStripClick={() => setView("analytics")}
+    >
       <main className="views">
         {/* THE HERO (S2a). `legacy-measure` is gone from this view because the view is
             transcribed now: the design's hero is a three-column grid of its own and capping
@@ -2007,75 +1888,6 @@ export default function Home() {
         </section>
 
       </main>
-
-      {/* THE FOOTER (preview lines 713-721), pinned to the bottom of every page by
-          `.comp > .ftr{margin-top:auto}` rather than by position, so it sits under the
-          content on a long page and at the bottom on a short one.
-
-          NOT TRANSCRIBED: the preview's privacy line, "No accounts, no cookies, no
-          trackers. Addresses and IPs are never logged." Nothing here sets a cookie and no
-          raw IP is stored or sent anywhere, so the first half is plainly true, but we do
-          persist a SALTED FINGERPRINT of the address and of the IP for the rate limiter,
-          for as long as the retention window in PURGE_SQL. "Never logged" is defensible
-          about raw values and misleading about derived ones, and that is a call for the
-          owner rather than for the slice that moves the furniture. Raised, not decided. */}
-          <footer className="ftr">
-            {/* THE WORDING IS THE CTO'S RULING OF 19:38Z, not the preview's original. I
-                blocked on the preview's "Addresses and IPs are never logged" because it is
-                defensible about RAW values and misleading about the salted fingerprints the
-                rate limiter keeps until PURGE_SQL drops them. "hashed, never stored raw" is
-                both true and the stronger claim, since it says what we do rather than only
-                what we do not. Nothing here sets a cookie and no raw IP is stored or sent
-                anywhere. The same words are in the frozen spec. */}
-            <span>No accounts, no cookies, no trackers. Addresses and IPs are hashed, never stored raw.</span>
-            <nav>
-              <a href="/donate">Donate TAZ</a>
-              {/* Absent unless config validated a maintenance address, so a rejected or
-                  unset one shows nothing rather than a link to an empty promise. This is
-                  real money, and the preview's unconditional link cannot keep that
-                  property. */}
-              {status?.maintenanceAddress ? <a href="/fund">Fund ZEC</a> : null}
-              {/* A terms page nobody can reach protects nobody, so it is linked from the
-                  page every visitor lands on. */}
-              <a href="/terms">Terms</a>
-              {/* The source, linked from the landing page. An open source project whose
-                  repo is only findable by guessing the org name is open source in licence
-                  rather than in practice. */}
-              <a href="https://github.com/jinolabs-xyz/zcash-faucet" target="_blank" rel="noopener noreferrer">GitHub</a>
-            </nav>
-            <div className="ftr-attrib">
-              {/* Canonical Jino Labs attribution lockup, committed verbatim from the brand
-                  kit. Do not restyle it toward our palette or resize it below native: the
-                  kit sets a 16px mark and an 11px cap-height minimum, and the badge is
-                  supposed to read as Jino Labs rather than as this app.
-
-                  The variant follows OUR theme state, which is client state and not
-                  prefers-color-scheme, so <picture> with a media query cannot do it. */}
-              <a className="footer-brand" href="https://jinolabs.xyz">
-                {/* eslint-disable-next-line @next/next/no-img-element -- a fixed-size SVG
-                    from public/ has nothing for next/image to optimise, and Next declines
-                    to optimise SVG anyway, so Image would just need unoptimized. The alt
-                    text is the accessible name the kit specifies. */}
-                <img
-                  className="lockup"
-                  src={theme === "ink" ? "/brand/powered-by-dark.svg" : "/brand/powered-by-light.svg"}
-                  alt="Powered by Jino Labs"
-                  width={218}
-                  height={36}
-                />
-              </a>
-              {/* THE "not an official Zcash service" LINE LEFT THE FOOTER (owner ruling,
-                  applied in the frozen spec). It has not left the site: /terms already says
-                  "It is an independent community project. It is not an official Zcash
-                  service and is not affiliated with, sponsored by, or endorsed by the
-                  Electric Coin Company", and its "Trademarks and licence" section names ECC
-                  and links the Foundation's policy. I checked both before removing this
-                  rather than taking the ruling's word for it, because the policy condition
-                  is the reason we may show the mark at all. S5 adds one more sentence there. */}
-            </div>
-          </footer>
-        </div>
-      </div>
-    </div>
+    </Shell>
   );
 }

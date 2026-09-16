@@ -42,6 +42,7 @@
 // everyone and production installs no browser tooling. Invoked as a plain
 // node script for the same reason, no shared package.json entry needed.
 import { chromium, devices } from "playwright";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 
 const BASE = (process.env.UI_SMOKE_URL ?? "http://localhost:3120").replace(/\/$/, "");
 // THE DESKTOP SIZE THIS SUITE SPEAKS FOR, declared rather than inherited. The contexts below
@@ -980,6 +981,225 @@ async function checkCtazToggle(page, base) {
  *   TAP TARGETS REACH 44px. The floor, and the rule that enforces it keyed on a
  *     class the masthead's two icon controls do not have, so both were 30px.
  */
+/**
+ * THE THREE SUBPAGES IN THE SHELL (S5).
+ *
+ * Six properties, and the third is the one that justified the whole design: these pages are
+ * server rendered ON PURPOSE, because a page whose job is to state obligations must not
+ * depend on a script running. Nothing pinned that until now, so the Shell could have been
+ * made a full client component in a later refactor and every other check here would have
+ * stayed green.
+ */
+async function checkSubpages(browser, base) {
+  const PAGES = [
+    { path: "/terms", heading: "Terms of use." },
+    { path: "/donate", heading: "Keep the tank full." },
+    { path: "/fund", heading: "Fund the project." },
+  ];
+  const NAV = [["claim", "/"], ["status", "/#status"], ["analytics", "/#analytics"], ["tools", "/#tools"]];
+
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await ctx.newPage();
+
+  // THE FOOTER LINK AND THE PAGE MUST AGREE ABOUT WHETHER THERE IS AN ADDRESS, which is the
+  // property, and it holds whether or not one is configured - CI sets no
+  // FAUCET_MAINTENANCE_ADDRESS, so an assertion that only held in one configuration could
+  // never run there.
+  //
+  // /fund ALWAYS ANSWERS 200: it has two states, the address card and a "no address
+  // configured" card, and that is the behaviour it already had. What must never happen is the
+  // footer offering a link to a page with nothing on it, or an address sitting on a page
+  // nothing links to.
+  await page.goto(base + "/", { waitUntil: "networkidle" });
+  const fundLinked = (await page.locator('.ftr a[href="/fund"]').count()) === 1;
+  await page.goto(base + "/fund", { waitUntil: "networkidle" });
+  const fundHasAddress = (await page.locator("#fund").count()) === 1;
+  ok("the Fund ZEC footer link is present exactly when /fund has an address to show",
+    fundLinked === fundHasAddress,
+    `footer link ${fundLinked ? "present" : "absent"}, address card ${fundHasAddress ? "present" : "absent"}`);
+
+  // /fund IS NEVER A 404 (CTO ruling, 23:39Z, on App's finding). I had written notFound() here
+  // and it was wrong for a reason better than the one I had: maintenanceAddress is empty when
+  // UNSET **or when config validation REJECTS it**, so a validation failure would silently
+  // delete a page instead of degrading it, and the operator's first signal would be a visitor
+  // asking where it went. A page that exists in every other configuration does not become
+  // not-found because it has nothing to offer; it says so.
+  const fundBody = await page.locator(".view.sub").innerText();
+  ok("/fund answers 200 in BOTH configurations, and says which one it is in",
+    fundHasAddress
+      ? /Mainnet ZEC, shielded/.test(fundBody) && /cannot be reversed/.test(fundBody)
+      : /No address configured/.test(fundBody) && /FAUCET_MAINTENANCE_ADDRESS/.test(fundBody),
+    `${fundHasAddress ? "address" : "no-address"} state: ${fundBody.replace(/\s+/g, " ").slice(0, 110)}`);
+
+  for (const { path, heading } of PAGES) {
+    const res = await page.goto(base + path, { waitUntil: "networkidle" });
+    ok(`${path} answers 200`, res?.status() === 200, `status ${res?.status()}`);
+    ok(`${path} renders the shell header and the pinned footer`,
+      (await page.locator("header.hdr").count()) === 1 && (await page.locator("footer.ftr").count()) === 1,
+      `hdr ${await page.locator("header.hdr").count()}, ftr ${await page.locator("footer.ftr").count()}`);
+    ok(`${path} renders its own heading`, (await page.locator("h1").first().innerText()).trim() === heading,
+      (await page.locator("h1").first().innerText()).trim());
+
+    // ANCHORS, NOT BUTTONS. On the index the views are client state, so the nav is buttons; on
+    // a subpage there is nothing to switch and a button would be a control that does nothing
+    // until JavaScript arrives. The snapshot makes exactly this distinction.
+    const nav = await page.evaluate((expected) =>
+      expected.map(([v]) => {
+        const el = document.querySelector(`.seg [data-testid="nav-${v}"]`);
+        return { v, tag: el?.tagName ?? "(missing)", href: el?.getAttribute("href") ?? null };
+      }), NAV);
+    ok(`${path} nav is anchors that resolve home`,
+      nav.every((n, i) => n.tag === "A" && n.href === NAV[i][1]),
+      JSON.stringify(nav));
+
+    // THE BADGE NEVER ASSERTS A STATE IT HAS NOT ESTABLISHED (ruling 21:13Z, #573). NOT READY
+    // or UNKNOWN as a first paint to someone reading the terms is a false claim about a
+    // service that may be perfectly healthy.
+    const word = (await page.getByTestId("status-word").innerText()).trim();
+    ok(`${path} badge reads CHECKING, never NOT READY or UNKNOWN`, word === "CHECKING", word);
+  }
+
+  // THE PRIVACY PARAGRAPH, WORD FOR WORD. It is the sentence we corrected twice tonight: the
+  // snapshot's terms body contradicted its own footer with the claim #562 was blocked over.
+  // A sentence argued over twice is one a later edit drifts back toward the comfortable
+  // version of, and this is the page where being wrong costs most.
+  await page.goto(base + "/terms", { waitUntil: "networkidle" });
+  const PRIVACY = "No accounts, no cookies, no trackers. Your address and your IP are used only to derive a salted hash for rate limiting, kept until the purge window drops the row, and the raw values are never written to a log or a database.";
+  const termsText = (await page.locator(".terms").innerText()).replace(/\s+/g, " ");
+  ok("the terms privacy paragraph is the snapshot's sentence, word for word",
+    termsText.includes(PRIVACY), termsText.slice(termsText.indexOf("No accounts"), termsText.indexOf("No accounts") + 120));
+  ok("and the wording #562 was blocked over appears nowhere on the page",
+    !(await page.locator("body").innerText()).includes("never logged"));
+
+  // FOOTER LINKS HIT-TESTABLE at the two sizes that caught the shell's clipped footer. Present
+  // in the DOM is not the property; reachable by a pointer is.
+  for (const [W, H] of [[1280, 720], [1366, 768]]) {
+    await page.setViewportSize({ width: W, height: H });
+    for (const { path } of PAGES) {
+      await page.goto(base + path, { waitUntil: "networkidle" });
+      const bad = await page.evaluate(() =>
+        [...document.querySelectorAll(".ftr a")].filter((a) => {
+          const b = a.getBoundingClientRect();
+          const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+          return !hit || !(hit === a || a.contains(hit) || hit.contains(a));
+        }).map((a) => a.textContent.trim()));
+      ok(`${path} footer links are hit-testable at ${W}x${H}`, bad.length === 0, bad.join(", "));
+    }
+  }
+  // ctx stays open: the no-JS comparison below needs a with-JS reading of the same element.
+
+  // READABLE WITH JAVASCRIPT OFF. The property the whole Shell design exists to preserve: the
+  // masthead is a client island, the obligations are server-rendered children inside it.
+  const noJs = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 1280, height: 800 } });
+  const plain = await noJs.newPage();
+  for (const { path, heading } of PAGES) {
+    // Same coupling as above: with no mainnet address there is a page here but it carries the
+    // "no address configured" state, so the heading assertion still holds. What would NOT hold
+    // is reading it as if an address were present, which is why the address length check below
+    // announces its own skip rather than passing quietly.
+    await plain.goto(base + path, { waitUntil: "domcontentloaded" });
+    const text = await plain.locator("body").innerText();
+    ok(`${path} renders its heading with JavaScript disabled`, text.includes(heading), text.slice(0, 80));
+    ok(`${path} renders the footer links with JavaScript disabled`,
+      (await plain.locator(".ftr a").count()) >= 3, `${await plain.locator(".ftr a").count()} links`);
+  }
+
+  // THE OBLIGATIONS THEMSELVES, not just the heading around them. My first spelling of this
+  // asserted the h1 and the footer links, and a mutant that hid the whole `.terms` body with
+  // display:none PASSED - the heading is in hero-copy and the footer is outside it, so nothing
+  // I had written was looking at the text the page exists to state. That is the property the
+  // whole server-rendered design is for, so it is measured directly: the sections a reader
+  // needs, in the DOM, with scripting off.
+  await plain.goto(base + "/terms", { waitUntil: "domcontentloaded" });
+  const termsOff = (await plain.locator(".terms").textContent()) ?? "";
+  for (const heading of ["Who runs this", "What you get", "No warranty", "Privacy", "Trademarks and licence"]) {
+    ok(`/terms states "${heading}" with JavaScript disabled`, termsOff.includes(heading),
+      `${termsOff.length} chars of terms body`);
+  }
+  ok("and the privacy sentence itself is there without a script",
+    termsOff.includes("salted hash for rate limiting"), termsOff.slice(0, 90));
+  // The addresses are the payload of two of these three pages and the reason they are server
+  // rendered at all: a page handing over an address must not need a script to show it.
+  await plain.goto(base + "/donate", { waitUntil: "domcontentloaded" });
+  // textContent, NOT innerText. innerText is layout-dependent and conflates "in the HTML" with
+  // "currently visible"; the property here is that the address is SERVER RENDERED. My first
+  // spelling used innerText and read 0 chars against a page that was perfectly correct - the
+  // stack simply had no FAUCET_DONATION_ADDRESS configured, which CI does not set either.
+  //
+  // So the assertion is on the PANEL rather than on the address element, and it is the same
+  // assertion in both configurations. My first spelling read `#don` and required it to exist,
+  // which pinned the defect I was in the middle of fixing: at a2aa54b the page rendered
+  // `<code id="don">` holding an empty string whatever was configured, so "the element is
+  // there" was true for the wrong reason, and giving the page its missing not-configured state
+  // would have turned that green assertion red. An assertion that goes red when the code gets
+  // MORE correct is pinning the bug, not the behaviour.
+  //
+  // What the page actually promises is that whatever /donate says about an address, it says it
+  // with no script running. That holds with an address and without one, so there is no SKIP
+  // here any more: the no-address run now covers the not-configured state instead of covering
+  // nothing.
+  const panelOff = (await plain.locator(".card.feature .panel").first().textContent()) ?? "";
+  await page.goto(base + "/donate", { waitUntil: "networkidle" });
+  const panelOn = (await page.locator(".card.feature .panel").first().textContent()) ?? "";
+  ok("/donate's address panel is server rendered, not script dependent",
+    panelOff.trim().length > 0 && panelOff === panelOn,
+    `off ${JSON.stringify(panelOff.trim().slice(0, 60))}, on ${JSON.stringify(panelOn.trim().slice(0, 60))}`);
+
+  // AND THE TWO RENDERINGS AGREE ABOUT WHICH STATE THEY ARE IN. Counts, not text, because a
+  // script that hydrated a different branch would show up here as 1 against 0 whatever the
+  // strings said.
+  const donOff = await plain.locator("#don").count();
+  const donOn = await page.locator("#don").count();
+  ok("/donate agrees with itself about whether it has an address, script or no script",
+    donOff === donOn, `off ${donOff}, on ${donOn}`);
+
+  if (donOn === 1) {
+    ok("and when an address is configured it arrives whole without a script",
+      (await plain.locator("#don").textContent() ?? "").trim().length > 40,
+      `${(await plain.locator("#don").textContent() ?? "").trim().length} chars`);
+    ok("and it offers the control that copies it",
+      (await plain.locator("#don").count()) === 1 && /Copy address/.test(panelOff), panelOff.trim().slice(0, 80));
+  } else {
+    // THE OTHER HALF OF THE COUPLING, and the configuration CI actually runs. No address means
+    // the page says so and offers no control for the thing it does not have.
+    ok("and with no address configured it says so rather than showing an empty box",
+      /No address configured/i.test(panelOff), panelOff.trim().slice(0, 80));
+    ok("and offers no copy control for an address it does not have",
+      !/Copy address/.test(panelOff), panelOff.trim().slice(0, 80));
+  }
+  await noJs.close();
+  await ctx.close();
+}
+
+/**
+ * ONE DEFINITION OF THE MASTHEAD, and a count that must be exactly one.
+ *
+ * The header lived inline in page.tsx while the index was the only page that had one. S5 gives
+ * three more pages the same chrome, so a second copy would be a header that drifts - the same
+ * thing we refused on the CSS. This is a repo fact rather than a browser one, so it is checked
+ * on the source: exactly one file may render `<header className="hdr">`, and the pages must
+ * consume it rather than carry their own.
+ */
+function checkSingleHeader() {
+  const files = [];
+  const walk = (d) => {
+    for (const e of readdirSync(d)) {
+      const f = `${d}/${e}`;
+      if (statSync(f).isDirectory()) walk(f);
+      else if (/\.tsx?$/.test(f)) files.push(f);
+    }
+  };
+  walk("src");
+  const definers = files.filter((f) => /<header\s+className="hdr"/.test(readFileSync(f, "utf8")));
+  ok("exactly one file defines the masthead", definers.length === 1, definers.join(", ") || "none");
+  ok("and it is the shared Shell", definers[0] === "src/components/Shell.tsx", definers[0] ?? "none");
+  // The wiring half: every page that should have the chrome actually consumes it. Without this
+  // the count above passes just as well on a tree where three pages have no header at all.
+  const consumers = ["src/app/page.tsx", "src/app/terms/page.tsx", "src/app/donate/page.tsx", "src/app/fund/page.tsx"]
+    .filter((f) => /<Shell\b/.test(readFileSync(f, "utf8")));
+  ok("and all four pages consume it", consumers.length === 4, `${consumers.length}/4: ${consumers.join(", ")}`);
+}
+
 async function checkMobile(browser, base) {
   const ctx = await browser.newContext({ ...devices["iPhone 13"], viewport: { width: 375, height: 812 } });
   const page = await ctx.newPage();
@@ -1327,6 +1547,9 @@ try {
   // it, and after the desktop claim so a mobile failure is never the first thing to
   // go red when something more basic is broken.
   await checkMobile(browser, BASE);
+
+  await checkSubpages(browser, BASE);
+  checkSingleHeader();
 
   // Last, because it navigates away and intentionally hits a 404.
   await check404(page, BASE);
