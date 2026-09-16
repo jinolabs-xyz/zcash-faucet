@@ -890,11 +890,37 @@ async function checkFooterReachable(browser) {
       return { overflowY: cs.overflowY, docOver, inserted };
     });
 
-    // REACHED WITH A REAL WHEEL, over the probe itself, because a wheel is refused by a clipped
-    // box exactly as a visitor's fingers are. Programmatic scrolling is not a substitute: the
-    // red-team already caught `scrollIntoView` moving an `overflow:hidden` box where a pointer
-    // cannot, and this row would inherit that false green.
-    const reach = await p.evaluate(() => {
+    // ASKED STRUCTURALLY, NOT KINETICALLY, and the wheel version that stood here was wrong in a
+    // way I could not have found from my own tree. SDE-UI ran it against unmodified origin/main:
+    // RED at 1280x720 and 1366x768, 865px and 852px below the fold. My claim that the new property
+    // was "green on the old page too" was false as measured, and that claim was the whole argument
+    // for re-premising a shipped row.
+    //
+    // What saved the premise was that they did not stop at the red. The content IS reachable on
+    // main at every size - the same probe, reached by other means at -217, -206 and -274px, with
+    // the document scrollable by 1139, 784 and 1101px. So main has no unreachability defect and
+    // the property holds there. TWELVE WHEEL EVENTS AT ONE POINT is what failed, not the property.
+    //
+    // AND THE ROW WAS NON-DETERMINISTIC, which is the part that would have cost someone else a
+    // day: at 1280x720 the SAME row gave -217 standalone and 865-below inside the full suite, same
+    // tree, same size. Rows before it leave the page in a scroll state it does not control, so it
+    // would have flaked in CI on an unrelated change and been blamed there.
+    //
+    // THE MECHANISM IS THE INDICTMENT. At 1366x768 the chain is div.panel(auto, 343px), then
+    // body(visible, 784px), then html. The panel eats the first 343px and the remainder does not
+    // chain the way a fixed budget of wheel events assumes. It fails exactly when an intermediate
+    // auto scroller exists - which is the thing THIS CHANGE CREATES. A kinetic probe would have
+    // got less reliable on my tree, not more, while appearing to endorse it.
+    //
+    // So the chain is walked instead: the probe is reachable if every ancestor between it and the
+    // document either does not clip, or clips and can scroll far enough to reveal it. No wheel
+    // budget, no dependence on what ran before, and it states the property directly.
+    //
+    // `hidden` IS NOT REACHABLE, and that exclusion is the point rather than a detail. An
+    // `overflow:hidden` box can still be scrolled programmatically, so counting it would call
+    // buried content reachable and hand back the exact false green this row exists to prevent.
+    // SDE-UI shipped that hatch on #609 and had to fix it; this is the same trap one layer up.
+    const reached = await p.evaluate(() => {
       const host = document.querySelector(".card.claim > .panel")
         ?? [...document.querySelectorAll(".views > .view")].find((v) => v.getClientRects().length)
         ?? document.querySelector(".stage .comp") ?? document.querySelector(".stage");
@@ -902,24 +928,54 @@ async function checkFooterReachable(browser) {
       probe.id = "tall-probe";
       probe.style.cssText = "height:1200px;min-height:1200px;width:1px;flex:0 0 1200px";
       host.appendChild(probe);
-      const b = probe.getBoundingClientRect();
-      return { x: Math.round(Math.min(Math.max(b.left, 4), innerWidth - 4)), y: Math.round(innerHeight / 2) };
-    });
-    await p.mouse.move(reach.x, reach.y);
-    for (let i = 0; i < 12; i++) { await p.mouse.wheel(0, 400); await p.waitForTimeout(40); }
-    await p.waitForTimeout(150);
-    const reached = await p.evaluate(() => {
-      const probe = document.getElementById("tall-probe");
-      const b = probe.getBoundingClientRect();
-      const short = Math.round(b.bottom - innerHeight);
+
+      // SCROLL THE CHAIN THE WAY A WHEEL WOULD, THEN LOOK. Walking the ancestors and comparing
+      // each one's scrollable extent against the probe's CURRENT offset is wrong, and this row
+      // caught me doing it: it reported `article.card(hidden,0) buries 1010px` on a tree where
+      // `div.panel` could scroll 1139px, because once the panel scrolls the probe moves up
+      // relative to the card too. The overflow was counted once per ancestor instead of once.
+      //
+      // So each scrollable ancestor is actually scrolled and the question is asked ONCE, at the
+      // end: is the probe inside the viewport and inside every box that clips it. Composition
+      // comes out right because the boxes have really moved.
+      //
+      // ONLY auto AND scroll ARE TOUCHED. `overflow:hidden` scrolls perfectly well from a script
+      // and not at all from a pointer, so scrolling one here would manufacture the false green
+      // this row exists to catch - the #609 hatch, one layer up.
+      const chain = [];
+      for (let el = probe.parentElement; el; el = el.parentElement) {
+        const cs = getComputedStyle(el);
+        if (cs.overflowY !== "visible") {
+          chain.push(`${el.tagName.toLowerCase()}${el.className ? "." + String(el.className).split(/\s+/)[0] : ""}(${cs.overflowY},${el.scrollHeight - el.clientHeight})`);
+          if (cs.overflowY === "auto" || cs.overflowY === "scroll") el.scrollTop = el.scrollHeight;
+        }
+        if (el === document.documentElement) break;
+      }
+      window.scrollTo(0, document.documentElement.scrollHeight);
+
+      // Now measure. A clipping ancestor that still cuts the probe off is the failure, and it is
+      // named, because "unreachable" without the box that buried it is a re-run rather than a
+      // diagnosis.
+      let blocked = null;
+      const pb = probe.getBoundingClientRect().bottom;
+      for (let el = probe.parentElement; el && !blocked; el = el.parentElement) {
+        const cs = getComputedStyle(el);
+        if (cs.overflowY !== "visible") {
+          const past = Math.round(pb - el.getBoundingClientRect().bottom);
+          if (past > 1) blocked = `${el.tagName.toLowerCase()}${el.className ? "." + String(el.className).split(/\s+/)[0] : ""}(${cs.overflowY}) still buries ${past}px at full scroll`;
+        }
+        if (el === document.documentElement) break;
+      }
+      if (!blocked && Math.round(pb - innerHeight) > 1) blocked = `${Math.round(pb - innerHeight)}px below the fold at full scroll`;
       probe.remove();
-      return { short };
+      return { blocked, chain: chain.join(" <- ") || "nothing clips" };
     });
-    ok(`${label}: content taller than the viewport can still be reached by a wheel`,
-      !!stage && stage.inserted && reached.short <= 1,
+    ok(`${label}: content taller than the viewport can still be reached`,
+      !!stage && stage.inserted && !reached.blocked,
       !stage ? "no .stage on the page"
         : !stage.inserted ? "the probe did not render at its full height, so nothing was measured"
-        : `overflow-y ${stage.overflowY}, twelve wheel events left the bottom of a 1200px probe ${reached.short}px below the fold`);
+        : reached.blocked ? `${reached.blocked}; chain ${reached.chain}`
+        : `reachable, chain ${reached.chain}`);
 
     // And a REAL wheel, through the browser rather than a dispatched event, on the pages that
     // are taller than the viewport. This one can still be inapplicable - it says so rather
