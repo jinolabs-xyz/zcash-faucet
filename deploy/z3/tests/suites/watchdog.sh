@@ -192,6 +192,25 @@ check "three attempts for two failures, then delivered, then quiet: the episode 
   "[ \"\$(grep -c 'NOT READY' '$T/attempts.log')\" = 3 ] && [ \"\$(grep -c 'NOT READY' '$T/alerts.log')\" = 1 ]"
 unset WATCHDOG_READY_GRACE_SECS STUB_READY
 
+# THE TWO PAGES #507 DID NOT REACH (#511). Both fired at an EXACT count, so a send that failed on
+# that one sweep lost the page for the rest of the episode. The two cases above are the shape;
+# these are the same shape at the two rungs that never got it.
+echo "== watchdog: the step-3 faucet-app page is retried after a failed send, not lost for the episode"
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+# Liveness never answers, so the app is restarted every sweep; the page is due from the second
+# restart on. The first send fails, and before #511 that was the whole episode's page: the next
+# one was twenty restarts away.
+export STUB_HEALTH=0 FAUCET_FAIL_LIMIT=1 WATCHDOG_FAUCET_FAIL_LIMIT=1 STUB_ALERT_FAIL_N=1
+wd_run 4
+check "the page is attempted again on the next sweep rather than waiting for restart 22" \
+  "[ \"\$(grep -c 'not answering /api/health' '$T/attempts.log')\" -ge 2 ]"
+check "and it is delivered exactly once, so the retry does not become a second page" \
+  "[ \"\$(grep -c 'not answering /api/health' '$T/alerts.log')\" = 1 ]"
+unset STUB_HEALTH FAUCET_FAIL_LIMIT WATCHDOG_FAUCET_FAIL_LIMIT
+
 echo "== watchdog: a page that fails with a code other than 1 is still a failed page"
 # alert.sh exits 1 for a POST that failed, 3 for no channel configured, 4 for no JSON
 # encoder at all. Only 0 and 3 are "done"; the suite's stub used to fail with 1 alone,
@@ -506,6 +525,39 @@ check "restarts exactly the cap, then stops" \
   "[ \"\$(grep -c 'systemctl restart zcash-testnet-miner.service' '$STUB_LOG')\" = 3 ]"
 check "and pages once it gives up" "grep -q 'NEEDS YOU: miner still stalled after 3 restarts' '$T/alerts.log'"
 check "without ever claiming a fix" "! grep -q 'FIXED: miner' '$T/alerts.log'"
+
+echo "== watchdog: the give-up page is retried after a failed send, not lost at the exact count"
+# #511's other half. This page fired at `n -eq MINER_HEAL_MAX + 1`, so it existed on exactly ONE
+# sweep: alert.sh failing there took the only signal that the miner has stopped being retried,
+# and step 4's NOT READY page does not cover a miner - a stalled miner leaves the faucet READY.
+wd_miner_env
+miner_hb 5 3600 3600
+export STUB_ALERT_FAIL_N=1
+wd_run 6   # restarts on 1-3, give-up due from 4; the first send fails and 5 retries it
+check "attempted more than once, so a failed send does not end the episode" \
+  "[ \"\$(grep -c 'miner still stalled after 3 restarts' '$T/attempts.log')\" -ge 2 ]"
+check "and delivered exactly once, so the retry is not a second page" \
+  "[ \"\$(grep -c 'miner still stalled after 3 restarts' '$T/alerts.log')\" = 1 ]"
+check "and the delivered flag is on disk beside the count, so a watchdog restart cannot re-page" \
+  "[ \"\$(cat '$T/state/zcash-testnet-miner.service.paged.flaps' 2>/dev/null)\" = 1 ]"
+unset STUB_ALERT_FAIL_N
+
+echo "== watchdog: a SECOND stall after a recovery pages again, because the delivered flag clears too"
+# The other half of the delivery flag, and the half a mutant found missing: marking the page as
+# delivered is only correct for THAT episode. Left set, the give-up rung is silent for the rest of
+# the process - a miner that stalls, is fixed, and stalls again would escalate once and then never.
+# The count already resets on recovery; the flag has to reset with it or it outlives its episode.
+wd_miner_env
+miner_hb 5 3600 3600      # stalled: restarts on 1-3, gives up and pages on 4
+wd_run 4
+miner_hb 5 3600 10        # templating again: the count and the flag both clear
+wd_run 1
+miner_hb 5 3600 3600      # stalled a second time, from zero
+wd_run 4
+check "the give-up page fires for the SECOND episode as well as the first" \
+  "[ \"\$(grep -c 'miner still stalled after 3 restarts' '$T/alerts.log')\" = 2 ]"
+check "and the recovery between them was reported, so this is two episodes and not one" \
+  "grep -q 'FIXED: miner stalled' '$T/alerts.log'"
 
 # --- step 5: poison auto-heal + budget reset -------------------------------------
 # zallet crash-loops on a dropped tx it can no longer fetch (-5 No such mempool...). The
