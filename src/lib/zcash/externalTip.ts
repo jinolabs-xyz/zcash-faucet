@@ -401,6 +401,27 @@ export interface TipReferences {
    * two can never tell different stories.
    */
   usedHeight: number | null;
+  /**
+   * EACH SOURCE'S HEIGHT, FLAT, for the same reason `usedHeight` is flat and by the same
+   * consumer's request (#600 step 3, SDE-Infra).
+   *
+   * The watchdog's fork ladder reads `corroborated`, and when that is false its journal line
+   * says only "cannot tell". The issue asks it to print the spread and the two heights it saw,
+   * so a journal can be read without the app -- and to do that it needs the per-source heights.
+   * Those live two levels in, under `sources.hosh.height`, and reaching two levels into a body
+   * with a brace-bounded grep is the #391 greedy-regex lesson. `usedHeight` exists because that
+   * argument was already made once; this is the same argument for the two numbers that explain
+   * WHY `used` was chosen.
+   *
+   * Null when a source did not answer or was stale, which is a different fact from "answered
+   * with a lower height" -- the watchdog needs to distinguish a dark reference from a lagging
+   * one, because only the second is evidence about the chain.
+   *
+   * Taken from the same `sources` entries the spread is computed from, never recomputed, so
+   * these can never disagree with `spreadBlocks`.
+   */
+  hoshHeight: number | null;
+  lightwalletdHeight: number | null;
 }
 
 /**
@@ -538,6 +559,10 @@ export function getTipReferences(now: number = Date.now()): TipReferences {
     // From the same entry `used` names, not recomputed, so a future change to the choice
     // rule cannot move one without the other.
     usedHeight: used ? sources[used]!.height : null,
+    // The same entries `spreadBlocks` was computed from. Deriving them here rather than in the
+    // caller keeps the three numbers on one clock: a reader can subtract them and get the spread.
+    hoshHeight: sources.hosh?.height ?? null,
+    lightwalletdHeight: sources.lightwalletd?.height ?? null,
   };
 }
 
