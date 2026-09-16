@@ -24,6 +24,12 @@ export interface IdentityFacts {
   ourBranchId: string | null;
   /** Consensus branch id an independent source reports. */
   theirBranchId: string | null;
+  /**
+   * WHY our side is silent, when it is and we know. Optional: chainIdentity stays decidable
+   * from facts alone, so an absent detail degrades to the plain sentence rather than to a worse
+   * one. Never a reason to change the STATE - it explains a lookup, it does not observe a chain.
+   */
+  ourBranchIdDetail?: string | null;
   /** The height both hashes were read at. Must be the SAME height or the comparison is meaningless. */
   comparedAtHeight: number | null;
   ourHashAtHeight: string | null;
@@ -87,9 +93,11 @@ export function classifyChainIdentity(f: IdentityFacts): IdentityVerdict {
         : f.ourBranchId === null
           ? "our node does not report"
           : "the independent source does not report";
+    const because =
+      f.ourBranchId === null && f.ourBranchIdDetail ? ` (${f.ourBranchIdDetail})` : "";
     return {
       state: "cannot-verify",
-      reason: `${missing} a consensus branch id, so whether we share rules is unestablished`,
+      reason: `${missing} a consensus branch id${because}, so whether we share rules is unestablished`,
     };
   }
 

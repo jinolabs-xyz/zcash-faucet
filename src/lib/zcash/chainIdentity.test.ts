@@ -85,6 +85,44 @@ test("and it says so plainly when BOTH are silent, rather than blaming one", () 
   assert.match(v.reason, /neither our node nor the independent source/);
 });
 
+// AND WHY, WHEN WE KNOW IT. The real cause on prod was zallet answering HTTP 200 with
+// {"error":{"code":-32601,"message":"Method not found"}} - it does not implement the method at
+// all. That arrived as the same null a missing FIELD produces, so the app could say a branch id
+// was missing and never say the method does not exist.
+test("and it carries the cause of our silence when the oracle knows it", () => {
+  const v = classifyChainIdentity({
+    ...ok,
+    ourBranchId: null,
+    ourBranchIdDetail: "zallet: Method not found (-32601)",
+  });
+  assert.equal(v.state, "cannot-verify");
+  assert.match(v.reason, /Method not found/);
+  assert.match(v.reason, /our node does not report/);
+});
+
+// A DETAIL ABOUT OUR SIDE MUST NOT BE ATTACHED TO THEIRS. The oracle only ever learns why OUR
+// lookup failed, so printing it under a null on the other side would blame zallet for a
+// lightwalletd outage.
+test("and it does not blame our side's cause when THEIRS is the silent one", () => {
+  const v = classifyChainIdentity({
+    ...ok,
+    theirBranchId: null,
+    ourBranchIdDetail: "zallet: Method not found (-32601)",
+  });
+  assert.match(v.reason, /independent source does not report/);
+  assert.doesNotMatch(v.reason, /Method not found/);
+});
+
+// Absent detail degrades to the plain sentence, never to a worse one: a dangling "()" or the
+// word "undefined" in front of an operator is its own defect.
+test("and an unknown cause reads clean rather than empty-bracketed", () => {
+  for (const d of [undefined, null, ""]) {
+    const v = classifyChainIdentity({ ...ok, ourBranchId: null, ourBranchIdDetail: d });
+    assert.match(v.reason, /our node does not report a consensus branch id, so/, String(d));
+    assert.doesNotMatch(v.reason, /\(\)|undefined|null/, String(d));
+  }
+});
+
 // THE ANTI-VACUITY PARTNER. Every row above matches a phrase, so a reason that named the
 // side and dropped the QUESTION would satisfy all three - "our node does not report" alone
 // tells an operator nothing about what is unestablished. This pins the half that survived
