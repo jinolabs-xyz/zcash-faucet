@@ -52,8 +52,11 @@ const geom = (p) => p.evaluate(() => {
 const browser = await chromium.launch();
 let deltas = 0, transitions = 0;          // anti-vacuity counters
 
+let STATUS_DELAY_MS = 0;
+for (const [speed, delay] of [["fast double", 0], ["slow, like production", 800]]) {
+STATUS_DELAY_MS = delay;
 for (const [W, H] of VIEWPORTS) {
-  console.log(`\n${W}x${H}`);
+  console.log(`\n${W}x${H}  (${speed})`);
   const ctx = await browser.newContext({ viewport: { width: W, height: H } });
   const page = await ctx.newPage();
   const errors = [];
@@ -61,8 +64,14 @@ for (const [W, H] of VIEWPORTS) {
   page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
 
   let current = PHASES[0];
-  await page.route("**/api/status", (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(current.mutate(clone())) }));
+  await page.route("**/api/status", async (route) => {
+    // THE DOUBLES ANSWER IN UNDER A MILLISECOND AND PRODUCTION DOES NOT. Measured TTFB on prod
+    // is about 790ms, and a status phase change is TWO renders, so on the real site an effect
+    // that ran per render cancelled the animation about 210ms in and the card snapped the rest.
+    // The whole defect was invisible here until the slow pass existed.
+    if (STATUS_DELAY_MS) await new Promise((r) => setTimeout(r, STATUS_DELAY_MS));
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(current.mutate(clone())) });
+  });
 
   await page.goto(BASE, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("#claim", { timeout: 15000 });
@@ -81,15 +90,26 @@ for (const [W, H] of VIEWPORTS) {
     window.__cardAnims = [];
     const original = el.animate.bind(el);
     el.animate = (frames, opts) => {
-      try { window.__cardAnims.push(JSON.parse(JSON.stringify(frames))); } catch { /* ignore */ }
-      return original(frames, opts);
+      // KEEP THE OPTIONS AND THE OUTCOME, not just the keyframes. The first version held only
+      // the frames and asked whether some animation's `to` matched, which a 460ms animation and
+      // a 1ms one satisfy identically - `duration: 1` survived the whole sweep at 29/0. And an
+      // animation that is CANCELLED two frames in registered exactly like one that ran, which is
+      // the defect this round is about: the card snapped and the sweep applauded.
+      const rec = { frames: null, opts: null, state: "running" };
+      try { rec.frames = JSON.parse(JSON.stringify(frames)); } catch { /* ignore */ }
+      try { rec.opts = JSON.parse(JSON.stringify(opts)); } catch { /* ignore */ }
+      window.__cardAnims.push(rec);
+      const a = original(frames, opts);
+      // `finished` rejects when an animation is cancelled, which is exactly the distinction.
+      a.finished.then(() => { rec.state = "finished"; }, () => { rec.state = "cancelled"; });
+      return a;
     };
   });
   await page.waitForFunction((s) => (document.querySelector("p.sr-only[role=status]")?.textContent ?? "").includes(s), PHASES[0].says, { timeout: 15000 })
     .catch(() => {});
 
   const anchor = await geom(page);
-  t(`${W}: the hero, the fox and the card are all on the page to measure`,
+  t(`${W} ${speed}: the hero, the fox and the card are all on the page to measure`,
     anchor.card != null && anchor.copy != null && anchor.fox != null && anchor.h1 != null,
     JSON.stringify({ card: anchor.card, copy: anchor.copy, fox: anchor.fox, h1: anchor.h1 }));
 
@@ -105,9 +125,18 @@ for (const [W, H] of VIEWPORTS) {
       const g = await geom(page);
       if (g.says.includes(ph.says)) { reached = true; break; }
     }
-    if (!reached) { t(`${W}: phase "${ph.name}" was reached at all`, false, `live region still: "${(await geom(page)).says.slice(0, 60)}"`); continue; }
-    await page.waitForTimeout(700);                       // past the 460ms the design animates
+    if (!reached) { t(`${W} ${speed}: phase "${ph.name}" was reached at all`, false, `live region still: "${(await geom(page)).says.slice(0, 60)}"`); continue; }
+    // SAMPLED WHEN THE ANIMATION ENDS, not after it. The old 700ms sample sat 240ms past the
+    // 460ms animation, and on `degraded` the card moves AGAIN inside that gap - 683 -> 611
+    // animated and finished, then 611 -> 592 as the sends reason text arrives. That second move
+    // is a content change within one phase, which the ruling does not animate and should not,
+    // and comparing the animation's end to a height taken after it made a correct card look like
+    // a jump. `settled` is carried alongside so the row can SAY when the two differ rather than
+    // hiding it.
+    await page.waitForTimeout(500);
     const after = await geom(page);
+    await page.waitForTimeout(400);
+    const settled = await geom(page);
 
     const moved = Math.abs(after.copy - anchor.copy) > 0.5 || Math.abs(after.fox - anchor.fox) > 0.5 || Math.abs(after.h1 - anchor.h1) > 0.5;
     const delta = Math.abs(after.card - before.card);
@@ -120,28 +149,50 @@ for (const [W, H] of VIEWPORTS) {
     // from its old size to its new one rather than snapping, and the keyframes say exactly
     // that without reference to when anyone looked.
     const anims = (await page.evaluate(() => window.__cardAnims ?? []))
-      .map((f) => (Array.isArray(f) && f.length >= 2 && f[0] && f[1] && f[0].height != null && f[1].height != null
-        ? { from: parseFloat(f[0].height), to: parseFloat(f[1].height) } : null))
+      .map((r) => {
+        const f = r && r.frames;
+        if (!Array.isArray(f) || f.length < 2 || !f[0] || !f[1] || f[0].height == null || f[1].height == null) return null;
+        return { from: parseFloat(f[0].height), to: parseFloat(f[1].height), opts: r.opts || {}, state: r.state };
+      })
       .filter((a) => a && !Number.isNaN(a.from) && !Number.isNaN(a.to));
-    const covering = anims.find((a) => Math.abs(a.to - after.card) <= 1.5 && Math.abs(a.from - a.to) > 1);
+    // FOUR THINGS, NOT ONE. It must end where the card settled, start somewhere else, carry the
+    // preview's own duration and easing, and have FINISHED rather than been cancelled. Any one
+    // of those alone is satisfied by an animation that never played.
+    // THE ANIMATION ITSELF, not a height matched from outside. Requiring `to` to equal the
+    // card's final height fails a CORRECT card: on `degraded` the phase animates 683 -> 611 and
+    // finishes, and then the sends-reason text arrives and the card settles at 592 inside the
+    // same phase. A content change within one phase is not a phase change, the ruling does not
+    // animate it, and it should not - so the final height and the animation's end legitimately
+    // differ. I measured that twice, at 500ms and at 900ms, before believing it.
+    //
+    // What the ruling actually asks is that the phase change was animated, so that is what this
+    // holds: one animation, from somewhere else, over the preview's own duration and easing, and
+    // FINISHED rather than cancelled. The last of those four is the one that catches the defect
+    // this round is about, and the first three are why `duration: 1` cannot pass it.
+    const covering = anims.find((a) =>
+      Math.abs(a.from - a.to) > 1
+      && a.opts.duration === 460
+      && a.opts.easing === "cubic-bezier(.16,1,.3,1)"
+      && a.state === "finished");
     const jumped = delta > 1 && !covering;
 
-    t(`${W}: entering "${ph.name}" moves neither the hero copy, the fox nor the h1`, !moved,
+    t(`${W} ${speed}: entering "${ph.name}" moves neither the hero copy, the fox nor the h1`, !moved,
       `copy ${before.copy}->${after.copy} fox ${before.fox}->${after.fox} h1 ${before.h1}->${after.h1}`);
     if (delta > 1) {
-      t(`${W}: the card's height animates into "${ph.name}" from its old value`, !jumped,
+      t(`${W} ${speed}: the card's height animates into "${ph.name}" from its old value`, !jumped,
         anims.length === 0
           ? `${Math.round(before.card)} -> ${Math.round(after.card)} with NO height animation registered at all`
           : covering
-            ? `animated ${covering.from.toFixed(1)} -> ${covering.to.toFixed(1)}px`
-            : `${Math.round(after.card)}px settled, but no animation ended there: ${anims.map((a) => `${a.from.toFixed(0)}->${a.to.toFixed(0)}`).join(", ")}`);
+            ? `animated ${covering.from.toFixed(1)} -> ${covering.to.toFixed(1)}px over ${covering.opts.duration}ms, finished${Math.abs(settled.card - after.card) > 1 ? `; then ${Math.round(settled.card)}px as the phase's own content settled` : ""}`
+            : `${Math.round(after.card)}px settled, and no animation finished the travel: ${anims.map((a) => `${a.from.toFixed(0)}->${a.to.toFixed(0)} ${a.opts.duration}ms ${a.state}`).join(", ") || "none registered"}`);
     } else {
       console.log(`  --   ${W}: "${ph.name}" changed the card by ${delta.toFixed(1)}px, too little to judge the animation`);
     }
   }
 
-  t(`${W}: no console errors across the sweep`, errors.length === 0, errors.slice(0, 2).join(" | "));
+  t(`${W} ${speed}: no console errors across the sweep`, errors.length === 0, errors.slice(0, 2).join(" | "));
   await ctx.close();
+}
 }
 await browser.close();
 

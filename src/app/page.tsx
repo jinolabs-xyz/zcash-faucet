@@ -349,35 +349,8 @@ export default function Home() {
   // It would sail straight through both rules and play for exactly the people who asked it not
   // to.
   const cardRef = useRef<HTMLElement | null>(null);
-  const cardHeight = useRef<number | null>(null);
-  useLayoutEffect(() => {
-    const el = cardRef.current;
-    if (!el) return;
-    // CANCEL THE ONE IN FLIGHT BEFORE MEASURING, or this effect chases its own tail. It runs
-    // after every render, and `getBoundingClientRect()` on an element whose height is being
-    // animated returns the INTERPOLATED height - so a render landing mid-animation recorded a
-    // halfway value as the card's size and animated from there. The sweep caught it as pairs
-    // going the wrong way, `616->564, 564->616`, with the card settling at 510 and no
-    // animation ending there. Cancelling first means every measurement is the natural height.
-    for (const running of el.getAnimations()) if (running.id === CARD_HEIGHT_ANIM) running.cancel();
-    const next = el.getBoundingClientRect().height;
-    const prev = cardHeight.current;
-    cardHeight.current = next;
-    // First paint has nothing to animate from, and a change under a pixel is not a phase
-    // change - it is a countdown digit changing width.
-    if (prev == null || Math.abs(next - prev) < 1) return;
-    if (typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    if (typeof el.animate !== "function") return;   // jsdom and old Safari: the plain swap
-    const previous = el.style.overflow;
-    el.style.overflow = "hidden";
-    const run = el.animate(
-      [{ height: `${prev}px` }, { height: `${next}px` }],
-      { duration: 460, easing: "cubic-bezier(.16,1,.3,1)" },
-    );
-    run.id = CARD_HEIGHT_ANIM;
-    run.onfinish = () => { el.style.overflow = previous; };
-    run.oncancel = () => { el.style.overflow = previous; };
-  });
+  const cardFrom = useRef<number | null>(null);
+  const cardPrevKey = useRef<string | null>(null);
   const [addr, setAddr] = useState("");
   const [touched, setTouched] = useState(false);
   // PAPER IS THE DEFAULT NOW (the approved redesign is a light design). A visitor who
@@ -981,6 +954,74 @@ export default function Home() {
   // Something is actually putting coins in: the miner is running and the shielding
   // step is not failing. Only then may the card promise that drips resume.
   const refillHealthy = !!status?.miner?.active && !!reserve?.shieldCoinbase && !(status && harvestFailing(status));
+
+  // THE CARD ANIMATES ITS OWN HEIGHT AND NOTHING OUTSIDE IT MOVES (owner ruling, 18:56Z),
+  // animated the way the frozen preview animates it: 460ms, cubic-bezier(.16,1,.3,1), the box
+  // and nothing inside it.
+  //
+  // ONLY ON A PHASE CHANGE, AND THE `from` IS THE PAINTED HEIGHT. The first version ran on every
+  // render and cancelled whatever was in flight, so any render inside the 460ms snapped the rest
+  // of the travel: into success 463 -> 602 was cancelled at 9ms, a 139px single-frame step. The
+  // status phases only looked right because the local doubles answer in under a millisecond; at
+  // production's 790ms TTFB every status transition would have been cancelled at about 210ms,
+  // and since a status change is TWO renders the first animation died before its first frame.
+  // Found by the CTO's red-team on #583.
+  //
+  // `cardFrom` is filled in the CLEANUP, which React runs BEFORE the DOM mutation of the next
+  // commit. That is the React equivalent of the preview reading `wasH` before it swaps the
+  // panel, and it is what makes cancelling unnecessary: the height we animate FROM is the height
+  // the card is actually painted at, interpolation included, so a change arriving mid-flight
+  // continues from where the card visibly is instead of jumping back.
+  //
+  // Reduced motion is read in JS and that is load-bearing: globals.css:264 and
+  // redesign-shell.css:142 both kill `animation` and `transition` under prefers-reduced-motion,
+  // and a Web Animations API animation is NEITHER, so left to the stylesheet it would play at
+  // full size for exactly the people who asked it not to.
+  const cardPhaseKey = [
+    phase, fail.kind, refusal?.kind ?? "", network,
+    refilling ? "r" : "", refillHealthy ? "h" : "", powState ? "p" : "", tx ? "t" : "",
+  ].join("|");
+  // THE PAINTED HEIGHT IS READ DURING RENDER, which is the only moment it still exists.
+  //
+  // The preview reads `wasH` before it swaps the panel. React has no such moment in an effect:
+  // a layout effect runs after the commit, and a layout-effect CLEANUP runs after the children's
+  // DOM mutations too, so both of them measure the NEW height. I shipped the cleanup version and
+  // the sweep said "NO height animation registered at all" on every transition, because `from`
+  // and `to` were the same number.
+  //
+  // Render runs before the mutation, so here the box is still the old one - interpolation
+  // included, which is what makes a change arriving mid-flight continue from where the card
+  // visibly is instead of snapping back. Writing a ref during render is the documented FLIP
+  // shape; the value is read by nothing but the effect below.
+  if (cardPrevKey.current !== cardPhaseKey) {
+    cardPrevKey.current = cardPhaseKey;
+    const painted = cardRef.current;
+    cardFrom.current = painted ? painted.getBoundingClientRect().height : null;
+  }
+  useLayoutEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    const from = cardFrom.current;
+    cardFrom.current = null;
+    // First paint has nothing to animate from.
+    if (from == null) return;
+    // `animate` is checked BEFORE anything else on the element: a browser with `animate` and no
+    // `getAnimations` used to reach a crash here instead of the plain swap.
+    if (typeof el.animate !== "function") return;
+    if (typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const to = el.getBoundingClientRect().height;
+    // A change under a pixel is not a phase change, it is a countdown digit changing width.
+    if (Math.abs(to - from) < 1) return;
+    const previous = el.style.overflow;
+    el.style.overflow = "hidden";
+    const run = el.animate(
+      [{ height: `${from}px` }, { height: `${to}px` }],
+      { duration: 460, easing: "cubic-bezier(.16,1,.3,1)" },
+    );
+    run.id = CARD_HEIGHT_ANIM;
+    run.onfinish = () => { el.style.overflow = previous; };
+    run.oncancel = () => { el.style.overflow = previous; };
+  }, [cardPhaseKey]);
   const c = check(addr);
   const badgeShow = c.ok || ("label" in c && !!c.label);
   const remain = Math.max(0, cooldownEnd - now);
