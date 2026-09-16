@@ -5,6 +5,14 @@
 //
 //   rm -f data/faucet.db data/faucet.db-wal data/faucet.db-shm   # see below
 //   npm run build
+//   # EXPORTED, not prefixed, and that is the whole point of the line (SDE-UI, review of #605).
+//   # Everything below is a command PREFIX on `npm start`, which reaches the SERVER only. The
+//   # three address rows compare the env against the page, and the suite is a SEPARATE process,
+//   # so under a prefix they read undefined here and the rows go inert - green, and checking
+//   # nothing - which is the state #605 exists to stop. `export` puts them in both processes.
+//   export FAUCET_DONATION_ADDRESS=utest1cafakedonationaddressusedadtestsneverusethesezecfunds
+//   export FAUCET_MINING_ADDRESS=tmUiVxo1bbZLP5z6KYfM4dh3PcX5wkd7on8
+//   export FAUCET_MAINTENANCE_ADDRESS=u1cafakeaddressusedadtestsneverusethesezecfundsarenatreal
 //   node scripts/fake-zallet.mjs &                 # PORT=28299 wallet double
 //   PORT=28324 node scripts/fake-hosh.mjs &        # tip oracle fixture, see below
 //   PORT=28611 node scripts/fake-crosslink.mjs &   # cTAZ node double (#326)
@@ -1749,7 +1757,7 @@ async function showView(page, v) {
 // THE DEFAULT IS BLIND TO `visibility` AND `opacity`, which is the whole of the #595 finding:
 // bare `checkVisibility()` returns true for `visibility:hidden` and for `opacity:0`, so a row
 // named PAINTED passed an element no reader could see. These are the spec's option names; the
-// older aliases (`checkVisibilityCSS`, `checkOpacity`) mean the same two things and Chromium
+// older aliases (`checkVisibilityCSS`, `checkOpacity`) mean the same two of them, and Chromium
 // honours both, measured from two directions - the CTO's red-team on the spec names, SDE-App on
 // the aliases - and the ruling is to use the spec's.
 //
@@ -1758,6 +1766,59 @@ async function showView(page, v) {
 // stops turning these rows red, the object is being ignored and the run says so - which is what
 // a silently-ignored option looks like from the outside, and no amount of spelling prevents it.
 const VIS_OPTS = { visibilityProperty: true, opacityProperty: true, contentVisibilityAuto: true };
+
+async function checkVisibilityOptionsStillBite(browser) {
+  // THE CANARY FOR VIS_OPTS, and it exists because the failure it guards is SILENT. `checkVisibility`
+  // takes a WebIDL dictionary, and WebIDL drops members it does not recognise - no throw, no warning.
+  // So `visibilityProprety: true` (one transposition) is not an error: the option simply is not
+  // there, the call falls back to the blind default, and every row that depends on it goes green
+  // over an element no reader can see. #595 shipped with the mutants as the only guard, which means
+  // the drift is invisible until someone happens to run one.
+  //
+  // This asks the browser directly, on elements this file creates and controls, so it is a fact
+  // about the OPTIONS rather than about the page: three probes, one per property the options are
+  // supposed to add, plus a visible control so a probe that fails for any other reason cannot read
+  // as success.
+  const c = await browser.newContext({ viewport: DESKTOP });
+  const p = await c.newPage();
+  await p.goto(BASE, { waitUntil: "domcontentloaded" });
+  const r = await p.evaluate((opts) => {
+    const mk = (css) => {
+      const el = document.createElement("div");
+      el.style.cssText = "width:20px;height:20px;" + css;
+      el.textContent = "x";
+      document.body.appendChild(el);
+      return el;
+    };
+    const visible = mk("");
+    const hidden = mk("visibility:hidden");
+    const transparent = mk("opacity:0");
+    const out = {
+      visible: visible.checkVisibility(opts),
+      hidden: hidden.checkVisibility(opts),
+      transparent: transparent.checkVisibility(opts),
+      // What the bare call says, for the detail line: it is TRUE for both, which is the defect.
+      hiddenBare: hidden.checkVisibility(),
+      transparentBare: transparent.checkVisibility(),
+    };
+    for (const el of [visible, hidden, transparent]) el.remove();
+    return out;
+  }, VIS_OPTS);
+
+  // WHICH TWO OF THE THREE, named rather than left to be discovered. VIS_OPTS carries three members
+  // and this probes two: `content-visibility` appears NOWHERE in src, so `contentVisibilityAuto`
+  // has no subject to be wrong about today and no probe that would mean anything. Keeping the
+  // option is cheap insurance for the day something uses it; claiming the canary covers it would
+  // not be. When `content-visibility` gains a subject this row gains a third probe, and if it does
+  // not, this comment is where the gap is recorded. Found by SDE-Infra reviewing #614 - from my own
+  // C2 detail line, which shows exactly which two members move when one key is transposed.
+  ok("checkVisibility's two load-bearing options still bite: visibility:hidden and opacity:0 read as not visible",
+    r.visible === true && r.hidden === false && r.transparent === false,
+    `visible=${r.visible} hidden=${r.hidden} opacity0=${r.transparent}`
+    + ` (bare call says hidden=${r.hiddenBare}, opacity0=${r.transparentBare})`
+    + `; contentVisibilityAuto carried but unprobed - no content-visibility in src`);
+  await c.close();
+}
 
 async function checkPuzzleSentenceWithdraws(browser) {
   // BOTH SIDES OF THE GATE. Every row this branch shipped asserts the sentence is PRESENT, so
@@ -1904,6 +1965,10 @@ async function checkOpsChipFollowsTheBox(browser) {
         text: el ? (el.textContent || "").trim() : "",
         sendsTone: sends ? sends.getAttribute("data-tone") : null,
         siblingChips: document.querySelectorAll('.hero-copy .chips [data-chip]').length,
+        // "has this page been told anything?" - the wallet chip reads `unknown` until a status
+        // arrives, so its leaving that value is the page's own signal that it has been told.
+        walletTold: !/unknown/i.test(
+          (document.querySelector('.hero-copy .chips [data-chip="wallet"]')?.textContent ?? "unknown")),
       };
     });
     visited.push(state);
@@ -1921,11 +1986,24 @@ async function checkOpsChipFollowsTheBox(browser) {
     // said, and this control is a second, different guard rather than a replacement for it.
     // Stating the limit because a control whose reach is assumed is the thing it exists to
     // prevent. (CTO red-team, #595.)
+    //
+    // AND IT CANNOT SEE A PAGE THAT WAS NEVER TOLD ANYTHING, which is the second limit and the
+    // one that matters to what "absent" means here. The four chips render before any status
+    // arrives, so a sibling count of four is equally true of a page mid-fetch - and on THAT page
+    // the ops chip is absent because nothing has been established, not because the box is well.
+    // The two readings are opposite and the count cannot tell them apart. So the row also asserts
+    // the wallet chip has left `unknown`, in the same evaluate: a page that has been told
+    // something has a wallet figure, and only then does an absent ops chip mean "the box is ok".
+    // (#606 item 1.)
     ok(`box ${state}: the ops chip is ${shouldShow ? "shown" : "absent"}`,
-      r.present === shouldShow && r.siblingChips >= 4,
-      r.siblingChips < 4
+      r.present === shouldShow && r.siblingChips >= 4 && r.walletTold,
+      !r.walletTold
+        ? `the page has not been told anything yet (wallet chip still reads unknown), so an absent ops chip means nothing`
+        : r.siblingChips < 4
         ? `only ${r.siblingChips} sibling chips found - the chip selection is broken, so "absent" means nothing`
-        : r.present ? `present, tone ${r.tone}, "${r.text}" (beside ${r.siblingChips} other chips)`
+        // `siblingChips` counts EVERY [data-chip], the ops chip included, so when it is present
+        // "beside 5 other chips" was counting it as its own sibling. Subtract it where it is there.
+        : r.present ? `present, tone ${r.tone}, "${r.text}" (beside ${r.siblingChips - 1} other chips)`
                     : `absent (beside ${r.siblingChips} other chips, so the selection works)`);
 
     if (shouldShow) {
@@ -2811,6 +2889,19 @@ async function checkPanelControlIsTheDesignsBar(browser, base) {
         // Read from the DOM rather than from process.env, because what matters is what the page
         // DID, not what the runner was told.
         configured: !!document.querySelector(".card.feature .panel code.addr, .card.claim .panel code.addr"),
+        // THE ELEMENT THAT PROVES THE SPECIFIC ADDRESS ARRIVED, by id, for the #605 guard below.
+        // `configured` above is a panel-scoped class selector and is right for what it does, but
+        // /donate renders TWO `code.addr` - the donation address in the panel and the mining one
+        // in `.card-copy` (donate/page.tsx:112 and :138) - and the only thing keeping the mining
+        // one out of that selector is that its block sits outside `.panel`. That is a layout
+        // fact, not a guarantee: move the mining block into a panel and a row asking "did the
+        // DONATION address arrive" starts answering yes because the MINING one did. UI hit the
+        // same shape on #612, where a page-wide `.figs b` was satisfied by the analytics view's
+        // slots while every claim-card placeholder was gone. The ids are already in the markup
+        // and they are unambiguous, so the guard reads those.
+        donAddr: (document.querySelector("code.addr#don")?.textContent || "").trim().length,
+        fundAddr: (document.querySelector("code.addr#fund")?.textContent || "").trim().length,
+        mineAddr: (document.querySelector("code.addr#mine")?.textContent || "").trim().length,
       };
     });
 
@@ -2844,6 +2935,49 @@ async function checkPanelControlIsTheDesignsBar(browser, base) {
         `${r.panelButtons} button(s) in the panel, ${r.barsInPanel} of them .automate - set FAUCET_DONATION_ADDRESS/FAUCET_MAINTENANCE_ADDRESS to measure the configured path`);
     }
 
+    // AND WHEN THE RUNNER DID SET ONE, IT HAS TO HAVE ARRIVED (#605). `configured` is read off
+    // the DOM a few lines up, deliberately, because what matters is what the page did - this is
+    // the half that was missing, not a contradiction of it: nothing told the runner when what it
+    // set failed to reach the page, and the two are different questions.
+    //
+    // It matters most for /fund. config.ts:426 puts FAUCET_MAINTENANCE_ADDRESS through
+    // mainnetUnifiedOrEmpty(), which returns "" for a testnet address AND for anything failing
+    // the u1 bech32m shape, so a typo in ci.yml is INDISTINGUISHABLE from leaving it unset: the
+    // page renders its not-configured card, the branch above takes the else, and the job is green
+    // while measuring the exact state #605 was filed to stop measuring. This file already says so
+    // at the /fund 200 check - "empty when UNSET **or when config validation REJECTS it**" - and
+    // then nothing acted on it.
+    //
+    // ONE-DIRECTIONAL, and that is not laziness. Run the smoke script without these vars against
+    // a server that has them and the page is configured while the env is not; a biconditional
+    // would go red on a page behaving perfectly, which is this file's own rule about an assertion
+    // that reddens when the code gets MORE correct. The implication catches the typo and cannot
+    // fail on a split environment.
+    //
+    // Donation and mining are unvalidated today (config.ts:402, :407 are plain `?? ""`), so for
+    // those the implication holds trivially. Stated anyway: it costs a comparison and it is what
+    // notices the day one of them gains a validator.
+    const addrEnv = path === "/fund" ? "FAUCET_MAINTENANCE_ADDRESS" : "FAUCET_DONATION_ADDRESS";
+    const addrSet = !!(process.env[addrEnv] || "").trim();
+    ok(`${path}: an address in ${addrEnv} reaches the page, rather than being silently dropped`,
+      !addrSet || (path === "/fund" ? r.fundAddr : r.donAddr) > 0,
+      addrSet
+        ? ((path === "/fund" ? r.fundAddr : r.donAddr) > 0
+            ? `set, and the page rendered ${path === "/fund" ? r.fundAddr : r.donAddr} characters of it`
+            : "set, and the page rendered NO address in that slot - config rejected the value, so every row above measured the wrong configuration")
+        : `NOT CHECKED: this process has no ${addrEnv}. Under a command-prefix recipe the server`
+          + ` has it and the suite does not, so this row cannot see a typo. Export it (header) to arm it.`);
+
+    // THE CHIP IS SKIPPED WHEN IT IS ABSENT, so a mining address that never arrives takes the
+    // measurement with it and says nothing. Same implication, same reason as above.
+    if (hasChip) {
+      const minSet = !!(process.env.FAUCET_MINING_ADDRESS || "").trim();
+      ok(`${path}: an address in FAUCET_MINING_ADDRESS reaches the page as a chip`,
+        !minSet || (r.mineAddr > 0 && !!r.chip),
+        minSet ? (r.mineAddr > 0 && r.chip ? `set, ${r.mineAddr} characters rendered beside a "${r.chip.cls}" chip`
+                                           : `set, and the page shows ${r.mineAddr} address characters and ${r.chip ? "a" : "NO"} chip - the chip row below measured nothing`)
+               : "NOT CHECKED: this process has no FAUCET_MINING_ADDRESS, so this row is inert here - export it (see the header) to arm it");
+    }
     // THE CHIP IS BEHIND A CONFIGURED MINING ADDRESS, which my first version did not check: with
     // FAUCET_MINING_ADDRESS unset the page renders a `.hint` instead and the row failed with "no
     // .tag chip found" on a correct page. The runner now configures one, so this is a real
@@ -3338,6 +3472,7 @@ try {
     ok("and the address is in the body", req.body.includes(`"address":"${lookupAddr}"`), req.body.slice(0, 60));
     ok("and the page answers that a shielded balance is private", /Shielded balances are private/.test(await page.locator("#lans").innerText()));
   }
+  await checkVisibilityOptionsStillBite(browser);
   await checkPuzzleSentenceWithdraws(browser);
   await checkFirstPaintSentenceIsPainted(browser);
   await checkOpsChipFollowsTheBox(browser);
