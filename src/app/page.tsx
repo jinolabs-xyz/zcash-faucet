@@ -23,7 +23,7 @@ import { StatusCards } from "@/components/StatusCards";
 import { AnalyticsCards } from "@/components/AnalyticsCards";
 import { ToolsCards } from "@/components/ToolsCards";
 import type { PublicBox } from "@/lib/boxLabel";
-import { syncLabel, syncBarWidth } from "@/lib/syncLabel";
+import { syncBarWidth } from "@/lib/syncLabel";
 import { networkFacts, formatAmount, type FaucetNetwork } from "@/lib/network";
 import { incomeSentence } from "@/lib/incomeSentence";
 import { validateTestnetAddress } from "@/lib/zcash/address";
@@ -1049,11 +1049,14 @@ export default function Home() {
     ["Broadcasting to the testnet", 0.15],
   ];
   let acc = 0, curStep = 0;
-  const proofSteps = steps.map(([label, w], i) => {
+  // A forEach, not a map whose array nobody reads. The legacy list rendered the returned
+  // objects; the transcribed `.steps` list renders `data-done`/`data-active` from `curStep`,
+  // which this loop sets. Keeping the map meant an unused array holding the only computation
+  // that matters, which reads as dead code and is not.
+  steps.forEach(([, w], i) => {
     const from = acc; acc += w;
     const done = proofFrac >= acc, active = !done && proofFrac >= from;
     if (active) curStep = i;
-    return { label, mark: done ? "done ✓" : active ? "···" : "", color: done || active ? "var(--color-text)" : muted(40) };
   });
   if (proofFrac >= 1) curStep = steps.length - 1;
 
@@ -1451,42 +1454,46 @@ export default function Home() {
           </div>
         )}
 
+        {/* HUMAN CHECK (index.html:483-489). The figures row is the snapshot's `.figs`; the
+            seconds estimate is ours and stays, because R-38 ruled that bits and hashes are not
+            a fact a visitor can decide on and "usually about" is. It is a lottery, never a
+            countdown. */}
         {phase === "submitting" && powState && (
-          <div style={{ border: "2px solid var(--color-text)", padding: "20px 16px", display: "flex", flexDirection: "column", gap: 13 }}>
-            <span style={kicker}>Human check, no CAPTCHA</span>
-            <h2 style={{ margin: 0, fontSize: 19, lineHeight: 1.25 }}>Checking you&apos;re human…</h2>
-            <div style={{ height: 10, border: "2px solid var(--color-text)", position: "relative", overflow: "hidden" }}>
-              <i style={{ position: "absolute", top: 0, bottom: 0, left: 0, right: 0, background: "repeating-linear-gradient(135deg,var(--color-accent) 0 3px,transparent 3px 7px)", backgroundSize: "26px 26px", animation: "hatch .9s linear infinite" }} />
-            </div>
-            <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.55, color: muted(62) }}>
-              Your browser is solving a small cryptographic puzzle so bots cannot drain the faucet. Nothing to click, nothing tracked.
-              {/* An estimate in seconds, not bits and hashes (R-38): ~10 s on a phone at 20
-                  bits and ~5 min at the 25-bit ceiling are facts a visitor can decide on. It is
-                  a lottery, so "usually about", never a countdown. */}
-              {" "}{powEstimate == null ? "Measuring how fast this device hashes…" : `Usually ${powEstimateText(powEstimate)} on this device; it is a lottery, so it can run longer.`}
+          <div className="phase" data-phase="human-check">
+            <div className="kicker">Human check, no CAPTCHA</div>
+            <h3>Checking you&apos;re human…</h3>
+            <p>
+              Your browser is solving a small cryptographic puzzle so bots cannot drain the faucet. Nothing to click,
+              nothing tracked.{" "}
+              {powEstimate == null ? "Measuring how fast this device hashes…" : `Usually ${powEstimateText(powEstimate)} on this device; it is a lottery, so it can run longer.`}
             </p>
-            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-              <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: muted(50) }}>difficulty {powState.difficulty ?? "…"} bits · {powState.hashes.toLocaleString("en-US")} hashes · {Math.round(powState.ms / 1000)} s</span>
-              <button className="btn btn-ghost btn-sm" onClick={() => powCancel.current?.()} style={{ padding: 0 }}>Cancel</button>
+            <div className="prog hatch" role="progressbar" aria-label="Puzzle progress, indeterminate"><i /></div>
+            <div className="figs">
+              <span><b className="num">{powState.difficulty ?? "…"}</b>bits</span>
+              <span><b className="num">{powState.hashes.toLocaleString("en-US")}</b>hashes</span>
+              <span><b className="num">{Math.round(powState.ms / 1000)}</b>seconds</span>
+            </div>
+            <div className="row">
+              <button className="tag" type="button" onClick={() => powCancel.current?.()}>Cancel</button>
             </div>
           </div>
         )}
 
+        {/* SENDING (index.html:490-499). The steps list is the snapshot's `.steps` with
+            `data-done`/`data-active`; the step the flow is actually on comes from `curStep`,
+            which the progress machinery already computes. */}
         {phase === "submitting" && !powState && (
-          <div style={{ border: "2px solid var(--color-text)", padding: "20px 16px", display: "flex", flexDirection: "column", gap: 13 }}>
-            <span style={kicker}>Sending, keep this tab open</span>
-            <h2 style={{ margin: 0, fontSize: 19, lineHeight: 1.25 }}>{steps[curStep][0]}…</h2>
-            <div style={{ height: 10, border: "2px solid var(--color-text)", position: "relative", overflow: "hidden" }}>
-              <i style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: Math.round(proofFrac * 100) + "%", background: "repeating-linear-gradient(135deg,var(--color-accent) 0 3px,transparent 3px 7px)", backgroundSize: "26px 26px", animation: "hatch .9s linear infinite" }} />
-            </div>
-            <div>
-              {proofSteps.map((s, i) => (
-                <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "7px 0", borderBottom: "1px solid var(--color-divider)", fontFamily: "var(--mono)", fontSize: 11.5, color: s.color }}>
-                  <span>{s.label}</span><span>{s.mark}</span>
-                </div>
+          <div className="phase" data-phase="sending">
+            <div className="kicker">Sending, keep this tab open</div>
+            <h3>Building the shielded transaction</h3>
+            <ul className="steps">
+              {steps.map(([label], i) => (
+                <li key={label} data-done={i < curStep ? "" : undefined} data-active={i === curStep ? "" : undefined}>
+                  <span className="mark" />{label}
+                </li>
               ))}
-            </div>
-            <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.55, color: muted(62) }}>A shielded send builds a zero-knowledge proof before it can be broadcast. That is the wait. It is doing the privacy work.</p>
+            </ul>
+            <div className="prog hatch" role="progressbar" aria-label="Send progress, indeterminate"><i /></div>
           </div>
         )}
 
