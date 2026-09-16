@@ -1431,8 +1431,33 @@ check "pages once for the episode, not once per sweep" \
 # the stop instruction - the same ruling the other rung follows, reached through the same one
 # definition (miner_unit_is_running) rather than a second copy of the word list. Without this row
 # the history rung could stop asking the question entirely and #618's rows would still be green.
-check "and it leads with the stop instruction, because the unit is running and the marker gates STARTS" \
-  "grep -q 'still running and extending this chain: stop it by hand FIRST' '$T/alerts.log'"
+check "and it leads with the stop instruction, in systemd's own word for the unit" \
+  "grep -q 'still running (systemd says active) and extending this chain: stop it by hand FIRST' '$T/alerts.log'"
+
+echo "== watchdog: a hash mismatch with a RELOADING miner leads with the stop, in systemd's own word"
+# SDE-UI's finding, and it is two gaps in one sentence. Nothing drove a running miner through this
+# page, so `stop_first` was never executed by any row: deleting the whole block survived at 309/0,
+# and the row that looks like it covers this - "does NOT stop the miner itself" - asserts the
+# ABSENCE of a systemctl stop CALL, which says nothing about the PRESENCE of the stop instruction.
+# On a rung whose entire ruling is that it does not stop the miner, that instruction IS the
+# mitigation: it is the one sentence between a park marker and a box still extending a private
+# chain at ~10 blocks a minute.
+#
+# RELOADING RATHER THAN ACTIVE, deliberately and on their advice: it is the word a hard-coded
+# literal cannot satisfy, so this case fails if the page flattens systemd's word back to "active"
+# the way #571 -> #618 spent three rounds establishing it must not.
+wd_fork_env
+echo reloading > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFHEIGHT=4350180 STUB_READY_REFHASH=00000000aaaaaaaabbbbbbbbccccccccdddddddd
+export STUB_ZEBRA_HASH=00000000eeeeeeeeffffffff1111111122222222
+wd_run 2
+check "HISTORY+RUNNING: the operator is told to stop the miner by hand FIRST" \
+  "grep -q 'stop it by hand FIRST' '$T/alerts.log'"
+check "HISTORY+RUNNING: and the page carries systemd's own word, as the AHEAD rung's does" \
+  "grep -q 'systemd says reloading' '$T/alerts.log'"
+check "HISTORY+RUNNING: and it still does not issue the stop itself, because that stays the owner's" \
+  "! grep -q 'systemctl stop zcash-testnet-miner' '$STUB_LOG'"
 
 echo "== watchdog: the SAME block at that height is not a fork, and says nothing at all"
 wd_fork_env

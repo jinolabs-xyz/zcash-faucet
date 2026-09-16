@@ -1004,7 +1004,7 @@ ticks=0
 # the height and publishes it; we do not derive our own, so the two processes cannot disagree about
 # where they looked.
 check_history_against_reference() {
-  local name="$1" ref_h ref_hash ours_hash lower_ours lower_ref park stop_first
+  local name="$1" ref_h ref_hash ours_hash lower_ours lower_ref park stop_first hist_word
   [ "$FORK_HEAL_ENABLED" = "1" ] || return 0
   [ -n "$name" ] || return 0
 
@@ -1051,9 +1051,16 @@ check_history_against_reference() {
     fi
   fi
 
+  # AND IT CARRIES SYSTEMD'S OWN WORD, like the rung twelve lines down (SDE-UI, review). My first
+  # version said only "still running", which is the #571 -> #618 flattening reintroduced one
+  # function along: three rounds established that a unit reported `activating` must not be
+  # described to an operator as though it were `active`, and this rung undid it in the next PR.
+  # Nobody caught it because nothing drove a running miner through this page - the absence of a
+  # `systemctl stop` CALL was asserted and the presence of the stop INSTRUCTION was not.
   stop_first=""
-  if miner_unit_is_running "$(systemctl is-active "$MINER_UNIT" 2>/dev/null)"; then
-    stop_first="The miner unit is still running and extending this chain: stop it by hand FIRST (systemctl stop $MINER_UNIT). "
+  hist_word="$(systemctl is-active "$MINER_UNIT" 2>/dev/null)" || true
+  if miner_unit_is_running "$hist_word"; then
+    stop_first="The miner unit is still running (systemd says ${hist_word}) and extending this chain: stop it by hand FIRST (systemctl stop $MINER_UNIT). "
   fi
   if [ -f "$FORK_PARK_MARKER" ]; then
     park="${stop_first}A park marker is written ($FORK_PARK_MARKER): no deploy and no watchdog heal will START the miner while that file exists."
