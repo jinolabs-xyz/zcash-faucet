@@ -323,8 +323,14 @@ export function sendsTone(state: string | undefined): "ok" | "warn" | "unknown" 
 /** The box's tone, for the hero chip and the status view's row. Moved here from StatusCards
  *  for the reason `sendsTone` was (R-24): the hero derived its own, and a second derivation is
  *  a second thing to keep true. `publicBox()` emits only ok | attention | unknown, so those are
- *  the three cases and there is no fourth to guess at. */
-export function boxTone(state: string | undefined): "ok" | "warn" | "bad" | "unknown" {
+ *  the three cases and there is no fourth to guess at.
+ *
+ *  AND THE RETURN TYPE OFFERS NO `"bad"`, for the same reason `sendsTone`'s does not: nothing here
+ *  returns it. `PublicBoxState` is ok | attention | unknown (boxLabel.ts:78) and neither branch
+ *  below produces `bad`, so advertising it in the signature invites a caller to write a `bad` case
+ *  that can never run. Found by SDE-Infra reviewing #614 - the same dead-branch shape I had just
+ *  narrowed five lines up, and I walked past it while narrowing that one. */
+export function boxTone(state: string | undefined): "ok" | "warn" | "unknown" {
   if (state === "ok") return "ok";
   if (state === "attention") return "warn";
   return "unknown";

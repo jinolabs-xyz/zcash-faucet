@@ -1797,10 +1797,18 @@ async function checkVisibilityOptionsStillBite(browser) {
     return out;
   }, VIS_OPTS);
 
-  ok("checkVisibility's options still bite: visibility:hidden and opacity:0 read as not visible",
+  // WHICH TWO OF THE THREE, named rather than left to be discovered. VIS_OPTS carries three members
+  // and this probes two: `content-visibility` appears NOWHERE in src, so `contentVisibilityAuto`
+  // has no subject to be wrong about today and no probe that would mean anything. Keeping the
+  // option is cheap insurance for the day something uses it; claiming the canary covers it would
+  // not be. When `content-visibility` gains a subject this row gains a third probe, and if it does
+  // not, this comment is where the gap is recorded. Found by SDE-Infra reviewing #614 - from my own
+  // C2 detail line, which shows exactly which two members move when one key is transposed.
+  ok("checkVisibility's two load-bearing options still bite: visibility:hidden and opacity:0 read as not visible",
     r.visible === true && r.hidden === false && r.transparent === false,
     `visible=${r.visible} hidden=${r.hidden} opacity0=${r.transparent}`
-    + ` (bare call says hidden=${r.hiddenBare}, opacity0=${r.transparentBare})`);
+    + ` (bare call says hidden=${r.hiddenBare}, opacity0=${r.transparentBare})`
+    + `; contentVisibilityAuto carried but unprobed - no content-visibility in src`);
   await c.close();
 }
 
