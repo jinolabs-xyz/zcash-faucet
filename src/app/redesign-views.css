@@ -87,6 +87,29 @@
 .grid3 .card{display:flex;flex-direction:column}
 .grid3 .card .panel{min-height:calc(14.5*var(--u));justify-content:flex-start}
 .grid3 .card .card-copy{flex:1}
+
+/* THE BREAKPOINTS, IN THE SHEET THAT OWNS THE BASE RULE. The header above says they "LIVE IN THE
+ * SHELL", and they do - redesign-shell.css carries both blocks and they match S1's spec exactly.
+ * They were also DEAD, and had been since the split: Shell.tsx imports shell.css at :32 and this
+ * file at :34, a media query adds no specificity, and `.grid3` here is (0,1,0) exactly as
+ * `.grid3` there is. Same weight, later source, this one wins - at every width.
+ *
+ * Measured on 2026-09-16 at 390px: `.grid3` rendered THREE columns, `article.card` came out 106px
+ * wide, and a 119px `white-space:nowrap` status tag ran 11px past the right edge of the phone with
+ * no horizontal scroll to reach it. Both blocks below were being overridden, so the 2-column step
+ * at 64rem was gone too.
+ *
+ * Not a departure: the S2-S5 snapshot ships these four rules itself (index.css, the max-width:64rem
+ * and max-width:32rem blocks). This sheet is the one compared against that snapshot and it was not
+ * shipping them. shell.css keeps its copy, which is what S1's spec asks of it. */
+@media (max-width:64rem){
+  .grid3{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .grid3 > :last-child{grid-column:1 / -1}
+}
+@media (max-width:32rem){
+  .grid3,.grid2{grid-template-columns:1fr}
+  .grid3 > :last-child{grid-column:auto}
+}
 .grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:calc(1.8*var(--u));width:100%;align-items:stretch}
 .grid2 .card{display:flex;flex-direction:column}
 .grid2 .card .panel{min-height:calc(14.5*var(--u));justify-content:flex-start}

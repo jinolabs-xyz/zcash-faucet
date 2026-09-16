@@ -247,6 +247,39 @@ a:hover { color: var(--color-accent-800); }
   .linkbtn,
   .footer-brand { display: inline-flex; align-items: center; }
 
+  /* AND THE WIDTH AXIS, for controls whose label is too short to reach 44px on its own.
+   *
+   * THE FLOOR ABOVE IS `min-height` ONLY, and a short label makes that half a floor. Measured on
+   * 2026-09-16 across six device widths: the network tabs came out 42.7 x 44 - the height applied,
+   * the width fell 1.3px short - and on an iPad portrait the view nav read Claim 27x44,
+   * Status 30x44, Analytics 42x44, Tools 25x44. Every one is a finger target at less than half
+   * the floor on one axis while reporting the floor on the other.
+   *
+   * This is the shape of the #598 regression exactly: there a `width` declaration lost on
+   * specificity while `min-height` came through, and the row that was meant to catch it measured
+   * height only. `min-width` is the one with no competitor, the same reason `min-height` is used
+   * above rather than `height`.
+   *
+   * NOT `button` WHOLESALE. A wide button is already past the floor and a `min-width` on every
+   * button is a licence for a future narrow one to pass unnoticed; these are the two families
+   * whose labels are short BY DESIGN - a network ticker and a one-word view name - so they are
+   * the two that need the floor stated.
+   *
+   * Below 32rem `.seg button` also carries `flex:1; min-width:0` from the shell, which is what
+   * lets the nav fit a 320px phone. `min-width:44px` here wins on source order and the four
+   * buttons then need 176px + 64.8px of gap = 240.8 in a 292px track, which fits.
+   *
+   * `.ftr nav a` WAS FOUND BY THE TEST AND NOT BY THE AUDIT, which is the reason it is listed
+   * separately here. The audit exempted it as prose - an `<a>` whose parent holds more text than
+   * the link itself - and a footer nav satisfies that rule while being nothing like a sentence.
+   * WCAG 2.5.8's exemption is for a target "in a sentence or block of text"; four links in a row
+   * are a list. Terms measured 29x44 and GitHub 34x44 at every width, height floor applied and
+   * width absent, the same half-a-floor as the two families above. */
+  .tabs button,
+  .seg button,
+  .seg a,
+  .ftr nav a { min-width: 44px; }
+
   /* `.tag` IS TWO THINGS AND ONLY ONE OF THEM IS A TARGET. The chip is a `button` or an `a` in
      the hero and the card, and a bare `span` in the status and analytics cards, where it is a
      LABEL - "miner unwatched", "sends unknown". A floor on the class grew those pills to 44px

@@ -132,9 +132,18 @@ html .iconbtn:hover{color:var(--ink)}
 @media (max-width:32rem){
   .stage{container-type:inline-size;height:auto;overflow:visible;--u:12px}
   .comp{width:auto;padding:12px 14px 28px;gap:12px}
-  .hdr{grid-template-columns:1fr auto;grid-template-areas:"brand right" "seg seg";gap:10px}
-  .brand{grid-area:brand;flex-wrap:wrap;row-gap:6px}.hdr-right{grid-area:right}.seg{grid-area:seg;justify-self:stretch}
-  .seg button{flex:1;padding:0}
+  /* minmax(0,1fr), NOT 1fr. A grid track at `1fr` carries an implicit `min-width:auto` and will
+   * not shrink below its content's min-content, so at 320px the two tracks measured
+   * 157.469 + 157.703 + 10 = 325.2 inside a 292px box and the whole header - .seg included,
+   * because it spans both columns - hung 19px past the viewport on every page. Same property as
+   * the footer bug in #610, other axis: there `main.views` sat at `min-height:auto` and refused
+   * to shrink below its content, pushing the footer out of a clamped .comp.
+   * `min-width:0` on the items themselves as well, because the track and the item each carry
+   * the constraint and relaxing one leaves the other. */
+  .hdr{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"brand right" "seg seg";gap:10px}
+  .brand{grid-area:brand;flex-wrap:wrap;row-gap:6px;min-width:0}.hdr-right{grid-area:right;min-width:0}
+  .seg{grid-area:seg;justify-self:stretch;min-width:0}
+  .seg button{flex:1;padding:0;min-width:0}
   .strip .kv.all,.strip .kv.week span{display:none}
   .strip{padding-right:calc(.35*var(--u))}
   .view{gap:14px}

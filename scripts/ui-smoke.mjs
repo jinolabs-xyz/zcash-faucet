@@ -3298,6 +3298,100 @@ async function checkNoEmDashReachesTheReader(browser, base) {
   }
 }
 
+// THE NARROW END, WHICH NOTHING VISITED. `checkMobile` runs at 390x844 and that is one phone.
+// #623 was found by walking six real widths across every surface, and all three of its defects
+// were invisible at 390: two needed 320, and the third needed a tablet with a finger.
+//
+// 320 IS THE FLOOR AND IT IS NOT ARBITRARY. iPhone SE 1st gen and the low-end Android baseline.
+// Everything above it inherits a fix that holds there.
+//
+// SURFACES, NOT PAGES: the index carries three views behind its nav, so they are driven. A page
+// audited at its default view reports on a third of itself - the status view is where the tags
+// were being cut off and no row had ever looked at it below desktop.
+async function checkNarrowWidths(browser, base) {
+  const WIDTHS = [
+    { w: 320, h: 568, name: "320 (iPhone SE 1)" },
+    { w: 375, h: 667, name: "375 (iPhone SE 2)" },
+    { w: 768, h: 1024, name: "768 (iPad portrait)" },
+  ];
+  const SURFACES = [
+    { path: "/", view: null, label: "claim" },
+    { path: "/", view: "status", label: "status" },
+    { path: "/", view: "analytics", label: "analytics" },
+    { path: "/donate", view: null, label: "donate" },
+    { path: "/fund", view: null, label: "fund" },
+    { path: "/limits", view: null, label: "limits" },
+  ];
+
+  for (const vp of WIDTHS) {
+    for (const s of SURFACES) {
+      // TOUCH ON ALL THREE, the tablet included. The floor is gated on `any-pointer: coarse`, so
+      // emulating a 768 tablet WITHOUT touch switches the floor off and the row then reports a
+      // defect the harness invented. A real iPad portrait is 768 wide and has a finger.
+      const ctx = await browser.newContext({
+        viewport: { width: vp.w, height: vp.h }, isMobile: true, hasTouch: true, deviceScaleFactor: 2,
+      });
+      const page = await ctx.newPage();
+      await page.goto(base + s.path, { waitUntil: "networkidle" });
+      if (s.view) {
+        const ok2 = await page.evaluate((v) => {
+          const b = [...document.querySelectorAll("nav a, nav button")]
+            .find((e) => (e.textContent || "").trim().toLowerCase().includes(v));
+          if (!b) return false;
+          b.click();
+          return true;
+        }, s.view);
+        if (!ok2) { ok(`${vp.name} ${s.label}: the view is reachable from the nav`, false, "no nav control found"); await ctx.close(); continue; }
+        await page.waitForTimeout(400);
+      }
+      await page.waitForTimeout(200);
+
+      const r = await page.evaluate(() => {
+        const de = document.documentElement;
+        const vw = de.clientWidth;
+        const out = { vw, sideways: de.scrollWidth - vw, past: [], small: [] };
+        for (const el of document.querySelectorAll("body *")) {
+          const b = el.getBoundingClientRect();
+          if (!b.width || !b.height) continue;
+          const cs = getComputedStyle(el);
+          if (cs.visibility === "hidden" || cs.display === "none") continue;
+          const over = Math.round(b.right - vw);
+          if (over > 1) {
+            // An ancestor that scrolls its own overflow is not a defect - the content is
+            // reachable. Only content nothing can bring into view counts.
+            let scrolls = false;
+            for (let q = el.parentElement; q && q !== document.body; q = q.parentElement) {
+              const c = getComputedStyle(q);
+              if (c.overflowX === "auto" || c.overflowX === "scroll") { scrolls = true; break; }
+            }
+            if (!scrolls) out.past.push(`${el.tagName.toLowerCase()}${el.className && typeof el.className === "string" ? "." + el.className.split(/\s+/)[0] : ""} +${over}px "${(el.textContent || "").trim().slice(0, 24)}"`);
+          }
+        }
+        // BOTH AXES. A control can report the floor on one and miss it on the other, which is
+        // what #623 found and what #598 shipped.
+        for (const el of document.querySelectorAll("button, .seg a, nav a")) {
+          const b = el.getBoundingClientRect();
+          if (!b.width || !b.height) continue;
+          if (getComputedStyle(el).visibility === "hidden") continue;
+          if (b.height < 44 || b.width < 44) {
+            out.small.push(`${el.tagName.toLowerCase()}${el.className && typeof el.className === "string" ? "." + el.className.split(/\s+/)[0] : ""} ${Math.round(b.width)}x${Math.round(b.height)} "${(el.textContent || "").trim().slice(0, 18)}"`);
+          }
+        }
+        return out;
+      });
+
+      ok(`${vp.name} ${s.label}: the page does not scroll sideways`,
+        r.sideways <= 1, `document is ${r.sideways}px wider than the ${r.vw}px viewport`);
+      ok(`${vp.name} ${s.label}: nothing is cut off past the right edge`,
+        r.past.length === 0, r.past.length ? `${r.past.length}: ${r.past.slice(0, 3).join("; ")}` : "nothing overhangs");
+      ok(`${vp.name} ${s.label}: every control meets the 44px floor on BOTH axes`,
+        r.small.length === 0, r.small.length ? `${r.small.length}: ${[...new Set(r.small)].slice(0, 4).join("; ")}` : "all controls at or above 44x44");
+
+      await ctx.close();
+    }
+  }
+}
+
 async function checkTapFloor(browser, base) {
   const WIDTHS = [[375, 812], [600, 900], [1024, 768], [1440, 900]];
   const PAGES = [["/", "index"], ["/donate", "donate"], ["/terms", "terms"], ["/fund", "fund"]];
@@ -3721,6 +3815,7 @@ try {
   await checkTabAffordanceAndLimits(browser, BASE);
   await checkFooterHeldAgainstGrowth(browser, BASE);
   await checkNoEmDashReachesTheReader(browser, BASE);
+  await checkNarrowWidths(browser, BASE);
   await checkTapFloor(browser, BASE);
   await checkMobile(browser, BASE);
 
