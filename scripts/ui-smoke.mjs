@@ -2408,11 +2408,29 @@ async function checkTapFloor(browser, base) {
           if (b.height === 0 && b.width === 0) continue;
           const cs = getComputedStyle(e);
           if (cs.display === "none" || cs.visibility === "hidden") continue;
-          if (b.height >= 44) continue;
+          // HEIGHT FOR EVERYTHING, AND WIDTH TOO WHEN THERE ARE NO WORDS. This asked about
+          // height only and missed a control getting NARROWER: the theme toggle went 44x44 on
+          // main to 25-34 wide here while its height stayed 44, so every row stayed green over
+          // a control that had shrunk. Found by the CTO's red-team.
+          //
+          // The width half is scoped to ICON-ONLY controls on purpose. A text link is as wide
+          // as its words and always will be - "Terms" at 29x44 is the design, not a defect, and
+          // demanding 44 there would repaint the nav to satisfy a row. An icon button has no
+          // words to set its width, so width is the whole of its target and a narrow one is
+          // invisible until a finger misses it.
+          const iconOnly = !(e.textContent || "").trim();
+          if (b.height >= 44 && (!iconOnly || b.width >= 44)) continue;
           const words = (e.textContent || e.getAttribute("aria-label") || "").trim().replace(/\s+/g, " ").slice(0, 22);
           const cls = String(e.className || "").trim().split(/\s+/).filter(Boolean)[0];
-          const what = `${words ? words + " " : ""}[${e.tagName.toLowerCase()}${cls ? "." + cls : ""}] h=${Math.round(b.height)}`;
-          if (e.closest("p, li, dd, .fine, .hint, .ref, figcaption")) prose.push(what);
+          const what = `${words ? words + " " : ""}[${e.tagName.toLowerCase()}${cls ? "." + cls : ""}] ${Math.round(b.width)}x${Math.round(b.height)}`;
+          // ONLY AN ANCHOR CAN BE PROSE. This was an ancestor test alone, so ANY control inside
+          // a <p> was exempt - the claim button at 40px wrapped in a paragraph passed all sixteen
+          // rows. WCAG 2.5.8's exception is for a target "in a sentence or block of text", which
+          // is a LINK in running text; a <button>, <input> or <select> is a control wherever it
+          // sits, and nesting one in a paragraph is not a reason to stop measuring it. Found by
+          // the CTO's red-team: the exemption I wrote to avoid wrecking paragraphs was wide
+          // enough to excuse the page's primary action.
+          if (e.tagName === "A" && e.closest("p, li, dd, .fine, .hint, .ref, figcaption")) prose.push(what);
           else small.push(what);
         }
         return { small, prose };

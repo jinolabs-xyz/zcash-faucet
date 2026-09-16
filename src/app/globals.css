@@ -212,13 +212,14 @@ a:hover { color: var(--color-accent-800); }
    `inline-flex` with centring rides along because `min-height` alone only grows the BOX: an
    anchor whose line is 17px would sit at the top of a 44px target with 27px of dead space under
    it, which looks like a bug and mis-places the thing a finger aims at. */
-@media (pointer: coarse) {
+@media (any-pointer: coarse) {
   button,
   input:not([type="hidden"]),
   select,
   textarea,
   nav a,
-  .tag,
+  button.tag,
+  a.tag,
   .home,
   .morelink,
   .linkbtn,
@@ -230,8 +231,23 @@ a:hover { color: var(--color-accent-800); }
   .linkbtn,
   .footer-brand { display: inline-flex; align-items: center; }
 
-  /* The square shape is the point of these two, so both dimensions grow together. */
-  .theme-toggle, .iconbtn { width: 44px; height: 44px; }
+  /* `.tag` IS TWO THINGS AND ONLY ONE OF THEM IS A TARGET. The chip is a `button` or an `a` in
+     the hero and the card, and a bare `span` in the status and analytics cards, where it is a
+     LABEL - "miner unwatched", "sends unknown". A floor on the class grew those pills to 44px
+     under touch: 18px of padding around a word nobody can press, measured at 30px before and
+     44 after. Named by element rather than by inventing a class, because the two uses are
+     already distinguishable. Found by the CTO's red-team. */
+
+  /* THE SQUARE IS A FLOOR, NOT A SIZE, AND THAT IS WHAT FIXES IT. Written as `width: 44px`
+     this rule is (0,1,0) and LOST to redesign-shell.css:82, `html .iconbtn` at (0,1,1), which
+     sets `width: calc(2.4*var(--u))`. `min-height` came through anyway because nothing else
+     declares one - so the control kept its height, lost its width, and the theme toggle SHRANK
+     against main: 44x44 there, 25-34 wide here. Main's rule was `.app .theme-toggle` at
+     (0,2,0), which outranked the shell; deleting it without matching its weight is what broke
+     it, and the row that should have caught it measured height only.
+     `min-width` has no competitor at any specificity, so the floor applies without a
+     specificity fight - and a floor is what this whole rule is, rather than a fixed size. */
+  .theme-toggle, .iconbtn { min-width: 44px; min-height: 44px; }
 }
 
 /* ── The footer, and why it stops sticking on a phone ────────────────────────
