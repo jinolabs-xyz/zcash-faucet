@@ -235,20 +235,5 @@ html[data-theme]{background:var(--page)}
  * highlighted it in the old palette. `.stage ::selection` is (0,1,1) against globals' (0,0,1),
  * so this is specificity rather than order like the three above it. */
 .stage ::selection{background:color-mix(in srgb,var(--accent) 30%,transparent)}
-
-/* THE HERO CHIPS CLEAR THE 44px TAP FLOOR ON A PHONE.
- *
- * The chips are `.tag`, and `.tag` has no floor of its own: there are five separately scoped
- * 44px rules in this codebase (`.view.sub .tag`, `.seg button`, `.strip`, `#lookupform .prompt`,
- * and App's `.card.claim .tag`), each added after a defect on one surface, each leaving the next
- * surface bare. The hero was the sixth surface and shipped at 23px - measured, at 375px wide,
- * on all three mobile passes.
- *
- * This is the narrow rule, deliberately. A single unscoped floor on `.tag` is the right end
- * state and it is a decision about every chip on every page including geometry the subpages
- * have already measured and shipped, so it gets its own PR with before and after at both
- * widths and the five scoped rules deleted rather than a sixth added (CTO, 08:04Z). When that
- * lands, this block comes out with them. */
 @media (max-width:56rem){
-  .hero-copy .chips .tag{min-height:44px}
 }
