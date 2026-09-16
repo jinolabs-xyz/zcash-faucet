@@ -135,8 +135,8 @@ for (const [W, H] of VIEWPORTS) {
     // hiding it.
     await page.waitForTimeout(500);
     const after = await geom(page);
+    // Waited out, so `natural` below is measured after the page has stopped moving.
     await page.waitForTimeout(400);
-    const settled = await geom(page);
     // THE NATURAL HEIGHT, with any of the card's own animation cancelled first. Reading the box
     // while one runs returns the interpolated value, which is exactly the defect this round is
     // about - the sweep has to measure the way the fixed code measures or it cannot see it.

@@ -931,7 +931,6 @@ export default function Home() {
   const syncPct = node?.syncPercent ?? null;
   // Never rounds up to 100 while the node is unready: 99.994 printed as "100%" beside
   // a "Syncing" headline during the 2026-08-03 incident, which reads as a stuck page.
-  const syncText = syncLabel(syncPct, node?.ready === true);
   // What the queued card is waiting on. A claim queued behind a fault is waiting for
   // the faucet, not for a sync, and "syncing… / the moment the node is ready" over a
   // frozen node is the R-33 story again with a different kicker.
@@ -941,7 +940,6 @@ export default function Home() {
   // reading for the whole of 2026-09-07. Frozen says frozen, and the sync cell says how
   // far behind rather than how close.
   const height = node?.height ?? null;
-  const nodeHeight = node?.nodeHeight ?? null;
   const reserve = status?.reserve;
   const donation = status?.donationAddress?.trim() ?? "";
   // A refill running while we can still serve must read as healthy, not as an
@@ -1172,131 +1170,141 @@ export default function Home() {
             height) is about OUR Zebra, and rendering it under a cTAZ hold would show
             someone a progress bar for a chain their claim has nothing to do with. The
             cTAZ equivalent is the readiness block above, which reads their node. */}
-        {phase === "syncing" && network === "taz" && (
-          <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 11 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
-              <span style={kicker}>Getting ready</span>
-              <span style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700 }}>{syncText ?? "starting…"}</span>
-            </div>
-            <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>Syncing the node. The faucet will be ready shortly.</h2>
-            <div role="progressbar" aria-label="Node sync progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={syncPct != null ? Math.min(syncPct, node?.ready === true ? 100 : 99.5) : undefined} style={{ height: 10, border: "2px solid var(--color-divider)", position: "relative", overflow: "hidden" }}>
-              <i aria-hidden="true" style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: syncBarWidth(syncPct, node?.ready === true), background: "repeating-linear-gradient(135deg,var(--color-accent) 0 3px,transparent 3px 7px)", backgroundSize: "26px 26px", animation: "hatch 1.1s linear infinite", opacity: syncPct != null ? 1 : 0.55 }} />
-            </div>
-            <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.5, color: muted(60) }}>
-              {height != null ? "Block " + num(height) + (nodeHeight ? " of " + num(nodeHeight) : "") + " · " : "Bringing the node online · "}first sync takes a while, one time. It becomes the real faucet automatically.
+        {/* GETTING READY (index.html:449-454). The snapshot has ONE panel for our `checking`
+            and `syncing`; the 23:08Z ruling splits them by content: syncing shows the sync
+            percent because there is one, checking does not because there is nothing to show yet.
+            TAZ only - every number here is about OUR Zebra, and a progress bar under a cTAZ hold
+            is a bar for a chain the claim has nothing to do with. */}
+        {(phase === "syncing" || phase === "checking") && network === "taz" && (
+          <div className="phase" data-phase="getting-ready">
+            <div className="kicker">Getting ready</div>
+            <h3>{phase === "checking" ? "Checking the faucet's status" : "Syncing the node"}</h3>
+            <p>
+              {phase === "checking"
+                ? "Reading the node and the wallet. This takes a moment."
+                : "Our node is catching up with the network. Sends start when it is ready."}
             </p>
+            {phase === "syncing" && (
+              <>
+                <div className="prog" role="progressbar" aria-label="Node sync progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={syncPct != null ? Math.min(syncPct, node?.ready === true ? 100 : 99.5) : undefined} style={{ ["--w" as string]: syncBarWidth(syncPct, node?.ready === true) }}>
+                  <i />
+                </div>
+                <div className="figs">
+                  <span><b className="num">{syncPct != null ? syncPct.toFixed(2) : "—"}</b>% synced</span>
+                  <span><b className="mono">{height != null ? num(height) : "—"}</b>height</span>
+                </div>
+              </>
+            )}
           </div>
         )}
 
+        {/* NOT READY (index.html:455-458). The ruling: `fault` takes this panel, with the
+            button below reading "Queue it, sends when the faucet is back". The hold-dropped
+            line is ours and has no counterpart in the snapshot - it reports a claim we stopped
+            holding, which the mock has no state for - so it is declared rather than dropped. */}
         {phase === "fault" && network === "taz" && (
-          <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 9 }}>
-            <span style={kicker}>Not ready</span>
-            <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>The faucet is having a problem.</h2>
-            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
-              {status ? `${(faultReason(status) ?? "something is not right").replace(/^./, (c) => c.toUpperCase())}. ` : ""}
-              Nothing to do on your side. It usually recovers on its own and the box pages a person if it does not;
-              this page re-checks every few seconds. You can queue your address and it sends when the faucet is back,
-              or check back in a while.
+          <div className="phase" data-phase="not-ready">
+            <div className="kicker">Not ready</div>
+            <h3>The faucet is having a problem</h3>
+            <p>
+              {status ? `${(faultReason(status) ?? "something is not right").replace(/^./, (c2) => c2.toUpperCase())}. ` : ""}
+              Nothing to do on your side. You can queue the request, and it sends when the faucet is back.
             </p>
             {holdDropped && (
-              <p data-testid="hold-dropped" style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: "var(--color-text)" }}>
-                We held your claim for {Math.round(HOLD_MAX_MS / 60_000)} minutes and the faucet did not recover, so we stopped
-                holding it rather than keep you waiting on it. Nothing was claimed and your cooldown is untouched; queue it
-                again if you like.
+              <p data-testid="hold-dropped">
+                We held your claim for {Math.round(HOLD_MAX_MS / 60_000)} minutes and the faucet did not recover, so we
+                stopped holding it rather than keep you waiting. Nothing was claimed and your cooldown is untouched.
               </p>
             )}
           </div>
         )}
 
+        {/* QUEUED (index.html:459-463). One panel, two data states: `queuedBehindFault` picks
+            the sentence, which is what page.tsx already did for the live region. */}
         {phase === "queued" && queuedAddr && (
-          <div style={{ border: "2px solid var(--color-text)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 11 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
-              <span style={kicker}>Queued</span>
-              <span style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700 }}>{queuedBehindFault ? "not ready" : (syncText ?? "syncing…")}</span>
-            </div>
-            <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>You&apos;re in line. It sends on its own.</h2>
-            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
+          <div className="phase" data-phase="queued">
+            <div className="kicker">Queued</div>
+            <h3>You&apos;re in line</h3>
+            <p>
               {queuedBehindFault && status ? `The faucet is having a problem: ${faultReason(status)}. ` : ""}
-              The moment the {queuedBehindFault ? "faucet is back" : "node is ready"}, {dripText} goes to <span style={{ fontFamily: "var(--mono)", fontSize: 11.5 }}>{short(queuedAddr, 12, 6)}</span>. Keep this tab open or come back later, your place survives a reload.
+              Your address is in the queue and sends when the {queuedBehindFault ? "faucet is back" : "node is ready"}.
+              You can close this tab.
             </p>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-              <button className="btn btn-secondary btn-sm" onClick={() => { setQueuedAddr(null); setQueuedAt(null); setHoldDropped(false); setPhase(basePhase(status, network)); }}>Cancel and change address</button>
+            <div className="figs">
+              <span><b className="num">{status?.queueDepth != null ? num(status.queueDepth) : "—"}</b>ahead of you</span>
             </div>
           </div>
         )}
 
+        {/* RESERVE LOW (index.html:469-473): ready, and a refill is due. Claims still work,
+            which is the whole point of the panel being separate from `empty`. */}
         {phase === "ready" && refilling && network === "taz" && (
-          <div style={{ border: "1px solid var(--color-divider)", padding: "10px 14px", display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: "4px 12px", fontFamily: "var(--mono)", fontSize: 11.5 }}>
-            <span style={{ ...kicker, fontSize: 10 }}>Topping up</span>
-            <span style={{ color: muted(60) }}>The reserve is being topped up in the background. Claims are unaffected.</span>
-            {refillPct != null && <span style={{ fontWeight: 700, marginLeft: "auto" }}>{refillPct}%</span>}
-          </div>
-        )}
-
-        {phase === "empty" && refilling && network === "taz" && (
-          <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 11 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
-              <span style={kicker}>Topping up</span>
-              {reserve && (
-                <span style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700 }}>
-                  {(reserve.spendableTaz ?? 0).toFixed(1)} / {reserve.targetTaz.toFixed(0)} TAZ
-                </span>
-              )}
+          <div className="phase" data-phase="reserve-low">
+            <div className="kicker">Reserve</div>
+            <h3>The reserve is low</h3>
+            <p>Claims still work. A refill is due, and if it runs out this page says so.</p>
+            <div className="figs">
+              <span><b className="num">{reserve?.spendableTaz != null ? num(Math.floor(reserve.spendableTaz)) : "—"}</b>spendable TAZ</span>
+              <span><b className="num">{reserve?.lowTaz != null ? num(reserve.lowTaz) : "—"}</b>low mark</span>
             </div>
-            {/* "Drips resume in a moment" is only true when something is putting coins
-                in: a running miner and a shielding step that is not failing. With the
-                miner parked this card still renders (the loop is armed by the balance,
-                not the miner), and then it is just a low balance being watched. */}
-            <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>{refillHealthy ? "Topping up the reserve. Drips resume in a moment." : "The reserve is low."}</h2>
-            {refillPct != null && (
-              <div role="progressbar" aria-label="Reserve refill progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={refillPct} style={{ height: 10, border: "2px solid var(--color-divider)", position: "relative", overflow: "hidden" }}>
-                <i aria-hidden="true" style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: refillPct + "%", background: "repeating-linear-gradient(135deg,var(--color-accent) 0 3px,transparent 3px 7px)", backgroundSize: "26px 26px", animation: "hatch 1.1s linear infinite" }} />
-              </div>
-            )}
-            {/* Read off status, not asserted (R-39): this line was fixed text saying
-                "mining and shielding its own coins right now. Nothing is broken." and it
-                rendered beside a strip reading "miner no signal". */}
-            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
-              {incomeFrom(status) ?? "The balance is below the reserve line."}{" "}
-              {refillHealthy
-                ? "Nothing is broken: the balance dipped below the reserve line and it is being restored automatically."
-                : "The balance dipped below the reserve line, and until something puts coins in it stays there."}
+          </div>
+        )}
+
+        {/* TOPPING UP (index.html:464-468): empty AND refilling AND the refill looks healthy.
+            The hatched bar is `.prog.hatch`, whose rule and keyframe are SDE-UI's; this renders
+            the element and defines neither, so the cascade has one definition of each. */}
+        {phase === "empty" && refilling && refillHealthy && network === "taz" && (
+          <div className="phase" data-phase="topping-up">
+            <div className="kicker">Topping up the reserve</div>
+            <h3>Refilling from the main wallet</h3>
+            <p>Claims resume when the reserve is back above the line.</p>
+            <div
+              className="prog hatch"
+              role="progressbar"
+              aria-label="Refill progress"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={refillPct ?? undefined}
+              // The snapshot hard-codes `--w:60%`; ours is the real fraction of the target the
+              // reserve currently holds, which is the number the bar is claiming to show.
+              style={{ ["--w" as string]: `${refillPct ?? 0}%` }}
+            >
+              <i />
+            </div>
+          </div>
+        )}
+
+        {/* NOT TAKING CLAIMS (index.html:474-477). The reason sentence is `sends.reason`,
+            read off the status and never asserted: this card once said "refilled by hand"
+            beside a panel showing coinbase shielding on (R-39). */}
+        {phase === "degraded" && (
+          <div className="phase" data-phase="not-taking">
+            <div className="kicker">Not taking claims</div>
+            <h3>Sends are failing on our side right now</h3>
+            <p>
+              {status?.sends?.reason ? `${status.sends.reason.charAt(0).toUpperCase()}${status.sends.reason.slice(1)}. ` : ""}
+              This is watched on our side and usually clears within minutes. No proof-of-work is asked for while it
+              lasts; the button comes back when sends land again.
             </p>
           </div>
         )}
 
-        {phase === "degraded" && (
-          <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 9 }}>
-            <span style={kicker}>Not taking claims</span>
-            <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>Sends are failing on our side right now.</h2>
-            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
-              {status?.sends?.reason ? `${status.sends.reason.charAt(0).toUpperCase()}${status.sends.reason.slice(1)}. ` : ""}
-              This is watched on our side and usually clears within minutes. Nothing you do here will change it, and no proof-of-work is asked for
-              while it lasts; this page re-checks on its own, and the button comes back when sends land again.
-            </p>
-          </div>
-        )}
-        {phase === "empty" && !refilling && network === "taz" && (
-          <div style={{ border: "2px solid var(--color-divider)", padding: "18px 16px", display: "flex", flexDirection: "column", gap: 9 }}>
-            <span style={kicker}>Empty</span>
-            <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.25 }}>The faucet is out of TAZ right now.</h2>
-            {/* Where the refill comes from is read off status, not asserted (R-39): this
-                card used to say "refilled by hand" beside a panel showing coinbase
-                shielding on and hundreds of accepted blocks. Do not promise a schedule
-                either way; a refill by mining takes a block win, a refill by hand takes
-                a person. */}
-            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: muted(62) }}>
-              {incomeFrom(status) ?? "It gets refilled when funds arrive."} This can take a while. Nothing you did caused
-              it{donation ? ", and if you have spare TAZ the address below puts the faucet back up for everyone" : ""}.
-            </p>
+        {/* EMPTY (index.html:478-482). Widened from `!refilling` to "not topping up": a refill
+            that is running but NOT healthy (miner off, or shielding not permitted) is not
+            "topping up", and when `topping-up` took the healthy condition this state would
+            otherwise have had no panel at all. */}
+        {phase === "empty" && !(refilling && refillHealthy) && network === "taz" && (
+          <div className="phase" data-phase="empty">
+            <div className="kicker">Empty</div>
+            <h3>The faucet is out of TAZ right now</h3>
+            <p>If you have testnet ZEC to spare, a donation refills it for everyone.</p>
             {donation && (
-              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: "4px 10px", fontFamily: "var(--mono)", fontSize: 11.5 }}>
-                <span style={{ color: muted(55) }}>top it up</span>
-                <span style={{ fontWeight: 700, wordBreak: "break-all" }}>{short(donation, 16, 8)}</span>
-                <button className="btn btn-ghost btn-sm" onClick={() => void copy("donation", donation)} style={{ padding: 0 }}>
+              <div className="row">
+                <code className="mono">{donation}</code>
+                <button className="tag" type="button" onClick={() => void copy("donation", donation)}>
                   {copied === "donation" ? "Copied ✓" : "Copy address"}
                 </button>
-                <a className="btn btn-ghost btn-sm" href="/donate" style={{ padding: 0 }}>Why, and how it helps →</a>
+                <a className="tag" href="/donate">Why, and how it helps →</a>
               </div>
             )}
           </div>
