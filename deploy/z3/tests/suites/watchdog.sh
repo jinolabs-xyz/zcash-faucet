@@ -42,7 +42,7 @@ wd_env() {
   # The first case that set the grace to 0 failed in CI and passed alone.
   unset STUB_READY_EXTERNAL STUB_CURL_RC STUB_READY_REFS STUB_READY_USEDHEIGHT WATCHDOG_NODE_CONFIRMED_LAG_LIMIT
   unset STUB_SLOWLOOP STUB_ALERT_FAIL_N STUB_ALERT_FAIL_RC WATCHDOG_RECOVERY_MIN_UPTIME
-  unset WATCHDOG_CLOCK_FILE WATCHDOG_CLOCK_STEP STUB_CRASHLOOP STUB_HEAL_FIXES STUB_ZEBRA_BLOCKS STUB_ZEBRA_EST STUB_ZEBRA_ADVANCE STUB_ZEBRA_STUCK_CALLS \
+  unset STUB_CRASHLOOP STUB_HEALTH_SEQUENCE STUB_HEAL_FIXES STUB_ZEBRA_ADVANCE STUB_ZEBRA_BLOCKS STUB_ZEBRA_EST STUB_ZEBRA_STUCK_CALLS WATCHDOG_CLOCK_FILE WATCHDOG_CLOCK_STEP \
         WATCHDOG_NODE_HEAL_ENABLED WATCHDOG_NODE_STOPS_MINER WATCHDOG_MINER_HEARTBEAT WATCHDOG_MINER_UNIT STUB_START_FAIL \
         WATCHDOG_SIGNAL_MATCH STUB_READY_CANBUILD STUB_READY_CANBUILD_ONCE \
         STUB_READY STUB_READY_REASON STUB_READY_FAIL_UNTIL STUB_HEALTH
@@ -210,6 +210,39 @@ check "the page is attempted again on the next sweep rather than waiting for res
 check "and it is delivered exactly once, so the retry does not become a second page" \
   "[ \"\$(grep -c 'not answering /api/health' '$T/alerts.log')\" = 1 ]"
 unset STUB_HEALTH FAUCET_FAIL_LIMIT WATCHDOG_FAUCET_FAIL_LIMIT
+
+echo "== watchdog: a SECOND app episode after a recovery pages again, because the flag clears too"
+# SDE-UI's finding on this PR, and it is the defect my own miner row exists to catch, one rung
+# along, in a reset I added in the same change. Removing `alerted_faucet_app=0` from the recovery
+# survived at 313/0: left set, an app that dies, is fixed and dies again escalates ONCE and is then
+# silent at the threshold page for the life of the process, with step 4's NOT READY page thirty
+# minutes behind it.
+#
+# DRIVEN INSIDE ONE PROCESS, which is what their attempt could not do and why it measured the wrong
+# thing. `faucet_restarts` and its flag are shell variables (watchdog.sh:881), so they die with the
+# process: a second `wd_run` starts from zero and cannot show whether a flag outlived its episode.
+# Their symmetric case passed in BOTH arms because the row it asserted was satisfied by the
+# periodic `(faucet_restarts - 2) % 20` re-alert rather than by a second episode - and they only
+# know that because their anti-vacuity partner failed in both arms too.
+#
+# STUB_HEALTH_SEQUENCE drives the health per READ, so the episode ends and begins again inside one
+# process: two unhealthy reads take it to the page, one healthy read is the recovery, and three
+# more unhealthy reads are a second episode from zero.
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+printf 'running\n\nunhealthy\n' > "$STUB_CONTAINERS/faucet-web"
+export WATCHDOG_FAUCET_FAIL_LIMIT=1
+export STUB_HEALTH_SEQUENCE="unhealthy unhealthy healthy unhealthy unhealthy unhealthy"
+wd_run 6
+# THE PARTNER FIRST, because without it the row below is satisfied by the periodic re-alert and
+# says nothing about a second episode. If no recovery happened there is only one episode, and a
+# page count of two would be the 20-sweep cadence rather than the reset working.
+check "the recovery really happened, so this is two episodes and not one long one" \
+  "grep -q 'FIXED: faucet app hung' '$T/alerts.log'"
+check "and the threshold page fires for the SECOND episode as well as the first" \
+  "[ \"\$(grep -c 'not answering /api/health' '$T/alerts.log')\" = 2 ]"
+unset WATCHDOG_FAUCET_FAIL_LIMIT STUB_HEALTH_SEQUENCE
 
 echo "== watchdog: a page that fails with a code other than 1 is still a failed page"
 # alert.sh exits 1 for a POST that failed, 3 for no channel configured, 4 for no JSON
