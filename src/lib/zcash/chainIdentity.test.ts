@@ -59,6 +59,105 @@ test("a missing branch id is cannot-verify, not agreement", () => {
   assert.equal(isChainProblem(v), false);
 });
 
+// WHICH SIDE IS SILENT, and the three cases are distinguished because they have different
+// owners and different fixes. Prod reported this state long enough to be committed as a
+// fixture and nobody could tell from the reason whether it was our node or the reference.
+// It was ours, and establishing that took reading the oracle and then querying the public
+// lightwalletd by hand.
+test("and it names OUR node when ours is the silent one", () => {
+  const v = classifyChainIdentity({ ...ok, ourBranchId: null });
+  assert.equal(v.state, "cannot-verify");
+  assert.match(v.reason, /our node does not report/);
+  // Not the other side, or the sentence sends someone to the wrong system.
+  assert.doesNotMatch(v.reason, /independent source does not report/);
+});
+
+test("and it names the INDEPENDENT SOURCE when theirs is the silent one", () => {
+  const v = classifyChainIdentity({ ...ok, theirBranchId: null });
+  assert.equal(v.state, "cannot-verify");
+  assert.match(v.reason, /independent source does not report/);
+  assert.doesNotMatch(v.reason, /our node does not report/);
+});
+
+test("and it says so plainly when BOTH are silent, rather than blaming one", () => {
+  const v = classifyChainIdentity({ ...ok, ourBranchId: null, theirBranchId: null });
+  assert.equal(v.state, "cannot-verify");
+  assert.match(v.reason, /neither our node nor the independent source/);
+});
+
+// AND WHY, WHEN WE KNOW IT. The real cause on prod was zallet answering HTTP 200 with
+// {"error":{"code":-32601,"message":"Method not found"}} - it does not implement the method at
+// all. That arrived as the same null a missing FIELD produces, so the app could say a branch id
+// was missing and never say the method does not exist.
+test("and it carries the cause of our silence when the oracle knows it", () => {
+  const v = classifyChainIdentity({
+    ...ok,
+    ourBranchId: null,
+    ourBranchIdDetail: "zallet: Method not found (-32601)",
+  });
+  assert.equal(v.state, "cannot-verify");
+  assert.match(v.reason, /Method not found/);
+  assert.match(v.reason, /our node does not report/);
+});
+
+// A DETAIL ABOUT OUR SIDE MUST NOT BE ATTACHED TO THEIRS. The oracle only ever learns why OUR
+// lookup failed, so printing it under a null on the other side would blame zallet for a
+// lightwalletd outage.
+test("and it does not blame our side's cause when THEIRS is the silent one", () => {
+  const v = classifyChainIdentity({
+    ...ok,
+    theirBranchId: null,
+    ourBranchIdDetail: "zallet: Method not found (-32601)",
+  });
+  assert.match(v.reason, /independent source does not report/);
+  assert.doesNotMatch(v.reason, /Method not found/);
+});
+
+// Absent detail degrades to the plain sentence, never to a worse one.
+//
+// ASSERTED AS A POSITIVE SHAPE, NOT A DENYLIST, and that is the correction. This read
+// `doesNotMatch(/\(\)|undefined|null/)`, which SDE-UI walked straight past: "( )" is a dangling
+// bracket one space wide and matches none of the three. A list of spellings you thought of
+// cannot be complete. The rule that IS complete: if the sentence has a bracket, the bracket has
+// something in it.
+//
+// " " is in the loop because it is the value that broke the old row, and "zallet: " because it
+// is REACHABLE rather than merely constructible - a JSON-RPC error with an empty message and no
+// code builds exactly that.
+test("and an unknown cause reads clean rather than empty-bracketed", () => {
+  for (const d of [undefined, null, "", " ", "   ", "\t"]) {
+    const v = classifyChainIdentity({ ...ok, ourBranchId: null, ourBranchIdDetail: d });
+    assert.match(v.reason, /our node does not report a consensus branch id, so/, JSON.stringify(d));
+    const bracket = v.reason.match(/\(([^)]*)\)/);
+    assert.equal(bracket, null, `a blank detail still bracketed: ${JSON.stringify(v.reason)}`);
+  }
+});
+
+test("and any bracket it DOES print has content in it", () => {
+  for (const d of ["zallet: Method not found (-32601)", "zallet unreachable: timeout", "x"]) {
+    const v = classifyChainIdentity({ ...ok, ourBranchId: null, ourBranchIdDetail: d });
+    const bracket = v.reason.match(/\(([^)]*)/);
+    assert.notEqual(bracket, null, `expected a bracket for ${JSON.stringify(d)}`);
+    assert.ok((bracket?.[1] ?? "").trim().length > 0, `empty bracket for ${JSON.stringify(d)}`);
+  }
+});
+
+// THE ANTI-VACUITY PARTNER. Every row above matches a phrase, so a reason that named the
+// side and dropped the QUESTION would satisfy all three - "our node does not report" alone
+// tells an operator nothing about what is unestablished. This pins the half that survived
+// from the original sentence, and it is the half that says why anyone should care.
+test("naming the side does not cost the sentence its point", () => {
+  for (const f of [
+    { ...ok, ourBranchId: null },
+    { ...ok, theirBranchId: null },
+    { ...ok, ourBranchId: null, theirBranchId: null },
+  ]) {
+    const v = classifyChainIdentity(f);
+    assert.match(v.reason, /consensus branch id/, JSON.stringify(f));
+    assert.match(v.reason, /whether we share rules is unestablished/, JSON.stringify(f));
+  }
+});
+
 test("a missing hash is cannot-verify, and says rules still matched", () => {
   // The partial result is worth keeping: rules agreeing is real information even when
   // history could not be checked.

@@ -24,6 +24,12 @@ export interface IdentityFacts {
   ourBranchId: string | null;
   /** Consensus branch id an independent source reports. */
   theirBranchId: string | null;
+  /**
+   * WHY our side is silent, when it is and we know. Optional: chainIdentity stays decidable
+   * from facts alone, so an absent detail degrades to the plain sentence rather than to a worse
+   * one. Never a reason to change the STATE - it explains a lookup, it does not observe a chain.
+   */
+  ourBranchIdDetail?: string | null;
   /** The height both hashes were read at. Must be the SAME height or the comparison is meaningless. */
   comparedAtHeight: number | null;
   ourHashAtHeight: string | null;
@@ -71,9 +77,33 @@ export function classifyChainIdentity(f: IdentityFacts): IdentityVerdict {
   }
 
   if (f.ourBranchId === null || f.theirBranchId === null) {
+    // WHICH SIDE, because the two have different owners and different fixes. This said "a
+    // consensus branch id is missing" for all three shapes, and on 2026-09-16 that sentence
+    // cost an investigation: prod had been reporting it long enough to be committed as a
+    // fixture (status.prod.json:184), and nobody could tell from the outside whether our node
+    // or the reference was the silent one. It was ours - the oracle asks the WALLET a
+    // node-level question - but establishing that took reading the oracle, then querying the
+    // public lightwalletd by hand to eliminate the other side.
+    //
+    // The state is deliberately unchanged. This is a claim about the LOOKUP, not the chain,
+    // and naming the side makes it a better claim about the lookup, not a stronger one.
+    const missing =
+      f.ourBranchId === null && f.theirBranchId === null
+        ? "neither our node nor the independent source reports"
+        : f.ourBranchId === null
+          ? "our node does not report"
+          : "the independent source does not report";
+    // `.trim()` on BOTH sides, because a truthy-but-blank detail brackets whitespace. SDE-UI
+    // found "zallet: " and " " reaching the old guard and rendering "( )" - a dangling bracket
+    // one space wide, and my own row missed it because a denylist of three spellings cannot be
+    // complete.
+    const because =
+      f.ourBranchId === null && f.ourBranchIdDetail?.trim()
+        ? ` (${f.ourBranchIdDetail.trim()})`
+        : "";
     return {
       state: "cannot-verify",
-      reason: "a consensus branch id is missing, so whether we share rules is unestablished",
+      reason: `${missing} a consensus branch id${because}, so whether we share rules is unestablished`,
     };
   }
 
