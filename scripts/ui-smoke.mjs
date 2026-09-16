@@ -2327,7 +2327,10 @@ async function checkSubpages(browser, base) {
       for (const b of document.querySelectorAll(".view.sub button")) {
         const cls = (b.className || "").toString();
         out.push({ text: (b.textContent || "").trim().slice(0, 14), cls,
-                   legacy: /\bbtn(-|\b)/.test(cls), design: /\btag\b/.test(cls) });
+                   // `.automate` joins `.tag` here: the snapshot dresses the panel's primary
+                   // action as a bar and only the secondary chips as tags, so a row that knows
+                   // about one of the two would fail the page for wearing the right class.
+                   legacy: /\bbtn(-|\b)/.test(cls), design: /\b(tag|automate)\b/.test(cls) });
       }
       return out;
     });
@@ -2472,6 +2475,120 @@ async function checkSubpages(browser, base) {
  * came from. A check that can only run in a configuration nobody runs is the SKIP problem in a
  * different coat.
  */
+async function checkPanelControlIsTheDesignsBar(browser, base) {
+  // THE PANEL CONTROL IS `.automate`, THE MINING CHIP IS `.tag`, AND THEY ARE NOT THE SAME CONTROL.
+  //
+  // Both copy buttons shipped in `.tag`, citing the snapshot. The snapshot uses two:
+  //   donate.html:428, fund.html:428   `<button class="automate" … data-accent>`  the page's
+  //                                     primary action, full width, 3.3u tall, accent fill
+  //   donate.html:435                  `<button class="tag" …>`                    the mining chip
+  // Read from the frozen snapshot rather than from the issue, whose line numbers have drifted.
+  //
+  // The cost of the wrong class was not the button: with no `.automate` rule in the app the
+  // control rendered 30.1px against the design's 46.2, so EVERYTHING BELOW IT sat 16.1px high on
+  // both pages. One class, a whole control's worth of layout.
+  for (const [path, hasChip] of [["/donate", true], ["/fund", false]]) {
+    const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const page = await ctx.newPage();
+    await page.goto(base + path, { waitUntil: "networkidle" });
+
+    const r = await page.evaluate(() => {
+      const panel = document.querySelector(".card.feature .panel, .card.claim .panel");
+      const bar = panel ? panel.querySelector("button.automate") : null;
+      const chip = document.querySelector("button.tag");
+      const hint = document.querySelector(".hint");
+      // `--u` COMPUTES TO ITS TOKEN, NOT TO A NUMBER. getPropertyValue returns the literal
+      // `clamp(10.5px, …, 14px)`, so parseFloat gave NaN and the row printed "against 3.3u =
+      // NaNpx". Custom properties are substituted, not resolved, until something uses them - so
+      // the way to read the unit is to make something use it and measure that.
+      const ruler = document.createElement("div");
+      ruler.style.cssText = "position:absolute;visibility:hidden;height:var(--u);width:var(--u)";
+      (panel || document.body).appendChild(ruler);
+      const u = ruler.getBoundingClientRect().height;
+      ruler.remove();
+      const box = (el) => {
+        if (!el) return null;
+        const cs = getComputedStyle(el), rc = el.getBoundingClientRect();
+        return { h: Math.round(rc.height * 10) / 10, w: Math.round(rc.width * 10) / 10,
+                 bg: cs.backgroundColor, cls: String(el.className) };
+      };
+      return {
+        u, bar: box(bar), chip: box(chip),
+        // THE CONTENT BOX, NOT THE PADDING BOX. `clientWidth` includes the panel's padding, so a
+        // bar correctly filling its content box read 428 against 507 and the row called it short.
+        panelW: panel ? (() => {
+          const cs = getComputedStyle(panel);
+          return Math.round((panel.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)) * 10) / 10;
+        })() : -1,
+        // `.automate` is the only thing between the address and the hint, so the hint's top is
+        // where the 16.1px showed up. It is the layout consequence rather than the button, which
+        // is what makes it worth asserting separately from the height.
+        hintTop: hint ? Math.round(hint.getBoundingClientRect().top * 10) / 10 : -1,
+        barsInPanel: panel ? panel.querySelectorAll("button.automate").length : -1,
+        panelButtons: panel ? panel.querySelectorAll("button").length : -1,
+        // The page's own signal for "an address is configured": it renders the address element.
+        // Read from the DOM rather than from process.env, because what matters is what the page
+        // DID, not what the runner was told.
+        configured: !!document.querySelector(".card.feature .panel code.addr, .card.claim .panel code.addr"),
+      };
+    });
+
+    // THE SAME ASSERTION IN BOTH CONFIGURATIONS, which is this file's standing rule for these
+    // three pages and which my first spelling broke. CI sets no FAUCET_DONATION_ADDRESS and no
+    // FAUCET_MAINTENANCE_ADDRESS, so on CI these pages render their not-configured state and
+    // there is no copy control to measure at all - my rows required one and the ui job went red
+    // on a page that was behaving correctly. Three hundred lines up, this file already says why:
+    // "an assertion that goes red when the code gets MORE correct is pinning the bug".
+    //
+    // So the property is stated as a conditional about the control that EXISTS: whatever copy
+    // control the panel offers, it is the design's bar. Where the page offers none, that is the
+    // not-configured state and the row says so rather than passing in silence - an absent
+    // control and a wrong control are different results and the detail distinguishes them.
+    const want = Math.round(3.3 * r.u * 10) / 10;
+    if (r.configured) {
+      ok(`${path}: the panel's copy control is the design's bar, not its chip`,
+        r.barsInPanel === 1 && !!r.bar && Math.abs(r.bar.h - want) <= 1,
+        r.bar ? `class "${r.bar.cls}", ${r.bar.h}px against 3.3u = ${want}px at u=${r.u}`
+              : `a copy control is offered but it is not button.automate (${r.barsInPanel} found, panel has ${r.panelButtons} button(s))`);
+
+      ok(`${path}: and it spans the panel and wears the accent`,
+        !!r.bar && Math.abs(r.bar.w - r.panelW) <= 1 && r.bar.bg !== "rgba(0, 0, 0, 0)",
+        r.bar ? `${r.bar.w}px wide against a ${r.panelW}px panel, background ${r.bar.bg}` : "no bar");
+    } else {
+      // Not a skip: the not-configured page has a property too, and it is the one that stops a
+      // future "fix" from rendering a copy button that copies an empty string - the defect this
+      // page already had once (a2aa54b) and was given its not-configured state to close.
+      ok(`${path}: not configured here, so the panel offers no copy control at all`,
+        r.panelButtons === 0 && r.barsInPanel === 0,
+        `${r.panelButtons} button(s) in the panel, ${r.barsInPanel} of them .automate - set FAUCET_DONATION_ADDRESS/FAUCET_MAINTENANCE_ADDRESS to measure the configured path`);
+    }
+
+    // THE CHIP IS BEHIND A CONFIGURED MINING ADDRESS, which my first version did not check: with
+    // FAUCET_MINING_ADDRESS unset the page renders a `.hint` instead and the row failed with "no
+    // .tag chip found" on a correct page. The runner now configures one, so this is a real
+    // measurement rather than a skip - and the guard stays, naming the reason, so the row cannot
+    // quietly become a no-op if that env goes away.
+    if (hasChip && r.chip) {
+      ok(`${path}: the mining chip stays a chip`,
+        !!r.chip && /\btag\b/.test(r.chip.cls) && !/\bautomate\b/.test(r.chip.cls) && r.chip.h < want - 4,
+        r.chip ? `class "${r.chip.cls}", ${r.chip.h}px against the bar's ${want}px`
+               : "no .tag chip rendered - is FAUCET_MINING_ADDRESS set for this run?");
+    }
+
+    // ASKED ONLY WHERE BOTH ELEMENTS EXIST. This is a claim about the hint's position RELATIVE TO
+    // THE BAR, so it needs both: /fund has no `.hint` in its configured state, and the
+    // not-configured page has a hint and no bar - the hint that says no address is configured.
+    // My first guard tested the hint alone and fired on that page with "bar -px", failing a page
+    // that was correct. A relative claim guarded on one of its two subjects is not guarded.
+    if (r.hintTop > 0 && r.bar) {
+      ok(`${path}: and the hint sits below a full-height control`,
+        !!r.bar && r.hintTop >= r.bar.h,
+        `hint top ${r.hintTop}px, bar ${r.bar ? r.bar.h : "-"}px`);
+    }
+    await ctx.close();
+  }
+}
+
 async function checkDonateFitsWithAnAddress(browser, base) {
   const ADDR = "utest1" + "q".repeat(160);          // 166 chars, production's shape
   for (const [w, h] of [[1440, 900], [1536, 864], [1280, 800]]) {
@@ -2976,6 +3093,7 @@ try {
   await checkMobile(browser, BASE);
 
   await checkSubpages(browser, BASE);
+  await checkPanelControlIsTheDesignsBar(browser, BASE);
   await checkDonateFitsWithAnAddress(browser, BASE);
   checkSingleHeader();
 
