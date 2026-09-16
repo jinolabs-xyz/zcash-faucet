@@ -143,4 +143,27 @@ li[data-active] .mark{border-color:var(--orange);border-top-color:transparent;an
  * and the index card is what is missing a floor, not the chip everywhere. */
 @media (max-width:56rem){
   .card.claim .tag,.card.claim .tabs button{min-height:44px}
+  /* THE OTHER THREE, and they are the same mechanism, not three bugs. Each was a control that
+   * carried `.btn`/`.btn-sm` on main - globals.css:187 is `.app .btn-sm{min-height:44px}` - and
+   * the transcription onto a redesign class took the floor away with the class. Measured by the
+   * red-team at 375x667: input.prompt 41, button.automate 40, button.linkbtn 16, all three green
+   * on e2c5026.
+   *
+   *   .automate is the primary claim button and its rule says `height:calc(3.3*var(--u))`, a
+   *   FIXED height. 3.3 x 14 = 46.2px at the desktop unit, which is over the floor; 3.3 x 12 =
+   *   39.6px at the narrow unit (redesign-shell.css:132), which is under it. I had written that
+   *   it "clears the floor by itself" - measured at the width where the floor does not apply and
+   *   concluded about the width where it does. `min-height` is applied after `height`, so this
+   *   raises it without touching the desktop size.
+   *
+   *   .prompt HAS a floor already - redesign-views.css:101 - scoped to `#lookupform`, which the
+   *   card's address field is not in. Same shape as the `.tag` floor scoped to `.view.sub`.
+   *
+   *   .linkbtn declares `padding:0` and no height at all, so it is its line-box: 16px, roughly a
+   *   third of the floor, on "Make a throwaway address and key" - the entry to the whole flow
+   *   for anyone who does not already have a testnet address.
+   *
+   * There are now six separately scoped 44px rules in this tree. The single unscoped floor that
+   * deletes all six is filed for after the swap (CTO, 08:04Z); this is not it. */
+  .card.claim .prompt,.card.claim .automate,.card.claim .linkbtn{min-height:44px}
 }
