@@ -1675,6 +1675,15 @@ check "config.ts reads address env vars at all, so the two readers below have so
 # mentioning one is not the same as the guard reading it - the same trap the #607 reader has.
 UIS_CODE="$(grep -vE '^[[:space:]]*(//|\*|/\*)' "$REPO/scripts/ui-smoke.mjs")"
 UIS_ENVS="$(printf '%s\n' "$UIS_CODE" | grep -oE 'FAUCET_[A-Z_]*ADDRESS' | sort -u)"
+# AN EMPTY SET ORPHANS NOTHING AND PASSES, which is this gate's own defect one turn further in
+# (SDE-UI, L38 on this PR). I guarded CFG_ENVS against emptiness fifteen lines up and did not
+# guard the other two: rename every FAUCET_*ADDRESS out of ui-smoke.mjs and UIS_ENVS comes back
+# empty, the loop below never runs, and the row reports green - so deleting the #605 guard this
+# PR exists to protect is invisible to the row protecting it. The detector's second question is
+# the one that catches it: not just what a constant is the truth of, but what the reader does
+# when it reads NOTHING.
+check "the smoke guards on address envs at all, so an empty read cannot pass as agreement" \
+  '[ -n "$UIS_ENVS" ]'
 UIS_ORPHAN=""
 while IFS= read -r n; do
   [ -n "$n" ] || continue
@@ -1690,7 +1699,17 @@ fi
 
 # And the ui job's side: a name set in CI that the product does not read configures nothing, and the
 # page then renders its not-configured card while ci.yml looks correct to a reader.
-CI_ENVS="$(awk '/^  ui:/,/^  [a-z][a-z0-9-]*:$/' "$CIWF" | grep -oE '^ +FAUCET_[A-Z_]*ADDRESS' | tr -d ' ' | sort -u)"
+# THE RANGE HAS TO SKIP ITS OWN OPENING LINE. `/^  ui:/,/^  [a-z...]:$/` opens AND closes on
+# `  ui:` itself, because the job header matches the end pattern too - the range yielded exactly
+# one line, CI_ENVS was empty, and the orphan loop below never ran. The row was vacuous from the
+# moment I wrote it, and the emptiness guard above is what surfaced it on its first run. Flagged
+# rather than quietly corrected: this is the same defect the guard exists for, found by the guard,
+# in the code that ships the guard.
+CI_ENVS="$(awk '/^  ui:$/{f=1;next} f && /^  [a-z][a-z0-9-]*:$/{f=0} f' "$CIWF" | grep -oE '^ +FAUCET_[A-Z_]*ADDRESS' | tr -d ' ' | sort -u)"
+# Same guard, same reason: the ui job going back to setting no address at all is exactly the
+# state #605 closed, and an empty set would let it through this row in silence.
+check "and the ui job sets address envs at all, so reverting #605 cannot pass as agreement" \
+  '[ -n "$CI_ENVS" ]'
 CI_ORPHAN=""
 while IFS= read -r n; do
   [ -n "$n" ] || continue
