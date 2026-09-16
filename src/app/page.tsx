@@ -1734,7 +1734,7 @@ export default function Home() {
                   {r?.reason || (sub ? "This network has had its share for now." : "This connection has had its share for now.")}{" "}
                   {whenText ? <>Try again at <strong>{whenText}</strong> (in {dur(remain)}).</> : <>Try again in {dur(remain)}.</>}
                 </p>
-                <p className="fine">A different address will not help: the limit is on the connection, not the address. The faucet is up.</p>
+                <p className="fine">A different address will not help — the limit is on the connection. The faucet is up.</p>
                 <div className="row"><button className="tag" type="button" onClick={again}>Start over</button></div>
               </div>
             );

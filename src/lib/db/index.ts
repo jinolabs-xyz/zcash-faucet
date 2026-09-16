@@ -134,7 +134,7 @@ async function whyBlocked(
         // actually reason about.
         reason:
           `This connection has used all ${ipDailyMax} of its drips for the last ${Math.round(cooldownSeconds / 3600)} hours. ` +
-          "Everyone on the same network shares this limit, so a different address will not help. Try again later.",
+          "Everyone on the same network shares this limit.",
         retryAfterSeconds: Math.max(1, (row?.frees_at ?? now) - now),
       };
     }

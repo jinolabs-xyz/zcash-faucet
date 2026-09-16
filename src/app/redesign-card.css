@@ -44,7 +44,7 @@
 .assistant-head .ring{width:calc(2.16*var(--u));height:calc(2.16*var(--u));border-radius:50%;background:var(--orange-soft);display:grid;place-items:center;color:var(--orange)}
 .assistant-head .ring canvas.g{width:48%;height:48%}
 .tabs{display:flex;gap:calc(.4*var(--u))}
-.tabs button{white-space:nowrap;border:calc(.06*var(--u)) solid var(--hair);background:none;height:calc(2*var(--u));padding:0 calc(.9*var(--u));border-radius:calc(.5*var(--u));font-size:calc(.85*var(--u));font-weight:600;color:var(--muted);cursor:pointer}
+.tabs button{white-space:nowrap;border:calc(.06*var(--u)) solid var(--prompt-border);background:none;height:calc(2*var(--u));padding:0 calc(.9*var(--u));border-radius:calc(.5*var(--u));font-size:calc(.85*var(--u));font-weight:600;color:var(--muted);cursor:pointer}
 .tabs button[aria-selected="true"]{background:var(--ink);color:var(--surface);border-color:var(--ink)}
 .tabs button[data-parked] small{font-weight:500;margin-left:calc(.5*var(--u));opacity:.8}
 .fieldwrap{display:flex;flex-direction:column;gap:calc(.45*var(--u))}
