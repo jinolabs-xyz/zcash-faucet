@@ -1543,9 +1543,20 @@ RB_LEGACY="$(sed -n 's/^[[:space:]]*#[[:space:]]*LEGACY-REASON:[[:space:]]*\(.*[
 
 check "redeploy.sh decides on reason strings at all, so the reader below has something to read" \
   '[ -n "$RB_LITERALS" ]'
-check "the chain set is written at more than one call site" '[ "$RB_CHAIN_SITES" -ge 2 ]'
-check "and every call site globs on the SAME set, so one cannot be updated alone" \
-  '[ -n "$RB_CHAIN" ] && [ "$(printf "%s\n" "$RB_CHAIN" | wc -l | tr -d " ")" = "1" ]'
+# Written out rather than passed to check(): the expressions read the variables above, and
+# inside a quoted check string shellcheck cannot see that use and calls them dead. Saying the
+# counts in the failure is worth more than the one-liner anyway.
+if [ "$RB_CHAIN_SITES" -ge 2 ]; then
+  ok "the chain set is written at more than one call site"
+else
+  bad "the chain set is written at more than one call site (found $RB_CHAIN_SITES)"
+fi
+RB_CHAIN_DISTINCT="$(printf '%s\n' "$RB_CHAIN" | wc -l | tr -d ' ')"
+if [ -n "$RB_CHAIN" ] && [ "$RB_CHAIN_DISTINCT" = "1" ]; then
+  ok "and every call site globs on the SAME set, so one cannot be updated alone"
+else
+  bad "and every call site globs on the SAME set, so one cannot be updated alone ($RB_CHAIN_DISTINCT distinct pattern(s) across $RB_CHAIN_SITES site(s))"
+fi
 
 # THE APP SIDE, with comments removed, and that is the whole difficulty. The prose above the
 # re-scanning return QUOTES the spelling it replaced - `This said "node syncing"` - so a plain
@@ -1615,14 +1626,13 @@ fi
 # exclusion redeploy.sh states in so many words, and pinning the others would be asserting a
 # decision nobody recorded. Matched the way the shell matches, from the literals just read.
 RB_WRONG=""
-for r in "wallet balance unknown"; do
-  while IFS= read -r lit; do
-    [ -n "$lit" ] || continue
-    case "$r" in *"$lit"*) RB_WRONG="$RB_WRONG [$r <- $lit]" ;; esac
-  done <<EOF
+RB_EXCLUDED="wallet balance unknown"
+while IFS= read -r lit; do
+  [ -n "$lit" ] || continue
+  case "$RB_EXCLUDED" in *"$lit"*) RB_WRONG="$RB_WRONG [$RB_EXCLUDED <- $lit]" ;; esac
+done <<EOF
 $RB_LITERALS
 EOF
-done
 if [ -z "$RB_WRONG" ]; then
   ok "and the reason #596 ruled IS the image's fault still falls through to a rollback"
 else
