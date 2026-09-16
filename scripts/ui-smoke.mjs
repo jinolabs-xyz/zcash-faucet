@@ -208,15 +208,27 @@ async function checkChunkOrderIdentity(browser) {
     const linksBefore = await order();
     const before = await snap();
     await p.evaluate(() => {
+      // REVERSE THE WHOLE LIST, not "last to the front". Moving only the last sheet turns
+      // [A,B,C] into [C,A,B]: A and B keep their relative order, so a tie between them is never
+      // exercised and this check cannot see it. With exactly two sheets the two operations are
+      // the same thing, which is why it went unnoticed - the defect is invisible until the page
+      // links a third, and Next splits CSS per route. Inserting each sheet before the original
+      // first one, from the back, reverses in place without moving them past the rest of <head>.
       const ls = [...document.querySelectorAll('link[rel="stylesheet"]')];
       if (ls.length < 2) return;
-      ls[0].parentNode.insertBefore(ls[ls.length - 1], ls[0]);   // last chunk linked first
+      const anchor = ls[0];
+      for (let i = ls.length - 1; i >= 1; i--) anchor.parentNode.insertBefore(ls[i], anchor);
     });
     await p.waitForTimeout(400);
     const linksAfter = await order();
     const after = await snap();
 
     const flipped = linksBefore.length >= 2 && linksBefore.join() !== linksAfter.join();
+    // A NODE THAT DISAPPEARS BETWEEN THE SWEEPS IS A CHANGE, and `Math.min` walked only as far as
+    // the shorter list, so it counted as nothing. The comparison is positional, so different
+    // lengths also mean every index after the first divergence is comparing two different
+    // elements - the row would be reading noise and reporting it as signal.
+    const sameShape = before.length === after.length;
     let moved = 0, deltas = 0, first = "";
     for (let i = 0; i < Math.min(before.length, after.length); i++) {
       const a = before[i], b2 = after[i];
@@ -229,10 +241,11 @@ async function checkChunkOrderIdentity(browser) {
       }
     }
     ok(`${theme}${keyboard ? ", keyboard-focused," : ","} the page is identical with the CSS chunks linked in the other order`,
-      flipped && before.length >= 50 && moved === 0,
+      flipped && sameShape && before.length >= 50 && moved === 0,
       !flipped ? `the flip did not take: ${linksBefore.length} stylesheet(s)`
+        : !sameShape ? `the page changed shape under the flip: ${before.length} nodes before, ${after.length} after`
         : before.length < 50 ? `only ${before.length} nodes rendered, too few to judge`
-        : `${moved} of ${before.length} nodes moved, ${deltas} deltas; first: ${first}`);
+        : `${linksBefore.length} stylesheets reversed; ${moved} of ${before.length} nodes moved, ${deltas} deltas; first: ${first}`);
     await c.close();
   }
   }
@@ -321,14 +334,21 @@ async function checkHoverUnderAFlip(browser) {
       [...document.querySelectorAll('link[rel="stylesheet"]')].map((l) => l.href));
     const sheetsBefore = await order();
     await p.evaluate(() => {
+      // The same reversal as the identity pass above, and deliberately the same code: two
+      // instruments that flip the cascade differently would disagree about what "the other
+      // order" means, and only one of them would be right.
       const ls = [...document.querySelectorAll('link[rel="stylesheet"]')];
-      if (ls.length >= 2) ls[0].parentNode.insertBefore(ls[ls.length - 1], ls[0]);
+      if (ls.length < 2) return;
+      const anchor = ls[0];
+      for (let i = ls.length - 1; i >= 1; i--) anchor.parentNode.insertBefore(ls[i], anchor);
     });
     await p.waitForTimeout(400);
     const sheetsAfter = await order();
     const flipped = sheetsBefore.length >= 2 && sheetsBefore.join() !== sheetsAfter.join();
     const after = await sweep();
 
+    // Same as the identity pass: a link vanishing between sweeps is a change, not a non-event.
+    const sameCount = before.length === after.length;
     let moved = 0, first = "";
     for (let k = 0; k < Math.min(before.length, after.length); k++) {
       if (before[k] === after[k]) continue;
@@ -341,10 +361,11 @@ async function checkHoverUnderAFlip(browser) {
     // it would go red the next time the design drops a footer link, for a reason that has
     // nothing to do with the cascade.
     ok(`${theme}: no link's HOVER styling changes when the CSS chunks are linked in the other order`,
-      flipped && before.length >= 4 && moved === 0,
+      flipped && sameCount && before.length >= 4 && moved === 0,
       !flipped ? `the flip did not take: ${sheetsBefore.length} stylesheet(s)`
+        : !sameCount ? `the link set changed under the flip: ${before.length} hovered before, ${after.length} after`
         : before.length < 4 ? `only ${before.length} links hovered, too few to judge`
-        : `${before.length} links hovered, ${moved} moved${first ? "; first: " + first : ""}`);
+        : `${sheetsBefore.length} stylesheets reversed; ${before.length} links hovered, ${moved} moved${first ? "; first: " + first : ""}`);
     await c.close();
   }
 }
