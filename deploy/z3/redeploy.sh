@@ -298,6 +298,14 @@ reason_is_not_the_code() {
     # to arrive here spelled "node syncing" and was already classified this way, so keeping
     # it here is preserving the behaviour the rename would otherwise have changed, not
     # widening the set. "node syncing" stays matched: older images still emit it.
+    #
+    # LEGACY-REASON: node syncing -- the pre-#604 spelling, kept deliberately. No current
+    # image emits it; a rolled-back one does, and it has to land here or the rollback we
+    # just performed reads as a code fault and gets rolled back again. The marker is read
+    # by deploy/z3/tests/suites/repo.sh, which requires every OTHER literal in these arms
+    # to be one src/lib/readiness.ts can still produce. Without a machine-readable
+    # exception the only way to say "kept on purpose" was the sentence above it, and a
+    # sentence cannot tell a deliberate survivor from a rename someone did not finish.
     *"behind the network"*|*"node frozen"*|*"node syncing"*|*"wallet re-scanning"*) return 0 ;;
     *) return 1 ;;
   esac
