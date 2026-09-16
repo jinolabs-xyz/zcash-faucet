@@ -57,7 +57,15 @@
  *
  * (0,3,0) against S2a's (0,2,0), scoped to the subpage view rather than raised globally,
  * because the index's claim card SHOULD keep its padding - it is one card's placeholder, not a
- * mistake to undo everywhere. */
+ * mistake to undo everywhere.
+ *
+ * 2026-09-16, #583: that last paragraph is no longer true and the rules below are left alone
+ * anyway. The index's card now has the real `div.panel` wrapper, so `.stage .card.claim`'s
+ * padding is deleted and `padding:0` here has nothing left to undo; `max-height`, the flex
+ * column and the two child rules are now also stated unscoped in redesign-card.css. These
+ * three are therefore redundant rather than wrong - identical declarations at (0,3,0) over
+ * (0,2,0), so the cascade has no choice to get wrong. Deleting them is a subpages change with
+ * its own /donate and /fund measurements, and this PR has not made them. */
 .view.sub .card.claim{padding:0;max-height:100%;display:flex;flex-direction:column}
 .view.sub .card.claim > .panel{flex:1 1 auto;min-height:0;overflow:auto}
 .view.sub .card.claim > .card-copy{flex:none}
