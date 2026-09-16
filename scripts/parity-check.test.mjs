@@ -241,7 +241,7 @@ test("with everything wired, a DROPPED rule is a divergence and fails", () => {
     spec: SPEC_WITH_EXTRA, shipped: ".a{color:red}\n",
     entry: ALL_VIEWS, shell: SHELL_SRC, pages: ALL_PAGES,
   });
-  assert.match(r.out, /transcription is complete \(4 views wired, 3 pages in the shell\)/);
+  assert.match(r.out, /the transcription is complete, so DROPPED is gated too/);
   assert.equal(r.code, 1);
   assert.match(r.out, /\.gone/);
 });
@@ -487,4 +487,19 @@ test("PARITY_PRINT emits the kind field, so the generator cannot reintroduce unk
   });
   assert.match(r.out, /"kind"/);
   assert.match(r.out, /divergence \| override/);
+});
+
+test("a spec held by its slice gate says so, instead of claiming mid-transcription at 4/4 and 3/3", () => {
+  const r = runParity({
+    spec: SPEC_WITH_EXTRA, shipped: ".a{color:red}\n",
+    entry: ALL_VIEWS, shell: SHELL_SRC, pages: ALL_PAGES,
+    sheets: { "card.css": DECL("design/spec/spec.css") },
+    args: ["src/app/shipped.css", "src/app/card.css"],
+    departures: SLICE([F_IMPORT, F_MARKUP]),
+  });
+  // everything the views/pages tally looks at is wired, and the slice gate is what still holds it
+  assert.match(r.out, /held by the slice gate, not by the views/);
+  assert.match(r.out, /which this spec does not consult/);
+  assert.doesNotMatch(r.out, /mid-transcription/);
+  assert.equal(r.code, 0, r.out);
 });
