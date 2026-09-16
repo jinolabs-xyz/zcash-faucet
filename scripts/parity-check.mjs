@@ -245,30 +245,47 @@ const declared = Object.fromEntries(
 // `.strip .kv b{font-size:calc(.95*var(--u))}` from redesign-shell.css and watched the strip
 // figures fall to .78u with the check silent; changing .95 to .96 was caught, because that ADDS
 // a body the spec does not have.
-// A SELECTOR SPLIT ACROSS TWO RULES IS THE SAME CSS AS ONE MERGED RULE, and until this it was
-// reported as a divergence. The set members are whole rule BODIES, so S2's spec, which writes
-// `.pc .figs b{overflow-wrap:anywhere}` at line 276 and the rest of it at line 293, has TWO
-// members where #567's sheet has one containing exactly the same five declarations. Measured on
-// #567's head: `.pc .figs b` came back as "declarations differ" with an empty difference on both
-// sides. That is noise rather than danger - a merge cannot turn a real difference into a green -
-// but the cost is real and specific: it invites a departures entry for a non-divergence, which
-// is the nine-invented-reasons mistake this file already carries a warning about, and I was
-// about to write one.
+// TWO RULES FOR ONE SELECTOR ARE WHAT A BROWSER APPLIES, NOT TWO THINGS TO MATCH. The sets hold
+// whole rule BODIES, so a selector the spec splits and the shipped sheet merges read as a
+// divergence with an EMPTY difference on both sides - `.pc .figs b`, measured on #567's head.
+// Worse, the split can make a spec declaration DEAD: S2's spec has
+//   .pc .figs .big b{font-size:clamp(calc(1.2*var(--u)),1.6vw,calc(1.8*var(--u)))}   line 275
+//   .pc .figs .big b{font-size:calc(1.8*var(--u));color:...;font-family:...}         line 294
+// Same selector, same specificity, later wins, so the clamp never applies in the preview either.
+// Requiring the shipped sheet to carry it would be requiring it to transcribe a dead rule - and
+// #567 round one did exactly that and rendered 23.04px where the preview rendered 25.2. The
+// round-two measurement at 900/1100/1440/1760 reads 23.4/19.8/25.2/25.2 in both, and 19.8 at
+// 1100 where the clamp would give 17.6 is the rendered proof that the clamp is dead.
 //
-// SO THE COMPARISON DROPS TO DECLARATIONS - BUT ONLY WHERE THAT IS SAFE. The body-level set
-// exists to protect one real pattern: a rule declaring the SAME PROPERTY TWICE as a fallback
-// (`color:red; color:color-mix(...)`), where the order decides what an old browser gets and a
-// declaration set would call the two orders equal. So where either side declares a property more
-// than once, the old body-level comparison stands and nothing about that case changes.
+// So a key's rules are reduced the way the cascade reduces them: concatenated in source order,
+// and for each property only the LAST RULE that declares it survives.
+//
+// WITHIN one rule, a repeated property is kept as an ordered pair, because `color:red;
+// color:color-mix(...)` is a deliberate fallback - an old browser takes the red - and the
+// reverse ships something different. Across rules there is no such thing: a property declared
+// again in a later rule is simply dead where it was declared first.
 const propOf = (d) => d.slice(0, d.indexOf(":")).trim();
-const declsOf = (set) => [...set].flatMap((b) => b.split(";").map((d) => d.trim()).filter(Boolean));
-const repeatsAProperty = (decls) => new Set(decls.map(propOf)).size !== decls.length;
+const effectiveDecls = (set) => {
+  const rules = [...set].map((b) => b.split(";").map((d) => d.trim()).filter(Boolean));
+  const lastRuleFor = new Map();
+  rules.forEach((decls, i) => decls.forEach((d) => lastRuleFor.set(propOf(d), i)));
+  const out = new Map();                       // property -> its declarations, in order
+  rules.forEach((decls, i) => decls.forEach((d) => {
+    if (lastRuleFor.get(propOf(d)) !== i) return;       // killed by a later rule
+    const k = propOf(d);
+    if (!out.has(k)) out.set(k, []);
+    out.get(k).push(d);
+  }));
+  return out;
+};
 const sameBodies = (a, b) => {
-  if (a.size === b.size && [...a].every((x) => b.has(x))) return true;   // identical as written
-  const da = declsOf(a), db = declsOf(b);
-  if (repeatsAProperty(da) || repeatsAProperty(db)) return false;        // the fallback pattern
-  const sa = new Set(da), sb = new Set(db);
-  return sa.size === sb.size && [...sa].every((x) => sb.has(x));
+  const ma = effectiveDecls(a), mb = effectiveDecls(b);
+  if (ma.size !== mb.size) return false;
+  for (const [prop, va] of ma) {
+    const vb = mb.get(prop);
+    if (!vb || vb.length !== va.length || va.some((x, i) => x !== vb[i])) return false;
+  }
+  return true;
 };
 const added = [...ship.keys()].filter((s) => !spec.has(s));
 const changed = [...ship.keys()].filter((s) => spec.has(s) && !sameBodies(ship.get(s), spec.get(s)));
