@@ -1775,6 +1775,11 @@ echo "== repo: the runbook's commands can be run from where it says to run them"
 # These rows tie the page to what is on disk. They cannot check that a command WORKS - only the box
 # can - but they catch the two shapes that have actually bitten: a compose call in a directory with
 # no default-named file, and an unresolved placeholder standing where a host should be.
+# DOUBLE-QUOTED CHECK EXPRESSIONS, unlike most of this file. A count used ONLY inside a
+# single-quoted `check` argument is invisible to shellcheck, which reports SC2034 "appears
+# unused" and fails the shell job. The neighbours escape it because they also use their
+# variable unquoted in a loop; these two do not. Expanding at definition is equivalent here -
+# both are integers computed one line above.
 OPS="$REPO/OPERATIONS.md"
 check "OPERATIONS.md exists, so the rows below are reading something" '[ -s "$OPS" ]'
 
@@ -1782,7 +1787,7 @@ check "OPERATIONS.md exists, so the rows below are reading something" '[ -s "$OP
 # rather than grepped for absence: `! grep -q` under pipefail is a false pass.
 Z3_NAKED="$(grep -n 'zcash-faucet/deploy/z3 && docker compose' "$OPS" | grep -vc 'compose -f docker-compose.faucet.yml' || true)"
 check "every runbook compose call in deploy/z3 passes -f, because that directory has no default-named compose file" \
-  '[ "$Z3_NAKED" = "0" ]'
+  "[ $Z3_NAKED -eq 0 ]"
 check "and the file it names is the one that is actually there" \
   '[ -f "$REPO/deploy/z3/docker-compose.faucet.yml" ] && [ ! -f "$REPO/deploy/z3/docker-compose.yml" ] && [ ! -f "$REPO/deploy/z3/compose.yaml" ]'
 
@@ -1790,7 +1795,7 @@ check "and the file it names is the one that is actually there" \
 # it is not checkable. <box> was the one that sent the owner to a laptop.
 PLACEHOLDER="$(grep -c 'root@<box>' "$OPS" || true)"
 check "the runbook names a real ssh host rather than an unresolved <box> placeholder" \
-  '[ "$PLACEHOLDER" = "0" ]'
+  "[ $PLACEHOLDER -eq 0 ]"
 
 # NOT ADDING A MARKER-PATH ROW HERE. I wrote one and my own mutant refused it: renaming the
 # watchdog's marker to `...-healing` left my `grep -q "miner-parked-by-fork-heal"` matching, because
