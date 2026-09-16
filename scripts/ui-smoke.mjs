@@ -1150,6 +1150,45 @@ async function showView(page, v) {
   await page.locator(`[data-testid="view-${v}"]`).waitFor({ state: "visible", timeout: 5000 });
 }
 
+async function checkServedHtmlCarriesTheHero() {
+  // THE BYTES THE SERVER SENDS, WITH NO BROWSER IN THE WAY.
+  //
+  // The rows in checkFirstPaint read the DOM with the status request held, which is the right
+  // instrument for "the island renders chips before its data arrives" - but it is NOT the claim
+  // this PR is making. The claim is about the SERVED PAGE: that `{status?.challenge === "pow"}`
+  // meant the sentence never reached a reader with JavaScript off, on any deployment, ever. A
+  // hydrated DOM cannot testify to that no matter how early it is sampled, because by the time
+  // there is a DOM the island has already run (L33: the test exercises the mechanism, the
+  // invocation exercises the artefact). So this one asks the server and reads the response body.
+  const res = await fetch(`${BASE}/`, { headers: { accept: "text/html" } });
+  const html = await res.text();
+
+  const has = (re) => re.test(html);
+  const chips = ["wallet", "node", "miner", "sends"].filter((n) => html.includes(`data-chip="${n}"`));
+
+  ok("the served HTML carries the four hero chips before any script runs",
+    res.ok && chips.length === 4, `${res.status}, chips in the body: ${chips.join(", ") || "none"}`);
+
+  // The regression this whole PR exists for. Kept as its own row and worded as the defect, so
+  // that if the gate is ever written back the failure names what went wrong rather than a count.
+  ok("the served HTML carries the puzzle sentence, which no server render carried before",
+    has(/solves a short puzzle instead of a CAPTCHA/),
+    has(/solves a short puzzle instead of a CAPTCHA/) ? `present in ${html.length} bytes`
+      : `absent from ${html.length} bytes - the status gate is back`);
+
+  // Unknown, not a figure: a server render has been told nothing, and a number in these bytes
+  // would be a number invented before the wallet was asked.
+  const untold = ["wallet", "node", "miner", "sends"].every((n) => {
+    const i = html.indexOf(`data-chip="${n}"`);
+    return i >= 0 && /unknown/i.test(html.slice(i, i + 400));
+  });
+  ok("and every one of them says unknown in those bytes, not a figure",
+    untold, untold ? "all four unknown" : "a chip carries a value the server was never told");
+
+  ok("and the ops chip is absent from a server render, which has heard nothing about the box",
+    !html.includes('data-chip="box"'), html.includes('data-chip="box"') ? "OPS ATTENTION in the served HTML" : "absent");
+}
+
 async function checkMinerPanel(page) {
   // S3 REPLACED THE DISCLOSURE. The miner used to live behind a "More details" toggle in
   // the legacy status view; the design's Status view has no disclosure at all, because
@@ -2100,6 +2139,7 @@ try {
     ok("and the address is in the body", req.body.includes(`"address":"${lookupAddr}"`), req.body.slice(0, 60));
     ok("and the page answers that a shielded balance is private", /Shielded balances are private/.test(await page.locator("#lans").innerText()));
   }
+  await checkServedHtmlCarriesTheHero();
   await checkMinerPanel(page);
   // The claim flow below drives input.input and button.btn-primary, which belong to the
   // claim view. Leave the nav where the rest of this file expects to find things.
