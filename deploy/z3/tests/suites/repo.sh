@@ -1785,7 +1785,15 @@ check "OPERATIONS.md exists, so the rows below are reading something" '[ -s "$OP
 
 # deploy/z3 has no docker-compose.yml, so every invocation naming that directory needs -f. Counted
 # rather than grepped for absence: `! grep -q` under pipefail is a false pass.
+Z3_CALLS="$(grep -c 'zcash-faucet/deploy/z3 && docker compose' "$OPS" || true)"
 Z3_NAKED="$(grep -n 'zcash-faucet/deploy/z3 && docker compose' "$OPS" | grep -vc 'compose -f docker-compose.faucet.yml' || true)"
+# THE SET FIRST, THEN ITS VIOLATORS. An empty set has no violators: delete every one of these lines
+# from the page and `grep -vc` counts zero non-matching lines out of zero, so the row below passes
+# while guarding nothing. SDE-Infra's block on this PR, and it is the second question in L38 - not
+# only what a constant is the truth of, but what the reader does when it reads NOTHING. I found
+# this exact shape in their #620 this afternoon and then shipped it here.
+check "the runbook still tells an operator how to restart the faucet at all" \
+  "[ $Z3_CALLS -gt 0 ]"
 check "every runbook compose call in deploy/z3 passes -f, because that directory has no default-named compose file" \
   "[ $Z3_NAKED -eq 0 ]"
 check "and the file it names is the one that is actually there" \
@@ -1796,6 +1804,14 @@ check "and the file it names is the one that is actually there" \
 PLACEHOLDER="$(grep -c 'root@<box>' "$OPS" || true)"
 check "the runbook names a real ssh host rather than an unresolved <box> placeholder" \
   "[ $PLACEHOLDER -eq 0 ]"
+
+# ABSENCE OF A PLACEHOLDER IS NOT PRESENCE OF THE HOST, and the defect this PR opens with is the
+# MISSING ssh line, not a wrong one. Without this the fix can be deleted and the gate stays green.
+# Ordering matters as much as presence: the ssh line below the marker read is the same defect.
+SSH_LINE="$(grep -n 'ssh root@zcashfaucet' "$OPS" | head -1 | cut -d: -f1)"
+MARKER_CAT="$(grep -n 'cat /var/lib/faucet-watchdog/miner-parked-by-fork-heal' "$OPS" | head -1 | cut -d: -f1)"
+check "the fork-park block tells the operator to ssh to the box BEFORE reading a path that only exists there" \
+  "[ -n '$SSH_LINE' ] && [ -n '$MARKER_CAT' ] && [ $SSH_LINE -lt $MARKER_CAT ]"
 
 # NOT ADDING A MARKER-PATH ROW HERE. I wrote one and my own mutant refused it: renaming the
 # watchdog's marker to `...-healing` left my `grep -q "miner-parked-by-fork-heal"` matching, because
