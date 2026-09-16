@@ -315,7 +315,11 @@ test("with only ONE of them, still not gated - they are ANDed", () => {
   const r = runParity({
     spec: SPEC_WITH_EXTRA, shipped: ".a{color:red}\n",
     entry: 'import "./card.css";\nexport default function P(){ return <div/> }\n',
-    sheets: { "card.css": DECL("design/spec/spec.css") + ".x{color:red}\n" },
+    // card.css is PASSED as well as imported: a sheet the app imports and CI does not compare
+    // is the hole the coverage gate now closes, so a fixture may not model it. Its body is
+    // empty so the rule counts these two cases assert on are exactly what they were.
+    sheets: { "card.css": DECL("design/spec/spec.css") },
+    args: ["src/app/shipped.css", "src/app/card.css"],
     departures: SLICE([F_IMPORT, F_MARKUP]),
   });
   assert.match(r.out, /slice gate: 1\/2 facts hold/);
@@ -326,7 +330,11 @@ test("and with both, DROPPED is enforced for that spec", () => {
   const r = runParity({
     spec: SPEC_WITH_EXTRA, shipped: ".a{color:red}\n",
     entry: 'import "./card.css";\nexport default function P(){ return <div data-phase="ready"/> }\n',
-    sheets: { "card.css": DECL("design/spec/spec.css") + ".x{color:red}\n" },
+    // card.css is PASSED as well as imported: a sheet the app imports and CI does not compare
+    // is the hole the coverage gate now closes, so a fixture may not model it. Its body is
+    // empty so the rule counts these two cases assert on are exactly what they were.
+    sheets: { "card.css": DECL("design/spec/spec.css") },
+    args: ["src/app/shipped.css", "src/app/card.css"],
     departures: SLICE([F_IMPORT, F_MARKUP]),
   });
   assert.match(r.out, /slice gate: 2\/2 facts hold/);
@@ -347,3 +355,87 @@ test("a fact keyed on the sheet existing would arm early, so it is not what is d
   assert.equal(r.code, 0);
 });
 
+
+// ---------------------------------------------------------------------------------------
+// SHEET DISCOVERY, which was a hand-written list of two entry files and is now a walk.
+// Measured on #576's branch before this change: every redesign import moves out of
+// `src/app/page.tsx` into `src/components/Shell.tsx` and is spelled `@/app/...`, both CI
+// invocations exit 0, and `redesign-subpages.css` is never compared. These fix that shape in
+// place so it cannot come back quietly.
+
+const SPEC_DECL_LINE = DECL("design/spec/spec.css");
+
+test("a sheet imported from a component, by alias, is discovered and must be compared", () => {
+  const r = runParity({
+    spec: SPEC,
+    shipped: SPEC_DECL_LINE + SPEC,
+    departures: {},
+    entry: 'import "./shipped.css";\n',
+    shell: 'import "@/app/elsewhere.css";\n',
+    sheets: { "elsewhere.css": SPEC_DECL_LINE + SPEC },
+    args: ["src/app/shipped.css"],
+  });
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /src\/app\/elsewhere\.css/);
+  assert.match(r.out, /not one of its rules is compared/);
+});
+
+test("and passing it satisfies the gate, so the failure above is about coverage and not the sheet", () => {
+  const r = runParity({
+    spec: SPEC,
+    shipped: SPEC_DECL_LINE + SPEC,
+    departures: {},
+    entry: 'import "./shipped.css";\n',
+    shell: 'import "@/app/elsewhere.css";\n',
+    sheets: { "elsewhere.css": SPEC_DECL_LINE + SPEC },
+    args: ["src/app/shipped.css", "src/app/elsewhere.css"],
+  });
+  assert.equal(r.code, 0, r.out);
+});
+
+test("a relative import from a nested component resolves to the sheet it names", () => {
+  const r = runParity({
+    spec: SPEC,
+    shipped: SPEC_DECL_LINE + SPEC,
+    departures: {},
+    entry: 'import "./shipped.css";\n',
+    shell: 'import "../app/elsewhere.css";\n',
+    sheets: { "elsewhere.css": SPEC_DECL_LINE + SPEC },
+    args: ["src/app/shipped.css"],
+  });
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /src\/app\/elsewhere\.css/);
+});
+
+test("sources that import no CSS at all are a broken walk, not an empty answer", () => {
+  const r = runParity({
+    spec: SPEC,
+    shipped: SPEC_DECL_LINE + SPEC,
+    departures: {},
+    entry: "export default function P() { return null; }\n",
+    shell: "export function Shell() { return null; }\n",
+    sheets: { "globals.css": "body{margin:0}\n" },
+    args: ["src/app/shipped.css"],
+  });
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /[Ss]heet discovery is broken/);
+});
+
+// AND ONE THAT SEPARATES THE TWO HALVES. The two cases above need BOTH the walk (to see the
+// sheet) and the coverage gate (to object), so either half being reverted kills both of them
+// and neither says which broke. This one exercises the walk ALONE: an undeclared sheet is
+// caught by a gate that predates this change, so it fails when discovery regresses and passes
+// when only the coverage gate is removed.
+test("the walk alone is what finds a component-imported sheet, declared or not", () => {
+  const r = runParity({
+    spec: SPEC,
+    shipped: SPEC_DECL_LINE + SPEC,
+    departures: {},
+    entry: 'import "./shipped.css";\n',
+    shell: 'import "@/app/elsewhere.css";\n',
+    sheets: { "elsewhere.css": SPEC },     // no @spec line
+    args: ["src/app/shipped.css"],
+  });
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /src\/app\/elsewhere\.css does not declare a spec/);
+});
