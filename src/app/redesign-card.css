@@ -73,6 +73,18 @@
  * The rest of this sheet is clear: the L28 sweep over globals' element selectors (h1-h6, a, body,
  * html, *) against every rule here whose subject is an element found `.fine b`, `.phase .figs b`,
  * `.tabs button` and `.linkbtn` all safe, because globals styles no `b` and no `button`. */
+/* THE PANEL CONTAINER ITSELF, and it had no rule anywhere. index.html:221. This sheet ships
+ * eight `.phase` DESCENDANT rules and not one for the box they sit in, so all nineteen panels
+ * rendered as flow content where the design draws a bordered card - no padding, no border, no
+ * radius, no surface. Invisible to every content assertion, visible to anyone looking at the
+ * page. Found by SDE-Infra's sweep, which could only fire once the transcription completed:
+ * "in the spec, shipped nowhere" is a codebase-level question and it was gated off until the
+ * panels landed.
+ *
+ * Fourth of this shape on this card, and the only one with the sign reversed - the other three
+ * were a rule present with its precondition absent. This is the precondition present with no
+ * rule at all. */
+.phase{padding:calc(.85*var(--u)) calc(1.1*var(--u));border:calc(.06*var(--u)) solid var(--hair);border-radius:calc(.6*var(--u));background:var(--surface)}
 .phase h3{margin:calc(.35*var(--u)) 0 calc(.3*var(--u));color:var(--ink-3);font-size:calc(1.34*var(--u));font-weight:500;line-height:1.1;letter-spacing:calc(-.05*var(--u));font-family:var(--sans)}
 .phase p{margin:0;font-size:calc(.95*var(--u));color:var(--muted);font-weight:475;line-height:1.35}
 .phase .row{display:flex;flex-wrap:wrap;gap:calc(.6*var(--u));align-items:center;margin-top:calc(.7*var(--u))}
