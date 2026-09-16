@@ -2811,6 +2811,19 @@ async function checkPanelControlIsTheDesignsBar(browser, base) {
         // Read from the DOM rather than from process.env, because what matters is what the page
         // DID, not what the runner was told.
         configured: !!document.querySelector(".card.feature .panel code.addr, .card.claim .panel code.addr"),
+        // THE ELEMENT THAT PROVES THE SPECIFIC ADDRESS ARRIVED, by id, for the #605 guard below.
+        // `configured` above is a panel-scoped class selector and is right for what it does, but
+        // /donate renders TWO `code.addr` - the donation address in the panel and the mining one
+        // in `.card-copy` (donate/page.tsx:112 and :138) - and the only thing keeping the mining
+        // one out of that selector is that its block sits outside `.panel`. That is a layout
+        // fact, not a guarantee: move the mining block into a panel and a row asking "did the
+        // DONATION address arrive" starts answering yes because the MINING one did. UI hit the
+        // same shape on #612, where a page-wide `.figs b` was satisfied by the analytics view's
+        // slots while every claim-card placeholder was gone. The ids are already in the markup
+        // and they are unambiguous, so the guard reads those.
+        donAddr: (document.querySelector("code.addr#don")?.textContent || "").trim().length,
+        fundAddr: (document.querySelector("code.addr#fund")?.textContent || "").trim().length,
+        mineAddr: (document.querySelector("code.addr#mine")?.textContent || "").trim().length,
       };
     });
 
@@ -2869,27 +2882,28 @@ async function checkPanelControlIsTheDesignsBar(browser, base) {
     const addrEnv = path === "/fund" ? "FAUCET_MAINTENANCE_ADDRESS" : "FAUCET_DONATION_ADDRESS";
     const addrSet = !!(process.env[addrEnv] || "").trim();
     ok(`${path}: an address in ${addrEnv} reaches the page, rather than being silently dropped`,
-      !addrSet || r.configured,
+      !addrSet || (path === "/fund" ? r.fundAddr : r.donAddr) > 0,
       addrSet
-        ? (r.configured
-            ? "set, and the page rendered it"
-            : `set, and the page rendered its NOT-configured card - config rejected the value, so every row above measured the wrong configuration`)
+        ? ((path === "/fund" ? r.fundAddr : r.donAddr) > 0
+            ? `set, and the page rendered ${path === "/fund" ? r.fundAddr : r.donAddr} characters of it`
+            : "set, and the page rendered NO address in that slot - config rejected the value, so every row above measured the wrong configuration")
         : "not set for this run, so there is nothing to have arrived");
 
-    // THE CHIP IS BEHIND A CONFIGURED MINING ADDRESS, which my first version did not check: with
-    // FAUCET_MINING_ADDRESS unset the page renders a `.hint` instead and the row failed with "no
-    // .tag chip found" on a correct page. The runner now configures one, so this is a real
-    // measurement rather than a skip - and the guard stays, naming the reason, so the row cannot
-    // quietly become a no-op if that env goes away.
     // THE CHIP IS SKIPPED WHEN IT IS ABSENT, so a mining address that never arrives takes the
     // measurement with it and says nothing. Same implication, same reason as above.
     if (hasChip) {
       const minSet = !!(process.env.FAUCET_MINING_ADDRESS || "").trim();
       ok(`${path}: an address in FAUCET_MINING_ADDRESS reaches the page as a chip`,
-        !minSet || !!r.chip,
-        minSet ? (r.chip ? `set, chip rendered as "${r.chip.cls}"` : "set, and NO .tag chip rendered - the chip row below measured nothing")
+        !minSet || (r.mineAddr > 0 && !!r.chip),
+        minSet ? (r.mineAddr > 0 && r.chip ? `set, ${r.mineAddr} characters rendered beside a "${r.chip.cls}" chip`
+                                           : `set, and the page shows ${r.mineAddr} address characters and ${r.chip ? "a" : "NO"} chip - the chip row below measured nothing`)
                : "not set for this run, so there is no chip to expect");
     }
+    // THE CHIP IS BEHIND A CONFIGURED MINING ADDRESS, which my first version did not check: with
+    // FAUCET_MINING_ADDRESS unset the page renders a `.hint` instead and the row failed with "no
+    // .tag chip found" on a correct page. The runner now configures one, so this is a real
+    // measurement rather than a skip - and the guard stays, naming the reason, so the row cannot
+    // quietly become a no-op if that env goes away.
     if (hasChip && r.chip) {
       ok(`${path}: the mining chip stays a chip`,
         !!r.chip && /\btag\b/.test(r.chip.cls) && !/\bautomate\b/.test(r.chip.cls) && r.chip.h < want - 4,
