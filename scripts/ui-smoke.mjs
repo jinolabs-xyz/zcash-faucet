@@ -2554,6 +2554,66 @@ function checkSingleHeader() {
 // PROSE LINKS ARE NOT SUBJECTS. A link inside a sentence cannot be given a 44px box without
 // wrecking the paragraph and WCAG 2.5.8 exempts it, so they are reported and not failed - which
 // also means this row cannot be quietly satisfied by someone wrapping a control in a <p>.
+// THE THREE CLAIMS #610 MADE AND COULD NOT SUPPORT. SDE-UI blocked it for touching no test
+// file, and proved the point the right way round: they aimed mutants at each claim and published
+// the GREENS. Reverting the tab token, deleting both /limits links and deleting the limit card's
+// copy all left the suite at 290/0, so that number was never evidence about the change.
+//
+// THE CONTRAST ROW IS GATED AT 3.0, not at the 2.03 the first fix reached. ui-smoke.mjs:1063
+// argues borders are exempt from 1.4.11 because THE GLYPH identifies the control; a text-only tab
+// with `background:none` has no glyph, so its border is the only non-text thing saying "control",
+// which is the defect the owner reported. It is inside the gated scope, not outside it.
+async function checkTabAffordanceAndLimits(browser, base) {
+  const rel = (a, b) => {
+    const l = (h) => {
+      const [r, g, bl] = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+      const f = (c) => (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+      return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(bl);
+    };
+    const [x, y] = [l(a), l(b)];
+    return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+  };
+  const hex = (rgb) => {
+    const m = rgb.match(/\d+/g);
+    return "#" + m.slice(0, 3).map((n) => (+n).toString(16).padStart(2, "0")).join("");
+  };
+
+  for (const theme of ["paper", "ink"]) {
+    const ctx = await browser.newContext({ viewport: DESKTOP });
+    const page = await ctx.newPage();
+    await page.goto(base, { waitUntil: "networkidle" });
+    await page.evaluate((t) => { localStorage.setItem("zfaucet_theme", t); document.documentElement.dataset.theme = t; }, theme);
+    await page.waitForTimeout(250);
+    const r = await page.evaluate(() => {
+      const b = [...document.querySelectorAll(".tabs button")].find((e) => e.getAttribute("aria-selected") !== "true");
+      if (!b) return null;
+      const cs = getComputedStyle(b);
+      // THE BACKGROUND IT SITS ON, not the page's. The tab is inside `.panel`, whose own
+      // background is a gradient - so the honest comparison walks up to the first ancestor with
+      // an opaque colour, which is what a reader's eye does.
+      let bg = "rgba(0, 0, 0, 0)", el = b;
+      while (el && (bg === "rgba(0, 0, 0, 0)" || bg === "transparent")) { bg = getComputedStyle(el).backgroundColor; el = el.parentElement; }
+      return { border: cs.borderTopColor, bg, width: cs.borderTopWidth };
+    });
+    ok(`${theme}: the unselected tab's border reaches 3.0:1, so it reads as a control`,
+      !!r && rel(hex(r.border), hex(r.bg)) >= 3.0,
+      r ? `border ${hex(r.border)} on ${hex(r.bg)} = ${rel(hex(r.border), hex(r.bg)).toFixed(2)}:1, width ${r.width}` : "no unselected tab");
+    await ctx.close();
+  }
+
+  // THE PAGE EXISTS AND THE CARDS REACH IT. A link to a 404 is worse than no link, and a page
+  // reachable from nowhere is the same defect one step along - R2 showed both can be deleted in
+  // silence.
+  const ctx = await browser.newContext({ viewport: DESKTOP });
+  const page = await ctx.newPage();
+  const res = await page.goto(base + "/limits", { waitUntil: "networkidle" });
+  const body = await page.locator(".view.sub").innerText().catch(() => "");
+  ok("/limits answers 200 and states the limits it enforces",
+    res?.status() === 200 && /Per address/.test(body) && /Per connection/.test(body) && /rolling/i.test(body),
+    `status ${res?.status()}, ${body.replace(/\s+/g, " ").slice(0, 90)}`);
+  await ctx.close();
+}
+
 async function checkTapFloor(browser, base) {
   const WIDTHS = [[375, 812], [600, 900], [1024, 768], [1440, 900]];
   const PAGES = [["/", "index"], ["/donate", "donate"], ["/terms", "terms"], ["/fund", "fund"]];
@@ -2972,6 +3032,7 @@ try {
   // The phone. Its own browser context, so it cannot disturb the desktop page above
   // it, and after the desktop claim so a mobile failure is never the first thing to
   // go red when something more basic is broken.
+  await checkTabAffordanceAndLimits(browser, BASE);
   await checkTapFloor(browser, BASE);
   await checkMobile(browser, BASE);
 
