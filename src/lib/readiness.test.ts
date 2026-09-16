@@ -33,7 +33,7 @@ test("UNVERIFIABLE: a tip we cannot verify keeps the faucet READY, so an oracle 
 test("the send gate sits below the node's own state and above the wallet", () => {
   const behind = { ready: true, frozen: false, shield: { state: "unsafe" as const, lag: 40 } };
   assert.equal(readinessReason({ ...healthy, node: { ...behind, frozen: true } }), "node frozen behind network");
-  assert.equal(readinessReason({ ...healthy, node: { ...behind, ready: false } }), "wallet scanning, behind our node");
+  assert.equal(readinessReason({ ...healthy, node: { ...behind, ready: false } }), "wallet re-scanning, behind our node");
   assert.equal(readinessReason({ ...healthy, node: behind, balanceZat: null }), "node 40 blocks behind the network, drips would expire");
   assert.equal(readinessReason({ ...healthy, node: behind, sendsBlock: true, sendsReason: "every send timed out" }), "node 40 blocks behind the network, drips would expire");
 });
@@ -47,7 +47,7 @@ test("a lagging wallet is named as the wallet, with the distance, not as the nod
     shield: { state: "unverifiable" as const, lag: null },
   };
   assert.equal(readinessReason({ ...healthy, node: rescanning }),
-    "wallet scanning, 50 blocks behind our node");
+    "wallet re-scanning, 50 blocks behind our node");
 
   // THE WORD "node" MUST NOT APPEAR AS THE SUBJECT. Asserting the whole string is what pins
   // that; a test for /wallet/ alone would pass a message that named both and still misdirected.
@@ -71,7 +71,7 @@ test("an unreadable height still names the wallet rather than inventing a distan
   // always answerable. The machine is, and that is the half the operator acts on.
   const noHeights = { ready: false, frozen: false, height: null, nodeHeight: null,
                       shield: { state: "unverifiable" as const, lag: null } };
-  assert.equal(readinessReason({ ...healthy, node: noHeights }), "wallet scanning, behind our node");
+  assert.equal(readinessReason({ ...healthy, node: noHeights }), "wallet re-scanning, behind our node");
 });
 
 test("the order of the rest is unchanged: ledger, backend, node, wallet, sends, reserve", () => {

@@ -325,8 +325,8 @@ check "a wallet reason STILL rolls back" "[ \"\$(img zcash-faucet:latest)\" = 's
 # through blocks on its own clock, which no image causes and no rollback ends.
 redeploy_env
 touch "$STUB_HEALTH" "$STUB_READY"
-STUB_READY_MAX=1 STUB_READY_REASON="wallet scanning, 50 blocks behind our node" bash "$REDEPLOY" > "$T/rescan.log" 2>&1
-check "a scanning wallet: no rollback" "[ \"\$(img zcash-faucet:latest)\" != 'sha256:old' ] && grep -q 'CHAIN, not code' '$T/rescan.log'"
+STUB_READY_MAX=1 STUB_READY_REASON="wallet re-scanning, 50 blocks behind our node" bash "$REDEPLOY" > "$T/rescan.log" 2>&1
+check "a re-scanning wallet: no rollback" "[ \"\$(img zcash-faucet:latest)\" != 'sha256:old' ] && grep -q 'CHAIN, not code' '$T/rescan.log'"
 
 echo "== redeploy: ON THE EXEC PATH TOO, a node behind the network is not rolled back"
 # The URL path read the reason from the body; the exec path (the default, and production)

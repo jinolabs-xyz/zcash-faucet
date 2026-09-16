@@ -290,7 +290,7 @@ reason_is_not_the_code() {
     # image, so a release that tightens the budget or breaks the parse reads as chain lag
     # and is not rolled back. It still exits 1 and pages, which is the mitigation.
     #
-    # "wallet scanning" IS IN THIS SET even though the paragraph above says the wallet's
+    # "wallet re-scanning" IS IN THIS SET even though the paragraph above says the wallet's
     # reasons are not, and the distinction is the one #596 is about. That exclusion is aimed
     # at REACHING the wallet - "wallet balance unknown" - which a broken image really can
     # cause and a rollback really does fix. A wallet that is behind its own node is scanning
@@ -298,7 +298,7 @@ reason_is_not_the_code() {
     # to arrive here spelled "node syncing" and was already classified this way, so keeping
     # it here is preserving the behaviour the rename would otherwise have changed, not
     # widening the set. "node syncing" stays matched: older images still emit it.
-    *"behind the network"*|*"node frozen"*|*"node syncing"*|*"wallet scanning"*) return 0 ;;
+    *"behind the network"*|*"node frozen"*|*"node syncing"*|*"wallet re-scanning"*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -682,7 +682,7 @@ if reason_is_not_the_code "$final_reason"; then
   # Reverting changes nothing except which code is blamed, and exit 2 would say nobody
   # needs paging for a faucet that refuses every claim.
   case "$final_reason" in
-    *"behind the network"*|*"node frozen"*|*"node syncing"*|*"wallet scanning"*)
+    *"behind the network"*|*"node frozen"*|*"node syncing"*|*"wallet re-scanning"*)
       log "NOT ROLLING BACK: the faucet is not serving, but the cause is the CHAIN, not code"
       log "  reason: $final_reason"
       log "  Our node is behind, frozen or syncing. The previous image runs against the same node,"
