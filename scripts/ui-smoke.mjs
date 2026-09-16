@@ -8,11 +8,12 @@
 //   node scripts/fake-zallet.mjs &                 # PORT=28299 wallet double
 //   PORT=28324 node scripts/fake-hosh.mjs &        # tip oracle fixture, see below
 //   PORT=28611 node scripts/fake-crosslink.mjs &   # cTAZ node double (#326)
+//   PORT=28612 node scripts/fake-lightwalletd.mjs & # read-side backend double (#588)
 //   FAUCET_SENDER=zallet ZALLET_RPC_URL=http://127.0.0.1:28299/ ZALLET_ACCOUNT=fake-account \
 //   ZALLET_ADDRESS=utest1fake ZALLET_MIN_CONF=0 FAUCET_CHALLENGE=pow FAUCET_POW_BITS=12 \
 //   RATE_LIMIT_SALT=ui-smoke HOSH_URL=http://127.0.0.1:28324/ TIP_ORACLE_ENDPOINT= \
 //   FAUCET_CTAZ_ENABLED=true CROSSLINK_RPC_URL=http://127.0.0.1:28611/ \
-//   FAUCET_CTAZ_RPC_SOCKET= PORT=3120 npm start
+//   FAUCET_CTAZ_RPC_SOCKET= LIGHTWALLETD_ENDPOINT=http://127.0.0.1:28612/ PORT=3120 npm start
 //
 // CLEAR THE DB FIRST, AND IT IS NOT HOUSEKEEPING. This suite drives a real claim on every
 // run, so the rows accumulate in data/faucet.db. Drive it enough times on one worktree and the
@@ -34,6 +35,17 @@
 // double on 28611 is never reached and every cTAZ assertion fails against a double that is
 // answering perfectly. CI sets both (.github/workflows/ci.yml, the ui job); this recipe
 // omitted the second one until 2026-09-15, which is exactly the shape of the note below.
+//
+// THE LIGHTWALLETD DOUBLE IS NOT OPTIONAL, AND IT IS THE THIRD OF THESE (#588). Without
+// LIGHTWALLETD_ENDPOINT the app falls through to https://testnet.zec.rocks:443, so the
+// index card's phase - and therefore its HEIGHT - follows a live third-party call. That
+// presents as a fit-check FLAKE rather than a visible failure: on #576 round two one row
+// read `1440x900 paper /#claim doc 941/900` with a red badge where main read 900/900, and
+// the same code re-ran green.
+//
+// Do NOT "fix" it by pointing the variable at a closed port. The same variable is also the
+// app's read-side backend, so a dead port makes the red badge PERMANENT rather than
+// removing it - api-integration.mjs:319 records that experiment and its result.
 //
 // The crosslink double is optional: without it the toggle does not render and the cTAZ
 // checks announce themselves as SKIPPED rather than passing quietly. A skipped check
@@ -1807,6 +1819,23 @@ async function checkMinerPanel(page) {
   // which is the same fact under a better name: which indexer we are talking to, and
   // whether it is answering. Asserted here so "it moved" is a checked claim rather than a
   // sentence in a PR body, and so nobody adds a second row for it later.
+  // AND IT IS ASSERTED AGAINST THE ENDPOINT THE APP SAYS IT IS USING, not against the SHAPE of
+  // a public hostname (#590). The test was `/[a-z0-9.-]+\.[a-z]{2,}(:\d+)?/` on the rendered
+  // text - a proxy for "looks like a DNS name", which passes for `testnet.zec.rocks:443` and
+  // fails for `127.0.0.1:28612`. That is not the property: the view has to name THE indexer we
+  // are talking to, whichever one that is. Pointing the job at a double made the proxy fail on a
+  // view that was naming the backend perfectly correctly, which is how it was found.
+  //
+  // The app is the authority on what it is talking to, so ask it rather than pattern-matching.
+  const reportedBackend = await (async () => {
+    const res = await fetch(`${BASE}/api/status`);
+    const body = await res.json();
+    const endpoint = body?.backend?.endpoint ?? "";
+    try { return new URL(endpoint).host; } catch { return endpoint; }
+  })();
+  ok("the app reports a backend endpoint at all, so the rows below compare against something",
+    reportedBackend.length > 0, `endpoint host=${reportedBackend || "(empty)"}`);
+
   for (const view of ["status", "analytics"]) {
     await showView(page, view);
     const backend = await page.evaluate((v) => {
@@ -1819,7 +1848,8 @@ async function checkMinerPanel(page) {
       return { found: !!hit, value, dot: !!dot, on: dot?.getAttribute("data-on") ?? null };
     }, view);
     ok(`the ${view} view names the indexer we are talking to`,
-      backend.found && /[a-z0-9.-]+\.[a-z]{2,}(:\d+)?/i.test(backend.value), JSON.stringify(backend));
+      backend.found && backend.value.includes(reportedBackend),
+      JSON.stringify({ ...backend, expected: reportedBackend }));
     // The dot defaults to grey and only data-on="true" makes it green, so a backend we
     // have not heard from cannot render as reachable.
     ok(`and says whether it is answering, beside it`,
