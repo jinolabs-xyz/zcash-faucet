@@ -809,6 +809,11 @@ async function checkCardInnerPadding(browser) {
 //
 // a[href="/donate"] rather than the first a[href]: a second link added above this one used to move
 // the assertion silently onto whatever was added.
+//
+// KNOWN LIMIT, not an oversight (SDE-Infra): indexOf takes the FIRST occurrence, so if the panel's
+// prose ever repeats the link's own phrase above the link, iAsk points at the prose instead. Left
+// as-is deliberately - the copy does not repeat it, and matching on the element's position rather
+// than its text would cost more than the case is worth today.
 async function readReserveLowPanel(p) {
   return p.evaluate(() => {
     const el = document.querySelector('[data-phase="reserve-low"]');
@@ -937,11 +942,22 @@ async function checkLivePhasePanelsWearTheBox(browser) {
       // because inside it, its content was what pushed the panel past its clamp - 41px at 1280x800
       // and 128px at 1024x768, hidden rather than shown because the panel scrolls. Nothing stopped
       // a later edit putting it back, and the scroll rows only go red once it is tall enough.
+      // THE FIRST CONJUNCT IS NOT DECORATION - WITHOUT IT THIS ROW IS VACUOUS, and SDE-Infra caught
+      // it one commit after I called it "an assertion instead of an accident". "not in the card" is
+      // satisfied by a panel that is not ANYWHERE, so the row reported the owner's instruction
+      // honoured on a page where the panel had vanished. Measured, not argued: deleting the panel
+      // turned its three neighbours red and left this row GREEN.
+      // Its neighbours cover the block, so this was never a hole in the suite - it was a hole in
+      // THIS row, and this is the only row guarding #659. The failure it would have missed is the
+      // quiet one: someone refactors, the neighbours go red, they fix the rendering, and this row
+      // is green the whole way through, so nobody learns whether #659 was ever re-checked.
       ok("driving reserve-low: and it is NOT inside the claim card (#659, the owner's instruction)",
-        !r.inClaimCard.includes("reserve-low"),
-        r.inClaimCard.includes("reserve-low")
-          ? "reserve-low is back inside .card.claim, which is what caused the 128px overflow at 1024x768"
-          : `panels inside the claim card: ${JSON.stringify(r.inClaimCard)} - reserve-low is not among them`);
+        r.dataCount >= 1 && !r.inClaimCard.includes("reserve-low"),
+        r.dataCount < 1
+          ? "the panel did not render at all, so WHERE it renders was never tested - this row says nothing here"
+          : r.inClaimCard.includes("reserve-low")
+            ? "reserve-low is back inside .card.claim, which is what caused the 128px overflow at 1024x768"
+            : `rendered under ${root}, and the claim card holds ${JSON.stringify(r.inClaimCard)} - reserve-low is not among them`);
       const link = await readReserveLowPanel(p);
       if (link) reserveLowRows("driving reserve-low", link);
       else ok("driving reserve-low: the panel offers the TAZ donate page, not the ZEC funding page",
