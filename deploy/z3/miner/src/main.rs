@@ -302,8 +302,51 @@ fn mine_once(rpc: &Rpc, config: &Config, hb: &Arc<Mutex<heartbeat::State>>) -> R
         fetched_at.elapsed().as_secs_f64()
     ));
 
+    // THE WATCHER RUNS FOR THE LENGTH OF THE SOLVE AND NO LONGER (#657). The parent is the
+    // template's own previousblockhash - the block we are building on - so "has the tip moved" is
+    // a string comparison against the thing we would be extending.
     let solve_started = Instant::now();
-    let Some(solved) = solve(&header, &target, config) else {
+    let abandon = Arc::new(AtomicBool::new(false));
+    let stop_watch = Arc::new(AtomicBool::new(false));
+    // A SCOPED THREAD, so the watcher can borrow the rpc client rather than forcing `Rpc` to be
+    // Clone for the sake of a thread that outlives nothing. The scope joins it before returning,
+    // which is also what guarantees no watcher survives the solve it belongs to.
+    let solved = thread::scope(|scope| {
+        let watcher = {
+            let parent = t.previous_block_hash.as_str();
+            let abandon = Arc::clone(&abandon);
+            let stop = Arc::clone(&stop_watch);
+            scope.spawn(move || {
+                watch_tip(
+                    parent.to_owned(),
+                    abandon,
+                    stop,
+                    Duration::from_millis(1000),
+                    || {
+                        rpc.call("getbestblockhash", json!([]))
+                            .ok()
+                            .and_then(|v| v.as_str().map(str::to_owned))
+                    },
+                )
+            })
+        };
+        let solved = solve(&header, &target, config, &abandon);
+        // Stopped either way, so a solve that ends for any other reason does not leave a thread
+        // polling the node for the rest of the process's life.
+        stop_watch.store(true, Ordering::Relaxed);
+        let _ = watcher.join();
+        solved
+    });
+    if abandon.load(Ordering::Relaxed) {
+        log(&format!(
+            "abandoned height {} after {:.2}s: the tip moved off {} while we were solving",
+            t.height,
+            solve_started.elapsed().as_secs_f64(),
+            &t.previous_block_hash[..16.min(t.previous_block_hash.len())]
+        ));
+        return Ok(Outcome::NoSolution { height: t.height });
+    }
+    let Some(solved) = solved else {
         return Ok(Outcome::NoSolution { height: t.height });
     };
     if let Ok(mut g) = hb.lock() {
@@ -436,7 +479,54 @@ fn sync_guard(rpc: &Rpc, config: &Config, hb: &Arc<Mutex<heartbeat::State>>) -> 
 /// Runs the solver across `threads` nonce ranges until something beats the
 /// target or the window expires. Each thread owns a disjoint nonce space by
 /// stamping its id into the high byte, so no two threads repeat work.
-fn solve(header: &Header, target: &[u8; 32], config: &Config) -> Option<Header> {
+/// Watches the chain while a solve runs and reports whether the parent we are building on is
+/// still the tip.
+///
+/// WHY THIS EXISTS (#657). `solve()` used to loop on exactly two conditions - a solution found, or
+/// the window expired - and neither of them is "a new block arrived". Testnet produces a block
+/// every 9-13s and our window is 8s, so the tip moved during roughly 80% of windows and everything
+/// after that point was work against a dead parent. It is not theoretical: the one block we won was
+/// refused by our own node with
+/// `proposal-is-not-based-on-the-current-best-chain-tip`.
+///
+/// POLLED, NOT PUSHED, because zebra offers no subscription and one cheap call a second is well
+/// inside what the node serves. `getbestblockhash` is the question actually being asked - a height
+/// comparison would miss a same-height reorg, which is exactly the case that produces a rejected
+/// proposal.
+///
+/// THE ABORT LANDS ON AN ITERATION BOUNDARY and that is deliberate. One `solve_200_9` call is
+/// uninterruptible and took at least 2.4s on the box, so the flag is read between iterations and
+/// waste is bounded at about one iteration rather than the whole window. Trying to interrupt
+/// mid-Equihash would mean patching the solver.
+pub fn watch_tip<F>(
+    parent: String,
+    abandon: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
+    poll: Duration,
+    mut current_tip: F,
+) where
+    F: FnMut() -> Option<String>,
+{
+    while !stop.load(Ordering::Relaxed) && !abandon.load(Ordering::Relaxed) {
+        // A FAILED READ IS NOT A CHANGED TIP. An unreachable node would otherwise abandon every
+        // solve for ever, which is worse than the bug: the miner would do no work at all rather
+        // than some wasted work. The deadline is still the backstop.
+        if let Some(tip) = current_tip() {
+            if tip != parent {
+                abandon.store(true, Ordering::Relaxed);
+                return;
+            }
+        }
+        thread::sleep(poll);
+    }
+}
+
+fn solve(
+    header: &Header,
+    target: &[u8; 32],
+    config: &Config,
+    abandon: &Arc<AtomicBool>,
+) -> Option<Header> {
     let deadline = Instant::now() + Duration::from_secs(config.template_secs);
     let found = Arc::new(AtomicBool::new(false));
     let mut handles = Vec::with_capacity(config.threads);
@@ -445,9 +535,14 @@ fn solve(header: &Header, target: &[u8; 32], config: &Config) -> Option<Header> 
         let mut header = header.clone();
         let target = *target;
         let found = Arc::clone(&found);
+        let abandon = Arc::clone(abandon);
         handles.push(thread::spawn(move || {
             let mut counter: u64 = 0;
-            while !found.load(Ordering::Relaxed) && Instant::now() < deadline {
+            // THE THIRD CONDITION, and the whole of #657: the parent stopped being the tip.
+            while !found.load(Ordering::Relaxed)
+                && !abandon.load(Ordering::Relaxed)
+                && Instant::now() < deadline
+            {
                 let mut nonce = [0u8; 32];
                 nonce[0] = id as u8;
                 nonce[1..9].copy_from_slice(&counter.to_le_bytes());
@@ -485,4 +580,124 @@ fn display_hash(hash_le: &[u8; 32]) -> [u8; 32] {
     let mut out = *hash_le;
     out.reverse();
     out
+}
+
+#[cfg(test)]
+mod tip_watch_tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    /// The tip moving is what must end a solve early (#657).
+    ///
+    /// ASSERTS THE ABANDONMENT, NOT THE WATCHER'S EXISTENCE. A row saying "a watcher is spawned"
+    /// passes on a watcher nobody reads, which is the failure this whole issue is an instance of:
+    /// the solver looped on two conditions and nothing told it the parent was dead.
+    #[test]
+    fn a_changed_tip_sets_the_abandon_flag() {
+        let abandon = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut reads = 0;
+        let s = Arc::clone(&stop);
+        watch_tip(
+            "parent-aaa".to_string(),
+            Arc::clone(&abandon),
+            Arc::clone(&stop),
+            Duration::from_millis(1),
+            || {
+                reads += 1;
+                // THE STOP IS WHAT MAKES THIS FAIL RATHER THAN HANG, and it is here because the
+                // mutant found it: with the watcher's comparison broken, watch_tip never returns
+                // and this test ran for over a minute instead of going red. A hanging test is
+                // worse than a failing one - CI waits on it instead of reporting it.
+                if reads >= 10 {
+                    s.store(true, Ordering::Relaxed);
+                }
+                // Two sweeps on the parent we are building on, then the chain moves.
+                Some(if reads < 3 { "parent-aaa".to_string() } else { "parent-bbb".to_string() })
+            },
+        );
+        assert!(abandon.load(Ordering::Relaxed), "a tip that moved must abandon the solve");
+        assert!(reads >= 3, "it kept reading while the tip was unchanged");
+    }
+
+    /// THE BOUND, and without it "abort always" satisfies the row above and the miner never
+    /// finishes anything. An unchanged tip must leave the flag alone.
+    #[test]
+    fn an_unchanged_tip_never_abandons() {
+        let abandon = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(AtomicBool::new(false));
+        let reads = Arc::new(AtomicUsize::new(0));
+        let r = Arc::clone(&reads);
+        let s = Arc::clone(&stop);
+        // The watcher only returns when something stops it, so the stop is what ends this test -
+        // which is also the production path when a solve finishes on its own.
+        let h = thread::spawn(move || {
+            watch_tip("same".to_string(), abandon, s, Duration::from_millis(1), move || {
+                r.fetch_add(1, Ordering::Relaxed);
+                Some("same".to_string())
+            })
+        });
+        while reads.load(Ordering::Relaxed) < 5 {
+            thread::sleep(Duration::from_millis(1));
+        }
+        stop.store(true, Ordering::Relaxed);
+        h.join().unwrap();
+        assert!(reads.load(Ordering::Relaxed) >= 5, "it polled");
+    }
+
+    /// A NODE THAT WILL NOT ANSWER IS NOT A MOVED TIP. Treating a failed read as a change would
+    /// abandon every solve for ever while the node was unreachable - the miner doing NO work
+    /// rather than some wasted work, which is worse than the bug being fixed. The deadline is
+    /// still the backstop.
+    #[test]
+    fn a_failed_read_is_not_a_changed_tip() {
+        let abandon = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut reads = 0;
+        let s = Arc::clone(&stop);
+        watch_tip(
+            "parent".to_string(),
+            Arc::clone(&abandon),
+            stop,
+            Duration::from_millis(1),
+            || {
+                reads += 1;
+                if reads >= 4 {
+                    s.store(true, Ordering::Relaxed);
+                }
+                None
+            },
+        );
+        assert!(!abandon.load(Ordering::Relaxed), "an unreadable tip must not abandon the solve");
+    }
+
+    /// The solver reads the flag: set it before the loop starts and no thread grinds at all.
+    /// This is the half that would still be broken if watch_tip were perfect and nobody checked it.
+    #[test]
+    fn the_solver_honours_an_abandon_set_before_it_starts() {
+        let abandon = Arc::new(AtomicBool::new(true));
+        let cfg = Config {
+            rpc_url: String::new(),
+            cookie_path: PathBuf::new(),
+            threads: 2,
+            mode: Mode::Proposal,
+            poll_secs: 1,
+            // Long enough that a solve reaching its deadline would fail this test loudly rather
+            // than passing for the wrong reason.
+            template_secs: 30,
+            max_lag: 100,
+        };
+        let t: template::Template =
+            serde_json::from_str(template::tests_sample()).expect("the sample template parses");
+        let header = Header::from_template(&t).expect("a header can be built from it");
+        let target = [0u8; 32]; // impossible target: only the flag can end this
+        let started = Instant::now();
+        let got = solve(&header, &target, &cfg, &abandon);
+        assert!(got.is_none(), "an abandoned solve yields nothing");
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "it returned on the flag rather than grinding to the {}s deadline",
+            cfg.template_secs
+        );
+    }
 }
