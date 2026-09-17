@@ -225,6 +225,34 @@ WD_LAG="$(sed -nE 's/^NODE_LAG_LIMIT="\$\{WATCHDOG_NODE_LAG_LIMIT:-([0-9]+)\}".*
 check "both defaults could be read" "[ -n '$MINER_LAG' ] && [ -n '$WD_LAG' ]"
 check "and the watchdog's default equals the miner's DEFAULT_MAX_LAG ($WD_LAG vs $MINER_LAG)" "[ '$WD_LAG' = '$MINER_LAG' ]"
 
+CIWF_LIVE="$REPO/.github/workflows/live-smoke.yml"
+echo "== repo: the docs do not claim a fork check the code does not have"
+# #533 / R-20. ARCHITECTURE.md said "chain-identity and branch-id checks catch a forked or
+# mis-upgraded chain rather than paying out on it". They never have: chainIdentityOracle.ts asks
+# zallet for getblockchaininfo, zallet does not implement it, so ourBranchId() is null for ever and
+# node.chain has read cannot-verify in production since the day it shipped.
+#
+# THE COUPLING, so the sentence cannot drift back: while the oracle still depends on that method,
+# the doc must say the check is NOT wired. If someone wires it for real, this row goes red and the
+# person doing it is told to update the claim in the same change - which is the only moment anyone
+# will know it is safe to make it.
+if grep -qF 'getblockchaininfo' "$REPO/src/lib/zcash/chainIdentityOracle.ts" 2>/dev/null; then
+  check "while the branch-id oracle still asks zallet for a method it lacks, ARCHITECTURE says the check is not wired" \
+    "grep -qF 'not wired' '$REPO/docs/ARCHITECTURE.md' && grep -qF 'ourBranchId' '$REPO/docs/ARCHITECTURE.md'"
+  check "and it no longer claims those checks catch a forked chain" \
+    "! grep -qF 'branch-id checks catch a forked' '$REPO/docs/ARCHITECTURE.md'"
+else
+  check "the branch-id oracle no longer depends on zallet getblockchaininfo, so the claim can be revisited" "true"
+fi
+
+# AND THE LIVE PROBE READS THE VERDICT FROM OUTSIDE THE BOX. Inside the box nothing is wrong when
+# the fork check has never verified anything: every page is green and every drip is served, which
+# is exactly why the row belongs off-box.
+check "the live probe reads node.chain.state rather than trusting the status code" \
+  "grep -qF 'node?.chain?.state' '$REPO/scripts/live-probe.mjs'"
+check "and both the probe and the re-probe judge it by the SAME knob, or a re-probe would overturn the probe" \
+  "[ \"\$(grep -c 'SMOKE_FORK_CHECK_ENFORCED' '$CIWF_LIVE')\" = 2 ]"
+
 echo "== repo: the watchdog's CORROBORATED-lag limit stays clear of the app's agreement budget"
 # A SECOND CROSS-FILE NUMBER, and it is a different relationship from the one above. The
 # watchdog calls a corroborated tip a stall at NODE_CONFIRMED_LAG_LIMIT blocks; the APP calls

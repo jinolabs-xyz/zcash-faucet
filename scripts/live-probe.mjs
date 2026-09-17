@@ -574,6 +574,38 @@ async function runFaucetChecks() {
           (ALLOW_UNREADY ? "allowed by SMOKE_ALLOW_UNREADY" : "SMOKE_ALLOW_UNREADY=<YYYY-MM-DD> suppresses this until that date during a known oracle outage"),
       );
     }
+    // THE FORK CHECK, WHICH HAS NEVER ONCE WORKED IN PRODUCTION (#533, R-20). `node.chain` has
+    // read `cannot-verify` since it shipped: the rules half asks zallet for
+    // `getblockchaininfo`, which zallet does not implement, so `ourBranchId()` is null for ever.
+    // The register asks us to "fail on proof, not on cannot-verify" - and the honest reading of
+    // that is that a verifier which has never verified anything should SAY SO from outside the
+    // box, because inside it nothing is wrong: every page is green and every drip is served.
+    //
+    // WHY A SINGLE RUN CANNOT SAY "FOR 24 HOURS" and this does not pretend to. One probe sees one
+    // instant. What it can say is which state it found; the 24-hour judgement belongs to whoever
+    // reads a run of these, and the issue's own point is that today EVERY run would say the same
+    // thing. When the watchdog's history rung (#621) and the app's reference publisher are wired
+    // end to end, this row starts passing on its own and stops being a standing red.
+    //
+    // OFF BY DEFAULT, AND THAT IS A JUDGEMENT I AM FLAGGING RATHER THAN BURYING. Failing today
+    // takes live-smoke permanently red, and live-smoke pages a human after 30 minutes of failure -
+    // so shipping this as a hard failure pages continuously for a gap everyone already knows
+    // about, and trains the reader to ignore the channel. It reports loudly instead, and
+    // FAUCET_FORK_CHECK_ENFORCED=1 turns it into the failure the issue asks for, once the owner
+    // decides the fork path is meant to work.
+    const chainState = node?.chain?.state ?? null;
+    const enforced = process.env.SMOKE_FORK_CHECK_ENFORCED === "1";
+    if (chainState === null) {
+      ok("GET /api/ready carries the chain-identity verdict (node.chain.state)", !enforced,
+        "no node.chain.state in the body: the fork check cannot be read at all from outside the box");
+    } else if (chainState === "cannot-verify") {
+      ok("the fork check has actually verified something (node.chain.state is not cannot-verify)", !enforced,
+        `node.chain.state=cannot-verify. R-20: the rules half asks zallet for getblockchaininfo, which it does not implement, ` +
+        `so this has never verified anything in production. ` +
+        (enforced ? "enforced by SMOKE_FORK_CHECK_ENFORCED=1" : "reported, not failed: set SMOKE_FORK_CHECK_ENFORCED=1 to make it a failure"));
+    } else {
+      ok("the fork check has actually verified something", true, `node.chain.state=${chainState}`);
+    }
   } else if (ready.status === 503 && ready.body) {
     const reason = ready.body.reason ?? ready.body.error ?? JSON.stringify(ready.body);
     ok("faucet is ready to drip", ALLOW_UNREADY, `app says not ready: ${reason}${ALLOW_UNREADY ? ", allowed by SMOKE_ALLOW_UNREADY" : ""}`);
