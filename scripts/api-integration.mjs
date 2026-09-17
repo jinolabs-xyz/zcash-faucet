@@ -33,6 +33,7 @@ const PORT_N = 3222; // N for the wrong wallet credential: a 401 is a definite n
 const PORT_O = 3223; // O for a z_sendmany reply that never arrives: the no-opid unknown (R-26), which C's hanging op is not
 const PORT_P = 3224; // P for a 401 on the SEND itself: a definite failure that releases the claim, never a held one (R-41)
 const PORT_Q = 3225; // Q for the one server this suite deliberately RESTARTS, to watch uptimeSeconds fall
+const PORT_R = 3226; // R for a wallet that REFUSES THE RECIPIENT: the visitor's address, not our wallet (#536)
 // Somewhere to keep the output of the server that is supposed to die, so the
 // assertion can check WHY it died rather than only that it did.
 const LOG_DIR = mkdtempSync(join(tmpdir(), "faucet-api-integration-"));
@@ -57,6 +58,7 @@ const BASE_E = `http://localhost:${PORT_E}`;
 const BASE_H = `http://localhost:${PORT_H}`;
 const BASE_I = `http://localhost:${PORT_I}`;
 const BASE_J = `http://localhost:${PORT_J}`;
+const BASE_R = `http://localhost:${PORT_R}`;
 const BASE_K = `http://localhost:${PORT_K}`;
 const BASE_L = `http://localhost:${PORT_L}`;
 const BASE_M = `http://localhost:${PORT_M}`;
@@ -271,6 +273,17 @@ const walletJ = spawn("node", ["scripts/fake-zallet.mjs"], {
   detached: true,
 });
 // E's wallet is healthy too. E's oracle is the one that has nothing to say.
+// R's wallet is funded and healthy and refuses the RECIPIENT: -8 with wording that IS on
+// RECIPIENT_REFUSALS. Nothing committed drove that branch before (#536), so the split between
+// "your address is wrong" (400, reservation released) and "our wallet is broken" (502) was
+// never exercised end to end, and the 400 is the one a visitor can act on.
+const WALLET_R = 28338;
+const walletR = spawn("node", ["scripts/fake-zallet.mjs"], {
+  env: { ...process.env, PORT: String(WALLET_R), BALANCE_TAZ: "10", REFUSE_PREFIX: "utest1", RPC_USER: "faucet", RPC_PASSWORD },
+  stdio: "ignore",
+  detached: true,
+});
+
 const WALLET_E = 28327;
 const walletE = wallet(WALLET_E, 10);
 
@@ -542,6 +555,12 @@ const serverP = boot(PORT_P, {
   FAUCET_CHALLENGE: "none",
   RATE_LIMIT_SALT: "integration-test-salt-p",
 });
+const serverR = boot(PORT_R, {
+  ...zallet(WALLET_R),
+  ...chainView,
+  FAUCET_CHALLENGE: "none",
+  RATE_LIMIT_SALT: "integration-test-salt-r",
+});
 const serverJ = boot(PORT_J, {
   ...zallet(WALLET_J),
   ...chainView,
@@ -762,6 +781,18 @@ try {
   const bad = await claim(BASE_A, UNIFIED_BAD, await solvedChallenge(BASE_A));
   ok("A checksum-broken address is 400", bad.status === 400, `status ${bad.status}`);
   ok("A 400 names the checksum", /checksum/i.test(bad.body.error ?? ""), bad.body.error);
+
+  // #536: THE WALLET REFUSES THE RECIPIENT, which is the visitor's address and not our wallet.
+  // It has to read 400 with kind recipient, never the 502 a broken wallet gets, because those two
+  // tell the visitor to do opposite things. Nothing committed drove this branch before.
+  const recipRefused = await claim(BASE_R, UNIFIED_A, null);
+  ok("R a recipient the wallet refuses is 400, not the 502 a broken wallet gets", recipRefused.status === 400, `status ${recipRefused.status}`);
+  ok("R and it is named as the recipient's fault", recipRefused.body.kind === "recipient", JSON.stringify(recipRefused.body));
+  // THE ASSERTION THAT MATTERS. A refusal releases the reservation, so the SAME address must be
+  // able to try again. If it burned the cooldown this would be 429 and a visitor who fixed a typo
+  // would be locked out for a day over an address we never paid.
+  const recipRefusedAgain = await claim(BASE_R, UNIFIED_A, null);
+  ok("R a refusal does NOT consume the cooldown", recipRefusedAgain.status === 400, `status ${recipRefusedAgain.status}`);
 
   const noPow = await claim(BASE_A, UNIFIED_A, null);
   ok("A claim without pow is 403", noPow.status === 403, `status ${noPow.status}`);
@@ -1397,6 +1428,8 @@ try {
   stop(walletI);
   stop(serverJ);
   stop(walletJ);
+  stop(serverR);
+  stop(walletR);
   stop(serverK);
   try { serverL.kill("SIGKILL"); } catch { /* already gone */ }
   stop(walletL);
