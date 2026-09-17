@@ -41,6 +41,7 @@
  */
 
 import { config } from "../config.ts";
+import { DEFAULT_NETWORK, NETWORKS, type FaucetNetwork } from "../network.ts";
 
 /** Outcomes we can honestly classify. `unknown` is counted and never held against us. */
 export type SendOutcome = "ok" | "failed" | "unknown" | "refused";
@@ -48,6 +49,19 @@ export type SendOutcome = "ok" | "failed" | "unknown" | "refused";
 export interface SendRecord {
   outcome: SendOutcome;
   at: number;
+  /**
+   * Which wallet paid (#517). The log was global, so a degraded TAZ wallet refused cTAZ
+   * claims. Absent on records written before this; those read as the default rather than
+   * being dropped, which would shrink the sample silently.
+   */
+  network?: FaucetNetwork;
+  /**
+   * The z_sendmany reply itself was lost, so there is no opid and we do not know the wallet
+   * heard us (zalletsend.ts records "no-opid"). Distinct from an unresolved opid, where the
+   * wallet took the job and is probably broadcasting. #527 put both in `unknown`; only this
+   * kind counts toward a verdict. Absent reads as the opid kind.
+   */
+  unanswered?: boolean;
 }
 
 
@@ -124,6 +138,10 @@ export interface SendHealth {
   failed: number;
   /** Submitted but unresolved. Reported so an operator can see them, never counted against. */
   unknown: number;
+  /** Of `unknown`, the ones where the reply itself was lost. Reported because a degraded
+   *  verdict can rest entirely on these, and `failed: 0` beside "4 of the last 5 sends
+   *  failed or went unanswered" reads as a contradiction on the page. */
+  unanswered: number;
   /** The wallet refused the recipient (the visitor's 400). Reported so a run of them is
    * visible, never counted: they say nothing about the wallet. */
   refused: number;
@@ -138,9 +156,14 @@ function log(): SendRecord[] {
   return (g.__faucetSendLog ??= []);
 }
 
-export function recordSend(outcome: SendOutcome, now: number = Date.now()): void {
+export function recordSend(
+  outcome: SendOutcome,
+  network: FaucetNetwork = DEFAULT_NETWORK,
+  now: number = Date.now(),
+  unanswered = false,
+): void {
   const l = log();
-  l.push({ outcome, at: now });
+  l.push({ outcome, at: now, network, unanswered });
   // Trim on write so nothing grows without bound in a long-lived process. Bounded by
   // time rather than count, because a burst of claims inside the window is exactly the
   // sample this wants to keep.
@@ -152,8 +175,15 @@ export function recordSend(outcome: SendOutcome, now: number = Date.now()): void
  * Classify the window. Pure given the log, so every verdict is reachable in a test
  * without a wallet, a network, or a clock.
  */
-export function readSendHealth(now: number = Date.now(), records: SendRecord[] = log()): SendHealth {
-  const live = records.filter((r) => r.at >= now - WINDOW_MS);
+export function readSendHealth(
+  now: number = Date.now(),
+  records: SendRecord[] = log(),
+  network: FaucetNetwork = DEFAULT_NETWORK,
+): SendHealth {
+  // BY NETWORK (#517). A record with no network predates this and is read as the default
+  // rather than dropped -- it is a send we made, and discarding it would shrink the sample
+  // silently, which is worse than attributing it to the wallet it almost certainly used.
+  const live = records.filter((r) => r.at >= now - WINDOW_MS && (r.network ?? DEFAULT_NETWORK) === network);
   const ok = live.filter((r) => r.outcome === "ok").length;
   const failed = live.filter((r) => r.outcome === "failed").length;
   const unknown = live.filter((r) => r.outcome === "unknown").length;
@@ -162,7 +192,19 @@ export function readSendHealth(now: number = Date.now(), records: SendRecord[] =
   // Unknowns are excluded from the denominator as well as the numerator. Including them
   // would let a run of slow sends dilute a real failure rate below the threshold, which
   // is the same mistake in the opposite direction from counting them as failures.
-  const decided = ok + failed;
+  // A lost reply counts; an unresolved opid still does not (#528). The second is the
+  // "slow but working" case the header is about. The first is also the outcome that holds
+  // the claimant's cooldown for the full day (route.ts, #88), where an outright failure
+  // releases it: so a run of them has to take the wallet out of service faster than
+  // failures do, not never. `unknown` keeps reporting both; only the counting splits them.
+  const unanswered = live.filter((r) => r.outcome === "unknown" && r.unanswered === true).length;
+  const heldBack = unknown - unanswered;
+  const failing = failed + unanswered;
+  // Not just "failed": a sentence calling a lost reply a failure sends an operator looking
+  // for an error the wallet never sent.
+  const failingWord = unanswered > 0 ? "failed or went unanswered" : "failed";
+
+  const decided = ok + failing;
   if (decided < MIN_SAMPLE) {
     // Nothing succeeded and unresolved plus failed make a sample: the wallet is not
     // finishing sends. Judged before the sample rule, which would otherwise answer "too
@@ -170,12 +212,13 @@ export function readSendHealth(now: number = Date.now(), records: SendRecord[] =
     // decided sends. Inside this branch decided < MIN_SAMPLE, so the sum reaching it
     // means at least one unresolved send; the failed-only case (three refusals, no
     // unknowns) never gets here and is the ratio rule's, one branch down.
-    if (ok === 0 && unknown + failed >= MIN_SAMPLE) {
+    if (ok === 0 && heldBack + failing >= MIN_SAMPLE) {
       return {
         state: "degraded",
         ok,
         failed,
         unknown,
+        unanswered,
         refused,
         reason: `${unknown} of the last ${unknown + failed} sends never resolved and none succeeded, the wallet is not finishing sends`,
       };
@@ -183,14 +226,15 @@ export function readSendHealth(now: number = Date.now(), records: SendRecord[] =
     // Two failures and no success (R-18): judged here too, since two decided sends
     // never reach the ratio rule. The ratio rule still owns anything with a success in
     // it, so one failure beside one success stays "too few to judge".
-    if (ok === 0 && failed >= FAIL_ALONE) {
+    if (ok === 0 && failing >= FAIL_ALONE) {
       return {
         state: "degraded",
         ok,
         failed,
         unknown,
+        unanswered,
         refused,
-        reason: `${failed} of the last ${failed} sends failed and none succeeded`,
+        reason: `${failing} of the last ${failing} sends ${failingWord} and none succeeded`,
       };
     }
     return {
@@ -198,23 +242,50 @@ export function readSendHealth(now: number = Date.now(), records: SendRecord[] =
       ok,
       failed,
       unknown,
+      unanswered,
       refused,
       reason: `only ${decided} decided send(s) in the last ${windowMinutes(WINDOW_MS)} min, too few to judge`,
     };
   }
 
-  if (failed / decided >= FAIL_RATIO) {
+  if (failing / decided >= FAIL_RATIO) {
     return {
       state: "degraded",
       ok,
       failed,
       unknown,
+      unanswered,
       refused,
-      reason: `${failed} of the last ${decided} sends failed`,
+      reason: `${failing} of the last ${decided} sends ${failingWord}`,
     };
   }
 
-  return { state: "ok", ok, failed, unknown, refused, reason: `${ok} of the last ${decided} sends succeeded` };
+  return { state: "ok", ok, failed, unknown, unanswered, refused, reason: `${ok} of the last ${decided} sends succeeded` };
+}
+
+/** The networks this faucet actually serves. A parked network has no claimants, so its
+ *  wallet cannot block serving; the day it comes back this covers it with no code change. */
+export function servedNetworks(): FaucetNetwork[] {
+  return config.crosslink.enabled ? [...NETWORKS] : [DEFAULT_NETWORK];
+}
+
+/**
+ * The verdict for the whole faucet: degraded on ANY served network, else the primary
+ * wallet's. Readiness and status must ask this rather than readSendHealth(), or the
+ * default network argument silently narrows them to TAZ and a dead cTAZ wallet becomes
+ * invisible to both (#517, caught in review).
+ */
+export function readSendHealthServed(
+  now: number = Date.now(),
+  records: SendRecord[] = log(),
+  networks: FaucetNetwork[] = servedNetworks(),
+): SendHealth {
+  const each = networks.map((n) => ({ n, h: readSendHealth(now, records, n) }));
+  const bad = each.find((e) => e.h.state === "degraded");
+  if (!bad) return each[0].h;
+  // Named when it is not the primary wallet, so an operator reading one sentence knows
+  // which of two wallets to go and look at.
+  return bad.n === DEFAULT_NETWORK ? bad.h : { ...bad.h, reason: `${bad.n}: ${bad.h.reason}` };
 }
 
 /**
