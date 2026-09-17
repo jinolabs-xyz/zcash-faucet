@@ -333,6 +333,23 @@ pub fn resume(path: &Path) -> Resumed {
     }
 }
 
+/// Move a heartbeat we could not read out of the way, ONCE, before the beat overwrites it.
+///
+/// Refusing to trust the file does not save its contents: `write_atomic` replaces the whole file
+/// every beat, so a schema we do not know - a rollback to an older miner - loses a real count
+/// within one interval. Measured: a schema-2 file holding 69 read `"solvedCount": null` 1.5s
+/// after start. Omitting the fields would not have helped; the loss is in rewriting at all.
+///
+/// An existing preserved copy is never clobbered: it is the one closest to the last good state,
+/// and a second rollback discarding it silently is the failure this function exists to stop.
+fn keep_unreadable(path: &Path) -> Option<PathBuf> {
+    let kept = path.with_extension("json.unreadable");
+    if kept.exists() || !path.exists() {
+        return None;
+    }
+    fs::rename(path, &kept).ok().map(|()| kept)
+}
+
 /// Spawns the beat. Returns the shared state for the mining loop to update.
 ///
 /// `MINER_HEARTBEAT_PATH` has no default that points anywhere real: a missing configuration
@@ -365,6 +382,16 @@ pub fn start(
     }));
 
     if let Some(path) = path {
+        // BEFORE the beat exists, for the same reason the resume happens there: the first write
+        // this process makes is already too late.
+        if matches!(resumed, Some(Resumed::Unusable(_))) {
+            match keep_unreadable(&path) {
+                Some(kept) => eprintln!("heartbeat: kept the unreadable file at {}", kept.display()),
+                None => eprintln!(
+                    "heartbeat: an unreadable file was NOT kept - one is already set aside, and the current one is being replaced"
+                ),
+            }
+        }
         let shared = Arc::clone(&state);
         let beat = Duration::from_secs(beat_secs.max(1));
         thread::spawn(move || loop {
@@ -569,6 +596,89 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("hb-{}-{}", std::process::id(), name));
         fs::remove_dir_all(&dir).ok();
         dir.join("heartbeat.json")
+    }
+
+    // ── AN UNREADABLE HEARTBEAT IS KEPT, NOT OVERWRITTEN ──────────────────────────
+    //
+    // Refusing to TRUST a file does not save it. write_atomic replaces the whole file every beat,
+    // so a schema we do not know - a rollback to an older miner - lost a real count within one
+    // interval. Measured before the fix: a schema-2 file holding 69 read "solvedCount": null 1.5s
+    // after start. (SDE-UI's finding; their proposed fix, omitting the fields, would have produced
+    // a file without them and lost the number just as completely.)
+
+    #[test]
+    fn a_heartbeat_we_could_not_read_is_kept_with_its_bytes_intact() {
+        let path = scratch("kept");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let original = "{\"schema\": 2, \"solvedCount\": 69, \"submittedAccepted\": 12}\n";
+        write_atomic(&path, original).unwrap();
+
+        let (_hb, resumed) = start(Some(path.clone()), "submit", 1, 8);
+        assert!(matches!(resumed, Some(Resumed::Unusable(_))));
+
+        let kept = path.with_extension("json.unreadable");
+        assert!(kept.exists(), "the file we could not read was not kept");
+        // The BYTES, not a summary: whatever a human needs is in there, including the 69.
+        assert_eq!(fs::read_to_string(&kept).unwrap(), original);
+        fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn and_the_live_file_is_still_written_fresh_so_the_beat_keeps_reporting() {
+        // The rescue must not cost liveness: a miner that stops writing reads as not-writing,
+        // which is the failure this whole file exists to surface.
+        let path = scratch("kept-live");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        write_atomic(&path, "{\"schema\": 2, \"solvedCount\": 69}\n").unwrap();
+        let (_hb, _) = start(Some(path.clone()), "submit", 1, 8);
+        std::thread::sleep(Duration::from_millis(1400));
+        let live = fs::read_to_string(&path).unwrap();
+        assert!(live.contains("\"schema\": 1"), "{live}");
+        assert!(live.contains("\"solvedCount\": null"), "{live}");
+        fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn a_second_rescue_does_not_clobber_the_first() {
+        // The kept copy is the one closest to the last good state. A later rollback quietly
+        // replacing it is the failure this exists to stop, so the current file is discarded
+        // LOUDLY instead (SDE-UI).
+        let path = scratch("kept-twice");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let first = "{\"schema\": 2, \"solvedCount\": 69}\n";
+        write_atomic(&path, first).unwrap();
+        assert!(keep_unreadable(&path).is_some());
+
+        write_atomic(&path, "{\"schema\": 2, \"solvedCount\": 5}\n").unwrap();
+        assert!(keep_unreadable(&path).is_none(), "the second rescue overwrote the first");
+        assert_eq!(
+            fs::read_to_string(path.with_extension("json.unreadable")).unwrap(),
+            first
+        );
+        fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn a_readable_heartbeat_is_never_moved() {
+        // The dangerous direction. Renaming a GOOD file would turn the fix into the bug, and
+        // every other row here would still pass.
+        let path = scratch("kept-good");
+        let mut good = State { mode: "submit".into(), beat_secs: 3, template_secs: 8, ..Default::default() };
+        good.solved_count = Some(69);
+        write_atomic(&path, &render(&good)).unwrap();
+
+        let (hb, resumed) = start(Some(path.clone()), "submit", 3, 8);
+        assert!(matches!(resumed, Some(Resumed::Counts { .. })));
+        assert!(!path.with_extension("json.unreadable").exists(), "a readable file was moved");
+        assert_eq!(hb.lock().unwrap().solved_count, Some(69));
+        fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn a_missing_heartbeat_keeps_nothing_and_does_not_error() {
+        let path = scratch("kept-none");
+        assert!(keep_unreadable(&path).is_none());
+        assert!(!path.with_extension("json.unreadable").exists());
     }
 
     #[test]
