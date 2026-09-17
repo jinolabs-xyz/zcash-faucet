@@ -3694,6 +3694,36 @@ async function check404(page, base) {
   ok("the 404 wears the site chrome", await page.getByTestId("brand-mark").isVisible());
 }
 
+// WHAT THIS RUN IS ACTUALLY TALKING TO, printed before anything measures it (SDE-Infra, #636).
+//
+// `UI_SMOKE_URL` unset does not fail. It falls back to :3120, and on a box where several seats each
+// run a stack, :3120 is SOMEBODY'S LIVE APP rather than a connection error. A full night went into
+// reporting a mutant "surviving", filing an issue against the product and asking another seat to
+// add a row on the strength of it - all against a colleague's build - because the invocation said
+// `BASE=` and this file reads `UI_SMOKE_URL`. An env var you set and the program never reads is
+// invisible, and the failure it produces is a clean number about the wrong thing.
+//
+// CI RELIES ON THE DEFAULT (ci.yml runs `node scripts/ui-smoke.mjs` bare), so this cannot refuse.
+// It has to SAY so, in the first line anyone reads, and name the BUILD as well as the URL: two
+// runs against different builds are indistinguishable by URL alone, and the served bundle names
+// are what tell them apart.
+//
+// DELIBERATELY A PRINT AND NOT A ROW. A row here could only ever pass - the suite cannot know which
+// target was intended - and a row no mutation can falsify is one nobody re-verifies, which is the
+// shape this file keeps removing. This is diagnostic output; it is not claiming anything.
+const TARGET_FROM = process.env.UI_SMOKE_URL ? "UI_SMOKE_URL" : "DEFAULT, UI_SMOKE_URL not set";
+let servedBuild = "unread";
+try {
+  const html = await (await fetch(BASE + "/")).text();
+  const names = [...html.matchAll(/<script[^>]+src="([^"]+)"/g)]
+    .map((m) => m[1].split("/").pop())
+    .filter((n) => n.endsWith(".js"));
+  servedBuild = names.length ? names.slice(0, 3).join(" ") : "no script tags";
+} catch (e) {
+  servedBuild = `could not read (${e instanceof Error ? e.message : String(e)})`;
+}
+console.log(`ui-smoke: target ${BASE} from ${TARGET_FROM}; serving ${servedBuild}`);
+
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ viewport: DESKTOP, permissions: ["clipboard-read", "clipboard-write"] });
 const page = await ctx.newPage();
