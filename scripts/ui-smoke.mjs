@@ -656,6 +656,20 @@ async function checkCardInnerPadding(browser) {
       const probeBox = box(probe);
       probe.remove();
 
+      // #648 POSITIVE CONTROL. The no-scroll row below is only worth its green if it CAN go red,
+      // and on a card that fits there is nothing to prove that. So: force an overflow with a tall
+      // probe, read the panel again, and require the row's own measurement to notice.
+      let forced = null;
+      if (panel) {
+        const tall = document.createElement("div");
+        tall.className = "phase";
+        tall.setAttribute("data-ui-smoke", "overflow-probe");
+        tall.style.height = "400px";
+        panel.appendChild(tall);
+        forced = { scrollH: Math.round(panel.scrollHeight), clientH: Math.round(panel.clientHeight) };
+        tall.remove();
+      }
+
       // And if the run happens to have caught a real one, it is measured too rather than assumed.
       const live = [...card.querySelectorAll(".phase")].filter((el) => el.getClientRects().length);
 
@@ -672,7 +686,7 @@ async function checkCardInnerPadding(browser) {
 
       return {
         measured, worst, missing: false,
-        panelScroll, panelNames,
+        panelScroll, panelNames, forced,
         panelBox: panel ? box(panel) : null,
         probeBox,
         liveCount: live.length,
@@ -704,12 +718,29 @@ async function checkCardInnerPadding(browser) {
       !!ps && ps.scrollH <= ps.clientH + 1,
       ps ? `scrollHeight ${ps.scrollH} vs clientHeight ${ps.clientH} (overflow-y: ${ps.overflowY}), panels: ${r.panelNames.join(", ") || "none"}`
          : "no .card.claim > .panel in the DOM");
-    // THE PARTNER, because the row above passes trivially on a card with nothing in it. An empty
-    // claim card never out-scrolls its panel, so a green row proves the layout only if there was
-    // content to overflow with. This names what was on screen instead of assuming it.
-    ok(`${vp.width}x${vp.height}: and the card had a panel in it, so the row above measured something`,
-      !!ps && r.panelNames.length >= 1,
-      `panels present: ${r.panelNames.join(", ") || "NONE - the no-scroll row above proved nothing"}`);
+    // THE PARTNER, and it is a positive control rather than a content requirement. My first version
+    // demanded a live `.phase` and went red on every healthy run - the claim panel carries the tabs,
+    // the copy, the field and the lower block whether or not a phase is showing, so the row above is
+    // measuring real content either way. What it cannot show on a card that FITS is that it would
+    // notice one that does not. So force an overflow and require the same measurement to catch it.
+    // Two regimes, and the control has to name which one it is in rather than demand the clamped
+    // one everywhere. Where the card is CLAMPED (desktop) extra content has nowhere to go, so the
+    // probe must produce a visible overflow or the row above cannot see one. Where it is NOT
+    // clamped (390, where the page scrolls instead) the panel simply grows and internal scrolling
+    // is impossible - which makes the row above trivially safe there, and saying so is honest
+    // where demanding an overflow would be measuring a state that does not exist.
+    const f = r.forced;
+    const overflowed = !!f && f.scrollH > f.clientH + 1;
+    const grew = !!f && !!ps && f.clientH > ps.clientH + 1;
+    ok(`${vp.width}x${vp.height}: and the no-scroll row can see an overflow wherever one is possible`,
+      overflowed || grew,
+      // The overflow is reported FIRST when both are true: a panel can give a little and still
+      // overflow, and calling that "unclamped" would describe the wrong regime on a row whose
+      // whole job is telling the two apart.
+      !f ? "no .card.claim > .panel to probe"
+         : overflowed
+           ? `clamped here: a 400px probe gave scrollHeight ${f.scrollH} vs clientHeight ${f.clientH}${grew ? ` (panel also gave ${f.clientH - ps.clientH}px)` : ""}`
+           : `unclamped here: a 400px probe grew the panel ${ps.clientH} -> ${f.clientH}, so it cannot scroll internally`);
 
     // EVERY RENDERED .phase WEARS THE DESIGN'S BOX. The design states the container
     // (`padding:calc(.85*var(--u)) calc(1.1*var(--u));border:calc(.06*var(--u)) solid var(--hair);
