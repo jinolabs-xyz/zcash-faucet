@@ -59,7 +59,17 @@ pub struct State {
     pub last_solved_at: Option<u64>,
     pub submitted_accepted: Option<u64>,
     pub submitted_rejected: Option<u64>,
+    /// WHY the last block was refused, as a fixed token - never zebra's text. A count with no
+    /// cause cannot say whether a fix worked: stale-parent falling to zero while duplicate rises
+    /// is #657 fixed, and submittedRejected alone reads identically in both worlds.
+    pub last_reject_reason: Option<&'static str>,
     pub last_submitted_at: Option<u64>,
+    /// Solves DROPPED because the tip moved under them (#660). Lifetime, resumed like the rest.
+    /// Without it an abandoned solve and a genuine no-solution-in-window are identical from
+    /// outside the box, so `solved 0 / accepted 0 / rejected 0` cannot say whether the watcher is
+    /// doing its job or the miner is not solving at all - and those need different responses.
+    pub abandoned_count: Option<u64>,
+    pub last_abandoned_at: Option<u64>,
     /// How far behind its own estimate the node was at the last check (sync.rs). None
     /// until the first check answers.
     pub node_lag: Option<u64>,
@@ -125,10 +135,46 @@ impl State {
     pub fn submitted(&mut self, accepted: bool) {
         if accepted {
             self.submitted_accepted = Some(self.submitted_accepted.unwrap_or(0).saturating_add(1));
+            // Cleared on a win, like last_error_stage: a reason from three rejections ago sitting
+            // beside a rising accepted count reads as a miner that is still failing.
+            self.last_reject_reason = None;
         } else {
             self.submitted_rejected = Some(self.submitted_rejected.unwrap_or(0).saturating_add(1));
         }
         self.last_submitted_at = Some(now());
+    }
+
+    /// Not an error: the watcher doing exactly what #660 added it for. It clears nothing,
+    /// because dropping stale work says nothing about templates, errors or the wait.
+    pub fn abandoned(&mut self) {
+        self.abandoned_count = Some(self.abandoned_count.unwrap_or(0).saturating_add(1));
+        self.last_abandoned_at = Some(now());
+    }
+
+    pub fn rejected(&mut self, reason: &str) {
+        self.last_reject_reason = Some(classify_reject(reason));
+        self.submitted(false);
+    }
+}
+
+/// zebra's rejection text to one of four fixed tokens. The TEXT never reaches the file: this is
+/// served publicly and an error string is where an RPC URL with credentials in its userinfo ends
+/// up - the same rule `last_error_stage` follows.
+///
+/// Only the stale-parent token carries a claim worth acting on, and it is the one #657 is about:
+/// `proposal-is-not-based-on-the-current-best-chain-tip` is what refused our one previous win.
+/// Everything unrecognised is `other` rather than guessed at, so a wording change downgrades the
+/// detail instead of inventing a cause.
+pub fn classify_reject(reason: &str) -> &'static str {
+    let r = reason.to_ascii_lowercase();
+    if r.contains("best-chain-tip") || r.contains("best chain tip") || r.contains("prev") {
+        "stale-parent"
+    } else if r.contains("duplicate") {
+        "duplicate"
+    } else if r.contains("invalid") || r.contains("bad") {
+        "invalid"
+    } else {
+        "other"
     }
 }
 
@@ -205,7 +251,10 @@ pub fn render(s: &State) -> String {
             "  \"lastSolvedAt\": {},\n",
             "  \"submittedAccepted\": {},\n",
             "  \"submittedRejected\": {},\n",
+            "  \"lastRejectReason\": {},\n",
             "  \"lastSubmittedAt\": {},\n",
+            "  \"abandonedCount\": {},\n",
+            "  \"lastAbandonedAt\": {},\n",
             "  \"nodeLag\": {},\n",
             "  \"waitingSince\": {},\n",
             "  \"waitingReason\": {}\n",
@@ -232,7 +281,12 @@ pub fn render(s: &State) -> String {
         ts(s.last_solved_at),
         num(s.submitted_accepted),
         num(s.submitted_rejected),
+        s.last_reject_reason
+            .map(|v| format!("\"{v}\""))
+            .unwrap_or_else(|| "null".into()),
         ts(s.last_submitted_at),
+        num(s.abandoned_count),
+        ts(s.last_abandoned_at),
         num(s.node_lag),
         ts(s.waiting_since),
         s.waiting_reason
@@ -280,6 +334,7 @@ pub enum Resumed {
         solved: Option<u64>,
         accepted: Option<u64>,
         rejected: Option<u64>,
+        abandoned: Option<u64>,
     },
 }
 
@@ -296,11 +351,12 @@ impl Resumed {
             Resumed::Unusable(why) => format!(
                 "heartbeat: prior file {why}, so the lifetime counts stay UNKNOWN rather than restarting at 0"
             ),
-            Resumed::Counts { solved, accepted, rejected } => format!(
-                "heartbeat: resumed lifetime counts - solved {}, accepted {}, rejected {}",
+            Resumed::Counts { solved, accepted, rejected, abandoned } => format!(
+                "heartbeat: resumed lifetime counts - solved {}, accepted {}, rejected {}, abandoned {}",
                 shown(*solved),
                 shown(*accepted),
-                shown(*rejected)
+                shown(*rejected),
+                shown(*abandoned)
             ),
         }
     }
@@ -330,6 +386,7 @@ pub fn resume(path: &Path) -> Resumed {
         solved: n("solvedCount"),
         accepted: n("submittedAccepted"),
         rejected: n("submittedRejected"),
+        abandoned: n("abandonedCount"),
     }
 }
 
@@ -366,9 +423,11 @@ pub fn start(
     template_secs: u64,
 ) -> (Arc<Mutex<State>>, Option<Resumed>) {
     let resumed = path.as_deref().map(resume);
-    let (solved, accepted, rejected) = match &resumed {
-        Some(Resumed::Counts { solved, accepted, rejected }) => (*solved, *accepted, *rejected),
-        _ => (None, None, None),
+    let (solved, accepted, rejected, abandoned) = match &resumed {
+        Some(Resumed::Counts { solved, accepted, rejected, abandoned }) => {
+            (*solved, *accepted, *rejected, *abandoned)
+        }
+        _ => (None, None, None, None),
     };
     let state = Arc::new(Mutex::new(State {
         mode: mode.to_string(),
@@ -378,6 +437,7 @@ pub fn start(
         solved_count: solved,
         submitted_accepted: accepted,
         submitted_rejected: rejected,
+        abandoned_count: abandoned,
         ..Default::default()
     }));
 
@@ -694,7 +754,7 @@ mod tests {
         // fails here rather than on the box. That pairing is the whole of the bug's family.
         assert_eq!(
             resume(&path),
-            Resumed::Counts { solved: Some(69), accepted: Some(12), rejected: Some(3) }
+            Resumed::Counts { solved: Some(69), accepted: Some(12), rejected: Some(3), abandoned: None }
         );
         fs::remove_dir_all(path.parent().unwrap()).ok();
     }
@@ -748,7 +808,7 @@ mod tests {
         write_atomic(&path, "{\"schema\": 1, \"writtenAt\": \"2026-09-17T00:00:00Z\"}\n").unwrap();
         assert_eq!(
             resume(&path),
-            Resumed::Counts { solved: None, accepted: None, rejected: None }
+            Resumed::Counts { solved: None, accepted: None, rejected: None, abandoned: None }
         );
         fs::remove_dir_all(path.parent().unwrap()).ok();
     }
@@ -787,11 +847,150 @@ mod tests {
         assert_eq!(s.solved_count, Some(1));
     }
 
+    // ── A REJECTION IS A CAUSE, NOT JUST A COUNT ───────────────────────────────────
+    //
+    // submittedRejected going up says something failed and nothing about WHAT. The two worlds we
+    // care about read identically through it: #657 unfixed (every loss a stale parent) and #657
+    // fixed (the occasional duplicate or race). One token separates them from outside the box.
+
+    // ── AN ABANDONED SOLVE IS COUNTED, NOT JUST LOGGED ────────────────────────────
+    //
+    // #660 added the state and counted nothing. From outside the box an abandoned solve and a
+    // genuine no-solution-in-window are the same observation, so `solved 0 / accepted 0 /
+    // rejected 0` could not say whether the watcher was doing its job or the miner was not
+    // solving at all - and those need different responses.
+
+    #[test]
+    fn an_abandoned_solve_is_counted_and_timed() {
+        let mut s = State::default();
+        assert_eq!(s.abandoned_count, None);
+        s.abandoned();
+        assert_eq!(s.abandoned_count, Some(1));
+        assert!(s.last_abandoned_at.is_some());
+        s.abandoned();
+        assert_eq!(s.abandoned_count, Some(2));
+    }
+
+    #[test]
+    fn abandoning_is_not_an_error_and_clears_nothing() {
+        // The watcher doing its job must not look like a fault, and must not wipe the state a
+        // reader uses to judge one. Dropping stale work says nothing about templates or errors.
+        let mut s = State::default();
+        s.error("template");
+        s.node_lag(40, Some("behind"));
+        let before_stage = s.last_error_stage;
+        let before_wait = s.waiting_since;
+        s.abandoned();
+        assert_eq!(s.last_error_stage, before_stage);
+        assert_eq!(s.waiting_since, before_wait);
+        assert_eq!(s.consecutive_errors, 1);
+    }
+
+    #[test]
+    fn the_abandoned_count_is_a_lifetime_figure_too() {
+        // A counter that resets on restart is the bug #645 just fixed. Shipping a new one with
+        // it would be worse than not shipping it, because this is the number that says whether
+        // #660 works and it is only readable as a rate over time.
+        let path = scratch("abandon-carry");
+        let mut before = State { mode: "submit".into(), beat_secs: 3, template_secs: 8, ..Default::default() };
+        before.abandoned_count = Some(41);
+        write_atomic(&path, &render(&before)).unwrap();
+
+        let (hb, resumed) = start(Some(path.clone()), "submit", 3, 8);
+        assert_eq!(hb.lock().unwrap().abandoned_count, Some(41));
+        assert!(resumed.unwrap().journal().contains("abandoned 41"));
+        fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn a_file_with_no_abandoned_count_reads_unknown_not_zero() {
+        // Every heartbeat written before this change. 0 would assert "the watcher has never
+        // abandoned a solve", which is exactly the claim we cannot make about those files.
+        let path = scratch("abandon-absent");
+        write_atomic(&path, "{\"schema\": 1, \"solvedCount\": 3}\n").unwrap();
+        match resume(&path) {
+            Resumed::Counts { abandoned, solved, .. } => {
+                assert_eq!(abandoned, None);
+                assert_eq!(solved, Some(3));
+            }
+            other => panic!("expected counts, got {other:?}"),
+        }
+        fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn a_stale_parent_is_named_as_one() {
+        // The real string, from the one win this faucet has ever had refused.
+        for r in [
+            "proposal check said \"proposal-is-not-based-on-the-current-best-chain-tip\"",
+            "Proposal Is Not Based On The Current Best Chain Tip",
+            "block-prev-blk-not-found",
+        ] {
+            assert_eq!(classify_reject(r), "stale-parent", "{r}");
+        }
+    }
+
+    #[test]
+    fn the_other_outcomes_are_told_apart_rather_than_collapsed() {
+        assert_eq!(classify_reject("duplicate"), "duplicate");
+        assert_eq!(classify_reject("duplicate-inconclusive"), "duplicate");
+        assert_eq!(classify_reject("bad-txns-duplicate"), "duplicate");
+        assert_eq!(classify_reject("invalid solution"), "invalid");
+        assert_eq!(classify_reject("inconclusive"), "other");
+    }
+
+    #[test]
+    fn an_unrecognised_reason_is_other_rather_than_a_guess() {
+        // A wording change must DOWNGRADE the detail, never invent a cause - the page would
+        // otherwise say stale-parent about something nobody has ever seen.
+        assert_eq!(classify_reject("something zebra has not said before"), "other");
+        assert_eq!(classify_reject(""), "other");
+    }
+
+    #[test]
+    fn zebras_text_never_reaches_the_file() {
+        // The rule this whole field exists under: the heartbeat is served publicly, so an error
+        // string is where an RPC URL with credentials in its userinfo would end up.
+        let leaky = "rejected: http://user:hunter2@127.0.0.1:8232 said prev-blk-not-found";
+        let mut s = State::default();
+        s.rejected(leaky);
+        let body = render(&s);
+        assert!(!body.contains("hunter2"), "{body}");
+        assert!(!body.contains("8232"), "{body}");
+        assert!(body.contains("\"lastRejectReason\": \"stale-parent\""), "{body}");
+    }
+
+    #[test]
+    fn a_rejection_counts_and_names_itself_in_one_call() {
+        let mut s = State::default();
+        s.rejected("duplicate");
+        assert_eq!(s.submitted_rejected, Some(1));
+        assert_eq!(s.last_reject_reason, Some("duplicate"));
+        assert!(s.last_submitted_at.is_some());
+    }
+
+    #[test]
+    fn a_win_clears_the_last_reason_so_it_cannot_haunt_a_working_miner() {
+        // Otherwise a reason from three rejections ago sits beside a rising accepted count and
+        // reads as a miner that is still failing.
+        let mut s = State::default();
+        s.rejected("prev-blk-not-found");
+        assert_eq!(s.last_reject_reason, Some("stale-parent"));
+        s.submitted(true);
+        assert_eq!(s.last_reject_reason, None);
+        assert!(render(&s).contains("\"lastRejectReason\": null"));
+    }
+
+    #[test]
+    fn a_miner_that_has_never_been_refused_says_null_rather_than_a_token() {
+        assert!(render(&State::default()).contains("\"lastRejectReason\": null"));
+    }
+
     #[test]
     fn the_journal_tells_a_resume_apart_from_a_failure_to_read() {
         // "resumed 69" and "could not read it" produce the same page. Only the journal can
         // say which happened, so the three cases must not share wording.
-        let resumed = Resumed::Counts { solved: Some(69), accepted: None, rejected: Some(3) }.journal();
+        let resumed = Resumed::Counts { solved: Some(69), accepted: None, rejected: Some(3), abandoned: None }.journal();
         assert!(resumed.contains("resumed lifetime counts"), "{resumed}");
         assert!(resumed.contains("solved 69"), "{resumed}");
         assert!(resumed.contains("accepted unknown"), "{resumed}");
@@ -912,6 +1111,11 @@ mod contract {
             last_error_stage: Some("template"),
             last_error_at: Some(1_785_022_200),
             consecutive_errors: 0,
+            // Some, like every other optional here: an all-null fixture cannot catch a writer
+            // that emits the wrong field in the right slot.
+            last_reject_reason: Some("stale-parent"),
+            abandoned_count: Some(7),
+            last_abandoned_at: Some(1_785_023_500),
             solved_count: Some(3),
             last_solved_at: Some(1_785_023_100),
             submitted_accepted: Some(3),

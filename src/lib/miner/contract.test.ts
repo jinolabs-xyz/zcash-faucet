@@ -136,6 +136,17 @@ const KNOWINGLY_IGNORED: Record<string, string> = {
   // already render as stalled, so it changes the words rather than the verdict.
   startedAt: "would let the panel separate 'just started' from 'up an hour and idle'",
   lastSubmittedAt: "when it last submitted - not surfaced anywhere yet",
+  // Written so a rejection is a CAUSE and not just a count from outside the box: a rising
+  // submittedRejected reads identically whether #657 is fixed or not, and stale-parent falling
+  // to zero while duplicate rises is the fix working. Ignored here on purpose - whether the
+  // operator row shows it is UI's call, and the writer emitting it does not oblige the page.
+  lastRejectReason: "why the last block was refused, as a fixed token - surface is UI's call",
+  // #660 added a state - a solve dropped because the tip moved - and counted nothing, so an
+  // abandoned solve and a genuine no-solution-in-window were identical from outside the box.
+  // These say which. Ignored here on purpose: the operator surface is UI's call, and the pair
+  // is read today by a human comparing it against solvedCount, not by this reader.
+  abandonedCount: "solves dropped because the tip moved (#660) - not surfaced yet",
+  lastAbandonedAt: "when the last solve was dropped - not surfaced yet",
 };
 
 test("EVERY field the writer emits is accounted for, consumed or ignored on purpose", () => {
