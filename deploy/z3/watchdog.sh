@@ -1418,7 +1418,27 @@ while true; do
   # is the more dangerous of the two options. The budget comes back once zallet is running
   # and its log is clean, so a later, unrelated episode still gets a full budget.
   if [ -n "$zallet" ] && [ "$HEAL_ENABLED" = "1" ]; then
-    if docker logs --tail 40 "$zallet" 2>&1 | grep -q "No such mempool or main chain transaction"; then
+    # BOTH PHRASINGS, BECAUSE THE WALLET HAS CHANGED ITS WORDS (#601). This matched one literal
+    # string. The owner's log of 2026-09-16 shows the current build answering the same condition -
+    # code -5, a transaction that is in neither the mempool nor the chain - as
+    #     RPC Error (code: -5): Transaction not found in mempool or best chain
+    # which this grep does not match. That wording appears NOWHERE in this repo; the watchdog, the
+    # suite that pins it and all three repair tools know only the older sentence.
+    #
+    # THE FAILURE IS SILENT IN BOTH DIRECTIONS, which is why it is worth widening rather than
+    # waiting for certainty. A signature this cannot see is a poison episode the heal never runs
+    # for; and because the ABSENCE of the line while zallet runs is what proves a heal worked, an
+    # unrecognised wording also reads as permanently clean. The 2026-08-17 episode this rung exists
+    # for was 162 restarts and about ten hours of a gated faucet.
+    #
+    # WHAT I DO NOT KNOW, said here rather than implied: the log I am going by is the RETRY form,
+    # which does not crash. Whether the crash path on this build emits the old sentence or the new
+    # one has not been observed. Matching both costs nothing and removes the question.
+    #
+    # NOT MATCHING BARE `code: -5`: other -5s are ordinary (an unknown address, a bad txid) and
+    # healing on those would rewrite wallet.db for a typo. If zallet changes the words a third
+    # time, add the phrase here - the repo suite pins both of these so a silent drop is caught.
+    if docker logs --tail 40 "$zallet" 2>&1 | grep -qE "No such mempool or main chain transaction|[Tt]ransaction not found in mempool or best chain"; then
       if [ "$heal_attempts" -ge "$HEAL_MAX_ATTEMPTS" ]; then
         if [ "$alerted_heal_giveup" = "0" ]; then
           danger "zallet poison persists after $heal_attempts repairs. Not retrying. Reason: ${reason:-unknown}."; rc=$?

@@ -631,6 +631,43 @@ check "exactly once" "[ \"\$(grep -c 'FIXED: zallet' '$T/alerts.log')\" = 1 ]"
 check "does not give up on a heal that worked" "! grep -q 'poison persists' '$T/alerts.log'"
 check "frees the heal budget once zallet is running and clean" "grep -q 'heal budget reset' '$T/run.log'"
 
+echo "== watchdog: the CURRENT build's wording triggers the repair too (#601)"
+# THE WALLET CHANGED ITS WORDS AND THE DETECTOR DID NOT. The rung above matched one literal
+# sentence; the owner's log of 2026-09-16 shows this build answering the same condition - code -5,
+# a transaction in neither the mempool nor the chain - as "Transaction not found in mempool or best
+# chain". That phrasing appeared NOWHERE in this repo, so the heal would not have fired for it.
+#
+# AND THE BLINDNESS IS TWO-WAY, which is the part that makes it worth a case rather than a comment:
+# the ABSENCE of the signature while zallet runs is what the rung treats as proof a heal worked, so
+# a wording it cannot see reads as permanently clean. The episode this exists for was 162 restarts
+# and about ten hours of a gated faucet.
+SIG_NEW='RPC Error (code: -5): Transaction not found in mempool or best chain'
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+mk_heal_tools
+export STUB_HEAL_FIXES=1
+printf '%s\n' "$SIG_NEW" > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
+wd_run 3
+check "runs the repair tools on the wording this build actually emits" \
+  "grep -q 'ran the repair tools (attempt 1/2)' '$T/run.log'"
+check "and reports the fix, so the new wording is not silently treated as clean" \
+  "grep -q 'FIXED: zallet crash-looped' '$T/alerts.log'"
+# THE PARTNER, and it is the one that matters: every row above is satisfied by a rung that heals on
+# ANY log line at all. A wording that is not a poison signature must still be left alone, or the
+# widening has turned a precise trigger into "rewrite wallet.db whenever something looks odd".
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+mk_heal_tools
+export STUB_HEAL_FIXES=1
+printf '%s\n' 'RPC Error (code: -5): Invalid address' > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
+wd_run 3
+check "and an unrelated code -5 is NOT healed, so the widening did not become 'heal on anything'" \
+  "! grep -q 'ran the repair tools' '$T/run.log'"
+
 echo "== watchdog: a poison the tools cannot clear heals up to the cap, then pages once"
 wd_env
 echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
