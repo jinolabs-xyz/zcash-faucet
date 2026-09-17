@@ -53,8 +53,17 @@ export function validateTestnetAddress(input: string): AddressInfo {
     return { valid: false, reason: "That looks like a MAINNET address. This faucet only funds testnet." };
   }
 
-  // Unified, testnet (utest1...) or regtest (uregtest1...): bech32m.
-  const uniPrefix = ["utest1", "uregtest1"].find((p) => addr.toLowerCase().startsWith(p));
+  // Regtest is a private local chain, and there is no regtest mode in config.ts: a testnet
+  // deployment's wallet cannot pay one (#536). Refused HERE rather than at the wallet, which
+  // since #531 costs the visitor a round-trip and answers "the wallet could not pay that
+  // address" instead of naming the real problem. If a regtest mode is ever added, this is the
+  // one line that gates it.
+  if (/^(uregtest1|zregtestsapling1)/i.test(addr)) {
+    return { valid: false, reason: "That is a REGTEST address, from a private local chain. This faucet funds the public testnet." };
+  }
+
+  // Unified, testnet: bech32m.
+  const uniPrefix = ["utest1"].find((p) => addr.toLowerCase().startsWith(p));
   if (uniPrefix) {
     let bytes: Uint8Array;
     try {
@@ -69,8 +78,8 @@ export function validateTestnetAddress(input: string): AddressInfo {
     return { valid: true, kind: "unified", shielded: true };
   }
 
-  // Sapling, testnet (ztestsapling1...) or regtest (zregtestsapling1...): bech32.
-  const sapPrefix = ["ztestsapling1", "zregtestsapling1"].find((p) => addr.toLowerCase().startsWith(p));
+  // Sapling, testnet: bech32.
+  const sapPrefix = ["ztestsapling1"].find((p) => addr.toLowerCase().startsWith(p));
   if (sapPrefix) {
     let bytes: Uint8Array;
     try {

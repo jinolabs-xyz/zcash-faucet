@@ -44,6 +44,15 @@ const SHIELD_ZAT = BigInt(Math.round(Number(process.env.SHIELD_TAZ ?? 0) * 1e8))
 // Message the shield RPC should throw instead of sweeping. Empty means do not throw.
 const SHIELD_ERROR = process.env.SHIELD_ERROR ?? "";
 const SEND_FAILS = process.env.SEND_FAILS === "true";
+// REFUSE_PREFIX=<prefix>[:<sentence>] makes z_sendmany refuse any recipient starting with
+// <prefix>, answering -8 with <sentence> (default: librustzcash's regtest wording). Nothing
+// committed drove the 400 recipient path before this, so the one branch that tells a visitor
+// "your address is wrong" from the one that says "our wallet is broken" was never exercised
+// end to end (#536). The sentence is settable because RECIPIENT_REFUSALS is a CLOSED list
+// keyed to current wording: a case can now pin a wording that is NOT on it and prove it
+// reads as `failed` rather than `refused`.
+const [REFUSE_PREFIX, REFUSE_MESSAGE = "Address is for the wrong network"] =
+  (process.env.REFUSE_PREFIX ?? "").split(":");
 const SEND_HANGS = process.env.SEND_HANGS === "true";
 const RPC_USER = process.env.RPC_USER ?? "";
 const RPC_PASSWORD = process.env.RPC_PASSWORD ?? "";
@@ -112,6 +121,9 @@ const handlers = {
     }
     if (/^ztestsapling/.test(to) && !REVEALS_AMOUNTS.has(policy)) {
       throw Object.assign(new Error(ERR_REVEALING_AMOUNT), { code: -8 });
+    }
+    if (REFUSE_PREFIX && to.startsWith(REFUSE_PREFIX)) {
+      throw Object.assign(new Error(REFUSE_MESSAGE), { code: -8 });
     }
     if (!SEND_FAILS && amountZat > balanceZat) throw new Error("Insufficient funds");
     const opid = "opid-" + randomBytes(4).toString("hex");

@@ -1247,6 +1247,17 @@ curl -s "https://$(cat /etc/faucet-domain)/api/ready" | jq
    `docker logs <zallet container>`, and the poison auto-heal in the watchdog
    journal. One send that lands clears the unresolved sentence on its own; the
    failure-rate rule still applies to whatever failed outright.
+
+   **Before restarting anything, check the refusal list.** `RECIPIENT_REFUSALS`
+   in `zalletsend.ts` is a CLOSED list of the wordings zallet uses when it is
+   the *recipient's* address that is wrong. Those are the visitor's 400 and are
+   never counted against the wallet. If zallet or librustzcash rewords one, the
+   same refusals start arriving as `failed`, and the faucet will call a working
+   wallet broken and restart it on a loop. The tell on `/api/status` is a run of
+   `-8`s in the zallet log while `sends.refused` stays **0**: a genuine wallet
+   fault is not fussy about the recipient, so `-8`s with no refusals counted
+   means the list has fallen behind the wallet, not that the wallet is ill
+   (#536).
 12. **`below reserve, refilling`.** Not broken, broke. **Fund the faucet
    address.** That is the fix, not a fallback. Mining lands a block rarely
    enough that it is not the answer at 3am, and even a block won right now
