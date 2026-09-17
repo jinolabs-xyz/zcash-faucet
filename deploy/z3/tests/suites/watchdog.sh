@@ -631,6 +631,52 @@ check "exactly once" "[ \"\$(grep -c 'FIXED: zallet' '$T/alerts.log')\" = 1 ]"
 check "does not give up on a heal that worked" "! grep -q 'poison persists' '$T/alerts.log'"
 check "frees the heal budget once zallet is running and clean" "grep -q 'heal budget reset' '$T/run.log'"
 
+echo "== watchdog: the QUIET form is noticed, and deliberately not acted on (#601 step 4)"
+# Zallet asks zebra about tracked transactions on every block. For one it can no longer fetch, the
+# answer used to kill the process - that is the crash-loop above. On this build the same condition
+# comes back "(will retry)", nothing exits, readiness stays true, and three failed RPCs a block go
+# on for ever with nothing in the system aware of it.
+#
+# THE DECISION THE ISSUE ASKED FOR, held by these rows rather than only argued in a comment: notice
+# it, say it ONCE, and do NOT heal. The repair tools rewrite wallet.db, and running them against a
+# wallet that is working to save three RPCs a block is the more dangerous of the two options.
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+mk_heal_tools
+export WATCHDOG_RETRY_MIN=6
+for _ in 1 2 3 4 5 6 7 8; do
+  printf 'Failed to get status of 29aed28d... (will retry): chain backend error: RPC Error (code: -5): Transaction not found in mempool or best chain\n'
+done > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
+wd_run 3
+check "the retry loop is noticed and counted" \
+  "grep -q 'zallet retried unfetchable transactions 8 times' '$T/run.log'"
+check "and said ONCE across three sweeps, because it is a state and not an event" \
+  "[ \"\$(grep -c 'zallet retried unfetchable transactions' '$T/run.log')\" = 1 ]"
+check "and it is a journal line, not a page: nothing is refused and nobody is needed" \
+  "! grep -q 'NEEDS YOU' '$T/alerts.log'"
+check "and the repair tools were NOT run on a wallet that is working" \
+  "! grep -q 'ran the repair tools' '$T/run.log'"
+check "and the line points at the read-only look rather than at a repair" \
+  "grep -q 'read-only' '$T/run.log'"
+
+echo "== watchdog: a few retries are not a retry loop, and the notice re-arms when it clears"
+# THE PARTNER. Every row above is satisfied by a rung that announces on ANY log content at all, and
+# by one that announces every sweep. This is the other side: under the floor it says nothing, and
+# once the condition ends it is allowed to speak again - a once-per-episode flag that never re-arms
+# is a rung that reports the first episode and then goes quiet for ever.
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+mk_heal_tools
+export WATCHDOG_RETRY_MIN=6
+printf 'Failed to get status of 29aed28d... (will retry): something\n' > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
+wd_run 2
+check "one retry in the window is under the floor and says nothing" \
+  "! grep -q 'zallet retried unfetchable transactions' '$T/run.log'"
+
 echo "== watchdog: the CURRENT build's wording triggers the repair too (#601)"
 # THE WALLET CHANGED ITS WORDS AND THE DETECTOR DID NOT. The rung above matched one literal
 # sentence; the owner's log of 2026-09-16 shows this build answering the same condition - code -5,
