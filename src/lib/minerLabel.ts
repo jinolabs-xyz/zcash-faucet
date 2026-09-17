@@ -155,7 +155,9 @@ export function minerChip(r: MinerReading, unit: MinerUnit = null): string {
 function wins(r: MinerReading): string {
   const solved = r.solvedCount;
   if (solved == null) return "";
-  if (solved === 0) return ", no blocks won yet";
+  // "yet" is a claim about the miner's life; this counter only knows the current process
+  // (#645), and prod read 0 in orange hours after a restart that had won 69. Say the scope.
+  if (solved === 0) return ", none won since it started";
 
   const ago = r.solvedAgoSeconds != null ? ` ${humanAge(r.solvedAgoSeconds)} ago` : "";
   const rejected = r.submittedRejected ?? 0;

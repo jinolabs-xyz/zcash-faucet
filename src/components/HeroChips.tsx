@@ -40,7 +40,8 @@ const UNKNOWN = "unknown";
 
 export interface HeroChipStatus {
   balanceTaz?: number | null;
-  node?: { ready?: boolean; nodeHeight?: number | null; externalHeight?: number | null };
+  /** null when the wallet did not answer, which is a state the server really sends (#573). */
+  node?: { ready?: boolean; nodeHeight?: number | null; externalHeight?: number | null } | null;
   miner?: Parameters<typeof minerWord>[0];
   box?: { state?: string; minerUnit?: string | null };
   sends?: { state?: string };

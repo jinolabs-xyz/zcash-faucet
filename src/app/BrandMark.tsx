@@ -1,3 +1,5 @@
+import { MARK_RING, MARK_VIEWBOX, MARK_Z } from "./zcashMark";
+
 /**
  * The official Zcash icon, path data taken verbatim from github.com/zcash/logos
  * (zcash-logos-icons-2018/icons/black). Not a redraw: reproducing a trademark by
@@ -46,12 +48,12 @@ export function BrandMark() {
       className="brand-mark"
       width={`${CAP_MATCHED_EM}em`}
       height={`${CAP_MATCHED_EM}em`}
-      viewBox="0 0 493.3 490.2"
+      viewBox={MARK_VIEWBOX}
       style={{ flex: "none" }}
     >
       <g fill="currentColor">
-        <path d="m245.4 20c-124.3 0-225.4 101.1-225.4 225.4s101.1 225.4 225.4 225.4 225.4-101.1 225.4-225.4-101.1-225.4-225.4-225.4zm0 413.6c-103.8 0-188.2-84.4-188.2-188.2s84.4-188.2 188.2-188.2 188.2 84.4 188.2 188.2-84.4 188.2-188.2 188.2z" />
-        <path d="m325.8 175.1v-34.3h-61.5v-37.8h-37.8v37.8h-61.5v45.5h95.4l-95.4 129.4v34.3h61.5v37.6h37.8v-37.6h61.5v-45.5h-95.4z" />
+        <path d={MARK_RING} />
+        <path d={MARK_Z} />
       </g>
     </svg>
   );

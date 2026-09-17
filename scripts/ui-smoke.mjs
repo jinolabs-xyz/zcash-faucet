@@ -656,11 +656,37 @@ async function checkCardInnerPadding(browser) {
       const probeBox = box(probe);
       probe.remove();
 
+      // #648 POSITIVE CONTROL. The no-scroll row below is only worth its green if it CAN go red,
+      // and on a card that fits there is nothing to prove that. So: force an overflow with a tall
+      // probe, read the panel again, and require the row's own measurement to notice.
+      let forced = null;
+      if (panel) {
+        const tall = document.createElement("div");
+        tall.className = "phase";
+        tall.setAttribute("data-ui-smoke", "overflow-probe");
+        tall.style.height = "400px";
+        panel.appendChild(tall);
+        forced = { scrollH: Math.round(panel.scrollHeight), clientH: Math.round(panel.clientHeight) };
+        tall.remove();
+      }
+
       // And if the run happens to have caught a real one, it is measured too rather than assumed.
       const live = [...card.querySelectorAll(".phase")].filter((el) => el.getClientRects().length);
 
+      // #648: the card must not solve "too much content" by hiding it. `overflow:auto` on
+      // .card.claim > .panel means a card that outgrows its clamp scrolls SILENTLY - every
+      // geometry row here still passes, because nothing is past an edge. scrollHeight is the
+      // only thing that can tell the two apart.
+      const panelScroll = panel
+        ? { scrollH: Math.round(panel.scrollHeight), clientH: Math.round(panel.clientHeight),
+            overflowY: getComputedStyle(panel).overflowY }
+        : null;
+      // What is actually in the card right now, so a clean run cannot be a run with nothing in it.
+      const panelNames = [...card.querySelectorAll(".phase")].map((el) => el.dataset.phase || "?");
+
       return {
         measured, worst, missing: false,
+        panelScroll, panelNames, forced,
         panelBox: panel ? box(panel) : null,
         probeBox,
         liveCount: live.length,
@@ -681,6 +707,40 @@ async function checkCardInnerPadding(browser) {
       !!pb && pb.padT > 0 && pb.padL > 0 && pb.painted,
       pb ? `panel padding ${pb.padT}/${pb.padL}px, radius ${pb.rad}px, bg-color ${pb.bg}, bg-image ${pb.bgImg.slice(0, 60)}`
          : "no .card.claim > .panel in the DOM");
+
+    // THE CARD MUST NOT SCROLL, AND UNTIL NOW NOTHING COULD SEE THAT IT DID (owner, #648).
+    // `redesign-card.css:40` gives the panel `overflow:auto`, so an over-full card absorbs the
+    // extra by scrolling rather than by overflowing - which every row in this file is blind to,
+    // because nothing crosses an edge. The owner found it from a screenshot: the reserve-low
+    // panel pushed the figures half out of view and 4,504 / 5,000 rendered sliced.
+    const ps = r.panelScroll;
+    ok(`${vp.width}x${vp.height}: the claim panel shows all of its content rather than scrolling it`,
+      !!ps && ps.scrollH <= ps.clientH + 1,
+      ps ? `scrollHeight ${ps.scrollH} vs clientHeight ${ps.clientH} (overflow-y: ${ps.overflowY}), panels: ${r.panelNames.join(", ") || "none"}`
+         : "no .card.claim > .panel in the DOM");
+    // THE PARTNER, and it is a positive control rather than a content requirement. My first version
+    // demanded a live `.phase` and went red on every healthy run - the claim panel carries the tabs,
+    // the copy, the field and the lower block whether or not a phase is showing, so the row above is
+    // measuring real content either way. What it cannot show on a card that FITS is that it would
+    // notice one that does not. So force an overflow and require the same measurement to catch it.
+    // Two regimes, and the control has to name which one it is in rather than demand the clamped
+    // one everywhere. Where the card is CLAMPED (desktop) extra content has nowhere to go, so the
+    // probe must produce a visible overflow or the row above cannot see one. Where it is NOT
+    // clamped (390, where the page scrolls instead) the panel simply grows and internal scrolling
+    // is impossible - which makes the row above trivially safe there, and saying so is honest
+    // where demanding an overflow would be measuring a state that does not exist.
+    const f = r.forced;
+    const overflowed = !!f && f.scrollH > f.clientH + 1;
+    const grew = !!f && !!ps && f.clientH > ps.clientH + 1;
+    ok(`${vp.width}x${vp.height}: and the no-scroll row can see an overflow wherever one is possible`,
+      overflowed || grew,
+      // The overflow is reported FIRST when both are true: a panel can give a little and still
+      // overflow, and calling that "unclamped" would describe the wrong regime on a row whose
+      // whole job is telling the two apart.
+      !f ? "no .card.claim > .panel to probe"
+         : overflowed
+           ? `clamped here: a 400px probe gave scrollHeight ${f.scrollH} vs clientHeight ${f.clientH}${grew ? ` (panel also gave ${f.clientH - ps.clientH}px)` : ""}`
+           : `unclamped here: a 400px probe grew the panel ${ps.clientH} -> ${f.clientH}, so it cannot scroll internally`);
 
     // EVERY RENDERED .phase WEARS THE DESIGN'S BOX. The design states the container
     // (`padding:calc(.85*var(--u)) calc(1.1*var(--u));border:calc(.06*var(--u)) solid var(--hair);

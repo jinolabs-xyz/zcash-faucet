@@ -28,15 +28,17 @@ export interface ViewStatus {
   balanceTaz: number | null;
   drips?: { allTime: number; last7d: number; last30d: number; byDay?: ViewDripDay[] } | null;
   backend: { reachable: boolean; endpoint: string };
+  /** null when the wallet did not answer - a state the server really sends (#573). */
   node?: {
     ready: boolean;
     syncPercent: number | null;
     nodeHeight: number | null;
     externalHeight?: number | null;
-  };
+  } | null;
   miner?: Partial<MinerReading> & { active?: boolean };
   box?: { state: string; minerUnit?: string | null };
-  sends?: { state: string; ok: number; failed: number; unknown: number; refused?: number; reason: string };
+  /** `unanswered` is a SUBSET of `unknown`, not a fourth bucket (#528). */
+  sends?: { state: string; ok: number; failed: number; unknown: number; unanswered?: number; refused?: number; reason: string };
   reserve?: {
     targetTaz: number | null;
     lowTaz: number | null;

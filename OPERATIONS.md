@@ -146,12 +146,25 @@ whether `ctaz-node.service` is running: the readers in `src/lib/crosslink/read.t
 `!config.crosslink.enabled` before touching the transport, and the refresher in
 `src/lib/crosslink/cache.ts` dials every `REFRESH_INTERVAL_MS` (20 s) when it is true.
 (Cited by symbol, not by line: line numbers in a doc rot silently, and the repo suite can
-hold a symbol to its word.) The box runs with it **true** while the
-node is parked (owner's decision of 2026-09-08), so this socket is opened **six times a
-minute** today: three refresher ticks, each of which opens two connections, because
-`readCtazNodeState` awaits `readCtazRecency` and then `readCtazInfo` and the socket is
-`Accept=yes`, so every RPC is its own connection and its own `ctaz-rpc@` instance. That is
-also why the 2026-09-08 pages named `ctaz-rpc@` instances rather than one service. Settle it rather than trusting this paragraph:
+hold a symbol to its word.)
+
+**Today the box runs with it FALSE and this socket is not dialled at all.** cTAZ was turned
+fully off on 2026-09-16 and `/api/status` now returns `{"enabled": false}` with no other
+field. The paragraph below describes what happens when it is **true**, which is the state to
+size against and the state an incident will put you back into — not what is running now.
+
+**When it is true the refresher alone opens it six times a minute**: three ticks at
+`REFRESH_INTERVAL_MS` (20 s), each opening two connections, because `readCtazNodeState`
+awaits `readCtazRecency` and then `readCtazInfo` and the socket is `Accept=yes`, so every RPC
+is its own connection and its own `ctaz-rpc@` instance. That is also why the 2026-09-08 pages
+named `ctaz-rpc@` instances rather than one service.
+
+**Six is the floor, not the ceiling, and that is the part worth knowing before you size
+`MaxConnections=8` (#565).** Claims add to it: a cTAZ claim reaching the readiness gate opens
+it twice (`src/app/api/faucet/route.ts`), and the send path opens it again
+(`src/lib/zcash/crosslinksend.ts`). So six per minute is the idle rate with nobody claiming;
+under load an operator counting `ctaz-rpc@` instances will find more than six and there was
+no line here that accounted for them. Settle the flag rather than trusting this paragraph:
 
 ```bash
 docker exec zcash-faucet-faucet-1 printenv FAUCET_CTAZ_ENABLED    # true = dialled every 20 s
