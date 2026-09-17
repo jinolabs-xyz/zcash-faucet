@@ -593,7 +593,22 @@ try {
   const opsStatus = await req(BASE_A, "/api/status", { headers: { "x-faucet-ops": OPS_TOKEN } });
   ok("A status (operator token): buildCommit is this run's nonce", opsStatus.body.buildCommit === RUN_NONCE, JSON.stringify(opsStatus.body.buildCommit));
   ok("A status (operator token): the detailed box, with its counts and the same one-word verdict", "expected" in (opsStatus.body.box ?? {}) && "watchdogUnit" in opsStatus.body.box && ["ok", "attention", "unknown"].includes(opsStatus.body.box.verdict), JSON.stringify(opsStatus.body.box));
+  // THE MINER'S EXPLANATORY DETAIL IS THE OPERATOR'S (#569). The redesign moved the public page to
+  // one word and the template age - the standing rule working as intended - which left the
+  // sentences an operator acts on homeless. They live behind the token now, beside the box's named
+  // faults, and the pair below is what says so: present WITH the token, absent WITHOUT it.
+  //
+  // The public half is the one that matters more. `publicBoxRow` already promises the public
+  // "detail is on the box, not here", and a detail string leaking into the public body would break
+  // that promise silently - the body is 200 either way and nobody reads an extra field.
+  ok("A status (operator token): the miner carries its explanatory detail",
+    typeof opsStatus.body.miner?.detail === "string" && opsStatus.body.miner.detail.length > 0,
+    JSON.stringify(opsStatus.body.miner?.detail ?? null));
+  ok("A status (public): and the miner does NOT, because that is the operator's surface",
+    !("detail" in (s.miner ?? {})), JSON.stringify(Object.keys(s.miner ?? {})));
   const wrongTok = await req(BASE_A, "/api/status", { headers: { "x-faucet-ops": OPS_TOKEN + "x" } });
+  ok("A status (wrong token): the miner detail is withheld too, not only the commit",
+    !("detail" in (wrongTok.body.miner ?? {})), JSON.stringify(Object.keys(wrongTok.body.miner ?? {})));
   ok("A status (wrong token): the public view, not an error that says a token exists", wrongTok.status === 200 && !("buildCommit" in wrongTok.body) && !("expected" in wrongTok.body.box), JSON.stringify(Object.keys(wrongTok.body)));
   ok("A status: reserve block shape", typeof s.reserve?.targetTaz === "number" && typeof s.reserve?.lowTaz === "number" && typeof s.reserve?.refilling === "boolean" && "spendableTaz" in (s.reserve ?? {}));
 
