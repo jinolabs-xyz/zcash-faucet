@@ -18,6 +18,7 @@ import { CSSProperties, useCallback, useEffect, useLayoutEffect, useRef, useStat
  * unstyled, with nothing failing at build time. It is in the Shell now, beside the other four. */
 import type { DripDay } from "./Sparkline";
 import { Mascot } from "@/components/Mascot";
+import { readinessBadge } from "@/lib/readinessBadge";
 import { Shell } from "@/components/Shell";
 import { HeroChips } from "@/components/HeroChips";
 import { StatusCards } from "@/components/StatusCards";
@@ -1119,33 +1120,11 @@ export default function Home() {
   });
   if (proofFrac >= 1) curStep = steps.length - 1;
 
-  // Honest badge: "TOPPING UP" only when a refill is actually running, "EMPTY"
-  // when it isn't. A refill with the balance still serviceable stays "LIVE".
-  // Queued is a syncing node with a claim held, so it reads PREPARING too.
-  const statusText =
-    phase === "checking"
-      ? "CHECKING"
-      : phase === "fault" || (phase === "queued" && queuedBehindFault)
-        ? "NOT READY"
-      : phase === "syncing" || phase === "queued"
-      ? "PREPARING"
-      : phase === "empty"
-        ? (refilling ? "TOPPING UP" : "EMPTY")
-        : phase === "degraded"
-          ? "DEGRADED"
-          : "LIVE";
-  // Colour carries the state, and red now means what red means. Redundant with
-  // the badge text and the status region, never the only signal.
-  const dot =
-    phase === "empty"
-      ? refilling
-        ? { fill: "var(--color-accent)", ring: "var(--color-accent)" } // topping up, calm
-        : { fill: "var(--color-empty)", ring: "var(--color-empty)" } // genuinely empty
-      : phase === "degraded" || phase === "fault" || (phase === "queued" && queuedBehindFault)
-        ? { fill: "var(--color-empty)", ring: "var(--color-empty)" } // a fault, and red means what red means
-      : live
-        ? { fill: "var(--color-live)", ring: "var(--color-live)" }
-        : { fill: "transparent", ring: muted(45) }; // syncing, no alarm
+  // ONE OWNER OF THE READINESS WORD (#573). This derivation used to live here and the subpages
+  // derived their own from three other facts, which disagreed with it in production. It is now
+  // src/lib/readinessBadge.ts and both callers read that - the decision has MOVED, not changed,
+  // and readinessBadge.test.ts pins the word and the dot for every phase to keep it that way.
+  const { word: statusText, dot } = readinessBadge({ phase, queuedBehindFault, refilling, live });
 
   // One persistent live region announces phase changes to screen readers. It
   // exists from first render (live regions mounted later announce unreliably)
