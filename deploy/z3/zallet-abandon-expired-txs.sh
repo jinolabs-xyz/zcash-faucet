@@ -61,7 +61,14 @@
 set -euo pipefail
 
 DRY_RUN=0
-[ "${1:-}" = "--dry-run" ] && DRY_RUN=1
+READ_ONLY=0
+for a in "$@"; do
+  case "$a" in
+    --dry-run)   DRY_RUN=1 ;;
+    --read-only) DRY_RUN=1; READ_ONLY=1 ;;
+    *) echo "usage: $(basename "$0") [--dry-run] [--read-only]" >&2; exit 64 ;;
+  esac
+done
 
 ZALLET_CONTAINER="${ZALLET_CONTAINER:-z3-testnet-zallet-1}"
 ZEBRA_CONTAINER="${ZEBRA_CONTAINER:-z3-testnet-zebra-1}"
@@ -71,10 +78,59 @@ VOLUME="${ZALLET_VOLUME:-z3-testnet-zallet}"
 # past any reorg that could still mine it, and keeps a just-expired send off the list.
 MARGIN="${EXPIRY_MARGIN:-100}"
 
-sq() { docker run --rm -v "$VOLUME":/d alpine:3 sh -c "apk add -q sqlite 2>/dev/null; sqlite3 /d/wallet.db \"\$1\"" _ "$1"; }
+# WHERE THE QUERIES READ FROM. Normally the live volume, with zallet stopped. Under
+# --read-only, a SNAPSHOT taken once into a scratch directory, so the look can happen with the
+# wallet running - see the block below.
+SQ_DIR=""
+sq() {
+  if [ -n "$SQ_DIR" ]; then
+    docker run --rm -v "$SQ_DIR":/d:ro alpine:3 sh -c "apk add -q sqlite 2>/dev/null; sqlite3 /d/wallet.db \"\$1\"" _ "$1"
+  else
+    docker run --rm -v "$VOLUME":/d alpine:3 sh -c "apk add -q sqlite 2>/dev/null; sqlite3 /d/wallet.db \"\$1\"" _ "$1"
+  fi
+}
 
-if [ "$(docker inspect -f '{{.State.Running}}' "$ZALLET_CONTAINER" 2>/dev/null)" = "true" ]; then
+if [ "$READ_ONLY" = "1" ]; then
+  # A READ PRICED AS A WRITE IS WHY THIS NEVER GETS DONE (#601). The abort below is correct for a
+  # repair - sqlite and the wallet must not both hold wallet.db - but it sits in front of
+  # --dry-run too, so the cheapest diagnostic step cost an outage and nobody paid it. This mode
+  # answers "which transactions are candidates" with the wallet up, and can do nothing else: it
+  # forces DRY_RUN and every query below reads the snapshot.
+  #
+  # THE SIDECARS COME WITH IT OR THE SNAPSHOT IS A LIE. A live sqlite database keeps recent
+  # commits in wallet.db-wal; copying the db alone yields a file that is internally consistent
+  # and OLD - a state that may never have existed as a whole - and a stale -wal against a fresh
+  # db reports as "disk I/O error", which is its own afternoon. All three or the copy is refused.
+  SQ_DIR="$(mktemp -d "${TMPDIR:-/tmp}/wallet-snap.XXXXXX")"
+  trap 'rm -rf "$SQ_DIR"' EXIT
+  if ! docker run --rm -v "$VOLUME":/d:ro -v "$SQ_DIR":/snap alpine:3 sh -c '
+      set -e
+      # TWO cp CALLS AGAINST A LIVE WALLET CAN STRADDLE A CHECKPOINT (SDE-UI, review of #637).
+      # That is this tools own warning one step along: the db is copied, zallet checkpoints, and
+      # the -wal that follows belongs to a different instant than the db it will be replayed
+      # against. A read-only mount rules out the sqlite backup API, so the copy cannot be made
+      # atomic here - what it CAN do is notice. Size and mtime are read either side of the whole
+      # copy, and a change means the pair is torn and the snapshot is thrown away, not read.
+      stamp() { stat -c "%s:%Y" /d/wallet.db 2>/dev/null || stat -f "%z:%m" /d/wallet.db; }
+      before="$(stamp)"
+      cp /d/wallet.db /snap/wallet.db
+      for x in -wal -shm; do
+        [ -e "/d/wallet.db$x" ] || continue
+        cp "/d/wallet.db$x" "/snap/wallet.db$x"
+      done
+      after="$(stamp)"
+      if [ "$before" != "$after" ]; then
+        echo "wallet.db changed while it was being copied ($before -> $after)" >&2
+        exit 7
+      fi
+    '; then
+    echo "ABORT: could not snapshot wallet.db and its -wal/-shm. A partial copy is not a reading." >&2
+    exit 1
+  fi
+  echo "--read-only: querying a snapshot of wallet.db (+ any -wal/-shm) taken just now; the wallet was not stopped and nothing will be changed"
+elif [ "$(docker inspect -f '{{.State.Running}}' "$ZALLET_CONTAINER" 2>/dev/null)" = "true" ]; then
   echo "ABORT: $ZALLET_CONTAINER is running. Stop it first, or sqlite and the wallet will fight over wallet.db." >&2
+  echo "       To see the candidate list WITHOUT stopping it, run with --read-only." >&2
   exit 1
 fi
 
@@ -127,7 +183,12 @@ if [ "$DRY_RUN" = "1" ]; then
   BEFORE="$(sq "$COUNTS_Q" | tr '|' ' ')"
   # shellcheck disable=SC2086  # deliberate split into label's positional args
   echo; echo "before: $(label $BEFORE)"
-  echo "--dry-run: would abandon ${#DEAD_IDS[@]} transaction(s), nothing changed"
+  if [ "$READ_ONLY" = "1" ]; then
+    echo "--read-only: ${#DEAD_IDS[@]} transaction(s) would be abandoned. Nothing was changed and the wallet was not stopped."
+    echo "To carry it out: docker stop $ZALLET_CONTAINER && bash $0 && docker start $ZALLET_CONTAINER"
+  else
+    echo "--dry-run: would abandon ${#DEAD_IDS[@]} transaction(s), nothing changed"
+  fi
   exit 0
 fi
 

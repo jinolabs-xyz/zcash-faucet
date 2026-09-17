@@ -49,10 +49,12 @@ export interface ShellStatus {
 }
 
 /** The badge: one word and the colour that carries it. */
-export interface ShellBadge {
-  word: string;
-  dot: { fill: string; ring: string };
-}
+// THE BADGE SHAPE AND ITS DERIVATION LIVE IN ONE PLACE NOW (#573). Re-exported here because four
+// subpages already import `ShellBadge` and `CHECKING_BADGE` from this file, and moving the
+// definition should not make them all change an import line.
+export type { ShellBadge } from "@/lib/readinessBadge";
+export { CHECKING_BADGE } from "@/lib/readinessBadge";
+import type { ShellBadge } from "@/lib/readinessBadge";
 
 /**
  * The nav is the ONLY structural difference between the index's masthead and a subpage's,
@@ -113,7 +115,6 @@ function MoonIcon() {
     </svg>
   );
 }
-
 
 export function Shell({
   nav,
@@ -287,28 +288,3 @@ export function Shell({
   );
 }
 
-/**
- * The badge a page shows before it knows anything.
- *
- * "CHECKING", NEVER "NOT READY", AND THIS IS A RULING RATHER THAN A PREFERENCE (CTO,
- * 21:13Z). The snapshot's static subpage markup ships `data-state="UNKNOWN"` with the words
- * NOT READY, and as a first paint to someone reading the terms with JavaScript disabled
- * that is a false claim about a service that may be perfectly healthy - the same class as a
- * sync figure reading 100% while 44 blocks behind, which is exactly what production did at
- * 20:38Z tonight.
- *
- * The ruling's better branch - render the TRUE word on the server - needs a status read
- * that does not block on the network, and there is none today: `pingBackend` is a live gRPC
- * round trip with no cache layer, `getNodeStatus` has none either, and this repo's own
- * recorded figure is a 2 ms page against 460 to 770 ms for `/api/status`. Putting that in
- * front of a legal page that currently renders from config alone loses to the ruling's own
- * priority: readability of the terms page outranks a live badge. The precondition for the
- * follow-up is an in-process status snapshot cache, which is its own change.
- *
- * The dot is TRANSPARENT with a muted ring, which is the page's existing "no alarm, nothing
- * established" pose, so the colour does not assert health either.
- */
-export const CHECKING_BADGE: ShellBadge = {
-  word: "CHECKING",
-  dot: { fill: "transparent", ring: "color-mix(in srgb, var(--color-text) 45%, transparent)" },
-};
