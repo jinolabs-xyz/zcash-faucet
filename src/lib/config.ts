@@ -272,8 +272,12 @@ export const config = {
   // drops below low, stop once it reaches target. The gap between the two is
   // the hysteresis band that stops the miner flapping on and off.
   reserve: {
-    targetZatoshi: tazToZatoshi(num("FAUCET_RESERVE_TARGET_TAZ", 15)),
-    lowZatoshi: tazToZatoshi(num("FAUCET_RESERVE_LOW_TAZ", 5)),
+    // 10,000 target / 5,000 floor, owner's decision 2026-09-17: the level this faucet
+    // intends to hold, not a small float. The old 15/5 were sized for a wallet with a few
+    // drips in it; at 0.1 TAZ a drip they are about 150 drips of headroom, and prod has
+    // been running 1,000/500 set by hand with nothing in the repo recording it.
+    targetZatoshi: tazToZatoshi(num("FAUCET_RESERVE_TARGET_TAZ", 10_000)),
+    lowZatoshi: tazToZatoshi(num("FAUCET_RESERVE_LOW_TAZ", 5_000)),
     checkSeconds: Math.max(5, Math.floor(num("FAUCET_RESERVE_CHECK_SECONDS", 30))),
 
     // Whether the loop may sweep coinbase we already own into the wallet.
