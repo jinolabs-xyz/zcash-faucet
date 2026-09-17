@@ -106,9 +106,9 @@ test("A FAULT THAT HAS AGED OUT IS NOT CURRENT", () => {
 
 test("recordSend trims by time, so the log cannot grow without bound", () => {
   resetSendHealth();
-  recordSend("ok", NOW - WINDOW_MS - 5_000);
-  recordSend("ok", NOW - WINDOW_MS - 4_000);
-  recordSend("failed", NOW);
+  recordSend("ok", "taz", NOW - WINDOW_MS - 5_000);
+  recordSend("ok", "taz", NOW - WINDOW_MS - 4_000);
+  recordSend("failed", "taz", NOW);
   // Reading through the module's own state rather than a passed array, so the trim and
   // the classifier are exercised together the way the route uses them.
   const h = readSendHealth(NOW);
@@ -119,7 +119,7 @@ test("recordSend trims by time, so the log cannot grow without bound", () => {
 test("a live record survives the trim, so trimming is not just deleting everything", () => {
   // The control for the test above. Without it, a trim that wiped the log would pass.
   resetSendHealth();
-  recordSend("ok", NOW - 1_000);
+  recordSend("ok", "taz", NOW - 1_000);
   assert.equal(readSendHealth(NOW).ok, 1);
   resetSendHealth();
 });

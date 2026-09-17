@@ -41,6 +41,7 @@
  */
 
 import { config } from "../config.ts";
+import { DEFAULT_NETWORK, type FaucetNetwork } from "../network.ts";
 
 /** Outcomes we can honestly classify. `unknown` is counted and never held against us. */
 export type SendOutcome = "ok" | "failed" | "unknown" | "refused";
@@ -48,6 +49,16 @@ export type SendOutcome = "ok" | "failed" | "unknown" | "refused";
 export interface SendRecord {
   outcome: SendOutcome;
   at: number;
+  /**
+   * WHICH WALLET THIS WAS (#517). The log was network-agnostic, so a degraded TAZ wallet
+   * refused cTAZ claims with `kind: sends` -- and three failed cTAZ sends would have refused
+   * TAZ. They are different wallets; one cannot be evidence about the other.
+   *
+   * Optional on the record so a log written before this shipped still reads, and those
+   * entries are treated as the default network rather than discarded: a record with no
+   * network is one we made, and dropping it would quietly shrink the sample.
+   */
+  network?: FaucetNetwork;
 }
 
 
@@ -138,9 +149,13 @@ function log(): SendRecord[] {
   return (g.__faucetSendLog ??= []);
 }
 
-export function recordSend(outcome: SendOutcome, now: number = Date.now()): void {
+export function recordSend(
+  outcome: SendOutcome,
+  network: FaucetNetwork = DEFAULT_NETWORK,
+  now: number = Date.now(),
+): void {
   const l = log();
-  l.push({ outcome, at: now });
+  l.push({ outcome, at: now, network });
   // Trim on write so nothing grows without bound in a long-lived process. Bounded by
   // time rather than count, because a burst of claims inside the window is exactly the
   // sample this wants to keep.
@@ -152,8 +167,15 @@ export function recordSend(outcome: SendOutcome, now: number = Date.now()): void
  * Classify the window. Pure given the log, so every verdict is reachable in a test
  * without a wallet, a network, or a clock.
  */
-export function readSendHealth(now: number = Date.now(), records: SendRecord[] = log()): SendHealth {
-  const live = records.filter((r) => r.at >= now - WINDOW_MS);
+export function readSendHealth(
+  now: number = Date.now(),
+  records: SendRecord[] = log(),
+  network: FaucetNetwork = DEFAULT_NETWORK,
+): SendHealth {
+  // BY NETWORK (#517). A record with no network predates this and is read as the default
+  // rather than dropped -- it is a send we made, and discarding it would shrink the sample
+  // silently, which is worse than attributing it to the wallet it almost certainly used.
+  const live = records.filter((r) => r.at >= now - WINDOW_MS && (r.network ?? DEFAULT_NETWORK) === network);
   const ok = live.filter((r) => r.outcome === "ok").length;
   const failed = live.filter((r) => r.outcome === "failed").length;
   const unknown = live.filter((r) => r.outcome === "unknown").length;

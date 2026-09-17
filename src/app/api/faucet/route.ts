@@ -130,7 +130,11 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
   //    happens after, so a dead wallet cost each honest retry +2 bits (14, 16, 18
   //    observed) for a refusal that was ours. Nothing is reserved, no proof is spent.
   //    Unknown (too few sends to judge) does not block, same as readiness.
-  const sends = readSendHealth();
+  //    AND ABOUT THIS NETWORK'S WALLET, not the faucet's (#517). The log was network-agnostic,
+  //    so a degraded TAZ wallet refused cTAZ claims and three failed cTAZ sends would have
+  //    refused TAZ. They are different wallets paying from different balances; neither is
+  //    evidence about the other, and refusing a working one is a self-inflicted outage.
+  const sends = readSendHealth(Date.now(), undefined, network);
   if (sendHealthBlocksServing(sends)) {
     api.logError(`drip refused before the challenge, sends degraded: ${sends.reason}`, "send health gate");
     return apiError(
@@ -422,7 +426,7 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
       // NOT a failure for health purposes. The wallet holds an opid and may have
       // broadcast, so counting it against the money path would let a slow wallet trip
       // readiness and roll a good deploy back.
-      recordSend("unknown");
+      recordSend("unknown", network);
       const marker = err instanceof SendOutcomeUnknownError ? `unknown:${err.opid}` : "unknown:deadline";
       try {
         await finalizeClaim(reservation.claimId, "sent", marker, undefined, Date.now(), network);
@@ -469,21 +473,21 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
       // Reported, never counted (a run of these is visible on /api/status). The
       // wallet's own sentence stays in the log under the request id: it can carry
       // note values and internals, and the visitor needs only the fact.
-      recordSend("refused");
+      recordSend("refused", network);
       return apiError(400, "The wallet could not pay that address. Nothing left the wallet and your cooldown is untouched. Check the address, or use a different one.", api, { kind: "recipient" });
     }
     // Counted, because this is the only place in the app that knows a drip failed. A
     // 502 to one caller and a log line is not a signal anything can act on, which is
     // how a crash-looping wallet stays invisible behind a readiness probe that only
     // reads a balance.
-    recordSend("failed");
+    recordSend("failed", network);
     // The raw send error can carry wallet/RPC internals. Log it under the
     // request id, tell the user only what they need: nothing moved, retry.
     api.logError(err, "send failed");
     return apiError(502, "The send failed on our side. Nothing left the wallet. Try again in a moment.", api);
   }
 
-  recordSend("ok");
+  recordSend("ok", network);
 
   // The send is broadcast. If recording it fails, that is an operator problem
   // (the cooldown may not commit), never a reason to tell the user it failed.
