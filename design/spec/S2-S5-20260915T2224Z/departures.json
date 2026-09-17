@@ -167,5 +167,30 @@
     "kind": "divergence",
     "why": "#648, same cause and same fix as .panel above: percentage vertical padding resolves against width and had no ceiling, so this block took 140px of the claim card at 1440 and squeezed the panel into a scroll. Capped on the vertical axis only; the 8.4% horizontal inset is the spec's.",
     "shipped": "position:relative; padding:min(7%,0.95rem) 8.4% min(7.5%,1.05rem)"
+  },
+  "button.tag,a.tag": {
+    "kind": "divergence",
+    "why": "#648, owner 2026-09-17: \"the white buttons that are present are not very... like they don't look like that they are buttons\". The gap is VISUAL, not behavioural - the interactive tags already carried cursor:pointer; a white rect with a hairline border simply does not read as a control. This replaces the design's box-shadow/transform transition with one over the properties that now carry the affordance (border, surface, press). The chip form of .tag is untouched.",
+    "shipped": "cursor:pointer; transition:border-color .15s,background .15s,transform .06s"
+  },
+  "button.tag:hover,a.tag:hover": {
+    "kind": "divergence",
+    "why": "#648: the spec's hover moves the border to --muted, which on a white tag is not enough to read as a control. Firms to --ink-3 and fills to --surface. Same re-scoping as button.tag,a.tag above.",
+    "shipped": "border-color:var(--ink-3); background:var(--surface)"
+  },
+  "button.tag:active,a.tag:active": {
+    "kind": "divergence",
+    "why": "#648: the design states no press state. A control that does not move under the finger is the other half of the owner's complaint, so this adds one to the interactive tags only.",
+    "shipped": "transform:translateY(1px)"
+  },
+  "button.tag:disabled": {
+    "kind": "divergence",
+    "why": "#648: partner to the affordance above. Having given the interactive tags a pointer, a DISABLED one must stop claiming to be pressable or the affordance becomes a lie on the one control that cannot be used.",
+    "shipped": "cursor:not-allowed; opacity:.55"
+  },
+  ".phase .row + .fine": {
+    "kind": "divergence",
+    "why": "#648, owner: \"the text starts just right after the buttons which looks very clumsy... the information is squashed\". .fine carries margin:0 and the action row has nothing below it, so the prose sits flush against the buttons. Adjacent-sibling only, so prose that does not follow a row is untouched.",
+    "shipped": "margin-top:calc(.85*var(--u))"
   }
 }

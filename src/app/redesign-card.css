@@ -70,6 +70,9 @@
 .automate:disabled{background:var(--orange-soft);color:var(--accent-text);cursor:default}
 .automate:disabled::after{content:none}
 .fine{font-size:calc(.9*var(--u));color:var(--muted);margin:0;line-height:1.4;font-weight:500}
+/* #648, owner: "the text starts just right after the buttons which looks very clumsy".
+   .fine has margin:0 and the action row has none below it, so the prose sits flush. */
+.phase .row + .fine{margin-top:calc(.85*var(--u))}
 .fine b{font-weight:600;color:var(--ink)}
 .keybox{padding:calc(.9*var(--u)) calc(1.1*var(--u));border:calc(.06*var(--u)) dashed var(--prompt-border);border-radius:calc(.86*var(--u));background:var(--prompt-bg);font-size:calc(.85*var(--u));color:var(--muted)}
 .keybox .mono{display:block;word-break:break-all;margin:calc(.4*var(--u)) 0 calc(.7*var(--u));font-size:calc(.8*var(--u));color:var(--ink)}

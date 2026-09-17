@@ -63,8 +63,13 @@
 .tag .sdot{width:calc(.55*var(--u));height:calc(.55*var(--u));border-radius:50%;background:var(--unknown)}
 .tag[data-tone="ok"] .sdot{background:var(--green)}.tag[data-tone="warn"] .sdot{background:var(--warn)}.tag[data-tone="bad"] .sdot{background:var(--bad)}
 .tag.ops{color:var(--warn-text);border-color:var(--warn);letter-spacing:calc(.04*var(--u))}
-button.tag,a.tag{cursor:pointer;transition:box-shadow .18s,transform .18s}
-button.tag:hover,a.tag:hover{border-color:var(--muted)}
+/* #648, owner: the white tags "don't look like they are buttons". They already had the pointer -
+   the gap is visual, not behavioural: a white rect with a hairline border reads as a field. So the
+   border firms up and the surface fills under the cursor, and a press moves. */
+button.tag,a.tag{cursor:pointer;transition:border-color .15s,background .15s,transform .06s}
+button.tag:hover,a.tag:hover{border-color:var(--ink-3);background:var(--surface)}
+button.tag:active,a.tag:active{transform:translateY(1px)}
+button.tag:disabled{cursor:not-allowed;opacity:.55}
 .tag.ink{background:var(--ink);color:var(--surface);border-color:var(--ink)}
 .tag.ink:hover{background:var(--ink-3)}
 
