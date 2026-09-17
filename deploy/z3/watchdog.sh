@@ -107,6 +107,11 @@ history_cannot_tell_logged=0   # same shape: a missing reference is a STATE, not
 HEAL_ENABLED="${WATCHDOG_HEAL_ENABLED:-1}"
 HEAL_MAX_ATTEMPTS="${WATCHDOG_HEAL_MAX_ATTEMPTS:-2}"
 HEAL_TOOLS_DIR="${WATCHDOG_HEAL_TOOLS_DIR:-$(dirname "$0")}"
+# #601 step 4. The window is a docker logs --since value; the floor is "more than one block's
+# worth", since the observed shape is three retries per block and a single block's worth could be
+# one transient fetch. Both are knobs so a case can drive them without waiting ten minutes.
+RETRY_WINDOW="${WATCHDOG_RETRY_WINDOW:-10m}"
+RETRY_MIN="${WATCHDOG_RETRY_MIN:-6}"
 heal_attempts=0
 alerted_heal_giveup=0
 
@@ -1417,8 +1422,71 @@ while true; do
   # wallet.db on a loop: at that point the diagnosis is wrong and thrashing the database
   # is the more dangerous of the two options. The budget comes back once zallet is running
   # and its log is clean, so a later, unrelated episode still gets a full budget.
+  # STEP 5b: THE SAME POISON IN ITS QUIET FORM, NOTICED AND NOT ACTED ON (#601 step 4).
+  #
+  # Zallet asks zebra for transactions it is tracking on every new block. For one it can no longer
+  # fetch, the answer used to be classified UNRECOVERABLE and the process exited - that is the
+  # crash-loop the rung below heals. On the current build the same condition comes back as
+  # "(will retry)" and nothing exits. The wallet keeps up, readiness is true, no drip is refused,
+  # and three failed RPCs a block go on for ever with nothing in the system aware of it.
+  #
+  # WHY THIS ONLY WRITES A JOURNAL LINE, which is a decision the issue asked for rather than an
+  # omission. This file has exactly two kinds of message and says why: one report per RESOLVED
+  # episode, and one page when it cannot fix something. This is neither. It is not an outage - a
+  # page marked NEEDS YOU for three wasted RPCs a block trains a reader to stop looking at the
+  # channel, which is the cost that comment is about.
+  #
+  # AND IT DELIBERATELY DOES NOT HEAL. The repair tools rewrite wallet.db. Running them against a
+  # wallet that is working, to save three RPCs a block, is the more dangerous of the two options -
+  # the same argument the give-up branch below already makes for the crashing case. If this state
+  # is ever to be cleared it should be a human with the read-only look first.
+  #
+  # ONCE PER EPISODE, ON DISK. The condition is measured in DAYS, and the watchdog restarts on
+  # every deploy - so a shell flag would re-announce it every deploy and teach the reader the line
+  # is noise. flap state outlives the process, which is the lifetime this state actually has.
+  if [ -n "$zallet" ]; then
+    retry_n="$(docker logs --since "$RETRY_WINDOW" "$zallet" 2>&1 | grep -c 'will retry' || true)"
+    case "$retry_n" in ''|*[!0-9]*) retry_n=0 ;; esac
+    if [ "$retry_n" -ge "$RETRY_MIN" ]; then
+      if [ "$(flap_get zallet.retryloop)" != "1" ]; then
+        log "note: zallet retried unfetchable transactions $retry_n times in the last $RETRY_WINDOW. Nothing is refused and the wallet is keeping up, so this is not being healed: the repair tools rewrite wallet.db and this wallet is working. Read it with deploy/z3/zallet-abandon-expired-txs.sh --read-only before deciding (#601)."
+        flap_set zallet.retryloop 1
+      fi
+    elif [ "$(flap_get zallet.retryloop)" = "1" ]; then
+      log "zallet is no longer retrying unfetchable transactions ($retry_n in the last $RETRY_WINDOW)"
+      flap_set zallet.retryloop 0
+    fi
+  fi
+
   if [ -n "$zallet" ] && [ "$HEAL_ENABLED" = "1" ]; then
-    if docker logs --tail 40 "$zallet" 2>&1 | grep -q "No such mempool or main chain transaction"; then
+    # BOTH PHRASINGS, BECAUSE THE WALLET HAS CHANGED ITS WORDS (#601). This matched one literal
+    # string. The owner's log of 2026-09-16 shows the current build answering the same condition -
+    # code -5, a transaction that is in neither the mempool nor the chain - as
+    #     RPC Error (code: -5): Transaction not found in mempool or best chain
+    # which this grep does not match. That wording appears NOWHERE in this repo; the watchdog, the
+    # suite that pins it and all three repair tools know only the older sentence.
+    #
+    # THE FAILURE IS SILENT IN BOTH DIRECTIONS, which is why it is worth widening rather than
+    # waiting for certainty. A signature this cannot see is a poison episode the heal never runs
+    # for; and because the ABSENCE of the line while zallet runs is what proves a heal worked, an
+    # unrecognised wording also reads as permanently clean. The 2026-08-17 episode this rung exists
+    # for was 162 restarts and about ten hours of a gated faucet.
+    #
+    # WHAT I DO NOT KNOW, said here rather than implied: the log I am going by is the RETRY form,
+    # which does not crash. Whether the crash path on this build emits the old sentence or the new
+    # one has not been observed. Matching both costs nothing and removes the question.
+    #
+    # NOT MATCHING BARE `code: -5`: other -5s are ordinary (an unknown address, a bad txid) and
+    # healing on those would rewrite wallet.db for a typo. If zallet changes the words a third
+    # time, add the phrase here - the repo suite pins both of these so a silent drop is caught.
+    # AND THE RETRY LINES ARE EXCLUDED, which widening the match made necessary. The quiet form
+    # (step 5b above) carries the SAME sentence with "(will retry)" on it - so without this filter
+    # the heal would fire on a wallet that is working and keeping up, stop it, and rewrite
+    # wallet.db to save three RPCs a block. That is the regression the widening would otherwise
+    # have introduced, and it is worse than the blindness it fixes. What this rung is for is the
+    # FATAL classification: the same condition with no retry, which is what kills the process.
+    if docker logs --tail 40 "$zallet" 2>&1 | grep -v "will retry" \
+         | grep -qE "No such mempool or main chain transaction|[Tt]ransaction not found in mempool or best chain"; then
       if [ "$heal_attempts" -ge "$HEAL_MAX_ATTEMPTS" ]; then
         if [ "$alerted_heal_giveup" = "0" ]; then
           danger "zallet poison persists after $heal_attempts repairs. Not retrying. Reason: ${reason:-unknown}."; rc=$?

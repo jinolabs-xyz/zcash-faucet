@@ -41,7 +41,7 @@ wd_env() {
   # faucet that is never ready and never paged looks exactly like one that is fine.
   # The first case that set the grace to 0 failed in CI and passed alone.
   unset STUB_READY_EXTERNAL STUB_CURL_RC STUB_READY_REFS STUB_READY_USEDHEIGHT WATCHDOG_NODE_CONFIRMED_LAG_LIMIT
-  unset STUB_SLOWLOOP STUB_ALERT_FAIL_N STUB_ALERT_FAIL_RC WATCHDOG_RECOVERY_MIN_UPTIME
+  unset STUB_SLOWLOOP STUB_ALERT_FAIL_N STUB_ALERT_FAIL_RC WATCHDOG_RECOVERY_MIN_UPTIME WATCHDOG_RETRY_MIN WATCHDOG_RETRY_WINDOW
   unset STUB_CRASHLOOP STUB_HEALTH_SEQUENCE STUB_HEAL_FIXES STUB_READY_REFHASH STUB_READY_REFHEIGHT STUB_ZEBRA_ADVANCE STUB_ZEBRA_BLOCKS STUB_ZEBRA_EST STUB_ZEBRA_HASH STUB_ZEBRA_STUCK_CALLS WATCHDOG_CLOCK_FILE WATCHDOG_CLOCK_STEP \
         WATCHDOG_NODE_HEAL_ENABLED WATCHDOG_NODE_STOPS_MINER WATCHDOG_MINER_HEARTBEAT WATCHDOG_MINER_UNIT STUB_START_FAIL \
         WATCHDOG_SIGNAL_MATCH STUB_READY_CANBUILD STUB_READY_CANBUILD_ONCE \
@@ -630,6 +630,135 @@ check "and reports the fix once zallet is seen running clean" "grep -q 'FIXED: z
 check "exactly once" "[ \"\$(grep -c 'FIXED: zallet' '$T/alerts.log')\" = 1 ]"
 check "does not give up on a heal that worked" "! grep -q 'poison persists' '$T/alerts.log'"
 check "frees the heal budget once zallet is running and clean" "grep -q 'heal budget reset' '$T/run.log'"
+
+echo "== watchdog: the QUIET form is noticed, and deliberately not acted on (#601 step 4)"
+# Zallet asks zebra about tracked transactions on every block. For one it can no longer fetch, the
+# answer used to kill the process - that is the crash-loop above. On this build the same condition
+# comes back "(will retry)", nothing exits, readiness stays true, and three failed RPCs a block go
+# on for ever with nothing in the system aware of it.
+#
+# THE DECISION THE ISSUE ASKED FOR, held by these rows rather than only argued in a comment: notice
+# it, say it ONCE, and do NOT heal. The repair tools rewrite wallet.db, and running them against a
+# wallet that is working to save three RPCs a block is the more dangerous of the two options.
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+mk_heal_tools
+export WATCHDOG_RETRY_MIN=6
+for _ in 1 2 3 4 5 6 7 8; do
+  printf 'Failed to get status of 29aed28d... (will retry): chain backend error: RPC Error (code: -5): Transaction not found in mempool or best chain\n'
+done > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
+wd_run 3
+check "the retry loop is noticed and counted" \
+  "grep -q 'zallet retried unfetchable transactions 8 times' '$T/run.log'"
+check "and said ONCE across three sweeps, because it is a state and not an event" \
+  "[ \"\$(grep -c 'zallet retried unfetchable transactions' '$T/run.log')\" = 1 ]"
+check "and it is a journal line, not a page: nothing is refused and nobody is needed" \
+  "! grep -q 'NEEDS YOU' '$T/alerts.log'"
+check "and the repair tools were NOT run on a wallet that is working" \
+  "! grep -q 'ran the repair tools' '$T/run.log'"
+check "and the line points at the read-only look rather than at a repair" \
+  "grep -q 'read-only' '$T/run.log'"
+# THE READ IS BOUNDED, and this row says only what it can. The rung asks for a WINDOW rather than
+# the whole log, which is what keeps it from counting a retry storm from last week as today's. The
+# docker double cannot age a log line, so the window's VALUE is not modelled and this must not
+# pretend otherwise - what is checkable is that the flag and the configured value are PASSED, so a
+# change dropping the bound (or hard-coding a different one) is caught (SDE-App, review of #644).
+check "and it asks docker for a bounded window rather than the whole log" \
+  "grep -q -- 'docker logs --since 10m z3-testnet-zallet-1' '$STUB_LOG'"
+
+echo "== watchdog: the retry floor the BOX runs on is the one in the file, not the one cases set"
+# Every case above exports WATCHDOG_RETRY_MIN, so the shipped default is anchored by nothing and a
+# typo in it would ship green (SDE-App, review of #644 - the override-hides-the-default shape).
+# This case sets NOTHING and drives the real default: 6 retries is over it, and the rung must fire.
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+mk_heal_tools
+for _ in 1 2 3 4 5 6; do
+  printf 'Failed to get status of 29aed28d... (will retry): chain backend error: RPC Error (code: -5): Transaction not found in mempool or best chain\n'
+done > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
+wd_run 2
+check "six retries reaches the SHIPPED floor with no override set" \
+  "grep -q 'zallet retried unfetchable transactions 6 times' '$T/run.log'"
+check "and the shipped window is the one in the file too" \
+  "grep -q -- 'docker logs --since 10m z3-testnet-zallet-1' '$STUB_LOG'"
+
+echo "== watchdog: a few retries are not a retry loop, and the notice re-arms when it clears"
+# THE PARTNER. Every row above is satisfied by a rung that announces on ANY log content at all, and
+# by one that announces every sweep. This is the other side: under the floor it says nothing, and
+# once the condition ends it is allowed to speak again - a once-per-episode flag that never re-arms
+# is a rung that reports the first episode and then goes quiet for ever.
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+mk_heal_tools
+export WATCHDOG_RETRY_MIN=6
+printf 'Failed to get status of 29aed28d... (will retry): something\n' > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
+wd_run 2
+check "one retry in the window is under the floor and says nothing" \
+  "! grep -q 'zallet retried unfetchable transactions' '$T/run.log'"
+
+# AND THE RE-ARM, WHICH THIS SECTION CLAIMED AND DID NOT HOLD (SDE-UI, review of #644). The header
+# above says "the notice re-arms when it clears" and the comment states the risk in so many words,
+# and the only check under it was the floor - both of UI's mutants (delete the elif; flap_set 0->1)
+# survived. A broken re-arm is worse here than a missing notice: flap is ON DISK, so the rung would
+# announce once on a host and then stay silent on that host FOR EVER, across every later episode
+# and every deploy. That is the two-way blindness this PR removes, reintroduced one branch along.
+#
+# THE TEST SHAPE HAS TO FOLLOW THE LIFETIME. The flag outlives the process, so a single sweep loop
+# cannot show it re-arming; NOT calling wd_env between runs keeps one STATE_DIR, and three runs over
+# it are what make an episode end and a second one begin.
+printf 'Failed to get status of 29aed28d... (will retry): x\n%.0s' 1 2 3 4 5 6 7 8 > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
+wd_run 1                                     # episode 1: over the floor, announced, flag set
+: > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
+wd_run 1                                     # the condition ends
+check "the notice says so when the retry loop stops, rather than just falling silent" \
+  "grep -q 'no longer retrying unfetchable transactions' '$T/run.log'"
+printf 'Failed to get status of 29aed28d... (will retry): x\n%.0s' 1 2 3 4 5 6 7 8 > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
+wd_run 1                                     # episode 2: must be announced again
+check "and a SECOND episode is announced, so the once-per-episode flag re-armed" \
+  "grep -q 'zallet retried unfetchable transactions 8 times' '$T/run.log'"
+
+echo "== watchdog: the CURRENT build's wording triggers the repair too (#601)"
+# THE WALLET CHANGED ITS WORDS AND THE DETECTOR DID NOT. The rung above matched one literal
+# sentence; the owner's log of 2026-09-16 shows this build answering the same condition - code -5,
+# a transaction in neither the mempool nor the chain - as "Transaction not found in mempool or best
+# chain". That phrasing appeared NOWHERE in this repo, so the heal would not have fired for it.
+#
+# AND THE BLINDNESS IS TWO-WAY, which is the part that makes it worth a case rather than a comment:
+# the ABSENCE of the signature while zallet runs is what the rung treats as proof a heal worked, so
+# a wording it cannot see reads as permanently clean. The episode this exists for was 162 restarts
+# and about ten hours of a gated faucet.
+SIG_NEW='RPC Error (code: -5): Transaction not found in mempool or best chain'
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+mk_heal_tools
+export STUB_HEAL_FIXES=1
+printf '%s\n' "$SIG_NEW" > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
+wd_run 3
+check "runs the repair tools on the wording this build actually emits" \
+  "grep -q 'ran the repair tools (attempt 1/2)' '$T/run.log'"
+check "and reports the fix, so the new wording is not silently treated as clean" \
+  "grep -q 'FIXED: zallet crash-looped' '$T/alerts.log'"
+# THE PARTNER, and it is the one that matters: every row above is satisfied by a rung that heals on
+# ANY log line at all. A wording that is not a poison signature must still be left alone, or the
+# widening has turned a precise trigger into "rewrite wallet.db whenever something looks odd".
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+mk_heal_tools
+export STUB_HEAL_FIXES=1
+printf '%s\n' 'RPC Error (code: -5): Invalid address' > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
+wd_run 3
+check "and an unrelated code -5 is NOT healed, so the widening did not become 'heal on anything'" \
+  "! grep -q 'ran the repair tools' '$T/run.log'"
 
 echo "== watchdog: a poison the tools cannot clear heals up to the cap, then pages once"
 wd_env
