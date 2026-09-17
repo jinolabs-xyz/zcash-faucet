@@ -538,14 +538,23 @@ export function rateAnchor(
 export function observedSecondsPerBlock(
   sources: Partial<Record<ReferenceName, { height: number; at: number; prevHeight?: number; prevAt?: number }>>,
 ): number | null {
-  const rates: number[] = [];
+  // POOLED, not an average of each source's rate. Averaging rates over-weights whichever
+  // source saw fewer blocks: one that advanced 1 block in 30 s and one that advanced 10 give
+  // a mean of 16.5 s a block where the chain plainly produced 11 blocks in 60 s, which is
+  // 5.5. Review measured that arithmetic turning a 20-block spread into 330 s and refusing
+  // agreement the pooled figure grants at 109 s.
+  let blocks = 0;
+  let seconds = 0;
   for (const v of Object.values(sources)) {
     if (v?.prevHeight == null || v.prevAt == null) continue;
-    const blocks = v.height - v.prevHeight;
-    const seconds = (v.at - v.prevAt) / 1000;
-    if (blocks > 0 && seconds > 0) rates.push(seconds / blocks);
+    const b = v.height - v.prevHeight;
+    const sec = (v.at - v.prevAt) / 1000;
+    if (b > 0 && sec > 0) {
+      blocks += b;
+      seconds += sec;
+    }
   }
-  return rates.length ? rates.reduce((a, b) => a + b, 0) / rates.length : null;
+  return blocks > 0 ? seconds / blocks : null;
 }
 
 function cacheRef(): TipCache {
@@ -640,7 +649,21 @@ export function getTipReferences(now: number = Date.now()): TipReferences {
   // currently producing a block every 9 to 13 s, so using the nominal figure would inflate
   // every spread by six and make this stricter than the count it replaces. In that window
   // the old block tolerance still answers, which is the behaviour this had before.
-  const secondsPerBlock = observedSecondsPerBlock(raw);
+  // FRESH SOURCES ONLY, the same set `spreadBlocks` is computed from. A source that went dark
+  // keeps the height it last reported, so its window stretches over the whole outage: review
+  // measured a hosh six minutes dark contributing 900 s a block. It cannot widen the spread it
+  // is excluded from, and it must not set the rate that spread is judged by either.
+  const freshNames = new Set(fresh.map(([n]) => n));
+  const rateSources = Object.fromEntries(
+    (Object.entries(raw) as [ReferenceName, { height: number; at: number; prevHeight?: number; prevAt?: number }][])
+      .filter(([n]) => freshNames.has(n)),
+  );
+  // ONE rate, rounded once, and the spread computed FROM THE ROUNDED VALUE. The field's whole
+  // promise is that a reading can be reproduced from the journal, and rounding the published
+  // number while converting with the unrounded one broke it: review measured spreadBlocks 500
+  // and secondsPerBlock 0 published beside spreadSeconds 200.
+  const rawRate = observedSecondsPerBlock(rateSources);
+  const secondsPerBlock = rawRate == null ? null : Math.round(rawRate * 100) / 100;
   const spreadSeconds =
     spreadBlocks == null || secondsPerBlock == null ? null : Math.round(spreadBlocks * secondsPerBlock);
   const used = fresh.length ? fresh.reduce((a, b) => (b[1].height > a[1].height ? b : a))[0] : null;
@@ -656,7 +679,7 @@ export function getTipReferences(now: number = Date.now()): TipReferences {
     // Both reported: the watchdog's journal line has to say what it saw, and null seconds
     // is how a reader tells which of the two rules answered.
     spreadSeconds,
-    secondsPerBlock: secondsPerBlock == null ? null : Math.round(secondsPerBlock),
+    secondsPerBlock,
     used,
     // From the same entry `used` names, not recomputed, so a future change to the choice
     // rule cannot move one without the other.

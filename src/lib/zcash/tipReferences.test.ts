@@ -282,10 +282,16 @@ test("#600: the SAME block spread agrees at a fast cadence and disagrees at a sl
   assert.equal(faster.corroborated, true, "at twice the cadence the same gap is half the time");
 });
 
-test("#600 THE PARTNER: the block count alone would have answered the same for both", () => {
-  // Without this the case above passes on any rule that happens to split 40 blocks. Under
-  // the OLD rule both readings are identical, so only the rate can be what changed it.
-  assert.ok(40 > AGREE_BLOCKS, "40 blocks breaches the old count in BOTH readings above");
+test("#600 THE PARTNER: the old block rule would have refused BOTH readings above", () => {
+  // This row used to be `assert.ok(40 > AGREE_BLOCKS)` and never called the module at all. It
+  // passed on main, on the unfixed branch and on every mutant, which is the definition of a row
+  // that holds nothing. It now drives the real rule: with no rate to convert through, the same
+  // 40-block spread that the case above accepts at 5 s a block is REFUSED, so the rate is
+  // provably what changed the verdict rather than something about the number 40.
+  plant({ hosh: { height: 4_000_000, ageMs: 1000 }, lightwalletd: { height: 4_000_040, ageMs: 1000 } });
+  const noRate = getTipReferences(NOW);
+  assert.equal(noRate.secondsPerBlock, null);
+  assert.equal(noRate.corroborated, false, "40 blocks breaches the old count, which is the fallback");
 });
 
 test("#600: with no rate observed yet the block tolerance still answers, rather than a guess", () => {
@@ -371,4 +377,61 @@ test("#600: a source that repeats its height does not move the anchor", () => {
   const out = rateAnchor(stale, 100, t0 + 1000);
   assert.equal(out.prevHeight, 90, "nothing advanced, because nothing moved");
   assert.equal(out.prevAt, t0 - 6 * 60_000);
+});
+
+/* --- what the rate is computed FROM (#600 step 2, review findings) --- */
+
+test("#600: the rate is POOLED across sources, not an average of their rates", () => {
+  // Averaging over-weights whichever source saw fewer blocks. One advancing 1 block in 30 s
+  // beside one advancing 10 gives a mean of 16.5 s a block, where the chain plainly produced
+  // 11 blocks in 60 s, which is 5.45. Review measured that arithmetic refusing a 20-block
+  // spread at 330 s that the pooled figure grants at 109 s.
+  const pooled = observedSecondsPerBlock({
+    hosh: { height: 101, at: 30_000, prevHeight: 100, prevAt: 0 },          // 1 block / 30 s
+    lightwalletd: { height: 110, at: 30_000, prevHeight: 100, prevAt: 0 },  // 10 blocks / 30 s
+  });
+  assert.ok(pooled != null);
+  assert.ok(Math.abs(pooled - 60 / 11) < 0.01, `pooled should be 60s/11 blocks, got ${pooled}`);
+  assert.ok(pooled < 6, "an average of the two rates would be 16.5, which is the bug");
+});
+
+test("#600: a STALE source does not get a vote on the rate", () => {
+  // It is excluded from the spread, so it must not set the rate the spread is judged by. A
+  // source dark for minutes keeps the height it last reported, and its window stretches over
+  // the whole outage: review measured a six-minute-dark hosh contributing 900 s a block.
+  plant({
+    hosh: { height: 4_000_000, ageMs: REFERENCE_MAX_AGE_MS + 60_000, wasHeight: 3_999_990, wasAgeMs: REFERENCE_MAX_AGE_MS + 960_000 },
+    lightwalletd: { height: 4_000_100, ageMs: 1000, wasHeight: 4_000_000, wasAgeMs: 1_001_000 },  // 100 blocks / 1000 s = 10
+  });
+  const refs = getTipReferences(NOW);
+  assert.equal(refs.secondsPerBlock, 10, "only the fresh source sets the rate");
+});
+
+test("#600: the published rate is the one the spread was computed FROM", () => {
+  // The field's promise is that a reading can be reproduced from the journal. Rounding the
+  // published number while converting with the unrounded one broke it: review measured
+  // spreadBlocks 500 and secondsPerBlock 0 published beside spreadSeconds 200.
+  plant({
+    hosh: { height: 4_000_000, ageMs: 1000, wasHeight: 3_999_000, wasAgeMs: 401_000 },  // 1000 blocks / 400 s = 0.4
+    lightwalletd: { height: 4_000_500, ageMs: 1000 },
+  });
+  const refs = getTipReferences(NOW);
+  assert.ok(refs.secondsPerBlock != null && refs.secondsPerBlock > 0, "a sub-second rate must not round to zero");
+  assert.equal(refs.spreadSeconds, Math.round(refs.spreadBlocks! * refs.secondsPerBlock!), "the journal reproduces");
+});
+
+test("#600: a source that went BACKWARDS in a reorg contributes no rate", () => {
+  // A negative delta is real: a reference reorgs and reports a lower height than last time.
+  // Accepting it would pool negative blocks against positive seconds and produce a rate with
+  // the wrong sign, or cancel a real source out entirely.
+  assert.equal(
+    observedSecondsPerBlock({ hosh: { height: 90, at: 30_000, prevHeight: 100, prevAt: 0 } }),
+    null,
+    "one source, going backwards: no rate at all rather than a negative one",
+  );
+  const withGood = observedSecondsPerBlock({
+    hosh: { height: 90, at: 30_000, prevHeight: 100, prevAt: 0 },          // reorged, ignored
+    lightwalletd: { height: 110, at: 30_000, prevHeight: 100, prevAt: 0 }, // 10 blocks / 30 s
+  });
+  assert.equal(withGood, 3, "and the healthy source still answers, undiluted by the reorged one");
 });
