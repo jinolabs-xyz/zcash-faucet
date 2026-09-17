@@ -1070,7 +1070,7 @@ wd_run 4
 check "a lag INSIDE the app's own agreement tolerance is not a stall" \
   "! grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
 check "and the journal says the limit was raised and where the number came from" \
-  "grep -q 'confirmed-lag limit raised to 45 from the app.s published agreeBlocks=40' '$T/run.log'"
+  "grep -q 'confirmed-lag limit now 45 from the app.s published agreeBlocks=40' '$T/run.log'"
 
 # THE PARTNER, and it is what stops the row above being "never heal". The SAME 30-block lag with no
 # published tolerance is a stall on the floor of 25, exactly as before this change.
@@ -1081,7 +1081,7 @@ wd_run 4
 check "and the same lag with NO published tolerance is still a stall on the floor" \
   "grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
 check "and nothing claims a raised limit when the field is absent" \
-  "! grep -q 'confirmed-lag limit raised' '$T/run.log'"
+  "! grep -q 'confirmed-lag limit now' '$T/run.log'"
 
 # AND THE MARGIN ITSELF. The two cases above move the limit far enough that +5 is not what decides
 # them, so neither pins it - disclosed on the PR rather than left implied, and this is the case that
@@ -1096,7 +1096,31 @@ wd_run 4
 check "a lag inside the MARGIN above the tolerance is not a stall either" \
   "! grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
 check "and the limit it used is the tolerance plus the margin, not the tolerance" \
-  "grep -q 'confirmed-lag limit raised to 45' '$T/run.log'"
+  "grep -q 'confirmed-lag limit now 45' '$T/run.log'"
+# SAID ONCE, NOT EVERY SWEEP (SDE-App, review of #655). agreeBlocks is ~30 at testnet's cadence, so
+# the raise is true on EVERY sweep - ~2,880 identical lines a day describing a healthy steady
+# state, which is the shape this file refuses everywhere else.
+check "and the derived limit is announced when it CHANGES, not on every sweep" \
+  "[ \"\$(grep -c 'confirmed-lag limit now' '$T/run.log')\" = 1 ]"
+
+echo "== watchdog: nothing remote can switch the confirmed-lag rung off (#655 review)"
+# A FLOOR ALONE ONLY PROTECTS US FROM A SILENT APP. The point of floor-and-derive is that the
+# constant still governs when the app is WRONG: a runaway tolerance would otherwise raise the limit
+# without bound and disable this rung from the far end of an HTTP call.
+wd_node_env
+# ZEBRA'S OWN LAG STAYS UNDER ITS LIMIT, so only the CORROBORATED path can trigger here. My first
+# fixture had zebra 200 behind its own estimate, over NODE_LAG_LIMIT=100 - so the restart came from
+# that path and the row passed with the ceiling deleted. It proved nothing about the cap.
+export STUB_ZEBRA_BLOCKS=4340700 STUB_ZEBRA_EST=4340750     # 50 by the clock: UNDER NODE_LAG_LIMIT
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4340900  # corroborated, 200 ahead: over the cap
+export STUB_READY_AGREE_BLOCKS=100000                       # a nonsense tolerance
+wd_run 4
+check "an absurd published tolerance is capped rather than obeyed" \
+  "grep -q 'capping at 100' '$T/run.log'"
+check "and the rung still fires, so the app cannot turn it off remotely" \
+  "grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
+check "and the cap is said once, not every sweep" \
+  "[ \"\$(grep -c 'capping at' '$T/run.log')\" = 1 ]"
 
 echo "== watchdog: a lag only zebra believes in buys restarts, never a rewind or a parked miner"
 wd_node_env
