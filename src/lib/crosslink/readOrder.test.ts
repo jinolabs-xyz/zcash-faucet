@@ -37,9 +37,18 @@ const NOW = 1_700_000_000_000;
 
 /** A broker double on a real socket: one JSON request in, one reply out. */
 let server: Server | null = null;
+/**
+ * HOW MANY TIMES THE SOCKET WAS DIALLED (#564). Every ctazRpc call is its own connection, so
+ * counting accepts is counting connections - which is the figure OPERATIONS.md multiplies and
+ * the thing repo.sh could only ever grep for.
+ */
+let conns = 0;
+/** Fields merged over the recency reply, so a test can drive a particular reading state. */
+let recencyOverride: Record<string, unknown> = {};
 function serveBroker(blocks: number, tip: number): Promise<void> {
   return new Promise((resolve) => {
     server = createServer({ allowHalfOpen: true }, (conn) => {
+      conns++;
       let raw = "";
       conn.on("data", (d) => (raw += d));
       conn.on("end", () => {
@@ -57,6 +66,7 @@ function serveBroker(blocks: number, tip: number): Promise<void> {
                 my_round: 12,
                 my_locked_round: 11,
                 finalizer_statuses: Array.from({ length: 46 }, () => ({})),
+                ...recencyOverride,
               }
             : { blocks, estimatedheight: tip, headers: tip };
         conn.end(JSON.stringify({ jsonrpc: "2.0", id: req.id, result }));
@@ -204,4 +214,47 @@ test("A SLOW NODE'S REPLY IS CLASSIFIED AT REPLY TIME, not against the pre-call 
     await serveBroker(294_800, 294_801);
     writeFreshFile();
   }
+});
+
+/**
+ * HOW MANY CONNECTIONS ONE TICK OPENS (#564).
+ *
+ * OPERATIONS.md says the cTAZ socket is dialled six times a minute, and the arithmetic is three
+ * ticks times the two RPCs a tick makes. The repo suite pinned that with a grep for
+ * `await readCtazInfo()` in read.ts, and a grep cannot see REACHABILITY. The CTO red-team's
+ * mutant keeps the text and makes the call conditional:
+ *
+ *     const info = reading.state === "cannot-verify" ? { blocks: null, tip: null } : await readCtazInfo();
+ *
+ * In the state OPERATIONS.md is actually describing - node parked, every tick cannot-verify -
+ * that is one dial per tick, three a minute, and the doc is wrong. With the mutant in place the
+ * repo suite stayed 175/0, tsc was clean, eslint was clean and all 59 crosslink unit tests passed.
+ * Every gate green while the property was false.
+ *
+ * These count the accepts on the real socket, which is the property itself rather than its
+ * spelling.
+ */
+test("#564: one tick dials the socket exactly twice, which is what six-a-minute multiplies", async () => {
+  recencyOverride = {};
+  conns = 0;
+  const state = await readCtazNodeState(NOW);
+  // THE PARTNER FIRST: two dials is satisfied by two FAILURES just as well as by the two calls
+  // the figure is about, so the tick has to have actually answered over RPC.
+  assert.equal(state.source, "rpc", "the tick answered over RPC, so the dials below are the real path");
+  assert.equal(conns, 2, "readCtazRecency and readCtazInfo are one connection each");
+});
+
+test("#564: and it still dials twice when the reading is cannot-verify, which is the parked node OPERATIONS.md describes", async () => {
+  // A negative round lag is cannot-verify while the broker answers perfectly - so this drives the
+  // reading state the mutant keys on, without breaking the socket underneath it.
+  recencyOverride = { my_round: 11, my_locked_round: 12 };
+  conns = 0;
+  const state = await readCtazNodeState(NOW);
+  assert.equal(state.reading.state, "cannot-verify", "the case is in the state it claims to be about");
+  assert.equal(conns, 2, "the second RPC is not skipped when the recency reading cannot verify");
+  // And the second dial did something: the info call is what supplies these, and a tick that
+  // skipped it reports them null while still opening one connection.
+  assert.equal(state.blocks, 294_800, "the info call's answer reached the state");
+  assert.equal(state.tip, 294_801);
+  recencyOverride = {};
 });
