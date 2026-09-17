@@ -155,3 +155,9 @@ li[data-active] .mark{border-color:var(--orange);border-top-color:transparent;an
  * "receipt actions: even grid" section). */
 .phase[data-phase="sent"] .row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:calc(.6*var(--u))}
 .phase[data-phase="sent"] .row .tag{justify-content:center;width:100%}
+
+/* #654: the reserve notice sits in the hero column now, not in the claim card. It keeps the .phase
+   box so it still reads as one of the page's status panels, and takes a top margin because it is
+   the last thing in that column rather than one of a stack inside a panel. Left-aligned with the
+   copy above it; the card's own panels are unaffected. */
+.reserve-aside{margin-top:calc(1.4*var(--u));align-self:start;width:100%}

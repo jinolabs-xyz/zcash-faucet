@@ -1052,6 +1052,23 @@ export default function Home() {
                 <p className="lede small">Your browser solves a short puzzle instead of a CAPTCHA. A few seconds, longer on a phone, and you can cancel it.</p>
               )}
               <HeroChips status={status} onView={(v) => setView(v)} />
+              {/* RESERVE LOW, IN THE HERO COLUMN RATHER THAN THE CLAIM CARD (#654, owner: "this below
+                  in the left hand bottom side of the website not in that component"). It is a fact about
+                  the faucet's float, not a step in the claim, and inside the card it was the content that
+                  pushed the panel past its clamp - 41px at 1280x800 and 128px at 1024x768, hidden rather
+                  than shown because the panel scrolls. Claims still work while it is up, which is why it
+                  was never an error state. */}
+              {phase === "ready" && refilling && network === "taz" && (
+                <div className="phase reserve-aside" data-phase="reserve-low">
+                  <div className="kicker">Reserve</div>
+                  <h3>The reserve is low</h3>
+                  <p>Claims still work. A refill is due, and if it runs out this page says so.</p>
+                  <div className="figs">
+                    <span><b className="num">{reserve?.spendableTaz != null ? num(Math.floor(reserve.spendableTaz)) : "-"}</b>spendable TAZ</span>
+                    <span><b className="num">{reserve?.lowTaz != null ? num(reserve.lowTaz) : "-"}</b>low mark</span>
+                  </div>
+                </div>
+              )}
             </div>
             <figure className="hero-mascot" aria-label="The faucet's fox, turning to follow your pointer">
               <Mascot />
@@ -1321,20 +1338,6 @@ export default function Home() {
             </p>
             <div className="figs">
               <span><b className="num">{status?.queueDepth != null ? num(status.queueDepth) : "-"}</b>ahead of you</span>
-            </div>
-          </div>
-        )}
-
-        {/* RESERVE LOW (index.html:469-473): ready, and a refill is due. Claims still work,
-            which is the whole point of the panel being separate from `empty`. */}
-        {phase === "ready" && refilling && network === "taz" && (
-          <div className="phase" data-phase="reserve-low">
-            <div className="kicker">Reserve</div>
-            <h3>The reserve is low</h3>
-            <p>Claims still work. A refill is due, and if it runs out this page says so.</p>
-            <div className="figs">
-              <span><b className="num">{reserve?.spendableTaz != null ? num(Math.floor(reserve.spendableTaz)) : "-"}</b>spendable TAZ</span>
-              <span><b className="num">{reserve?.lowTaz != null ? num(reserve.lowTaz) : "-"}</b>low mark</span>
             </div>
           </div>
         )}

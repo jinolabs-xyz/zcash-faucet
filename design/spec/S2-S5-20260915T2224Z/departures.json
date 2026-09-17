@@ -197,5 +197,10 @@
     "kind": "divergence",
     "why": "#648, owner 2026-09-17: the claim card must show its content rather than scroll it, and the design has no rule for the TERMINAL states because the frozen snapshot shows the card before a claim. Measured with a real claim driven to a receipt: the panel needs 572/536 at 1440 and 534/455 at 1280, i.e. 36px and 79px more than it has. The copy block is 113px and 112px at those widths, so letting it give way clears both with room. It is only hidden AFTER a claim, where it is a caption explaining the product to someone who has already used it while competing with the txid, the buttons and the spending key they came back to read. Before the claim it is untouched, which is the state the design froze and the state the owner nominated the block from.",
     "shipped": "display:none"
+  },
+  ".reserve-aside": {
+    "kind": "divergence",
+    "why": "#654, owner: \"this below in the left hand bottom side of the website not in that component\". The design draws the reserve notice inside the claim card, where it was the content that pushed the panel past its clamp - 41px hidden at 1280x800 and 128px at 1024x768, concealed rather than shown because .card.claim > .panel scrolls. It is a fact about the faucet's float rather than a step in the claim, and claims keep working while it is up, so it belongs beside the hero copy. Keeps the .phase box so it still reads as one of the page's status panels; only the placement differs from the snapshot.",
+    "shipped": "margin-top:calc(1.4*var(--u)); align-self:start; width:100%"
   }
 }
