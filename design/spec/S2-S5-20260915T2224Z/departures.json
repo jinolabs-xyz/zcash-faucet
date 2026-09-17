@@ -192,5 +192,10 @@
     "kind": "divergence",
     "why": "#648, owner: \"the text starts just right after the buttons which looks very clumsy... the information is squashed\". .fine carries margin:0 and the action row has nothing below it, so the prose sits flush against the buttons. Adjacent-sibling only, so prose that does not follow a row is untouched.",
     "shipped": "margin-top:calc(.85*var(--u))"
+  },
+  ".card.claim[data-terminal] > .card-copy": {
+    "kind": "divergence",
+    "why": "#648, owner 2026-09-17: the claim card must show its content rather than scroll it, and the design has no rule for the TERMINAL states because the frozen snapshot shows the card before a claim. Measured with a real claim driven to a receipt: the panel needs 572/536 at 1440 and 534/455 at 1280, i.e. 36px and 79px more than it has. The copy block is 113px and 112px at those widths, so letting it give way clears both with room. It is only hidden AFTER a claim, where it is a caption explaining the product to someone who has already used it while competing with the txid, the buttons and the spending key they came back to read. Before the claim it is untouched, which is the state the design froze and the state the owner nominated the block from.",
+    "shipped": "display:none"
   }
 }

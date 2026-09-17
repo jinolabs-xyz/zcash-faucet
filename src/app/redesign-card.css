@@ -39,6 +39,11 @@
 .card.claim{max-height:100%;display:flex;flex-direction:column}
 .card.claim > .panel{flex:1 1 auto;min-height:0;overflow:auto}
 .card.claim > .card-copy{flex:none}
+/* #648: after a claim the copy block is a caption explaining the product to someone who has
+   already used it, while competing with the txid, the buttons and the spending key they came
+   back to read. Measured: it is 113px at 1440 and 112px at 1280, against receipt deficits of
+   36px and 79px. Before the claim it earns its place and is untouched. */
+.card.claim[data-terminal] > .card-copy{display:none}
 .linkbtn{background:none;border:0;padding:0;align-self:flex-start;color:var(--accent-text);font-size:calc(.9*var(--u));font-weight:600;cursor:pointer}
 .linkbtn:hover{text-decoration:underline}
 .assistant-head .ring{width:calc(2.16*var(--u));height:calc(2.16*var(--u));border-radius:50%;background:var(--orange-soft);display:grid;place-items:center;color:var(--orange)}

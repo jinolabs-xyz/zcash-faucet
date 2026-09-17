@@ -1060,7 +1060,11 @@ export default function Home() {
             {/* THE CARD SHELL, with the CURRENT claim markup inside it. S2b transcribes the
                 card's own contents and puts the phase changes on `motion`; this slice gives
                 them the shell they will live in, so the hero is real a merge earlier. */}
-            <article className="card claim feature" id="claim" aria-labelledby="h1" ref={cardRef}>
+            {/* #648: the card announces when it is in a TERMINAL state - a receipt or an error -
+                so the stylesheet can let the explanatory copy give way to what the reader now
+                needs. Derived from the phase machine, not from what happens to be rendered. */}
+            <article className="card claim feature" id="claim" aria-labelledby="h1" ref={cardRef}
+              data-terminal={phase === "success" || phase === "error" || phase === "cooldown" ? "" : undefined}>
               {/* THE PANEL, which this card did not have. The design's claim card is
                   article.card.claim.feature > div.panel + div.card-copy (index.html:429, :430,
                   :553) and our content sat directly on the article, so `.panel` (hero.css:25),
