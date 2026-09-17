@@ -20,18 +20,29 @@ import assert from "node:assert/strict";
 process.env.HOSH_URL = "http://127.0.0.1:9/";
 process.env.TIP_ORACLE_ENDPOINT = "";
 
-const { getTipReferences, referenceTipAt, referenceTip, readTipReferences, resetExternalTipForTests, REFERENCE_MAX_AGE_MS, AGREE_BLOCKS } =
+const { getTipReferences, referenceTipAt, referenceTip, readTipReferences, resetExternalTipForTests, REFERENCE_MAX_AGE_MS, AGREE_BLOCKS, AGREE_SECONDS, observedSecondsPerBlock } =
   await import("./externalTip.ts");
 
 const NOW = Date.parse("2026-09-15T13:06:00Z");
-type Src = { height: number; at: number; host: string | null };
+type Src = { height: number; at: number; host: string | null; prevHeight?: number; prevAt?: number };
 const g = globalThis as unknown as { __faucetTipSources?: Record<string, Src> };
 
 /** Plant the per-source cache the background refresh fills. Ages are relative to NOW. */
-function plant(sources: Record<string, { height: number; ageMs: number; host?: string | null }>) {
+function plant(
+  sources: Record<string, { height: number; ageMs: number; host?: string | null; wasHeight?: number; wasAgeMs?: number }>,
+) {
   resetExternalTipForTests();
   g.__faucetTipSources = Object.fromEntries(
-    Object.entries(sources).map(([k, v]) => [k, { height: v.height, at: NOW - v.ageMs, host: v.host ?? null }]),
+    Object.entries(sources).map(([k, v]) => [
+      k,
+      {
+        height: v.height,
+        at: NOW - v.ageMs,
+        host: v.host ?? null,
+        // The previous sample, which is the only thing a block RATE can be observed from.
+        ...(v.wasHeight != null && v.wasAgeMs != null ? { prevHeight: v.wasHeight, prevAt: NOW - v.wasAgeMs } : {}),
+      },
+    ]),
   );
 }
 
@@ -241,4 +252,71 @@ test("A READ KICKS THE REFRESH once the cache is getting old, which is what keep
   delete gg.__faucetTipLastAttemptAt;
   referenceTip();
   assert.equal(typeof gg.__faucetTipLastAttemptAt, "number", "no sources at all also kicks");
+});
+
+/* --- the tolerance is a TIME, because the disagreement is one (#600 step 2) --- */
+
+test("#600: the SAME block spread agrees at a fast cadence and disagrees at a slow one", () => {
+  // The whole bug in one case. A block count cannot express an indexer that runs behind by
+  // a roughly fixed interval: step 1 measured p50 8 blocks but 70 SECONDS, so the seconds
+  // figure is the stable one. 40 blocks is under seven minutes while testnet makes a block
+  // every 10 s, and over half an hour at 50 s.
+  plant({
+    hosh: { height: 4_000_000, ageMs: 1000, wasHeight: 3_999_900, wasAgeMs: 1_001_000 },  // 100 blocks / 1000 s = 10 s
+    lightwalletd: { height: 4_000_040, ageMs: 1000 },
+  });
+  const fast = getTipReferences(NOW);
+  assert.equal(fast.spreadBlocks, 40);
+  assert.equal(fast.secondsPerBlock, 10);
+  assert.equal(fast.spreadSeconds, 400);
+  assert.equal(fast.corroborated, false, "400 s is past the 300 s tolerance");
+
+  plant({
+    hosh: { height: 4_000_000, ageMs: 1000, wasHeight: 3_999_980, wasAgeMs: 101_000 },    // 20 blocks / 100 s = 5 s
+    lightwalletd: { height: 4_000_040, ageMs: 1000 },
+  });
+  const faster = getTipReferences(NOW);
+  assert.equal(faster.spreadBlocks, 40, "the same forty blocks");
+  assert.equal(faster.secondsPerBlock, 5);
+  assert.equal(faster.spreadSeconds, 200);
+  assert.equal(faster.corroborated, true, "at twice the cadence the same gap is half the time");
+});
+
+test("#600 THE PARTNER: the block count alone would have answered the same for both", () => {
+  // Without this the case above passes on any rule that happens to split 40 blocks. Under
+  // the OLD rule both readings are identical, so only the rate can be what changed it.
+  assert.ok(40 > AGREE_BLOCKS, "40 blocks breaches the old count in BOTH readings above");
+});
+
+test("#600: with no rate observed yet the block tolerance still answers, rather than a guess", () => {
+  // The first poll or two after a restart. Converting through the nominal 75 s target would
+  // inflate every spread by six on a testnet making blocks every 10 s.
+  plant({ hosh: { height: 4_000_000, ageMs: 1000 }, lightwalletd: { height: 4_000_000 + AGREE_BLOCKS, ageMs: 1000 } });
+  const refs = getTipReferences(NOW);
+  assert.equal(refs.secondsPerBlock, null);
+  assert.equal(refs.spreadSeconds, null, "null seconds is how a reader tells which rule answered");
+  assert.equal(refs.corroborated, true, "exactly at the block bound, as before");
+});
+
+test("#600: a source that has not moved gives no rate, rather than a divide by zero", () => {
+  plant({
+    hosh: { height: 4_000_000, ageMs: 1000, wasHeight: 4_000_000, wasAgeMs: 601_000 },
+    lightwalletd: { height: 4_000_010, ageMs: 1000 },
+  });
+  assert.equal(getTipReferences(NOW).secondsPerBlock, null);
+  assert.equal(observedSecondsPerBlock({ hosh: { height: 5, at: 10, prevHeight: 5, prevAt: 0 } }), null);
+  assert.equal(observedSecondsPerBlock({ hosh: { height: 9, at: 10, prevHeight: 5, prevAt: 10 } }), null, "no elapsed time either");
+});
+
+test("#600: the tolerance is a boundary in seconds", () => {
+  const atBound = (spread: number) => {
+    plant({
+      hosh: { height: 4_000_000, ageMs: 1000, wasHeight: 3_999_900, wasAgeMs: 1_001_000 },  // 10 s a block
+      lightwalletd: { height: 4_000_000 + spread, ageMs: 1000 },
+    });
+    return getTipReferences(NOW);
+  };
+  assert.equal(atBound(AGREE_SECONDS / 10).spreadSeconds, AGREE_SECONDS);
+  assert.equal(atBound(AGREE_SECONDS / 10).corroborated, true, "exactly at the bound still agrees");
+  assert.equal(atBound(AGREE_SECONDS / 10 + 1).corroborated, false, "one block past it does not");
 });

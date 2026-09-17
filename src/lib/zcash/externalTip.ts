@@ -363,7 +363,7 @@ const g = globalThis as unknown as {
   __faucetTipRefreshing?: boolean;
   __faucetTipLastAttemptAt?: number;
   __faucetTipBootChecked?: boolean;
-  __faucetTipSources?: Partial<Record<ReferenceName, { height: number; at: number; host: string | null }>>;
+  __faucetTipSources?: Partial<Record<ReferenceName, { height: number; at: number; host: string | null; prevHeight?: number; prevAt?: number }>>;
 };
 
 /** The references we ask, by name. Open-ended on purpose: the watchdog's fork rung reads
@@ -384,9 +384,15 @@ export interface TipReferences {
   sources: Partial<Record<ReferenceName, TipReference>>;
   /** The widest disagreement between non-stale sources, or null when fewer than two. */
   spreadBlocks: number | null;
-  /** spreadBlocks <= AGREE_BLOCKS. NULL, never false, when it cannot be computed: a
-   *  reader treating "cannot tell" as "they disagree" would page on an absent source. */
+  /** spreadSeconds <= AGREE_SECONDS (#600 step 2). NULL, never false, when it cannot be
+   *  computed: a reader treating "cannot tell" as "they disagree" would page on an absent
+   *  source. */
   corroborated: boolean | null;
+  /** The spread converted through the observed block rate: the unit the tolerance uses. */
+  spreadSeconds: number | null;
+  /** The rate the conversion used, so a reading can be reproduced from the journal. Null
+   *  before any source has moved twice, which is also when the block tolerance answers. */
+  secondsPerBlock: number | null;
   /** The source whose height a caller should judge a node against: the highest
    *  non-stale one. Null when no source is usable. */
   used: ReferenceName | null;
@@ -471,6 +477,49 @@ export const REFERENCE_MAX_AGE_MS = MAX_AGE_MS;
  */
 export const AGREE_BLOCKS = num("TIP_AGREE_BLOCKS", 20);
 
+/**
+ * WHAT CORROBORATION IS FOR, which the issue correctly says was never written down: it
+ * decides whether the higher reference is a trustworthy yardstick to judge OUR node
+ * against. Two independent views telling roughly the same story means either can serve as
+ * that yardstick. It is not a fork check; these sources publish heights, not hashes, so
+ * they cannot see a fork at all.
+ *
+ * IN SECONDS, BECAUSE THAT IS THE UNIT THE DISAGREEMENT HAS (#600 step 2). What is being
+ * absorbed is an indexer running behind the chain by a roughly fixed INTERVAL. Expressed
+ * as a block count it drifts with the block rate: 20 blocks is three to four minutes while
+ * testnet produces one every 9 to 13 s, and twenty-five minutes on a 75 s day. Step 1
+ * measured the spread over a day of the app's own polls: p50 8 blocks but 70 SECONDS, with
+ * 13.3% of samples breaching 20 blocks at fast cadence and a maximum of 36. The seconds
+ * figure is the stable one, which is the whole argument for changing the unit.
+ *
+ * 300 s is a little over four times the measured typical lag. It is deliberately not
+ * derived from AGREE_BLOCKS: 20 blocks at the 75 s target would be 1500 s, twenty times
+ * the observed lag, which would make this say "corroborated" almost always and be a
+ * different kind of useless. Same num() reasoning as AGREE_BLOCKS above.
+ */
+export const AGREE_SECONDS = num("TIP_AGREE_SECONDS", 300);
+
+
+
+/**
+ * Seconds per block as actually observed, averaged over whichever sources have advanced.
+ * Coarse on purpose: the point is that the tolerance stops drifting by an order of
+ * magnitude with the cadence, not that the estimate is precise. Null before any source has
+ * moved twice.
+ */
+export function observedSecondsPerBlock(
+  sources: Partial<Record<ReferenceName, { height: number; at: number; prevHeight?: number; prevAt?: number }>>,
+): number | null {
+  const rates: number[] = [];
+  for (const v of Object.values(sources)) {
+    if (v?.prevHeight == null || v.prevAt == null) continue;
+    const blocks = v.height - v.prevHeight;
+    const seconds = (v.at - v.prevAt) / 1000;
+    if (blocks > 0 && seconds > 0) rates.push(seconds / blocks);
+  }
+  return rates.length ? rates.reduce((a, b) => a + b, 0) / rates.length : null;
+}
+
 function cacheRef(): TipCache {
   return (g.__faucetTipCache ??= { height: null, at: 0, source: "none", host: null });
 }
@@ -496,8 +545,17 @@ async function refresh(waiveGap = false): Promise<void> {
     // round keeps its last one: the age is what turns an outage into an honest "stale",
     // exactly as MAX_AGE_MS does for the aggregate below.
     const sources = (g.__faucetTipSources ??= {});
-    if (both.hosh != null) sources.hosh = { height: both.hosh, at: now, host: null };
-    if (both.direct) sources.lightwalletd = { height: both.direct.height, at: now, host: both.direct.host };
+    // The PREVIOUS reading is kept beside the current one so the chain's block rate can be
+    // observed (#600 step 2). Only advanced when the height actually moved: a source that
+    // repeats itself would otherwise give a zero delta and a nonsense rate.
+    const carry = (was: { height: number; at: number; prevHeight?: number; prevAt?: number } | undefined, h: number) =>
+      was == null
+        ? {}
+        : was.height !== h
+          ? { prevHeight: was.height, prevAt: was.at }
+          : { prevHeight: was.prevHeight, prevAt: was.prevAt };
+    if (both.hosh != null) sources.hosh = { height: both.hosh, at: now, host: null, ...carry(sources.hosh, both.hosh) };
+    if (both.direct) sources.lightwalletd = { height: both.direct.height, at: now, host: both.direct.host, ...carry(sources.lightwalletd, both.direct.height) };
 
     // THE AGGREGATE CACHE KEEPS ITS OLD MEANING, deliberately: the aggregate when we have
     // it, the direct endpoint when we do not. Every existing reader (the shield gate, the
@@ -558,11 +616,28 @@ export function getTipReferences(now: number = Date.now()): TipReferences {
   const fresh = (Object.entries(sources) as [ReferenceName, TipReference][]).filter(([, v]) => !v.stale);
   const heights = fresh.map(([, v]) => v.height);
   const spreadBlocks = heights.length >= 2 ? Math.max(...heights) - Math.min(...heights) : null;
+  // NO RATE MEANS NO CONVERSION, not a guessed one. Before a source has moved twice there
+  // is nothing to convert through, and the 75 s target is not a safe stand-in: testnet is
+  // currently producing a block every 9 to 13 s, so using the nominal figure would inflate
+  // every spread by six and make this stricter than the count it replaces. In that window
+  // the old block tolerance still answers, which is the behaviour this had before.
+  const secondsPerBlock = observedSecondsPerBlock(raw);
+  const spreadSeconds =
+    spreadBlocks == null || secondsPerBlock == null ? null : Math.round(spreadBlocks * secondsPerBlock);
   const used = fresh.length ? fresh.reduce((a, b) => (b[1].height > a[1].height ? b : a))[0] : null;
   return {
     sources,
     spreadBlocks,
-    corroborated: spreadBlocks == null ? null : spreadBlocks <= AGREE_BLOCKS,
+    corroborated:
+      spreadBlocks == null
+        ? null
+        : spreadSeconds != null
+          ? spreadSeconds <= AGREE_SECONDS
+          : spreadBlocks <= AGREE_BLOCKS,
+    // Both reported: the watchdog's journal line has to say what it saw, and null seconds
+    // is how a reader tells which of the two rules answered.
+    spreadSeconds,
+    secondsPerBlock: secondsPerBlock == null ? null : Math.round(secondsPerBlock),
     used,
     // From the same entry `used` names, not recomputed, so a future change to the choice
     // rule cannot move one without the other.
