@@ -3956,6 +3956,23 @@ try {
   // between a stranger's address and someone else's spending key.
   ok("#515: and the claim is allowed, because the unseen-key gate is about the address in the box",
     await submitB.isEnabled(), (await submitB.textContent())?.trim());
+
+  // PIN THE SUBJECT AT THE MOMENT IT MATTERS, NOT EARLIER (SDE-Infra, #633 review). The row above
+  // proves a key was held when it ran; it does not prove one is still held now. On their box
+  // `genKey` was set at the generate step and NULL by the time the receipt rendered, so the gate
+  // below passed without the guard being consulted at all - a vacuity my "Copy txid" control
+  // cannot see, because the control is about whether the LOOKING works and this is about whether
+  // the SUBJECT survived.
+  //
+  // WITH B IN THE BOX THERE IS NO DOM EVIDENCE EITHER WAY: the generated-key panel renders only
+  // when `genKey.address === addr`, so it is hidden both when the key is alive-but-mismatched and
+  // when it is gone. Putting A back for an instant is the only thing that tells them apart.
+  await page.getByTestId("address-input").fill(keyA);
+  ok("#515: and A's key is STILL held at the moment of the claim, not merely when it was made",
+    await page.getByTestId("generated-key").isVisible(),
+    "the panel returns when A goes back in the box, so genKey survived to here");
+  await page.getByTestId("address-input").fill(addrB);
+
   await submitB.click();
   await page.getByTestId("sent-badge").waitFor({ timeout: 120_000 });
 
