@@ -435,9 +435,10 @@ export function acceptPercent(miner: { submittedAccepted?: number | null; submit
  */
 export function acceptSentence(miner: { submittedAccepted?: number | null; submittedRejected?: number | null } | null | undefined): string {
   const pct = acceptPercent(miner);
-  // Same scope fix as minerLabel's wins() (#645): the submitted counts reset with the
-  // process, so "yet" reads as "never" on a miner that has won plenty before a restart.
-  if (pct === null) return "none submitted since it started";
+  // And "yet" is right again here too (#645, Rust half at 3f59ef5): the submitted counts are
+  // resumed from the heartbeat now, so a zero is a statement about the miner rather than about
+  // this process. Absent still renders as unknown rather than as zero.
+  if (pct === null) return "no blocks submitted yet";
   return `${pct}% accepted by our node`;
 }
 

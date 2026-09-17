@@ -308,7 +308,7 @@ test("a miner that has submitted nothing has no acceptance rate", () => {
   // 0% is a measurement. Nothing submitted is the absence of one, and the two look
   // identical at zero while meaning entirely different things.
   assert.equal(acceptPercent({ submittedAccepted: 0, submittedRejected: 0 }), null);
-  assert.equal(acceptSentence({ submittedAccepted: 0, submittedRejected: 0 }), "none submitted since it started");
+  assert.equal(acceptSentence({ submittedAccepted: 0, submittedRejected: 0 }), "no blocks submitted yet");
   assert.equal(acceptPercent(null), null);
   assert.equal(acceptPercent({}), null);
   // A genuine zero rate, which IS a measurement, still reads as one.
@@ -428,18 +428,22 @@ test("the word is never a number, in any combination", () => {
 });
 
 /**
- * #645: solvedCount and the submitted counts reset with the miner process, so a zero must
- * not be phrased as a statement about the miner's life. Prod showed "0 / no blocks submitted
- * yet" in orange on a healthy miner that had won 69 before that day's restart. Asserted as
- * the POSITIVE property - the sentence names its scope - because a denylist of the words I
- * happen to think of ("yet", "never") would pass the next phrasing that means the same thing.
+ * #645: the counts are LIFETIME figures now - the miner resumes them from its heartbeat (Rust half
+ * at 3f59ef5). So a zero is a statement about the miner rather than about this process, and "yet"
+ * is the honest word again. What does NOT change, and matters more now than it did, is that ABSENT
+ * is not zero: a lifetime zero is a much stronger claim than a per-process one, so a missing or
+ * unreadable count must still render as unknown rather than as "never won one".
  */
-test("#645: a zero count is scoped to this process, not claimed as a lifetime", () => {
+test("#645: a zero count is now a claim about the MINER, because the counter survives a restart", () => {
   const s = acceptSentence({ submittedAccepted: 0, submittedRejected: 0 });
-  assert.match(s, /since it started/, `"${s}" does not say which period it is about`);
+  assert.match(s, /yet/, `"${s}" should read as a lifetime statement now the count is resumed`);
+  assert.doesNotMatch(s, /since it started/, "the per-process scoping is wrong once the count is lifetime");
 });
 
-test("#645: absent is still not zero - no counts at all says nothing about blocks", () => {
+test("#645: absent is STILL not zero, and the stakes are higher now the zero is a lifetime claim", () => {
+  // A miner with no readable heartbeat has not "never won a block" - we do not know. The Rust half
+  // returns null for a missing, unreadable, non-JSON, unknown-schema or pre-#286 file precisely so
+  // the page can say so; this row is the page's half of that contract.
   assert.equal(acceptSentence({ submittedAccepted: null, submittedRejected: null }), acceptSentence(null));
-  assert.match(acceptSentence(null), /since it started|unknown/i);
+  assert.match(acceptSentence(null), /yet|unknown/i);
 });
