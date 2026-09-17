@@ -241,10 +241,11 @@ fn main() {
             }
             Ok(Outcome::Rejected { height, reason }) => {
                 if let Ok(mut g) = hb.lock() {
-                    g.submitted(false);
+                    g.rejected(&reason);
                 }
-                // The reason is LOGGED, never written to the heartbeat: it is zebra's text and
-                // the heartbeat is public.
+                // The TEXT is logged and never written to the heartbeat - that file is public and
+                // an error string is where a credentialled URL ends up. A fixed token goes in, so
+                // a rejection is a cause and not just a count from outside the box.
                 log(&format!("height {height}: zebra rejected the block: {reason}"));
             }
             Err(e) => {
@@ -344,6 +345,12 @@ fn mine_once(rpc: &Rpc, config: &Config, hb: &Arc<Mutex<heartbeat::State>>) -> R
         solved
     });
     if abandon.load(Ordering::Relaxed) {
+        // COUNTED, not just logged (#660 shipped without this). An abandoned solve and a genuine
+        // no-solution-in-window were identical from outside the box, so the panel could not say
+        // whether the watcher was working or the miner was not solving at all.
+        if let Ok(mut g) = hb.lock() {
+            g.abandoned();
+        }
         log(&format!(
             "abandoned height {} after {:.2}s: the tip moved off {} while we were solving",
             t.height,
@@ -763,6 +770,30 @@ mod tip_watch_tests {
 
     /// The solver reads the flag: set it before the loop starts and no thread grinds at all.
     /// This is the half that would still be broken if watch_tip were perfect and nobody checked it.
+    /// A TEXT PIN, AND IT SAYS SO. The counter itself is covered by rows in heartbeat.rs, but
+    /// the CALL SITE is not: `mine_once` takes a concrete `&Rpc` with no seam, so nothing can
+    /// drive the abandon branch without a real node. Measured: deleting `g.abandoned()` from that
+    /// branch leaves the whole suite green at 81/0, which is the same untested-wiring gap #660
+    /// shipped with one level down.
+    ///
+    /// So this catches a DELETION and nothing more. It cannot catch a branch that stopped being
+    /// reachable. The behavioural version needs an Rpc trait with a double behind it, which is a
+    /// bigger change than this one and is named in the PR rather than pretended at here.
+    #[test]
+    fn the_abandon_branch_still_records_to_the_heartbeat() {
+        let src = include_str!("main.rs");
+        let branch = src
+            .split("if abandon.load(Ordering::Relaxed) {")
+            .nth(1)
+            .expect("the abandon branch has moved or been renamed");
+        let head = &branch[..branch.len().min(600)];
+        assert!(
+            head.contains("g.abandoned()"),
+            "the abandon branch no longer records to the heartbeat, so an abandoned solve and a \
+             genuine no-solution are indistinguishable from outside the box again"
+        );
+    }
+
     #[test]
     fn the_solver_honours_an_abandon_set_before_it_starts() {
         let abandon = Arc::new(AtomicBool::new(true));

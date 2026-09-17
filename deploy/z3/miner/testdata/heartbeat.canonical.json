@@ -16,7 +16,10 @@
   "lastSolvedAt": "2026-07-25T23:45:00Z",
   "submittedAccepted": 3,
   "submittedRejected": 1,
+  "lastRejectReason": "stale-parent",
   "lastSubmittedAt": "2026-07-25T23:45:01Z",
+  "abandonedCount": 7,
+  "lastAbandonedAt": "2026-07-25T23:51:40Z",
   "nodeLag": 2,
   "waitingSince": null,
   "waitingReason": null
