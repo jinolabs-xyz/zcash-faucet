@@ -1928,3 +1928,20 @@ done
 check "and every context main requires is a job this workflow defines" \
   "[ -z '$MQ_MISSING' ]"
 
+# DEFINED IS NOT THE SAME AS REPORTS, and SDE-UI blocked this PR on exactly that gap. A required
+# job carrying `if: github.event_name != 'merge_group'` is still defined, still named, and SKIPS
+# on the queue - and a skipped job reports no conclusion, so the entry waits forever. Measured by
+# them: adding that condition to `smoke` left the suite at 256/0, which is the outage this PR's
+# own body describes, invisible to the row above.
+#
+# So: no required job may carry a job-level `if:` at all. That is stricter than the failure needs
+# and deliberately so - a conditional whose expression happens to be true today is a row nobody
+# re-verifies, and the four contexts main blocks on are not the place for cleverness.
+MQ_COND=""
+for j in app miner smoke shell; do
+  body="$(awk -v j="  $j:" '$0==j{f=1;next} f&&/^  [a-z][a-z0-9-]*:$/{f=0} f' "$CIWF")"
+  printf '%s\n' "$body" | grep -qE '^    if:' && MQ_COND="$MQ_COND [$j]"
+done
+check "and no required job is conditional, because a SKIPPED job reports nothing and strands the queue" \
+  "[ -z '$MQ_COND' ]"
+
