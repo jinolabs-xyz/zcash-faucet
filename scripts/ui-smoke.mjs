@@ -595,7 +595,12 @@ async function checkCardInnerPadding(browser) {
   // `.panel` (redesign-hero.css:25, 7.5% 7.5% 8%). The card-edge row below still measures the
   // composite, so deleting the panel's padding still turns it red - that is why it stays as it
   // is rather than being re-pointed. What it could NOT see is the boxes one level in.
-  for (const vp of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+  // #654: the SHORT viewports are here because that is where the card could not hold its content
+  // and the panel's overflow:auto hid the difference - 1024x768 lost 128px, a quarter of the panel,
+  // and nothing in this file could see it because nothing crossed an edge. 1440x900 and 390 both
+  // passed throughout. A row that only runs where the bug is absent is not coverage.
+  for (const vp of [{ width: 1440, height: 900 }, { width: 390, height: 844 },
+                    { width: 1366, height: 768 }, { width: 1280, height: 720 }, { width: 1024, height: 768 }]) {
     const c = await browser.newContext({ viewport: vp });
     const p = await c.newPage();
     await p.goto(BASE, { waitUntil: "networkidle" });
@@ -1190,6 +1195,13 @@ async function checkFooterReachable(browser) {
     // And a REAL wheel, through the browser rather than a dispatched event, on the pages that
     // are taller than the viewport. This one can still be inapplicable - it says so rather
     // than claiming a pass - because the check above is what carries the clamped case.
+    // BACK TO THE TOP FIRST (#654). This reads scrollTop, wheels DOWN and asserts movement - so if
+    // an earlier check in this block left the page at the bottom, the wheel has nowhere to go and a
+    // perfectly scrollable page reports as stuck. The branch only runs when the document overflows,
+    // which never happened at 1440 or 390, so the bug shipped unreachable until the short viewports
+    // arrived. Measured: standalone the row's own sequence moves 34px every time; in-suite it moved 0.
+    await p.evaluate(() => { document.documentElement.scrollTop = 0; document.body.scrollTop = 0; });
+    await p.waitForTimeout(80);
     const beforeTop = await p.evaluate(() => document.documentElement.scrollTop);
     await p.mouse.move(Math.round(vp.width / 2), Math.round(vp.height / 2));
     await p.mouse.wheel(0, 600);
