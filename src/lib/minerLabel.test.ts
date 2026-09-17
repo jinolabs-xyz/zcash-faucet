@@ -223,7 +223,9 @@ test("one block is singular, because a row that says '1 blocks' reads as a bug",
 
 test("A MINER THAT HAS NEVER WON SAYS SO, which is the case the old row hid", () => {
   const row = minerRow(({ ...base,  state: "running", solvedCount: 0  }));
-  assert.match(row, /none won since it started/);
+  // Its name is true again (#645): the count is resumed from the heartbeat, so a zero really is
+  // "never won one" rather than "none this run".
+  assert.match(row, /no blocks won yet/);
   assert.match(row, /mining/, "and it is still mining: never-won is not broken");
 });
 
@@ -361,8 +363,15 @@ test("a waiting reason the reader does not know falls back to the lag wording", 
   assert.equal(minerIsBad({ ...waiting, waitingReason: "something-new" }), false);
 });
 
-/** #645: the operator row's zero is per-process too - see statusView.test.ts for the reasoning. */
-test("#645: the operator row scopes a zero to the current process", () => {
+/** #645: the operator row's zero is a lifetime claim now too - see statusView.test.ts. */
+test("#645: the operator row's zero is a claim about the miner, not about this process", () => {
   const row = minerRow({ ...base, state: "running", solvedCount: 0 });
-  assert.match(row, /since it started/, `"${row}" reads as a lifetime claim`);
+  assert.match(row, /no blocks won yet/, `"${row}" should read as a lifetime statement`);
+  assert.doesNotMatch(row, /since it started/, "per-process scoping is wrong once the count is resumed");
+});
+
+/** And the one that must never change whichever way the counter works. */
+test("#645: a NULL count still renders nothing at all - absent is not zero", () => {
+  const row = minerRow({ ...base, state: "running", solvedCount: null });
+  assert.doesNotMatch(row, /blocks won|yet|since it started/, `"${row}" claims something about blocks from no data`);
 });

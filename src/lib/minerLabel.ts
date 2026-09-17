@@ -155,9 +155,12 @@ export function minerChip(r: MinerReading, unit: MinerUnit = null): string {
 function wins(r: MinerReading): string {
   const solved = r.solvedCount;
   if (solved == null) return "";
-  // "yet" is a claim about the miner's life; this counter only knows the current process
-  // (#645), and prod read 0 in orange hours after a restart that had won 69. Say the scope.
-  if (solved === 0) return ", none won since it started";
+  // "yet" IS the right word again (#645, Rust half at 3f59ef5). This counter was per-process, so
+  // a zero meant "none this run" and saying otherwise was a lifetime claim the data could not
+  // support. The miner now resumes the count from its heartbeat, so a zero here really is "this
+  // miner has never won one" - and null still renders nothing at all, which is the distinction
+  // that matters: absent is not zero.
+  if (solved === 0) return ", no blocks won yet";
 
   const ago = r.solvedAgoSeconds != null ? ` ${humanAge(r.solvedAgoSeconds)} ago` : "";
   const rejected = r.submittedRejected ?? 0;
