@@ -659,8 +659,20 @@ async function checkCardInnerPadding(browser) {
       // And if the run happens to have caught a real one, it is measured too rather than assumed.
       const live = [...card.querySelectorAll(".phase")].filter((el) => el.getClientRects().length);
 
+      // #648: the card must not solve "too much content" by hiding it. `overflow:auto` on
+      // .card.claim > .panel means a card that outgrows its clamp scrolls SILENTLY - every
+      // geometry row here still passes, because nothing is past an edge. scrollHeight is the
+      // only thing that can tell the two apart.
+      const panelScroll = panel
+        ? { scrollH: Math.round(panel.scrollHeight), clientH: Math.round(panel.clientHeight),
+            overflowY: getComputedStyle(panel).overflowY }
+        : null;
+      // What is actually in the card right now, so a clean run cannot be a run with nothing in it.
+      const panelNames = [...card.querySelectorAll(".phase")].map((el) => el.dataset.phase || "?");
+
       return {
         measured, worst, missing: false,
+        panelScroll, panelNames,
         panelBox: panel ? box(panel) : null,
         probeBox,
         liveCount: live.length,
@@ -681,6 +693,23 @@ async function checkCardInnerPadding(browser) {
       !!pb && pb.padT > 0 && pb.padL > 0 && pb.painted,
       pb ? `panel padding ${pb.padT}/${pb.padL}px, radius ${pb.rad}px, bg-color ${pb.bg}, bg-image ${pb.bgImg.slice(0, 60)}`
          : "no .card.claim > .panel in the DOM");
+
+    // THE CARD MUST NOT SCROLL, AND UNTIL NOW NOTHING COULD SEE THAT IT DID (owner, #648).
+    // `redesign-card.css:40` gives the panel `overflow:auto`, so an over-full card absorbs the
+    // extra by scrolling rather than by overflowing - which every row in this file is blind to,
+    // because nothing crosses an edge. The owner found it from a screenshot: the reserve-low
+    // panel pushed the figures half out of view and 4,504 / 5,000 rendered sliced.
+    const ps = r.panelScroll;
+    ok(`${vp.width}x${vp.height}: the claim panel shows all of its content rather than scrolling it`,
+      !!ps && ps.scrollH <= ps.clientH + 1,
+      ps ? `scrollHeight ${ps.scrollH} vs clientHeight ${ps.clientH} (overflow-y: ${ps.overflowY}), panels: ${r.panelNames.join(", ") || "none"}`
+         : "no .card.claim > .panel in the DOM");
+    // THE PARTNER, because the row above passes trivially on a card with nothing in it. An empty
+    // claim card never out-scrolls its panel, so a green row proves the layout only if there was
+    // content to overflow with. This names what was on screen instead of assuming it.
+    ok(`${vp.width}x${vp.height}: and the card had a panel in it, so the row above measured something`,
+      !!ps && r.panelNames.length >= 1,
+      `panels present: ${r.panelNames.join(", ") || "NONE - the no-scroll row above proved nothing"}`);
 
     // EVERY RENDERED .phase WEARS THE DESIGN'S BOX. The design states the container
     // (`padding:calc(.85*var(--u)) calc(1.1*var(--u));border:calc(.06*var(--u)) solid var(--hair);
