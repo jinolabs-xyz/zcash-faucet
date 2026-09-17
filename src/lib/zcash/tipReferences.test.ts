@@ -410,14 +410,42 @@ test("#600: a STALE source does not get a vote on the rate", () => {
 test("#600: the published rate is the one the spread was computed FROM", () => {
   // The field's promise is that a reading can be reproduced from the journal. Rounding the
   // published number while converting with the unrounded one broke it: review measured
-  // spreadBlocks 500 and secondsPerBlock 0 published beside spreadSeconds 200.
+  // spreadBlocks 500 and secondsPerBlock 0 published beside spreadSeconds 200. Driven with a
+  // rate a real chain produces (10.456 s a block) so the clamp below is not what is under test.
   plant({
-    hosh: { height: 4_000_000, ageMs: 1000, wasHeight: 3_999_000, wasAgeMs: 401_000 },  // 1000 blocks / 400 s = 0.4
+    hosh: { height: 4_000_000, ageMs: 1000, wasHeight: 3_999_000, wasAgeMs: 10_457_000 },  // 1000 blocks / 10456 s
     lightwalletd: { height: 4_000_500, ageMs: 1000 },
   });
   const refs = getTipReferences(NOW);
-  assert.ok(refs.secondsPerBlock != null && refs.secondsPerBlock > 0, "a sub-second rate must not round to zero");
+  assert.equal(refs.secondsPerBlock, 10.46, "rounded to two places, not to an integer");
   assert.equal(refs.spreadSeconds, Math.round(refs.spreadBlocks! * refs.secondsPerBlock!), "the journal reproduces");
+});
+
+test("#600: a rate no chain produces is NOT a rate (review of #655)", () => {
+  // A reference CATCHING UP after an outage measures 30,000 blocks across one anchor window,
+  // which is 0.01 s a block. That made agreeBlocks 30,000, and the watchdog sizes its
+  // confirmed-lag limit off that field - so an implausible rate would have raised a limit that
+  // authorises rewinding chain state to 30,005 and switched the rung off entirely.
+  plant({
+    hosh: { height: 4_030_000, ageMs: 1000, wasHeight: 4_000_000, wasAgeMs: 301_000 },  // 0.01 s a block
+    lightwalletd: { height: 4_030_005, ageMs: 1000 },
+  });
+  const refs = getTipReferences(NOW);
+  assert.equal(refs.secondsPerBlock, null, "a source catching up is not a fast chain");
+  assert.equal(refs.spreadSeconds, null);
+  assert.equal(refs.agreeBlocks, AGREE_BLOCKS, "and the tolerance falls back to the block bound");
+});
+
+test("#600 THE PARTNER: a plausibly fast chain is still believed", () => {
+  // Without this, clamping everything satisfies the row above and the seconds rule never runs.
+  // Testnet has been making a block every 9-13 s; that must survive the clamp untouched.
+  plant({
+    hosh: { height: 4_000_000, ageMs: 1000, wasHeight: 3_999_900, wasAgeMs: 901_000 },  // 9 s a block
+    lightwalletd: { height: 4_000_010, ageMs: 1000 },
+  });
+  const refs = getTipReferences(NOW);
+  assert.equal(refs.secondsPerBlock, 9);
+  assert.equal(refs.agreeBlocks, Math.round(AGREE_SECONDS / 9));
 });
 
 test("#600: a source that went BACKWARDS in a reorg contributes no rate", () => {

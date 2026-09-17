@@ -519,6 +519,15 @@ export const AGREE_SECONDS = num("TIP_AGREE_SECONDS", 300);
  */
 const RATE_BASELINE_MS = 5 * 60_000;
 
+/**
+ * The fastest block rate we will believe. Zcash targets 75 s and testnet has been running 9-13 s;
+ * one second a block is already far outside anything the chain does, so a measurement below it is
+ * a source catching up, not a fast chain. Published tolerances are read by the watchdog to size a
+ * limit that authorises rewinding state, so an implausible rate must degrade to "no rate" rather
+ * than to a very large number.
+ */
+const MIN_PLAUSIBLE_SECONDS_PER_BLOCK = 1;
+
 
 
 /**
@@ -674,8 +683,15 @@ export function getTipReferences(now: number = Date.now()): TipReferences {
   // promise is that a reading can be reproduced from the journal, and rounding the published
   // number while converting with the unrounded one broke it: review measured spreadBlocks 500
   // and secondsPerBlock 0 published beside spreadSeconds 200.
+  // A RATE NO CHAIN PRODUCES IS NOT A RATE (review of #655). The floor here is 0.01 s a block,
+  // and a reference CATCHING UP after an outage reaches it: 30,000 blocks across one anchor window
+  // measures 0.01, which made agreeBlocks 30,000 and would have raised the watchdog's confirmed-lag
+  // limit to 30,005 - switching off the rung that exists for "58 blocks behind a corroborated tip".
+  // Below the floor we have not measured a fast chain, we have measured a source that was not
+  // following one, so it reads as NO rate and the block tolerance answers instead.
   const rawRate = observedSecondsPerBlock(rateSources);
-  const secondsPerBlock = rawRate == null ? null : Math.round(rawRate * 100) / 100;
+  const secondsPerBlock =
+    rawRate == null || rawRate < MIN_PLAUSIBLE_SECONDS_PER_BLOCK ? null : Math.round(rawRate * 100) / 100;
   const spreadSeconds =
     spreadBlocks == null || secondsPerBlock == null ? null : Math.round(spreadBlocks * secondsPerBlock);
   const used = fresh.length ? fresh.reduce((a, b) => (b[1].height > a[1].height ? b : a))[0] : null;
