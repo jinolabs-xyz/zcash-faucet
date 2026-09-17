@@ -1089,6 +1089,54 @@ check "the unconfirmed give-up page still says the miner is left STOPPED and how
   "grep -q 'no independent tip confirms it' '$T/alerts.log' && grep -q 'The miner is left STOPPED.*systemctl start zcash-testnet-miner.service' '$T/alerts.log'"
 check "and does not claim the miner was never stopped" "! grep -q 'the miner was not stopped' '$T/alerts.log'"
 
+echo "== watchdog: a confirmation arriving AFTER the budget is spent still gets its rewind (#510)"
+# THE HOLE. Unconfirmed attempts take the restart-only rung by design - no peer cache dropped, no
+# non-finalized state dropped, no miner stopped. They rewind NOTHING, and they used to spend the
+# budget whose entire purpose is to authorise the rungs they were not allowed to reach. When the
+# tip oracle or the app came back and the lag was CONFIRMED, `n > NODE_HEAL_MAX` returned early and
+# `alerted_node_giveup` was already 1 from the unconfirmed page - so the fork got no rewind AND the
+# confirmed page never fired. Step 4's 30-minute NOT READY was the only signal left.
+#
+# THE FLIP HAS TO HAPPEN INSIDE ONE RUN, because the budget is a shell variable and dies with the
+# process: a second wd_run starts from zero and cannot show the hole at all. That is what the
+# per-call reference SHAPE sequence is for.
+wd_node_env
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4340727 STUB_ZEBRA_EST=4340900
+# Dark long enough that the UNCONFIRMED give-up page actually fires - that is what arms
+# alerted_node_giveup, and re-arming it is half the fix. Four dark sweeps only spends the budget;
+# it takes a fifth for the page. Then a corroborated tip for ever (the last value repeats).
+# The reference shape is consumed per /api/ready CALL rather than per sweep, so these are counted
+# in calls: a fixture that assumed one per sweep left the page unfired and the re-arm untested.
+export STUB_READY_REFS_SEQ="none none none none none agree"
+export STUB_READY_USEDHEIGHT_SEQ="0 0 0 0 0 4340900"
+peers="$STUB_VOLROOT/z3-testnet-chain/network/testnet.peers"
+wd_run 16
+check "the unconfirmed attempts are returned, and the journal says why" \
+  "grep -q 'an independent tip now CONFIRMS the lag; returning' '$T/run.log'"
+check "and the rewind the budget exists for actually runs once confirmed" \
+  "[ ! -f '$peers' ]"
+check "and once the confirmed attempts are spent too, the page names a FORK" \
+  "grep -q 'reimport a snapshot' '$T/alerts.log'"
+check "and that page is the confirmed sentence, not the unconfirmed one re-sent" \
+  "grep -q 'the network tip (4340900) confirms it' '$T/alerts.log'"
+
+echo "== watchdog: the budget is repaid ONCE, so a flapping oracle cannot buy unlimited rewinds"
+# THE PARTNER TO THE CASE ABOVE, and it needs its own fixture: with a reference that stays good,
+# node_unconfirmed_attempts is zeroed by the first repayment and never rises again, so the `-gt 0`
+# test alone blocks a second one and the once-guard is UNFALSIFIABLE. Removing the guard survived
+# at 360/0 against the non-flapping fixture - the row claimed to hold "repaid once" and held
+# nothing. A flapping oracle is also the realistic case: it IS the app or the tip oracle being
+# unreachable, which is what made the attempts unconfirmed to begin with.
+wd_node_env
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4340727 STUB_ZEBRA_EST=4340900
+export STUB_READY_REFS_SEQ="none none none agree none none agree"
+export STUB_READY_USEDHEIGHT_SEQ="0 0 0 4340900 0 0 4340900"
+wd_run 20
+check "the repayment happens exactly once across the whole episode" \
+  "[ \"\$(grep -c 'an independent tip now CONFIRMS the lag' '$T/run.log')\" = 1 ]"
+
 echo "== watchdog: no independent tip at all is 'unconfirmed', not 'behind'"
 wd_node_env
 echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"

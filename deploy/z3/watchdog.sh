@@ -183,6 +183,14 @@ MINER_STOP_KEY="miner-stopped-for-node-heal"
 alerted_node_giveup=0
 node_heal_what=""     # the deepest thing the current episode has tried, for the one report
 node_stall_lag=0      # how far behind it was when the episode began
+# #510. How many of this episode's attempts ran on an UNCONFIRMED lag, and whether the budget has
+# already been repaid once. An unconfirmed attempt restarts and rewinds NOTHING by design, so it
+# buys none of what the budget is for; five of them used to spend it, and a confirmation arriving
+# afterwards then found `n > NODE_HEAL_MAX` and an already-set give-up flag - no rewind, and the
+# confirmed page suppressed by the unconfirmed one. The repayment is ONCE, because a tip oracle
+# that flaps would otherwise hand out unlimited rewinds.
+node_unconfirmed_attempts=0
+node_budget_repaid=0
 
 # 0 = loop forever (production). Tests set this to run an exact number of sweeps.
 MAX_TICKS="${WATCHDOG_MAX_TICKS:-0}"
@@ -812,6 +820,7 @@ heal_node_if_stalled() {
       log "zebra tip advancing again (height $blocks, ${lag} behind); stall clock cleared"
     fi
     node_stall_since=0; node_heal_attempts=0; alerted_node_giveup=0; node_heal_what=""; node_stall_lag=0
+    node_unconfirmed_attempts=0; node_budget_repaid=0
     return 0
   fi
 
@@ -831,6 +840,7 @@ heal_node_if_stalled() {
       # advancing sweep would report the same heal twice and the next stall would start
       # with no budget and no page.
       node_heal_attempts=0; alerted_node_giveup=0; node_heal_what=""; node_stall_lag=0
+      node_unconfirmed_attempts=0; node_budget_repaid=0
     fi
     return 0
   fi
@@ -867,6 +877,29 @@ heal_node_if_stalled() {
     tipset_note=" - zebra's log says it exhausted its prospective tip set and is waiting to restart sync, which is the peer set having stopped serving blocks"
   fi
 
+  # THE BUDGET IS REPAID FOR RESTARTS THAT REWOUND NOTHING (#510). An unconfirmed lag takes the
+  # restart-only rung by design: no peer cache dropped, no non-finalized state dropped, no miner
+  # stopped. Five of those spent a budget whose whole purpose is to authorise the rungs they were
+  # not allowed to reach - and when the tip oracle or the app came back and the lag was CONFIRMED,
+  # `n > NODE_HEAL_MAX` returned early and `alerted_node_giveup` was already 1 from the unconfirmed
+  # page, so the confirmed one never fired either. A real fork got no rewind and no page; step 4's
+  # 30-minute NOT READY was the only thing left.
+  #
+  # ONCE PER EPISODE, and that is the guard that matters: a tip oracle flapping between confirmed
+  # and unconfirmed would otherwise refund the budget every time it flipped and hand out unlimited
+  # rewinds on a node nothing has actually confirmed.
+  if [ "$confirmed" = "1" ] && [ "$node_unconfirmed_attempts" -gt 0 ] && [ "$node_budget_repaid" != "1" ]; then
+    local repaid="$node_unconfirmed_attempts"
+    node_heal_attempts=$(( node_heal_attempts - repaid ))
+    [ "$node_heal_attempts" -ge 0 ] || node_heal_attempts=0
+    node_unconfirmed_attempts=0
+    node_budget_repaid=1
+    # The give-up page is re-armed with it: the earlier page said "no independent tip confirms it",
+    # which is now false, and the operator needs the sentence that names a fork.
+    alerted_node_giveup=0
+    log "an independent tip now CONFIRMS the lag; returning $repaid heal attempt(s) that ran unconfirmed and rewound nothing, and re-arming the page ($node_heal_attempts/$NODE_HEAL_MAX spent)"
+  fi
+
   local n=$(( node_heal_attempts + 1 ))
   if [ "$n" -gt "$NODE_HEAL_MAX" ]; then
     if [ "$alerted_node_giveup" = "0" ]; then
@@ -887,6 +920,9 @@ heal_node_if_stalled() {
     return 0
   fi
   node_heal_attempts="$n"
+  # Counted BEFORE the ladder runs, because what makes this attempt refundable is the evidence it
+  # had, not what it managed to do.
+  [ "$confirmed" != "1" ] && node_unconfirmed_attempts=$(( node_unconfirmed_attempts + 1 ))
   [ "$node_stall_lag" = "0" ] && node_stall_lag="$lag"
 
   # Stop the miner for the episode, once, and only if it is running, and only when the
