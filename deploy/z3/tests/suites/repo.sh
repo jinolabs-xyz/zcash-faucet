@@ -246,8 +246,13 @@ WD_CONF="$(sed -nE 's/^NODE_CONFIRMED_LAG_LIMIT="\$\{WATCHDOG_NODE_CONFIRMED_LAG
 check "the watchdog still declares a confirmed-lag floor" "[ -n '$WD_CONF' ]"
 # grep -qF throughout: the shapes being matched contain $ and " and [0-9] classes, and an escaped
 # regex through check()'s eval is how the first version of these rows aborted the whole suite.
+# COMMENTS STRIPPED BEFORE READING, and SDE-UI caught this one: watchdog.sh:779 is a COMMENT
+# containing "agreeBlocks", so a bare grep is satisfied by the prose explaining the derivation
+# whether or not the derivation is there. They measured it - replacing the extraction with
+# `agree_b=""` left this row GREEN. Same trap as the #607 reader finding "node syncing" twice in
+# prose and the #640 row matching a commented-out call.
 check "and it DERIVES the working limit from the app's published agreeBlocks rather than assuming a number" \
-  "grep -qF 'agreeBlocks' '$REPO/deploy/z3/watchdog.sh'"
+  "[ \"\$(grep -vE '^[[:space:]]*#' '$REPO/deploy/z3/watchdog.sh' | grep 'agree_b=' | grep -c 'agreeBlocks')\" -ge 1 ] && [ \"\$(grep -vE '^[[:space:]]*#' '$REPO/deploy/z3/watchdog.sh' | grep -c 'agree_b + 5')\" -ge 1 ]"
 check "and the floor is still the fallback, so a body without the field keeps today's behaviour" \
   "grep -qF 'conf_limit=' '$REPO/deploy/z3/watchdog.sh' && grep -qF 'NODE_CONFIRMED_LAG_LIMIT' '$REPO/deploy/z3/watchdog.sh'"
 check "and the stall comparison uses the derived limit rather than the constant" \
