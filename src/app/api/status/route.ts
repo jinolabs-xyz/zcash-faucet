@@ -52,6 +52,9 @@ async function ctazBlock() {
   const reading = node.reading;
   return {
     enabled: true as const,
+    // This wallet's own money-path verdict. It pays from a different balance than TAZ, so
+    // one cannot stand in for the other and the page shows both.
+    sends: readSendHealth(Date.now(), undefined, "ctaz"),
     // Five states, not a boolean. "cannot-verify" is not "behind" and neither is "off".
     readiness: reading.state,
     // Both questions, per #322. The panel still shows state and percent apart.
@@ -132,7 +135,8 @@ export const GET = withApi("status", async (req: NextRequest) => {
     // failing, ready answered 503 "3 of the last 3 sends failed" while this endpoint,
     // the badge and the claim button all said LIVE, and each visitor paid proof-of-work
     // into a wallet the faucet had already judged, at +2 bits per retry.
-    sends: readSendHealth(),
+    // TAZ's wallet, named rather than defaulted: cTAZ reports its own below (#517).
+    sends: readSendHealth(Date.now(), undefined, "taz"),
     // How many drips this faucet has served: ever, last 7 UTC days, last 30. From the
     // privacy-safe per-day counter, not the claims table, whose rows retention deletes.
     // Null when the ledger will not answer; an unknown count is not zero.

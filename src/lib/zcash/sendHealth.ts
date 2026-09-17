@@ -41,7 +41,7 @@
  */
 
 import { config } from "../config.ts";
-import { DEFAULT_NETWORK, type FaucetNetwork } from "../network.ts";
+import { DEFAULT_NETWORK, NETWORKS, type FaucetNetwork } from "../network.ts";
 
 /** Outcomes we can honestly classify. `unknown` is counted and never held against us. */
 export type SendOutcome = "ok" | "failed" | "unknown" | "refused";
@@ -138,6 +138,10 @@ export interface SendHealth {
   failed: number;
   /** Submitted but unresolved. Reported so an operator can see them, never counted against. */
   unknown: number;
+  /** Of `unknown`, the ones where the reply itself was lost. Reported because a degraded
+   *  verdict can rest entirely on these, and `failed: 0` beside "4 of the last 5 sends
+   *  failed or went unanswered" reads as a contradiction on the page. */
+  unanswered: number;
   /** The wallet refused the recipient (the visitor's 400). Reported so a run of them is
    * visible, never counted: they say nothing about the wallet. */
   refused: number;
@@ -214,6 +218,7 @@ export function readSendHealth(
         ok,
         failed,
         unknown,
+        unanswered,
         refused,
         reason: `${unknown} of the last ${unknown + failed} sends never resolved and none succeeded, the wallet is not finishing sends`,
       };
@@ -227,6 +232,7 @@ export function readSendHealth(
         ok,
         failed,
         unknown,
+        unanswered,
         refused,
         reason: `${failing} of the last ${failing} sends ${failingWord} and none succeeded`,
       };
@@ -236,6 +242,7 @@ export function readSendHealth(
       ok,
       failed,
       unknown,
+      unanswered,
       refused,
       reason: `only ${decided} decided send(s) in the last ${windowMinutes(WINDOW_MS)} min, too few to judge`,
     };
@@ -247,12 +254,38 @@ export function readSendHealth(
       ok,
       failed,
       unknown,
+      unanswered,
       refused,
       reason: `${failing} of the last ${decided} sends ${failingWord}`,
     };
   }
 
-  return { state: "ok", ok, failed, unknown, refused, reason: `${ok} of the last ${decided} sends succeeded` };
+  return { state: "ok", ok, failed, unknown, unanswered, refused, reason: `${ok} of the last ${decided} sends succeeded` };
+}
+
+/** The networks this faucet actually serves. A parked network has no claimants, so its
+ *  wallet cannot block serving; the day it comes back this covers it with no code change. */
+export function servedNetworks(): FaucetNetwork[] {
+  return config.crosslink.enabled ? [...NETWORKS] : [DEFAULT_NETWORK];
+}
+
+/**
+ * The verdict for the whole faucet: degraded on ANY served network, else the primary
+ * wallet's. Readiness and status must ask this rather than readSendHealth(), or the
+ * default network argument silently narrows them to TAZ and a dead cTAZ wallet becomes
+ * invisible to both (#517, caught in review).
+ */
+export function readSendHealthServed(
+  now: number = Date.now(),
+  records: SendRecord[] = log(),
+  networks: FaucetNetwork[] = servedNetworks(),
+): SendHealth {
+  const each = networks.map((n) => ({ n, h: readSendHealth(now, records, n) }));
+  const bad = each.find((e) => e.h.state === "degraded");
+  if (!bad) return each[0].h;
+  // Named when it is not the primary wallet, so an operator reading one sentence knows
+  // which of two wallets to go and look at.
+  return bad.n === DEFAULT_NETWORK ? bad.h : { ...bad.h, reason: `${bad.n}: ${bad.h.reason}` };
 }
 
 /**

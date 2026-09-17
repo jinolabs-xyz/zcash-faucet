@@ -19,8 +19,11 @@ import {
   MIN_SAMPLE,
   FAIL_ALONE,
   FAIL_RATIO,
+  readSendHealthServed,
+  servedNetworks,
   type SendRecord,
 } from "./sendHealth.ts";
+import { config } from "../config.ts";
 
 const NOW = 1_800_000_000_000;
 const at = (outcome: "ok" | "failed" | "unknown", agoMs = 0): SendRecord => ({ outcome, at: NOW - agoMs });
@@ -347,4 +350,47 @@ test("#517: recordSend files a send under the network that made it", () => {
   assert.equal(readSendHealth(NOW, undefined, "ctaz").state, "degraded");
   assert.equal(readSendHealth(NOW, undefined, "taz").state, "unknown");
   resetSendHealth();
+});
+
+/* --- the whole faucet's verdict, not just the primary wallet's (#517, review) --- */
+
+test("#517: a dead cTAZ wallet is NOT invisible to readiness while cTAZ is served", () => {
+  // The regression review caught: readSendHealth() defaults to TAZ, so ready and status
+  // asking it bare would have narrowed both to one wallet by accident.
+  const records = [...on("ctaz", "failed", 4), ...on("taz", "ok", 4)];
+  assert.equal(readSendHealth(NOW, records).state, "ok", "the primary wallet alone looks fine");
+  const served = readSendHealthServed(NOW, records, ["taz", "ctaz"]);
+  assert.equal(served.state, "degraded");
+  assert.equal(sendHealthBlocksServing(served), true);
+  assert.match(served.reason, /^ctaz: /, "and it names which of two wallets to go and look at");
+});
+
+test("#517: a PARKED network cannot block serving, because nobody can claim from it", () => {
+  const records = [...on("ctaz", "failed", 4), ...on("taz", "ok", 4)];
+  const served = readSendHealthServed(NOW, records, ["taz"]);
+  assert.equal(served.state, "ok");
+  assert.equal(sendHealthBlocksServing(served), false);
+});
+
+test("#517: the primary wallet's own verdict is not renamed", () => {
+  const records = [...on("taz", "failed", 4), ...on("ctaz", "ok", 4)];
+  const served = readSendHealthServed(NOW, records, ["taz", "ctaz"]);
+  assert.equal(served.state, "degraded");
+  assert.doesNotMatch(served.reason, /^taz: /, "one wallet is the default; saying so adds noise");
+});
+
+test("servedNetworks follows the crosslink switch, so a parked wallet is dropped by config", () => {
+  const served = servedNetworks();
+  assert.ok(served.includes("taz"), "the primary network is always served");
+  assert.equal(served.includes("ctaz"), config.crosslink.enabled);
+});
+
+test("#528: a degraded verdict resting on lost replies reports them, so the numbers match the sentence", () => {
+  // failed: 0 beside "4 of the last 5 sends failed or went unanswered" reads as a
+  // contradiction on the status page. Raised in review.
+  const h = readSendHealth(NOW, [at("ok"), ...manyLost(4)]);
+  assert.equal(h.state, "degraded");
+  assert.equal(h.failed, 0);
+  assert.equal(h.unanswered, 4, "the sentence's number has to appear in the fields");
+  assert.match(h.reason, /4 of the last 5 sends failed or went unanswered/);
 });

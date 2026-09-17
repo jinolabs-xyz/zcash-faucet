@@ -16,7 +16,7 @@ import { safeBalance } from "@/lib/zcash/send";
 import { getNodeStatus } from "@/lib/zcash/nodeStatus";
 import { cachedLedgerHealth } from "@/lib/db";
 import { ledgerBlocksServing } from "@/lib/db/probe";
-import { readSendHealth, sendHealthBlocksServing } from "@/lib/zcash/sendHealth";
+import { readSendHealthServed, sendHealthBlocksServing } from "@/lib/zcash/sendHealth";
 import { readTipReferences } from "@/lib/zcash/externalTip";
 import { readinessReason } from "@/lib/readiness";
 import { withApi } from "@/lib/api";
@@ -66,7 +66,10 @@ export const GET = withApi("ready", async () => {
   // Same treatment as the ledger: only a DEFINITE verdict blocks. Too few sends to
   // judge is "unknown" and does not 503, or a quiet faucet would take itself down for
   // being quiet, and a slow one would hand a blip the power to roll back a deploy.
-  const sends = readSendHealth();
+  // ACROSS EVERY NETWORK WE SERVE, not just the primary one (#517). readSendHealth()
+  // defaults to TAZ, so asking it bare here would make a dead cTAZ wallet invisible to
+  // exactly the gate this paragraph exists for.
+  const sends = readSendHealthServed();
 
   // THE SEND GATE, finally on the readiness path (risk register #7, 2026-09-08). Every
   // claim runs mayBuildTransaction() and refuses when our node's view of the chain is
