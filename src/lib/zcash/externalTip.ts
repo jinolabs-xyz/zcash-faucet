@@ -499,6 +499,14 @@ export const AGREE_BLOCKS = num("TIP_AGREE_BLOCKS", 20);
  */
 export const AGREE_SECONDS = num("TIP_AGREE_SECONDS", 300);
 
+/**
+ * How old the rate anchor must be before it moves. Long enough that the rate is taken over
+ * minutes of chain rather than one poll: at a 30 s refresh and 10 s blocks a single-poll
+ * measurement sees three blocks, and a patch that produced one would read 30 s a block and
+ * treble every spread. Five minutes is ~30 blocks at the fast cadence and ~4 at the target.
+ */
+const RATE_BASELINE_MS = 5 * 60_000;
+
 
 
 /**
@@ -507,6 +515,26 @@ export const AGREE_SECONDS = num("TIP_AGREE_SECONDS", 300);
  * magnitude with the cadence, not that the estimate is precise. Null before any source has
  * moved twice.
  */
+/**
+ * The anchor the block rate is measured FROM, carried forward across a refresh (#600 step 2).
+ *
+ * An anchor, not simply the last reading: it is held until RATE_BASELINE_MS old so the rate is
+ * always taken over minutes of chain. Across one poll the rate is measured over two or three
+ * blocks, and a patch that produced one would read 30 s a block and treble every spread, which
+ * is the noise this change exists to remove. Advanced only when the height actually moved, since
+ * a source repeating itself gives a zero delta and no rate at all.
+ */
+export function rateAnchor(
+  was: { height: number; at: number; prevHeight?: number; prevAt?: number } | undefined,
+  height: number,
+  now: number,
+): { prevHeight?: number; prevAt?: number } {
+  if (was == null) return {};
+  const held = { prevHeight: was.prevHeight, prevAt: was.prevAt };
+  if (was.prevAt != null && now - was.prevAt < RATE_BASELINE_MS) return held;
+  return was.height !== height ? { prevHeight: was.height, prevAt: was.at } : held;
+}
+
 export function observedSecondsPerBlock(
   sources: Partial<Record<ReferenceName, { height: number; at: number; prevHeight?: number; prevAt?: number }>>,
 ): number | null {
@@ -545,17 +573,8 @@ async function refresh(waiveGap = false): Promise<void> {
     // round keeps its last one: the age is what turns an outage into an honest "stale",
     // exactly as MAX_AGE_MS does for the aggregate below.
     const sources = (g.__faucetTipSources ??= {});
-    // The PREVIOUS reading is kept beside the current one so the chain's block rate can be
-    // observed (#600 step 2). Only advanced when the height actually moved: a source that
-    // repeats itself would otherwise give a zero delta and a nonsense rate.
-    const carry = (was: { height: number; at: number; prevHeight?: number; prevAt?: number } | undefined, h: number) =>
-      was == null
-        ? {}
-        : was.height !== h
-          ? { prevHeight: was.height, prevAt: was.at }
-          : { prevHeight: was.prevHeight, prevAt: was.prevAt };
-    if (both.hosh != null) sources.hosh = { height: both.hosh, at: now, host: null, ...carry(sources.hosh, both.hosh) };
-    if (both.direct) sources.lightwalletd = { height: both.direct.height, at: now, host: both.direct.host, ...carry(sources.lightwalletd, both.direct.height) };
+    if (both.hosh != null) sources.hosh = { height: both.hosh, at: now, host: null, ...rateAnchor(sources.hosh, both.hosh, now) };
+    if (both.direct) sources.lightwalletd = { height: both.direct.height, at: now, host: both.direct.host, ...rateAnchor(sources.lightwalletd, both.direct.height, now) };
 
     // THE AGGREGATE CACHE KEEPS ITS OLD MEANING, deliberately: the aggregate when we have
     // it, the direct endpoint when we do not. Every existing reader (the shield gate, the

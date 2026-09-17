@@ -20,7 +20,7 @@ import assert from "node:assert/strict";
 process.env.HOSH_URL = "http://127.0.0.1:9/";
 process.env.TIP_ORACLE_ENDPOINT = "";
 
-const { getTipReferences, referenceTipAt, referenceTip, readTipReferences, resetExternalTipForTests, REFERENCE_MAX_AGE_MS, AGREE_BLOCKS, AGREE_SECONDS, observedSecondsPerBlock } =
+const { getTipReferences, referenceTipAt, referenceTip, readTipReferences, resetExternalTipForTests, REFERENCE_MAX_AGE_MS, AGREE_BLOCKS, AGREE_SECONDS, observedSecondsPerBlock, rateAnchor } =
   await import("./externalTip.ts");
 
 const NOW = Date.parse("2026-09-15T13:06:00Z");
@@ -319,4 +319,56 @@ test("#600: the tolerance is a boundary in seconds", () => {
   assert.equal(atBound(AGREE_SECONDS / 10).spreadSeconds, AGREE_SECONDS);
   assert.equal(atBound(AGREE_SECONDS / 10).corroborated, true, "exactly at the bound still agrees");
   assert.equal(atBound(AGREE_SECONDS / 10 + 1).corroborated, false, "one block past it does not");
+});
+
+/* --- the rate anchor: measured over minutes of chain, not one poll (#600 step 2) --- */
+
+test("#600: the anchor is HELD, so the rate is never measured across a single poll", () => {
+  // The weakness a one-poll rate has: at a 30 s refresh and 10 s blocks each sample sees three
+  // blocks, and a patch producing one reads 30 s a block and trebles every spread - which can
+  // flip corroborated to false, the exact noise this change removes.
+  const t0 = NOW - 600_000;
+  let src = { height: 4_000_000, at: t0, ...rateAnchor(undefined, 4_000_000, t0) };
+  assert.equal(src.prevAt, undefined, "the first reading has nothing to anchor to yet");
+
+  // Second reading: nothing held, so this one becomes the anchor.
+  const t1 = t0 + 30_000;
+  src = { height: 4_000_003, at: t1, ...rateAnchor(src, 4_000_003, t1) };
+  assert.equal(src.prevHeight, 4_000_000);
+  assert.equal(src.prevAt, t0);
+
+  // Every poll for the next five minutes keeps that SAME anchor rather than stepping forward.
+  let t = t1;
+  for (let i = 0; i < 8; i++) {
+    t += 30_000;
+    src = { height: src.height + 3, at: t, ...rateAnchor(src, src.height + 3, t) };
+  }
+  assert.equal(src.prevAt, t0, "still anchored to the first sample, four minutes on");
+  assert.equal(src.prevHeight, 4_000_000);
+
+  // Past the baseline it finally steps, and the new anchor is the reading it stepped from.
+  const tLate = t0 + 5 * 60_000 + 1_000;
+  const before = { ...src };
+  src = { height: src.height + 3, at: tLate, ...rateAnchor(src, src.height + 3, tLate) };
+  assert.equal(src.prevAt, before.at, "the anchor advances to the previous reading, not to now");
+  assert.equal(src.prevHeight, before.height);
+});
+
+test("#600 THE PARTNER: a held anchor is not a FROZEN one", () => {
+  // Without this, never advancing the anchor at all satisfies the case above, and the rate
+  // would be measured from the process's first ever poll for the life of the box.
+  const t0 = 1_000_000;
+  let src: { height: number; at: number; prevHeight?: number; prevAt?: number } =
+    { height: 100, at: t0, prevHeight: 90, prevAt: t0 - 6 * 60_000 };
+  src = { height: 110, at: t0 + 1000, ...rateAnchor(src, 110, t0 + 1000) };
+  assert.equal(src.prevAt, t0, "an anchor past the baseline DOES move");
+  assert.equal(src.prevHeight, 100);
+});
+
+test("#600: a source that repeats its height does not move the anchor", () => {
+  const t0 = 1_000_000;
+  const stale = { height: 100, at: t0, prevHeight: 90, prevAt: t0 - 6 * 60_000 };
+  const out = rateAnchor(stale, 100, t0 + 1000);
+  assert.equal(out.prevHeight, 90, "nothing advanced, because nothing moved");
+  assert.equal(out.prevAt, t0 - 6 * 60_000);
 });
