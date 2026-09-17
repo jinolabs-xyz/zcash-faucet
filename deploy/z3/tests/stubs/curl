@@ -78,6 +78,10 @@ case "$*" in
     #            usable, so it does NOT become usedHeight.
     #   absent   no tipReferences field at all, as a body from before #559 (the default)
     refs=""
+    # #651: the tolerance the app is APPLYING right now, flat beside usedHeight. Unset = the field
+    # is absent, which is the pre-#651 body and must leave the watchdog on its own floor.
+    agreeb=""
+    [ -n "${STUB_READY_AGREE_BLOCKS:-}" ] && agreeb=",\"agreeBlocks\":${STUB_READY_AGREE_BLOCKS}"
     uh="${STUB_READY_USEDHEIGHT:-}"
     # STUB_READY_EXTERNAL ALONE MEANS "THE NETWORK AGREES AND IS AT N", which is what every
     # case written before the corroboration axis existed meant by it, and what step 7 needs
@@ -149,9 +153,9 @@ case "$*" in
     for a in "$@"; do
       case "$a" in *"%{http_code}"*)
         if [ "$want_code" = "200" ] && [ "$canbuild" = "0" ]; then
-          printf '{"ready":true,"reason":null,"node":{"ready":true,"canBuildTx":false%s,"shield":{"state":"unverifiable","lag":null,"reason":"no independent tip to compare against"}}%s%s}' "$heights" "$refs" "$refblock"
-        elif [ "$want_code" = "200" ]; then printf '{"ready":true,"reason":null,"node":{"ready":true,"canBuildTx":true%s}%s%s}' "$heights" "$refs" "$refblock"
-        else printf '{"ready":false,"reason":"%s","node":{"ready":false%s}%s%s}' "${STUB_READY_REASON:-node syncing}" "$heights" "$refs" "$refblock"; fi
+          printf '{"ready":true,"reason":null,"node":{"ready":true,"canBuildTx":false%s,"shield":{"state":"unverifiable","lag":null,"reason":"no independent tip to compare against"}}%s%s%s}' "$heights" "$refs" "$refblock" "$agreeb"
+        elif [ "$want_code" = "200" ]; then printf '{"ready":true,"reason":null,"node":{"ready":true,"canBuildTx":true%s}%s%s%s}' "$heights" "$refs" "$refblock" "$agreeb"
+        else printf '{"ready":false,"reason":"%s","node":{"ready":false%s}%s%s%s}' "${STUB_READY_REASON:-node syncing}" "$heights" "$refs" "$refblock" "$agreeb"; fi
         printf '\n%s' "$want_code"
         exit 0 ;;
       esac

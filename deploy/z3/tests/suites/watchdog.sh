@@ -40,7 +40,7 @@ wd_env() {
   # syncing". Nothing noticed for as long as the grace window was 999999, because a
   # faucet that is never ready and never paged looks exactly like one that is fine.
   # The first case that set the grace to 0 failed in CI and passed alone.
-  unset STUB_READY_EXTERNAL STUB_CURL_RC STUB_READY_REFS STUB_READY_USEDHEIGHT WATCHDOG_NODE_CONFIRMED_LAG_LIMIT
+  unset STUB_READY_EXTERNAL STUB_CURL_RC STUB_READY_REFS STUB_READY_USEDHEIGHT WATCHDOG_NODE_CONFIRMED_LAG_LIMIT STUB_READY_AGREE_BLOCKS
   unset STUB_SLOWLOOP STUB_ALERT_FAIL_N STUB_ALERT_FAIL_RC WATCHDOG_RECOVERY_MIN_UPTIME WATCHDOG_RETRY_MIN WATCHDOG_RETRY_WINDOW
   unset STUB_CRASHLOOP STUB_HEALTH_SEQUENCE STUB_HEAL_FIXES STUB_READY_REFHASH STUB_READY_REFHEIGHT STUB_ZEBRA_ADVANCE STUB_ZEBRA_BLOCKS STUB_ZEBRA_EST STUB_ZEBRA_HASH STUB_ZEBRA_STUCK_CALLS WATCHDOG_CLOCK_FILE WATCHDOG_CLOCK_STEP \
         WATCHDOG_NODE_HEAL_ENABLED WATCHDOG_NODE_STOPS_MINER WATCHDOG_MINER_HEARTBEAT WATCHDOG_MINER_UNIT STUB_START_FAIL \
@@ -1055,6 +1055,72 @@ check "a 55-block clock lag is under the limit: no restart" "! grep -q 'docker r
 check "no peer wipe, no state drop" "[ -f '$peers' ] && [ -d '$nonfinal' ]"
 check "the miner is not touched" "! grep -q 'systemctl stop zcash-testnet-miner' '$STUB_LOG'"
 check "and nothing about the node is paged" "! grep -q 'zebra' '$T/alerts.log'"
+
+echo "== watchdog: the confirmed-lag limit follows the app's published tolerance (#651)"
+# THE COUPLING. The app decides what two sources AGREEING means and publishes that tolerance flat
+# as `agreeBlocks`. If it calls a 32-block spread agreement, a corroborated tip is only good to
+# +/-32 - and a fixed 25 here would read tolerance slack as a confirmed lag and drop non-finalized
+# state on NOISE. No literal fixes it: the tolerance is a block count standing in for a delay in
+# seconds, so it moves with the block rate.
+wd_node_env
+export STUB_ZEBRA_BLOCKS=4340870 STUB_ZEBRA_EST=4340900     # 30 by zebra's clock: under NODE_LAG_LIMIT
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4340900  # corroborated, 30 ahead of us
+export STUB_READY_AGREE_BLOCKS=40                           # the app calls 40 blocks agreement
+wd_run 4
+check "a lag INSIDE the app's own agreement tolerance is not a stall" \
+  "! grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
+check "and the journal says the limit was raised and where the number came from" \
+  "grep -q 'confirmed-lag limit now 45 from the app.s published agreeBlocks=40' '$T/run.log'"
+
+# THE PARTNER, and it is what stops the row above being "never heal". The SAME 30-block lag with no
+# published tolerance is a stall on the floor of 25, exactly as before this change.
+wd_node_env
+export STUB_ZEBRA_BLOCKS=4340870 STUB_ZEBRA_EST=4340900
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4340900
+wd_run 4
+check "and the same lag with NO published tolerance is still a stall on the floor" \
+  "grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
+check "and nothing claims a raised limit when the field is absent" \
+  "! grep -q 'confirmed-lag limit now' '$T/run.log'"
+
+# AND THE MARGIN ITSELF. The two cases above move the limit far enough that +5 is not what decides
+# them, so neither pins it - disclosed on the PR rather than left implied, and this is the case that
+# closes it. 42 behind sits BETWEEN the app's tolerance (40) and the margin (45): inside the margin
+# it is not a stall, and with the margin removed it is. That is the only arrangement where the 5
+# is the deciding number.
+wd_node_env
+export STUB_ZEBRA_BLOCKS=4340858 STUB_ZEBRA_EST=4340900     # 42 by the clock, still under NODE_LAG_LIMIT
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4340900  # corroborated, 42 ahead
+export STUB_READY_AGREE_BLOCKS=40
+wd_run 4
+check "a lag inside the MARGIN above the tolerance is not a stall either" \
+  "! grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
+check "and the limit it used is the tolerance plus the margin, not the tolerance" \
+  "grep -q 'confirmed-lag limit now 45' '$T/run.log'"
+# SAID ONCE, NOT EVERY SWEEP (SDE-App, review of #655). agreeBlocks is ~30 at testnet's cadence, so
+# the raise is true on EVERY sweep - ~2,880 identical lines a day describing a healthy steady
+# state, which is the shape this file refuses everywhere else.
+check "and the derived limit is announced when it CHANGES, not on every sweep" \
+  "[ \"\$(grep -c 'confirmed-lag limit now' '$T/run.log')\" = 1 ]"
+
+echo "== watchdog: nothing remote can switch the confirmed-lag rung off (#655 review)"
+# A FLOOR ALONE ONLY PROTECTS US FROM A SILENT APP. The point of floor-and-derive is that the
+# constant still governs when the app is WRONG: a runaway tolerance would otherwise raise the limit
+# without bound and disable this rung from the far end of an HTTP call.
+wd_node_env
+# ZEBRA'S OWN LAG STAYS UNDER ITS LIMIT, so only the CORROBORATED path can trigger here. My first
+# fixture had zebra 200 behind its own estimate, over NODE_LAG_LIMIT=100 - so the restart came from
+# that path and the row passed with the ceiling deleted. It proved nothing about the cap.
+export STUB_ZEBRA_BLOCKS=4340700 STUB_ZEBRA_EST=4340750     # 50 by the clock: UNDER NODE_LAG_LIMIT
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4340900  # corroborated, 200 ahead: over the cap
+export STUB_READY_AGREE_BLOCKS=100000                       # a nonsense tolerance
+wd_run 4
+check "an absurd published tolerance is capped rather than obeyed" \
+  "grep -q 'capping at 100' '$T/run.log'"
+check "and the rung still fires, so the app cannot turn it off remotely" \
+  "grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
+check "and the cap is said once, not every sweep" \
+  "[ \"\$(grep -c 'capping at' '$T/run.log')\" = 1 ]"
 
 echo "== watchdog: a lag only zebra believes in buys restarts, never a rewind or a parked miner"
 wd_node_env
