@@ -342,6 +342,109 @@ check "and NO shellcheck invocation uses the deploy/z3/*.sh glob that silently m
 check "and it refuses a suspiciously short file list instead of linting nothing" \
   "grep -qE 'ge 30' '$CI_YML'"
 
+
+echo "== repo: a box address cannot enter the tree, in any shape"
+# Three times now. #95 took the IP out of an HTTPS.md A record, #250 out of ops examples and
+# fixtures, #656 put root@<ip> back in two scripts a `git add -A` swept up. Twice removed by a
+# reviewer remembering. That is a check's job, not a memory's.
+#
+# NOT "root@ next to an IPv4", which is the shape I was asked for and wrote first. Measured
+# against all three instances: it catches #656 and MISSES #95 (`A faucet.example.org <ip>`) and
+# #118 (`Host <ip> faucet.*`). The access verb is not the constant, the ADDRESS is - so a public
+# IPv4 is refused unless it is named below with a reason. Examples belong in RFC 5737's
+# documentation ranges, exempt by range; a real box comes from FAUCET_BOX (#658).
+#
+# The set is tracked AND untracked-not-ignored, because untracked-and-not-ignored is what #656
+# was: one `git add -A` from being permanent. Deliberately-ignored local scratch stays invisible,
+# which is #658's decision and not this row's to overturn.
+
+# Public addresses this repo names on purpose. An entry here is a decision, in writing.
+#   35.246.253.46                       a real peer in sync.rs's captured getpeerinfo body
+#   70.34.* 45.76.30.90                 Crosslink's own seeds, quoted in a spike
+#   203.0.114.1                         one OFF the doc range, proving subnetOf separates them
+#   5.6.1.1                             a Zcash spec SECTION number that looks like an address
+#   172.32.0.1 8.8.8.8                  externalTip's SSRF vectors
+BOX_ADDR_ALLOW="35.246.253.46 70.34.201.202 45.76.30.90 70.34.201.146 70.34.209.22 70.34.195.191 70.34.209.18 203.0.114.1 5.6.1.1 172.32.0.1 8.8.8.8"
+
+# Reads `path:line:text` on stdin, prints the lines carrying a public address. The 172 boundary
+# is the one worth getting right: 172.16-31 is private, 172.235 is the box we keep deleting.
+box_public_ips() {
+  awk -v allow="$BOX_ADDR_ALLOW" '
+    BEGIN { n = split(allow, a, " "); for (i = 1; i <= n; i++) named[a[i]] = 1 }
+    function pub(ip,   p, k, i) {
+      k = split(ip, p, ".")
+      if (k != 4) return 0
+      for (i = 1; i <= 4; i++) { if (p[i] !~ /^[0-9]+$/) return 0; if (p[i] + 0 > 255) return 0 }
+      if (p[1]+0 == 0 || p[1]+0 == 10 || p[1]+0 == 127 || p[1]+0 >= 224) return 0
+      if (p[1]+0 == 169 && p[2]+0 == 254) return 0
+      if (p[1]+0 == 172 && p[2]+0 >= 16 && p[2]+0 <= 31) return 0
+      if (p[1]+0 == 100 && p[2]+0 >= 64 && p[2]+0 <= 127) return 0
+      if (p[1]+0 == 192 && p[2]+0 == 168) return 0
+      if (p[1]+0 == 192 && p[2]+0 == 0 && p[3]+0 == 2) return 0
+      if (p[1]+0 == 198 && p[2]+0 == 51 && p[3]+0 == 100) return 0
+      if (p[1]+0 == 203 && p[2]+0 == 0 && p[3]+0 == 113) return 0
+      return 1
+    }
+    { rest = $0
+      while (match(rest, /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/)) {
+        ip = substr(rest, RSTART, RLENGTH); rest = substr(rest, RSTART + RLENGTH)
+        if (pub(ip) && !(ip in named)) { print; next }
+      } }'
+}
+
+# A content matcher cannot scan its own test vectors: the controls below are real box-address
+# lines, so this file trips its own gate. Counting them beats exempting the file - an exemption
+# would make this the one place an address could be added unseen.
+BOX_ADDR_SELF="deploy/z3/tests/suites/repo.sh"
+BOX_ADDR_SCAN="$(cd "$REPO" && git grep --untracked -nIE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' -- . ":!$BOX_ADDR_SELF" 2>/dev/null || true)"
+BOX_ADDR_OWN="$(cd "$REPO" && git grep --untracked -nIE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' -- "$BOX_ADDR_SELF" 2>/dev/null | box_public_ips | grep -c . || true)"
+BOX_ADDR_FILES="$(cd "$REPO" && git ls-files --cached --others --exclude-standard 2>/dev/null | grep -c . || true)"
+BOX_ADDR_LINES="$(printf '%s' "$BOX_ADDR_SCAN" | grep -c . || true)"
+BOX_ADDR_HITS="$(printf '%s\n' "$BOX_ADDR_SCAN" | box_public_ips || true)"
+BOX_ADDR_HIT_N="$(printf '%s' "$BOX_ADDR_HITS" | grep -c . || true)"
+
+# The two floors first. `git grep` exits 128 in a tree with no index - which is what
+# `git archive | tar -x` produces, and how the mutants for this very row get built - and an
+# empty scan satisfies an absence assertion perfectly. Measured: exit 128, no output, row green.
+# shellcheck disable=SC2034 # every BOX_ADDR_* below is read inside check's eval
+check "the working tree could be enumerated at all, so an absent scan cannot read as a clean one" \
+  "[ '$BOX_ADDR_FILES' -ge 200 ]"
+check "and the scan actually read lines carrying an address-shaped string" \
+  "[ '$BOX_ADDR_LINES' -ge 100 ]"
+check "and NO file in it publishes a public IP address that is not named above" \
+  "[ '$BOX_ADDR_HIT_N' -eq 0 ]"
+[ "$BOX_ADDR_HIT_N" -eq 0 ] || printf '%s\n' "$BOX_ADDR_HITS" | sed 's/^/     box address: /'
+
+# The controls, through the SAME function the gate uses. An absence assertion with nothing
+# proving the looking works is the failure mode this suite keeps finding in other people's rows.
+BOX_ADDR_POS="$(printf '%s\n' \
+  'deploy/z3/HTTPS.md:15:A     faucet.example.org    172.235.26.235' \
+  'OPERATIONS.md:212:Host 172.235.26.235 faucet.*' \
+  'scripts/dev-pull-env.sh:15:BOX="${FAUCET_BOX:-root@172.235.26.235}"' \
+  'docs/RUNBOOK.md:8:ssh -L 8081:127.0.0.1:8081 root@172.235.26.235' \
+  'deploy/x.sh:3:scp deploy.tar root@45.32.11.9:/tmp/' \
+  | box_public_ips | grep -c . || true)"
+check "and the same matcher flags every shape this repo has ACTUALLY shipped an address in" \
+  "[ '$BOX_ADDR_POS' -eq 5 ]"
+BOX_ADDR_NEG="$(printf '%s\n' \
+  'deploy/z3/OBSERVABILITY.md:37:ssh -L 8081:127.0.0.1:8081 root@<box>' \
+  'deploy/z3/tests/suites/alerts.sh:207:http://rpcuser:hunter2@127.0.0.1:8232' \
+  'deploy/z3/HTTPS.md:15:A     faucet.example.org    203.0.113.45' \
+  'deploy/compose.yml:9:the docker bridge hands out 172.17.0.2' \
+  'deploy/z3/miner/src/sync.rs:174:"addr": "35.246.253.46:49750"' \
+  | box_public_ips | grep -c . || true)"
+check "and passes loopback, private, documentation-range and named addresses, so it is not a blanket" \
+  "[ '$BOX_ADDR_NEG' -eq 0 ]"
+
+# An exemption for an address nobody uses any more is a blanket waiting for a collision.
+BOX_ADDR_STALE=""
+for _a in $BOX_ADDR_ALLOW; do
+  (cd "$REPO" && git grep --untracked -qF "$_a" -- . 2>/dev/null) || BOX_ADDR_STALE="$BOX_ADDR_STALE $_a"
+done
+check "and every exempted address is still in the tree, so the list cannot grow into a blanket" \
+  "[ -z '$BOX_ADDR_STALE' ]"
+check "and this file carries exactly its five control fixtures and no sixth address" \
+  "[ '$BOX_ADDR_OWN' -eq 5 ]"
 echo "== repo: the npm test script's floor is compatible with the pinned major"
 # `npm test` runs .ts through `node --test`, which needs type stripping. That is
 # unflagged from 22.18. Below the floor the script needs --experimental-strip-types,
