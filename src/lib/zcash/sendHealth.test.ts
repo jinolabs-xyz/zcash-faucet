@@ -247,3 +247,104 @@ test("a success AFTER two failures clears it: the rule is about a wallet that la
   ]);
   assert.equal(recovered.state, "ok");
 });
+
+/* ------------------------------------------------------------------------- *
+ * #528: the two kinds of unresolved, and only one of them is a verdict.
+ * ------------------------------------------------------------------------- */
+
+/** A z_sendmany whose REPLY was lost: no opid, we do not know the wallet heard us. */
+const lost = (agoMs = 0): SendRecord => ({ outcome: "unknown", at: NOW - agoMs, unanswered: true });
+const manyLost = (n: number) => Array.from({ length: n }, () => lost());
+
+test("#528: A WALLET THAT NEVER ANSWERS z_sendmany IS DEGRADED, even with a success beside it", () => {
+  // The regression #527 introduced by being more honest. Two sends in three losing their
+  // reply read `1 ok, 2 unknown` -> "too few to judge", where the same wallet before #527
+  // read `1 ok, 2 failed` -> degraded. Meanwhile each of those two burnt a stranger's
+  // cooldown for the whole day (route.ts, #88), which an outright failure does not.
+  const h = readSendHealth(NOW, [at("ok"), ...manyLost(2)]);
+  assert.equal(h.state, "degraded");
+  assert.equal(sendHealthBlocksServing(h), true);
+  assert.match(h.reason, /2 of the last 3 sends failed or went unanswered/);
+});
+
+test("#528 THE PARTNER: the same shape WITH an opid is still not a verdict", () => {
+  // Without this row every assertion above is satisfied by "any unresolved send now
+  // counts", which would undo the rule at the top of this file and hand a slow wallet the
+  // power to fail readiness and roll back a good deploy. The KIND is what counts, not the
+  // bucket, so the identical arithmetic must come out differently.
+  const h = readSendHealth(NOW, [at("ok"), ...many("unknown", 2)]);
+  assert.equal(h.state, "unknown", "an opid means the wallet took the job; that is not a fault");
+  assert.equal(sendHealthBlocksServing(h), false);
+});
+
+test("#528: the slow-but-working wallet is left exactly as it was", () => {
+  // The two cases the module already decided, re-asserted against the new counting so a
+  // later widening cannot quietly take them with it.
+  assert.equal(readSendHealth(NOW, [...many("unknown", 8), at("ok")]).state, "unknown");
+  assert.equal(readSendHealth(NOW, [...many("unknown", 8), ...many("ok", 3)]).state, "ok");
+});
+
+test("#528: two lost replies and no success is a verdict, exactly as two failures are", () => {
+  const h = readSendHealth(NOW, manyLost(FAIL_ALONE));
+  assert.equal(h.state, "degraded");
+  assert.match(h.reason, /2 of the last 2 sends failed or went unanswered and none succeeded/);
+});
+
+test("#528: the sentence never calls a lost reply a failure, nor a failure a lost reply", () => {
+  // An operator told "3 sends failed" goes looking for an error the wallet never sent.
+  assert.match(readSendHealth(NOW, many("failed", 3)).reason, /3 of the last 3 sends failed$/);
+  assert.match(readSendHealth(NOW, [at("ok"), ...manyLost(2)]).reason, /went unanswered/);
+  assert.doesNotMatch(readSendHealth(NOW, many("failed", 3)).reason, /unanswered/);
+});
+
+test("#528: BOTH kinds are still reported as unknown, because an operator wants to see them all", () => {
+  const h = readSendHealth(NOW, [at("ok"), ...manyLost(2), ...many("unknown", 2)]);
+  assert.equal(h.unknown, 4, "counting them differently must not hide any of them");
+});
+
+/* ------------------------------------------------------------------------- *
+ * #517: the log is per wallet, because the wallets are per network.
+ * ------------------------------------------------------------------------- */
+
+const on = (network: "taz" | "ctaz", outcome: "ok" | "failed" | "unknown", n: number): SendRecord[] =>
+  Array.from({ length: n }, () => ({ outcome, at: NOW, network }));
+
+test("#517: a degraded TAZ wallet does not refuse cTAZ claims, and the reverse", () => {
+  // Different wallets paying from different balances. Neither is evidence about the other,
+  // and refusing a working one is an outage we inflicted on ourselves.
+  const records = [...on("taz", "failed", 4), ...on("ctaz", "ok", 4)];
+  assert.equal(readSendHealth(NOW, records, "taz").state, "degraded");
+  assert.equal(readSendHealth(NOW, records, "ctaz").state, "ok");
+
+  const mirrored = [...on("ctaz", "failed", 4), ...on("taz", "ok", 4)];
+  assert.equal(readSendHealth(NOW, mirrored, "ctaz").state, "degraded");
+  assert.equal(readSendHealth(NOW, mirrored, "taz").state, "ok");
+});
+
+test("#517: one network's sends do not pad the other's SAMPLE either", () => {
+  // The quieter half of the same bug. If the other wallet's records stayed in the window
+  // they would not only carry verdicts across, they would make a network with two sends
+  // look like one with six, and MIN_SAMPLE would stop protecting it.
+  const records = [...on("ctaz", "ok", 9), ...on("taz", "failed", 1)];
+  assert.equal(readSendHealth(NOW, records, "taz").state, "unknown", "one TAZ failure is not a sample");
+  assert.equal(readSendHealth(NOW, records, "taz").failed, 1);
+  assert.equal(readSendHealth(NOW, records, "taz").ok, 0, "cTAZ successes must not vouch for TAZ");
+});
+
+test("#517: a record written before networks were tracked counts, rather than being dropped", () => {
+  // Discarding them would silently shrink the sample, which is worse than attributing them
+  // to the wallet they almost certainly used.
+  const legacy = many("failed", 4);  // no network field at all
+  assert.equal(readSendHealth(NOW, legacy, "taz").state, "degraded");
+  assert.equal(readSendHealth(NOW, legacy, "ctaz").state, "unknown", "and they belong to ONE network, not both");
+});
+
+test("#517: recordSend files a send under the network that made it", () => {
+  resetSendHealth();
+  recordSend("failed", "ctaz", NOW);
+  recordSend("failed", "ctaz", NOW);
+  recordSend("failed", "ctaz", NOW);
+  assert.equal(readSendHealth(NOW, undefined, "ctaz").state, "degraded");
+  assert.equal(readSendHealth(NOW, undefined, "taz").state, "unknown");
+  resetSendHealth();
+});

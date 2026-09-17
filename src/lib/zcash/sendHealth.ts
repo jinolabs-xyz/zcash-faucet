@@ -50,15 +50,18 @@ export interface SendRecord {
   outcome: SendOutcome;
   at: number;
   /**
-   * WHICH WALLET THIS WAS (#517). The log was network-agnostic, so a degraded TAZ wallet
-   * refused cTAZ claims with `kind: sends` -- and three failed cTAZ sends would have refused
-   * TAZ. They are different wallets; one cannot be evidence about the other.
-   *
-   * Optional on the record so a log written before this shipped still reads, and those
-   * entries are treated as the default network rather than discarded: a record with no
-   * network is one we made, and dropping it would quietly shrink the sample.
+   * Which wallet paid (#517). The log was global, so a degraded TAZ wallet refused cTAZ
+   * claims. Absent on records written before this; those read as the default rather than
+   * being dropped, which would shrink the sample silently.
    */
   network?: FaucetNetwork;
+  /**
+   * The z_sendmany reply itself was lost, so there is no opid and we do not know the wallet
+   * heard us (zalletsend.ts records "no-opid"). Distinct from an unresolved opid, where the
+   * wallet took the job and is probably broadcasting. #527 put both in `unknown`; only this
+   * kind counts toward a verdict. Absent reads as the opid kind.
+   */
+  unanswered?: boolean;
 }
 
 
@@ -153,9 +156,10 @@ export function recordSend(
   outcome: SendOutcome,
   network: FaucetNetwork = DEFAULT_NETWORK,
   now: number = Date.now(),
+  unanswered = false,
 ): void {
   const l = log();
-  l.push({ outcome, at: now, network });
+  l.push({ outcome, at: now, network, unanswered });
   // Trim on write so nothing grows without bound in a long-lived process. Bounded by
   // time rather than count, because a burst of claims inside the window is exactly the
   // sample this wants to keep.
@@ -184,7 +188,19 @@ export function readSendHealth(
   // Unknowns are excluded from the denominator as well as the numerator. Including them
   // would let a run of slow sends dilute a real failure rate below the threshold, which
   // is the same mistake in the opposite direction from counting them as failures.
-  const decided = ok + failed;
+  // A lost reply counts; an unresolved opid still does not (#528). The second is the
+  // "slow but working" case the header is about. The first is also the outcome that holds
+  // the claimant's cooldown for the full day (route.ts, #88), where an outright failure
+  // releases it: so a run of them has to take the wallet out of service faster than
+  // failures do, not never. `unknown` keeps reporting both; only the counting splits them.
+  const unanswered = live.filter((r) => r.outcome === "unknown" && r.unanswered === true).length;
+  const heldBack = unknown - unanswered;
+  const failing = failed + unanswered;
+  // Not just "failed": a sentence calling a lost reply a failure sends an operator looking
+  // for an error the wallet never sent.
+  const failingWord = unanswered > 0 ? "failed or went unanswered" : "failed";
+
+  const decided = ok + failing;
   if (decided < MIN_SAMPLE) {
     // Nothing succeeded and unresolved plus failed make a sample: the wallet is not
     // finishing sends. Judged before the sample rule, which would otherwise answer "too
@@ -192,7 +208,7 @@ export function readSendHealth(
     // decided sends. Inside this branch decided < MIN_SAMPLE, so the sum reaching it
     // means at least one unresolved send; the failed-only case (three refusals, no
     // unknowns) never gets here and is the ratio rule's, one branch down.
-    if (ok === 0 && unknown + failed >= MIN_SAMPLE) {
+    if (ok === 0 && heldBack + failing >= MIN_SAMPLE) {
       return {
         state: "degraded",
         ok,
@@ -205,14 +221,14 @@ export function readSendHealth(
     // Two failures and no success (R-18): judged here too, since two decided sends
     // never reach the ratio rule. The ratio rule still owns anything with a success in
     // it, so one failure beside one success stays "too few to judge".
-    if (ok === 0 && failed >= FAIL_ALONE) {
+    if (ok === 0 && failing >= FAIL_ALONE) {
       return {
         state: "degraded",
         ok,
         failed,
         unknown,
         refused,
-        reason: `${failed} of the last ${failed} sends failed and none succeeded`,
+        reason: `${failing} of the last ${failing} sends ${failingWord} and none succeeded`,
       };
     }
     return {
@@ -225,14 +241,14 @@ export function readSendHealth(
     };
   }
 
-  if (failed / decided >= FAIL_RATIO) {
+  if (failing / decided >= FAIL_RATIO) {
     return {
       state: "degraded",
       ok,
       failed,
       unknown,
       refused,
-      reason: `${failed} of the last ${decided} sends failed`,
+      reason: `${failing} of the last ${decided} sends ${failingWord}`,
     };
   }
 

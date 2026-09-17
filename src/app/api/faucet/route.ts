@@ -130,10 +130,8 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
   //    happens after, so a dead wallet cost each honest retry +2 bits (14, 16, 18
   //    observed) for a refusal that was ours. Nothing is reserved, no proof is spent.
   //    Unknown (too few sends to judge) does not block, same as readiness.
-  //    AND ABOUT THIS NETWORK'S WALLET, not the faucet's (#517). The log was network-agnostic,
-  //    so a degraded TAZ wallet refused cTAZ claims and three failed cTAZ sends would have
-  //    refused TAZ. They are different wallets paying from different balances; neither is
-  //    evidence about the other, and refusing a working one is a self-inflicted outage.
+  //    And about the wallet that would pay THIS claim (#517): different networks are
+  //    different wallets, so neither is evidence about the other.
   const sends = readSendHealth(Date.now(), undefined, network);
   if (sendHealthBlocksServing(sends)) {
     api.logError(`drip refused before the challenge, sends degraded: ${sends.reason}`, "send health gate");
@@ -426,7 +424,11 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
       // NOT a failure for health purposes. The wallet holds an opid and may have
       // broadcast, so counting it against the money path would let a slow wallet trip
       // readiness and roll a good deploy back.
-      recordSend("unknown", network);
+      //
+      // Which kind of unresolved (#528): an opid means the wallet took the job, "no-opid"
+      // means the reply was lost and we do not know it heard us. Only the second counts.
+      const unanswered = err instanceof SendOutcomeUnknownError && err.opid === "no-opid";
+      recordSend("unknown", network, Date.now(), unanswered);
       const marker = err instanceof SendOutcomeUnknownError ? `unknown:${err.opid}` : "unknown:deadline";
       try {
         await finalizeClaim(reservation.claimId, "sent", marker, undefined, Date.now(), network);
