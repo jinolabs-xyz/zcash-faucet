@@ -17,6 +17,7 @@ import { isActive } from "@/lib/miner/heartbeat";
 import { cachedCtazNodeStateWarm } from "@/lib/crosslink/cache";
 import { canServeCtaz } from "@/lib/crosslink/recency";
 import { uptimeReading } from "@/lib/uptime";
+import { minerRow } from "@/lib/minerLabel";
 import { withApi } from "@/lib/api";
 
 export const runtime = "nodejs";
@@ -166,6 +167,18 @@ export const GET = withApi("status", async (req: NextRequest) => {
       templateAgoSeconds: round(minerReading.templateAgoSeconds),
       waitingAgoSeconds: round(minerReading.waitingAgoSeconds),
       active: isActive(minerReading.state),
+      // THE MINER'S EXPLANATORY DETAIL, OPERATOR ONLY (#569). The redesign moved the public page
+      // to one word and the template age, which is the standing rule working as intended - the
+      // public surface says one word about ops state and never a fault name. That left the
+      // sentences an operator acts on (what the heartbeat means, why it is parked, the acceptance
+      // ratio, the last template age) on no page at all. They belong behind the token, beside the
+      // box's named faults, for the same reason those are: `publicBoxRow` already tells the public
+      // "detail is on the box, not here", and this is that detail.
+      //
+      // Rendered with the same minerRow() the unit tests cover rather than reshaped here, so the
+      // wire format and the tested format cannot drift apart - the reason given twenty lines up
+      // for sending the reading through as-is.
+      ...(ops ? { detail: minerRow(minerReading, box.minerUnit) } : {}),
     },
     // Refill loop state. spendableTaz uses this request's balance read (fresher
     // than the reconciler's last tick); refilling is the reconciler's decision.
