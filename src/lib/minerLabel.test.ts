@@ -223,7 +223,7 @@ test("one block is singular, because a row that says '1 blocks' reads as a bug",
 
 test("A MINER THAT HAS NEVER WON SAYS SO, which is the case the old row hid", () => {
   const row = minerRow(({ ...base,  state: "running", solvedCount: 0  }));
-  assert.match(row, /no blocks won yet/);
+  assert.match(row, /none won since it started/);
   assert.match(row, /mining/, "and it is still mining: never-won is not broken");
 });
 
@@ -359,4 +359,10 @@ test("no peers for a few seconds after a node restart is not red yet; two minute
 test("a waiting reason the reader does not know falls back to the lag wording", () => {
   assert.equal(minerRow({ ...waiting, waitingReason: "something-new" }), "waiting, node 1,443 blocks behind for 40 min");
   assert.equal(minerIsBad({ ...waiting, waitingReason: "something-new" }), false);
+});
+
+/** #645: the operator row's zero is per-process too - see statusView.test.ts for the reasoning. */
+test("#645: the operator row scopes a zero to the current process", () => {
+  const row = minerRow({ ...base, state: "running", solvedCount: 0 });
+  assert.match(row, /since it started/, `"${row}" reads as a lifetime claim`);
 });

@@ -435,7 +435,9 @@ export function acceptPercent(miner: { submittedAccepted?: number | null; submit
  */
 export function acceptSentence(miner: { submittedAccepted?: number | null; submittedRejected?: number | null } | null | undefined): string {
   const pct = acceptPercent(miner);
-  if (pct === null) return "no blocks submitted yet";
+  // Same scope fix as minerLabel's wins() (#645): the submitted counts reset with the
+  // process, so "yet" reads as "never" on a miner that has won plenty before a restart.
+  if (pct === null) return "none submitted since it started";
   return `${pct}% accepted by our node`;
 }
 

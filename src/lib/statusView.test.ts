@@ -308,7 +308,7 @@ test("a miner that has submitted nothing has no acceptance rate", () => {
   // 0% is a measurement. Nothing submitted is the absence of one, and the two look
   // identical at zero while meaning entirely different things.
   assert.equal(acceptPercent({ submittedAccepted: 0, submittedRejected: 0 }), null);
-  assert.equal(acceptSentence({ submittedAccepted: 0, submittedRejected: 0 }), "no blocks submitted yet");
+  assert.equal(acceptSentence({ submittedAccepted: 0, submittedRejected: 0 }), "none submitted since it started");
   assert.equal(acceptPercent(null), null);
   assert.equal(acceptPercent({}), null);
   // A genuine zero rate, which IS a measurement, still reads as one.
@@ -425,4 +425,21 @@ test("the word is never a number, in any combination", () => {
     for (const servable of [true, false, undefined])
       assert.ok(Number.isNaN(Number(ctazWord({ enabled, servable }))),
         `${enabled}/${servable} produced a numeric word`);
+});
+
+/**
+ * #645: solvedCount and the submitted counts reset with the miner process, so a zero must
+ * not be phrased as a statement about the miner's life. Prod showed "0 / no blocks submitted
+ * yet" in orange on a healthy miner that had won 69 before that day's restart. Asserted as
+ * the POSITIVE property - the sentence names its scope - because a denylist of the words I
+ * happen to think of ("yet", "never") would pass the next phrasing that means the same thing.
+ */
+test("#645: a zero count is scoped to this process, not claimed as a lifetime", () => {
+  const s = acceptSentence({ submittedAccepted: 0, submittedRejected: 0 });
+  assert.match(s, /since it started/, `"${s}" does not say which period it is about`);
+});
+
+test("#645: absent is still not zero - no counts at all says nothing about blocks", () => {
+  assert.equal(acceptSentence({ submittedAccepted: null, submittedRejected: null }), acceptSentence(null));
+  assert.match(acceptSentence(null), /since it started|unknown/i);
 });

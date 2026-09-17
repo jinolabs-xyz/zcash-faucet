@@ -1875,7 +1875,7 @@ export default function Home() {
         <section className="view" data-view="analytics" data-testid="view-analytics" aria-label="Usage analytics" hidden={view !== "analytics"}>
           <div className="vhead">
             <h2>Usage</h2>
-            <p>Aggregate counts by UTC day from <code className="mono">/api/status</code>. Nothing per user is collected, so nothing per user is shown.</p>
+            <p>Aggregate counts by UTC day. Nothing per user is collected, so nothing per user is shown.</p>
           </div>
           <AnalyticsCards status={status} />
         </section>
