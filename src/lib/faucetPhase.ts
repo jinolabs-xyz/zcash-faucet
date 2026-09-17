@@ -6,7 +6,6 @@
  * The decision MOVES and does not change. readinessBadge.ts turns a phase into a word; this
  * turns the facts into a phase. Together they are the one owner of "what is the faucet doing".
  */
-import type { ChainFreshness } from "./zcash/shieldGate.ts";
 import type { CtazState } from "./crosslink/recency.ts";
 import type { MinerReading } from "./miner/heartbeat.ts";
 import type { PublicBox } from "./boxLabel.ts";

@@ -34,7 +34,7 @@
  */
 
 import { num } from "../config.ts";
-import { referenceTip, warmExternalTip, HOSH_TIMEOUT_MS, MIN_ATTEMPT_GAP_MS, REFRESH_ATTEMPT_MS } from "./externalTip.ts";
+import { referenceTip, warmExternalTip, MIN_ATTEMPT_GAP_MS, REFRESH_ATTEMPT_MS } from "./externalTip.ts";
 
 /*
  * The decision itself is a PURE function of two heights (see shieldFreshness),
