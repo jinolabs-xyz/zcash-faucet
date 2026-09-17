@@ -41,6 +41,37 @@ pub struct TransactionTemplate {
     pub data: String,
 }
 
+/// The sample template, shared with main.rs's tests so a second copy cannot drift from this one.
+#[cfg(test)]
+pub fn tests_sample() -> &'static str {
+    r#"{
+      "capabilities": ["proposal"],
+      "version": 4,
+      "previousblockhash": "0000000000a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b",
+      "blockcommitmentshash": "1111111111111111111111111111111111111111111111111111111111111111",
+      "lightclientroothash": "2222222222222222222222222222222222222222222222222222222222222222",
+      "defaultroots": {
+        "merkleroot": "3333333333333333333333333333333333333333333333333333333333333333",
+        "chainhistoryroot": "4444444444444444444444444444444444444444444444444444444444444444",
+        "authdataroot": "5555555555555555555555555555555555555555555555555555555555555555",
+        "blockcommitmentshash": "6666666666666666666666666666666666666666666666666666666666666666"
+      },
+      "transactions": [{"data": "abcdef", "hash": "00", "authdigest": "00", "depends": [], "fee": 1000, "sigops": 1, "required": false}],
+      "coinbasetxn": {"data": "0400008085202f89", "hash": "00", "authdigest": "00", "depends": [], "fee": -1000, "sigops": 1, "required": true},
+      "longpollid": "0000",
+      "target": "0000000000002f93c0000000000000000000000000000000000000000000000000",
+      "mintime": 1700000000,
+      "mutable": ["time", "transactions", "prevblock"],
+      "noncerange": "00000000ffffffff",
+      "sigoplimit": 20000,
+      "sizelimit": 2000000,
+      "curtime": 1700000123,
+      "bits": "1f2f93c0",
+      "height": 4204726,
+      "maxtime": 1700007200
+    }"#
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
