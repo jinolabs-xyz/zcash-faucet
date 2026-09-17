@@ -43,8 +43,14 @@ a FIFO queue, so two claims never spend the same notes.
 - **Shielded by default.** Every drip is z2z on the Ironwood pool.
 - **Its own node and wallet.** Nothing that moves money depends on a third party.
 - **Refuses payments that cannot confirm.** The tip is checked against an independent
-  reference, and chain-identity and branch-id checks catch a forked or mis-upgraded
-  chain rather than paying out on it.
+  reference, and a drip is refused when our view of the chain is too stale to build
+  against. A fork is caught by the *watchdog*, which compares our block hash at a
+  reference height against the one the app publishes and parks the miner rather than
+  extending a private chain.
+  The app's own chain-identity and branch-id check is **not wired** and reads
+  `cannot-verify`: it asks zallet for `getblockchaininfo`, which zallet does not
+  implement, so `ourBranchId()` is null (#533, R-20). This bullet used to claim those
+  checks caught a forked or mis-upgraded chain. They never have.
 - **Mines and auto-shields its funding.** A solo miner works `getblocktemplate`; a
   reserve loop shields matured coinbase into the wallet, sharing the send queue with
   drips and yielding the moment a real claim arrives.
