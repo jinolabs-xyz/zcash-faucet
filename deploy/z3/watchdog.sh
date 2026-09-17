@@ -1197,7 +1197,7 @@ check_history_against_reference() {
 }
 
 heal_self_mined_fork() {
-  local name="$1" blocks corr used_h ahead miner_word started_age who mins hosh_h lwd_h spread
+  local name="$1" blocks corr used_h ahead miner_word started_age who mins hosh_h lwd_h spread spread_s spb agree_b
   [ "$FORK_HEAL_ENABLED" = "1" ] || return 0
   [ -n "$name" ] || return 0
 
@@ -1233,14 +1233,26 @@ heal_self_mined_fork() {
     hosh_h="$(printf '%s' "${ready_body:-}" | grep -o '"hoshHeight":[0-9][0-9]*' | head -n1 | cut -d: -f2)"
     lwd_h="$(printf '%s' "${ready_body:-}" | grep -o '"lightwalletdHeight":[0-9][0-9]*' | head -n1 | cut -d: -f2)"
     spread="$(printf '%s' "${ready_body:-}" | grep -o '"spreadBlocks":[0-9][0-9]*' | head -n1 | cut -d: -f2)"
+    # AND IN THE UNIT THAT NOW DECIDES (#600 step 3, after step 2 landed). Since #651 the app
+    # judges agreement on spreadSeconds, not on a block count, so a line naming only blocks
+    # cannot be used to reproduce the verdict: 32 blocks is inside tolerance at one cadence
+    # and far outside it at another. secondsPerBlock is a DECIMAL, unlike every other number
+    # here - a [0-9]* grep silently truncates 32.26 to 32 and the three figures stop
+    # reconciling, which is the "500 x 0 is not 200" bug one file over.
+    spread_s="$(printf '%s' "${ready_body:-}" | grep -o '"spreadSeconds":[0-9][0-9]*' | head -n1 | cut -d: -f2)"
+    spb="$(printf '%s' "${ready_body:-}" | grep -o '"secondsPerBlock":[0-9][0-9.]*' | head -n1 | cut -d: -f2)"
+    agree_b="$(printf '%s' "${ready_body:-}" | grep -o '"agreeBlocks":[0-9][0-9]*' | head -n1 | cut -d: -f2)"
     case "$hosh_h" in ''|*[!0-9]*) hosh_h="" ;; esac
     case "$lwd_h"  in ''|*[!0-9]*) lwd_h=""  ;; esac
     case "$spread" in ''|*[!0-9]*) spread="" ;; esac
+    case "$spread_s" in ''|*[!0-9]*) spread_s="" ;; esac
+    case "$spb" in ''|*[!0-9.]*) spb="" ;; esac
+    case "$agree_b" in ''|*[!0-9]*) agree_b="" ;; esac
     # ONCE PER EPISODE, not once per sweep (CTO red-team, finding 7): a single-sourced oracle,
     # an unreachable app or a body from before #559 is a STATE, and one line every 30 s for as
     # long as it lasts is the shape this file already refuses elsewhere (miner_waiting_logged).
     if [ "$fork_cannot_tell_logged" != "1" ]; then
-      log "fork check: cannot tell, so nothing is paged and nothing is touched (corroborated=${corr:-absent}, highest usable reference=${used_h:-none}, ours $blocks; hosh=${hosh_h:-none}, lightwalletd=${lwd_h:-none}, spread=${spread:-unknown}). Silent until this changes."
+      log "fork check: cannot tell, so nothing is paged and nothing is touched (corroborated=${corr:-absent}, highest usable reference=${used_h:-none}, ours $blocks; hosh=${hosh_h:-none}, lightwalletd=${lwd_h:-none}, spread=${spread:-unknown}b/${spread_s:-unknown}s at ${spb:-unknown}s a block, tolerance ${agree_b:-unknown}b). Silent until this changes."
       fork_cannot_tell_logged=1
     fi
     return 0
