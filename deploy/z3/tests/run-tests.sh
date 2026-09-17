@@ -186,7 +186,10 @@ suite_deps() { # $1 suite name -> commands it needs beyond the base set
     # them, and without the interpreter those checks fail as though the workflow were
     # broken. A harness that cannot tell "not installed" from "defect" makes every number
     # it prints suspect, which is what this table exists to prevent.
-    repo)     echo "python3 jq" ;;
+    # git joined when the box-address row landed: it enumerates the WORKING TREE
+    # (tracked plus untracked-not-ignored) rather than a directory listing, so without git
+    # the scan is empty and an absence assertion passes proving nothing.
+    repo)     echo "python3 jq git" ;;
     # installops copies files and asks systemctl via a stub; nothing beyond the base set.
     installops) echo "" ;;
     # boxreport reads files and asks a stubbed systemctl; python3 parses its JSON output.
@@ -254,6 +257,10 @@ suite_caps() { # $1 suite -> capability keys it needs
     # means we could not tell. Spending the wrong one costs somebody the hour it takes to
     # prove main is fine, which is the hour it cost to find this.
     boxreport) echo "git stat_c" ;;
+    # repo's box-address row greps the working tree through git. `command -v git` is not
+    # enough for it: a tree extracted with `git archive` HAS git and has no index, and there
+    # `git grep` exits 128 with no output - which satisfies "no address found" perfectly.
+    repo) echo "git_tree" ;;
     *)        echo "" ;;
   esac
 }
@@ -270,6 +277,9 @@ cap_probe() { # $1 key -> 0 when this host really has it
     # a GNU flag.
     nonroot)     [ "$(id -u)" != 0 ] ;;
     git)         command -v git >/dev/null 2>&1 ;;
+    # Not "is git installed" but "can git see this tree": the repo suite scans the working
+    # tree, and an indexless copy answers every query with nothing rather than an error.
+    git_tree)    git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1 ;;
     *)           return 0 ;;
   esac
 }
@@ -281,6 +291,7 @@ cap_reason() { # $1 key -> what is missing, in the operator's terms
     sha256sum)   echo "sha256sum      GNU coreutils. macOS ships shasum instead." ;;
     nonroot)     echo "a non-root user  running as root, so chmod cannot make a path unwritable." ;;
     git)         echo "git            box-report dates sources by commit time; without it staleness is untestable." ;;
+    git_tree)    echo "a git work tree  the repo suite scans the tree through git; an archive-extracted copy has no index." ;;
   esac
 }
 
@@ -303,7 +314,7 @@ dep_package() { # $1 command or capability -> the apt package that provides it
     git)         echo git ;;
     # GNU behaviours (coreutils/findutils) and non-rootness: the capability refusal tells
     # you to use the Linux container as a normal user, which no package can do for you.
-    stat_c|find_printf|sha256sum|nonroot) echo "-" ;;
+    stat_c|find_printf|sha256sum|nonroot|git_tree) echo "-" ;;
     *)           echo "" ;;
   esac
 }
