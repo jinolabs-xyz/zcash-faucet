@@ -1787,6 +1787,49 @@ check "a source that answered but is not trusted prints its height beside an unu
   "grep -qE 'highest usable reference=none, ours [0-9]+; hosh=4349918, lightwalletd=none' '$T/run.log'"
 check "and it is the cannot-tell line saying it, so this is the state the sentence is written for" \
   "grep -q 'fork check: cannot tell.*hosh=4349918' '$T/run.log'"
+
+# #600 STEP 3, THE HALF STEP 2 CHANGED UNDERNEATH IT. The line named the spread in BLOCKS, and since
+# #651 the app does not decide in blocks: corroborated is spreadSeconds <= TIP_AGREE_SECONDS. So the
+# journal published the evidence in a unit that no longer governs, and 400 blocks is agreement at one
+# cadence and nowhere near it at another. An operator could read the line and still not know why it
+# was refused - which is the whole complaint #600 step 3 exists to answer.
+echo "== watchdog: cannot-tell names the unit the verdict was ACTUALLY made in"
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFS=disagree STUB_READY_USEDHEIGHT=4350000
+export STUB_READY_AGREE_BLOCKS=40            # the tolerance the app is applying at this cadence
+wd_run 2
+check "the journal carries the spread in BOTH units on one line, so the verdict can be reproduced" \
+  "grep -q 'spread=400b/4200s' '$T/run.log'"
+check "and the tolerance the app applied, without which neither number can be judged" \
+  "grep -q 'tolerance 40b' '$T/run.log'"
+# THE ROW THAT PINS THE DECIMAL. secondsPerBlock is the only non-integer on this body, and a
+# [0-9]* grep truncates 10.5 to 10 while still printing something plausible. Asserting the text
+# would pass on the truncation; asserting that the THREE FIGURES MULTIPLY OUT does not - at 10 the
+# journal claims 400 blocks is 4000 seconds when it published 4200. This is the app's own
+# "500 x 0 is not 200" defect, one file downstream, and it is invisible to every other row here.
+check "and the rate is the decimal the app published, not a truncation of it" \
+  "grep -q 'at 10.5s a block' '$T/run.log'"
+check "and the three figures reconcile, read back OUT of the journal rather than off the fixture" \
+  "line=\"\$(grep -o 'spread=[0-9]*b/[0-9]*s at [0-9.]*s a block' '$T/run.log' | head -n1)\"; \
+   b=\"\${line#spread=}\"; b=\"\${b%%b/*}\"; \
+   sec=\"\${line#*b/}\"; sec=\"\${sec%%s at*}\"; \
+   r=\"\${line##*at }\"; r=\"\${r%%s a block}\"; \
+   [ -n \"\$b\" ] && [ -n \"\$sec\" ] && [ -n \"\$r\" ] && \
+   [ \"\$(awk -v b=\"\$b\" -v r=\"\$r\" -v s=\"\$sec\" 'BEGIN{d=b*r-s; if(d<0)d=-d; print (d<=1)?\"ok\":\"no\"}')\" = ok ]"
+
+# A BODY THAT CARRIES NONE OF IT MUST SAY UNKNOWN, NOT ZERO. A field absent and a body from before
+# #651 are the same thing to a key-grep reader, and "0 seconds apart" is the one reading that would
+# send an operator looking for a fork that is not there.
+echo "== watchdog: a body without the time figures says unknown rather than inventing a zero"
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFS=absent
+wd_run 2
+check "the spread, the rate and the tolerance all read unknown on a body that carries none of them" \
+  "grep -q 'spread=unknownb/unknowns at unknowns a block, tolerance unknownb' '$T/run.log'"
+check "and no figure reads as 0, which would be a measurement rather than a silence" \
+  "! grep -qE 'spread=0b|/0s at|tolerance 0b' '$T/run.log'"
 check "and nothing is touched on a reference the app itself will not use" \
   "[ ! -f '$T/park/$FORK_MARKER_REL' ] && ! grep -q 'blocks AHEAD' '$T/alerts.log'"
 # THE HISTORY HALF (#533 step 2, R-20). Four cases, and the two that must stay SILENT matter as
