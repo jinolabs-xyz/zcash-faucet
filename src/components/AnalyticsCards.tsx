@@ -280,7 +280,11 @@ export function AnalyticsCards({ status }: { status: ViewStatus | null }) {
           </span>
           <span>
             <i style={{ background: "var(--unknown)" }} />
+            {/* NESTED, not a fourth bucket: `unanswered` is the part of `unknown` whose reply was
+                lost, and the verdict counts it (#528). Side by side they would read as siblings and
+                double-count. Shown only when there are some, so a healthy wallet stays one word. */}
             unknown {sends?.unknown ?? UNKNOWN}
+            {sends?.unanswered != null && sends.unanswered > 0 ? ` (${sends.unanswered} unanswered)` : ""}
           </span>
           <span>
             <i style={{ background: "var(--warn)" }} />

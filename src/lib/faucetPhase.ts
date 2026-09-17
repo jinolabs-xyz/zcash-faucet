@@ -34,7 +34,9 @@ export interface Status {
   /** The money-path verdict /api/ready pages on, now on the endpoint the page polls
    * (risk register II, R-32). Optional: a deploy older than this sends none, and absent
    * must read as "not judged", never as healthy. */
-  sends?: { state: "ok" | "degraded" | "unknown"; ok: number; failed: number; unknown: number; reason: string };
+  /** `unanswered` is the SUBSET of `unknown` whose z_sendmany reply was lost (#528). Typed here
+   *  because the page cannot read a field it does not declare, however real it is at runtime. */
+  sends?: { state: "ok" | "degraded" | "unknown"; ok: number; failed: number; unknown: number; unanswered?: number; refused?: number; reason: string };
   /** Drips served: ever, last 7 UTC days, last 30. Null (or absent, from an older
    * deploy) means the ledger would not answer, which is unknown, never zero. */
   // `byDay` is the thirty-day series #549 added: counts only, zero-filled, oldest

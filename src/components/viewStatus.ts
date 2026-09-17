@@ -37,7 +37,8 @@ export interface ViewStatus {
   } | null;
   miner?: Partial<MinerReading> & { active?: boolean };
   box?: { state: string; minerUnit?: string | null };
-  sends?: { state: string; ok: number; failed: number; unknown: number; refused?: number; reason: string };
+  /** `unanswered` is a SUBSET of `unknown`, not a fourth bucket (#528). */
+  sends?: { state: string; ok: number; failed: number; unknown: number; unanswered?: number; refused?: number; reason: string };
   reserve?: {
     targetTaz: number | null;
     lowTaz: number | null;
