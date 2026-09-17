@@ -3718,7 +3718,18 @@ try {
   const names = [...html.matchAll(/<script[^>]+src="([^"]+)"/g)]
     .map((m) => m[1].split("/").pop())
     .filter((n) => n.endsWith(".js"));
-  servedBuild = names.length ? names.slice(0, 3).join(" ") : "no script tags";
+  // THE PAGE CHUNK, NOT THE FIRST THREE (SDE-Infra, review of this PR). Next emits the shared and
+  // runtime chunks first and the page chunk EIGHTH, so a leading slice names bundles that do not
+  // move when app code does. They measured it: origin/main and origin/main plus the #633 mutation
+  // printed BYTE-IDENTICAL leading chunks while their page- hashes differed. That version would
+  // have caught the wrong URL - which alone would have saved the night this PR is about - and
+  // still not told two builds apart, which is the other half of what the line promises.
+  const pages = names.filter((n) => n.startsWith("page-"));
+  servedBuild = pages.length
+    ? pages.join(" ")
+    : names.length
+      ? `no page- chunk; leading: ${names.slice(0, 3).join(" ")}`
+      : "no script tags";
 } catch (e) {
   servedBuild = `could not read (${e instanceof Error ? e.message : String(e)})`;
 }
