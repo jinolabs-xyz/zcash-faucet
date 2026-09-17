@@ -145,6 +145,13 @@ case "${1:-}" in
     while [ $# -gt 0 ]; do
       case "$1" in
         --tail) shift 2 ;;
+        # --since TAKES A VALUE, and before #601 this branch did not know that: the flag and its
+        # value both fell through to the `*)` arm and were assigned to `target`, which then
+        # happened to end up correct only because the container is the LAST argument. A caller
+        # that put the container first would have read a log file named ".logs" and found nothing.
+        # THE VALUE IS STILL NOT MODELLED - this double cannot age a log line - so a case can
+        # assert the window was REQUESTED and must not claim the window was enforced.
+        --since|--until) shift 2 ;;
         -f|--follow|-t|--timestamps) shift ;;
         *) target="$1"; shift ;;
       esac

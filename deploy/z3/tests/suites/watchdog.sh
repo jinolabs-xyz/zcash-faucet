@@ -41,7 +41,7 @@ wd_env() {
   # faucet that is never ready and never paged looks exactly like one that is fine.
   # The first case that set the grace to 0 failed in CI and passed alone.
   unset STUB_READY_EXTERNAL STUB_CURL_RC STUB_READY_REFS STUB_READY_USEDHEIGHT WATCHDOG_NODE_CONFIRMED_LAG_LIMIT
-  unset STUB_SLOWLOOP STUB_ALERT_FAIL_N STUB_ALERT_FAIL_RC WATCHDOG_RECOVERY_MIN_UPTIME
+  unset STUB_SLOWLOOP STUB_ALERT_FAIL_N STUB_ALERT_FAIL_RC WATCHDOG_RECOVERY_MIN_UPTIME WATCHDOG_RETRY_MIN WATCHDOG_RETRY_WINDOW
   unset STUB_CRASHLOOP STUB_HEALTH_SEQUENCE STUB_HEAL_FIXES STUB_READY_REFHASH STUB_READY_REFHEIGHT STUB_ZEBRA_ADVANCE STUB_ZEBRA_BLOCKS STUB_ZEBRA_EST STUB_ZEBRA_HASH STUB_ZEBRA_STUCK_CALLS WATCHDOG_CLOCK_FILE WATCHDOG_CLOCK_STEP \
         WATCHDOG_NODE_HEAL_ENABLED WATCHDOG_NODE_STOPS_MINER WATCHDOG_MINER_HEARTBEAT WATCHDOG_MINER_UNIT STUB_START_FAIL \
         WATCHDOG_SIGNAL_MATCH STUB_READY_CANBUILD STUB_READY_CANBUILD_ONCE \
@@ -660,6 +660,31 @@ check "and the repair tools were NOT run on a wallet that is working" \
   "! grep -q 'ran the repair tools' '$T/run.log'"
 check "and the line points at the read-only look rather than at a repair" \
   "grep -q 'read-only' '$T/run.log'"
+# THE READ IS BOUNDED, and this row says only what it can. The rung asks for a WINDOW rather than
+# the whole log, which is what keeps it from counting a retry storm from last week as today's. The
+# docker double cannot age a log line, so the window's VALUE is not modelled and this must not
+# pretend otherwise - what is checkable is that the flag and the configured value are PASSED, so a
+# change dropping the bound (or hard-coding a different one) is caught (SDE-App, review of #644).
+check "and it asks docker for a bounded window rather than the whole log" \
+  "grep -q -- 'docker logs --since 10m z3-testnet-zallet-1' '$STUB_LOG'"
+
+echo "== watchdog: the retry floor the BOX runs on is the one in the file, not the one cases set"
+# Every case above exports WATCHDOG_RETRY_MIN, so the shipped default is anchored by nothing and a
+# typo in it would ship green (SDE-App, review of #644 - the override-hides-the-default shape).
+# This case sets NOTHING and drives the real default: 6 retries is over it, and the rung must fire.
+wd_env
+echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+mk_heal_tools
+for _ in 1 2 3 4 5 6; do
+  printf 'Failed to get status of 29aed28d... (will retry): chain backend error: RPC Error (code: -5): Transaction not found in mempool or best chain\n'
+done > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
+wd_run 2
+check "six retries reaches the SHIPPED floor with no override set" \
+  "grep -q 'zallet retried unfetchable transactions 6 times' '$T/run.log'"
+check "and the shipped window is the one in the file too" \
+  "grep -q -- 'docker logs --since 10m z3-testnet-zallet-1' '$STUB_LOG'"
 
 echo "== watchdog: a few retries are not a retry loop, and the notice re-arms when it clears"
 # THE PARTNER. Every row above is satisfied by a rung that announces on ANY log content at all, and
