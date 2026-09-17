@@ -58,3 +58,21 @@ deploy/.faucet-account
 # Fixtures written by scripts/ui-state.mjs to drive the UI into a named state.
 # Regenerated on every run and never meant to be shared.
 /.ui-state/
+
+# Local scripts that reach the production box. They carry no secrets, but they carry the
+# BOX ADDRESS and the user it is reached as, and this repo is public. That has been removed
+# by hand twice already - #95 "stop pinning the box IP in an example" and #250 "use
+# placeholders in ops examples and test fixtures" - and came back both times because these
+# files sit in the tree untracked and unignored, where one `git add -A` sweeps them up.
+#
+# An address in git history is not removed by deleting it later. If a dev script is worth
+# sharing, commit it deliberately with the host taken from the environment and add a `!` line
+# here saying so.
+/scripts/dev-*.sh
+# ...except these three, committed ON PURPOSE. They take the box from FAUCET_BOX in the
+# environment and hardcode nothing, so they are shareable. A new dev-*.sh is ignored by
+# default and has to be allowed here deliberately, which is the point: the decision is
+# made once, in writing, rather than by whoever next runs `git add -A`.
+!/scripts/dev-pull-env.sh
+!/scripts/dev-run.sh
+!/scripts/dev-tunnels.sh
