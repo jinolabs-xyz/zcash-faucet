@@ -160,4 +160,8 @@ li[data-active] .mark{border-color:var(--orange);border-top-color:transparent;an
    box so it still reads as one of the page's status panels, and takes a top margin because it is
    the last thing in that column rather than one of a stack inside a panel. Left-aligned with the
    copy above it; the card's own panels are unaffected. */
-.reserve-aside{margin-top:calc(1.4*var(--u));align-self:start;width:100%}
+/* The donate row brings its own .phase .row top margin, so the block's own gap comes down to
+   pay for it - measured: without this 1024x768 runs 2px past the fold, which is small and is
+   still the owner's no-scrolling rule. */
+.reserve-aside{margin-top:calc(1.0*var(--u));align-self:start;width:100%}
+.reserve-aside .row{margin-top:calc(.5*var(--u))}

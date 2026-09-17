@@ -201,6 +201,11 @@
   ".reserve-aside": {
     "kind": "divergence",
     "why": "#654, owner: \"this below in the left hand bottom side of the website not in that component\". The design draws the reserve notice inside the claim card, where it was the content that pushed the panel past its clamp - 41px hidden at 1280x800 and 128px at 1024x768, concealed rather than shown because .card.claim > .panel scrolls. It is a fact about the faucet's float rather than a step in the claim, and claims keep working while it is up, so it belongs beside the hero copy. Keeps the .phase box so it still reads as one of the page's status panels; only the placement differs from the snapshot.",
-    "shipped": "margin-top:calc(1.4*var(--u)); align-self:start; width:100%"
+    "shipped": "margin-top:calc(1.0*var(--u)); align-self:start; width:100%"
+  },
+  ".reserve-aside .row": {
+    "kind": "divergence",
+    "why": "#659 follow-up, owner: the reserve panel should point at /donate. The donate row inherits `.phase .row{margin-top:calc(.7*var(--u))}`, which on top of the block's own gap ran 1024x768 2px past the fold - small, and still the owner's standing no-scrolling rule. The row's gap comes down here and the block's own margin comes down with it, so the link is paid for rather than added. Measured after: every viewport fits and the link is on screen at all of them.",
+    "shipped": "margin-top:calc(.5*var(--u))"
   }
 }

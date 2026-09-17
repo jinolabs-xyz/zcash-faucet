@@ -723,6 +723,27 @@ async function checkCardInnerPadding(browser) {
       !!ps && ps.scrollH <= ps.clientH + 1,
       ps ? `scrollHeight ${ps.scrollH} vs clientHeight ${ps.clientH} (overflow-y: ${ps.overflowY}), panels: ${r.panelNames.join(", ") || "none"}`
          : "no .card.claim > .panel in the DOM");
+    // THE RESERVE PANEL POINTS AT THE PAGE THAT CAN FIX IT, and at the RIGHT one (owner ask).
+    // /donate is the TAZ page; /fund is mainnet ZEC for the server. A panel saying testnet coins
+    // are short must not ask for real money, and "it links somewhere" is not the assertion - the
+    // destination is. Conditional because this panel only renders when the reserve is under its
+    // low mark, which CI does not drive; it SAYS when it could not look rather than passing quietly.
+    const resv = await p.evaluate(() => {
+      const el = document.querySelector('[data-phase="reserve-low"]');
+      if (!el) return null;
+      const a = el.querySelector("a[href]");
+      return { href: a ? a.getAttribute("href") : null, text: (a?.textContent || "").trim(),
+               reassures: /claims still work/i.test(el.textContent || "") };
+    });
+    if (resv) {
+      ok(`${vp.width}x${vp.height}: the reserve-low panel offers the TAZ donate page, not the ZEC funding page`,
+        resv.href === "/donate", `href ${resv.href ?? "(no link)"} on "${resv.text}"`);
+      ok(`${vp.width}x${vp.height}: and it still reassures before it asks`,
+        resv.reassures, `panel text ${resv.reassures ? "carries" : "has LOST"} "Claims still work"`);
+    } else {
+      console.log(`  --   ${vp.width}x${vp.height}: no reserve-low panel in this state, so its link was not checked`);
+    }
+
     // THE PARTNER, and it is a positive control rather than a content requirement. My first version
     // demanded a live `.phase` and went red on every healthy run - the claim panel carries the tabs,
     // the copy, the field and the lower block whether or not a phase is showing, so the row above is
