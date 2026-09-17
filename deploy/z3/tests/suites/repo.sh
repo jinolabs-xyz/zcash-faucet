@@ -234,11 +234,24 @@ echo "== repo: the watchdog's CORROBORATED-lag limit stays clear of the app's ag
 # first cut of this rung got its threshold wrong in the other direction.
 # Held as an INEQUALITY, not two literals: the right relationship is "clear of it", and
 # pinning them equal would forbid the very change that fixes a future miscalibration.
+# THIS ROW USED TO COMPARE TWO LITERALS AND IT WENT BLIND (#651, found by SDE-App reviewing their
+# own change against this file). After #651 the app's AGREE_BLOCKS only decides the FALLBACK path -
+# the tolerance actually applied is computed from the observed block rate and PUBLISHED as
+# `agreeBlocks`. So "25 > 20" kept passing while the relationship it protects had moved, and it
+# would have kept passing at TIP_AGREE_SECONDS=100000. A check that cannot fail is not a check.
+#
+# WHAT IS HELD NOW: that the watchdog DERIVES its limit from the published field, with the constant
+# as a floor. That is a property a mutant can break; the old inequality was not.
 WD_CONF="$(sed -nE 's/^NODE_CONFIRMED_LAG_LIMIT="\$\{WATCHDOG_NODE_CONFIRMED_LAG_LIMIT:-([0-9]+)\}".*/\1/p' "$REPO/deploy/z3/watchdog.sh")"
-APP_AGREE="$(sed -nE 's/^export const AGREE_BLOCKS = num\("TIP_AGREE_BLOCKS", ([0-9]+)\);$/\1/p' "$REPO/src/lib/zcash/externalTip.ts")"
-check "both numbers could be read" "[ -n '$WD_CONF' ] && [ -n '$APP_AGREE' ]"
-check "and the watchdog's confirmed-lag limit is clear of it ($WD_CONF vs $APP_AGREE)" \
-  "[ '$WD_CONF' -gt '$APP_AGREE' ]"
+check "the watchdog still declares a confirmed-lag floor" "[ -n '$WD_CONF' ]"
+# grep -qF throughout: the shapes being matched contain $ and " and [0-9] classes, and an escaped
+# regex through check()'s eval is how the first version of these rows aborted the whole suite.
+check "and it DERIVES the working limit from the app's published agreeBlocks rather than assuming a number" \
+  "grep -qF 'agreeBlocks' '$REPO/deploy/z3/watchdog.sh'"
+check "and the floor is still the fallback, so a body without the field keeps today's behaviour" \
+  "grep -qF 'conf_limit=' '$REPO/deploy/z3/watchdog.sh' && grep -qF 'NODE_CONFIRMED_LAG_LIMIT' '$REPO/deploy/z3/watchdog.sh'"
+check "and the stall comparison uses the derived limit rather than the constant" \
+  "grep -qF -e '-gt \"\$conf_limit\"' '$REPO/deploy/z3/watchdog.sh' && ! grep -qF -e '-gt \"\$NODE_CONFIRMED_LAG_LIMIT\"' '$REPO/deploy/z3/watchdog.sh'"
 # AND THE TWO RUNGS READ THE SAME GATE. Step 7 read `externalHeight` while step 8 read
 # `corroborated`+`usedHeight`, which is the same height with the corroboration discarded, and
 # one flaky source could buy a chain rewind. One definition now, called twice.

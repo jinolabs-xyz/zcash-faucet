@@ -774,8 +774,34 @@ heal_node_if_stalled() {
   # 55-by-the-clock as not-a-stall, while the same 100 meant tonight's 58 blocks behind a
   # CORROBORATED tip never started the stall clock at all. So the corroborated number gets
   # NODE_CONFIRMED_LAG_LIMIT and zebra's estimate keeps NODE_LAG_LIMIT.
+  # THE CONFIRMED LIMIT IS DERIVED, NOT A SECOND COPY OF THE APP'S NUMBER (#651, SDE-App).
+  # The app decides what counts as two sources AGREEING, and it publishes that tolerance flat in
+  # /api/ready as `agreeBlocks`. If it calls a 32-block spread agreement, then a "corroborated" tip
+  # is only good to +/-32 - and a fixed 25 here would read that tolerance slack as a confirmed lag
+  # and drop non-finalized state on noise. So the floor has to sit ABOVE the app's tolerance by
+  # construction rather than by two people remembering the same number.
+  #
+  # NO LITERAL WORKS, which is why this is derived: the tolerance is a block count standing in for
+  # a delay measured in seconds, so it moves with the block rate. Any value clearing 32 at 10s
+  # blocks is 60+ at 5s and absurd at 75s.
+  #
+  # +5 IS A JUDGEMENT AND THE ONLY ONE HERE. It is margin above the tolerance, not a derived
+  # quantity, and it is named rather than folded in so the next person can argue with it.
+  #
+  # THE CONSTANT STAYS AS THE FLOOR. A missing or garbage field leaves today's behaviour exactly as
+  # it is - same shape as the retry counter's guard, and the reason a /api/ready that predates #651
+  # is not a silent downgrade.
+  local agree_b conf_limit
+  agree_b="$(printf '%s' "${ready_body:-}" | grep -o '"agreeBlocks":[0-9][0-9]*' | head -n1 | cut -d: -f2)"
+  case "$agree_b" in ''|*[!0-9]*) agree_b="" ;; esac
+  conf_limit="$NODE_CONFIRMED_LAG_LIMIT"
+  if [ -n "$agree_b" ] && [ "$(( agree_b + 5 ))" -gt "$conf_limit" ]; then
+    conf_limit=$(( agree_b + 5 ))
+    log "confirmed-lag limit raised to $conf_limit from the app's published agreeBlocks=$agree_b (floor $NODE_CONFIRMED_LAG_LIMIT)"
+  fi
+
   local ext_over=0 zebra_over=0
-  [ -n "$ext_lag" ] && [ "$ext_lag" -gt "$NODE_CONFIRMED_LAG_LIMIT" ] && ext_over=1
+  [ -n "$ext_lag" ] && [ "$ext_lag" -gt "$conf_limit" ] && ext_over=1
   [ "$zebra_lag" -gt "$NODE_LAG_LIMIT" ] && zebra_over=1
   # THE NUMBER THAT FIRED, NOT THE LARGER ONE. With two limits the bigger raw lag can be the
   # one still inside its own budget - zebra 90 under its 100, beside 30 behind a corroborated
