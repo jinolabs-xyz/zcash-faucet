@@ -1083,6 +1083,21 @@ check "and the same lag with NO published tolerance is still a stall on the floo
 check "and nothing claims a raised limit when the field is absent" \
   "! grep -q 'confirmed-lag limit raised' '$T/run.log'"
 
+# AND THE MARGIN ITSELF. The two cases above move the limit far enough that +5 is not what decides
+# them, so neither pins it - disclosed on the PR rather than left implied, and this is the case that
+# closes it. 42 behind sits BETWEEN the app's tolerance (40) and the margin (45): inside the margin
+# it is not a stall, and with the margin removed it is. That is the only arrangement where the 5
+# is the deciding number.
+wd_node_env
+export STUB_ZEBRA_BLOCKS=4340858 STUB_ZEBRA_EST=4340900     # 42 by the clock, still under NODE_LAG_LIMIT
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4340900  # corroborated, 42 ahead
+export STUB_READY_AGREE_BLOCKS=40
+wd_run 4
+check "a lag inside the MARGIN above the tolerance is not a stall either" \
+  "! grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
+check "and the limit it used is the tolerance plus the margin, not the tolerance" \
+  "grep -q 'confirmed-lag limit raised to 45' '$T/run.log'"
+
 echo "== watchdog: a lag only zebra believes in buys restarts, never a rewind or a parked miner"
 wd_node_env
 echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
