@@ -37,7 +37,14 @@
 set -euo pipefail
 
 DRY_RUN=0
-[ "${1:-}" = "--dry-run" ] && DRY_RUN=1
+READ_ONLY=0
+for a in "$@"; do
+  case "$a" in
+    --dry-run)   DRY_RUN=1 ;;
+    --read-only) DRY_RUN=1; READ_ONLY=1 ;;
+    *) echo "usage: $(basename "$0") [--dry-run] [--read-only]" >&2; exit 64 ;;
+  esac
+done
 
 ZALLET_CONTAINER="${ZALLET_CONTAINER:-z3-testnet-zallet-1}"
 ZEBRA_CONTAINER="${ZEBRA_CONTAINER:-z3-testnet-zebra-1}"
@@ -47,10 +54,36 @@ DB_IN_VOL="/d/wallet.db"
 
 # sqlite and curl come from throwaway containers so this needs nothing installed on the
 # host, matching how the rest of deploy/z3 works.
-sq() { docker run --rm -v "$VOLUME":/d alpine:3 sh -c "apk add -q sqlite 2>/dev/null; sqlite3 $DB_IN_VOL \"\$1\"" _ "$1"; }
+# Under --read-only, SQ_DIR holds a snapshot and every query reads that instead of the volume.
+SQ_DIR=""
+sq() {
+  if [ -n "$SQ_DIR" ]; then
+    docker run --rm -v "$SQ_DIR":/d:ro alpine:3 sh -c "apk add -q sqlite 2>/dev/null; sqlite3 $DB_IN_VOL \"\$1\"" _ "$1"
+  else
+    docker run --rm -v "$VOLUME":/d alpine:3 sh -c "apk add -q sqlite 2>/dev/null; sqlite3 $DB_IN_VOL \"\$1\"" _ "$1"
+  fi
+}
 
-if [ "$(docker inspect -f '{{.State.Running}}' "$ZALLET_CONTAINER" 2>/dev/null)" = "true" ]; then
+if [ "$READ_ONLY" = "1" ]; then
+  # See the long note in zallet-abandon-expired-txs.sh: the look must not cost an outage (#601),
+  # and a snapshot without the -wal is a state that may never have existed as a whole.
+  SQ_DIR="$(mktemp -d "${TMPDIR:-/tmp}/wallet-snap.XXXXXX")"
+  trap 'rm -rf "$SQ_DIR"' EXIT
+  if ! docker run --rm -v "$VOLUME":/d:ro -v "$SQ_DIR":/snap alpine:3 sh -c '
+      set -e
+      cp /d/wallet.db /snap/wallet.db
+      for x in -wal -shm; do
+        [ -e "/d/wallet.db$x" ] || continue
+        cp "/d/wallet.db$x" "/snap/wallet.db$x"
+      done
+    '; then
+    echo "ABORT: could not snapshot wallet.db and its -wal/-shm. A partial copy is not a reading." >&2
+    exit 1
+  fi
+  echo "--read-only: querying a snapshot of wallet.db (+ any -wal/-shm) taken just now; the wallet was not stopped and nothing will be changed"
+elif [ "$(docker inspect -f '{{.State.Running}}' "$ZALLET_CONTAINER" 2>/dev/null)" = "true" ]; then
   echo "ABORT: $ZALLET_CONTAINER is running. Stop it first, or sqlite and the wallet will fight over wallet.db." >&2
+  echo "       To see the candidate list WITHOUT stopping it, run with --read-only." >&2
   exit 1
 fi
 
