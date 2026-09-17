@@ -702,6 +702,27 @@ wd_run 2
 check "one retry in the window is under the floor and says nothing" \
   "! grep -q 'zallet retried unfetchable transactions' '$T/run.log'"
 
+# AND THE RE-ARM, WHICH THIS SECTION CLAIMED AND DID NOT HOLD (SDE-UI, review of #644). The header
+# above says "the notice re-arms when it clears" and the comment states the risk in so many words,
+# and the only check under it was the floor - both of UI's mutants (delete the elif; flap_set 0->1)
+# survived. A broken re-arm is worse here than a missing notice: flap is ON DISK, so the rung would
+# announce once on a host and then stay silent on that host FOR EVER, across every later episode
+# and every deploy. That is the two-way blindness this PR removes, reintroduced one branch along.
+#
+# THE TEST SHAPE HAS TO FOLLOW THE LIFETIME. The flag outlives the process, so a single sweep loop
+# cannot show it re-arming; NOT calling wd_env between runs keeps one STATE_DIR, and three runs over
+# it are what make an episode end and a second one begin.
+printf 'Failed to get status of 29aed28d... (will retry): x\n%.0s' 1 2 3 4 5 6 7 8 > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
+wd_run 1                                     # episode 1: over the floor, announced, flag set
+: > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
+wd_run 1                                     # the condition ends
+check "the notice says so when the retry loop stops, rather than just falling silent" \
+  "grep -q 'no longer retrying unfetchable transactions' '$T/run.log'"
+printf 'Failed to get status of 29aed28d... (will retry): x\n%.0s' 1 2 3 4 5 6 7 8 > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
+wd_run 1                                     # episode 2: must be announced again
+check "and a SECOND episode is announced, so the once-per-episode flag re-armed" \
+  "grep -q 'zallet retried unfetchable transactions 8 times' '$T/run.log'"
+
 echo "== watchdog: the CURRENT build's wording triggers the repair too (#601)"
 # THE WALLET CHANGED ITS WORDS AND THE DETECTOR DID NOT. The rung above matched one literal
 # sentence; the owner's log of 2026-09-16 shows this build answering the same condition - code -5,
