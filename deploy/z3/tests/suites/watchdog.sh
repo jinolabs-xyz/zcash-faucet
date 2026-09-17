@@ -660,6 +660,16 @@ check "and the repair tools were NOT run on a wallet that is working" \
   "! grep -q 'ran the repair tools' '$T/run.log'"
 check "and the line points at the read-only look rather than at a repair" \
   "grep -q 'read-only' '$T/run.log'"
+# AND THE POINTER IS RUNNABLE, which the row above cannot tell: `read-only` appears in a relative
+# path just as happily as in an absolute one. This line is read through journalctl from wherever
+# the operator happens to be standing, and the repo-relative form it used to print resolves to
+# nothing there. I sent the owner the wrong path myself an hour ago - /opt/faucet is the install
+# dir, /opt/zcash-faucet is the checkout - so this is the same mistake one layer up.
+# Extracted from the journal and tested as a FILE: a relative path fails, and so does an absolute
+# one naming something that is not there.
+check "and the path it names is absolute and actually exists, so it can be run where it is read" \
+  "tool=\"\$(grep -o 'bash /[^ ]*zallet-abandon-expired-txs.sh' '$T/run.log' | head -n1)\"; \
+   tool=\"\${tool#bash }\"; [ -n \"\$tool\" ] && [ -f \"\$tool\" ]"
 # THE READ IS BOUNDED, and this row says only what it can. The rung asks for a WINDOW rather than
 # the whole log, which is what keeps it from counting a retry storm from last week as today's. The
 # docker double cannot age a log line, so the window's VALUE is not modelled and this must not
@@ -697,10 +707,32 @@ echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
 echo running > "$STUB_CONTAINERS/faucet-web"
 mk_heal_tools
 export WATCHDOG_RETRY_MIN=6
-printf 'Failed to get status of 29aed28d... (will retry): something\n' > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
+printf 'Failed to get status of 29aed28d... (will retry): chain backend error: RPC Error (code: -5): Transaction not found in mempool or best chain\n' > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
 wd_run 2
 check "one retry in the window is under the floor and says nothing" \
   "! grep -q 'zallet retried unfetchable transactions' '$T/run.log'"
+
+# AND THE OTHER PARTNER, WHICH THE FLOOR ROWS CANNOT SEE (SDE-App, review of #644). The count was
+# `grep -c 'will retry'` - any line carrying that phrase, from any subsystem. A wallet backing off
+# a peer, or retrying an ordinary RPC, was counted as an unfetchable transaction, and the note then
+# asserted "zallet retried unfetchable transactions N times" and sent the reader to
+# zallet-abandon-expired-txs.sh. A false sentence pointing at the wrong tool, on a healthy wallet.
+# Twelve of these is twice the floor: under the loose matcher this case announces, under the
+# anchored one it is silent, and NO row above can tell the two apart.
+printf 'Failed to connect to peer 10.0.0.9 (will retry): connection refused\n%.0s' 1 2 3 4 5 6 7 8 9 10 11 12 \
+  > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
+wd_run 2
+check "twelve unrelated retries are not unfetchable transactions, so nothing is announced" \
+  "! grep -q 'zallet retried unfetchable transactions' '$T/run.log'"
+# The COMPANION, and it claims only what it holds. Together with the row above it says an
+# unrelated-retry log does nothing at all - neither announced nor healed.
+# IT DOES NOT GUARD THE HEAL'S EXCLUSION, and I checked rather than assuming: dropping
+# `grep -v "will retry"` from the heal measures 373/0 -> 371/2, and the two that die are #644's
+# ("it is a journal line, not a page" and "the repair tools were NOT run on a wallet that is
+# working"). This row stays green, because a peer backoff carries no poison sentence and the heal
+# would never fire on it either way. The exclusion is held there; this is held here.
+check "and the same log does not reach the heal either, so the rung is silent end to end" \
+  "! grep -q 'poison signature detected' '$T/run.log'"
 
 # AND THE RE-ARM, WHICH THIS SECTION CLAIMED AND DID NOT HOLD (SDE-UI, review of #644). The header
 # above says "the notice re-arms when it clears" and the comment states the risk in so many words,
@@ -712,13 +744,13 @@ check "one retry in the window is under the floor and says nothing" \
 # THE TEST SHAPE HAS TO FOLLOW THE LIFETIME. The flag outlives the process, so a single sweep loop
 # cannot show it re-arming; NOT calling wd_env between runs keeps one STATE_DIR, and three runs over
 # it are what make an episode end and a second one begin.
-printf 'Failed to get status of 29aed28d... (will retry): x\n%.0s' 1 2 3 4 5 6 7 8 > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
+printf 'Failed to get status of 29aed28d... (will retry): chain backend error: RPC Error (code: -5): Transaction not found in mempool or best chain\n%.0s' 1 2 3 4 5 6 7 8 > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
 wd_run 1                                     # episode 1: over the floor, announced, flag set
 : > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
 wd_run 1                                     # the condition ends
 check "the notice says so when the retry loop stops, rather than just falling silent" \
   "grep -q 'no longer retrying unfetchable transactions' '$T/run.log'"
-printf 'Failed to get status of 29aed28d... (will retry): x\n%.0s' 1 2 3 4 5 6 7 8 > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
+printf 'Failed to get status of 29aed28d... (will retry): chain backend error: RPC Error (code: -5): Transaction not found in mempool or best chain\n%.0s' 1 2 3 4 5 6 7 8 > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
 wd_run 1                                     # episode 2: must be announced again
 check "and a SECOND episode is announced, so the once-per-episode flag re-armed" \
   "grep -q 'zallet retried unfetchable transactions 8 times' '$T/run.log'"
