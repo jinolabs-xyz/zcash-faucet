@@ -31,6 +31,7 @@ zc_env() {
   printf 'shm\n'                              > "$T/vol/wallet.db-shm"
   export STUB_VOL_DIR="$T/vol" STUB_ZALLET_RUNNING=true STUB_SQL_OUT="" STUB_RPC_HAS_TX=0
   export STUB_SNAP_KEEP="$T/snap-taken"; rm -rf "$STUB_SNAP_KEEP"
+  unset STUB_TOUCH_DURING_COPY
   export ZALLET_CONTAINER="zallet-under-test" ZEBRA_CONTAINER="zebra-under-test" ZALLET_VOLUME="fixture-volume"
   # THE DESTRUCTIVE PATH HAS TO BE REACHABLE OR THE SAFETY ROWS PIN NOTHING. The repair copies
   # the volume's real host path before deleting; with that path absent the script dies at the
@@ -63,6 +64,14 @@ if [ -n "$SNAP" ]; then
   # is copied; this only rebinds the two paths it names.
   real_src="${STUB_VOL_DIR:?}"
   printf '%s' "$SCRIPT" | sed "s#/snap#$SNAP#g; s#/d/#$real_src/#g; s#\"/d/#\"$real_src/#g" > "$SNAP/.script"
+  # A CHECKPOINT AT THE DANGEROUS MOMENT, injected deterministically rather than raced for: the
+  # window this guards is between the db copy and the -wal copy, so the double inserts the write
+  # exactly there. A background toucher would reproduce the same state some of the time, and a
+  # case that only sometimes sets up its subject is worse than no case.
+  if [ "${STUB_TOUCH_DURING_COPY:-0}" = "1" ]; then
+    awk -v src="$real_src" '''{ print; if ($0 ~ /cp .*wallet\.db .*wallet\.db$/) { printf "printf x >> %s/wallet.db\n", src; printf "touch -t 203001010000 %s/wallet.db\n", src } }''' \
+      "$SNAP/.script" > "$SNAP/.script.2" && mv "$SNAP/.script.2" "$SNAP/.script"
+  fi
   bash "$SNAP/.script" || exit 1
   rm -f "$SNAP/.script"
   # KEEP WHAT WAS COPIED. The tool traps EXIT and removes its own snapshot, which is right and
@@ -171,6 +180,23 @@ check "and the -wal came with it, so the snapshot is the state the wallet is act
 check "and the -shm too" "[ -e '$T/snap-taken/wallet.db-shm' ]"
 check "and the volume was mounted READ ONLY for the copy" \
   "grep -q -- '-v fixture-volume:/d:ro' '$STUB_LOG'"
+
+echo "== zallet cleanup: a wallet that CHANGES mid-copy is refused, not read"
+# The db and its -wal are two cp calls, so they can straddle a checkpoint: the db is copied,
+# zallet checkpoints, and the -wal that follows belongs to a different instant than the db it
+# would be replayed against (SDE-UI, review of #637). A read-only mount rules out sqlite's own
+# backup API, so the copy cannot be atomic - but it can notice, and a torn pair must be thrown
+# away rather than read, because what it reports is a state that never existed.
+zc_env
+# WITH A CANDIDATE, or the second row below passes because there was nothing to report either
+# way. Same trap as the read-only case above, and I walked into it twice.
+export STUB_ZALLET_RUNNING=true STUB_TOUCH_DURING_COPY=1 STUB_SQL_OUT="7:AABBCC"
+zc_run "$ABANDON" --read-only
+check "a wallet written to between the db copy and the -wal copy refuses" \
+  "[ $RC -eq 1 ] && grep -q 'A partial copy is not a reading' '$T/last.out'"
+check "and it does not go on to report candidates from the torn pair" \
+  "! grep -q 'would be abandoned' '$T/last.out'"
+unset STUB_TOUCH_DURING_COPY
 
 echo "== zallet cleanup: a wallet with no -wal is snapshotted, not refused"
 # A checkpointed wallet has no sidecars. Copying only what exists is correct; refusing would

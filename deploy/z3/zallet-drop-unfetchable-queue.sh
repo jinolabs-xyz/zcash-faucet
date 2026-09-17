@@ -71,11 +71,24 @@ if [ "$READ_ONLY" = "1" ]; then
   trap 'rm -rf "$SQ_DIR"' EXIT
   if ! docker run --rm -v "$VOLUME":/d:ro -v "$SQ_DIR":/snap alpine:3 sh -c '
       set -e
+      # TWO cp CALLS AGAINST A LIVE WALLET CAN STRADDLE A CHECKPOINT (SDE-UI, review of #637).
+      # That is this tools own warning one step along: the db is copied, zallet checkpoints, and
+      # the -wal that follows belongs to a different instant than the db it will be replayed
+      # against. A read-only mount rules out the sqlite backup API, so the copy cannot be made
+      # atomic here - what it CAN do is notice. Size and mtime are read either side of the whole
+      # copy, and a change means the pair is torn and the snapshot is thrown away, not read.
+      stamp() { stat -c "%s:%Y" /d/wallet.db 2>/dev/null || stat -f "%z:%m" /d/wallet.db; }
+      before="$(stamp)"
       cp /d/wallet.db /snap/wallet.db
       for x in -wal -shm; do
         [ -e "/d/wallet.db$x" ] || continue
         cp "/d/wallet.db$x" "/snap/wallet.db$x"
       done
+      after="$(stamp)"
+      if [ "$before" != "$after" ]; then
+        echo "wallet.db changed while it was being copied ($before -> $after)" >&2
+        exit 7
+      fi
     '; then
     echo "ABORT: could not snapshot wallet.db and its -wal/-shm. A partial copy is not a reading." >&2
     exit 1
