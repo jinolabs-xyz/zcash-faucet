@@ -34,7 +34,7 @@ use std::{
     process,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
     },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -307,7 +307,7 @@ fn mine_once(rpc: &Rpc, config: &Config, hb: &Arc<Mutex<heartbeat::State>>) -> R
     // a string comparison against the thing we would be extending.
     let solve_started = Instant::now();
     let abandon = Arc::new(AtomicBool::new(false));
-    let stop_watch = Arc::new(AtomicBool::new(false));
+    let stop_watch = Arc::new(Shutdown::new());
     // A SCOPED THREAD, so the watcher can borrow the rpc client rather than forcing `Rpc` to be
     // Clone for the sake of a thread that outlives nothing. The scope joins it before returning,
     // which is also what guarantees no watcher survives the solve it belongs to.
@@ -333,7 +333,7 @@ fn mine_once(rpc: &Rpc, config: &Config, hb: &Arc<Mutex<heartbeat::State>>) -> R
         let solved = solve(&header, &target, config, &abandon);
         // Stopped either way, so a solve that ends for any other reason does not leave a thread
         // polling the node for the rest of the process's life.
-        stop_watch.store(true, Ordering::Relaxed);
+        stop_watch.stop();
         let _ = watcher.join();
         solved
     });
@@ -498,16 +498,65 @@ fn sync_guard(rpc: &Rpc, config: &Config, hb: &Arc<Mutex<heartbeat::State>>) -> 
 /// uninterruptible and took at least 2.4s on the box, so the flag is read between iterations and
 /// waste is bounded at about one iteration rather than the whole window. Trying to interrupt
 /// mid-Equihash would mean patching the solver.
+/// The watcher's sleep, interruptible.
+///
+/// WHY NOT `thread::sleep` (SDE-UI, review of #660). A plain sleep is uninterruptible, so the main
+/// thread's `stop` + `join()` blocked until the current 1s sleep ended - measured at **956ms**. The
+/// abandon path was fine (the watcher returns immediately on a change), but the cost landed on the
+/// two paths that matter most: a solve that hit its deadline paid ~1s of idle per pass, and A SOLVE
+/// THAT FOUND A BLOCK held it for a second before submitting. In a race whose only previous win was
+/// rejected for a stale parent, adding a window in which the tip can move AFTER we have won is the
+/// opposite of what this PR is for.
+pub struct Shutdown {
+    stopped: Mutex<bool>,
+    wake: Condvar,
+}
+
+impl Shutdown {
+    pub fn new() -> Self {
+        Self { stopped: Mutex::new(false), wake: Condvar::new() }
+    }
+    /// Ends any wait in progress immediately.
+    pub fn stop(&self) {
+        if let Ok(mut g) = self.stopped.lock() {
+            *g = true;
+        }
+        self.wake.notify_all();
+    }
+    pub fn is_stopped(&self) -> bool {
+        self.stopped.lock().map(|g| *g).unwrap_or(true)
+    }
+    /// Waits up to `d`, returning as soon as `stop()` is called. True when stopped.
+    fn wait(&self, d: Duration) -> bool {
+        let Ok(g) = self.stopped.lock() else { return true };
+        if *g {
+            return true;
+        }
+        // A POISONED LOCK ENDS THE WAIT rather than parking for ever: the watcher is a helper, and
+        // a helper that cannot be stopped is the failure this whole struct exists to remove.
+        match self.wake.wait_timeout(g, d) {
+            Ok((g, _)) => *g,
+            Err(_) => true,
+        }
+    }
+}
+
+impl Default for Shutdown {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub fn watch_tip<F>(
     parent: String,
     abandon: Arc<AtomicBool>,
-    stop: Arc<AtomicBool>,
+    stop: Arc<Shutdown>,
     poll: Duration,
     mut current_tip: F,
 ) where
     F: FnMut() -> Option<String>,
 {
-    while !stop.load(Ordering::Relaxed) && !abandon.load(Ordering::Relaxed) {
+    while !stop.is_stopped() && !abandon.load(Ordering::Relaxed) {
         // A FAILED READ IS NOT A CHANGED TIP. An unreachable node would otherwise abandon every
         // solve for ever, which is worse than the bug: the miner would do no work at all rather
         // than some wasted work. The deadline is still the backstop.
@@ -517,7 +566,9 @@ pub fn watch_tip<F>(
                 return;
             }
         }
-        thread::sleep(poll);
+        if stop.wait(poll) {
+            return;
+        }
     }
 }
 
@@ -595,7 +646,7 @@ mod tip_watch_tests {
     #[test]
     fn a_changed_tip_sets_the_abandon_flag() {
         let abandon = Arc::new(AtomicBool::new(false));
-        let stop = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(Shutdown::new());
         let mut reads = 0;
         let s = Arc::clone(&stop);
         watch_tip(
@@ -610,7 +661,7 @@ mod tip_watch_tests {
                 // and this test ran for over a minute instead of going red. A hanging test is
                 // worse than a failing one - CI waits on it instead of reporting it.
                 if reads >= 10 {
-                    s.store(true, Ordering::Relaxed);
+                    s.stop();
                 }
                 // Two sweeps on the parent we are building on, then the chain moves.
                 Some(if reads < 3 { "parent-aaa".to_string() } else { "parent-bbb".to_string() })
@@ -625,7 +676,7 @@ mod tip_watch_tests {
     #[test]
     fn an_unchanged_tip_never_abandons() {
         let abandon = Arc::new(AtomicBool::new(false));
-        let stop = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(Shutdown::new());
         let reads = Arc::new(AtomicUsize::new(0));
         let r = Arc::clone(&reads);
         let s = Arc::clone(&stop);
@@ -640,7 +691,7 @@ mod tip_watch_tests {
         while reads.load(Ordering::Relaxed) < 5 {
             thread::sleep(Duration::from_millis(1));
         }
-        stop.store(true, Ordering::Relaxed);
+        stop.stop();
         h.join().unwrap();
         assert!(reads.load(Ordering::Relaxed) >= 5, "it polled");
     }
@@ -652,7 +703,7 @@ mod tip_watch_tests {
     #[test]
     fn a_failed_read_is_not_a_changed_tip() {
         let abandon = Arc::new(AtomicBool::new(false));
-        let stop = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(Shutdown::new());
         let mut reads = 0;
         let s = Arc::clone(&stop);
         watch_tip(
@@ -663,12 +714,45 @@ mod tip_watch_tests {
             || {
                 reads += 1;
                 if reads >= 4 {
-                    s.store(true, Ordering::Relaxed);
+                    s.stop();
                 }
                 None
             },
         );
         assert!(!abandon.load(Ordering::Relaxed), "an unreadable tip must not abandon the solve");
+    }
+
+    /// THE SHUTDOWN COSTS NOTHING ON THE WINNING PATH (SDE-UI, review of #660).
+    ///
+    /// The watcher used to `thread::sleep(poll)`, which is uninterruptible, so `stop()` + `join()`
+    /// blocked until the current sleep ended - measured at 956ms against a 1s poll. The abandon
+    /// path was fine (the watcher returns immediately on a change); the cost landed on a solve that
+    /// hit its deadline, and on A SOLVE THAT FOUND A BLOCK, which then held it for a second before
+    /// submitting. In a race whose only previous win was rejected for a stale parent, that is a
+    /// window in which the tip can move AFTER we have won.
+    ///
+    /// The bound is deliberately loose (200ms against a 5s poll): this pins "the wait is
+    /// interruptible", not a scheduler's timing. Restore the plain sleep and it is ~5000ms.
+    #[test]
+    fn stopping_the_watcher_does_not_wait_out_its_poll_interval() {
+        let abandon = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(Shutdown::new());
+        let s = Arc::clone(&stop);
+        let a = Arc::clone(&abandon);
+        let h = thread::spawn(move || {
+            // Five seconds, so a sleep-based wait could not possibly finish inside the assertion.
+            watch_tip("same".to_string(), a, s, Duration::from_secs(5), || Some("same".to_string()))
+        });
+        thread::sleep(Duration::from_millis(50));
+        let asked = Instant::now();
+        stop.stop();
+        h.join().unwrap();
+        let waited = asked.elapsed();
+        assert!(
+            waited < Duration::from_millis(200),
+            "join waited {waited:?} after stop; the watcher's wait must be interruptible"
+        );
+        assert!(!abandon.load(Ordering::Relaxed), "stopping is not abandoning");
     }
 
     /// The solver reads the flag: set it before the loop starts and no thread grinds at all.
