@@ -182,15 +182,33 @@ check "and probes a THIRD time as the app, so a listener that died on the first 
 # two is what the check demands.
 check "OPERATIONS.md says the dial is gated on the app's flag, and BOTH readers still gate it there" \
   "grep -qF 'FAUCET_CTAZ_ENABLED' '$REPO/OPERATIONS.md' && grep -qF 'config.crosslink.enabled' '$REPO/OPERATIONS.md' && [ \"\$(grep -c 'if (!config.crosslink.enabled)' '$REPO/src/lib/crosslink/read.ts')\" = 2 ]"
-# THE DOC'S ARITHMETIC, held to the code it multiplies: six connections a minute is three
-# ticks times the two RPCs one TICK MAKES. My first spelling of this counted ctazRpc call
-# SITES in the file, and my own mutation showed that up: deleting the `await readCtazInfo()`
-# from the tick leaves the call site sitting unreachable inside that function, so the count
-# stayed 2 and the check stayed green while a tick had dropped to one connection. What the
-# claim rests on is the two awaits the tick REACHES, so those are what this holds - and the
-# two call sites as well, since a third RPC added to either reader changes the figure too.
-check "and its six-a-minute figure is three ticks times the two RPCs a tick actually makes" \
-  "grep -qF 'six times a' '$REPO/OPERATIONS.md' && grep -qF 'await readCtazRecency(' '$REPO/src/lib/crosslink/read.ts' && grep -qF 'await readCtazInfo()' '$REPO/src/lib/crosslink/read.ts' && [ \"\$(grep -c 'ctazRpc(transport()' '$REPO/src/lib/crosslink/read.ts')\" = 2 ]"
+# THE DOC'S ARITHMETIC, AND WHAT THIS ROW CAN AND CANNOT SEE (#564). Six connections a minute is
+# three ticks times two RPCs a tick. This row used to claim it held "the two awaits the tick
+# REACHES". It did not and could not: it is a grep, and a grep sees TEXT.
+#
+# The CTO red-team showed the gap with a mutant that keeps every string this row reads and makes
+# the second call conditional:
+#     const info = reading.state === "cannot-verify" ? { blocks: null, tip: null } : await readCtazInfo();
+# In the state OPERATIONS.md is actually describing - node parked, every tick cannot-verify - that
+# is ONE dial per tick and the doc is wrong, and this suite measured 253/0 with it in place.
+#
+# REACHABILITY IS NOW HELD WHERE IT CAN BE: readOrder.test.ts counts accepts on a real socket
+# across one readCtazNodeState(), in the healthy state AND in the cannot-verify state. That mutant
+# dies there, by name, alone. What is left here is the DOCUMENT's side of the claim - that the
+# figure is written down and that there are still exactly two call sites to multiply - which is
+# worth holding and is all a repo-level grep is entitled to say.
+#
+# COMMENTS STRIPPED BEFORE READING: `grep -qF 'await readCtazInfo()'` matched a commented-out
+# occurrence, so commenting the call out and leaving the text kept this green (the issue's second
+# shape). Same trap as the #607 reader finding "node syncing" twice in prose.
+# The strip is inlined rather than held in a variable: a variable referenced only inside the
+# check string is not a USE as far as shellcheck can see, and SC2034 is a warning, which is above
+# this repo's CI floor. The path expands when the string is built, so it reads once here.
+check "and OPERATIONS.md's six-a-minute figure still has two RPC call sites to multiply (reachability is readOrder.test.ts's)" \
+  "grep -qF 'six times a' '$REPO/OPERATIONS.md' \
+   && [ \"\$(grep -vE '^[[:space:]]*(//|\*|/\*)' '$REPO/src/lib/crosslink/read.ts' | grep -c 'await readCtazRecency(')\" -ge 1 ] \
+   && [ \"\$(grep -vE '^[[:space:]]*(//|\*|/\*)' '$REPO/src/lib/crosslink/read.ts' | grep -c 'await readCtazInfo()')\" -ge 1 ] \
+   && [ \"\$(grep -vE '^[[:space:]]*(//|\*|/\*)' '$REPO/src/lib/crosslink/read.ts' | grep -c 'ctazRpc(transport()')\" = 2 ]"
 check "and its 20-second figure is the interval the refresher actually uses" \
   "grep -qF 'REFRESH_INTERVAL_MS' '$REPO/OPERATIONS.md' && grep -qE 'REFRESH_INTERVAL_MS = 20_000' '$REPO/src/lib/crosslink/cache.ts'"
 check "and the socket probe reaps its listener and volume on EVERY exit path, not just the happy one" \
