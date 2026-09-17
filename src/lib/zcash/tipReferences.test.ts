@@ -435,3 +435,27 @@ test("#600: a source that went BACKWARDS in a reorg contributes no rate", () => 
   });
   assert.equal(withGood, 3, "and the healthy source still answers, undiluted by the reorged one");
 });
+
+test("#600: the tolerance we are applying is published IN BLOCKS, for consumers that count blocks", () => {
+  // The watchdog's stall floor has to clear the gap the app calls agreement, and its comment
+  // derives 25 from TIP_AGREE_BLOCKS being 20. Once the tolerance is a time that derivation
+  // cannot be a literal: the same 300 s is 30 blocks at a 10 s cadence and 4 at 75 s.
+  plant({
+    hosh: { height: 4_000_000, ageMs: 1000, wasHeight: 3_999_900, wasAgeMs: 1_001_000 },  // 10 s a block
+    lightwalletd: { height: 4_000_005, ageMs: 1000 },
+  });
+  assert.equal(getTipReferences(NOW).agreeBlocks, AGREE_SECONDS / 10);
+
+  plant({
+    hosh: { height: 4_000_000, ageMs: 1000, wasHeight: 3_999_900, wasAgeMs: 7_501_000 },  // 75 s a block
+    lightwalletd: { height: 4_000_005, ageMs: 1000 },
+  });
+  assert.equal(getTipReferences(NOW).agreeBlocks, AGREE_SECONDS / 75, "the SAME tolerance, far fewer blocks");
+});
+
+test("#600 THE PARTNER: with no rate it reports the fallback bound, not a guess", () => {
+  plant({ hosh: { height: 4_000_000, ageMs: 1000 }, lightwalletd: { height: 4_000_005, ageMs: 1000 } });
+  const refs = getTipReferences(NOW);
+  assert.equal(refs.secondsPerBlock, null);
+  assert.equal(refs.agreeBlocks, AGREE_BLOCKS, "the bound that is actually deciding on this path");
+});

@@ -393,6 +393,18 @@ export interface TipReferences {
   /** The rate the conversion used, so a reading can be reproduced from the journal. Null
    *  before any source has moved twice, which is also when the block tolerance answers. */
   secondsPerBlock: number | null;
+  /**
+   * THE TOLERANCE WE ARE ACTUALLY APPLYING, IN BLOCKS, at this moment's cadence.
+   *
+   * Published because the watchdog's stall floor has to CLEAR it and cannot work that out for
+   * itself any more. NODE_CONFIRMED_LAG_LIMIT is 25 and its comment derives that from
+   * TIP_AGREE_BLOCKS being 20: "a distance the app would not even call a disagreement must not
+   * be called a stall here". Once the tolerance is a time, the same tolerance is 30 blocks at a
+   * 10 s cadence and 4 at 75 s, so a literal on the other side of the repo cannot stay clear of
+   * it. A consumer reads this and adds its own margin, and the relationship holds at every
+   * cadence instead of being two numbers kept in step by comment.
+   */
+  agreeBlocks: number;
   /** The source whose height a caller should judge a node against: the highest
    *  non-stale one. Null when no source is usable. */
   used: ReferenceName | null;
@@ -680,6 +692,9 @@ export function getTipReferences(now: number = Date.now()): TipReferences {
     // is how a reader tells which of the two rules answered.
     spreadSeconds,
     secondsPerBlock,
+    // The seconds rule converted back into the unit a block-counting consumer works in, or the
+    // fallback bound when there is no rate to convert through.
+    agreeBlocks: secondsPerBlock == null || secondsPerBlock <= 0 ? AGREE_BLOCKS : Math.round(AGREE_SECONDS / secondsPerBlock),
     used,
     // From the same entry `used` names, not recomputed, so a future change to the choice
     // rule cannot move one without the other.
