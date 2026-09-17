@@ -1063,6 +1063,16 @@ export default function Home() {
                     <span><b className="num">{reserve?.spendableTaz != null ? num(Math.floor(reserve.spendableTaz)) : "-"}</b>spendable TAZ</span>
                     <span><b className="num">{reserve?.lowTaz != null ? num(reserve.lowTaz) : "-"}</b>low mark</span>
                   </div>
+                  {/* The owner's ask: a panel that says something is short should say what a reader
+                      can do about it. /donate, NOT /fund - donate is the TAZ page ("Keep the tank
+                      full", and "Or point a miner at us"), fund is mainnet ZEC for the server.
+                      Asking for real money because TESTNET coins are low is the wrong ask.
+                      It sits AFTER the figures on purpose: "Claims still work" reassures first, and
+                      a donate link read before that sentence would make a healthy faucet look like
+                      one about to stop. 4,504 TAZ is about 45,000 drips. */}
+                  <div className="row">
+                    <a className="tag" href="/donate">Top it up, or point a miner &rarr;</a>
+                  </div>
                 </div>
               )}
             </div>

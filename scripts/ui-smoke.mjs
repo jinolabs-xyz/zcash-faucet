@@ -723,6 +723,19 @@ async function checkCardInnerPadding(browser) {
       !!ps && ps.scrollH <= ps.clientH + 1,
       ps ? `scrollHeight ${ps.scrollH} vs clientHeight ${ps.clientH} (overflow-y: ${ps.overflowY}), panels: ${r.panelNames.join(", ") || "none"}`
          : "no .card.claim > .panel in the DOM");
+    // THE RESERVE PANEL POINTS AT THE PAGE THAT CAN FIX IT, and at the RIGHT one (owner ask).
+    // /donate is the TAZ page; /fund is mainnet ZEC for the server. A panel saying testnet coins
+    // are short must not ask for real money, and "it links somewhere" is not the assertion - the
+    // destination is. Conditional because this panel only renders when the reserve is under its
+    // low mark, which CI does not drive; it SAYS when it could not look rather than passing quietly.
+    const resv = await readReserveLowPanel(p);
+    if (resv) {
+      reserveLowRows(`${vp.width}x${vp.height}`, resv);
+    } else {
+      // Honest, and no longer the only coverage: the DRIVEN run asserts these every CI run.
+      console.log(`  --   ${vp.width}x${vp.height}: no reserve-low panel at rest here, so the at-rest link was not checked (the phase drive asserts it regardless)`);
+    }
+
     // THE PARTNER, and it is a positive control rather than a content requirement. My first version
     // demanded a live `.phase` and went red on every healthy run - the claim panel carries the tabs,
     // the copy, the field and the lower block whether or not a phase is showing, so the row above is
@@ -780,6 +793,54 @@ async function checkCardInnerPadding(browser) {
   }
 }
 
+// THE RESERVE PANEL'S LINK, read in ONE place so the at-rest loop and the DRIVEN run cannot
+// drift apart and quietly assert different things.
+//
+// THE ORDER IS READ BY INDEX, NOT BY A REGEX OVER textContent. My first version tested
+// /claims still work/i.test(el.textContent) and I described it as pinning the order. SDE-Infra
+// measured it against three panels and it passed the REVERSED one:
+//     shipped (reassure then ask)  true      REVERSED (ask then reassure)  true
+//     reassurance deleted          false
+// textContent concatenates descendants in document order, so a test for a sentence's PRESENCE is
+// structurally incapable of seeing its POSITION. The name claimed more than the assertion held.
+// Comparing where the reassurance starts against where the link's own text starts is what actually
+// goes red when someone moves the ask above it. Their finding, their fix, and their REVERSED panel
+// is the mutant I ran before keeping it.
+//
+// a[href="/donate"] rather than the first a[href]: a second link added above this one used to move
+// the assertion silently onto whatever was added.
+async function readReserveLowPanel(p) {
+  return p.evaluate(() => {
+    const el = document.querySelector('[data-phase="reserve-low"]');
+    if (!el) return null;
+    const a = el.querySelector('a[href="/donate"]') || el.querySelector("a[href]");
+    const text = el.textContent || "";
+    const linkText = (a?.textContent || "").trim();
+    return {
+      href: a ? a.getAttribute("href") : null,
+      linkText,
+      linkCount: el.querySelectorAll("a[href]").length,
+      iReassure: text.search(/claims still work/i),
+      iAsk: linkText ? text.indexOf(linkText) : -1,
+    };
+  });
+}
+
+// /donate is the TAZ page ("Keep the tank full", and "Or point a miner at us"); /fund is mainnet
+// ZEC for the server. A panel saying TESTNET coins are short must not ask for real money, so the
+// assertion is the DESTINATION - "it links somewhere" passes on /fund, which is what was nearly
+// shipped.
+function reserveLowRows(label, r) {
+  ok(`${label}: the reserve-low panel offers the TAZ donate page, not the ZEC funding page`,
+    r.href === "/donate",
+    `href ${r.href ?? "(no link)"} on "${r.linkText}", ${r.linkCount} link(s) in the panel`);
+  ok(`${label}: and the reassurance comes BEFORE the ask, by index and not by presence`,
+    r.iReassure >= 0 && r.iAsk > r.iReassure,
+    r.iReassure < 0 ? '"Claims still work" is GONE from the panel text'
+      : r.iAsk < 0 ? `the link text "${r.linkText}" was not found in the panel text`
+      : `reassurance at ${r.iReassure}, ask at ${r.iAsk} - ${r.iAsk > r.iReassure ? "in order" : "REVERSED, the ask now reads first"}`);
+}
+
 async function checkLivePhasePanelsWearTheBox(browser) {
   // THE PROBE ROW ABOVE IS A CLAIM ABOUT THE RULE. This one is the claim about the MARKUP, and
   // the CTO's red-team is why it exists: rename `class="phase"` on a single panel and the probe
@@ -800,10 +861,25 @@ async function checkLivePhasePanelsWearTheBox(browser) {
       s2.reserve = { ...(s2.reserve ?? { targetTaz: 100, lowTaz: 5, spendableTaz: 0 }), refilling: true, shieldCoinbase: true };
       s2.miner = { ...(s2.miner ?? {}), active: true }; return s2; }],
     ["degraded", (s2) => { s2.sends = { ...(s2.sends ?? {}), state: "degraded" }; return s2; }],
+    // RESERVE-LOW WAS DRIVEN BY NOTHING - not this list, not phase-sweep's PHASES (SDE-Infra, #668).
+    // Of the phase panels it was the only one no instrument reached, which is exactly why its
+    // 128px overflow got to the owner as a screenshot instead of as a red row. It is the LIVE
+    // state, not the empty one: `topping-up` above is empty with a refill running, this is a
+    // working faucet whose float is under its low mark, so claims still succeed.
+    // AND ITS ROOT IS NOT THE CARD. #659 moved this panel OUT of the claim card into the hero on
+    // the owner's instruction ("the left hand bottom side of the website not in that component"),
+    // so a card-scoped query cannot see it. Driving it without saying that printed "the state did
+    // not drive" - a wrong diagnosis, and the measured proof it was wrong is that the link rows
+    // below found the panel and passed under the same mutation. The third element is the root, so
+    // the suite records WHERE each panel is supposed to live instead of assuming one place.
+    ["reserve-low", (s2) => { s2.empty = false; s2.balanceTaz = s2.balanceTaz || 4504;
+      s2.reserve = { ...(s2.reserve ?? {}), refilling: true, lowTaz: 5000, spendableTaz: 4504 };
+      return s2; }, ".hero-copy"],
   ];
 
   const seen = [];
-  for (const [name, mutate] of DRIVEN) {
+  for (const [name, mutate, rootSel] of DRIVEN) {
+    const root = rootSel ?? ".card.claim";
     const c = await browser.newContext({ viewport: DESKTOP });
     const p = await c.newPage();
     await p.route("**/api/status", (route) =>
@@ -811,15 +887,15 @@ async function checkLivePhasePanelsWearTheBox(browser) {
     await p.goto(BASE, { waitUntil: "domcontentloaded" });
     await p.waitForSelector("#claim", { timeout: 15_000 }).catch(() => {});
     // The panel arrives with the status, not with the document.
-    await p.waitForSelector(".card.claim .phase", { timeout: 8_000 }).catch(() => {});
+    await p.waitForSelector(`${root} .phase`, { timeout: 8_000 }).catch(() => {});
 
-    const r = await p.evaluate(() => {
+    const r = await p.evaluate((root) => {
       const px = (v) => Math.round(parseFloat(v) * 10) / 10 || 0;
-      const live = [...document.querySelectorAll(".card.claim .phase")].filter((el) => el.getClientRects().length);
+      const live = [...document.querySelectorAll(`${root} .phase`)].filter((el) => el.getClientRects().length);
       // What the card is actually showing, whatever it is called. If the class was renamed this
       // still finds the panel by its data attribute, so the row can say "a panel is on screen and
       // it is not a .phase" rather than the much weaker "no .phase found".
-      const byData = [...document.querySelectorAll(".card.claim [data-phase]")].filter((el) => el.getClientRects().length);
+      const byData = [...document.querySelectorAll(`${root} [data-phase]`)].filter((el) => el.getClientRects().length);
       const box = (el) => {
         const cs = getComputedStyle(el);
         return { padT: px(cs.paddingTop), padL: px(cs.paddingLeft), bor: px(cs.borderTopWidth),
@@ -833,23 +909,44 @@ async function checkLivePhasePanelsWearTheBox(browser) {
         names: byData.map((el) => el.getAttribute("data-phase")),
         classes: byData.map((el) => String(el.className || "(none)")),
         boxes: live.map(box),
+        // Where it actually is, so "#659 put it back in the card" is a visible fact and not a
+        // silent pass: this is read document-wide, deliberately, not under the root.
+        inClaimCard: [...document.querySelectorAll(".card.claim [data-phase]")].map((el) => el.getAttribute("data-phase")),
       };
-    });
+    }, root);
 
     const dressed = (b) => b.padT > 0 && b.padL > 0 && b.bor > 0 && b.rad > 0 && b.painted;
     seen.push(`${name}->${r.names.join("/") || "none"}`);
 
     // A panel is on screen AND it is a .phase. These are two different failures and the detail
     // says which: a renamed class shows as dataCount 1, liveCount 0, and names the class it wore.
-    ok(`driving ${name}: the panel the card shows is a .phase`,
+    ok(`driving ${name}: the panel ${root} shows is a .phase`,
       r.dataCount >= 1 && r.liveCount === r.dataCount,
-      r.dataCount < 1 ? "no [data-phase] panel rendered at all - the state did not drive"
+      r.dataCount < 1 ? `no [data-phase] panel under ${root} - either the state did not drive, or the panel moved (elsewhere on the page: ${JSON.stringify(r.inClaimCard)})`
         : `${r.dataCount} panel(s) ${JSON.stringify(r.names)} but ${r.liveCount} matched .phase; classes ${JSON.stringify(r.classes)}`);
 
     ok(`driving ${name}: and it wears the design's box`,
       r.liveCount >= 1 && r.boxes.every(dressed),
       r.liveCount < 1 ? "nothing matched .phase, so no box was measured"
         : `${r.boxes.filter(dressed).length} of ${r.liveCount} dressed; first padding ${r.boxes[0].padT}/${r.boxes[0].padL}px, border ${r.boxes[0].bor}px, radius ${r.boxes[0].rad}px, painted ${r.boxes[0].painted}`);
+
+    // THE LINK ROWS, DRIVEN. At rest CI never reaches this state, so the at-rest copies above
+    // print a skip and assert nothing; here the state is forced, so they run on every CI run.
+    if (name === "reserve-low") {
+      // #659 IS A DECISION, SO IT GETS A ROW. The owner moved this panel out of the claim card
+      // because inside it, its content was what pushed the panel past its clamp - 41px at 1280x800
+      // and 128px at 1024x768, hidden rather than shown because the panel scrolls. Nothing stopped
+      // a later edit putting it back, and the scroll rows only go red once it is tall enough.
+      ok("driving reserve-low: and it is NOT inside the claim card (#659, the owner's instruction)",
+        !r.inClaimCard.includes("reserve-low"),
+        r.inClaimCard.includes("reserve-low")
+          ? "reserve-low is back inside .card.claim, which is what caused the 128px overflow at 1024x768"
+          : `panels inside the claim card: ${JSON.stringify(r.inClaimCard)} - reserve-low is not among them`);
+      const link = await readReserveLowPanel(p);
+      if (link) reserveLowRows("driving reserve-low", link);
+      else ok("driving reserve-low: the panel offers the TAZ donate page, not the ZEC funding page",
+        false, "the reserve-low panel did not render under this mutation, so its link was never measured");
+    }
 
     await c.close();
   }
