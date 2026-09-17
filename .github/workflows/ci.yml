@@ -16,6 +16,12 @@ on:
   pull_request:
   push:
     branches: [main]
+  # THE MERGE QUEUE'S OWN EVENT, and without it a queue cannot work at all. main requires
+  # app, miner, smoke and shell; a queued PR is tested on a `merge_group` ref, and a workflow
+  # that does not listen for that event never reports those four contexts there. The queue
+  # then holds every entry forever waiting for checks that will not arrive. Enabling the
+  # setting before this line is the outage, which is why this lands first and separately.
+  merge_group:
 
 # LEAST PRIVILEGE FOR THE JOB TOKEN (risk register #27). Nothing in this workflow
 # writes through the GitHub API: no gh, no actions/github-script; the one action that
@@ -37,8 +43,22 @@ permissions:
 # with no verdict, so a main run that never happens is a deploy that never happens.
 # Per-commit groups on push: main runs never share a group, so none is superseded.
 concurrency:
+  # A QUEUE RUN MUST NOT BE CANCELLABLE, and this is the half that is easy to miss. The old
+  # predicate was `event_name != 'push'`, which is TRUE for merge_group, so a queue entry's run
+  # could be cancelled by a later one sharing its group - and a cancelled run reports no
+  # conclusion, so the required context never arrives and the entry sits in the queue until it
+  # times out. The queue then looks broken in a way that reads like CI being slow.
+  #
+  # merge_group is grouped by its own ref, which GitHub makes unique per entry
+  # (refs/heads/gh-readonly-queue/main/pr-N-<sha>), so entries do not contend; and it is
+  # non-cancelling for the same reason push is - the run is about a commit that is going in,
+  # not about the newest state of a branch someone is still pushing to.
+  # The GROUP is unchanged and already correct for all three events: push keys on the sha so
+  # every commit is its own group, and both pull_request and merge_group key on the ref -
+  # which for a PR is the thing a new push should supersede, and for a queue entry is unique
+  # per entry already. Only the CANCEL predicate was wrong.
   group: ci-${{ github.event_name == 'push' && github.sha || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'push' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   app:

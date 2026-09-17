@@ -1900,3 +1900,31 @@ fi
 # traversal means the only way the partner can be green is that the loop really walked a file.
 check "and the loop above actually read a workflow, so it is not reporting agreement on an empty set" \
   "[ $SCANNED -ge 1 ]"
+
+echo "== repo: the merge queue can actually run, rather than merely being switched on"
+# A MERGE QUEUE THAT CANNOT REPORT ITS REQUIRED CHECKS HOLDS EVERY PR FOREVER, and it fails in
+# the shape of CI being slow rather than of anything being broken. main requires app, miner,
+# smoke and shell; a queued PR is tested on a `merge_group` ref; a workflow that does not listen
+# for that event never reports those four there.
+#
+# These rows are the PRECONDITION for the branch-protection flip, and they are in the repo so the
+# flip cannot be re-done later against a ci.yml that has lost the trigger.
+check "ci.yml listens for merge_group, without which a queue never gets its required checks" \
+  "grep -qE '^  merge_group:' '$CIWF'"
+
+# AND THE HALF THAT IS EASY TO MISS: a cancelled run reports NO conclusion, so a cancellable
+# queue entry can sit waiting for a check that was killed. The old predicate was
+# `event_name != 'push'`, which is TRUE for merge_group. Asserted as the positive spelling
+# rather than as the absence of the old one, because a third spelling would pass an absence test.
+check "and a queue run is not cancellable, so a killed run cannot strand an entry" \
+  "grep -qF \"cancel-in-progress: \\\${{ github.event_name == 'pull_request' }}\" '$CIWF'"
+
+# The four REQUIRED contexts must be jobs that exist. A queue waits on the names branch
+# protection asks for, not on whatever the workflow happens to define.
+MQ_MISSING=""
+for j in app miner smoke shell; do
+  grep -qE "^  ${j}:" "$CIWF" || MQ_MISSING="$MQ_MISSING [$j]"
+done
+check "and every context main requires is a job this workflow defines" \
+  "[ -z '$MQ_MISSING' ]"
+
