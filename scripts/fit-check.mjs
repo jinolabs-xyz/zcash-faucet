@@ -87,7 +87,6 @@ const RULING_COMBOS = 168;  // 6 sizes x 2 themes x 2 pointers x (4 views + 3 pa
 const RULING_SIZES = 6;
 const RULING_THEMES = 2;
 const RULING_POINTERS = 2;
-const RULING_VIEWPORT_PASSES = RULING_SIZES * RULING_THEMES * RULING_POINTERS;
 if (SIZES.length !== RULING_SIZES || THEMES.length !== RULING_THEMES || POINTERS.length !== RULING_POINTERS) {
   console.error(`fit-check: this file has ${SIZES.length} sizes, ${THEMES.length} themes and ${POINTERS.length} pointers, and the ruling is ${RULING_SIZES}, ${RULING_THEMES} and ${RULING_POINTERS}. Change the arrays and these numbers together, deliberately, or neither.`);
   process.exit(1);

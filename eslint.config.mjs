@@ -26,6 +26,14 @@ const config = [
       // drag in utxo-lib and the t2z prover. See src/lib/zcash/send.ts.
       "@typescript-eslint/no-require-imports": "off",
 
+      // AN UNUSED IMPORT IS DEAD CODE AND THIS RULE ALREADY FOUND THEM - as WARNINGS, and
+      // eslint exits 0 on warnings, so `npm run lint` passed and CI went green over seven of
+      // them. Six had accumulated in page.tsx alone as logic moved out to faucetPhase.ts and
+      // the imports stayed. A rule nothing fails on is a rule nobody reads.
+      // Scoped to this rule: the react-hooks/exhaustive-deps warnings in page.tsx are a
+      // separate question and turning them into errors is not this change.
+      "@typescript-eslint/no-unused-vars": "error",
+
       // eslint-config-next 16 turns on the React Compiler rules. We have NOT adopted
       // the compiler, so two of them are switched off deliberately and by name rather
       // than by disabling the set (#139).

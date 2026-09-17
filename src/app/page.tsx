@@ -1,6 +1,6 @@
 "use client";
 
-import { CSSProperties, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { CSSProperties, useEffect, useLayoutEffect, useRef, useState } from "react";
 // The redesign's tokens and shell, transcribed from the preview the owner approved on
 // 2026-09-15. Tokens first: the shell reads them.
 /* KEEP-BOTH, and the two sides removed different things rather than disagreeing.
@@ -16,23 +16,19 @@ import { CSSProperties, useCallback, useEffect, useLayoutEffect, useRef, useStat
  * Shell.tsx imports tokens, shell, hero and subpages, and the views sheet was imported by this
  * file alone. Dropping it here without adding it there would have shipped the three views
  * unstyled, with nothing failing at build time. It is in the Shell now, beside the other four. */
-import type { DripDay } from "./Sparkline";
 import { Mascot } from "@/components/Mascot";
 import { readinessBadge } from "@/lib/readinessBadge";
-import { basePhase, faultReason, holding, nodeGap, num, type Phase, type Status } from "@/lib/faucetPhase";
+import { basePhase, faultReason, holding, num, type Phase, type Status } from "@/lib/faucetPhase";
 import { Shell } from "@/components/Shell";
 import { HeroChips } from "@/components/HeroChips";
 import { StatusCards } from "@/components/StatusCards";
 import { AnalyticsCards } from "@/components/AnalyticsCards";
 import { ToolsCards } from "@/components/ToolsCards";
-import type { PublicBox } from "@/lib/boxLabel";
 import { syncBarWidth } from "@/lib/syncLabel";
 import { networkFacts, formatAmount, type FaucetNetwork } from "@/lib/network";
 import { incomeSentence } from "@/lib/incomeSentence";
 import { validateTestnetAddress } from "@/lib/zcash/address";
 import { powEstimateSeconds, powEstimateText } from "@/lib/powEstimate";
-import type { CtazState } from "@/lib/crosslink/recency";
-import type { MinerReading } from "@/lib/miner/heartbeat";
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 // "checking" is NOT a variant of "syncing". It means we have not asked the backend
