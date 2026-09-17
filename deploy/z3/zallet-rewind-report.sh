@@ -83,19 +83,61 @@ PERMIN="$(printf '%s\n' "$LOG" | grep 'Scanning block' | awk '
     ts = $1
     # 2026-09-16T02:29:01.123456Z -> 02:29
     minute = substr(ts, 12, 5)
+    # THE MINUTE HAS TO LOOK LIKE A MINUTE, not merely be five characters at offset 12. A scan
+    # line with no leading timestamp yields "" here while its height still parses, so without this
+    # the line is COUNTED - reconciliation sees nothing missing and a bogus empty minute joins the
+    # table. Checking only the half that happens to parse is how a partial read passes for whole.
+    if (minute !~ /^[0-9][0-9]:[0-9][0-9]$/) next
     h = $NF
     gsub(/[^0-9]/, "", h)
     if (h == "") next
+    consumed++
     if (!(minute in n)) { lo[minute] = h; order[++k] = minute }
     hi[minute] = h
     n[minute]++
   }
-  END { for (i = 1; i <= k; i++) { m = order[i]; print m, n[m], lo[m], hi[m] } }
+  END {
+    # The parser reports how much it CONSUMED, so the caller can reconcile it against how many
+    # scan lines there were. Without that, a format change that breaks some lines and not others
+    # is a smaller sample reported as a complete answer (SDE-UI, review of #639).
+    print "CONSUMED", consumed
+    for (i = 1; i <= k; i++) { m = order[i]; print m, n[m], lo[m], hi[m] }
+  }
 ')"
+CONSUMED="$(printf '%s\n' "$PERMIN" | awk '$1 == "CONSUMED" { print $2 }')"
+# `|| true`: when NOTHING parsed the only line is the CONSUMED marker, so this grep matches
+# nothing and exits 1 - and under `set -e` that killed the script before it could say why, which
+# is the silent death this file exists to avoid.
+PERMIN="$(printf '%s\n' "$PERMIN" | grep -v '^CONSUMED ' || true)"
 
 if [ -z "$PERMIN" ]; then
   echo "found $SCANS 'Scanning block' lines but could not read a height or a timestamp from any of them." >&2
   echo "The log format has moved; this script reads the height as the last field and the minute from an RFC3339 first field." >&2
+  exit 1
+fi
+
+# ALL-OR-NOTHING IS NOT ENOUGH, and the gap is the interesting one (SDE-UI, review of #639). The
+# refusal above only fires when NOT ONE line parses. A format change that breaks SOME of them
+# leaves a smaller sample reported as a complete answer, and a smaller sample of a rewind count is
+# indistinguishable from fewer rewinds.
+if [ "${CONSUMED:-0}" != "$SCANS" ]; then
+  echo "read $SCANS 'Scanning block' lines but could only parse ${CONSUMED:-0} of them." >&2
+  echo "A partial read is not a smaller answer, it is a different question. The log format has moved." >&2
+  exit 1
+fi
+
+# AND A NUMBER IN THE RIGHT PLACE IS NOT A HEIGHT. The reader is positional - the height is the
+# last field - so any format change that leaves something numeric at the end REDEFINES it: append a
+# duration to each line and the report becomes "first 250, last 310" on a chain at 4.35 million,
+# which is a confident answer about nothing and would send an incident reader somewhere wrong. This
+# fails on the VALUE rather than on a count, because a count is something a future format could
+# satisfy just as easily.
+MIN_PLAUSIBLE_HEIGHT=100000
+IMPLAUSIBLE="$(printf '%s\n' "$PERMIN" | awk -v min="$MIN_PLAUSIBLE_HEIGHT" '$3 + 0 < min || $4 + 0 < min { print $1 ": " $3 "-" $4 }' | head -n3)"
+if [ -n "$IMPLAUSIBLE" ]; then
+  echo "the heights this read do not look like chain heights (below $MIN_PLAUSIBLE_HEIGHT):" >&2
+  printf '  %s\n' "$IMPLAUSIBLE" >&2
+  echo "The height is read as the last field of the scan line. If the format now ends in something else - a duration, a count, an elapsed time - that is what these are." >&2
   exit 1
 fi
 

@@ -151,3 +151,46 @@ check "scan lines it cannot parse refuse rather than report zero rewinds" \
   "[ $RC -eq 1 ] && grep -q 'could not read a height or a timestamp' '$T/last.out'"
 check "and it names what it expected, so the fix is obvious" \
   "grep -q 'last field' '$T/last.out' && grep -q 'RFC3339' '$T/last.out'"
+
+echo "== rewind report: a PARTIAL parse is a refusal, not a smaller sample"
+# SDE-UI, review of #639. The all-or-nothing refusal above only fires when NOT ONE line parses.
+# Their case B: three scan lines, one of them in a shape the reader cannot use. Two get counted,
+# nothing complains, and a smaller sample of a rewind count is indistinguishable from fewer rewinds.
+zw_env
+zw_minute "02:28" 2 4353366 4353367
+printf 'Scanning block 4353368\n' >> "$STUB_LOGFILE"     # no timestamp: unreadable to a positional reader
+zw_run
+check "three scan lines of which one is unreadable refuses rather than reporting on two" \
+  "[ $RC -eq 1 ] && grep -q 'could only parse' '$T/last.out'"
+check "and says a partial read is a different question, not a smaller answer" \
+  "grep -q 'not a smaller answer' '$T/last.out'"
+# THE PARTNER: this row is satisfied by a script that refuses everything. The same fixture without
+# the unreadable line has to pass, or the refusal above is not about partiality at all.
+zw_env
+zw_minute "02:28" 2 4353366 4353367
+zw_run
+check "and the same fixture WITHOUT the unreadable line is read normally" "[ $RC -eq 0 ]"
+
+echo "== rewind report: numbers in the right place that are not heights are refused"
+# Their case C, and the serious one. The reader is positional, so any format change leaving
+# something numeric at the end redefines the height: append a duration and the report becomes
+# "first 250, last 310" on a chain at 4.35 million - a confident answer about nothing, handed to
+# someone reading it during an incident.
+# THE DURATIONS FALL WHILE THE HEIGHTS RISE, on purpose. Read as heights they go 300,301 then
+# 250,251 - so a reader that trusts the last field does not merely print wrong numbers, it
+# FABRICATES A REWIND OF 51 BLOCKS that never happened, on a chain at 4.35 million. That is the
+# output this refusal exists to prevent, and a fixture whose fake heights happened to ascend would
+# have let the "no rewind figure" row below pass for free.
+zw_env
+: > "$STUB_LOGFILE"
+printf '\033[2m2026-09-16T02:28:01Z\033[0m INFO zallet::sync: Scanning block 4353361 took_ms 300\n' >> "$STUB_LOGFILE"
+printf '\033[2m2026-09-16T02:28:02Z\033[0m INFO zallet::sync: Scanning block 4353362 took_ms 301\n' >> "$STUB_LOGFILE"
+printf '\033[2m2026-09-16T02:29:01Z\033[0m INFO zallet::sync: Scanning block 4353363 took_ms 250\n' >> "$STUB_LOGFILE"
+printf '\033[2m2026-09-16T02:29:02Z\033[0m INFO zallet::sync: Scanning block 4353364 took_ms 251\n' >> "$STUB_LOGFILE"
+zw_run
+check "a trailing duration is not read as a height" \
+  "[ $RC -eq 1 ] && grep -q 'do not look like chain heights' '$T/last.out'"
+check "and it names what it reads, so the fix is obvious" \
+  "grep -q 'last field of the scan line' '$T/last.out'"
+check "and it does not FABRICATE a rewind out of them, which is what a falling duration looks like" \
+  "! grep -q 'REWIND of' '$T/last.out'"
