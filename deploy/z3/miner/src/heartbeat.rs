@@ -51,10 +51,14 @@ pub struct State {
     pub last_error_stage: Option<&'static str>,
     pub last_error_at: Option<u64>,
     pub consecutive_errors: u64,
-    pub solved_count: u64,
+    /// LIFETIME, not per-process, and `None` is not zero. These three resume from the file
+    /// at startup (#645): the path is persistent, so the number already survived the
+    /// restart - nothing read it back. `None` means we could not find out, and 0 would
+    /// claim "this miner has never won a block", which is a different sentence.
+    pub solved_count: Option<u64>,
     pub last_solved_at: Option<u64>,
-    pub submitted_accepted: u64,
-    pub submitted_rejected: u64,
+    pub submitted_accepted: Option<u64>,
+    pub submitted_rejected: Option<u64>,
     pub last_submitted_at: Option<u64>,
     /// How far behind its own estimate the node was at the last check (sync.rs). None
     /// until the first check answers.
@@ -92,8 +96,11 @@ impl State {
         self.waiting_reason = None;
     }
 
+    /// From `None` the first win reports 1. On a fresh box that is true; on a box whose
+    /// file we could not read it under-reports, which is the only direction available once
+    /// the state is gone - and it beats never moving off unknown, which is the bug.
     pub fn solved(&mut self) {
-        self.solved_count = self.solved_count.saturating_add(1);
+        self.solved_count = Some(self.solved_count.unwrap_or(0).saturating_add(1));
         self.last_solved_at = Some(now());
     }
 
@@ -117,9 +124,9 @@ impl State {
 
     pub fn submitted(&mut self, accepted: bool) {
         if accepted {
-            self.submitted_accepted = self.submitted_accepted.saturating_add(1);
+            self.submitted_accepted = Some(self.submitted_accepted.unwrap_or(0).saturating_add(1));
         } else {
-            self.submitted_rejected = self.submitted_rejected.saturating_add(1);
+            self.submitted_rejected = Some(self.submitted_rejected.unwrap_or(0).saturating_add(1));
         }
         self.last_submitted_at = Some(now());
     }
@@ -221,10 +228,10 @@ pub fn render(s: &State) -> String {
             .unwrap_or_else(|| "null".into()),
         ts(s.last_error_at),
         s.consecutive_errors,
-        s.solved_count,
+        num(s.solved_count),
         ts(s.last_solved_at),
-        s.submitted_accepted,
-        s.submitted_rejected,
+        num(s.submitted_accepted),
+        num(s.submitted_rejected),
         ts(s.last_submitted_at),
         num(s.node_lag),
         ts(s.waiting_since),
@@ -258,22 +265,102 @@ pub fn write_atomic(path: &Path, body: &str) -> std::io::Result<()> {
     fs::rename(&tmp, path)
 }
 
+/// What a startup read of the existing heartbeat found. It is logged, because "resumed 69"
+/// and "I could not read the file" must not look the same in a journal: only one of them
+/// makes the number on the page a lifetime figure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Resumed {
+    /// Nothing at the path. A first run and a wiped state directory are indistinguishable
+    /// from here, so the counts stay unknown rather than asserting a fresh box.
+    NoFile,
+    /// The file is there and we could not use it. The one case where 0 would be an outright
+    /// false claim - it says "never won a block" about a miner that may have won hundreds.
+    Unusable(&'static str),
+    Counts {
+        solved: Option<u64>,
+        accepted: Option<u64>,
+        rejected: Option<u64>,
+    },
+}
+
+fn shown(v: Option<u64>) -> String {
+    v.map(|n| n.to_string()).unwrap_or_else(|| "unknown".into())
+}
+
+impl Resumed {
+    pub fn journal(&self) -> String {
+        match self {
+            Resumed::NoFile => {
+                "heartbeat: no prior file, so the lifetime counts start UNKNOWN, not 0".into()
+            }
+            Resumed::Unusable(why) => format!(
+                "heartbeat: prior file {why}, so the lifetime counts stay UNKNOWN rather than restarting at 0"
+            ),
+            Resumed::Counts { solved, accepted, rejected } => format!(
+                "heartbeat: resumed lifetime counts - solved {}, accepted {}, rejected {}",
+                shown(*solved),
+                shown(*accepted),
+                shown(*rejected)
+            ),
+        }
+    }
+}
+
+/// Reads the counts back out of an existing heartbeat (#645). The path is persistent, so the
+/// number already survived every restart - nothing ever read it.
+///
+/// An unrecognised schema is refused rather than best-effort parsed, the same rule the app's
+/// reader applies: half-understanding a heartbeat is how a wrong number gets a confident
+/// render. A missing field reads as unknown, which is what a pre-#286 file has.
+pub fn resume(path: &Path) -> Resumed {
+    let body = match fs::read_to_string(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Resumed::NoFile,
+        Err(_) => return Resumed::Unusable("could not be read"),
+    };
+    let v: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(_) => return Resumed::Unusable("is not JSON"),
+    };
+    if v.get("schema").and_then(serde_json::Value::as_u64) != Some(SCHEMA as u64) {
+        return Resumed::Unusable("has a schema this miner does not know");
+    }
+    let n = |k: &str| v.get(k).and_then(serde_json::Value::as_u64);
+    Resumed::Counts {
+        solved: n("solvedCount"),
+        accepted: n("submittedAccepted"),
+        rejected: n("submittedRejected"),
+    }
+}
+
 /// Spawns the beat. Returns the shared state for the mining loop to update.
 ///
 /// `MINER_HEARTBEAT_PATH` has no default that points anywhere real: a missing configuration
 /// must not write to a stale path and must not be mistaken for a working heartbeat. Unset
 /// means no file, and the reader then sees an absent file, which is cannot-verify.
+///
+/// The resume happens BEFORE the beat thread exists, so the first file this process writes
+/// already carries the resumed counts. Seeding afterwards would race the beat and could
+/// publish a null over a good number.
 pub fn start(
     path: Option<PathBuf>,
     mode: &str,
     beat_secs: u64,
     template_secs: u64,
-) -> Arc<Mutex<State>> {
+) -> (Arc<Mutex<State>>, Option<Resumed>) {
+    let resumed = path.as_deref().map(resume);
+    let (solved, accepted, rejected) = match &resumed {
+        Some(Resumed::Counts { solved, accepted, rejected }) => (*solved, *accepted, *rejected),
+        _ => (None, None, None),
+    };
     let state = Arc::new(Mutex::new(State {
         mode: mode.to_string(),
         started_at: now(),
         beat_secs: beat_secs.max(1),
         template_secs: template_secs.max(1),
+        solved_count: solved,
+        submitted_accepted: accepted,
+        submitted_rejected: rejected,
         ..Default::default()
     }));
 
@@ -297,7 +384,7 @@ pub fn start(
         });
     }
 
-    state
+    (state, resumed)
 }
 
 #[cfg(test)]
@@ -470,6 +557,139 @@ mod tests {
         assert!(leftovers.is_empty(), "temp files left: {leftovers:?}");
         fs::remove_dir_all(&dir).ok();
     }
+
+    // ── #645: the lifetime counts resume, and absent is never zero ──────────────────
+    //
+    // The bug was not that the number was wrong, it was that a per-process counter was
+    // rendered as a lifetime figure. Prod read "0 blocks" on a miner that had won 69,
+    // hours after a restart. These rows pin the CARRY and the four ways it can be unknown,
+    // because a row asserting solvedCount is a number passes on the bug.
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("hb-{}-{}", std::process::id(), name));
+        fs::remove_dir_all(&dir).ok();
+        dir.join("heartbeat.json")
+    }
+
+    #[test]
+    fn a_prior_heartbeat_carries_its_counts_forward() {
+        let path = scratch("carry");
+        let mut before = State { mode: "submit".into(), beat_secs: 3, template_secs: 8, ..Default::default() };
+        before.solved_count = Some(69);
+        before.submitted_accepted = Some(12);
+        before.submitted_rejected = Some(3);
+        write_atomic(&path, &render(&before)).unwrap();
+
+        // Through the SHIPPED writer and the shipped reader, so a field renamed on one side
+        // fails here rather than on the box. That pairing is the whole of the bug's family.
+        assert_eq!(
+            resume(&path),
+            Resumed::Counts { solved: Some(69), accepted: Some(12), rejected: Some(3) }
+        );
+        fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn starting_the_beat_seeds_the_state_from_the_file_it_is_about_to_overwrite() {
+        // App's row, end to end: write a known count, start the miner, read a count at
+        // least that high. The seed has to happen BEFORE the beat thread exists.
+        let path = scratch("seed");
+        let mut before = State { mode: "submit".into(), beat_secs: 3, template_secs: 8, ..Default::default() };
+        before.solved_count = Some(69);
+        before.submitted_accepted = Some(12);
+        before.submitted_rejected = Some(3);
+        write_atomic(&path, &render(&before)).unwrap();
+
+        let (hb, resumed) = start(Some(path.clone()), "submit", 3, 8);
+        let s = hb.lock().unwrap();
+        assert_eq!(s.solved_count, Some(69));
+        assert_eq!(s.submitted_accepted, Some(12));
+        assert_eq!(s.submitted_rejected, Some(3));
+        assert!(resumed.unwrap().journal().contains("resumed lifetime counts"));
+        fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn a_missing_file_leaves_the_counts_unknown_rather_than_zero() {
+        let path = scratch("missing");
+        assert_eq!(resume(&path), Resumed::NoFile);
+        let (hb, _) = start(Some(path.clone()), "submit", 3, 8);
+        let body = render(&hb.lock().unwrap());
+        // The distinction the page depends on: null renders nothing, 0 renders a claim.
+        assert!(body.contains("\"solvedCount\": null"), "{body}");
+        assert!(body.contains("\"submittedAccepted\": null"), "{body}");
+        fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn a_file_that_is_not_json_leaves_the_counts_unknown_rather_than_zero() {
+        // The dangerous one. A corrupt file beside a miner that has won hundreds would
+        // render a confident "no blocks won yet" - worse than the bug being fixed, because
+        // it looks stable instead of resetting visibly on the next restart.
+        let path = scratch("garbage");
+        write_atomic(&path, "{ this is not json").unwrap();
+        assert_eq!(resume(&path), Resumed::Unusable("is not JSON"));
+        fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn a_pre_286_heartbeat_with_no_count_fields_is_unknown_not_zero() {
+        let path = scratch("pre286");
+        write_atomic(&path, "{\"schema\": 1, \"writtenAt\": \"2026-09-17T00:00:00Z\"}\n").unwrap();
+        assert_eq!(
+            resume(&path),
+            Resumed::Counts { solved: None, accepted: None, rejected: None }
+        );
+        fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn a_schema_this_miner_does_not_know_is_refused_rather_than_read_anyway() {
+        // Same rule as the app's reader. Half-understanding a heartbeat is how a wrong
+        // number gets a confident render.
+        let path = scratch("schema");
+        write_atomic(&path, "{\"schema\": 99, \"solvedCount\": 5}\n").unwrap();
+        assert_eq!(
+            resume(&path),
+            Resumed::Unusable("has a schema this miner does not know")
+        );
+        fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn a_resumed_count_keeps_counting_from_where_it_was() {
+        // Without this the carry could be a read that nothing builds on.
+        let mut s = State { solved_count: Some(69), ..Default::default() };
+        s.solved();
+        assert_eq!(s.solved_count, Some(70));
+        s.submitted_accepted = Some(12);
+        s.submitted(true);
+        assert_eq!(s.submitted_accepted, Some(13));
+    }
+
+    #[test]
+    fn a_win_after_an_unknown_start_reports_one_rather_than_staying_unknown() {
+        // The counter has to leave `unknown` on real evidence, or a fresh box never shows a
+        // number at all and the issue is only half fixed.
+        let mut s = State::default();
+        assert_eq!(s.solved_count, None);
+        s.solved();
+        assert_eq!(s.solved_count, Some(1));
+    }
+
+    #[test]
+    fn the_journal_tells_a_resume_apart_from_a_failure_to_read() {
+        // "resumed 69" and "could not read it" produce the same page. Only the journal can
+        // say which happened, so the three cases must not share wording.
+        let resumed = Resumed::Counts { solved: Some(69), accepted: None, rejected: Some(3) }.journal();
+        assert!(resumed.contains("resumed lifetime counts"), "{resumed}");
+        assert!(resumed.contains("solved 69"), "{resumed}");
+        assert!(resumed.contains("accepted unknown"), "{resumed}");
+        for other in [Resumed::NoFile.journal(), Resumed::Unusable("could not be read").journal()] {
+            assert!(other.contains("UNKNOWN"), "{other}");
+            assert!(!other.contains("resumed lifetime counts"), "{other}");
+        }
+    }
 }
 
 // ── THE SHARED ARTEFACT, WHICH IS THE WHOLE OF #391 ─────────────────────────────────
@@ -582,10 +802,10 @@ mod contract {
             last_error_stage: Some("template"),
             last_error_at: Some(1_785_022_200),
             consecutive_errors: 0,
-            solved_count: 3,
+            solved_count: Some(3),
             last_solved_at: Some(1_785_023_100),
-            submitted_accepted: 3,
-            submitted_rejected: 1,
+            submitted_accepted: Some(3),
+            submitted_rejected: Some(1),
             last_submitted_at: Some(1_785_023_101),
             node_lag: Some(2),
             // None on purpose, the one exception to "every optional is Some": a set

@@ -196,7 +196,7 @@ fn main() {
         Some(p) => log(&format!("heartbeat: {p} (every {}s)", config.poll_secs.max(1))),
         None => log("heartbeat: MINER_HEARTBEAT_PATH is unset, so nothing will report whether this miner is working"),
     }
-    let hb = heartbeat::start(
+    let (hb, resumed) = heartbeat::start(
         hb_path.map(PathBuf::from),
         match config.mode {
             Mode::Submit => "submit",
@@ -205,6 +205,12 @@ fn main() {
         config.poll_secs.max(1),
         config.template_secs,
     );
+    // #645: the counts are LIFETIME figures resumed from the file, so the journal has to say
+    // which of the two it got. "resumed 69" and "could not read it" produce the same page
+    // otherwise, and only one of them means the number is trustworthy.
+    if let Some(r) = &resumed {
+        log(&r.journal());
+    }
 
     // A node that is behind for hours would otherwise write a line every poll. One a minute
     // is enough for a journal to show the wait and its progress.

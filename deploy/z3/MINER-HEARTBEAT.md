@@ -80,6 +80,15 @@ absent: "has not happened" and "unknown" are different and `null` says which.
 error cannot sit in the panel after recovery. `consecutiveErrors` stays, because a miner flapping
 between success and failure is invisible if you only keep the latest state.
 
+**`solvedCount`, `submittedAccepted` and `submittedRejected` are LIFETIME figures, resumed from
+this file at startup (#645), and `null` is not zero.** The path is persistent, so the numbers
+already survived every restart - nothing read them back, and prod rendered "0 blocks" on a miner
+that had won 69. A missing file, one that cannot be read or parsed, or a `schema` the miner does
+not recognise leaves all three `null`: 0 asserts "this miner has never won a block", which is a
+different sentence from "we do not know". A win lifts the count out of `null` to 1 - true on a
+fresh box, an under-report on a box whose file was lost, and the only direction available once
+the state is gone. The journal says which case it got, because the page cannot.
+
 **The writer publishes the thresholds, not just the intervals.** `staleAfterSeconds` and
 `templateStaleAfterSeconds` are computed by the writer from its own configuration, so the reader
 compares an age to a number in the file and neither side picks a multiplier. App proposed 3× and
