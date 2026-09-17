@@ -157,5 +157,15 @@
     "kind": "override",
     "why": "THE FOOTER MUST NEVER MOVE AND THE PAGE MUST NEVER SCROLL, the owner's rule, and this group of rules is what makes it true. The claim card grew with its tallest panel - the sent receipt - past the viewport and pushed the footer below the fold: measured 39px over at 1440x900 and 132px at 1440x720.\n\nTHE DESIGN ALREADY INTENDS THIS. Its `.card.claim{max-height:100%}` and `.card.claim > .panel{overflow:auto}` say the card is bounded and its contents scroll inside. Both were inert here because no ancestor had a definite height, so the percentage never resolved. These rules restore the chain the design assumes rather than inventing a mechanism.\n\nWHY IT CAN WORK NOW AND COULD NOT IN S2a. The clamp was removed then because it SWALLOWED content - footer cut by 30-93px, Donate/Terms/GitHub unreachable. The claim card had no inner scroll box; #583 gave it one. The other views still had none, and bounding `.comp` alone broke the status view exactly as before (1081px in a 768px box, all four fit rows red), which is why `.views > .view:not(.hero)` gets its own. Verified after: fit-check 168/168, and four footer links reachable with 0px cut at 1024x768, 1280x720, 1366x768 and 1440x810.",
     "shipped": "flex:1 1 auto; min-height:0; height:100%; grid-template-rows:minmax(0,1fr)"
+  },
+  ".panel": {
+    "kind": "divergence",
+    "why": "#648, owner 2026-09-17: the claim card must not scroll its own content. The spec's vertical padding is a percentage, which resolves against WIDTH, so it grows without a ceiling as the card widens - and .card.claim > .panel carries overflow:auto, so the card absorbed the excess by SCROLLING rather than by overflowing. Measured with the reserve-low panel present (prod's state until the wallet clears 5,000): scrollHeight 554 against clientHeight 509 at 1440x900, 45px of content hidden, with the figures sliced mid-digit. Vertical padding is capped here so the rhythm tracks type rather than viewport width; the horizontal percentages are the spec's, untouched.",
+    "shipped": "position:relative; margin:0 2.55%; padding:min(7.5%,1.15rem) 7.5% min(8%,1.25rem); border-radius:calc(1.28*var(--u)) calc(1.28*var(--u)) calc(1.08*var(--u)) calc(1.08*var(--u)); background:var(--panel-bg); display:flex; flex-direction:column; gap:calc(1.1*var(--u))"
+  },
+  ".card-copy": {
+    "kind": "divergence",
+    "why": "#648, same cause and same fix as .panel above: percentage vertical padding resolves against width and had no ceiling, so this block took 140px of the claim card at 1440 and squeezed the panel into a scroll. Capped on the vertical axis only; the 8.4% horizontal inset is the spec's.",
+    "shipped": "position:relative; padding:min(7%,0.95rem) 8.4% min(7.5%,1.05rem)"
   }
 }

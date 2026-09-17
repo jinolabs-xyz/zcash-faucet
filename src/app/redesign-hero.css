@@ -23,9 +23,12 @@
  */
 .card{position:relative;background:var(--surface);border:calc(.075*var(--u)) solid var(--border);border-radius:calc(1.59*var(--u));overflow:hidden;
   box-shadow:calc(.32*var(--u)) calc(.9*var(--u)) calc(1.42*var(--u)) var(--shadow-a),0 calc(.14*var(--u)) calc(.42*var(--u)) var(--shadow-b)}
-.panel{position:relative;margin:0 2.55%;padding:7.5% 7.5% 8%;border-radius:calc(1.28*var(--u)) calc(1.28*var(--u)) calc(1.08*var(--u)) calc(1.08*var(--u));background:var(--panel-bg);display:flex;flex-direction:column;gap:calc(1.1*var(--u))}
+.panel{position:relative;margin:0 2.55%;padding:min(7.5%,1.15rem) 7.5% min(8%,1.25rem);border-radius:calc(1.28*var(--u)) calc(1.28*var(--u)) calc(1.08*var(--u)) calc(1.08*var(--u));background:var(--panel-bg);display:flex;flex-direction:column;gap:calc(1.1*var(--u))}
 .card.feature .panel{margin:0 2%;background:var(--panel-bg-feature)}
-.card-copy{position:relative;padding:7% 8.4% 7.5%}
+/* #648: vertical padding as a % of WIDTH grows without a ceiling, so the claim card outgrew its
+   clamp on desktop and .panel's overflow:auto hid the difference - 45px of it at 1440. Capped so
+   the vertical rhythm tracks type instead of viewport width; the horizontal % is untouched. */
+.card-copy{position:relative;padding:min(7%,0.95rem) 8.4% min(7.5%,1.05rem)}
 .card-copy h2{margin:0 0 calc(.5*var(--u));color:var(--ink-2);font:600 calc(1.86*var(--u))/1.04 var(--sans-semibold);letter-spacing:calc(-.125*var(--u));text-wrap:balance}
 .card.feature .card-copy h2{font-size:calc(2.17*var(--u));letter-spacing:calc(-.09*var(--u))}
 .card-copy p{margin:0;color:var(--muted);font-size:calc(1.18*var(--u));font-weight:500;line-height:1.28;letter-spacing:calc(-.04*var(--u))}
