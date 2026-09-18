@@ -15,7 +15,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { drawDrips, dripHitAtX, drawReserve, drawSegments, barMax, sevenDayMean, type DripDay, type Segment } from "@/lib/charts";
+import { drawDrips, dripHitAtX, drawReserve, drawSegments, barMax, isUncounted, sevenDayMean, type DripDay, type Segment } from "@/lib/charts";
 import { paintGlyph, type GlyphName } from "@/lib/glyphs";
 import { groupDigits, reserveSentence, reserveWord, reserveChipTone, acceptSentence, minerWord, minerTone, sendsTone, syncFigure, heightDiff, heightNote, backendHost } from "@/lib/statusView";
 import type { Tone, ViewStatus } from "./viewStatus";
@@ -81,8 +81,8 @@ export function AnalyticsCards({ status }: { status: ViewStatus | null }) {
 
   const dripsRef = useCanvasPainter(() => {
     const c = dripsRef.current;
-    if (c) drawDrips(c, c, { series, last7d: drips?.last7d }, hover?.index ?? -1);
-  }, `${series.length}:${series.map((d) => d.sent).join(",")}:${drips?.last7d}:${hover?.index ?? -1}`);
+    if (c) drawDrips(c, c, { series, last7d: drips?.last7d, countedFrom: drips?.countingSince }, hover?.index ?? -1);
+  }, `${series.length}:${series.map((d) => d.sent).join(",")}:${drips?.last7d}:${drips?.countingSince}:${hover?.index ?? -1}`);
 
   const reserveRef = useCanvasPainter(() => {
     const c = reserveRef.current;
@@ -123,6 +123,9 @@ export function AnalyticsCards({ status }: { status: ViewStatus | null }) {
 
   const mean = sevenDayMean(drips?.last7d);
   const today = series.length ? series[series.length - 1].sent : null;
+  // How much of the window predates the counter, so the label can say it rather than leaving a
+  // silent gap for a screen reader.
+  const uncountedDays = series.filter((d) => isUncounted(d.day, drips?.countingSince)).length;
   const diff = heightDiff(node?.nodeHeight, node?.externalHeight);
 
   return (
@@ -150,7 +153,12 @@ export function AnalyticsCards({ status }: { status: ViewStatus | null }) {
               series.length === 0
                 ? "Drips per day for the last 30 days. The series is not available."
                 : `Drips per day for the last 30 days. ${drips?.last30d ?? UNKNOWN} drips in 30 days, ${drips?.last7d ?? UNKNOWN} this week, ` +
-                  `${mean === null ? "no 7 day mean" : `mean ${mean.toFixed(1)} per day over 7 days`}, busiest day ${barMax(series)}. ${today ?? 0} today.`
+                  `${mean === null ? "no 7 day mean" : `mean ${mean.toFixed(1)} per day over 7 days`}, busiest day ${barMax(series, drips?.countingSince)}. ` +
+                  // `today ?? 0` spoke a measured zero for a figure nobody has - the same defect as
+                  // Sparkline's label, in the other chart. And the uncounted span is said aloud
+                  // because a sighted reader sees the gap and a screen reader had no way to know.
+                  `${today == null ? "today unknown" : `${today} today`}.` +
+                  (uncountedDays > 0 ? ` ${uncountedDays} of the 30 days are before counting began and are not plotted.` : "")
             }
           />
           {/* `hidden` rather than unmounting, because the design ships one `.tip` per chart and a
@@ -164,7 +172,13 @@ export function AnalyticsCards({ status }: { status: ViewStatus | null }) {
             hidden={!hover}
             style={hover ? { left: `${hover.cx}px`, top: `${hover.top}px` } : undefined}
           >
-            {hover ? `${series[hover.index]?.sent ?? 0} on ${series[hover.index]?.day ?? ""}` : ""}
+            {hover
+              ? isUncounted(series[hover.index]?.day ?? "", drips?.countingSince)
+                // A day before the counter existed has no figure to show, and "0 on 12 Aug" is the
+                // one thing it must not say (#677). Same rule as the bar it has no mark for.
+                ? `not counted on ${series[hover.index]?.day ?? ""}`
+                : `${series[hover.index]?.sent ?? 0} on ${series[hover.index]?.day ?? ""}`
+              : ""}
           </div>
         </div>
         <div className="tot">
@@ -177,7 +191,15 @@ export function AnalyticsCards({ status }: { status: ViewStatus | null }) {
           <span>
             {/* "counted", not "all time" - see Shell.tsx. The figure begins when the counter
                 shipped, not at genesis, and the label must not out-claim it. */}
+            {/* AND NOW IT SAYS SINCE WHEN (#675 put the date on the wire). "counted" alone was
+                honest and incomplete: it dropped the false "all time" claim without replacing it
+                with the true one. The date goes HERE rather than on the shell chip, which is 56px
+                at 1024 and was given the shorter word for that reason. */}
             counted<b>{drips?.allTime != null ? groupDigits(drips.allTime) : UNKNOWN}</b>
+            {/* A span, and no class of its own: `<i>` in this file is a swatch or a progress
+                fill, never prose, and it renders italic - a face the sheet uses nowhere. Bare,
+                it inherits `.tot`'s label style, which is what a secondary annotation wants. */}
+            {drips?.countingSince ? <span data-testid="counting-since">since {drips.countingSince}</span> : null}
           </span>
         </div>
       </div>

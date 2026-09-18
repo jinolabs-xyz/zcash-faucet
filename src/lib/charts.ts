@@ -29,6 +29,12 @@ export interface BarRect {
   h: number;
   /** The last bar is today's and is drawn accented and slightly wider. */
   today: boolean;
+  /**
+   * The day is BEFORE the counter's first record (#677), so `h` is 0 and the renderer draws
+   * nothing. Not the same as a day that served none - that one keeps its minimum bar, and the
+   * two are opposite news.
+   */
+  uncounted: boolean;
 }
 
 /**
@@ -54,16 +60,29 @@ export function barMetrics(count: number, innerWidth: number): { barWidth: numbe
  * zero-fills so that quiet days are countable. Dropping them here would throw that away
  * one layer above where it was paid for.
  *
+ * AND THERE IS A THIRD STATE THE RULE ABOVE DID NOT CONTEMPLATE (#677). `countedFrom` is
+ * the first day the counter has any record of - `countingSince`, added by #675. A day
+ * BEFORE it is not a quiet day; it is a day nobody counted, and the zero-fill was
+ * plotting it as "served none". The two are opposite news and the chart drew them the
+ * same mark.
+ * So: inside the counted window the rule above is unchanged and a quiet day still gets
+ * its minimum bar. Before it, the rect is marked `uncounted` and the renderers draw
+ * NOTHING. That does not re-open the ambiguity the rule closes - a gap there cannot be
+ * read as "no entry", because which days are uncounted is DERIVED from countedFrom
+ * rather than inferred from a missing row.
+ * Omit `countedFrom` and every day counts, which is what every existing caller means.
+ *
  * The scale's top is the busiest day, never a fixed ceiling, and never zero: an all-zero
  * month divides by 1 instead of producing NaN geometry.
  */
-export function barRects(series: readonly DripDay[], left: number, top: number, innerWidth: number, innerHeight: number): BarRect[] {
+export function barRects(series: readonly DripDay[], left: number, top: number, innerWidth: number, innerHeight: number, countedFrom?: string | null): BarRect[] {
   const n = series.length;
   if (n === 0) return [];
-  const max = Math.max(1, ...series.map((d) => d.sent));
+  const max = barMax(series, countedFrom);
   const { barWidth, gap } = barMetrics(n, innerWidth);
   return series.map((d, i) => {
-    const h = Math.max(barWidth, (d.sent / max) * innerHeight);
+    const uncounted = isUncounted(d.day, countedFrom);
+    const h = uncounted ? 0 : Math.max(barWidth, (d.sent / max) * innerHeight);
     const today = i === n - 1;
     return {
       // Today's bar is 10% wider and centred on its slot, so the accent reads as
@@ -73,13 +92,32 @@ export function barRects(series: readonly DripDay[], left: number, top: number, 
       w: today ? barWidth * 1.1 : barWidth,
       h,
       today,
+      uncounted,
     };
   });
 }
 
-/** The busiest day in the series, which is the axis's top label. */
-export function barMax(series: readonly DripDay[]): number {
-  return Math.max(1, ...series.map((d) => d.sent));
+/**
+ * Is this day before the counter had any record at all?
+ *
+ * String comparison, deliberately: both sides are `YYYY-MM-DD` UTC, which sorts
+ * lexicographically, and parsing them into Dates would introduce a timezone where there is
+ * not one. No countedFrom means every day counts.
+ */
+export function isUncounted(day: string, countedFrom?: string | null): boolean {
+  return !!countedFrom && day < countedFrom;
+}
+
+/**
+ * The busiest day in the series, which is the axis's top label.
+ *
+ * UNCOUNTED DAYS ARE EXCLUDED, because their `sent` is a zero-fill rather than a
+ * measurement - including them cannot change the max today (0 never wins) but it would the
+ * moment the fill stopped being zero, and the axis label would then be scaled by a number
+ * nobody counted.
+ */
+export function barMax(series: readonly DripDay[], countedFrom?: string | null): number {
+  return Math.max(1, ...series.filter((d) => !isUncounted(d.day, countedFrom)).map((d) => d.sent));
 }
 
 /** Mondays carry a dated tick, every other day carries a short one. */
@@ -231,6 +269,9 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
 export interface DripsChartInput {
   series: readonly DripDay[];
   last7d: number | null | undefined;
+  /** First day the counter has any record of (#675's `countingSince`). Days before it are
+   *  drawn as nothing rather than as a served-none bar - see barRects. */
+  countedFrom?: string | null;
 }
 
 /** The thirty-day bar chart. Geometry from barRects, nothing decided here. */
@@ -279,10 +320,14 @@ export function drawDrips(canvas: HTMLCanvasElement, host: HTMLElement, input: D
   const { height, L, T, iw, ih } = dripsLayout(width);
   const ctx = prepareCanvas(canvas, width, height);
   if (!ctx) return;
-  const rects = barRects(input.series, L, T, iw, ih);
-  const max = barMax(input.series);
+  const rects = barRects(input.series, L, T, iw, ih, input.countedFrom);
+  const max = barMax(input.series, input.countedFrom);
 
   for (const [i, r] of rects.entries()) {
+    // NOTHING IS DRAWN FOR A DAY NOBODY COUNTED (#677). A served-none day keeps its minimum
+    // bar; this one gets no mark at all, because "we have no record" and "none went out" are
+    // opposite news and the chart drew them identically until now.
+    if (r.uncounted) continue;
     if (r.today) {
       ctx.save();
       ctx.shadowColor = "rgba(255,105,0,.28)";

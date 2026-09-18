@@ -22,6 +22,8 @@
 //   RATE_LIMIT_SALT=ui-smoke HOSH_URL=http://127.0.0.1:28324/ TIP_ORACLE_ENDPOINT= \
 //   FAUCET_CTAZ_ENABLED=true CROSSLINK_RPC_URL=http://127.0.0.1:28611/ \
 //   FAUCET_CTAZ_RPC_SOCKET= LIGHTWALLETD_ENDPOINT=http://127.0.0.1:28612/ PORT=3120 npm start
+//   # then, once it is answering, a 30-day history so the chart is not a single bar:
+//   node scripts/seed-drips.mjs data/faucet.db
 //
 // CLEAR THE DB FIRST, AND IT IS NOT HOUSEKEEPING. This suite drives a real claim on every
 // run, so the rows accumulate in data/faucet.db. Drive it enough times on one worktree and the
@@ -3622,8 +3624,39 @@ async function checkDripsTooltip(browser, base) {
   // the S1 spec the design's own page uses and ours did not, and the only entry the parity gate
   // refused to accept as a departure. `drawDrips` ALREADY lit `i === hovered` with --orange-line
   // and was called with a literal -1, so the highlight existed and could never fire.
+  //
+  // AND THE HOVER ROWS SUPPLY THEIR OWN SERIES (#681). They used to hover a fixed fraction of
+  // whatever the database happened to hold, which made them a fact about the fixture rather than
+  // about the chart. CI builds its db fresh for the job and every drip in it comes from this
+  // suite's own claim, so `countingSince` is TODAY and all 29 earlier days are uncounted - and
+  // #677 draws NOTHING for an uncounted day. The hovered bar was therefore never painted, the
+  // highlight could not fire, and three rows went red against a chart doing exactly what it was
+  // asked. Measured on a local copy of CI's fixture: countingSince 2026-09-18, one non-zero day,
+  // and the same three rows red; the same probe against main was green and its tooltip read
+  // "0 on 2026-08-22", which is the defect #677 exists to remove.
+  //
+  // Moving the hover elsewhere cannot fix it: there is no counted, non-today day anywhere in CI's
+  // series to move onto. So the series is driven, with the counting boundary in the MIDDLE, and
+  // each arm below names the state it needs instead of hoping for it. Same correction as the
+  // reserve-low rows on #676, reached the same way - green on a stack that forces one state, red
+  // where CI supplies another.
+  const live = await (await fetch(`${base}/api/status`)).json();
+  const days = (live.drips?.byDay ?? []).map((d) => d.day);
+  // THE FIRST COUNTED DAY, IN THE MIDDLE. Both classes then exist and neither sits at an edge
+  // where the nearest-centre hit test could land on the other side of the boundary.
+  const CUT = 15;
+  const series = days.map((day, i) => ({ day, sent: i < CUT ? 0 : 2 + ((i * 7) % 9) }));
+  const countingSince = days[CUT];
+  const sum = (from) => series.slice(from).reduce((n, d) => n + d.sent, 0);
+  const driven = {
+    ...live,
+    drips: { allTime: sum(0), last7d: sum(series.length - 7), last30d: sum(0), byDay: series, countingSince },
+  };
+
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const page = await ctx.newPage();
+  await page.route("**/api/status", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(driven) }));
   await page.goto(base + "/", { waitUntil: "domcontentloaded" });
   const tab = page.locator(".seg button").filter({ hasText: /analytics/i }).first();
   if (await tab.count()) { await tab.click().catch(() => {}); }
@@ -3631,6 +3664,21 @@ async function checkDripsTooltip(browser, base) {
 
   const canvas = page.locator("#c-drips");
   const tip = page.getByTestId("drips-tip");
+
+  // THE DRIVEN SERIES IS ITSELF A SUBJECT, so it is pinned before anything is asserted about it.
+  // A route that silently stopped matching would leave every row below testing the database
+  // again, which is the failure this rewrite exists to remove - and it would do it quietly.
+  // READ FROM THE PAGE, not from the payload. `countingSince === days[CUT]` would be a sentence
+  // about two variables assigned four lines apart and would pass whatever the page did (L51).
+  // The card prints the date it was given, so that is what gets compared, against a driven value
+  // that is FIFTEEN DAYS from the one the app would have served on its own.
+  const shownSince = await page.evaluate(() => {
+    const els = document.querySelectorAll('[data-testid="counting-since"]');
+    return { n: els.length, text: (els[0]?.textContent ?? "").trim() };
+  });
+  ok("#594: the page is plotting the DRIVEN series rather than the database's",
+    shownSince.n === 1 && shownSince.text === `since ${countingSince}` && countingSince !== (live.drips?.countingSince ?? null),
+    `the card says ${JSON.stringify(shownSince.text)} (${shownSince.n} element), driven ${countingSince}, the app's own ${JSON.stringify(live.drips?.countingSince ?? null)}`);
 
   // THE PARTNER, FIRST. Every row below is satisfied by a chart that drew nothing: a canvas with
   // no bars cannot change colour, and a tip that never shows cannot show the wrong thing. A
@@ -3652,14 +3700,33 @@ async function checkDripsTooltip(browser, base) {
 
   const box = await canvas.boundingBox();
   const atRest = await page.evaluate(() => document.querySelector("#c-drips").toDataURL());
+  const bitmap = () => page.evaluate(() => document.querySelector("#c-drips").toDataURL());
+  const dayNamed = (s) => (/(\d{4}-\d{2}-\d{2})/.exec(s) ?? [])[1] ?? null;
+  // Hover a fraction of the plot, and report what was actually hit rather than what was aimed at.
+  const hoverAt = async (frac) => {
+    await page.mouse.move(box.x + box.width * frac, box.y + box.height * 0.7);
+    await page.waitForTimeout(250);
+    return ((await tip.textContent()) ?? "").trim();
+  };
+  const leave = async () => {
+    await page.mouse.move(box.x + box.width / 2, box.y - 60);
+    await page.waitForTimeout(250);
+  };
 
-  // A bar that is NOT today's: today is drawn with --orange whatever the pointer does, so hovering
-  // it would prove nothing about the hovered branch.
-  await page.mouse.move(box.x + box.width * 0.35, box.y + box.height * 0.7);
-  await page.waitForTimeout(250);
-  const hovered = await page.evaluate(() => document.querySelector("#c-drips").toDataURL());
+  // ── a day the counter HAS a record of, and not today ──────────────────────────────────────
+  // Not today's: today is drawn with --orange whatever the pointer does, so hovering it would
+  // prove nothing about the hovered branch.
+  const countedText = await hoverAt(0.75);
+  const countedDay = dayNamed(countedText);
+  // THE SUBJECT PIN. The fraction is a guess about geometry; this is the check that the guess
+  // landed in the class the three rows below need. Without it a drifted margin would quietly move
+  // these rows onto an uncounted day and they would fail as a chart bug.
+  ok("#594: the hover landed on a day the counter has a record of, and not today",
+    countedDay !== null && countedDay >= countingSince && countedDay !== days[days.length - 1],
+    `hovered ${JSON.stringify(countedDay)}, counting from ${countingSince}, today is ${days[days.length - 1]}`);
 
-  ok("#594: hovering a bar repaints the chart, so the hovered branch is reached at all",
+  const hovered = await bitmap();
+  ok("#594: hovering a counted bar repaints the chart, so the hovered branch is reached at all",
     hovered !== atRest, hovered === atRest ? "the bitmap is unchanged" : "the bitmap changed");
   ok("#594: and the tooltip is shown", await tip.isVisible());
   // AND IT IS POSITIONED OVER THE CHART, which the text rows above do not check. Deleting the
@@ -3682,15 +3749,35 @@ async function checkDripsTooltip(browser, base) {
     placed.position === "absolute" && placed.overChart && placed.pointerEvents === "none",
     JSON.stringify(placed));
 
-  const text = ((await tip.textContent()) ?? "").trim();
   ok("#594: and it names a count and the day it belongs to, not just a number",
-    /^\d+ on \d{4}-\d{2}-\d{2}$/.test(text), JSON.stringify(text));
+    /^\d+ on \d{4}-\d{2}-\d{2}$/.test(countedText), JSON.stringify(countedText));
 
-  await page.mouse.move(box.x + box.width / 2, box.y - 60);
-  await page.waitForTimeout(250);
+  await leave();
   ok("#594: and it goes away again when the pointer leaves the chart", await tip.isHidden());
   ok("#594: and the chart returns to exactly its unhovered bitmap",
-    (await page.evaluate(() => document.querySelector("#c-drips").toDataURL())) === atRest);
+    (await bitmap()) === atRest);
+
+  // ── a day BEFORE the counter had any record (#677) ────────────────────────────────────────
+  // The opposite news, and the chart has to tell them apart: no mark, and a tooltip that says so
+  // rather than "0 on <day>", which is what main says here and what the issue is about.
+  const uncountedText = await hoverAt(0.25);
+  const uncountedDay = dayNamed(uncountedText);
+  ok("#594/#677: the hover landed on a day before counting began",
+    uncountedDay !== null && uncountedDay < countingSince,
+    `hovered ${JSON.stringify(uncountedDay)}, counting from ${countingSince}`);
+  ok("#594/#677: and the tooltip says the day was not counted, rather than inventing a zero",
+    uncountedText === `not counted on ${uncountedDay}`, JSON.stringify(uncountedText));
+  // AND NOTHING LIGHTS UP, which is the same rule one layer along: there is no bar to highlight,
+  // so the chart must be unchanged. This is the row that would have caught #677's own fix going
+  // in backwards - a chart that still drew the bar would repaint here.
+  const afterUncounted = await bitmap();
+  ok("#594/#677: and no bar lights up, because an uncounted day has no mark to light",
+    afterUncounted === atRest,
+    // Reported, not asserted. A static "the bitmap is unchanged" here prints the OPPOSITE of what
+    // happened on the only run that matters - the failing one (L54, my own, the day I filed it).
+    afterUncounted === atRest ? "the bitmap is unchanged, as it must be with nothing drawn there"
+                              : "the bitmap CHANGED, so something was drawn for a day nobody counted");
+  await leave();
   await ctx.close();
 }
 

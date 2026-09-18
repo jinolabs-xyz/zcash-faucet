@@ -18,6 +18,7 @@ import {
   isMonday,
   mondayLabel,
   sevenDayMean,
+  isUncounted,
   logPosition,
   tickLabel,
   reserveTargetPlacement,
@@ -247,4 +248,61 @@ test("production's miner split is 40 accepted to 29 rejected", () => {
   assert.equal(rects.length, 2);
   const total = PROD.miner.submittedAccepted + PROD.miner.submittedRejected;
   assert.ok(Math.abs(rects[0].w + 1.5 - (PROD.miner.submittedAccepted / total) * 600) < 1e-9);
+});
+
+/* ── days before the counter existed (#677) ───────────────────────────── */
+
+test("a day before counting began is not a quiet day, and the two get different marks", () => {
+  // THE DEFECT THIS EXISTS FOR. `byDay` zero-fills the whole 30-day window, so a day BEFORE the
+  // counter had any record arrived as `sent: 0` and drew the same minimum bar a genuinely quiet
+  // day gets. "Nobody counted" and "none went out" are opposite news and the chart said the same
+  // thing for both.
+  const series: DripDay[] = [
+    { day: "2026-09-01", sent: 0 },   // before counting: no record
+    { day: "2026-09-02", sent: 0 },   // counting, and genuinely quiet
+    { day: "2026-09-03", sent: 7 },
+  ];
+  const rects = barRects(series, 0, 0, 300, 100, "2026-09-02");
+
+  assert.equal(rects[0].uncounted, true, "the day before countingSince is uncounted");
+  assert.equal(rects[0].h, 0, "and nothing is drawn for it");
+  assert.equal(rects[1].uncounted, false, "a quiet day inside the window is counted");
+  assert.ok(rects[1].h > 0, "and it keeps the minimum bar that makes quiet days visible");
+
+  // The pair is the whole point: same `sent: 0`, different mark.
+  assert.notEqual(rects[0].h, rects[1].h,
+    "a zero-filled pre-count day and a measured zero must not draw identically");
+});
+
+test("the axis top ignores days nobody counted", () => {
+  // Their `sent` is a fill, not a measurement. It cannot change the max while the fill is 0 -
+  // which is exactly why this needs a row: the day the fill stops being 0, an uncounted day
+  // could set the scale, and the label would be a number nobody measured.
+  const series: DripDay[] = [
+    { day: "2026-09-01", sent: 99 },  // pretend the fill was not zero
+    { day: "2026-09-02", sent: 4 },
+  ];
+  assert.equal(barMax(series, "2026-09-02"), 4, "the uncounted 99 must not set the axis");
+  assert.equal(barMax(series), 99, "and with no countedFrom every day counts, unchanged");
+});
+
+test("isUncounted compares dates as strings on purpose, and no countedFrom means everything counts", () => {
+  assert.equal(isUncounted("2026-09-01", "2026-09-02"), true);
+  assert.equal(isUncounted("2026-09-02", "2026-09-02"), false, "the first counted day is counted");
+  assert.equal(isUncounted("2026-09-03", "2026-09-02"), false);
+  // Absence is not a date. An empty table gives null and every day is then plotted as before,
+  // which is what every caller written before #675 means.
+  assert.equal(isUncounted("2026-09-01", null), false);
+  assert.equal(isUncounted("2026-09-01", undefined), false);
+  assert.equal(isUncounted("2026-09-01", ""), false, "an empty string is not a boundary");
+});
+
+test("the existing zero-fill rule is UNCHANGED inside the counted window", () => {
+  // charts.ts states it: a day with no drips is still drawn, so a gap cannot be confused with a
+  // missing row. #677 adds a third state and must not weaken that one. Every day of the real
+  // series is counted when no boundary is given, and every bar is still drawn.
+  const rects = barRects(SERIES, 0, 0, 400, 100);
+  assert.equal(rects.length, SERIES.length);
+  assert.equal(rects.filter((r) => r.uncounted).length, 0, "no boundary means nothing is uncounted");
+  for (const r of rects) assert.ok(r.h > 0, "every bar in the counted window is still drawn");
 });
