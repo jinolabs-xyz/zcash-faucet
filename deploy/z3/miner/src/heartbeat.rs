@@ -70,6 +70,16 @@ pub struct State {
     /// doing its job or the miner is not solving at all - and those need different responses.
     pub abandoned_count: Option<u64>,
     pub last_abandoned_at: Option<u64>,
+    /// Solves that were DISCARDED before submission - the node moved under us, or could not be
+    /// re-checked (main.rs's two sync_guard exits). Lifetime, resumed like the rest.
+    ///
+    /// WITHOUT THIS THE ACCOUNTING DOES NOT CLOSE. A solved block ends accepted, rejected or
+    /// discarded, and only the first two were counted - so solvedCount included blocks neither
+    /// submitted counter ever saw and the remainder was unattributable. That is precisely why
+    /// submittedRejected could not be derived by subtraction, and why the page turned an honest
+    /// null into "100% accepted". With this, accepted + rejected + discarded = solved.
+    pub discarded_count: Option<u64>,
+    pub last_discarded_at: Option<u64>,
     /// How far behind its own estimate the node was at the last check (sync.rs). None
     /// until the first check answers.
     pub node_lag: Option<u64>,
@@ -149,6 +159,14 @@ impl State {
     pub fn abandoned(&mut self) {
         self.abandoned_count = Some(self.abandoned_count.unwrap_or(0).saturating_add(1));
         self.last_abandoned_at = Some(now());
+    }
+
+    /// Not an error and not an abandon: the solve FINISHED and we chose not to submit it, because
+    /// the node moved under us or could not be re-checked. Clears nothing - a discard says nothing
+    /// about templates, errors or the wait.
+    pub fn discarded(&mut self) {
+        self.discarded_count = Some(self.discarded_count.unwrap_or(0).saturating_add(1));
+        self.last_discarded_at = Some(now());
     }
 
     pub fn rejected(&mut self, reason: &str) {
@@ -255,6 +273,8 @@ pub fn render(s: &State) -> String {
             "  \"lastSubmittedAt\": {},\n",
             "  \"abandonedCount\": {},\n",
             "  \"lastAbandonedAt\": {},\n",
+            "  \"discardedCount\": {},\n",
+            "  \"lastDiscardedAt\": {},\n",
             "  \"nodeLag\": {},\n",
             "  \"waitingSince\": {},\n",
             "  \"waitingReason\": {}\n",
@@ -287,6 +307,8 @@ pub fn render(s: &State) -> String {
         ts(s.last_submitted_at),
         num(s.abandoned_count),
         ts(s.last_abandoned_at),
+        num(s.discarded_count),
+        ts(s.last_discarded_at),
         num(s.node_lag),
         ts(s.waiting_since),
         s.waiting_reason
@@ -335,6 +357,7 @@ pub enum Resumed {
         accepted: Option<u64>,
         rejected: Option<u64>,
         abandoned: Option<u64>,
+        discarded: Option<u64>,
     },
 }
 
@@ -351,12 +374,13 @@ impl Resumed {
             Resumed::Unusable(why) => format!(
                 "heartbeat: prior file {why}, so the lifetime counts stay UNKNOWN rather than restarting at 0"
             ),
-            Resumed::Counts { solved, accepted, rejected, abandoned } => format!(
-                "heartbeat: resumed lifetime counts - solved {}, accepted {}, rejected {}, abandoned {}",
+            Resumed::Counts { solved, accepted, rejected, abandoned, discarded } => format!(
+                "heartbeat: resumed lifetime counts - solved {}, accepted {}, rejected {}, abandoned {}, discarded {}",
                 shown(*solved),
                 shown(*accepted),
                 shown(*rejected),
-                shown(*abandoned)
+                shown(*abandoned),
+                shown(*discarded)
             ),
         }
     }
@@ -387,6 +411,7 @@ pub fn resume(path: &Path) -> Resumed {
         accepted: n("submittedAccepted"),
         rejected: n("submittedRejected"),
         abandoned: n("abandonedCount"),
+        discarded: n("discardedCount"),
     }
 }
 
@@ -423,11 +448,11 @@ pub fn start(
     template_secs: u64,
 ) -> (Arc<Mutex<State>>, Option<Resumed>) {
     let resumed = path.as_deref().map(resume);
-    let (solved, accepted, rejected, abandoned) = match &resumed {
-        Some(Resumed::Counts { solved, accepted, rejected, abandoned }) => {
-            (*solved, *accepted, *rejected, *abandoned)
+    let (solved, accepted, rejected, abandoned, discarded) = match &resumed {
+        Some(Resumed::Counts { solved, accepted, rejected, abandoned, discarded }) => {
+            (*solved, *accepted, *rejected, *abandoned, *discarded)
         }
-        _ => (None, None, None, None),
+        _ => (None, None, None, None, None),
     };
     let state = Arc::new(Mutex::new(State {
         mode: mode.to_string(),
@@ -438,6 +463,7 @@ pub fn start(
         submitted_accepted: accepted,
         submitted_rejected: rejected,
         abandoned_count: abandoned,
+        discarded_count: discarded,
         ..Default::default()
     }));
 
@@ -754,7 +780,7 @@ mod tests {
         // fails here rather than on the box. That pairing is the whole of the bug's family.
         assert_eq!(
             resume(&path),
-            Resumed::Counts { solved: Some(69), accepted: Some(12), rejected: Some(3), abandoned: None }
+            Resumed::Counts { solved: Some(69), accepted: Some(12), rejected: Some(3), abandoned: None, discarded: None }
         );
         fs::remove_dir_all(path.parent().unwrap()).ok();
     }
@@ -808,7 +834,7 @@ mod tests {
         write_atomic(&path, "{\"schema\": 1, \"writtenAt\": \"2026-09-17T00:00:00Z\"}\n").unwrap();
         assert_eq!(
             resume(&path),
-            Resumed::Counts { solved: None, accepted: None, rejected: None, abandoned: None }
+            Resumed::Counts { solved: None, accepted: None, rejected: None, abandoned: None, discarded: None }
         );
         fs::remove_dir_all(path.parent().unwrap()).ok();
     }
@@ -859,6 +885,87 @@ mod tests {
     // genuine no-solution-in-window are the same observation, so `solved 0 / accepted 0 /
     // rejected 0` could not say whether the watcher was doing its job or the miner was not
     // solving at all - and those need different responses.
+
+    // ── THE THIRD OUTCOME: DISCARDED BEFORE SUBMISSION ────────────────────────────
+    //
+    // A solved block ends accepted, rejected or discarded, and only the first two were counted.
+    // solvedCount therefore included blocks neither submitted counter ever saw, the remainder was
+    // unattributable, and that is exactly why submittedRejected could not be derived by
+    // subtraction - which is how the page came to print "100% ACCEPTED BY OUR NODE" from a field
+    // nobody had measured.
+
+    #[test]
+    fn a_discarded_solve_is_counted_and_timed() {
+        let mut s = State::default();
+        assert_eq!(s.discarded_count, None);
+        s.discarded();
+        assert_eq!(s.discarded_count, Some(1));
+        assert!(s.last_discarded_at.is_some());
+        s.discarded();
+        assert_eq!(s.discarded_count, Some(2));
+    }
+
+    #[test]
+    fn the_three_outcomes_add_up_to_the_solves() {
+        // THE WHOLE POINT, as an equation rather than three separate counters. Without the third
+        // term there is no denominator anyone can defend, and a rate computed from two of them is
+        // an inference about a population that was never measured.
+        let mut s = State::default();
+        for _ in 0..7 { s.solved(); }
+        s.submitted(true); s.submitted(true); s.submitted(true);
+        s.rejected("duplicate"); s.rejected("duplicate");
+        s.discarded(); s.discarded();
+        assert_eq!(s.solved_count, Some(7));
+        assert_eq!(
+            s.submitted_accepted.unwrap() + s.submitted_rejected.unwrap() + s.discarded_count.unwrap(),
+            s.solved_count.unwrap(),
+            "accepted + rejected + discarded must equal solved, or the remainder is unattributable"
+        );
+    }
+
+    #[test]
+    fn discarding_is_not_an_error_and_clears_nothing() {
+        // A discard is the sync guard doing its job. It must not look like a fault, and must not
+        // wipe the state a reader uses to judge one.
+        let mut s = State::default();
+        s.error("template");
+        s.node_lag(40, Some("behind"));
+        let before_stage = s.last_error_stage;
+        let before_wait = s.waiting_since;
+        s.discarded();
+        assert_eq!(s.last_error_stage, before_stage);
+        assert_eq!(s.waiting_since, before_wait);
+        assert_eq!(s.consecutive_errors, 1);
+    }
+
+    #[test]
+    fn the_discarded_count_is_a_lifetime_figure_too() {
+        let path = scratch("discard-carry");
+        let mut before = State { mode: "submit".into(), beat_secs: 3, template_secs: 8, ..Default::default() };
+        before.discarded_count = Some(23);
+        write_atomic(&path, &render(&before)).unwrap();
+        let (hb, resumed) = start(Some(path.clone()), "submit", 3, 8);
+        assert_eq!(hb.lock().unwrap().discarded_count, Some(23));
+        assert!(resumed.unwrap().journal().contains("discarded 23"));
+        fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn a_file_with_no_discarded_count_reads_unknown_not_zero() {
+        // Every heartbeat written before this change. 0 would assert "no solve has ever been
+        // discarded", which is the claim we cannot make about those files - and asserting it is
+        // how the accounting would silently appear to close when it does not.
+        let path = scratch("discard-absent");
+        write_atomic(&path, "{\"schema\": 1, \"solvedCount\": 3}\n").unwrap();
+        match resume(&path) {
+            Resumed::Counts { discarded, solved, .. } => {
+                assert_eq!(discarded, None);
+                assert_eq!(solved, Some(3));
+            }
+            other => panic!("expected counts, got {other:?}"),
+        }
+        fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
 
     #[test]
     fn an_abandoned_solve_is_counted_and_timed() {
@@ -990,7 +1097,7 @@ mod tests {
     fn the_journal_tells_a_resume_apart_from_a_failure_to_read() {
         // "resumed 69" and "could not read it" produce the same page. Only the journal can
         // say which happened, so the three cases must not share wording.
-        let resumed = Resumed::Counts { solved: Some(69), accepted: None, rejected: Some(3), abandoned: None }.journal();
+        let resumed = Resumed::Counts { solved: Some(69), accepted: None, rejected: Some(3), abandoned: None, discarded: None }.journal();
         assert!(resumed.contains("resumed lifetime counts"), "{resumed}");
         assert!(resumed.contains("solved 69"), "{resumed}");
         assert!(resumed.contains("accepted unknown"), "{resumed}");
@@ -1116,6 +1223,8 @@ mod contract {
             last_reject_reason: Some("stale-parent"),
             abandoned_count: Some(7),
             last_abandoned_at: Some(1_785_023_500),
+            discarded_count: Some(5),
+            last_discarded_at: Some(1_785_023_400),
             solved_count: Some(3),
             last_solved_at: Some(1_785_023_100),
             submitted_accepted: Some(3),

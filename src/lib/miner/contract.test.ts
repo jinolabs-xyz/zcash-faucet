@@ -147,6 +147,13 @@ const KNOWINGLY_IGNORED: Record<string, string> = {
   // is read today by a human comparing it against solvedCount, not by this reader.
   abandonedCount: "solves dropped because the tip moved (#660) - not surfaced yet",
   lastAbandonedAt: "when the last solve was dropped - not surfaced yet",
+  // The third outcome. A solved block ends accepted, rejected or DISCARDED before submission, and
+  // only the first two were counted - which is why submittedRejected could not be derived and why
+  // the page turned that null into "100% accepted". With this the accounting closes. Ignored here
+  // on purpose: no rate goes back on the page until all three counts share a period, and that is
+  // SDE-App's call to make deliberately rather than a consequence of a field appearing.
+  discardedCount: "solves dropped before submission - closes accepted + rejected + discarded = solved",
+  lastDiscardedAt: "when the last solve was dropped before submission - not surfaced yet",
 };
 
 test("EVERY field the writer emits is accounted for, consumed or ignored on purpose", () => {

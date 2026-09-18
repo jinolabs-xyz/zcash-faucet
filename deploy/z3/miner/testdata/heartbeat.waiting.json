@@ -20,6 +20,8 @@
   "lastSubmittedAt": "2026-07-25T23:45:01Z",
   "abandonedCount": 7,
   "lastAbandonedAt": "2026-07-25T23:51:40Z",
+  "discardedCount": 5,
+  "lastDiscardedAt": "2026-07-25T23:50:00Z",
   "nodeLag": 1443,
   "waitingSince": "2026-07-25T23:40:00Z",
   "waitingReason": "behind"
