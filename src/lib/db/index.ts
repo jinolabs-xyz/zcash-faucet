@@ -29,6 +29,7 @@ import {
   pendingLeaseSeconds,
   SPEND_CHALLENGE_SQL,
   PURGE_CHALLENGES_SQL,
+  FEEDBACK_INSERT_SQL, FEEDBACK_RECENT_SQL, FEEDBACK_PURGE_SQL,
 } from "./sql.ts";
 import { probeLedger, verdictFor, PROBE_EVERY_MS, type LedgerCacheEntry, type LedgerHealth } from "./probe.ts";
 
@@ -596,5 +597,71 @@ export async function farmingSignals(now: number): Promise<FarmingSignals | null
     // can afford a reason.
     console.error(`[farming] ledger read failed: ${err instanceof Error ? err.message : err}`);
     return null;
+  }
+}
+
+/* ── feedback ─────────────────────────────────────────────────────────── */
+
+/** Longer than this is truncated by nobody: the request is refused and says so. */
+export const MAX_FEEDBACK_BODY = 2000;
+/** A contact string someone chose to give us. Never parsed, never trusted, never required. */
+export const MAX_FEEDBACK_REPLY_TO = 200;
+/** Per fingerprint, per day. Low: this is a feedback form, not a chat. */
+export const FEEDBACK_PER_DAY = 5;
+/** Rows are deleted after this whether or not they were ever delivered. */
+export const FEEDBACK_RETENTION_SECONDS = 30 * 86_400;
+
+export type FeedbackResult =
+  | { ok: true }
+  | { ok: false; reason: "empty" | "too-long" | "rate" | "ledger" };
+
+/**
+ * Take a visitor's feedback and answer. THE APP DOES NOT DELIVER IT and does not know how:
+ * it writes a row, and a timer on the box drains unsent rows to Signal over loopback.
+ *
+ * That seam is a security decision rather than a convenience. This is the only
+ * unauthenticated public WRITE path on the site that is not a claim, and giving the
+ * public-facing container outbound network access so a form can reach a webhook is how an
+ * SSRF surface gets built by accident - we have already had docker's publish rules bypass
+ * ufw and leave the wallet RPC internet-reachable for nine days. The failure mode here is a
+ * row that sits there, not a request that hangs.
+ *
+ * VALIDATION REFUSES RATHER THAN REPAIRS. A body over the limit is not silently cut down to
+ * it: truncating someone's words and then reporting success is a lie about what we received,
+ * and the sender has no way to discover it.
+ */
+export async function recordFeedback(opts: {
+  body: string;
+  replyTo: string | null;
+  ipHash: string | null;
+  now: number;
+}): Promise<FeedbackResult> {
+  const body = opts.body.trim();
+  if (body.length === 0) return { ok: false, reason: "empty" };
+  if (body.length > MAX_FEEDBACK_BODY) return { ok: false, reason: "too-long" };
+  const replyTo = opts.replyTo?.trim() || null;
+  if (replyTo !== null && replyTo.length > MAX_FEEDBACK_REPLY_TO) return { ok: false, reason: "too-long" };
+  try {
+    // NO FINGERPRINT IS NOT A FREE PASS. A caller we cannot identify is exactly the one an
+    // abuser would arrange to be, so the cap applies to the null key as a shared bucket
+    // rather than being skipped when the key is missing.
+    const key = opts.ipHash ?? "anon";
+    const since = Math.floor(opts.now / 1000) - 86_400;
+    const recent = await driver().get<{ n: number }>(FEEDBACK_RECENT_SQL, [key, since]);
+    if (Number(recent?.n ?? 0) >= FEEDBACK_PER_DAY) return { ok: false, reason: "rate" };
+    await driver().run(FEEDBACK_INSERT_SQL, [Math.floor(opts.now / 1000), body, replyTo, key]);
+    return { ok: true };
+  } catch (e) {
+    console.error(`[feedback] write failed: ${e instanceof Error ? e.message : e}`);
+    return { ok: false, reason: "ledger" };
+  }
+}
+
+/** Retention, called on the same schedule as the claims purge. */
+export async function purgeFeedback(nowMs: number): Promise<void> {
+  try {
+    await driver().run(FEEDBACK_PURGE_SQL, [Math.floor(nowMs / 1000) - FEEDBACK_RETENTION_SECONDS]);
+  } catch (e) {
+    console.error(`[feedback] purge failed: ${e instanceof Error ? e.message : e}`);
   }
 }
