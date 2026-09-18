@@ -732,6 +732,21 @@ try {
   const dripStatus = (await get(BASE_A, "/api/status")).body.drips;
   const dayAfter = new Date().toISOString().slice(0, 10);
   const byDay = dripStatus?.byDay ?? [];
+
+  // THE BLOCK'S OWN KEYS, NOT JUST EACH DAY'S. byDay's per-day keys have been pinned since it
+  // shipped; the drips OBJECT never was - so `countingSince` was added in the db layer, reached
+  // this PUBLIC body, and no test broke and nothing acknowledged it (#675, flagged by SDE-UI and
+  // filed by SDE-Infra on #677). That is the same silence that left the miner's heartbeat fields
+  // unread for months: a field can only be noticed here if something enumerates what is here.
+  // Listed rather than counted, so the failure names the field that arrived or left.
+  ok("A status: the PUBLIC drips block carries exactly the keys it is meant to",
+    JSON.stringify(Object.keys(dripStatus ?? {}).sort()) === '["allTime","byDay","countingSince","last30d","last7d"]',
+    JSON.stringify(Object.keys(dripStatus ?? {}).sort()));
+  // And countingSince is a DATE or null - never "" and never an invented epoch, which is the
+  // property #675's own db row holds one layer down and this one holds on the wire.
+  ok("A status: countingSince is a UTC date or null, never an invented one",
+    dripStatus?.countingSince === null || /^\d{4}-\d{2}-\d{2}$/.test(dripStatus?.countingSince ?? ""),
+    JSON.stringify(dripStatus?.countingSince));
   ok("A status: drips.byDay carries today's drip and is 30 zero-filled UTC days, oldest first, summing to last30d",
     Array.isArray(byDay) && byDay.length === 30 &&
       byDay.every((d) => JSON.stringify(Object.keys(d).sort()) === '["day","sent"]' && /^\d{4}-\d{2}-\d{2}$/.test(d.day) && Number.isInteger(d.sent) && d.sent >= 0) &&

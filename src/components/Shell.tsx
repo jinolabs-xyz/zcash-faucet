@@ -44,7 +44,7 @@ export type Theme = "paper" | "ink";
 
 /** What the masthead reads off a status. Narrow on purpose: the shell is not a view. */
 export interface ShellStatus {
-  drips?: { last7d: number; allTime: number; byDay?: DripDay[] } | null;
+  drips?: { last7d: number; allTime: number; byDay?: DripDay[]; countingSince?: string | null } | null;
   maintenanceAddress?: string;
 }
 
@@ -223,6 +223,7 @@ export function Shell({
                   byDay={shown?.drips?.byDay ?? []}
                   last7d={shown?.drips?.last7d ?? null}
                   allTime={shown?.drips?.allTime ?? null}
+                  countingSince={shown?.drips?.countingSince ?? null}
                   theme={theme}
                 />
                 <span className="kv week">
