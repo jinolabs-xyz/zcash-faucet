@@ -45,7 +45,8 @@ wd_env() {
   unset STUB_CRASHLOOP STUB_HEALTH_SEQUENCE STUB_HEAL_FIXES STUB_READY_REFHASH STUB_READY_REFHEIGHT STUB_ZEBRA_ADVANCE STUB_ZEBRA_BLOCKS STUB_ZEBRA_EST STUB_ZEBRA_HASH STUB_ZEBRA_STUCK_CALLS WATCHDOG_CLOCK_FILE WATCHDOG_CLOCK_STEP \
         WATCHDOG_NODE_HEAL_ENABLED WATCHDOG_NODE_STOPS_MINER WATCHDOG_MINER_HEARTBEAT WATCHDOG_MINER_UNIT STUB_START_FAIL \
         WATCHDOG_SIGNAL_MATCH STUB_READY_CANBUILD STUB_READY_CANBUILD_ONCE \
-        STUB_READY STUB_READY_REASON STUB_READY_FAIL_UNTIL STUB_HEALTH
+        STUB_READY STUB_READY_REASON STUB_READY_FAIL_UNTIL STUB_HEALTH \
+        WATCHDOG_MINER_OUTCOME_ENABLED WATCHDOG_MINER_NO_SOLVE_SECS WATCHDOG_MINER_ABANDON_PER_BLOCK WATCHDOG_MINER_BLOCK_SECS WATCHDOG_MINER_RATE_WINDOW_SECS
   # R-12's knobs belong in THIS list and not in the cases: the suites share one shell, and
   # an export that outlives its case is a bug I have shipped twice (STUB_ACTIVE into the
   # next install-ops case, BOX_REPORT_FAUCET_VOLUME into bringtospec). A fork shape left
@@ -494,6 +495,19 @@ miner_hb() {
     "$(_ago_z "$1")" "$(_ago_z "$2")" "$lt" > "$T/heartbeat.json"
 }
 
+# THE OUTCOME FIXTURE (#660). Same discipline as miner_hb above and for the same reason: the
+# writer's REAL shape, one field per line, in the canonical order, so a parser that only handles
+# the shape the test invented cannot pass here and fail on the box.
+# Args: writtenAge startedAge templateAge mode abandonedCount solvedAge ("none" = never solved,
+# "null" abandons = the field absent, which is a heartbeat written before #666).
+miner_hb_outcome() {
+  local sv av
+  if [ "$6" = "none" ]; then sv='null'; else sv="\"$(_ago_z "$6")\""; fi
+  if [ "$5" = "null" ]; then av='null'; else av="$5"; fi
+  printf '{\n  "schema": 1,\n  "writtenAt": "%s",\n  "beatSeconds": 10,\n  "staleAfterSeconds": 60,\n  "templateSeconds": 8,\n  "templateStaleAfterSeconds": 48,\n  "mode": "%s",\n  "startedAt": "%s",\n  "lastTemplateAt": "%s",\n  "lastTemplateHeight": 4282310,\n  "lastErrorStage": null,\n  "lastErrorAt": null,\n  "consecutiveErrors": 0,\n  "solvedCount": 2846,\n  "lastSolvedAt": %s,\n  "submittedAccepted": 2175,\n  "submittedRejected": null,\n  "lastRejectReason": null,\n  "lastSubmittedAt": null,\n  "abandonedCount": %s,\n  "lastAbandonedAt": "%s",\n  "discardedCount": 0,\n  "lastDiscardedAt": null,\n  "nodeLag": 0,\n  "waitingSince": null,\n  "waitingReason": null\n}\n' \
+    "$(_ago_z "$1")" "$4" "$(_ago_z "$2")" "$(_ago_z "$3")" "$sv" "$av" "$(_ago_z 13)" > "$T/heartbeat.json"
+}
+
 wd_miner_env() {
   wd_env
   echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
@@ -633,6 +647,149 @@ TOOL
   chmod +x "$T/tools/"*.sh
   export WATCHDOG_HEAL_TOOLS_DIR="$T/tools"
 }
+
+# THE OUTCOME RUNG (#660). Every case here drives the CLOCK, because the rung measures a RATE over
+# a window and a rate needs two readings at a known distance. One sweep seeds the baseline, the
+# heartbeat is rewritten with a higher count, the second sweep measures. CLOCK_STEP 900 against a
+# 600 s minimum window means the second sweep is always far enough from the first.
+# The deltas: 190 abandons in 15 minutes is ~15 per block where one is normal; 12 is ~1.
+oc_env() {
+  wd_miner_env
+  export WATCHDOG_CLOCK_FILE="$T/oc.clock" WATCHDOG_CLOCK_STEP=900
+  # A REAL EPOCH, not an empty file. wd_now reads an unparseable clock as 0, and 0 is the
+  # rung's "no baseline yet" sentinel - starting there would make the first window
+  # indistinguishable from a cold start and the cases would test the seed path twice.
+  printf '1700000000' > "$T/oc.clock"
+}
+
+echo "== watchdog: a miner that is ALIVE and COMPLETING NOTHING is named, and never restarted (#660)"
+# THE STATE FOUR OTHER INSTRUMENTS CALL HEALTHY. sync_guard gates on height, the fork rung compares
+# us to outside references, step 6 gates on template RECENCY, and the status page reads "mining".
+# A miner that templates every few seconds and completes nothing passes all four. This is the rung
+# that asks whether it is ACCOMPLISHING anything, and the only thing it does is say so.
+oc_env
+miner_hb_outcome 5 28800 4 submit 6000 none
+wd_run 1
+miner_hb_outcome 5 28800 4 submit 6190 none
+wd_run 1
+check "it pages, because nothing else in the system would have" \
+  "grep -q 'NEEDS YOU: miner is running and completing nothing' '$T/alerts.log'"
+check "and it names the two numbers that make the state legible" \
+  "grep -q '6190 abandoned attempts' '$T/alerts.log' && grep -q 'No block solved in 8h' '$T/alerts.log'"
+check "and it says the rate against the one that is normal, so the reader need not know the block time" \
+  "grep -q 'per block where one is normal' '$T/alerts.log'"
+check "and it does NOT restart the miner, because a restart cannot fix work invalidated from outside" \
+  "! grep -q 'systemctl restart zcash-testnet-miner' '$STUB_LOG'"
+check "and it does not guess WHY, which would send the reader to the wrong place with confidence" \
+  "! grep -qiE 'node|fork|tip moved|zebra' '$T/alerts.log'"
+
+echo "== watchdog: ONE READING IS NOT A RATE, so the first sweep only seeds"
+oc_env
+miner_hb_outcome 5 28800 4 submit 6190 none
+wd_run 1
+check "a single reading says nothing, however large the lifetime total" \
+  "! grep -q 'completing nothing' '$T/alerts.log'"
+
+echo "== watchdog: and it is a STATE, said once, not an event repeated every sweep"
+# THE COUNTER HAS TO KEEP MOVING or this row cannot tell the two behaviours apart: once the abandons
+# stop, the delta is zero and the condition goes false on its own, so a rung with NO once-guard would
+# also page only once. A mutant removing the guard proved exactly that against the first version of
+# this case. The incident being modelled is a miner abandoning continuously, so the fixture abandons
+# continuously.
+oc_env
+miner_hb_outcome 5 28800 4 submit 6000 none
+wd_run 1
+miner_hb_outcome 5 28800 4 submit 6190 none
+wd_run 1
+miner_hb_outcome 5 28800 4 submit 6380 none
+wd_run 1
+miner_hb_outcome 5 28800 4 submit 6570 none
+wd_run 1
+check "still abandoning, still silent after the first page" "[ \"\$(grep -c 'completing nothing' '$T/alerts.log')\" = 1 ]"
+
+echo "== watchdog: A RESTARTED MINER IS NOT A BROKEN ONE, which is what the lifetime counter would say"
+# THE DEFECT A SURVIVING MUTANT FOUND. abandonedCount is restored across restarts by
+# heartbeat.rs resume(), so a miner running for weeks and restarted an hour ago carries a huge
+# lifetime total against a tiny uptime. An earlier version of this rung divided one by the other and
+# would have paged every healthy miner a few hours after every deploy.
+oc_env
+miner_hb_outcome 5 25000 4 submit 900000 none
+wd_run 1
+miner_hb_outcome 5 25000 4 submit 900012 none
+wd_run 1
+check "a vast lifetime total with a normal RECENT rate is left alone" \
+  "! grep -q 'completing nothing' '$T/alerts.log'"
+
+echo "== watchdog: ORDINARY QUIET IS NOT AN INCIDENT, which is the whole reason the rate is in the condition"
+# Solves run about twice a day, so a silent eight hours is unremarkable - against a Poisson mean of
+# 2/day a quiet 12h is ~37% likely. A rung that fired on silence alone would be wrong most weeks and
+# would be switched off, which is worse than not having it.
+oc_env
+miner_hb_outcome 5 28800 4 submit 6000 none
+wd_run 1
+miner_hb_outcome 5 28800 4 submit 6012 none
+wd_run 1
+check "a quiet miner with a healthy abandon rate is left alone" \
+  "! grep -q 'completing nothing' '$T/alerts.log'"
+
+echo "== watchdog: a high abandon rate with solves still landing is not 'completing nothing' either"
+oc_env
+miner_hb_outcome 5 28800 4 submit 6000 600
+wd_run 1
+miner_hb_outcome 5 28800 4 submit 6190 600
+wd_run 1
+check "a miner that solved ten minutes ago is completing work, whatever its rate" \
+  "! grep -q 'completing nothing' '$T/alerts.log'"
+
+echo "== watchdog: a young process is not evidence about six hours"
+# The uptime guard earns its place on a RESUMED lastSolvedAt: a miner restarted an hour ago carries
+# the last solve from before the restart, so "no solve in 11h" is true of the SYSTEM and says
+# nothing about this process yet.
+oc_env
+miner_hb_outcome 5 3600 4 submit 6000 40000
+wd_run 1
+miner_hb_outcome 5 3600 4 submit 6190 40000
+wd_run 1
+check "one hour of uptime cannot support a claim about six" \
+  "! grep -q 'completing nothing' '$T/alerts.log'"
+
+echo "== watchdog: a heartbeat with NO abandonedCount says nothing, rather than saying zero"
+# NULL IS NOT ZERO. A heartbeat written before #666 has no counter at all, and reading its absence
+# as 0 would assert "this miner has never abandoned an attempt" on no evidence.
+oc_env
+miner_hb_outcome 5 28800 4 submit null none
+wd_run 2
+check "an absent counter is unknown, not healthy and not broken" \
+  "! grep -q 'completing nothing' '$T/alerts.log'"
+
+echo "== watchdog: a miner that is not SUBMITTING is not expected to complete anything"
+oc_env
+miner_hb_outcome 5 28800 4 dry-run 6000 none
+wd_run 1
+miner_hb_outcome 5 28800 4 dry-run 6190 none
+wd_run 1
+check "dry-run mode is left alone" "! grep -q 'completing nothing' '$T/alerts.log'"
+
+echo "== watchdog: and when it completes work again it says so ONCE, so a second episode pages"
+oc_env
+miner_hb_outcome 5 28800 4 submit 6000 none
+wd_run 1
+miner_hb_outcome 5 28800 4 submit 6190 none
+wd_run 1
+miner_hb_outcome 5 28800 4 submit 6380 600
+wd_run 2
+check "the recovery is reported" "grep -q 'FIXED: miner is completing work again' '$T/alerts.log'"
+check "exactly once" "[ \"\$(grep -c 'completing work again' '$T/alerts.log')\" = 1 ]"
+
+echo "== watchdog: the outcome rung has its own kill switch"
+oc_env
+export WATCHDOG_MINER_OUTCOME_ENABLED=0
+miner_hb_outcome 5 28800 4 submit 6000 none
+wd_run 1
+miner_hb_outcome 5 28800 4 submit 6190 none
+wd_run 1
+check "switched off, it says nothing" "! grep -q 'completing nothing' '$T/alerts.log'"
+unset WATCHDOG_MINER_OUTCOME_ENABLED
 
 echo "== watchdog: the poison signature triggers a repair, and a heal that works frees the budget again"
 wd_env
