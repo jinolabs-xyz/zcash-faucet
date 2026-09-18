@@ -192,9 +192,34 @@ if [ "$DRY_RUN" = "1" ]; then
   exit 0
 fi
 
-BAK="/var/lib/docker/volumes/${VOLUME}/_data/wallet.db.bak-abandon-$(date +%s)"
-cp -f "/var/lib/docker/volumes/${VOLUME}/_data/wallet.db" "$BAK"
-echo "backup: $BAK"
+# THE BACKUP TAKES THE SIDECARS OR IT IS NOT A BACKUP. The snapshot path in
+# zallet-abandon-expired-txs.sh refuses a partial copy and says why: a db without its -wal is
+# internally consistent and OLD, a state that may never have existed as a whole, and a stale -wal
+# beside a restored db reports as "disk I/O error". That rule was written for the READ and not
+# applied to the UNDO, which is the more dangerous of the two - and the watchdog runs this tool
+# unattended (watchdog.sh, poison path), so the incomplete copy is taken while nobody is watching.
+#
+# Normally there is nothing to take: sqlite checkpoints and removes the -wal when the last
+# connection closes, and this runs with zallet stopped. But the case this tool EXISTS for is a
+# crash-looping wallet, which is where a clean close is least likely, so it is checked rather
+# than assumed.
+# INJECTABLE SO THE DESTRUCTIVE PATH CAN BE TESTED AT ALL. The default is the real host path
+# and nothing about a production run changes. But /var/lib/docker/volumes is root-owned, the
+# harness runs as a normal user on purpose (see run-tests.sh), and so the backup and the delete
+# have NEVER been reached by a test - the suite's fixture claims to stand this path up and
+# silently cannot. A guard nothing can execute is a guard nobody has checked.
+VOL_DATA="${ZALLET_VOL_DATA:-/var/lib/docker/volumes/${VOLUME}/_data}"
+BAK="$VOL_DATA/wallet.db.bak-abandon-$(date +%s)"
+cp -f "$VOL_DATA/wallet.db" "$BAK"
+for SIDE in -wal -shm; do
+  [ -e "$VOL_DATA/wallet.db$SIDE" ] || continue
+  cp -f "$VOL_DATA/wallet.db$SIDE" "$BAK$SIDE" || {
+    rm -f "$BAK" "$BAK"-wal "$BAK"-shm
+    echo "ABORT: wallet.db$SIDE exists and could not be copied. A backup without it is not an undo." >&2
+    exit 1
+  }
+done
+echo "backup: $BAK$(ls "$BAK"-wal "$BAK"-shm 2>/dev/null | sed 's|.*/||;s|^|  +|' | tr -d '\n')"
 
 BEFORE="$(sq "$COUNTS_Q" | tr '|' ' ')"
 # shellcheck disable=SC2086  # deliberate split into label's positional args
