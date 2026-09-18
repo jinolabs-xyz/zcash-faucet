@@ -129,8 +129,10 @@ export function Sparkline({
     ro.observe(c);
     return () => ro.disconnect();
     // `theme` is a dependency because the fills are read from CSS custom properties, so a
-    // theme flip changes the colours without changing the data.
-  }, [byDay, theme]);
+    // theme flip changes the colours without changing the data. `countingSince` because the
+    // draw reads it twice and a new `byDay` on every poll is a habit of the caller's, not a
+    // guarantee - and exhaustive-deps is a warning here, so nothing in CI would ever say so.
+  }, [byDay, theme, countingSince]);
 
   // NULL, NOT ZERO, AND THERE ARE THREE OF THEM ON THE LABEL BELOW. Shell passes
   // `byDay ?? []`, so an absent drips block arrives as an EMPTY ARRAY and this returned a

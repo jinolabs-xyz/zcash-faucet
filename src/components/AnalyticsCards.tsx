@@ -196,7 +196,10 @@ export function AnalyticsCards({ status }: { status: ViewStatus | null }) {
                 with the true one. The date goes HERE rather than on the shell chip, which is 56px
                 at 1024 and was given the shorter word for that reason. */}
             counted<b>{drips?.allTime != null ? groupDigits(drips.allTime) : UNKNOWN}</b>
-            {drips?.countingSince ? <i className="since">since {drips.countingSince}</i> : null}
+            {/* A span, and no class of its own: `<i>` in this file is a swatch or a progress
+                fill, never prose, and it renders italic - a face the sheet uses nowhere. Bare,
+                it inherits `.tot`'s label style, which is what a secondary annotation wants. */}
+            {drips?.countingSince ? <span data-testid="counting-since">since {drips.countingSince}</span> : null}
           </span>
         </div>
       </div>
