@@ -116,7 +116,26 @@ case "$*" in
   *curl*) echo '{"result":null,"error":null}'; exit 0 ;;
 esac
 # Otherwise a sqlite query: the SQL is the last argument.
-printf '%s' "${STUB_SQL_OUT:-}"
+case "$*" in
+  *"count(*)"*)
+    # THE BEFORE/AFTER REPORT'S OWN QUERY, answered in the shape the report needs. The tools
+    # word-split this into label()'s positional args - eight for the abandon tool, six for the
+    # drop-queue one - so answering with one token makes `label` expand $2 unset under set -u,
+    # print "$2: unbound variable" to stderr, and emit an EMPTY report. Every run of this suite
+    # did exactly that, and nothing asserted on it, so the report has never been exercised.
+    # THE FIELD COUNT IS DERIVED FROM THE QUERY rather than typed, so this follows either tool
+    # and does not need editing when a table is added to one of them.
+    # The SECOND call returns lower numbers, so before and after DIFFER: a report that merely
+    # exists is not the same as one that shows the delete happened.
+    _n=$(printf '%s' "$*" | tr ',' '\n' | grep -c 'count(\*)')
+    _f="${STUB_LOG%/*}/counts.calls"
+    _seq=$(cat "$_f" 2>/dev/null || echo 0); _seq=$((_seq + 1)); printf '%s' "$_seq" > "$_f"
+    _base=100; [ "$_seq" -ge 2 ] && _base=90
+    _out=""; _i=0
+    while [ "$_i" -lt "$_n" ]; do _i=$((_i + 1)); _out="$_out|$((_base + _i))"; done
+    printf '%s' "${_out#|}" ;;
+  *) printf '%s' "${STUB_SQL_OUT:-}" ;;
+esac
 exit 0
 D
   chmod +x "$T/bin/docker"
@@ -324,6 +343,40 @@ check "a candidate zebra still has is left alone, and no delete is issued" \
   "! grep -qi 'delete from transactions' '$STUB_LOG'"
 check "and it says so rather than exiting silently" \
   "grep -q 'still fetchable' '$T/last.out'"
+
+echo "== zallet cleanup: the before/after report is actually produced"
+# IT NEVER HAS BEEN. The docker stub answered EVERY sqlite query with STUB_SQL_OUT, so the counts
+# query got one token, label() expanded $2 unset under set -u, and every run of this suite printed
+# `$2: unbound variable` to stderr with `before:` and `after:` EMPTY. Nothing asserted on that
+# output, so nobody saw it. In production the query returns eight pipe-separated counts which tr
+# splits, so it very probably works on the box - NOT ESTABLISHED, nobody has run it against a real
+# wallet.db. What is established is that the report was unexercised and failed silently, which is
+# the half that a test can fix.
+zc_env
+export STUB_ZALLET_RUNNING=false STUB_SQL_OUT="7:AABBCC" STUB_RPC_HAS_TX=0
+zc_run "$ABANDON"
+check "the run reached the report at all, so the rows below are not reading an early exit" \
+  "grep -q '^before:' '$T/last.out'"
+check "and the before line carries all eight labelled counts rather than an empty report" \
+  "grep -q 'before: transactions=101 sent_notes=102 ironwood=103 orchard=104 sapling=105 transparent_outputs=106 retrieval_q=107 spend_q=108' '$T/last.out'"
+check "and the after line is the SECOND reading, so the report shows a change and not just a shape" \
+  "grep -q 'after:  transactions=91 sent_notes=92 ironwood=93 orchard=94 sapling=95 transparent_outputs=96 retrieval_q=97 spend_q=98' '$T/last.out'"
+check "and nothing complained about an unbound positional, which is what the empty report looked like" \
+  "! grep -q 'unbound variable' '$T/last.out'"
+
+echo "== zallet cleanup: drop-queue's report has its OWN six columns, not the abandon tool's eight"
+# The two tools count different tables and label() takes a different number of args in each. A
+# fixture that hard-coded eight would make this row pass while the drop-queue report stayed broken.
+# AND THERE IS NOTHING HERE TO ASSERT ABOUT OVER-SUPPLY, which I found by arming it: a stub that
+# answers EIGHT columns to the six-column tool survives, 61/0, because label() simply ignores the
+# extra positional args. Under-supply is the only direction that breaks anything - six columns to
+# the eight-column tool leaves $7 and $8 unset and the report goes empty - so that is the arm the
+# derivation earns. A row named for the other direction would have been one that cannot fail.
+zc_env
+export STUB_ZALLET_RUNNING=false STUB_SQL_OUT="7:AABBCC" STUB_RPC_HAS_TX=0
+zc_run "$DROPQ"
+check "drop-queue prints its own labelled report" \
+  "grep -q 'before: retrieval_queue=101 spend_queue=102 transactions=103 ironwood_notes=104 sent_notes=105 transparent_outputs=106' '$T/last.out'"
 
 echo "== zallet cleanup: a wallet with NO -wal still backs up, rather than refusing"
 # The ordinary case after a clean stop. Refusing here would turn a safety check into an outage,
