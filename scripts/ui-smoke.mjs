@@ -336,6 +336,21 @@ async function checkHoverUnderAFlip(browser) {
     }, theme);
     await p.waitForTimeout(300);
 
+    // TRANSITIONS OFF BEFORE ANY SWEEP, AND THIS IS A BUG I PUT HERE IN #668. The sweep hovers a
+    // link, waits 25ms, and reads computed style. `a.tag` carries `transition:background .15s`
+    // (redesign-hero.css:69), so 25ms lands MID-TRANSITION and the value read is wherever the
+    // animation had got to - deltas of a few units in one channel, "1 moved", red on a page that
+    // had not changed at all. My donate link made this reachable: it is the first transitioning
+    // link this sweep hovers in the reserve-low state.
+    // WORSE, THE GATE COULD NOT SEE IT: the link only renders when the reserve is under its low
+    // mark, which CI never reaches at rest, so the flake was invisible to CI and reproducible only
+    // for whoever ran the suite locally against a low reserve - 2 of 4 runs the night I shipped it.
+    // Waiting longer would be slower and still a race. Disabling transitions removes the TIME
+    // dependence and keeps the CASCADE dependence, which is the only thing this row is about - the
+    // settled hover style under two chunk orders. Injected as a <style>, not a <link>, so the
+    // reversal below still reorders exactly the sheets it did before.
+    await p.addStyleTag({ content: "*,*::before,*::after{transition:none !important;animation:none !important}" });
+
     // RE-QUERIED PER SWEEP, NOT COLLECTED ONCE. `p.$$` returns handles to the elements that
     // existed when it ran, and the sweep below iterates them - so a link ADDED between the two
     // sweeps is never hovered and never compared, and a link REMOVED is skipped only because its
@@ -423,8 +438,9 @@ async function checkHoverUnderAFlip(browser) {
       if (!first) first = `${before[k].split("|")[0]} ${before[k].split("|")[1]} -> ${after[k].split("|")[1]}`;
     }
     // The floor is the anti-vacuity: a page that rendered no links would otherwise report
-    // "0 moved" and go green. FOUR rather than six, deliberately - this tree hovers exactly six,
-    // and a floor equal to today's count is a pin on the link count wearing a guard's clothes:
+    // "0 moved" and go green. FOUR rather than today's count, deliberately - this tree hovers six,
+    // or SEVEN in the reserve-low state since #668 added the donate link, and a floor equal to
+    // today's count is a pin on the link count wearing a guard's clothes:
     // it would go red the next time the design drops a footer link, for a reason that has
     // nothing to do with the cascade.
     ok(`${theme}: no link's HOVER styling changes when the CSS chunks are linked in the other order`,
@@ -809,6 +825,11 @@ async function checkCardInnerPadding(browser) {
 //
 // a[href="/donate"] rather than the first a[href]: a second link added above this one used to move
 // the assertion silently onto whatever was added.
+//
+// KNOWN LIMIT, not an oversight (SDE-Infra): indexOf takes the FIRST occurrence, so if the panel's
+// prose ever repeats the link's own phrase above the link, iAsk points at the prose instead. Left
+// as-is deliberately - the copy does not repeat it, and matching on the element's position rather
+// than its text would cost more than the case is worth today.
 async function readReserveLowPanel(p) {
   return p.evaluate(() => {
     const el = document.querySelector('[data-phase="reserve-low"]');
@@ -937,11 +958,29 @@ async function checkLivePhasePanelsWearTheBox(browser) {
       // because inside it, its content was what pushed the panel past its clamp - 41px at 1280x800
       // and 128px at 1024x768, hidden rather than shown because the panel scrolls. Nothing stopped
       // a later edit putting it back, and the scroll rows only go red once it is tall enough.
+      // THE FIRST CONJUNCT IS NOT DECORATION - WITHOUT IT THIS ROW IS VACUOUS, and SDE-Infra caught
+      // it one commit after I called it "an assertion instead of an accident". "not in the card" is
+      // satisfied by a panel that is not ANYWHERE, so the row reported the owner's instruction
+      // honoured on a page where the panel had vanished. Measured, not argued: deleting the panel
+      // turned its three neighbours red and left this row GREEN.
+      // Its neighbours cover the block, so this was never a hole in the suite - it was a hole in
+      // THIS row, and this is the only row guarding #659. The failure it would have missed is the
+      // quiet one: someone refactors, the neighbours go red, they fix the rendering, and this row
+      // is green the whole way through, so nobody learns whether #659 was ever re-checked.
+      // BY NAME, NOT BY COUNT (SDE-App's review). `r.dataCount >= 1` counts ANY [data-phase] under
+      // the root, so the conjunct is satisfied by a BYSTANDER panel rather than by this one. It
+      // goes red on the delete-the-panel mutant today only because .hero-copy currently holds
+      // nothing else - and the very next PR in the queue extracts this panel into its own
+      // component inside that same subtree. The vacuity would come back exactly when the follow-up
+      // lands, which is the worst possible moment for it. r.names is computed one line above and
+      // cannot be satisfied by something that is not this panel.
       ok("driving reserve-low: and it is NOT inside the claim card (#659, the owner's instruction)",
-        !r.inClaimCard.includes("reserve-low"),
-        r.inClaimCard.includes("reserve-low")
-          ? "reserve-low is back inside .card.claim, which is what caused the 128px overflow at 1024x768"
-          : `panels inside the claim card: ${JSON.stringify(r.inClaimCard)} - reserve-low is not among them`);
+        r.names.includes("reserve-low") && !r.inClaimCard.includes("reserve-low"),
+        !r.names.includes("reserve-low")
+          ? `reserve-low did not render under ${root} (panels there: ${JSON.stringify(r.names)}), so WHERE it renders was never tested - this row says nothing here`
+          : r.inClaimCard.includes("reserve-low")
+            ? "reserve-low is back inside .card.claim, which is what caused the 128px overflow at 1024x768"
+            : `rendered under ${root}, and the claim card holds ${JSON.stringify(r.inClaimCard)} - reserve-low is not among them`);
       const link = await readReserveLowPanel(p);
       if (link) reserveLowRows("driving reserve-low", link);
       else ok("driving reserve-low: the panel offers the TAZ donate page, not the ZEC funding page",
@@ -951,10 +990,32 @@ async function checkLivePhasePanelsWearTheBox(browser) {
     await c.close();
   }
 
-  // COVERAGE PIN, the same one this file already puts on its viewport loops: if this list is cut
-  // the suite gets quieter and stays green, which is the hole #563 was blocked for.
-  ok("the phase drive covered every state it names",
-    seen.length === DRIVEN.length, seen.join(", "));
+  // COVERAGE PIN. IT DID NOT DO EITHER OF THE TWO JOBS ITS OWN COMMENT CLAIMED, and SDE-Infra
+  // spotted the first half while reviewing #668.
+  //
+  // IT COULD NOT FAIL. `seen.push` is unconditional inside the loop over DRIVEN, so
+  // `seen.length === DRIVEN.length` compared the list to ITSELF and was true on every possible
+  // run - including the one where a state drove nothing. Measured: with the reserve-low panel
+  // deleted the row printed `ok ... reserve-low->none`, green while naming its own miss.
+  //
+  // AND IT COULD NOT SEE A CUT LIST, which is the hole #563 was blocked for and the reason the
+  // comment said it existed. Delete an entry from DRIVEN and BOTH sides shrink together, so the
+  // suite gets quieter and stays green - exactly the failure it was written to stop.
+  //
+  // EXPECTED is deliberately a SEPARATE LITERAL rather than derived from DRIVEN. A pin computed
+  // from the thing it is pinning is not a pin; the duplication IS the mechanism, because it is the
+  // only part that does not move when someone edits the list.
+  const EXPECTED = ["syncing", "fault", "empty", "topping-up", "degraded", "reserve-low"];
+  const drove = new Map(seen.map((s) => { const i = s.indexOf("->"); return [s.slice(0, i), s.slice(i + 2)]; }));
+  const notListed = EXPECTED.filter((n) => !DRIVEN.some(([d]) => d === n));
+  const didNotDrive = EXPECTED.filter((n) => drove.get(n) === "none" || !drove.has(n));
+  ok("the phase drive still NAMES every state, and REACHED every one it names",
+    notListed.length === 0 && didNotDrive.length === 0,
+    notListed.length
+      ? `DRIVEN no longer lists ${notListed.join(", ")} - the list was cut, which is the hole this pin exists for; seen ${seen.join(", ")}`
+      : didNotDrive.length
+        ? `${didNotDrive.join(", ")} drove NOTHING - the state was attempted and no panel rendered: ${seen.join(", ")}`
+        : seen.join(", "));
 }
 
 async function checkTallCardStaysReachable(browser) {
