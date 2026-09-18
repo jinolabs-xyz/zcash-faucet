@@ -1,0 +1,17 @@
+# Fires faucet-feedback-drain.service on a schedule. Install with the service, see its header.
+[Unit]
+Description=Scheduled delivery of queued faucet feedback
+
+[Timer]
+# Every 15 minutes. THE CADENCE IS THE LATENCY: the app answers "queued, not delivered", so this
+# interval is how long that sentence stays true in the ordinary case. Fast enough that a person
+# who writes to us is heard the same hour; slow enough that a burst is drained in batches the
+# per-run ceiling can bound rather than one page per message.
+OnBootSec=5m
+OnUnitActiveSec=15m
+RandomizedDelaySec=2m
+# A box that was off has messages waiting; deliver them rather than waiting for the next slot.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

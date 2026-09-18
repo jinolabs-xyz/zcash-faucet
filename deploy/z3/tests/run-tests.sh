@@ -58,6 +58,8 @@ IMPORT="$REPO/deploy/z3/zsnap-import.sh"
 BACKUP="$REPO/deploy/z3/backup.sh"
 # shellcheck disable=SC2034
 RESTORE="$REPO/deploy/z3/restore-backup.sh"
+# shellcheck disable=SC2034
+DRAIN="$REPO/deploy/z3/feedback-drain.sh"
 # Each suite prepends its own stub dir to this, rather than to whatever the
 # previous suite left on PATH.
 # shellcheck disable=SC2034
@@ -74,7 +76,7 @@ BASE_PATH="$PATH"
 # WHAT IS NOT WRITTEN OUT IS WHETHER IT IS COMPLETE. A suite file added and not named here
 # never runs, on a green tally, which is the same silent-pass shape the suites themselves
 # exist to catch. So the two are compared below and a mismatch refuses the run.
-SUITE_ORDER="zsnap backup deploy metrics redeploy drift alerts access watchdog repo installops boxreport bringtospec ctazports ctazconfig ctazbroker prune imagemanifest autodeploy zalletrepair zalletrewind zalletclean"
+SUITE_ORDER="zsnap backup deploy metrics redeploy drift alerts access watchdog repo installops boxreport bringtospec ctazports ctazconfig ctazbroker prune imagemanifest autodeploy zalletrepair zalletrewind zalletclean feedbackdrain"
 SELECTED="${SUITES:-$SUITE_ORDER}"
 
 # Only when running the default set: a deliberately narrowed SUITES= is not a mismatch.

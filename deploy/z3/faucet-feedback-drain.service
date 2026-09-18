@@ -1,0 +1,26 @@
+# Drains the feedback table to the operator's Signal. The app writes rows and answers 202;
+# this is the only half that reaches outward, so the public container never gains egress.
+# See feedback-drain.sh.
+# Install (alongside the watchdog and alert.sh):
+#   cp feedback-drain.sh /opt/faucet/ && chmod +x /opt/faucet/feedback-drain.sh
+#   cp faucet-feedback-drain.service faucet-feedback-drain.timer /etc/systemd/system/
+#   # the destination is alert.sh's, already configured in /etc/faucet/alerts.env
+#   systemctl daemon-reload && systemctl enable --now faucet-feedback-drain.timer
+[Unit]
+Description=Deliver queued faucet feedback to the operator
+After=docker.service
+Requires=docker.service
+OnFailure=faucet-alert@%n.service
+
+[Service]
+Type=oneshot
+# NO SECRET OF ITS OWN. The destination and the Signal credentials belong to alert.sh and live
+# in /etc/faucet/alerts.env, which this never reads. Nothing here needs a number to do its job.
+EnvironmentFile=-/etc/faucet/feedback.env
+ExecStart=/opt/faucet/feedback-drain.sh
+# A message can wait behind a block being mined.
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target
