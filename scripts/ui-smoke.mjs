@@ -2410,8 +2410,19 @@ async function checkServedHtmlCarriesTheHero() {
     if (i < 0) return { n, ok: false, why: "chip missing" };
     // To the end of that element's own markup, so a neighbour's figure cannot satisfy it.
     const slice = html.slice(i, i + 400).split("</button>")[0];
-    if (/unknown/i.test(slice)) return { n, ok: false, why: "still says unknown" };
-    if (/>\s*[\d,]+/.test(slice)) return { n, ok: false, why: "carries a figure" };
+    // TEXT ONLY, ATTRIBUTES STRIPPED, and this row got it wrong first (SDE-Infra). The owner's
+    // rule is about what the page SAYS. `data-tone="unknown"` is a CSS token - one of
+    // ok|attention|unknown, read by a stylesheet and by nobody aloud - and testing the raw markup
+    // made a machine attribute trip a rule about vocabulary. The obvious fix from that failure
+    // would have been renaming the tone enum: changing state plumbing to satisfy a text rule.
+    // PAST THE OPENING TAG FIRST. The slice starts at the `data-chip=` attribute, which is INSIDE
+    // that tag, so there is no leading `<` for a tag-strip to match and the attributes survive it.
+    // I wrote the strip alone, ran it against the real markup, and watched it still trip - which
+    // is the whole reason to try a fix on the string it is meant to fix rather than reason about
+    // it.
+    const text = slice.slice(slice.indexOf(">") + 1).replace(/<[^>]*>/g, " ");
+    if (/unknown/i.test(text)) return { n, ok: false, why: "still says unknown" };
+    if (/[\d]/.test(text)) return { n, ok: false, why: "carries a figure" };
     return { n, ok: true, why: "label only" };
   });
   ok("and not one of them carries a figure the server was never told",
