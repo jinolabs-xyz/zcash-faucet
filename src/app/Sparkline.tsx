@@ -125,7 +125,7 @@ export function Sparkline({
       id="spark"
       role="img"
       data-testid="spark"
-      aria-label={`Drips per day over the last 30 days. ${last7d ?? 0} this week, ${allTime ?? 0} all time, ${today} today.`}
+      aria-label={`Drips per day over the last 30 days. ${last7d ?? 0} this week, ${allTime ?? 0} counted, ${today} today.`}
     />
   );
 }

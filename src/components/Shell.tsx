@@ -231,7 +231,16 @@ export function Shell({
                 </span>
                 <span className="kv all">
                   <b className="num" data-testid="drips-all">{shown?.drips ? num(shown.drips.allTime) : "–"}</b>
-                  <span>all time</span>
+                  {/* NOT "all time", because it is not. db/index.ts says so in its own words:
+                      "Ever begins when this counter shipped, plus the ~25 hours of sent rows
+                      retention had not yet deleted. Earlier history was deleted by design and is
+                      not reconstructable." The counter does not pretend; the LABEL did.
+                      Same defect as the 100% acceptance rate - a figure whose name is a stronger
+                      claim than its data - and it matters more under the owner's lifetime rule,
+                      where "all time" reads as "from genesis". "counted" claims exactly what the
+                      number is and needs no date from the database. It is also SHORTER than "all
+                      time", so the compact chip cannot be pushed wider by it. */}
+                  <span>counted</span>
                 </span>
               </button>
               {/* `theme-toggle` stays beside the design's `iconbtn`: the class is what the

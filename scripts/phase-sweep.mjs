@@ -35,6 +35,22 @@ const PHASES = [
       s.reserve = { ...(s.reserve ?? { targetTaz: 100, lowTaz: 5, spendableTaz: 0 }), refilling: true, shieldCoinbase: true };
       s.miner = { ...(s.miner ?? {}), active: true }; return s; } },
   { name: "degraded",   says: "Sends are failing",        mutate: (s) => { s.sends = { ...(s.sends ?? {}), state: "degraded" }; return s; } },
+  // RESERVE-LOW, AND IT NEEDED A DIFFERENT READINESS SIGNAL RATHER THAN A NEW ROW.
+  // SDE-Infra found this state is driven by NOTHING - not ui-smoke's DRIVEN, not this list - which
+  // is how its 128px overflow reached the owner as a screenshot instead of a red row. ui-smoke's
+  // half landed in #670; this is the other instrument.
+  //
+  // IT CANNOT USE `says`. The claim card's phase here is still "ready", so its live-region text is
+  // "Faucet ready." - identical to PHASES[0]. The loop below waits for `g.says.includes(ph.says)`,
+  // so an entry with that string is satisfied by the page it STARTED on, before the mutated status
+  // has arrived on the 4s poll: it would report "reached" having driven nothing. That is the same
+  // shape as the vacuous rows this file's neighbours have been fixed for all week.
+  // `until` is the readiness signal for a state the live region cannot name - here the panel's own
+  // presence. Everything else keeps the says-based wait unchanged.
+  { name: "reserve-low", says: "Faucet ready.", until: '[data-phase="reserve-low"]',
+    mutate: (s) => { s.empty = false; s.balanceTaz = s.balanceTaz || 4504;
+      s.reserve = { ...(s.reserve ?? {}), refilling: true, lowTaz: 5000, spendableTaz: 4504 };
+      return s; } },
 ];
 
 const geom = (p) => p.evaluate(() => {
@@ -146,7 +162,11 @@ for (const [W, H] of VIEWPORTS) {
     let reached = false;
     while (Date.now() - t0 < 9000) {
       const g = await geom(page);
-      if (g.says.includes(ph.says)) { reached = true; break; }
+      // `until` wins where it exists: a state the live region cannot distinguish needs a witness
+      // that can. Without it, an entry sharing PHASES[0]'s text is "reached" on arrival.
+      if (ph.until) {
+        if (await page.evaluate((sel) => !!document.querySelector(sel), ph.until)) { reached = true; break; }
+      } else if (g.says.includes(ph.says)) { reached = true; break; }
     }
     if (!reached) { t(`${W} ${speed}: phase "${ph.name}" was reached at all`, false, `live region still: "${(await geom(page)).says.slice(0, 60)}"`); continue; }
     // SAMPLED WHEN THE ANIMATION ENDS, not after it. The old 700ms sample sat 240ms past the

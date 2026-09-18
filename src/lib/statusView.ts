@@ -417,7 +417,14 @@ export function minerTone(
   return minerIsBad(r, unit) ? "bad" : "warn";
 }
 
-/** Accepted as a share of everything submitted. Null when nothing has been submitted. */
+/**
+ * Accepted as a share of everything submitted. Null when nothing has been submitted.
+ *
+ * NOT RENDERED ANYWHERE, ON PURPOSE. It is arithmetic on two counters whose windows are not known
+ * to match - see acceptSentence below - so a caller that puts this on a page is publishing a rate
+ * of nothing. It stays because the arithmetic is right and tested, and because it becomes usable
+ * the moment accepted + rejected + discarded closes over one period.
+ */
 export function acceptPercent(miner: { submittedAccepted?: number | null; submittedRejected?: number | null } | null | undefined): number | null {
   const a = miner?.submittedAccepted, r = miner?.submittedRejected;
   if (a == null && r == null) return null;
@@ -453,11 +460,25 @@ export function acceptSentence(miner: { submittedAccepted?: number | null; submi
     return `${known}, and the ${missing} count is not known`;
   }
 
-  const pct = acceptPercent(miner);
   // "yet" is right here (#645, Rust half at 3f59ef5): the submitted counts are resumed from the
   // heartbeat now, so a zero is a statement about the MINER rather than about this process.
-  if (pct === null) return "no blocks submitted yet";
-  return `${pct}% accepted by our node`;
+  if (a === 0 && r === 0) return "no blocks submitted yet";
+
+  // NO PERCENTAGE, AND THIS GOES FURTHER THAN THE DEFECT THAT WAS REPORTED. Removing the
+  // `(a ?? 0)` null-as-zero fault above takes away the "100% accepted" render, and a WORSE one
+  // walks in behind it the moment the null resolves, because THE TWO HALVES COVER DIFFERENT
+  // PERIODS (SDE-Infra, with the arithmetic):
+  //   submittedAccepted was seeded from `journalctl -g "ACCEPTED by zebra" | wc -l` - ALL history
+  //   submittedRejected was deliberately left null, so it counts FROM THE SEED FORWARD
+  //   verified in the writer: resume() reads it with as_u64(), so a JSON null resumes as unknown
+  // One future rejection then renders 2175/2176 = 99.95% against a true historical 76.4% - both
+  // counters present, neither null, wrong by twenty-three points, and it NEVER self-corrects
+  // because accepted permanently carries a baseline rejected does not.
+  // A percentage computed from two eras glued together is not a rate, and no null check rescues
+  // it. The counts are what was measured, so the counts are what this says. A denominator anyone
+  // can defend needs accepted + rejected + discarded to close, which is Infra's discarded counter
+  // and is not built.
+  return `${a} accepted, ${r} refused`;
 }
 
 /* ── the backend ──────────────────────────────────────────────────────── */

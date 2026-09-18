@@ -953,6 +953,22 @@ async function checkLivePhasePanelsWearTheBox(browser) {
 
     // THE LINK ROWS, DRIVEN. At rest CI never reaches this state, so the at-rest copies above
     // print a skip and assert nothing; here the state is forced, so they run on every CI run.
+    // THE STATE A PHASE-LESS GATE RENDERS A LIE IN, DRIVEN RATHER THAN ARGUED (SDE-App's review).
+    // `topping-up` IS empty + refilling: basePhase returns "empty" at balanceTaz <= 0 while
+    // `refilling` stays true, and page.tsx already renders its own panel for it. A gate that only
+    // asks "is the reserve refilling" therefore prints "The reserve is low. CLAIMS STILL WORK."
+    // over a card saying the faucet is out of TAZ - two answers to one question, and the
+    // reassuring one false. The reviewer should not have to take that reasoning on faith, so the
+    // combination is driven and the absence asserted.
+    if (name === "topping-up") {
+      const shown = await p.locator('[data-phase="reserve-low"]').count();
+      ok("driving topping-up: the reserve-low notice stays AWAY while the card says empty",
+        shown === 0,
+        shown === 0
+          ? `panels on the page: ${JSON.stringify(r.names)} - reserve-low is not among them, and refilling IS true here`
+          : "reserve-low rendered beside an empty card: 'claims still work' over 'out of TAZ'");
+    }
+
     if (name === "reserve-low") {
       // #659 IS A DECISION, SO IT GETS A ROW. The owner moved this panel out of the claim card
       // because inside it, its content was what pushed the panel past its clamp - 41px at 1280x800
