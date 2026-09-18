@@ -3842,6 +3842,89 @@ async function checkReserveLinkIsReachable(browser, base) {
   }
 }
 
+async function checkFeedbackForm(browser, base) {
+  // THE OWNER'S ITEM 3, THE VISITOR'S HALF. #683 shipped the endpoint: it writes a row and answers
+  // 202, and a timer on the box hands it on separately with no egress from this container. So at
+  // the moment the form gets its answer NOTHING has been delivered, and the page saying "sent"
+  // would claim more than it knows - the same rule the drips chart and the acceptance rate were
+  // both corrected for this week.
+  //
+  // The failure rows DRIVE their status through page.route rather than exhausting the real daily
+  // limit: a row that depends on the rate limiter's accumulated state is a row whose subject is
+  // whatever earlier rows happened to do (#681, the same correction one suite over).
+  const ctx = await browser.newContext({ viewport: DESKTOP });
+  const page = await ctx.newPage();
+  await page.goto(base + "/", { waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(400);
+
+  const launch = page.locator(".fb-launch");
+  ok("feedback: the launcher ships on every page", (await launch.count()) === 1,
+    `${await launch.count()} launcher(s)`);
+  ok("feedback: and the form is closed until it is asked for", (await page.locator(".fb-panel").count()) === 0);
+
+  // THE OWNER ASKED FOR BOTTOM-LEFT, so that is measured rather than assumed from a class name.
+  const placed = await page.evaluate(() => {
+    const el = document.querySelector(".fb-launch");
+    if (!el) return null;
+    const b = el.getBoundingClientRect();
+    return { left: Math.round(b.left), fromBottom: Math.round(window.innerHeight - b.bottom),
+             fromRight: Math.round(window.innerWidth - b.right), fixed: getComputedStyle(el.parentElement).position };
+  });
+  ok("feedback: the launcher sits in the BOTTOM-LEFT corner, where the owner put it",
+    placed !== null && placed.fixed === "fixed" && placed.left >= 0 && placed.left < 120 && placed.fromBottom >= 0 && placed.fromBottom < 120 && placed.fromRight > placed.left,
+    JSON.stringify(placed));
+
+  await launch.click();
+  await page.waitForTimeout(250);
+  ok("feedback: it opens", (await page.locator(".fb-panel").count()) === 1);
+  // A control that opens something and leaves the keyboard behind cannot be used from a keyboard.
+  ok("feedback: and the keyboard lands in the message box, not back at the top of the page",
+    (await page.evaluate(() => document.activeElement?.tagName?.toLowerCase())) === "textarea");
+  ok("feedback: an empty message cannot be submitted",
+    await page.locator('.fb-panel button[type="submit"]').isDisabled());
+  await page.locator(".fb-text").fill("the claim button did nothing until I scrolled");
+  // THE PARTNER FOR THE ROW ABOVE: disabled-always would satisfy it and ship a form nobody can use.
+  ok("feedback: and it CAN be submitted once there is one, so the row above is not just a dead button",
+    !(await page.locator('.fb-panel button[type="submit"]').isDisabled()));
+
+  // ── the 202, which is the only path that may clear what someone wrote ──────────────────────
+  await page.route("**/api/feedback", (route) =>
+    route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ ok: true, kind: "queued" }) }));
+  await page.locator('.fb-panel button[type="submit"]').click();
+  await page.waitForTimeout(350);
+  const queued = ((await page.locator(".fb-msg").textContent()) ?? "").trim();
+  ok("feedback: a queued message is reported as RECEIVED, never as sent or delivered",
+    /received/i.test(queued) && !/\bis (sent|delivered)\b/i.test(queued) && /not been delivered/i.test(queued),
+    JSON.stringify(queued));
+  ok("feedback: and only then is the box cleared",
+    (await page.locator(".fb-text").inputValue()) === "");
+
+  // ── every failure keeps what was written, which is the one unrecoverable outcome ───────────
+  for (const [status, kind, wants] of [[429, "rate", /limit for one day/i], [503, "ledger", /could not store/i]]) {
+    await page.unroute("**/api/feedback");
+    await page.route("**/api/feedback", (route) =>
+      route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ ok: false, kind }) }));
+    const written = `a message that must survive a ${status}`;
+    await page.locator(".fb-text").fill(written);
+    await page.locator('.fb-panel button[type="submit"]').click();
+    await page.waitForTimeout(350);
+    const msg = ((await page.locator(".fb-msg").textContent()) ?? "").trim();
+    ok(`feedback: a ${status} says what happened in its own words`, wants.test(msg), JSON.stringify(msg));
+    ok(`feedback: and a ${status} does NOT throw away what the visitor wrote`,
+      (await page.locator(".fb-text").inputValue()) === written,
+      JSON.stringify((await page.locator(".fb-text").inputValue()).slice(0, 60)));
+  }
+  await page.unroute("**/api/feedback");
+
+  // Escape closes and hands the keyboard back, or the form is a trap.
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(250);
+  ok("feedback: Escape closes it and returns the keyboard to the launcher",
+    (await page.locator(".fb-panel").count()) === 0 &&
+    (await page.evaluate(() => document.activeElement?.className || "")).includes("fb-launch"));
+  await ctx.close();
+}
+
 async function checkNarrowViewport(browser, base) {
   // #623. TWO FAILURES THAT ONLY EXIST BELOW 415px, AND EVERY WIDTH THIS SUITE ALREADY VISITS
   // IS ABOVE THEM. checkTapFloor's list is 375, 600, 1024, 1440; the narrowest phone still in
@@ -4518,6 +4601,7 @@ try {
   await checkNoEmDashReachesTheReader(browser, BASE);
 
   await checkDripsTooltip(browser, BASE);
+  await checkFeedbackForm(browser, BASE);
   await checkReserveLinkIsReachable(browser, BASE);
   await checkNarrowViewport(browser, BASE);
   await checkTapFloor(browser, BASE);

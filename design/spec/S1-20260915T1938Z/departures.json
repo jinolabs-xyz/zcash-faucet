@@ -221,5 +221,45 @@
     "kind": "override",
     "why": "`min-width:0`, `flex-wrap:wrap` and a tighter gap (#623). `.seg` spans both header columns, so it INHERITED the overflow above rather than causing it - it was the widest thing past the edge, which is why it reads like the cause and is not. These three are the structural guard that keeps it from becoming one: the nav may now shrink, and if a longer label or a larger font ever makes four tabs genuinely not fit on one row it wraps to two instead of escaping its parent. At the measured widths it still renders as one row, so this changes nothing visible today - it changes what happens when the content grows.",
     "shipped": "grid-area:seg; justify-self:stretch; min-width:0; flex-wrap:wrap; gap:calc(.7*var(--u))"
+  },
+  ".fb": {
+    "kind": "divergence",
+    "shipped": "position:fixed; left:calc(1.2*var(--u)); bottom:calc(1.2*var(--u)); z-index:20; display:flex; flex-direction:column; align-items:flex-start; gap:calc(.6*var(--u)); max-width:min(26rem,calc(100vw - 2.4*var(--u)))",
+    "why": "Owner's item 3, 2026-09-19: the feedback affordance. The frozen snapshot predates the feature entirely, so the design has no rule to transcribe here - the same situation as the claim card's terminal states, which are declared the same way. Built from the sheet's own vocabulary wherever it reaches (the launcher and both controls are .tag, the fields are .prompt, the fine print is .fine); what is new is only the corner placement and the box that opens from it. A debt, not a floor: when the design covers this component these entries should be replaced by a transcription rather than kept. The corner is the owner's placement. The max-width is against the VIEWPORT rather than a fixed panel width so it cannot overhang at 320px, which is the narrowest width ui-smoke drives."
+  },
+  ".fb-panel": {
+    "kind": "divergence",
+    "shipped": "display:flex; flex-direction:column; gap:calc(.8*var(--u)); width:min(26rem,calc(100vw - 2.4*var(--u))); padding:calc(1.1*var(--u)); border:calc(.06*var(--u)) solid var(--hair); border-radius:calc(.8*var(--u)); background:var(--surface); box-shadow:0 calc(.5*var(--u)) calc(1.6*var(--u)) rgba(0,0,0,.18)",
+    "why": "Owner's item 3, 2026-09-19: the feedback affordance. The frozen snapshot predates the feature entirely, so the design has no rule to transcribe here - the same situation as the claim card's terminal states, which are declared the same way. Built from the sheet's own vocabulary wherever it reaches (the launcher and both controls are .tag, the fields are .prompt, the fine print is .fine); what is new is only the corner placement and the box that opens from it. A debt, not a floor: when the design covers this component these entries should be replaced by a transcription rather than kept. Border, radius and surface are the sheet's own tokens; the shadow is the one thing with no token, because nothing else in this design floats over content."
+  },
+  ".fb-text": {
+    "kind": "divergence",
+    "shipped": "resize:vertical; min-height:calc(6*var(--u)); line-height:1.45",
+    "why": "Owner's item 3, 2026-09-19: the feedback affordance. The frozen snapshot predates the feature entirely, so the design has no rule to transcribe here - the same situation as the claim card's terminal states, which are declared the same way. Built from the sheet's own vocabulary wherever it reaches (the launcher and both controls are .tag, the fields are .prompt, the fine print is .fine); what is new is only the corner placement and the box that opens from it. A debt, not a floor: when the design covers this component these entries should be replaced by a transcription rather than kept. The textarea is .prompt plus a height and a vertical-only resize: horizontal resize would let a visitor drag it past the panel."
+  },
+  ".fb-msg": {
+    "kind": "divergence",
+    "shipped": "margin:0; font-size:calc(.85*var(--u)); color:var(--label)",
+    "why": "Owner's item 3, 2026-09-19: the feedback affordance. The frozen snapshot predates the feature entirely, so the design has no rule to transcribe here - the same situation as the claim card's terminal states, which are declared the same way. Built from the sheet's own vocabulary wherever it reaches (the launcher and both controls are .tag, the fields are .prompt, the fine print is .fine); what is new is only the corner placement and the box that opens from it. A debt, not a floor: when the design covers this component these entries should be replaced by a transcription rather than kept. The result line."
+  },
+  ".fb-msg:empty": {
+    "kind": "divergence",
+    "shipped": "display:none",
+    "why": "Owner's item 3, 2026-09-19: the feedback affordance. The frozen snapshot predates the feature entirely, so the design has no rule to transcribe here - the same situation as the claim card's terminal states, which are declared the same way. Built from the sheet's own vocabulary wherever it reaches (the launcher and both controls are .tag, the fields are .prompt, the fine print is .fine); what is new is only the corner placement and the box that opens from it. A debt, not a floor: when the design covers this component these entries should be replaced by a transcription rather than kept. The element is always in the DOM so aria-live has a stable node to announce into; empty, it must take no space. Unmounting it instead is what makes a screen reader miss the confirmation."
+  },
+  ".fb-msg[data-tone=ok]": {
+    "kind": "divergence",
+    "shipped": "color:var(--green)",
+    "why": "Owner's item 3, 2026-09-19: the feedback affordance. The frozen snapshot predates the feature entirely, so the design has no rule to transcribe here - the same situation as the claim card's terminal states, which are declared the same way. Built from the sheet's own vocabulary wherever it reaches (the launcher and both controls are .tag, the fields are .prompt, the fine print is .fine); what is new is only the corner placement and the box that opens from it. A debt, not a floor: when the design covers this component these entries should be replaced by a transcription rather than kept. Tone tokens, the same two the rest of the page uses."
+  },
+  ".fb-msg[data-tone=bad]": {
+    "kind": "divergence",
+    "shipped": "color:var(--bad)",
+    "why": "Owner's item 3, 2026-09-19: the feedback affordance. The frozen snapshot predates the feature entirely, so the design has no rule to transcribe here - the same situation as the claim card's terminal states, which are declared the same way. Built from the sheet's own vocabulary wherever it reaches (the launcher and both controls are .tag, the fields are .prompt, the fine print is .fine); what is new is only the corner placement and the box that opens from it. A debt, not a floor: when the design covers this component these entries should be replaced by a transcription rather than kept. Tone tokens, the same two the rest of the page uses."
+  },
+  "@media (max-width:56rem) | .fb": {
+    "kind": "divergence",
+    "shipped": "position:static; max-width:100%; margin-top:calc(1.2*var(--u))",
+    "why": "Owner's item 3, 2026-09-19: the launcher stops being fixed at the width where the layout starts to scroll. `.stage` is the scroll container (height:100dvh, overflow:auto) and `.comp` is locked to the viewport only at 56rem and up - so above that nothing passes under a fixed corner, and below it everything does. Measured at 390px: it covered the footer brand on /fund, a control on /, and the footer on /terms, at the top of the page and at the end of the scroll alike; ui-smoke's 'nothing pinned covers a control' row caught it on the first run. Reserving space in the document cannot fix it because the document is not what scrolls. Belongs with the other .fb entries."
   }
 }

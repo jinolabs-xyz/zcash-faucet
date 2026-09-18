@@ -602,14 +602,17 @@ export async function farmingSignals(now: number): Promise<FarmingSignals | null
 
 /* ── feedback ─────────────────────────────────────────────────────────── */
 
-/** Longer than this is truncated by nobody: the request is refused and says so. */
-export const MAX_FEEDBACK_BODY = 2000;
-/** A contact string someone chose to give us. Never parsed, never trusted, never required. */
-export const MAX_FEEDBACK_REPLY_TO = 200;
-/** Per fingerprint, per day. Low: this is a feedback form, not a chat. */
-export const FEEDBACK_PER_DAY = 5;
-/** Rows are deleted after this whether or not they were ever delivered. */
-export const FEEDBACK_RETENTION_SECONDS = 30 * 86_400;
+// MOVED, NOT COPIED (the form needs them too). The browser cannot import this module - it would
+// drag better-sqlite3 into the bundle - and a second literal in a .tsx is how two constants that
+// must agree stop agreeing. One definition, re-exported here so every existing importer is
+// untouched.
+export {
+  MAX_FEEDBACK_BODY,
+  MAX_FEEDBACK_REPLY_TO,
+  FEEDBACK_PER_DAY,
+  FEEDBACK_RETENTION_SECONDS,
+} from "../feedbackLimits.ts";
+import { MAX_FEEDBACK_BODY, MAX_FEEDBACK_REPLY_TO, FEEDBACK_PER_DAY, FEEDBACK_RETENTION_SECONDS } from "../feedbackLimits.ts";
 
 export type FeedbackResult =
   | { ok: true }

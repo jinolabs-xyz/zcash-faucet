@@ -350,3 +350,29 @@ html :focus-visible{outline-color:var(--accent-text)}
   .views > .view{min-height:0}
   .views > .view:not(.hero){overflow-y:auto}
 }
+
+/* THE FEEDBACK AFFORDANCE (owner's item 3). The frozen design predates the feature and has no
+ * rule for it, the way it has none for the claim card's terminal states - so these are declared
+ * departures rather than a transcription. Built from the sheet's own vocabulary wherever it
+ * reaches: the launcher and the two controls are `.tag`, the fields are `.prompt`, the fine print
+ * is `.fine`. What is genuinely new is only the corner placement and the box that opens from it.
+ *
+ * BOTTOM-LEFT, FIXED, and it has to stay clear of two things: the page's own footer, which is not
+ * sticky here so it only meets the button at the very bottom of a scroll, and the claim card's
+ * controls at 320px. Hence the max-width against the viewport rather than a fixed panel width. */
+.fb{position:fixed;left:calc(1.2*var(--u));bottom:calc(1.2*var(--u));z-index:20;display:flex;flex-direction:column;align-items:flex-start;gap:calc(.6*var(--u));max-width:min(26rem,calc(100vw - 2.4*var(--u)))}
+.fb-panel{display:flex;flex-direction:column;gap:calc(.8*var(--u));width:min(26rem,calc(100vw - 2.4*var(--u)));padding:calc(1.1*var(--u));border:calc(.06*var(--u)) solid var(--hair);border-radius:calc(.8*var(--u));background:var(--surface);box-shadow:0 calc(.5*var(--u)) calc(1.6*var(--u)) rgba(0,0,0,.18)}
+.fb-text{resize:vertical;min-height:calc(6*var(--u));line-height:1.45}
+.fb-msg:empty{display:none}
+.fb-msg{margin:0;font-size:calc(.85*var(--u));color:var(--label)}
+.fb-msg[data-tone="ok"]{color:var(--green)}
+.fb-msg[data-tone="bad"]{color:var(--bad)}
+
+/* BELOW 56rem THE LAYOUT SCROLLS AND A FIXED CORNER IS A TRAP. `.stage` is the scroll container
+ * (height:100dvh, overflow:auto) and `.comp` is only locked to the viewport at 56rem and up - so
+ * above that nothing passes under the launcher, and below it everything does. Measured at 390px:
+ * the launcher covered the footer brand on /fund, a control on /, and the footer again on /terms,
+ * at the top of the page and at the bottom of the scroll alike. Padding the document cannot fix
+ * that because the document is not what scrolls; the honest fix is to stop being fixed. In the
+ * flow it sits after the footer, scrolls with the page, and can cover nothing. */
+@media (max-width:56rem){.fb{position:static;max-width:100%;margin-top:calc(1.2*var(--u))}}
