@@ -6,7 +6,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readingFor, isActive, type Heartbeat } from "./heartbeat.ts";
+import { readingFor, isActive, publicMinerView, type Heartbeat } from "./heartbeat.ts";
 
 const NOW = Date.parse("2026-07-31T12:00:00Z");
 const ago = (s: number) => new Date(NOW - s * 1000).toISOString();
@@ -29,6 +29,9 @@ const HEALTHY: Heartbeat = {
   nodeLag: 0,
   waitingSince: null,
   waitingReason: null,
+  lastRejectReason: null,
+  abandonedCount: null,
+  lastAbandonedAt: null,
 };
 
 test("TODAY'S OUTAGE: beating every 5s while no template has arrived in 70 minutes", () => {
@@ -208,4 +211,67 @@ test("a wait with NO error count at all is not honoured either, matching the wat
   const { consecutiveErrors: _c, ...noCount } = { ...HEALTHY, lastTemplateAt: ago(3600), waitingSince: ago(1800) };
   void _c;
   assert.equal(readingFor(noCount, NOW).state, "stalled");
+});
+
+test("the operator half is read, and an absent count is NULL rather than zero", () => {
+  const r = readingFor({ ...HEALTHY, lastRejectReason: "stale-parent", abandonedCount: 31, lastAbandonedAt: ago(90) }, NOW);
+  assert.equal(r.operator.lastRejectReason, "stale-parent");
+  assert.equal(r.operator.abandonedCount, 31);
+  assert.equal(r.operator.abandonedAgoSeconds, 90);
+
+  // NULL IS NOT ZERO, and this is the whole reason the field is nullable. A heartbeat
+  // written before #666 has no abandonedCount, and reporting 0 would tell an operator
+  // "this watcher has never dropped a solve" on no evidence - which is precisely the
+  // claim they would read the number for. Same rule as solvedCount, same reason.
+  const { abandonedCount: _a, lastAbandonedAt: _t, lastRejectReason: _r, ...older } = HEALTHY;
+  void _a; void _t; void _r;
+  const o = readingFor(older, NOW);
+  assert.equal(o.operator.abandonedCount, null, "an older writer's silence must not read as zero");
+  assert.equal(o.operator.abandonedAgoSeconds, null);
+  assert.equal(o.operator.lastRejectReason, null);
+});
+
+test("a count of zero is KEPT as zero - the null rule must not swallow a real 0", () => {
+  // The partner to the row above, and the one that would catch `|| null`: a watcher that
+  // has genuinely never abandoned says 0, and 0 is a measurement. Without this row the
+  // nullable-field rule could be implemented as falsy-to-null and nobody would notice.
+  const r = readingFor({ ...HEALTHY, abandonedCount: 0 }, NOW);
+  assert.equal(r.operator.abandonedCount, 0);
+});
+
+test("a non-string reject reason is null, not coerced - the writer is not trusted to be a writer", () => {
+  assert.equal(readingFor({ ...HEALTHY, lastRejectReason: 7 as never }, NOW).operator.lastRejectReason, null);
+  assert.equal(readingFor({ ...HEALTHY, lastRejectReason: "" }, NOW).operator.lastRejectReason, null);
+});
+
+test("an unreadable heartbeat reports the operator half as all-null, never absent", () => {
+  // The shape must be stable whatever the file said, or every operator row has to
+  // re-check that the object exists before reading it.
+  const r = readingFor(null, NOW);
+  assert.equal(r.state, "cannot-verify");
+  assert.deepEqual(r.operator, { lastRejectReason: null, abandonedCount: null, abandonedAgoSeconds: null });
+});
+
+test("the public view drops the operator half - the VALUE, not just the key", () => {
+  // THE ROW THE WIRE-LEVEL CHECK CANNOT BE: api-integration asserts the `operator` KEY is
+  // absent from a token-less body, and it is right to - but that suite runs with no
+  // heartbeat configured, so every operator value there is null. An assertion that has
+  // only ever seen null has not been shown to withhold anything. This one drives a real
+  // reject reason through and asserts the string does not survive serialisation.
+  const r = readingFor({ ...HEALTHY, lastRejectReason: "stale-parent", abandonedCount: 314159, lastAbandonedAt: ago(90) }, NOW);
+  assert.equal(r.operator.lastRejectReason, "stale-parent", "the reading must carry it, or this row proves nothing");
+  assert.equal(r.operator.abandonedCount, 314159);
+
+  const pub = publicMinerView(r);
+  assert.ok(!("operator" in pub), "the key must be absent, not nulled");
+  const wire = JSON.stringify(pub);
+  assert.ok(!wire.includes("stale-parent"), `the reject reason survived into the public view: ${wire}`);
+  assert.ok(!wire.includes("314159"), `the abandoned count survived into the public view: ${wire}`);
+
+  // AND THE PUBLIC HALF IS STILL WHOLE - otherwise "drops the operator half" would be
+  // satisfied by a projection that dropped everything, which is the partner failure.
+  assert.equal(pub.state, r.state);
+  assert.equal(pub.solvedCount, r.solvedCount);
+  assert.equal(pub.beatAgoSeconds, r.beatAgoSeconds);
+  assert.equal(Object.keys(pub).length, Object.keys(r).length - 1, "exactly one key removed");
 });
