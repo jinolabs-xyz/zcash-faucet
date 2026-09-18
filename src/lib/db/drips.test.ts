@@ -47,6 +47,22 @@ async function serveOne(addr: string, nowSec: number, nowMs: number) {
   await finalizeClaim(r.claimId, "sent", `tx-${addr}`, undefined, nowMs);
 }
 
+// FIRST, BEFORE ANYTHING IS SERVED, because this is the only moment the table is empty and
+// the distinction only exists here.
+test("a counter that has counted nothing has no start date, and that is not day zero", async () => {
+  const c = await countDrips(NOW_MS);
+  assert.ok(c, "an empty table still answers");
+  assert.equal(c.allTime, 0, "nothing served is a real zero");
+  // THIS IS THE ROW THAT DISCRIMINATES, and it is worth saying so because the line that used to
+  // sit below it did not. `assert.notEqual(typeof allTime, typeof countingSince)` reads like the
+  // L51 shape - assert a DIFFERENCE rather than match a pattern - but with 0 and null already
+  // pinned above, number-vs-object differ on every possible run. SDE-Infra measured it: restore
+  // the `String(...)` defect, delete the two assertions above, and the file still passes 8/0.
+  // It was a tautology wearing L51's clothes, in the fix for L51.
+  assert.equal(c.countingSince, null,
+    "an empty table has no first day; a '' or an epoch here is a date we invented");
+});
+
 test("a sent claim bumps today's bucket; a failed one does not", async () => {
   await serveOne("addr-a", NOW_SEC, NOW_MS);
   await serveOne("addr-b", NOW_SEC, NOW_MS);
@@ -124,4 +140,26 @@ test("counts survive the claims purge, which is the reason this table exists", a
   const c = await countDrips(NOW_MS);
   assert.ok(c);
   assert.equal(c.allTime, 2 + 10 + 100 + 1000 + 1, "purging claims must not lose counts");
+});
+
+test("the counter says which day it started, and it is not the day you asked on", async () => {
+  const c = await countDrips(NOW_MS);
+  assert.ok(c);
+  // The oldest bucket planted above, 31 days back and outside every window - so this is the
+  // one figure on the surface that reaches past the windows beside it.
+  assert.equal(c.countingSince, day(31 * 86_400_000));
+  assert.notEqual(c.countingSince, day(0),
+    "a start date equal to today would make 'counted since' say nothing at all");
+});
+
+test("the start date is the network's own, not the ledger's earliest row", async () => {
+  // cTAZ's only bucket is today's, planted by the per-network test above; TAZ reaches back 31
+  // days. If MIN(day) ever escapes the `WHERE network = ?` both answers become the same day,
+  // and the cTAZ figure would claim a history that belongs to TAZ.
+  const taz = await countDrips(NOW_MS, "taz");
+  const ctaz = await countDrips(NOW_MS, "ctaz");
+  assert.ok(taz && ctaz);
+  assert.equal(ctaz.countingSince, day(0));
+  assert.notEqual(ctaz.countingSince, taz.countingSince,
+    "two networks with different histories must not report the same start date");
 });

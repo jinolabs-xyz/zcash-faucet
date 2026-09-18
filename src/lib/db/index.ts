@@ -352,6 +352,24 @@ export interface DripCounts {
   last7d: number;
   last30d: number;
   /**
+   * The first UTC day this counter holds, or null if it holds nothing yet.
+   *
+   * `allTime` is the total we can prove, not the total ever served: retention deletes
+   * `claims` rows for privacy, so drips from before this table existed are gone and are not
+   * reconstructable from here. Publishing the sum without its start date lets the figure
+   * claim a period it cannot support - the same defect as an acceptance rate built from two
+   * eras. The date is the difference between "we served this many" and "we have counted this
+   * many since a day we can name".
+   *
+   * IT IS PUBLIC, DELIBERATELY. `api/status/route.ts` returns the whole drips block outside the
+   * ops-token gate, so this lands on `/api/status` for everyone the moment it merges (SDE-Infra
+   * caught me describing this change as rendering nothing - true of the page, not of the API).
+   * A date the counter started is operational transparency, not user data, and it is the half
+   * that makes the total honest. Saying so here because nothing enumerates the keys of that
+   * block, so a field added in this layer reaches the endpoint with no test acknowledging it.
+   */
+  countingSince: string | null;
+  /**
    * The last 30 UTC days, oldest first, one entry per day whether or not anything was
    * served. COUNTS ONLY, and there is nothing here for it to grow into: the table behind
    * it holds (network, day, sent) and no claim row ever reaches it. A day with no drips
@@ -403,7 +421,7 @@ export async function countDrips(nowMs: number, network: DripNetwork = "taz"): P
     const window30 = utcDayWindow(nowMs, 30);
     const today = window30[window30.length - 1];
     const [row, days] = await Promise.all([
-      driver().get<{ allTime: number; last30d: number; last7d: number }>(
+      driver().get<{ allTime: number; last30d: number; last7d: number; countingSince: string | null }>(
         DRIP_TOTALS_SQL,
         // Both windows end on the same day the series does, which is what keeps the
         // chart and the figure beside it in agreement.
@@ -420,6 +438,9 @@ export async function countDrips(nowMs: number, network: DripNetwork = "taz"): P
       allTime: Number(row.allTime),
       last7d: Number(row.last7d),
       last30d: Number(row.last30d),
+      // Not `?? ""` and not `String(row.countingSince)`: a null here means the table is empty,
+      // and "" would render as a date the page could print. Absence stays absence.
+      countingSince: typeof row.countingSince === "string" && row.countingSince ? row.countingSince : null,
       byDay: window30.map((day) => ({ day, sent: sentOn.get(day) ?? 0 })),
     };
   } catch (e) {
