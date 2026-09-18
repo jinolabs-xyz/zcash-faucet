@@ -31,7 +31,12 @@ zc_env() {
   printf 'shm\n'                              > "$T/vol/wallet.db-shm"
   export STUB_VOL_DIR="$T/vol" STUB_ZALLET_RUNNING=true STUB_SQL_OUT="" STUB_RPC_HAS_TX=0
   export STUB_SNAP_KEEP="$T/snap-taken"; rm -rf "$STUB_SNAP_KEEP"
-  unset STUB_TOUCH_DURING_COPY
+  # STUB_RPC_HAS_TXIDS MUST BE CLEARED HERE OR IT OUTLIVES ITS CASE. Every case shares one shell,
+  # so a knob set by one and not reset by zc_env silently rewrites the next one's fixture - and
+  # because TXIDS takes precedence over the global HAS_TX, the leak turns a "zebra still has it"
+  # case into a "zebra has nothing" case and the row fails for a reason that is not the subject.
+  # Measured: two rows went red in the case AFTER mine before this line existed.
+  unset STUB_TOUCH_DURING_COPY STUB_RPC_HAS_TXIDS
   export ZALLET_CONTAINER="zallet-under-test" ZEBRA_CONTAINER="zebra-under-test" ZALLET_VOLUME="fixture-volume"
   # THE DESTRUCTIVE PATH HAS TO BE REACHABLE OR THE SAFETY ROWS PIN NOTHING. The repair copies
   # the volume's real host path before deleting; with that path absent the script dies at the
@@ -95,7 +100,17 @@ fi
 case "$*" in
   *getblockcount*)    echo '{"result":4350000,"error":null}'; exit 0 ;;
   *getrawtransaction*)
-    if [ "${STUB_RPC_HAS_TX:-0}" = "1" ]; then echo '{"result":"deadbeef","error":null}'
+    # PER-TXID WHEN ASKED. STUB_RPC_HAS_TX is one global answer, so a fixture with two candidates
+    # got the same verdict for both - and a row asserting "the VERIFIED-dead id, not the candidate
+    # list" cannot discriminate when the two lists are identical. Measured: a mutant deleting the
+    # candidate list SURVIVED against a one-candidate fixture. STUB_RPC_HAS_TXIDS names the txids
+    # zebra HAS; anything else is not-found. Unset keeps the old global behaviour exactly.
+    if [ -n "${STUB_RPC_HAS_TXIDS:-}" ]; then
+      _hit=0
+      for _t in $STUB_RPC_HAS_TXIDS; do case "$*" in *"$_t"*) _hit=1 ;; esac; done
+      if [ "$_hit" = "1" ]; then echo '{"result":"deadbeef","error":null}'
+      else echo '{"result":null,"error":{"code":-5,"message":"Transaction not found in mempool or best chain"}}'; fi
+    elif [ "${STUB_RPC_HAS_TX:-0}" = "1" ]; then echo '{"result":"deadbeef","error":null}'
     else echo '{"result":null,"error":{"code":-5,"message":"Transaction not found in mempool or best chain"}}'; fi
     exit 0 ;;
   *curl*) echo '{"result":null,"error":null}'; exit 0 ;;
@@ -109,6 +124,15 @@ D
   # the double above; nothing else on PATH is replaced.
   export PATH="$T/bin:$PATH"
 }
+
+# THE DELETE'S ID LIST, READ AS A LIST. SDE-UI reviewing #672: `grep '(7)'` also matches (17), (70)
+# and (7,9), and `! grep '8'` asks whether the CHARACTER 8 appears anywhere on the line - a timestamp,
+# a table name or an id like 18 answers it. Neither is the claim. These pull the parenthesised list
+# out and compare whole elements, so the rows survive a change to the rest of the log line, which is
+# not ours to control. zc_idlist prints nothing when no delete was issued, which is why the callers
+# that need "a delete happened" still pin it separately.
+zc_idlist() { sed -n 's/.*id_tx in (\([^)]*\)).*/\1/p' "$STUB_LOG"; }
+zc_ids_have() { local L; L=",$(zc_idlist),"; [ "${L#*,$1,}" != "$L" ]; }
 
 zc_run() { # $1=script, rest=args. Captures stdout+stderr, returns the exit code in RC.
   local sc="$1"; shift
@@ -211,6 +235,95 @@ export STUB_ZALLET_RUNNING=false STUB_SQL_OUT="7:AABBCC" STUB_RPC_HAS_TX=0
 zc_run "$DROPQ"
 check "drop-queue resolves the same default, since the watchdog runs it on the same box" \
   "grep -q '/var/lib/docker/volumes/z3-testnet-zallet/_data/wallet.db' '$T/last.out'"
+
+echo "== zallet cleanup: the DELETE itself - what it issues, and in what order"
+# THE DESTRUCTIVE PATH HAD NEVER BEEN EXECUTED BY A TEST until the volume path became injectable,
+# so nothing has ever checked what it actually issues. The only existing row about the delete is a
+# NEGATIVE one - that --read-only does not run it. The owner is being asked to authorise this
+# against 138 transactions whose deletion cascades into seven tables; "it has never been run by a
+# test" is not a sentence that should be true of that code.
+zc_env
+export STUB_ZALLET_RUNNING=false STUB_SQL_OUT="7:AABBCC" STUB_RPC_HAS_TX=0
+zc_run "$ABANDON"
+check "the repair reached the delete at all, so the rows below are not reporting on a run that stopped early" \
+  "grep -qi 'delete from transactions' '$STUB_LOG'"
+# THE CASCADE IS THE WHOLE POINT AND IT IS OFF BY DEFAULT. sqlite does not honour a declared
+# ON DELETE CASCADE unless foreign_keys is ON, and the pragma is PER CONNECTION - so it has to
+# travel in the SAME sqlite3 invocation as the delete. Split them across two calls and the delete
+# still succeeds, silently leaving notes whose transaction is gone: the wallet then reads a note
+# it can never spend. The file's own comment says this; nothing held it.
+# THE DOWNSTREAM grep HAS NO -q ON PURPOSE, and it is not style. run-tests.sh sets pipefail and
+# check() evals in this shell, so `grep A | grep -q B` can exit 141: -q closes the pipe on the first
+# match and the upstream grep takes SIGPIPE. On a positive row that is a red row on a good match; on
+# the NEGATIVE row below it inverts to a PASS, so a delete that really did name 8 would report green.
+# Without -q the downstream grep drains its input and there is no signal to misread. (SDE-App)
+check "and foreign_keys=ON rides in the SAME invocation, or the cascade silently does not fire" \
+  "grep -i 'delete from transactions' '$STUB_LOG' | grep -i 'foreign_keys=ON' >/dev/null"
+# CANDIDATES ARE NOT THE DEAD LIST. Every candidate is checked against live zebra one at a time and
+# only the ones zebra cannot serve are deleted. A delete built from the CANDIDATE list rather than
+# the verified one would abandon transactions the chain still has, which is the opposite of safe.
+check "and it deletes the VERIFIED-dead id, and that list exactly" \
+  "[ \"$(zc_idlist)\" = '7' ]"
+check "and a backup was written for this run" \
+  "ls '$T/vol'/wallet.db.bak-abandon-* >/dev/null 2>&1"
+check "and it asks sqlite to check its own work afterwards, rather than assuming" \
+  "grep -qi 'integrity_check' '$STUB_LOG' && grep -qi 'foreign_key_check' '$STUB_LOG'"
+
+echo "== zallet cleanup: TWO candidates, one alive - only the dead one is deleted"
+# THE ROW ABOVE CANNOT TELL THE TWO LISTS APART ON A ONE-CANDIDATE FIXTURE, and I found that by
+# mutating rather than by reading: a delete built from CANDIDATES instead of the zebra-verified
+# DEAD_IDS survived, because with one candidate that zebra does not have, the two lists are the
+# same list. Discriminating needs a fixture where they DIFFER.
+# Two candidates, zebra still has the second. The verified list is a strict subset, and a tool
+# that deletes what it was given rather than what it checked names both.
+zc_env
+export STUB_ZALLET_RUNNING=false STUB_SQL_OUT="7:AABBCC 8:DDEEFF" STUB_RPC_HAS_TXIDS="ddeeff"
+zc_run "$ABANDON"
+check "the run reached a delete, so the two rows below are not reporting on an early exit" \
+  "grep -qi 'delete from transactions' '$STUB_LOG'"
+check "the dead candidate IS deleted, as a whole id and not a substring" \
+  "zc_ids_have 7"
+check "and the one zebra still has is NOT in the delete, which is the whole of the verification step" \
+  "! zc_ids_have 8"
+check "and the journal says which way each went" \
+  "grep -q 'gone from the chain' '$T/last.out' && grep -q 'zebra still has it' '$T/last.out'"
+
+echo "== zallet cleanup: a backup that CANNOT be written stops the run before any delete"
+# THE ORDERING PROPERTY, TESTED WHERE IT IS OBSERVABLE. My first attempt at this asserted that a
+# delete line existed AND a backup file existed, and called itself "the backup is written before
+# the delete" - which it did not hold: the backup is a host cp and never reaches the stub log, so
+# there is no order to read there. Both-happened is not before.
+# What matters is not the order on a good run, it is that a FAILED backup prevents the delete.
+# That is observable: make the directory unwritable and the cp fails under set -e.
+zc_env
+export STUB_ZALLET_RUNNING=false STUB_SQL_OUT="7:AABBCC" STUB_RPC_HAS_TX=0
+chmod 500 "$T/vol"
+zc_run "$ABANDON"
+chmod 700 "$T/vol"
+check "a backup that cannot be written aborts, non-zero" "[ $RC -ne 0 ]"
+# AND WHERE IT DIED, WHICH THE RC ALONE DOES NOT SAY. SDE-UI reviewing #672: every other failure
+# satisfies `RC -ne 0` too - a fixture that never built, a stub that never started - and then "no
+# delete was issued" is true of a run that never got near one. This is the same anti-vacuity pin
+# used elsewhere in the suite, missing from the one case whose expected outcome is itself "it
+# stopped", which is exactly where a green negative looks identical either way. cp names the backup
+# it could not create, so the attempt is observable even though it failed.
+check "and it died AT the backup, not before it" \
+  "grep -q 'wallet.db.bak-abandon-' '$T/last.out'"
+check "and NO delete was issued, because an unrecoverable repair is worse than none" \
+  "! grep -qi 'delete from transactions' '$STUB_LOG'"
+
+echo "== zallet cleanup: nothing zebra can still serve is deleted"
+# THE PARTNER. Every row above is satisfied by a tool that deletes whatever it is given. This is
+# the other direction: zebra HAS the transaction, so it is not dead, and no delete may be issued
+# at all. Without this the verification step could be removed entirely and the block above would
+# still be green.
+zc_env
+export STUB_ZALLET_RUNNING=false STUB_SQL_OUT="7:AABBCC" STUB_RPC_HAS_TX=1
+zc_run "$ABANDON"
+check "a candidate zebra still has is left alone, and no delete is issued" \
+  "! grep -qi 'delete from transactions' '$STUB_LOG'"
+check "and it says so rather than exiting silently" \
+  "grep -q 'still fetchable' '$T/last.out'"
 
 echo "== zallet cleanup: a wallet with NO -wal still backs up, rather than refusing"
 # The ordinary case after a clean stop. Refusing here would turn a safety check into an outage,
