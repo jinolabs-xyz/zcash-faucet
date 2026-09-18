@@ -134,6 +134,34 @@ MINER_STALL_SECS="${WATCHDOG_MINER_STALL_SECS:-300}"          # alive but no tem
 MINER_HEARTBEAT_FRESH_SECS="${WATCHDOG_MINER_HEARTBEAT_FRESH_SECS:-60}" # older writtenAt = process itself down (Restart=always' job, not ours)
 MINER_START_GRACE_SECS="${WATCHDOG_MINER_START_GRACE_SECS:-120}"  # just (re)started: give it time to fetch its first template
 MINER_HEAL_MAX="${WATCHDOG_MINER_HEAL_MAX:-3}"               # then page instead of restart-looping the miner
+# THE OUTCOME RUNG (#660). Every other miner check asks whether it is ALIVE or KEEPING UP. None
+# asks whether it is ACCOMPLISHING anything, which is how a miner that templated every few seconds
+# and completed nothing for hours read as healthy on four instruments at once.
+MINER_OUTCOME_ENABLED="${WATCHDOG_MINER_OUTCOME_ENABLED:-1}"
+# The expected spacing between blocks, which is also the expected spacing between abandons: the
+# miner abandons its attempt when the tip moves, so ONE abandon per block is the mechanism working.
+MINER_BLOCK_SECS="${WATCHDOG_MINER_BLOCK_SECS:-75}"
+# Abandons per block-interval before the RATE is anomalous rather than unlucky. Healthy is ~1.
+# Five is far from healthy and far below what a wedged miner produces, so the gap does the work
+# rather than the precision of the number.
+MINER_ABANDON_PER_BLOCK="${WATCHDOG_MINER_ABANDON_PER_BLOCK:-5}"
+# HOURS, NOT MINUTES, and this is the number that decides whether the rung cries wolf. Solves run
+# about twice a day, so silence is ORDINARY: against a Poisson mean of 2/day a quiet 12 hours is
+# ~37% likely and a quiet 24 hours ~13%. A rung that fired on silence alone would be wrong most
+# weeks and would be switched off, which is worse than not having it.
+MINER_NO_SOLVE_SECS="${WATCHDOG_MINER_NO_SOLVE_SECS:-21600}"
+# THE RATE IS MEASURED OVER A WINDOW rather than divided by uptime, so this is how long a window
+# has to be before it is worth dividing by. abandonedCount is a LIFETIME counter - heartbeat.rs
+# resume() restores it across restarts - so uptime is the wrong denominator for it.
+MINER_RATE_WINDOW_SECS="${WATCHDOG_MINER_RATE_WINDOW_SECS:-600}"
+MINER_OUTCOME_KEY="miner-completing-nothing"
+# TWO NUMERIC KEYS, NOT ONE COMPOUND VALUE. flap_get is a COUNT store by contract: its value
+# feeds $(( )), so it sanitises anything that is not all digits to 0. A baseline written as
+# "6190:900" reads back as 0 the moment it crosses a process boundary, which made the very
+# first sweep compute the whole lifetime total over the whole clock and page instantly. Kept
+# numeric so the helper's hardening still applies.
+MINER_ABANDON_N_KEY="miner-abandon-count"
+MINER_ABANDON_T_KEY="miner-abandon-at"
 # Step 7 stops the miner while it heals the node. A node being rewound ~100 blocks with a
 # miner still submitting on top of the old tip is how the 2026-09-07 fork kept growing.
 # The miner has its own sync guard (MINER_MAX_LAG); this is the layer that acts before
@@ -510,6 +538,89 @@ ts_age() {
 # that just (re)started and has not had time to fetch its first template. Capped, so a
 # stall it cannot fix (zebra genuinely down, RPC endpoint moved) pages a human instead of
 # restart-looping the miner forever.
+# THE MINER IS ALIVE AND COMPLETING NOTHING (#660). It NAMES the state and never heals it.
+#
+# WHY THE ABANDON RATE AND NOT SILENCE ALONE. "No solve in N" is a weak detector by itself because
+# solves are rare and irregular - see MINER_NO_SOLVE_SECS. The abandon count is the half that does
+# not depend on luck: the miner abandons an attempt when the tip moves under it, so a healthy miner
+# abandons about once per block. A rate several times that means it is starting and discarding work
+# continuously, which is true whatever the cause and whether or not a solve happened to land.
+# BOTH must hold. A high rate with solves still landing is not "completing nothing", and silence
+# with a normal rate is just a quiet afternoon.
+#
+# WHAT IT DELIBERATELY DOES NOT SAY: why. The cause is outside this file - it could be the node, the
+# network, or the miner - and an alert that guesses sends the reader to the wrong place with
+# confidence. It prints the two numbers that make the state legible and stops there.
+# AND IT NAMES NO COMPONENT AT ALL, not even as a place to look. My first draft ended "read the
+# miner journal and the node's tip" - a pointer rather than a guess, and the row below still caught
+# it, because a reader who sees "node" in a page about the miner has been pointed whether or not a
+# claim was made. The numbers are the message; where to look is the reader's to decide.
+miner_completing_nothing() {
+  [ "$MINER_OUTCOME_ENABLED" = "1" ] || return 0
+  [ -f "$MINER_HEARTBEAT" ] || return 0
+  # A miner step 7 stopped for a node heal is not completing anything BY DESIGN.
+  [ "$(flap_get "$MINER_STOP_KEY")" != "1" ] || return 0
+
+  local written_age started_age quiet abandons per_block solved_at
+  written_age="$(ts_age "$(hb_field writtenAt)")"
+  # No parseable or stale heartbeat: the process itself is the question, and step 6 owns that.
+  [ -n "$written_age" ] && [ "$written_age" -le "$MINER_HEARTBEAT_FRESH_SECS" ] || return 0
+  # A miner that is not submitting is not expected to complete anything.
+  [ "$(hb_field mode)" = "submit" ] || return 0
+
+  started_age="$(ts_age "$(hb_field startedAt)")"
+  # Cannot claim "nothing in six hours" about a process that has not been up for six hours.
+  [ -n "$started_age" ] && [ "$started_age" -ge "$MINER_NO_SOLVE_SECS" ] || return 0
+
+  # NULL IS NOT ZERO. A heartbeat written before #666 carries no abandonedCount, and reading its
+  # absence as 0 would say "this miner has never abandoned an attempt" on no evidence at all.
+  abandons="$(hb_num abandonedCount)"
+  [ -n "$abandons" ] || return 0
+
+  # Never solved since start is the strongest case of "no solve", not a missing measurement: the
+  # duration that matters is then the whole uptime.
+  solved_at="$(ts_age "$(hb_field lastSolvedAt)")"
+  quiet="${solved_at:-$started_age}"
+
+  # THE RATE IS A DELTA, NOT A LIFETIME TOTAL OVER AN UPTIME. abandonedCount is restored across
+  # restarts by heartbeat.rs resume(), so it counts since the miner first ran, while startedAt is
+  # THIS process. Dividing one by the other mixes two scopes and reports a rate the miner never ran
+  # at - after a restart it would be enormous and this rung would page a healthy miner. That is L49
+  # in my own code, and a surviving mutant is what found it: the arm that removed the uptime guard
+  # changed nothing, because the guard was standing in for an arithmetic that was wrong underneath.
+  # Measured against the PREVIOUS reading instead, which is the only form that means "right now".
+  local now_s base_n base_t win
+  now_s="$(wd_now)"
+  base_n="$(flap_get "$MINER_ABANDON_N_KEY")"
+  base_t="$(flap_get "$MINER_ABANDON_T_KEY")"
+  # A timestamp of 0 is the helper's "nothing stored" answer, and it is never a real reading: wd_now
+  # is an epoch on the box. So 0 means no baseline. A counter that went BACKWARDS is a miner that
+  # started without resuming, which is a new baseline rather than a negative rate.
+  if [ "$base_t" = "0" ] || [ "$abandons" -lt "$base_n" ]; then
+    flap_set "$MINER_ABANDON_N_KEY" "$abandons"; flap_set "$MINER_ABANDON_T_KEY" "$now_s"
+    return 0
+  fi
+  win=$(( now_s - base_t ))
+  # Too short a window to divide by. KEEP the baseline rather than refreshing it, or a short sweep
+  # interval would reset the window for ever and the rung would never measure anything.
+  [ "$win" -ge "$MINER_RATE_WINDOW_SECS" ] || return 0
+  # Integer arithmetic on purpose - this is a threshold, not a statistic.
+  per_block=$(( (abandons - base_n) * MINER_BLOCK_SECS / win ))
+  flap_set "$MINER_ABANDON_N_KEY" "$abandons"; flap_set "$MINER_ABANDON_T_KEY" "$now_s"
+
+  if [ "$quiet" -ge "$MINER_NO_SOLVE_SECS" ] && [ "$per_block" -ge "$MINER_ABANDON_PER_BLOCK" ]; then
+    # A STATE, said once, like every other state line here - not an event repeated every sweep.
+    if [ "$(flap_get "$MINER_OUTCOME_KEY")" != "1" ]; then
+      danger "miner is running and completing nothing. No block solved in $((quiet / 3600))h, and $abandons abandoned attempts since it started $((started_age / 3600))h ago - about $per_block per block where one is normal. It is templating and erroring nothing, so nothing here restarts it and this needs a person."
+      flap_set "$MINER_OUTCOME_KEY" 1
+    fi
+  elif [ "$(flap_get "$MINER_OUTCOME_KEY")" = "1" ]; then
+    # Cleared by a SOLVE or by the rate coming back, so a second episode pages again.
+    fixed "miner is completing work again (last solve $((quiet / 60))m ago, $per_block abandons per block)."
+    flap_set "$MINER_OUTCOME_KEY" 0
+  fi
+}
+
 heal_miner_if_stalled() {
   [ "$MINER_HEAL_ENABLED" = "1" ] || return 0
   # A miner step 7 stopped for a node heal is not stalled, it is stopped. Its last
@@ -1653,6 +1764,12 @@ while true; do
       fi
     fi
   fi
+
+  # 6b: THE MINER IS ALIVE, TEMPLATING, AND COMPLETING NOTHING. Separate from step 6 on purpose:
+  # that rung heals, this one only says. A restart cannot fix a miner whose work is being invalidated
+  # from outside, and an auto-healer thrashing it every few minutes would bury the signal under its
+  # own noise.
+  miner_completing_nothing
 
   # 6: miner stall recovery. Independent of the faucet's readiness - the miner funds the
   # reserve but a stalled miner does not gate drips, so this runs every sweep on its own
