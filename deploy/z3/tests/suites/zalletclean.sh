@@ -125,6 +125,15 @@ D
   export PATH="$T/bin:$PATH"
 }
 
+# THE DELETE'S ID LIST, READ AS A LIST. SDE-UI reviewing #672: `grep '(7)'` also matches (17), (70)
+# and (7,9), and `! grep '8'` asks whether the CHARACTER 8 appears anywhere on the line - a timestamp,
+# a table name or an id like 18 answers it. Neither is the claim. These pull the parenthesised list
+# out and compare whole elements, so the rows survive a change to the rest of the log line, which is
+# not ours to control. zc_idlist prints nothing when no delete was issued, which is why the callers
+# that need "a delete happened" still pin it separately.
+zc_idlist() { sed -n 's/.*id_tx in (\([^)]*\)).*/\1/p' "$STUB_LOG"; }
+zc_ids_have() { local L; L=",$(zc_idlist),"; [ "${L#*,$1,}" != "$L" ]; }
+
 zc_run() { # $1=script, rest=args. Captures stdout+stderr, returns the exit code in RC.
   local sc="$1"; shift
   set +e
@@ -253,8 +262,8 @@ check "and foreign_keys=ON rides in the SAME invocation, or the cascade silently
 # CANDIDATES ARE NOT THE DEAD LIST. Every candidate is checked against live zebra one at a time and
 # only the ones zebra cannot serve are deleted. A delete built from the CANDIDATE list rather than
 # the verified one would abandon transactions the chain still has, which is the opposite of safe.
-check "and it deletes the VERIFIED-dead id" \
-  "grep -i 'delete from transactions' '$STUB_LOG' | grep 'id_tx in (7)' >/dev/null"
+check "and it deletes the VERIFIED-dead id, and that list exactly" \
+  "[ \"$(zc_idlist)\" = '7' ]"
 check "and a backup was written for this run" \
   "ls '$T/vol'/wallet.db.bak-abandon-* >/dev/null 2>&1"
 check "and it asks sqlite to check its own work afterwards, rather than assuming" \
@@ -272,10 +281,10 @@ export STUB_ZALLET_RUNNING=false STUB_SQL_OUT="7:AABBCC 8:DDEEFF" STUB_RPC_HAS_T
 zc_run "$ABANDON"
 check "the run reached a delete, so the two rows below are not reporting on an early exit" \
   "grep -qi 'delete from transactions' '$STUB_LOG'"
-check "the dead candidate IS deleted" \
-  "grep -i 'delete from transactions' '$STUB_LOG' | grep '(7)' >/dev/null"
+check "the dead candidate IS deleted, as a whole id and not a substring" \
+  "zc_ids_have 7"
 check "and the one zebra still has is NOT in the delete, which is the whole of the verification step" \
-  "! grep -i 'delete from transactions' '$STUB_LOG' | grep '8' >/dev/null"
+  "! zc_ids_have 8"
 check "and the journal says which way each went" \
   "grep -q 'gone from the chain' '$T/last.out' && grep -q 'zebra still has it' '$T/last.out'"
 
@@ -292,6 +301,14 @@ chmod 500 "$T/vol"
 zc_run "$ABANDON"
 chmod 700 "$T/vol"
 check "a backup that cannot be written aborts, non-zero" "[ $RC -ne 0 ]"
+# AND WHERE IT DIED, WHICH THE RC ALONE DOES NOT SAY. SDE-UI reviewing #672: every other failure
+# satisfies `RC -ne 0` too - a fixture that never built, a stub that never started - and then "no
+# delete was issued" is true of a run that never got near one. This is the same anti-vacuity pin
+# used elsewhere in the suite, missing from the one case whose expected outcome is itself "it
+# stopped", which is exactly where a green negative looks identical either way. cp names the backup
+# it could not create, so the attempt is observable even though it failed.
+check "and it died AT the backup, not before it" \
+  "grep -q 'wallet.db.bak-abandon-' '$T/last.out'"
 check "and NO delete was issued, because an unrecoverable repair is worse than none" \
   "! grep -qi 'delete from transactions' '$STUB_LOG'"
 
