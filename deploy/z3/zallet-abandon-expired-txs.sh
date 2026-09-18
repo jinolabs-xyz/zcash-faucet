@@ -208,6 +208,11 @@ fi
 # harness runs as a normal user on purpose (see run-tests.sh), and so the backup and the delete
 # have NEVER been reached by a test - the suite's fixture claims to stand this path up and
 # silently cannot. A guard nothing can execute is a guard nobody has checked.
+# AND THE STOP IS LOAD-BEARING FOR THE COPY, not only for sqlite's sake. The db is copied before
+# its sidecars, so against a LIVE wallet those two reads can straddle a checkpoint and the backup
+# would be a torn pair - the same hazard the snapshot path detects and refuses. It cannot happen
+# here because this path aborts while the container is running, which is why that abort is a
+# safety property and not a convenience.
 VOL_DATA="${ZALLET_VOL_DATA:-/var/lib/docker/volumes/${VOLUME}/_data}"
 BAK="$VOL_DATA/wallet.db.bak-abandon-$(date +%s)"
 cp -f "$VOL_DATA/wallet.db" "$BAK"
@@ -219,7 +224,24 @@ for SIDE in -wal -shm; do
     exit 1
   }
 done
-echo "backup: $BAK$(ls "$BAK"-wal "$BAK"-shm 2>/dev/null | sed 's|.*/||;s|^|  +|' | tr -d '\n')"
+echo "backup: $BAK"
+for SIDE in -wal -shm; do
+  [ -e "$BAK$SIDE" ] && echo "        $BAK$SIDE"
+done
+# THE WAY BACK, PRINTED BESIDE THE BACKUP RATHER THAN LEFT TO 3AM (SDE-App, review of the sidecar
+# fix). After this the MATERIALS for an undo are complete and the PROCEDURE still is not: nothing
+# in any runbook mentions these files, so the restore is whatever the operator invents - and the
+# obvious one is wrong in exactly the way this file warns about. Copy the db back, leave the LIVE
+# -wal in place, and sqlite replays a stale sidecar against a restored database: "disk I/O error".
+# This repo has eaten that once. The rm of the LIVE sidecars is the step nobody thinks of and the
+# one that turns a good backup into a working restore.
+echo "to undo: docker stop $ZALLET_CONTAINER"
+echo "         rm -f $VOL_DATA/wallet.db-wal $VOL_DATA/wallet.db-shm   # the LIVE ones, or a stale -wal replays over the restored db"
+echo "         cp -f $BAK $VOL_DATA/wallet.db"
+for SIDE in -wal -shm; do
+  [ -e "$BAK$SIDE" ] && echo "         cp -f $BAK$SIDE $VOL_DATA/wallet.db$SIDE"
+done
+echo "         docker start $ZALLET_CONTAINER"
 
 BEFORE="$(sq "$COUNTS_Q" | tr '|' ' ')"
 # shellcheck disable=SC2086  # deliberate split into label's positional args

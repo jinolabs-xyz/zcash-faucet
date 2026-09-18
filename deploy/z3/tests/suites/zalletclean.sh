@@ -160,6 +160,33 @@ zc_run "$DROPQ"
 check "drop-queue backs up the same way, since the watchdog runs it on the same path" \
   "ls '$T/vol'/wallet.db.bak-queuefix-*-wal >/dev/null 2>&1"
 
+echo "== zallet cleanup: the way BACK is printed, and it removes the LIVE sidecars first"
+# SDE-App's finding on the sidecar fix, and it is the same defect one layer out: after that change
+# the MATERIALS for an undo are complete and the PROCEDURE is not. Nothing in any runbook mentions
+# bak-abandon or bak-queuefix, so the restore is whatever an operator invents at 3am - and the
+# obvious one is wrong in exactly the way this file warns about: copy the db back, leave the LIVE
+# -wal, and sqlite replays a stale sidecar against a restored database. "disk I/O error". Eaten once
+# already.
+# THIS IS A TEXT ASSERTION AND THAT IS THE RIGHT KIND: the artefact under test IS the printed
+# instruction. What it must not do is print a restore that omits the step nobody thinks of.
+zc_env
+export STUB_ZALLET_RUNNING=false STUB_SQL_OUT="7:AABBCC" STUB_RPC_HAS_TX=0
+zc_run "$ABANDON"
+check "the repair reached the backup, so the rows below are not reading an early exit" \
+  "grep -q 'backup:' '$T/last.out'"
+check "and it prints a way back at all" "grep -q 'to undo:' '$T/last.out'"
+check "and the LIVE -wal and -shm are removed BEFORE the database is copied back" \
+  "awk '/to undo:/{u=1} u&&/rm -f .*wallet[.]db-wal/&&!r{r=NR} u&&/cp -f .*wallet[.]db/&&!/wallet[.]db-/&&!c{c=NR} END{exit !(r&&c&&r<c)}' '$T/last.out'"
+check "and it names the LIVE sidecars, not the backup's copies, for the removal" \
+  "grep -q \"rm -f $T/vol/wallet.db-wal $T/vol/wallet.db-shm\" '$T/last.out'"
+check "and the backup's own sidecars are copied back too, or the restore is the bug again" \
+  "grep -q 'cp -f .*wallet.db.bak-abandon-.*-wal' '$T/last.out'"
+zc_env
+export STUB_ZALLET_RUNNING=false STUB_SQL_OUT="7:AABBCC" STUB_RPC_HAS_TX=0
+zc_run "$DROPQ"
+check "drop-queue prints the same way back, since the watchdog runs it on the same path" \
+  "grep -q 'to undo:' '$T/last.out' && grep -q 'rm -f .*wallet.db-wal' '$T/last.out'"
+
 echo "== zallet cleanup: a wallet with NO -wal still backs up, rather than refusing"
 # The ordinary case after a clean stop. Refusing here would turn a safety check into an outage,
 # which is the failure mode the --read-only work was done to remove.
