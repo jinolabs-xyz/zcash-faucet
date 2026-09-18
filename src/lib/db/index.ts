@@ -360,6 +360,13 @@ export interface DripCounts {
    * claim a period it cannot support - the same defect as an acceptance rate built from two
    * eras. The date is the difference between "we served this many" and "we have counted this
    * many since a day we can name".
+   *
+   * IT IS PUBLIC, DELIBERATELY. `api/status/route.ts` returns the whole drips block outside the
+   * ops-token gate, so this lands on `/api/status` for everyone the moment it merges (SDE-Infra
+   * caught me describing this change as rendering nothing - true of the page, not of the API).
+   * A date the counter started is operational transparency, not user data, and it is the half
+   * that makes the total honest. Saying so here because nothing enumerates the keys of that
+   * block, so a field added in this layer reaches the endpoint with no test acknowledging it.
    */
   countingSince: string | null;
   /**

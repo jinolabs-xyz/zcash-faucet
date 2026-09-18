@@ -53,12 +53,14 @@ test("a counter that has counted nothing has no start date, and that is not day 
   const c = await countDrips(NOW_MS);
   assert.ok(c, "an empty table still answers");
   assert.equal(c.allTime, 0, "nothing served is a real zero");
+  // THIS IS THE ROW THAT DISCRIMINATES, and it is worth saying so because the line that used to
+  // sit below it did not. `assert.notEqual(typeof allTime, typeof countingSince)` reads like the
+  // L51 shape - assert a DIFFERENCE rather than match a pattern - but with 0 and null already
+  // pinned above, number-vs-object differ on every possible run. SDE-Infra measured it: restore
+  // the `String(...)` defect, delete the two assertions above, and the file still passes 8/0.
+  // It was a tautology wearing L51's clothes, in the fix for L51.
   assert.equal(c.countingSince, null,
     "an empty table has no first day; a '' or an epoch here is a date we invented");
-  // The two halves are different KINDS of answer and the page renders them differently:
-  // 0 is a measurement, null is the absence of one. Asserting they differ rather than
-  // matching each against a pattern both satisfy (L51).
-  assert.notEqual(typeof c.allTime, typeof c.countingSince);
 });
 
 test("a sent claim bumps today's bucket; a failed one does not", async () => {
