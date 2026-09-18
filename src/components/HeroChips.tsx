@@ -10,10 +10,14 @@
  * the code was there the whole time. Gating the chips the same way would ship that defect again
  * in new markup.
  *
- * So the chips render unconditionally: the labels, the dots and the words, with `unknown` where
- * a figure is not known yet. That is what the preview does (its chips are in the HTML with
- * placeholder numbers and its script fills them) and it is the CHECKING badge's rule from S5 -
- * say what you have established, and say you have not established it when you have not.
+ * So the chips render unconditionally: the labels, the dots and the words. WHAT CHANGED on
+ * 2026-09-19 is what sits where a figure is not known yet: it used to be the word `unknown`, and
+ * the owner asked for that word to be off the page everywhere. It is now NOTHING - the chip keeps
+ * its label and its dot and simply carries no number until one arrives.
+ * The two halves of this are separate and only one of them moved. "Do not print the word" is
+ * about vocabulary; "the chip is in the served HTML" is about whether the page says anything at
+ * all before a script runs. Gating the chip on the figure satisfies the first by breaking the
+ * second, which is the mistake this header exists to prevent and which it did prevent.
  *
  * THE WORDS AND TONES COME FROM `statusView.ts`, NOT FROM A SECOND DERIVATION. The status view
  * already computes every one of these, and two derivations of "what word describes the faucet
@@ -82,31 +86,31 @@ export function HeroChips({
   return (
     <>
       <div className="chips" id="chips" aria-label="Faucet status">
-        {/* A CHIP GOES WITH ITS FIGURE (owner, 2026-09-19). "wallet unknown" in a coloured pill
-            is a status claim about a status we do not have, and a row of them is how the hero
-            looked whenever a poll failed. No figure, no chip. */}
-        {status?.balanceTaz != null && (
+        {/* THE FIGURE GOES, THE CHIP STAYS - and my first attempt had it the other way round,
+            which SDE-Infra caught before it shipped. Gating the CHIP on a figure reintroduces the
+            defect this file's header is about: `status` is null on the server, so a chip gated on
+            it is not "absent when unknown", it is absent from the served HTML ALWAYS, on every
+            first paint. That is the puzzle-sentence bug the owner personally found missing from
+            prod, in new markup.
+            The owner's rule is about a WORD, not about whether the page works without a script.
+            A chip carrying its label and its dot with no figure satisfies the first and leaves
+            the second alone. */}
         <Chip name="wallet" tone={reserveTone(status?.reserve)} onOpen={() => onView("status")}>
-          wallet <b>{`${groupDigits(Math.round(status.balanceTaz))} TAZ`}</b>
+          wallet {status?.balanceTaz != null && <b>{`${groupDigits(Math.round(status.balanceTaz))} TAZ`}</b>}
         </Chip>
-        )}
-        {node?.nodeHeight != null && (
         <Chip name="node" tone={nodeChipTone(node?.ready)} onOpen={() => onView("status")}>
-          node <b>{groupDigits(node.nodeHeight)}</b>
+          node {node?.nodeHeight != null && <b>{groupDigits(node.nodeHeight)}</b>}
           {/* The second figure is the delta, and it is absent rather than "(unknown)" when we
               have nothing to compare against - the design shows a parenthetical only when there
               is one. */}
           {diff == null ? null : <b>{heightDiffChip(diff)}</b>}
         </Chip>
-        )}
-        {/* Same rule, and this one is the pre-first-poll case: with no status at all the chip
-            used to render "miner unknown". The WORD the miner gets once status arrives is
-            minerLabel's business, not this file's - SDE-UI is changing it separately. */}
-        {status && (
-        <Chip name="miner" tone={minerTone(status.miner, unit)} onOpen={() => onView("status")}>
-          miner <b>{minerWord(status.miner, unit)}</b>
+        {/* The WORD the miner gets once status arrives is minerLabel's business, not this
+            file's - SDE-UI is changing it separately. Here the chip is present either way and
+            only the word waits. */}
+        <Chip name="miner" tone={status ? minerTone(status.miner, unit) : "unknown"} onOpen={() => onView("status")}>
+          miner {status && <b>{minerWord(status.miner, unit)}</b>}
         </Chip>
-        )}
         {/* THE SENDS CHIP IS GONE with its card. Its verdict needs three completed sends inside
             fifteen minutes and prod serves about one drip every two hours, so it read "unknown"
             permanently. The gate itself is untouched: a degraded wallet still stops claims and
