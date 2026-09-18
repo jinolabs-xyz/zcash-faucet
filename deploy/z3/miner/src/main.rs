@@ -409,6 +409,12 @@ fn mine_once(rpc: &Rpc, config: &Config, hb: &Arc<Mutex<heartbeat::State>>) -> R
     match sync_guard(rpc, config, hb) {
         Ok(None) => {}
         Ok(Some(why)) => {
+            // COUNTED (#601 follow-up). A solved block ends accepted, rejected or DISCARDED, and
+            // only the first two were counted - so solvedCount included blocks neither submitted
+            // counter saw and the remainder was unattributable.
+            if let Ok(mut g) = hb.lock() {
+                g.discarded();
+            }
             log(&format!(
                 "height {}: solved block DISCARDED, the node moved under us before submit: {why}",
                 t.height
@@ -420,6 +426,12 @@ fn mine_once(rpc: &Rpc, config: &Config, hb: &Arc<Mutex<heartbeat::State>>) -> R
             // after it was fine is more likely a blip than a fork, and this is the one
             // place a won block is lost, so the journal must record the loss, not just
             // "error".
+            // THE SECOND EXIT, and it is a different one: this returns Err rather than Waiting.
+            // A count that only covered the tidy exit would under-report exactly when the node is
+            // misbehaving, which is when the number matters most.
+            if let Ok(mut g) = hb.lock() {
+                g.discarded();
+            }
             log(&format!(
                 "height {}: solved block DISCARDED, the node could not be re-checked before submit: {e}",
                 t.height
@@ -770,6 +782,40 @@ mod tip_watch_tests {
 
     /// The solver reads the flag: set it before the loop starts and no thread grinds at all.
     /// This is the half that would still be broken if watch_tip were perfect and nobody checked it.
+    /// A TEXT PIN TOO, AND FOR THE SAME REASON: `mine_once` takes a concrete `&Rpc`, so nothing
+    /// can drive either discard branch without a real node. It catches a DELETION and cannot catch
+    /// a branch that stopped being reachable.
+    ///
+    /// BOTH SITES, because they are different exits - one returns `Waiting`, the other returns
+    /// `Err` - and a count covering only the tidy exit would under-report exactly when the node is
+    /// misbehaving, which is when the number matters most.
+    ///
+    /// fix/miner-rpc-seam replaces this with a behavioural row driven through a double. It is held
+    /// at SDE-App's direction, so this is what the wiring has until then, and I would rather say
+    /// that than let the pin read as coverage.
+    #[test]
+    fn both_discard_branches_still_record_to_the_heartbeat() {
+        // SCANNED ABOVE THE TEST MODULE ONLY. include_str! pulls in this file entire, so the
+        // marker below appears a THIRD time - in this very line - and the first version counted
+        // itself and failed at 3. A text pin that reads its own source has to say where the
+        // source stops.
+        let whole = include_str!("main.rs");
+        let src = whole.split("#[cfg(test)]").next().expect("main.rs has a test module marker");
+        let sites: Vec<&str> = src.split("solved block DISCARDED").skip(1).collect();
+        assert_eq!(sites.len(), 2, "expected exactly two discard sites above the tests, found {}", sites.len());
+        for (i, site) in sites.iter().enumerate() {
+            // The recording sits BEFORE the log line, so look backwards from the marker.
+            let before = src[..src.find(site).unwrap()].rsplit("if abandon").next().unwrap_or("");
+            let tail = &before[before.len().saturating_sub(400)..];
+            assert!(
+                tail.contains("g.discarded()"),
+                "discard site {} no longer records to the heartbeat, so accepted + rejected + \
+                 discarded stops equalling solved and the remainder is unattributable again",
+                i + 1
+            );
+        }
+    }
+
     /// A TEXT PIN, AND IT SAYS SO. The counter itself is covered by rows in heartbeat.rs, but
     /// the CALL SITE is not: `mine_once` takes a concrete `&Rpc` with no seam, so nothing can
     /// drive the abandon branch without a real node. Measured: deleting `g.abandoned()` from that
