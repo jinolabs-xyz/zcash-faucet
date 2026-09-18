@@ -953,6 +953,22 @@ async function checkLivePhasePanelsWearTheBox(browser) {
 
     // THE LINK ROWS, DRIVEN. At rest CI never reaches this state, so the at-rest copies above
     // print a skip and assert nothing; here the state is forced, so they run on every CI run.
+    // THE STATE A PHASE-LESS GATE RENDERS A LIE IN, DRIVEN RATHER THAN ARGUED (SDE-App's review).
+    // `topping-up` IS empty + refilling: basePhase returns "empty" at balanceTaz <= 0 while
+    // `refilling` stays true, and page.tsx already renders its own panel for it. A gate that only
+    // asks "is the reserve refilling" therefore prints "The reserve is low. CLAIMS STILL WORK."
+    // over a card saying the faucet is out of TAZ - two answers to one question, and the
+    // reassuring one false. The reviewer should not have to take that reasoning on faith, so the
+    // combination is driven and the absence asserted.
+    if (name === "topping-up") {
+      const shown = await p.locator('[data-phase="reserve-low"]').count();
+      ok("driving topping-up: the reserve-low notice stays AWAY while the card says empty",
+        shown === 0,
+        shown === 0
+          ? `panels on the page: ${JSON.stringify(r.names)} - reserve-low is not among them, and refilling IS true here`
+          : "reserve-low rendered beside an empty card: 'claims still work' over 'out of TAZ'");
+    }
+
     if (name === "reserve-low") {
       // #659 IS A DECISION, SO IT GETS A ROW. The owner moved this panel out of the claim card
       // because inside it, its content was what pushed the panel past its clamp - 41px at 1280x800
@@ -1950,7 +1966,26 @@ async function checkRefusalCards(browser, base, address) {
       await page.goto(base, { waitUntil: "networkidle" });
       await page.waitForFunction(() => /\bLIVE\b/.test(document.body.innerText), null, { timeout: 30_000 });
       await page.getByTestId("address-input").fill(address);
+      // READ BEFORE THE CLICK, BECAUSE "SURVIVES" IS A CLAIM ABOUT A TRANSITION.
+      // The first version asserted the panel WAS present during the claim, which is only true
+      // where the reserve is actually low. My local stack forces that state; CI's reserve is
+      // healthy, so the panel correctly does not render and all seven rows failed on a page
+      // behaving perfectly - green on my machine, red in CI, from a row that never stated the
+      // state it needed. Comparing before against during is the assertion the NAME always made.
+      const reserveBefore = await page.locator('[data-phase="reserve-low"]').count();
       await page.getByTestId("claim-button").click();
+      // THE SUBMITTING WINDOW, the owner's OTHER screenshot. The click sets phase "submitting"
+      // before any response arrives, so this reads the state the proof-of-work screen is in.
+      // Asserted once per shape rather than once overall: the panel must survive EVERY claim,
+      // not merely the one case someone thought to check.
+      const reserveDuring = await page.locator('[data-phase="reserve-low"]').count();
+      if (reserveBefore > 0) {
+        ok(`${s.name}: the reserve notice survives the claim itself (owner, item 2)`,
+          reserveDuring === reserveBefore,
+          `reserve-low panels: ${reserveBefore} before the claim, ${reserveDuring} during it`);
+      } else {
+        console.log(`  --   ${s.name}: the reserve is not low in this run, so there was no notice to survive the claim`);
+      }
       // An EMPTY [role=alert] is always in the DOM; wait for one with text.
       await page.waitForFunction(() => [...document.querySelectorAll("[role=alert]")].some((e) => (e.textContent || "").trim()), null, { timeout: 60_000 }).catch(() => {});
       const c = await card();
@@ -1958,6 +1993,44 @@ async function checkRefusalCards(browser, base, address) {
       else await s.expect(c);
       await page.unroute("**/api/faucet");
     }
+    // THE OWNER'S OTHER SCREENSHOT: RATE-LIMITED, DRIVEN ON ITS OWN TERMS.
+    // It is NOT a `shapes` entry, and that is the point: I added it as one first, and every arm
+    // of the mutant printed "a cooldown refusal: a card rendered" FAILED - a 429 puts the page in
+    // `cooldown`, which renders a refusal view rather than a [role=alert] card, so the loop's
+    // `if (!c.text)` guard skipped my expect and the assertion NEVER RAN. It was green-adjacent
+    // noise in a harness whose contract it did not meet.
+    await page.route("**/api/faucet", (route) => route.fulfill({
+      status: 429, contentType: "application/json",
+      body: JSON.stringify({ error: "You have already claimed for this address. Try again later.", kind: "address", nextAt: new Date(Date.now() + 3_600_000).toISOString(), requestId: "ui-smoke" }),
+    }));
+    await page.goto(base, { waitUntil: "networkidle" });
+    await page.waitForFunction(() => /\bLIVE\b/.test(document.body.innerText), null, { timeout: 30_000 });
+    await page.getByTestId("address-input").fill(address);
+    const rlBefore = await page.locator('[data-phase="reserve-low"]').count();
+    await page.getByTestId("claim-button").click();
+    // WAIT FOR THE SUBJECT ITSELF, NOT FOR A PROXY THE WRONG STATE ALSO SATISFIES. The first
+    // version waited for the claim button to be absent or disabled - which is ALREADY TRUE while
+    // proof-of-work runs, so it returned during `submitting` and the run below measured the wrong
+    // state. The pin caught it (FAIL: "a 429 leaves the page rate-limited") while the row behind
+    // it went GREEN, because the panel is visible in `submitting` too - right answer, wrong
+    // reason, which is the whole thing the pin is there to expose.
+    // The proof-of-work is real work at 12 bits and slow on a loaded machine, so the budget is
+    // generous; the pin below still fails honestly if it never arrives.
+    await page.waitForFunction(() => /already claimed|come back|try again later/i.test(document.body.innerText),
+      null, { timeout: 180_000 }).catch(() => {});
+    await page.waitForTimeout(600);
+    const cooledDown = await page.evaluate(() => /already claimed|come back|try again|cooldown/i.test(document.body.innerText));
+    ok("a 429 leaves the page rate-limited, so the next row has a subject",
+      cooledDown, (await page.innerText("body")).replace(/\s+/g, " ").slice(0, 140));
+    const rlAfter = await page.locator('[data-phase="reserve-low"]').count();
+    if (rlBefore > 0) {
+      ok("AND THE RESERVE NOTICE SURVIVES BEING RATE-LIMITED (owner, item 2)",
+        rlAfter === rlBefore,
+        `reserve-low panels: ${rlBefore} before, ${rlAfter} after being refused - it was gated on phase === "ready" and vanished here`);
+    } else {
+      console.log("  --   the reserve is not low in this run, so there was no notice to survive the rate limit");
+    }
+    await page.unroute("**/api/faucet");
   } catch (err) {
     ok("refusal cards ran to completion", false, err instanceof Error ? err.message : String(err));
   } finally {
@@ -3484,6 +3557,12 @@ async function checkNoEmDashReachesTheReader(browser, base) {
   nulled.reserve = { ...(nulled.reserve ?? {}), spendableTaz: null, lowTaz: null, refilling: true };
   nulled.empty = true;
   nulled.balanceTaz = 0;
+  // AND THE DRIPS, because the SPOKEN placeholder had the same defect as the visible one.
+  // Shell passes `drips?.byDay ?? []` and `?? null`, so an absent block reaches the sparkline as
+  // an empty series and two nulls - and its aria-label said `${allTime ?? 0}`, so a sighted
+  // reader saw an em dash while a screen reader heard "0 counted": a measured zero for a count
+  // nobody has. SDE-App found it one line from a line I had just edited.
+  nulled.drips = null;
 
   for (const [label, payload] of [["as served", null], ["with every figure null", nulled]]) {
     const ctx = await browser.newContext({ viewport: DESKTOP });
@@ -3509,7 +3588,11 @@ async function checkNoEmDashReachesTheReader(browser, base) {
       // out. The claim card is `<article id="claim">` (page.tsx:1252-1884) and all four live
       // inside it, so the id is both the tightest anchor and the one that cannot drift with a
       // class rename.
-      return { hits, figs: document.querySelectorAll("#claim .figs b").length };
+      // The sparkline speaks its figures rather than drawing them, so the placeholder it owes a
+      // screen reader is a WORD. Read it here so the spoken and the visible are judged together.
+      const spark = document.querySelector("#spark");
+      return { hits, figs: document.querySelectorAll("#claim .figs b").length,
+               spark: spark ? (spark.getAttribute("aria-label") || "") : null };
     }, EM);
     ok(`${label}: no em dash reaches the reader`,
       r.hits.length === 0,
@@ -3523,6 +3606,12 @@ async function checkNoEmDashReachesTheReader(browser, base) {
     if (payload) {
       ok(`${label}: and the placeholders were actually on screen to be checked`,
         r.figs > 0, `${r.figs} claim-card figure slot(s) rendered under the nulled status, want > 0`);
+      // THE SPOKEN PLACEHOLDER. An em dash on screen and "0" in the ear is the same figure
+      // answering two different ways, and only one of them is true. The label must not invent a
+      // zero for a count that arrived null.
+      ok(`${label}: and the sparkline SPEAKS the absence rather than inventing a zero`,
+        r.spark !== null && /unknown/.test(r.spark) && !/\b0 counted\b/.test(r.spark),
+        r.spark === null ? "no #spark on the page, so the label was never read" : `aria-label: "${r.spark}"`);
     }
     await ctx.close();
   }

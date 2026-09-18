@@ -53,6 +53,10 @@ function rr(x: CanvasRenderingContext2D, X: number, Y: number, W: number, H: num
   x.closePath();
 }
 
+/** What the label says for a figure nobody has told us. The visible figure renders an em dash for
+ *  the same state; "unknown" is that em dash spoken aloud, and it is never "0". */
+const say = (n: number | null | undefined) => (n == null ? "unknown" : String(n));
+
 export function Sparkline({
   byDay,
   last7d,
@@ -117,7 +121,11 @@ export function Sparkline({
     // theme flip changes the colours without changing the data.
   }, [byDay, theme]);
 
-  const today = byDay.length ? byDay[byDay.length - 1].sent : 0;
+  // NULL, NOT ZERO, AND THERE ARE THREE OF THEM ON THE LABEL BELOW. Shell passes
+  // `byDay ?? []`, so an absent drips block arrives as an EMPTY ARRAY and this returned a
+  // measured 0 for a day nobody counted - the same `(a ?? 0)` fault this PR removes from the
+  // acceptance rate, one component over. An empty series means we were not told.
+  const today = byDay.length ? byDay[byDay.length - 1].sent : null;
 
   return (
     <canvas
@@ -125,7 +133,13 @@ export function Sparkline({
       id="spark"
       role="img"
       data-testid="spark"
-      aria-label={`Drips per day over the last 30 days. ${last7d ?? 0} this week, ${allTime ?? 0} all time, ${today} today.`}
+      // THE LABEL MUST SAY WHAT THE FIGURE SAYS. Both props are `number | null` - Shell passes
+      // `?? null` deliberately - and the visible figure renders an EM DASH for null. This said
+      // `${allTime ?? 0}`, so a sighted reader saw "-" and a screen reader heard "0 counted": a
+      // measured zero for a count we do not have. Found by SDE-App one line from the line I had
+      // just edited, which is the lesson - I changed the words and did not read the operator
+      // beside them.
+      aria-label={`Drips per day over the last 30 days. ${say(last7d)} this week, ${say(allTime)} counted, ${say(today)} today.`}
     />
   );
 }

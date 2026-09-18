@@ -417,7 +417,14 @@ export function minerTone(
   return minerIsBad(r, unit) ? "bad" : "warn";
 }
 
-/** Accepted as a share of everything submitted. Null when nothing has been submitted. */
+/**
+ * Accepted as a share of everything submitted. Null when nothing has been submitted.
+ *
+ * NOT RENDERED ANYWHERE, ON PURPOSE. It is arithmetic on two counters whose windows are not known
+ * to match - see acceptSentence below - so a caller that puts this on a page is publishing a rate
+ * of nothing. It stays because the arithmetic is right and tested, and because it becomes usable
+ * the moment accepted + rejected + discarded closes over one period.
+ */
 export function acceptPercent(miner: { submittedAccepted?: number | null; submittedRejected?: number | null } | null | undefined): number | null {
   const a = miner?.submittedAccepted, r = miner?.submittedRejected;
   if (a == null && r == null) return null;
@@ -434,12 +441,47 @@ export function acceptPercent(miner: { submittedAccepted?: number | null; submit
  * not measured. The two states look identical at 0 and are not the same news.
  */
 export function acceptSentence(miner: { submittedAccepted?: number | null; submittedRejected?: number | null } | null | undefined): string {
-  const pct = acceptPercent(miner);
-  // And "yet" is right again here too (#645, Rust half at 3f59ef5): the submitted counts are
-  // resumed from the heartbeat now, so a zero is a statement about the miner rather than about
-  // this process. Absent still renders as unknown rather than as zero.
-  if (pct === null) return "no blocks submitted yet";
-  return `${pct}% accepted by our node`;
+  const a = miner?.submittedAccepted, r = miner?.submittedRejected;
+  // ABSENT IS NOT ZERO, AND THIS FUNCTION SAID IT WAS. The comment above has claimed since #645
+  // that "absent renders as unknown rather than as zero" and the code returned the SAME SENTENCE
+  // for both, because acceptPercent() answers null to two different questions: nothing was
+  // submitted, and we were not told. The owner caught it from an Analytics screenshot reading
+  // "accepted unknown" two lines above a sentence asserting zero.
+  if (a == null && r == null) return "whether any block was submitted is not known";
+
+  // AND THE HALF-KNOWN CASE IS LIVE ON PROD RIGHT NOW, which is worse than the one reported.
+  // acceptPercent does `(a ?? 0) + (r ?? 0)`, so a null REFUSED count is counted as zero
+  // refusals: prod reads submittedAccepted 2172, submittedRejected null, and this rendered
+  // "100% accepted by our node" - a claim that nothing has ever been refused, built entirely on
+  // a field the miner did not send. A rate needs BOTH halves; one half is a count, not a rate.
+  if (a == null || r == null) {
+    const known = a == null ? `${groupDigits(r as number)} refused` : `${groupDigits(a)} accepted`;
+    const missing = a == null ? "accepted" : "refused";
+    return `${known}, and the ${missing} count is not known`;
+  }
+
+  // "yet" is right here (#645, Rust half at 3f59ef5): the submitted counts are resumed from the
+  // heartbeat now, so a zero is a statement about the MINER rather than about this process.
+  if (a === 0 && r === 0) return "no blocks submitted yet";
+
+  // NO PERCENTAGE, AND THIS GOES FURTHER THAN THE DEFECT THAT WAS REPORTED. Removing the
+  // `(a ?? 0)` null-as-zero fault above takes away the "100% accepted" render, and a WORSE one
+  // walks in behind it the moment the null resolves, because THE TWO HALVES COVER DIFFERENT
+  // PERIODS (SDE-Infra, with the arithmetic):
+  //   submittedAccepted was seeded from `journalctl -g "ACCEPTED by zebra" | wc -l` - ALL history
+  //   submittedRejected was deliberately left null, so it counts FROM THE SEED FORWARD
+  //   verified in the writer: resume() reads it with as_u64(), so a JSON null resumes as unknown
+  // One future rejection then renders 2175/2176 = 99.95% against a true historical 76.4% - both
+  // counters present, neither null, wrong by twenty-three points, and it NEVER self-corrects
+  // because accepted permanently carries a baseline rejected does not.
+  // A percentage computed from two eras glued together is not a rate, and no null check rescues
+  // it. The counts are what was measured, so the counts are what this says. A denominator anyone
+  // can defend needs accepted + rejected + discarded to close, which is Infra's discarded counter
+  // and is not built.
+  // groupDigits, because `solved` two lines up on the same card renders through it. Two formats
+  // for one kind of quantity in one card reads as a bug to the person looking at it, and the
+  // owner has already asked once why these numbers looked wrong (SDE-App).
+  return `${groupDigits(a)} accepted, ${groupDigits(r)} refused`;
 }
 
 /* ── the backend ──────────────────────────────────────────────────────── */

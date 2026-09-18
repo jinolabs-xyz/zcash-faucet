@@ -1,211 +1,221 @@
 {
+  ".card-copy": {
+    "kind": "divergence",
+    "shipped": "position:relative; padding:min(7%,0.95rem) 8.4% min(7.5%,1.05rem)",
+    "why": "#648, same cause and same fix as .panel above: percentage vertical padding resolves against width and had no ceiling, so this block took 140px of the claim card at 1440 and squeezed the panel into a scroll. Capped on the vertical axis only; the 8.4% horizontal inset is the spec's."
+  },
+  ".card.claim[data-terminal] > .card-copy": {
+    "kind": "divergence",
+    "shipped": "display:none",
+    "why": "#648, owner 2026-09-17: the claim card must show its content rather than scroll it, and the design has no rule for the TERMINAL states because the frozen snapshot shows the card before a claim. Measured with a real claim driven to a receipt: the panel needs 572/536 at 1440 and 534/455 at 1280, i.e. 36px and 79px more than it has. The copy block is 113px and 112px at those widths, so letting it give way clears both with room. It is only hidden AFTER a claim, where it is a caption explaining the product to someone who has already used it while competing with the txid, the buttons and the spending key they came back to read. Before the claim it is untouched, which is the state the design froze and the state the owner nominated the block from."
+  },
+  ".comp > .view.hero": {
+    "kind": "override",
+    "shipped": "",
+    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `.comp > .view.hero`; the rule is shipped as `.views > .view.hero, .comp > .view.hero`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs."
+  },
+  ".iconbtn": {
+    "kind": "override",
+    "shipped": "",
+    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `.iconbtn`; the rule is shipped as `html .iconbtn`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs."
+  },
+  ".iconbtn:hover": {
+    "kind": "override",
+    "shipped": "",
+    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `.iconbtn:hover`; the rule is shipped as `html .iconbtn:hover`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs."
+  },
+  ".m-dir": {
+    "kind": "divergence",
+    "shipped": "",
+    "why": "THE MASCOT'S INNER DOM IS THE `page-mascot` PACKAGE'S, NOT OURS. The design draws the fox from its own markup and we render <Mascot/> from the package, which ships its own structure and styling. Transcribing these would be a second, competing description of a DOM we do not author, and the first time the package changed its internals ours would point at elements that no longer exist. The rendered result is checked by scripts/mascot-check.mjs instead of the rules behind it."
+  },
+  ".m-dir,.m-react": {
+    "kind": "divergence",
+    "shipped": "",
+    "why": "THE MASCOT'S INNER DOM IS THE `page-mascot` PACKAGE'S, NOT OURS. The design draws the fox from its own markup and we render <Mascot/> from the package, which ships its own structure and styling. Transcribing these would be a second, competing description of a DOM we do not author, and the first time the package changed its internals ours would point at elements that no longer exist. The rendered result is checked by scripts/mascot-check.mjs instead of the rules behind it."
+  },
+  ".m-react": {
+    "kind": "divergence",
+    "shipped": "",
+    "why": "THE MASCOT'S INNER DOM IS THE `page-mascot` PACKAGE'S, NOT OURS. The design draws the fox from its own markup and we render <Mascot/> from the package, which ships its own structure and styling. Transcribing these would be a second, competing description of a DOM we do not author, and the first time the package changed its internals ours would point at elements that no longer exist. The rendered result is checked by scripts/mascot-check.mjs instead of the rules behind it."
+  },
+  ".m-squash": {
+    "kind": "divergence",
+    "shipped": "",
+    "why": "THE MASCOT'S INNER DOM IS THE `page-mascot` PACKAGE'S, NOT OURS. The design draws the fox from its own markup and we render <Mascot/> from the package, which ships its own structure and styling. Transcribing these would be a second, competing description of a DOM we do not author, and the first time the package changed its internals ours would point at elements that no longer exist. The rendered result is checked by scripts/mascot-check.mjs instead of the rules behind it."
+  },
+  ".mascot-riso": {
+    "kind": "divergence",
+    "shipped": "position:relative; display:block; flex:none; width:100%; max-width:calc(22*var(--u)); aspect-ratio:1; padding:0; border:0; background:transparent; appearance:none; cursor:pointer; user-select:none; touch-action:manipulation || width:100% !important; max-width:calc(22*var(--u)) !important; height:auto !important",
+    "why": "The owner's 19:40Z ruling says the mascot follows its column. The frozen snapshot does NOT carry the !important width/max-width/height that the ruling describes - grep finds none on that rule - so the ruling's intent is transcribed here and the discrepancy between the ruling's words and the snapshot is recorded in the PR body rather than silently resolved either way."
+  },
+  ".metric .delta[data-tone=unknown]": {
+    "kind": "override",
+    "shipped": "color:var(--muted)",
+    "why": "A REAL STATE THE PREVIEW HAS NO SWATCH FOR. The design tones the delta `warn` and `bad` only; our status can also be unestablished, and the same rule that made the badge carry PREPARING and TOPPING UP applies - the word was already on the page before the redesign and saying nothing about it is not an option. Same shape as the .badge[data-state=...] entries above."
+  },
+  ".morelink:hover": {
+    "kind": "override",
+    "shipped": "text-decoration:underline; text-underline-offset:auto",
+    "why": "CLOSES A PROPERTY globals.css SETS AND THE TRANSCRIPTION DOES NOT NAME - #575's seventh-leak family. globals.css:82 styles every heading with font-family, line-height and letter-spacing, and the design's rule names neither font-family nor (for .pc h3) the other two, so the retired values leak in under a rule that looks complete. Adding the design's own values by name is what makes the transcription describe what is painted. `.morelink:hover` is the same shape one property along: globals.css:97 sets text-underline-offset:3px and no transcription names it."
+  },
+  ".panel": {
+    "kind": "divergence",
+    "shipped": "position:relative; margin:0 2.55%; padding:min(7.5%,1.15rem) 7.5% min(8%,1.25rem); border-radius:calc(1.28*var(--u)) calc(1.28*var(--u)) calc(1.08*var(--u)) calc(1.08*var(--u)); background:var(--panel-bg); display:flex; flex-direction:column; gap:calc(1.1*var(--u))",
+    "why": "#648, owner 2026-09-17: the claim card must not scroll its own content. The spec's vertical padding is a percentage, which resolves against WIDTH, so it grows without a ceiling as the card widens - and .card.claim > .panel carries overflow:auto, so the card absorbed the excess by SCROLLING rather than by overflowing. Measured with the reserve-low panel present (prod's state until the wallet clears 5,000): scrollHeight 554 against clientHeight 509 at 1440x900, 45px of content hidden, with the figures sliced mid-digit. Vertical padding is capped here so the rhythm tracks type rather than viewport width; the horizontal percentages are the spec's, untouched."
+  },
+  ".pc h3": {
+    "kind": "override",
+    "shipped": "margin:0 0 calc(.9*var(--u)); font-size:calc(1.1*var(--u)); font-weight:600; font-family:var(--sans); line-height:1.5; letter-spacing:normal; display:flex; align-items:center; gap:calc(.6*var(--u)); color:var(--ink-2); flex-wrap:wrap",
+    "why": "CLOSES A PROPERTY globals.css SETS AND THE TRANSCRIPTION DOES NOT NAME - #575's seventh-leak family. globals.css:82 styles every heading with font-family, line-height and letter-spacing, and the design's rule names neither font-family nor (for .pc h3) the other two, so the retired values leak in under a rule that looks complete. Adding the design's own values by name is what makes the transcription describe what is painted. `.morelink:hover` is the same shape one property along: globals.css:97 sets text-underline-offset:3px and no transcription names it."
+  },
+  ".phase .row + .fine": {
+    "kind": "divergence",
+    "shipped": "margin-top:calc(.85*var(--u))",
+    "why": "#648, owner: \"the text starts just right after the buttons which looks very clumsy... the information is squashed\". .fine carries margin:0 and the action row has nothing below it, so the prose sits flush against the buttons. Adjacent-sibling only, so prose that does not follow a row is untouched."
+  },
+  ".phase code.mono": {
+    "kind": "override",
+    "shipped": "display:block; word-break:break-all; margin-top:calc(.4*var(--u)); font-size:calc(.82*var(--u)); color:var(--ink)",
+    "why": "THE ADDRESS ON `lost-track`, WHICH IS A PANEL THE APPROVED SET DOES NOT HAVE, in SDE-App's own words. A unified address is eighty-odd characters and the card is 24rem, so it has to break inside the word; the inline style this panel replaced said word-break:break-all and `.mono` alone does not. The design has no rule here because it has no such panel."
+  },
+  ".phase h3": {
+    "kind": "override",
+    "shipped": "margin:calc(.35*var(--u)) 0 calc(.3*var(--u)); color:var(--ink-3); font-size:calc(1.34*var(--u)); font-weight:500; line-height:1.1; letter-spacing:calc(-.05*var(--u)); font-family:var(--sans)",
+    "why": "CLOSES A PROPERTY globals.css SETS AND THE TRANSCRIPTION DOES NOT NAME - #575's seventh-leak family. globals.css:82 styles every heading with font-family, line-height and letter-spacing, and the design's rule names neither font-family nor (for .pc h3) the other two, so the retired values leak in under a rule that looks complete. Adding the design's own values by name is what makes the transcription describe what is painted. `.morelink:hover` is the same shape one property along: globals.css:97 sets text-underline-offset:3px and no transcription names it."
+  },
+  ".reserve-aside": {
+    "kind": "divergence",
+    "shipped": "margin-top:calc(1.0*var(--u)); align-self:start; width:100%",
+    "why": "#654, owner: \"this below in the left hand bottom side of the website not in that component\". The design draws the reserve notice inside the claim card, where it was the content that pushed the panel past its clamp - 41px hidden at 1280x800 and 128px at 1024x768, concealed rather than shown because .card.claim > .panel scrolls. It is a fact about the faucet's float rather than a step in the claim, and claims keep working while it is up, so it belongs beside the hero copy. Keeps the .phase box so it still reads as one of the page's status panels; only the placement differs from the snapshot."
+  },
+  ".reserve-aside .figs-action": {
+    "kind": "divergence",
+    "shipped": "align-items:baseline; gap:calc(.7*var(--u)); flex-wrap:wrap",
+    "why": "Owner: the reserve action belongs BESIDE the figures, not stacked under them. Baseline alignment puts the link level with the numbers, and the gap between the figures comes down 1.4u -> .7u to buy width. MEASURED: with the full 'or point a miner' wording the row needed 385/351/356px against 360/319/297px of panel at 1440x900, 1280x800 and 1024x768 - short by 25, 32 and 59px - so the label is the shorter 'or mine' (SDE-App's original call, re-derived here). flex-wrap lets the action drop to its own line rather than force the page sideways on a phone. At .9u the row still stacked at 1024x768 - it needed exactly 297px against 297px of panel - so the gap comes down once more to clear it by a measured margin rather than by a rounding error."
+  },
+  ".reserve-aside .reserve-act": {
+    "kind": "divergence",
+    "shipped": "margin-left:auto; white-space:nowrap",
+    "why": "The same owner ask: right-aligned on the figures' line. margin-left:auto takes the remaining width; nowrap because an action that wraps to two lines defeats putting it on this row at all."
+  },
+  ".stage .tag": {
+    "kind": "override",
+    "shipped": "font-family:inherit; display:inline-flex; align-items:center; gap:calc(.5*var(--u)); height:calc(2.15*var(--u)); padding:0 calc(.9*var(--u)); border-radius:calc(.5*var(--u)); background:var(--tag-bg); color:var(--ink); font-size:calc(.84*var(--u)); font-weight:500; letter-spacing:0; border:calc(.06*var(--u)) solid var(--hair); white-space:nowrap; text-decoration:none; cursor:default || text-transform:none",
+    "why": "RE-SCOPED TO OUTRANK globals.css, AND IT ADDS ONE DECLARATION, NAMED. The re-scoping is as above - one ancestor, so it outranks the legacy sheet. What it adds beyond the design's body is:\n  text-transform:none\nwhich closes globals.css:151-155 `.tag { ... text-transform: uppercase; ... }`. The legacy sheet upper-cases every tag at the same (0,1,0) specificity as the design's own `.tag`, so source order decided it and the design's tags shipped shouting. #575's review could not see it because `.tag` matched zero elements on that tree - the chips arrive with these views.\nNamed per the CTO's round-three ruling: an `override` whose body adds to the spec's names each addition and the globals.css rule it closes, or it is a `divergence`. Round three pasted \"SAME DECLARATIONS\" onto this entry and it was false - the checker's own sameBodies says so."
+  },
+  ".stage ::selection": {
+    "kind": "override",
+    "shipped": "background:color-mix(in srgb,var(--accent) 30%,transparent)",
+    "why": "RE-SCOPED TO OUTRANK globals.css, AND IT ADDS ONE DECLARATION, NAMED. The re-scoping is as above - one ancestor, so it outranks the legacy sheet. What it adds beyond the design's body is:\n  background:color-mix(in srgb,var(--accent) 30%,transparent)\nwhich closes globals.css:101 `::selection { background: color-mix(in srgb, var(--color-accent) 30%, transparent); }`. Same shape, different token: globals highlights selected text in the RETIRED accent. `.stage ::selection` is (0,1,1) against globals' (0,0,1), so this is specificity rather than order.\nNamed per the CTO's round-three ruling: an `override` whose body adds to the spec's names each addition and the globals.css rule it closes, or it is a `divergence`. Round three pasted \"SAME DECLARATIONS\" onto this entry and it was false - the checker's own sameBodies says so."
+  },
+  ".tabs button": {
+    "kind": "override",
+    "shipped": "white-space:nowrap; border:calc(.06*var(--u)) solid var(--tab-border); background:none; height:calc(2*var(--u)); padding:0 calc(.9*var(--u)); border-radius:calc(.5*var(--u)); font-size:calc(.85*var(--u)); font-weight:600; color:var(--muted); cursor:pointer",
+    "why": "A DEDICATED BORDER TOKEN FOR THE TAB, because the shared one cannot be raised alone. The unselected tab's `--hair` border is #efe6df on #fff: 1.23:1, invisible, so the pair read as a label with grey text rather than two tabs - the owner reported exactly that from a screenshot. WCAG 1.4.11 wants 3.0:1 for a control boundary, and ui-smoke.mjs:1063 argues in this repo's own words that borders are exempt because THE GLYPH identifies the control. That inverts here: the tab is text-only with `background:none`, so its border is the only non-text thing saying 'control'. SDE-UI made that argument on #610 and it is right.\n\nNOT `--prompt-border`, which was my first answer: it is shared with `.prompt`, so raising it to the floor would move the address input's border too. SDE-UI caught that the token question is downstream of the floor question rather than independent.\n\nValues chosen against BOTH backgrounds the tab sits on, not just the page: #968981 is 3.39:1 on --surface and 3.27:1 on --panel; #7d736b is 3.59:1 and 3.41:1 in ink. The obvious candidates one step lighter (#a09289, #736962) clear 3.0 on the surface and FAIL on the panel at 2.91 and 2.95, which is where the card actually is."
+  },
+  ".tag": {
+    "kind": "override",
+    "shipped": "",
+    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `.tag`; the rule is shipped as `.stage .tag`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs."
+  },
+  ".tag.more": {
+    "kind": "override",
+    "shipped": "",
+    "why": "RE-SCOPED TO OUTRANK globals.css, SAME DECLARATIONS (#575). The legacy sheet styles the same element at the same specificity, so the design's own selector loses on source order alone. One ancestor is added - `html` for element rules, `.stage` for page furniture - which raises specificity without changing what is painted. The spec's key and ours therefore differ while the CSS does not, which the checker reports as one dropped rule plus one added rule: the same divergence twice."
+  },
+  ".view.hero .hero-grid": {
+    "kind": "override",
+    "shipped": "flex:1 1 auto; min-height:0; height:100%; grid-template-rows:minmax(0,1fr)",
+    "why": "THE FOOTER MUST NEVER MOVE AND THE PAGE MUST NEVER SCROLL, the owner's rule, and this group of rules is what makes it true. The claim card grew with its tallest panel - the sent receipt - past the viewport and pushed the footer below the fold: measured 39px over at 1440x900 and 132px at 1440x720.\n\nTHE DESIGN ALREADY INTENDS THIS. Its `.card.claim{max-height:100%}` and `.card.claim > .panel{overflow:auto}` say the card is bounded and its contents scroll inside. Both were inert here because no ancestor had a definite height, so the percentage never resolved. These rules restore the chain the design assumes rather than inventing a mechanism.\n\nWHY IT CAN WORK NOW AND COULD NOT IN S2a. The clamp was removed then because it SWALLOWED content - footer cut by 30-93px, Donate/Terms/GitHub unreachable. The claim card had no inner scroll box; #583 gave it one. The other views still had none, and bounding `.comp` alone broke the status view exactly as before (1081px in a 768px box, all four fit rows red), which is why `.views > .view:not(.hero)` gets its own. Verified after: fit-check 168/168, and four footer links reachable with 0px cut at 1024x768, 1280x720, 1366x768 and 1440x810."
+  },
+  ".views > .view.hero, .comp > .view.hero": {
+    "kind": "override",
+    "shipped": "flex:1 1 auto; min-height:0; justify-content:flex-start; padding-top:calc(2.5*var(--u))",
+    "why": "OUR LANDMARK, NOT A #575 RE-SCOPING, and round three mislabelled it. The spec has this as `.comp > .view.hero`. Our four views sit inside a `<main class=\"views\">` landmark rather than directly in `.comp`, so the design's child combinator matched nothing at all and computed padding-top 0. The selector carries BOTH spellings so the rule applies in our structure and still describes the design's. Same declarations as the spec - verified - but the reason is the landmark, and globals.css has nothing to do with it."
+  },
+  ":focus-visible": {
+    "kind": "override",
+    "shipped": "",
+    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `:focus-visible`; the rule is shipped as `html :focus-visible`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs."
+  },
+  "@media (max-width:32rem) | .reserve-aside .reserve-act": {
+    "kind": "divergence",
+    "shipped": "white-space:normal; margin-left:0",
+    "why": "nowrap cannot shrink below its own text, so at 320px the link made .hero-copy 350px wide in a 320px viewport - caught by ui-smoke's sideways-scroll row, scrollWidth 350 vs clientWidth 320. The single-line layout is the owner's DESKTOP ask; on a phone the action takes its own line and wraps. 32rem is the breakpoint the hero already uses."
+  },
+  "@media (max-width:56rem) | .mascot-riso": {
+    "kind": "divergence",
+    "shipped": "max-width:min(52vw,240px) !important",
+    "why": "Same ruling, the narrow breakpoint: the cap that keeps the fox inside its column at phone widths, which the snapshot's own rule does not express."
+  },
+  "@media (max-width:64rem) | .hero-grid": {
+    "kind": "divergence",
+    "shipped": "gap:calc(2.5*var(--u))",
+    "why": "The 64rem block ships the gap and NOT grid-template-columns:1fr. That declaration was dead in the snapshot - a later section overrode it - and moving the block into this sheet brought it to life, collapsing the hero to one column from 897 to 1024px. Dropped deliberately; #566's third round is the record."
+  },
   "_": "Departures from design/spec/S2-S5-20260915T2224Z/index.css, the S2 slice. Each entry carries the body it declares, so a second, different change to the same rule cannot inherit this label.",
   "_slice": {
-    "why": "S2's spec block is a whole page, so it carries about ninety card-internal rules that belong to S2b. DROPPED is enforced for this spec only once S2b is actually in the tree.",
     "facts": [
       {
         "anyOf": [
           {
-            "file": "src/app/page.tsx",
-            "contains": "./redesign-card.css"
+            "contains": "./redesign-card.css",
+            "file": "src/app/page.tsx"
           },
           {
-            "file": "src/components/Shell.tsx",
-            "contains": "@/app/redesign-card.css"
+            "contains": "@/app/redesign-card.css",
+            "file": "src/components/Shell.tsx"
           }
         ],
         "means": "the card sheet is APPLIED, by whichever of the two files imports it. Not 'the file exists': it was committed inert first so the transcription could be reviewed before it could move a pixel. The second spelling is the one that shipped - S2b's import landed in Shell.tsx, not page.tsx, and the single-file version of this fact read false on the very tree it exists to detect."
       },
       {
-        "file": "src/app/page.tsx",
         "contains": "<Shell",
+        "file": "src/app/page.tsx",
         "means": "the page renders the shell, which is what makes the shell's import reach THIS page. Without it the branch above would accept a sheet imported by a shell nobody renders."
       },
       {
-        "file": "src/app/page.tsx",
         "contains": "data-phase",
+        "file": "src/app/page.tsx",
         "means": "the markup the sheet styles is really rendering. The snapshot's own card is a stack of div.phase[data-phase] and the transcription keeps the attribute, so this is design-anchored rather than invented."
       }
-    ]
-  },
-  ".mascot-riso": {
-    "kind": "divergence",
-    "why": "The owner's 19:40Z ruling says the mascot follows its column. The frozen snapshot does NOT carry the !important width/max-width/height that the ruling describes - grep finds none on that rule - so the ruling's intent is transcribed here and the discrepancy between the ruling's words and the snapshot is recorded in the PR body rather than silently resolved either way.",
-    "shipped": "position:relative; display:block; flex:none; width:100%; max-width:calc(22*var(--u)); aspect-ratio:1; padding:0; border:0; background:transparent; appearance:none; cursor:pointer; user-select:none; touch-action:manipulation || width:100% !important; max-width:calc(22*var(--u)) !important; height:auto !important"
-  },
-  ".tag": {
-    "kind": "override",
-    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `.tag`; the rule is shipped as `.stage .tag`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs.",
-    "shipped": ""
-  },
-  "@media (max-width:56rem) | .mascot-riso": {
-    "kind": "divergence",
-    "why": "Same ruling, the narrow breakpoint: the cap that keeps the fox inside its column at phone widths, which the snapshot's own rule does not express.",
-    "shipped": "max-width:min(52vw,240px) !important"
-  },
-  "@media (max-width:64rem) | .hero-grid": {
-    "kind": "divergence",
-    "why": "The 64rem block ships the gap and NOT grid-template-columns:1fr. That declaration was dead in the snapshot - a later section overrode it - and moving the block into this sheet brought it to life, collapsing the hero to one column from 897 to 1024px. Dropped deliberately; #566's third round is the record.",
-    "shipped": "gap:calc(2.5*var(--u))"
-  },
-  ".comp > .view.hero": {
-    "kind": "override",
-    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `.comp > .view.hero`; the rule is shipped as `.views > .view.hero, .comp > .view.hero`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs.",
-    "shipped": ""
-  },
-  ".iconbtn": {
-    "kind": "override",
-    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `.iconbtn`; the rule is shipped as `html .iconbtn`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs.",
-    "shipped": ""
-  },
-  ".iconbtn:hover": {
-    "kind": "override",
-    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `.iconbtn:hover`; the rule is shipped as `html .iconbtn:hover`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs.",
-    "shipped": ""
-  },
-  ".m-dir": {
-    "kind": "divergence",
-    "why": "THE MASCOT'S INNER DOM IS THE `page-mascot` PACKAGE'S, NOT OURS. The design draws the fox from its own markup and we render <Mascot/> from the package, which ships its own structure and styling. Transcribing these would be a second, competing description of a DOM we do not author, and the first time the package changed its internals ours would point at elements that no longer exist. The rendered result is checked by scripts/mascot-check.mjs instead of the rules behind it.",
-    "shipped": ""
-  },
-  ".m-dir,.m-react": {
-    "kind": "divergence",
-    "why": "THE MASCOT'S INNER DOM IS THE `page-mascot` PACKAGE'S, NOT OURS. The design draws the fox from its own markup and we render <Mascot/> from the package, which ships its own structure and styling. Transcribing these would be a second, competing description of a DOM we do not author, and the first time the package changed its internals ours would point at elements that no longer exist. The rendered result is checked by scripts/mascot-check.mjs instead of the rules behind it.",
-    "shipped": ""
-  },
-  ".m-react": {
-    "kind": "divergence",
-    "why": "THE MASCOT'S INNER DOM IS THE `page-mascot` PACKAGE'S, NOT OURS. The design draws the fox from its own markup and we render <Mascot/> from the package, which ships its own structure and styling. Transcribing these would be a second, competing description of a DOM we do not author, and the first time the package changed its internals ours would point at elements that no longer exist. The rendered result is checked by scripts/mascot-check.mjs instead of the rules behind it.",
-    "shipped": ""
-  },
-  ".m-squash": {
-    "kind": "divergence",
-    "why": "THE MASCOT'S INNER DOM IS THE `page-mascot` PACKAGE'S, NOT OURS. The design draws the fox from its own markup and we render <Mascot/> from the package, which ships its own structure and styling. Transcribing these would be a second, competing description of a DOM we do not author, and the first time the package changed its internals ours would point at elements that no longer exist. The rendered result is checked by scripts/mascot-check.mjs instead of the rules behind it.",
-    "shipped": ""
-  },
-  ".metric .delta[data-tone=unknown]": {
-    "kind": "override",
-    "why": "A REAL STATE THE PREVIEW HAS NO SWATCH FOR. The design tones the delta `warn` and `bad` only; our status can also be unestablished, and the same rule that made the badge carry PREPARING and TOPPING UP applies - the word was already on the page before the redesign and saying nothing about it is not an option. Same shape as the .badge[data-state=...] entries above.",
-    "shipped": "color:var(--muted)"
-  },
-  ".morelink:hover": {
-    "kind": "override",
-    "why": "CLOSES A PROPERTY globals.css SETS AND THE TRANSCRIPTION DOES NOT NAME - #575's seventh-leak family. globals.css:82 styles every heading with font-family, line-height and letter-spacing, and the design's rule names neither font-family nor (for .pc h3) the other two, so the retired values leak in under a rule that looks complete. Adding the design's own values by name is what makes the transcription describe what is painted. `.morelink:hover` is the same shape one property along: globals.css:97 sets text-underline-offset:3px and no transcription names it.",
-    "shipped": "text-decoration:underline; text-underline-offset:auto"
-  },
-  ".pc h3": {
-    "kind": "override",
-    "why": "CLOSES A PROPERTY globals.css SETS AND THE TRANSCRIPTION DOES NOT NAME - #575's seventh-leak family. globals.css:82 styles every heading with font-family, line-height and letter-spacing, and the design's rule names neither font-family nor (for .pc h3) the other two, so the retired values leak in under a rule that looks complete. Adding the design's own values by name is what makes the transcription describe what is painted. `.morelink:hover` is the same shape one property along: globals.css:97 sets text-underline-offset:3px and no transcription names it.",
-    "shipped": "margin:0 0 calc(.9*var(--u)); font-size:calc(1.1*var(--u)); font-weight:600; font-family:var(--sans); line-height:1.5; letter-spacing:normal; display:flex; align-items:center; gap:calc(.6*var(--u)); color:var(--ink-2); flex-wrap:wrap"
-  },
-  ".phase code.mono": {
-    "kind": "override",
-    "why": "THE ADDRESS ON `lost-track`, WHICH IS A PANEL THE APPROVED SET DOES NOT HAVE, in SDE-App's own words. A unified address is eighty-odd characters and the card is 24rem, so it has to break inside the word; the inline style this panel replaced said word-break:break-all and `.mono` alone does not. The design has no rule here because it has no such panel.",
-    "shipped": "display:block; word-break:break-all; margin-top:calc(.4*var(--u)); font-size:calc(.82*var(--u)); color:var(--ink)"
-  },
-  ".phase h3": {
-    "kind": "override",
-    "why": "CLOSES A PROPERTY globals.css SETS AND THE TRANSCRIPTION DOES NOT NAME - #575's seventh-leak family. globals.css:82 styles every heading with font-family, line-height and letter-spacing, and the design's rule names neither font-family nor (for .pc h3) the other two, so the retired values leak in under a rule that looks complete. Adding the design's own values by name is what makes the transcription describe what is painted. `.morelink:hover` is the same shape one property along: globals.css:97 sets text-underline-offset:3px and no transcription names it.",
-    "shipped": "margin:calc(.35*var(--u)) 0 calc(.3*var(--u)); color:var(--ink-3); font-size:calc(1.34*var(--u)); font-weight:500; line-height:1.1; letter-spacing:calc(-.05*var(--u)); font-family:var(--sans)"
-  },
-  ".stage .tag": {
-    "kind": "override",
-    "why": "RE-SCOPED TO OUTRANK globals.css, AND IT ADDS ONE DECLARATION, NAMED. The re-scoping is as above - one ancestor, so it outranks the legacy sheet. What it adds beyond the design's body is:\n  text-transform:none\nwhich closes globals.css:151-155 `.tag { ... text-transform: uppercase; ... }`. The legacy sheet upper-cases every tag at the same (0,1,0) specificity as the design's own `.tag`, so source order decided it and the design's tags shipped shouting. #575's review could not see it because `.tag` matched zero elements on that tree - the chips arrive with these views.\nNamed per the CTO's round-three ruling: an `override` whose body adds to the spec's names each addition and the globals.css rule it closes, or it is a `divergence`. Round three pasted \"SAME DECLARATIONS\" onto this entry and it was false - the checker's own sameBodies says so.",
-    "shipped": "font-family:inherit; display:inline-flex; align-items:center; gap:calc(.5*var(--u)); height:calc(2.15*var(--u)); padding:0 calc(.9*var(--u)); border-radius:calc(.5*var(--u)); background:var(--tag-bg); color:var(--ink); font-size:calc(.84*var(--u)); font-weight:500; letter-spacing:0; border:calc(.06*var(--u)) solid var(--hair); white-space:nowrap; text-decoration:none; cursor:default || text-transform:none"
-  },
-  ".stage ::selection": {
-    "kind": "override",
-    "why": "RE-SCOPED TO OUTRANK globals.css, AND IT ADDS ONE DECLARATION, NAMED. The re-scoping is as above - one ancestor, so it outranks the legacy sheet. What it adds beyond the design's body is:\n  background:color-mix(in srgb,var(--accent) 30%,transparent)\nwhich closes globals.css:101 `::selection { background: color-mix(in srgb, var(--color-accent) 30%, transparent); }`. Same shape, different token: globals highlights selected text in the RETIRED accent. `.stage ::selection` is (0,1,1) against globals' (0,0,1), so this is specificity rather than order.\nNamed per the CTO's round-three ruling: an `override` whose body adds to the spec's names each addition and the globals.css rule it closes, or it is a `divergence`. Round three pasted \"SAME DECLARATIONS\" onto this entry and it was false - the checker's own sameBodies says so.",
-    "shipped": "background:color-mix(in srgb,var(--accent) 30%,transparent)"
-  },
-  ".tag.more": {
-    "kind": "override",
-    "why": "RE-SCOPED TO OUTRANK globals.css, SAME DECLARATIONS (#575). The legacy sheet styles the same element at the same specificity, so the design's own selector loses on source order alone. One ancestor is added - `html` for element rules, `.stage` for page furniture - which raises specificity without changing what is painted. The spec's key and ours therefore differ while the CSS does not, which the checker reports as one dropped rule plus one added rule: the same divergence twice.",
-    "shipped": ""
-  },
-  ".views > .view.hero, .comp > .view.hero": {
-    "kind": "override",
-    "why": "OUR LANDMARK, NOT A #575 RE-SCOPING, and round three mislabelled it. The spec has this as `.comp > .view.hero`. Our four views sit inside a `<main class=\"views\">` landmark rather than directly in `.comp`, so the design's child combinator matched nothing at all and computed padding-top 0. The selector carries BOTH spellings so the rule applies in our structure and still describes the design's. Same declarations as the spec - verified - but the reason is the landmark, and globals.css has nothing to do with it.",
-    "shipped": "flex:1 1 auto; min-height:0; justify-content:flex-start; padding-top:calc(2.5*var(--u))"
-  },
-  ":focus-visible": {
-    "kind": "override",
-    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `:focus-visible`; the rule is shipped as `html :focus-visible`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs.",
-    "shipped": ""
+    ],
+    "why": "S2's spec block is a whole page, so it carries about ninety card-internal rules that belong to S2b. DROPPED is enforced for this spec only once S2b is actually in the tree."
   },
   "a": {
     "kind": "override",
-    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `a`; the rule is shipped as `html a`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs.",
-    "shipped": ""
+    "shipped": "",
+    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `a`; the rule is shipped as `html a`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs."
   },
   "body": {
     "kind": "override",
-    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `body`; the rule is shipped as `html body`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs.",
-    "shipped": ""
-  },
-  "html[data-theme]": {
-    "kind": "override",
-    "why": "RE-SCOPED TO OUTRANK globals.css, AND IT ADDS ONE DECLARATION, NAMED. The re-scoping is as above - one ancestor, so it outranks the legacy sheet. What it adds beyond the design's body is:\n  background:var(--page)\nwhich closes globals.css:72 `html { background: var(--color-bg); }`. globals paints the root with the OLD palette and nothing in the transcription names html's background, so the overscroll and rubber-band area behind the page kept the pre-redesign colour while the page itself was on --page. Only visible on a bounce, which is why nobody would find it by looking. The attribute selector is what outranks the bare `html`.\nNamed per the CTO's round-three ruling: an `override` whose body adds to the spec's names each addition and the globals.css rule it closes, or it is a `divergence`. Round three pasted \"SAME DECLARATIONS\" onto this entry and it was false - the checker's own sameBodies says so.",
-    "shipped": "background:var(--page)"
-  },
-  ".tabs button": {
-    "kind": "override",
-    "why": "A DEDICATED BORDER TOKEN FOR THE TAB, because the shared one cannot be raised alone. The unselected tab's `--hair` border is #efe6df on #fff: 1.23:1, invisible, so the pair read as a label with grey text rather than two tabs - the owner reported exactly that from a screenshot. WCAG 1.4.11 wants 3.0:1 for a control boundary, and ui-smoke.mjs:1063 argues in this repo's own words that borders are exempt because THE GLYPH identifies the control. That inverts here: the tab is text-only with `background:none`, so its border is the only non-text thing saying 'control'. SDE-UI made that argument on #610 and it is right.\n\nNOT `--prompt-border`, which was my first answer: it is shared with `.prompt`, so raising it to the floor would move the address input's border too. SDE-UI caught that the token question is downstream of the floor question rather than independent.\n\nValues chosen against BOTH backgrounds the tab sits on, not just the page: #968981 is 3.39:1 on --surface and 3.27:1 on --panel; #7d736b is 3.59:1 and 3.41:1 in ink. The obvious candidates one step lighter (#a09289, #736962) clear 3.0 on the surface and FAIL on the panel at 2.91 and 2.95, which is where the card actually is.",
-    "shipped": "white-space:nowrap; border:calc(.06*var(--u)) solid var(--tab-border); background:none; height:calc(2*var(--u)); padding:0 calc(.9*var(--u)); border-radius:calc(.5*var(--u)); font-size:calc(.85*var(--u)); font-weight:600; color:var(--muted); cursor:pointer"
-  },
-  ".view.hero .hero-grid": {
-    "kind": "override",
-    "why": "THE FOOTER MUST NEVER MOVE AND THE PAGE MUST NEVER SCROLL, the owner's rule, and this group of rules is what makes it true. The claim card grew with its tallest panel - the sent receipt - past the viewport and pushed the footer below the fold: measured 39px over at 1440x900 and 132px at 1440x720.\n\nTHE DESIGN ALREADY INTENDS THIS. Its `.card.claim{max-height:100%}` and `.card.claim > .panel{overflow:auto}` say the card is bounded and its contents scroll inside. Both were inert here because no ancestor had a definite height, so the percentage never resolved. These rules restore the chain the design assumes rather than inventing a mechanism.\n\nWHY IT CAN WORK NOW AND COULD NOT IN S2a. The clamp was removed then because it SWALLOWED content - footer cut by 30-93px, Donate/Terms/GitHub unreachable. The claim card had no inner scroll box; #583 gave it one. The other views still had none, and bounding `.comp` alone broke the status view exactly as before (1081px in a 768px box, all four fit rows red), which is why `.views > .view:not(.hero)` gets its own. Verified after: fit-check 168/168, and four footer links reachable with 0px cut at 1024x768, 1280x720, 1366x768 and 1440x810.",
-    "shipped": "flex:1 1 auto; min-height:0; height:100%; grid-template-rows:minmax(0,1fr)"
-  },
-  ".panel": {
-    "kind": "divergence",
-    "why": "#648, owner 2026-09-17: the claim card must not scroll its own content. The spec's vertical padding is a percentage, which resolves against WIDTH, so it grows without a ceiling as the card widens - and .card.claim > .panel carries overflow:auto, so the card absorbed the excess by SCROLLING rather than by overflowing. Measured with the reserve-low panel present (prod's state until the wallet clears 5,000): scrollHeight 554 against clientHeight 509 at 1440x900, 45px of content hidden, with the figures sliced mid-digit. Vertical padding is capped here so the rhythm tracks type rather than viewport width; the horizontal percentages are the spec's, untouched.",
-    "shipped": "position:relative; margin:0 2.55%; padding:min(7.5%,1.15rem) 7.5% min(8%,1.25rem); border-radius:calc(1.28*var(--u)) calc(1.28*var(--u)) calc(1.08*var(--u)) calc(1.08*var(--u)); background:var(--panel-bg); display:flex; flex-direction:column; gap:calc(1.1*var(--u))"
-  },
-  ".card-copy": {
-    "kind": "divergence",
-    "why": "#648, same cause and same fix as .panel above: percentage vertical padding resolves against width and had no ceiling, so this block took 140px of the claim card at 1440 and squeezed the panel into a scroll. Capped on the vertical axis only; the 8.4% horizontal inset is the spec's.",
-    "shipped": "position:relative; padding:min(7%,0.95rem) 8.4% min(7.5%,1.05rem)"
+    "shipped": "",
+    "why": "THE DROPPED HALF OF ONE RE-SCOPING. We ship nothing under the design's own `body`; the rule is shipped as `html body`, which carries the body and its reason. One divergence, reported twice - once here because the spec's key is unshipped, once there because ours is not in the spec - so this entry makes no claim about declarations it does not have. Read the partner for what differs."
   },
   "button.tag,a.tag": {
     "kind": "divergence",
-    "why": "#648, owner 2026-09-17: \"the white buttons that are present are not very... like they don't look like that they are buttons\". The gap is VISUAL, not behavioural - the interactive tags already carried cursor:pointer; a white rect with a hairline border simply does not read as a control. This replaces the design's box-shadow/transform transition with one over the properties that now carry the affordance (border, surface, press). The chip form of .tag is untouched.",
-    "shipped": "cursor:pointer; transition:border-color .15s,background .15s,transform .06s"
-  },
-  "button.tag:hover,a.tag:hover": {
-    "kind": "divergence",
-    "why": "#648: the spec's hover moves the border to --muted, which on a white tag is not enough to read as a control. Firms to --ink-3 and fills to --surface. Same re-scoping as button.tag,a.tag above.",
-    "shipped": "border-color:var(--ink-3); background:var(--surface)"
+    "shipped": "cursor:pointer; transition:border-color .15s,background .15s,transform .06s",
+    "why": "#648, owner 2026-09-17: \"the white buttons that are present are not very... like they don't look like that they are buttons\". The gap is VISUAL, not behavioural - the interactive tags already carried cursor:pointer; a white rect with a hairline border simply does not read as a control. This replaces the design's box-shadow/transform transition with one over the properties that now carry the affordance (border, surface, press). The chip form of .tag is untouched."
   },
   "button.tag:active,a.tag:active": {
     "kind": "divergence",
-    "why": "#648: the design states no press state. A control that does not move under the finger is the other half of the owner's complaint, so this adds one to the interactive tags only.",
-    "shipped": "transform:translateY(1px)"
+    "shipped": "transform:translateY(1px)",
+    "why": "#648: the design states no press state. A control that does not move under the finger is the other half of the owner's complaint, so this adds one to the interactive tags only."
   },
   "button.tag:disabled": {
     "kind": "divergence",
-    "why": "#648: partner to the affordance above. Having given the interactive tags a pointer, a DISABLED one must stop claiming to be pressable or the affordance becomes a lie on the one control that cannot be used.",
-    "shipped": "cursor:not-allowed; opacity:.55"
+    "shipped": "cursor:not-allowed; opacity:.55",
+    "why": "#648: partner to the affordance above. Having given the interactive tags a pointer, a DISABLED one must stop claiming to be pressable or the affordance becomes a lie on the one control that cannot be used."
   },
-  ".phase .row + .fine": {
+  "button.tag:hover,a.tag:hover": {
     "kind": "divergence",
-    "why": "#648, owner: \"the text starts just right after the buttons which looks very clumsy... the information is squashed\". .fine carries margin:0 and the action row has nothing below it, so the prose sits flush against the buttons. Adjacent-sibling only, so prose that does not follow a row is untouched.",
-    "shipped": "margin-top:calc(.85*var(--u))"
+    "shipped": "border-color:var(--ink-3); background:var(--surface)",
+    "why": "#648: the spec's hover moves the border to --muted, which on a white tag is not enough to read as a control. Firms to --ink-3 and fills to --surface. Same re-scoping as button.tag,a.tag above."
   },
-  ".card.claim[data-terminal] > .card-copy": {
-    "kind": "divergence",
-    "why": "#648, owner 2026-09-17: the claim card must show its content rather than scroll it, and the design has no rule for the TERMINAL states because the frozen snapshot shows the card before a claim. Measured with a real claim driven to a receipt: the panel needs 572/536 at 1440 and 534/455 at 1280, i.e. 36px and 79px more than it has. The copy block is 113px and 112px at those widths, so letting it give way clears both with room. It is only hidden AFTER a claim, where it is a caption explaining the product to someone who has already used it while competing with the txid, the buttons and the spending key they came back to read. Before the claim it is untouched, which is the state the design froze and the state the owner nominated the block from.",
-    "shipped": "display:none"
-  },
-  ".reserve-aside": {
-    "kind": "divergence",
-    "why": "#654, owner: \"this below in the left hand bottom side of the website not in that component\". The design draws the reserve notice inside the claim card, where it was the content that pushed the panel past its clamp - 41px hidden at 1280x800 and 128px at 1024x768, concealed rather than shown because .card.claim > .panel scrolls. It is a fact about the faucet's float rather than a step in the claim, and claims keep working while it is up, so it belongs beside the hero copy. Keeps the .phase box so it still reads as one of the page's status panels; only the placement differs from the snapshot.",
-    "shipped": "margin-top:calc(1.0*var(--u)); align-self:start; width:100%"
-  },
-  ".reserve-aside .row": {
-    "kind": "divergence",
-    "why": "#659 follow-up, owner: the reserve panel should point at /donate. The donate row inherits `.phase .row{margin-top:calc(.7*var(--u))}`, which on top of the block's own gap ran 1024x768 2px past the fold - small, and still the owner's standing no-scrolling rule. The row's gap comes down here and the block's own margin comes down with it, so the link is paid for rather than added. Measured after: every viewport fits and the link is on screen at all of them.",
-    "shipped": "margin-top:calc(.5*var(--u))"
+  "html[data-theme]": {
+    "kind": "override",
+    "shipped": "background:var(--page)",
+    "why": "RE-SCOPED TO OUTRANK globals.css, AND IT ADDS ONE DECLARATION, NAMED. The re-scoping is as above - one ancestor, so it outranks the legacy sheet. What it adds beyond the design's body is:\n  background:var(--page)\nwhich closes globals.css:72 `html { background: var(--color-bg); }`. globals paints the root with the OLD palette and nothing in the transcription names html's background, so the overscroll and rubber-band area behind the page kept the pre-redesign colour while the page itself was on --page. Only visible on a bounce, which is why nobody would find it by looking. The attribute selector is what outranks the bare `html`.\nNamed per the CTO's round-three ruling: an `override` whose body adds to the spec's names each addition and the globals.css rule it closes, or it is a `divergence`. Round three pasted \"SAME DECLARATIONS\" onto this entry and it was false - the checker's own sameBodies says so."
   }
 }

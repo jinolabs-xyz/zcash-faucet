@@ -313,12 +313,12 @@ test("a miner that has submitted nothing has no acceptance rate", () => {
   assert.equal(acceptPercent({}), null);
   // A genuine zero rate, which IS a measurement, still reads as one.
   assert.equal(acceptPercent({ submittedAccepted: 0, submittedRejected: 12 }), 0);
-  assert.equal(acceptSentence({ submittedAccepted: 0, submittedRejected: 12 }), "0% accepted by our node");
+  assert.equal(acceptSentence({ submittedAccepted: 0, submittedRejected: 12 }), "0 accepted, 12 refused");
 });
 
 test("production's acceptance is 58%", () => {
   assert.equal(acceptPercent(PROD.miner), 58);
-  assert.equal(acceptSentence(PROD.miner), "58% accepted by our node");
+  assert.match(acceptSentence(PROD.miner), /^\d+ accepted, \d+ refused$/);
 });
 
 /* ── the backend ──────────────────────────────────────────────────────── */
@@ -445,5 +445,61 @@ test("#645: absent is STILL not zero, and the stakes are higher now the zero is 
   // returns null for a missing, unreadable, non-JSON, unknown-schema or pre-#286 file precisely so
   // the page can say so; this row is the page's half of that contract.
   assert.equal(acceptSentence({ submittedAccepted: null, submittedRejected: null }), acceptSentence(null));
-  assert.match(acceptSentence(null), /yet|unknown/i);
+  assert.match(acceptSentence(null), /yet|unknown|not known/i);
+
+  // THIS ROW USED TO BE SATISFIED BY THE BUG IT IS NAMED AFTER. `/yet|unknown/` matches "no blocks
+  // submitted yet", which is exactly what absent WAS rendering - so a test called "absent is STILL
+  // not zero" passed while absent and zero produced the identical sentence. The assertion that
+  // actually holds the name is that the two DIFFER.
+  assert.notEqual(
+    acceptSentence({ submittedAccepted: null, submittedRejected: null }),
+    acceptSentence({ submittedAccepted: 0, submittedRejected: 0 }),
+    "unknown and a measured zero are different news and must not share a sentence");
+  assert.doesNotMatch(acceptSentence(null), /\byet\b/,
+    "'yet' asserts a measured zero; we were not told");
+});
+
+test("#645: a rate needs BOTH halves - a null refused count is not zero refusals", () => {
+  // LIVE ON PROD WHEN THIS WAS WRITTEN: submittedAccepted 2172, submittedRejected null, rendering
+  // "100% accepted by our node" because acceptPercent does `(a ?? 0) + (r ?? 0)`. That is a claim
+  // that nothing has ever been refused, drawn from a field the miner never sent.
+  const half = acceptSentence({ submittedAccepted: 2172, submittedRejected: null });
+  assert.doesNotMatch(half, /100%/, "a null refused count must not become a 100% acceptance rate");
+  assert.match(half, /2,172 accepted/);
+  assert.match(half, /refused count is not known/);
+
+  const otherHalf = acceptSentence({ submittedAccepted: null, submittedRejected: 7 });
+  assert.doesNotMatch(otherHalf, /0%/, "a null accepted count must not become a 0% acceptance rate");
+  assert.match(otherHalf, /7 refused/);
+  assert.match(otherHalf, /accepted count is not known/);
+});
+
+test("no percentage at all - the two counters do not cover the same period", () => {
+  // SDE-Infra's arithmetic, and the reason removing the null-as-zero fault is necessary and NOT
+  // sufficient. submittedAccepted was seeded from the whole journal; submittedRejected was left
+  // null on purpose and counts from the seed forward. So the moment one rejection lands, both
+  // counters are present, neither is null, and the ratio is wrong by twenty-three points:
+  //     true historical  2172/2843 = 76.4%
+  //     after one        2175/2176 = 99.95%
+  // and it never self-corrects, because accepted carries a baseline rejected never will.
+  const s = acceptSentence({ submittedAccepted: 2175, submittedRejected: 1 });
+  assert.doesNotMatch(s, /%/, "a rate from two different periods is not a rate");
+  assert.equal(s, "2,175 accepted, 1 refused");
+
+  // The partner, so "never show a percent" cannot be satisfied by saying nothing useful.
+  assert.match(s, /2,175/);
+  assert.match(s, /\b1 refused\b/);
+});
+
+test("absent, zero and half-known are THREE DIFFERENT strings, asserted as differing", () => {
+  // SDE-App's review ask, and the reason is L51 applied to its own fix: three rows each matching a
+  // pattern would pass if two of the three sentences were identical. Comparing them to EACH OTHER
+  // is the assertion that holds the claim.
+  const absent = acceptSentence({ submittedAccepted: null, submittedRejected: null });
+  const zero = acceptSentence({ submittedAccepted: 0, submittedRejected: 0 });
+  const half = acceptSentence({ submittedAccepted: 2172, submittedRejected: null });
+  assert.notEqual(absent, zero, "not told and measured-none are different news");
+  assert.notEqual(absent, half, "not told and partly told are different news");
+  assert.notEqual(zero, half, "measured-none and 2172-accepted are different news");
+  for (const s of [absent, zero, half]) assert.doesNotMatch(s, /%/, `no rate may appear: ${s}`);
 });

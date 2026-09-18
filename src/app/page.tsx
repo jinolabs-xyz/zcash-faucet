@@ -24,6 +24,7 @@ import { HeroChips } from "@/components/HeroChips";
 import { StatusCards } from "@/components/StatusCards";
 import { AnalyticsCards } from "@/components/AnalyticsCards";
 import { ToolsCards } from "@/components/ToolsCards";
+import ReserveLowPanel from "@/components/ReserveLowPanel";
 import { syncBarWidth } from "@/lib/syncLabel";
 import { networkFacts, formatAmount, type FaucetNetwork } from "@/lib/network";
 import { incomeSentence } from "@/lib/incomeSentence";
@@ -1048,33 +1049,14 @@ export default function Home() {
                 <p className="lede small">Your browser solves a short puzzle instead of a CAPTCHA. A few seconds, longer on a phone, and you can cancel it.</p>
               )}
               <HeroChips status={status} onView={(v) => setView(v)} />
-              {/* RESERVE LOW, IN THE HERO COLUMN RATHER THAN THE CLAIM CARD (#654, owner: "this below
-                  in the left hand bottom side of the website not in that component"). It is a fact about
-                  the faucet's float, not a step in the claim, and inside the card it was the content that
-                  pushed the panel past its clamp - 41px at 1280x800 and 128px at 1024x768, hidden rather
-                  than shown because the panel scrolls. Claims still work while it is up, which is why it
-                  was never an error state. */}
-              {phase === "ready" && refilling && network === "taz" && (
-                <div className="phase reserve-aside" data-phase="reserve-low">
-                  <div className="kicker">Reserve</div>
-                  <h3>The reserve is low</h3>
-                  <p>Claims still work. A refill is due, and if it runs out this page says so.</p>
-                  <div className="figs">
-                    <span><b className="num">{reserve?.spendableTaz != null ? num(Math.floor(reserve.spendableTaz)) : "-"}</b>spendable TAZ</span>
-                    <span><b className="num">{reserve?.lowTaz != null ? num(reserve.lowTaz) : "-"}</b>low mark</span>
-                  </div>
-                  {/* The owner's ask: a panel that says something is short should say what a reader
-                      can do about it. /donate, NOT /fund - donate is the TAZ page ("Keep the tank
-                      full", and "Or point a miner at us"), fund is mainnet ZEC for the server.
-                      Asking for real money because TESTNET coins are low is the wrong ask.
-                      It sits AFTER the figures on purpose: "Claims still work" reassures first, and
-                      a donate link read before that sentence would make a healthy faucet look like
-                      one about to stop. 4,504 TAZ is about 45,000 drips. */}
-                  <div className="row">
-                    <a className="tag" href="/donate">Top it up, or point a miner &rarr;</a>
-                  </div>
-                </div>
-              )}
+              {/* RESERVE LOW, ITS OWN COMPONENT (owner, item 4) AND ITS OWN GATE.
+                  It lived inline here gated on `phase === "ready"`, which meant it inherited the
+                  CLAIM's lifecycle and vanished the moment one started - the owner caught it under
+                  proof-of-work and again when rate-limited. #659 moved this panel out of the card
+                  precisely because the reserve is a fact about the WALLET rather than a step in the
+                  claim, and the gate had not been carried the same distance.
+                  reserveLowVisible() now decides, with a row per phase. */}
+              <ReserveLowPanel phase={phase} reserve={reserve} network={network} />
             </div>
             <figure className="hero-mascot" aria-label="The faucet's fox, turning to follow your pointer">
               <Mascot />
