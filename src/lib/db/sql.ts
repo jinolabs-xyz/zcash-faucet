@@ -474,12 +474,17 @@ ON CONFLICT(network, day) DO UPDATE SET sent = sent + 1`;
  * on either side. `allTime` stays unbounded on purpose: it means ever, and a row whose
  * label is wrong is still a drip that went out.
  *
+ * `countingSince` is the earliest day this table holds, and it is NOT wrapped in COALESCE on
+ * purpose: an empty table has no first day, and a zero-length string or an epoch would be a
+ * date we made up. Null means nothing has been counted yet.
+ *
  * Params: 30-day first day, today, 7-day first day, today, network.
  */
 export const DRIP_TOTALS_SQL = `
 SELECT COALESCE(SUM(sent), 0)                                                AS allTime,
        COALESCE(SUM(CASE WHEN day >= ? AND day <= ? THEN sent END), 0)       AS last30d,
-       COALESCE(SUM(CASE WHEN day >= ? AND day <= ? THEN sent END), 0)       AS last7d
+       COALESCE(SUM(CASE WHEN day >= ? AND day <= ? THEN sent END), 0)       AS last7d,
+       MIN(day)                                                              AS countingSince
   FROM drip_days
  WHERE network = ?`;
 
