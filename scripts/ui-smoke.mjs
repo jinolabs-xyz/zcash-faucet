@@ -967,10 +967,17 @@ async function checkLivePhasePanelsWearTheBox(browser) {
       // THIS row, and this is the only row guarding #659. The failure it would have missed is the
       // quiet one: someone refactors, the neighbours go red, they fix the rendering, and this row
       // is green the whole way through, so nobody learns whether #659 was ever re-checked.
+      // BY NAME, NOT BY COUNT (SDE-App's review). `r.dataCount >= 1` counts ANY [data-phase] under
+      // the root, so the conjunct is satisfied by a BYSTANDER panel rather than by this one. It
+      // goes red on the delete-the-panel mutant today only because .hero-copy currently holds
+      // nothing else - and the very next PR in the queue extracts this panel into its own
+      // component inside that same subtree. The vacuity would come back exactly when the follow-up
+      // lands, which is the worst possible moment for it. r.names is computed one line above and
+      // cannot be satisfied by something that is not this panel.
       ok("driving reserve-low: and it is NOT inside the claim card (#659, the owner's instruction)",
-        r.dataCount >= 1 && !r.inClaimCard.includes("reserve-low"),
-        r.dataCount < 1
-          ? "the panel did not render at all, so WHERE it renders was never tested - this row says nothing here"
+        r.names.includes("reserve-low") && !r.inClaimCard.includes("reserve-low"),
+        !r.names.includes("reserve-low")
+          ? `reserve-low did not render under ${root} (panels there: ${JSON.stringify(r.names)}), so WHERE it renders was never tested - this row says nothing here`
           : r.inClaimCard.includes("reserve-low")
             ? "reserve-low is back inside .card.claim, which is what caused the 128px overflow at 1024x768"
             : `rendered under ${root}, and the claim card holds ${JSON.stringify(r.inClaimCard)} - reserve-low is not among them`);
