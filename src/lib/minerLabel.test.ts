@@ -24,6 +24,7 @@ const base: MinerReading = {
   nodeLag: null,
   waitingAgoSeconds: null,
   waitingReason: null,
+  operator: { lastRejectReason: null, abandonedCount: null, abandonedAgoSeconds: null },
 };
 
 test("running names the age, because 'on' was the whole problem", () => {

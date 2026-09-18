@@ -34,6 +34,14 @@ export function readingFromStatus(m: (Partial<MinerReading> & { active?: boolean
     mode: m?.mode ?? null,
     lastErrorStage: m?.lastErrorStage ?? null,
     consecutiveErrors: m?.consecutiveErrors ?? null,
+    // ABSENT IS THE NORMAL CASE, not a fault: /api/status only sends `operator` when the
+    // ops token was presented, so a public page rebuilds it as all-nulls and every
+    // operator row renders as "not said" rather than as zero.
+    operator: {
+      lastRejectReason: m?.operator?.lastRejectReason ?? null,
+      abandonedCount: m?.operator?.abandonedCount ?? null,
+      abandonedAgoSeconds: m?.operator?.abandonedAgoSeconds ?? null,
+    },
     solvedCount: m?.solvedCount ?? null,
     submittedAccepted: m?.submittedAccepted ?? null,
     submittedRejected: m?.submittedRejected ?? null,

@@ -78,6 +78,15 @@ export interface Heartbeat {
   waitingSince: string | null;
   /** Why: "behind" (lag over MINER_MAX_LAG) or "no-peers" (an isolated node). */
   waitingReason: string | null;
+  /** Why the last submitted block was refused, as a FIXED TOKEN and never zebra's text
+   *  (#666). The miner's raw errors are the transport's and can carry an RPC URL with
+   *  credentials in its userinfo - the rule lastErrorStage already follows. */
+  lastRejectReason: string | null;
+  /** Solves DROPPED because the tip moved while we were working (#660). Without it an
+   *  abandoned solve and a genuine no-solution-in-window are identical from outside. */
+  abandonedCount: number | null;
+  /** When the last one was dropped, so a total can be told from a total that stopped. */
+  lastAbandonedAt: string | null;
 }
 
 export interface MinerReading {
@@ -105,6 +114,45 @@ export interface MinerReading {
   waitingAgoSeconds: number | null;
   /** "behind" or "no-peers" while waiting; anything else the writer says is kept as text. */
   waitingReason: string | null;
+  /**
+   * OPERATOR ONLY. NEVER SPREAD INTO THE PUBLIC RESPONSE - see `route.ts`, which
+   * destructures this off before it spreads the reading.
+   *
+   * WHY IT IS A NESTED OBJECT AND NOT THREE MORE FLAT FIELDS, which is the whole design:
+   * `route.ts` publishes the reading with `...minerReading`, so reading a field and
+   * PUBLISHING it are the same action. Three flat fields would reach every visitor the
+   * moment they were parsed, and the only thing stopping that would be a person
+   * remembering. Nested, the leak requires DELETING a line rather than forgetting one,
+   * and a row can assert the public response does not carry these keys.
+   */
+  operator: MinerOperatorReading;
+}
+
+/**
+ * The half of the reading that may be published WITHOUT the ops token.
+ *
+ * A NAMED FUNCTION RATHER THAN A DESTRUCTURE AT THE CALL SITE, so that "what the public
+ * may see" is a thing with a test rather than a habit in a route handler. The test drives
+ * it with a REAL reject reason and asserts the string does not survive serialisation -
+ * which a key-absence check at the wire level cannot do while the test environment has no
+ * heartbeat and every operator value is null. An assertion that has only ever seen null
+ * has not been shown to withhold a secret.
+ */
+export function publicMinerView(r: MinerReading): Omit<MinerReading, "operator"> {
+  const { operator: _operator, ...rest } = r;
+  void _operator;
+  return rest;
+}
+
+/** The half of the reading that stays behind the ops token. */
+export interface MinerOperatorReading {
+  /** A fixed token, never the node's message. Null when nothing has been refused. */
+  lastRejectReason: string | null;
+  /** Solves dropped because the tip moved. Null is "the writer did not say", not zero. */
+  abandonedCount: number | null;
+  /** Seconds since the last drop - a total beside a recency, which is as close to a rate
+   *  as this can honestly get without inventing a window. */
+  abandonedAgoSeconds: number | null;
 }
 
 const NOTHING = {
@@ -121,6 +169,7 @@ const NOTHING = {
   nodeLag: null,
   waitingAgoSeconds: null,
   waitingReason: null,
+  operator: { lastRejectReason: null, abandonedCount: null, abandonedAgoSeconds: null },
 } as const;
 
 /** No heartbeat path configured, so this app was never asked to look. */
@@ -196,6 +245,17 @@ export function readingFor(raw: unknown, nowMs: number): MinerReading {
     nodeLag: typeof h.nodeLag === "number" && Number.isFinite(h.nodeLag) && h.nodeLag >= 0 ? h.nodeLag : null,
     waitingAgoSeconds: ageSeconds(h.waitingSince, nowMs),
     waitingReason: typeof h.waitingReason === "string" && h.waitingReason ? h.waitingReason : null,
+    operator: {
+      // A fixed token from a known writer is still not a thing to publish, so this is
+      // parsed the same careful way and then kept behind the token by route.ts.
+      lastRejectReason: typeof h.lastRejectReason === "string" && h.lastRejectReason ? h.lastRejectReason : null,
+      // NULL IS NOT ZERO, for the same reason it is not zero on solvedCount: a heartbeat
+      // written before #666 has no abandonedCount, and reporting 0 would say "this watcher
+      // has never dropped a solve" on no evidence - which is the exact claim an operator
+      // would read it for.
+      abandonedCount: typeof h.abandonedCount === "number" ? h.abandonedCount : null,
+      abandonedAgoSeconds: ageSeconds(h.lastAbandonedAt, nowMs),
+    },
   };
 
   if (beatAgo > staleAfter) return { ...facts, state: "not-writing" };

@@ -631,9 +631,33 @@ try {
   // field the public view is meant to keep, before asserting what it must not carry.
   ok("A status (public): and the miner does NOT, because that is the operator's surface",
     typeof s.miner?.active === "boolean" && !("detail" in s.miner), JSON.stringify(s.miner ?? null));
+  // THE SAME PAIR FOR THE OPERATOR BLOCK (#666's two fields plus the recency). These are
+  // the reason `operator` is a nested object on the reading rather than three more flat
+  // fields: `route.ts` publishes the reading with a spread, so a flat field would be
+  // public the moment it was parsed, and the only thing preventing that would be someone
+  // remembering. Nested, the leak takes DELETING the destructure, and these rows see it.
+  //
+  // lastRejectReason is a FIXED TOKEN and never the node's text - but a fixed token is
+  // still not a thing to publish, and abandonedCount says how often this miner loses
+  // races, which is operator detail by the same standard as `detail` itself.
+  //
+  // SAME ANTI-VACUITY AS THE ROWS ABOVE (#642, SDE-Infra): assert the miner block IS
+  // there, by a field the public view is meant to keep, BEFORE asserting what it must not
+  // carry - otherwise a body that dropped `miner` entirely satisfies both and proves
+  // nothing.
+  ok("A status (operator token): the miner carries its operator block, with all three fields",
+    !!opsStatus.body.miner?.operator
+      && ["lastRejectReason", "abandonedCount", "abandonedAgoSeconds"].every((k) => k in opsStatus.body.miner.operator),
+    JSON.stringify(opsStatus.body.miner?.operator ?? null));
+  ok("A status (public): and the operator block is absent, not nulled - a reject reason is not public",
+    typeof s.miner?.active === "boolean" && !("operator" in s.miner), JSON.stringify(s.miner ?? null));
+
   const wrongTok = await req(BASE_A, "/api/status", { headers: { "x-faucet-ops": OPS_TOKEN + "x" } });
   ok("A status (wrong token): the miner detail is withheld too, not only the commit",
     typeof wrongTok.body.miner?.active === "boolean" && !("detail" in wrongTok.body.miner),
+    JSON.stringify(wrongTok.body.miner ?? null));
+  ok("A status (wrong token): and the operator block is withheld with it",
+    typeof wrongTok.body.miner?.active === "boolean" && !("operator" in wrongTok.body.miner),
     JSON.stringify(wrongTok.body.miner ?? null));
   ok("A status (wrong token): the public view, not an error that says a token exists", wrongTok.status === 200 && !("buildCommit" in wrongTok.body) && !("expected" in wrongTok.body.box), JSON.stringify(Object.keys(wrongTok.body)));
   ok("A status: reserve block shape", typeof s.reserve?.targetTaz === "number" && typeof s.reserve?.lowTaz === "number" && typeof s.reserve?.refilling === "boolean" && "spendableTaz" in (s.reserve ?? {}));

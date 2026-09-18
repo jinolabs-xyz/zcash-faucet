@@ -13,7 +13,7 @@ import { countDrips } from "@/lib/db";
 import { getNodeStatus } from "@/lib/zcash/nodeStatus";
 import { getReserveReconciler } from "@/lib/reserve/reconciler";
 import { readMinerHeartbeat } from "@/lib/miner/read";
-import { isActive } from "@/lib/miner/heartbeat";
+import { isActive, publicMinerView } from "@/lib/miner/heartbeat";
 import { cachedCtazNodeStateWarm } from "@/lib/crosslink/cache";
 import { canServeCtaz } from "@/lib/crosslink/recency";
 import { uptimeReading } from "@/lib/uptime";
@@ -94,6 +94,11 @@ export const GET = withApi("status", async (req: NextRequest) => {
   // Synchronous and off the await chain: a few hundred bytes from a bind mount, so it
   // does not belong in the Promise.all with three network calls.
   const minerReading = readMinerHeartbeat(config.miner.heartbeatPath);
+  // Split once, here, so the public projection is a THING rather than a habit: every
+  // later use of publicMinerReading is incapable of carrying the operator half, and
+  // minerOperator has exactly one consumer below, inside the ops branch.
+  const publicMinerReading = publicMinerView(minerReading);
+  const minerOperator = minerReading.operator;
 
   const balanceTaz = balanceZat === null ? null : Number(balanceZat) / Number(ZATOSHI_PER_TAZ);
   const empty =
@@ -165,8 +170,13 @@ export const GET = withApi("status", async (req: NextRequest) => {
     // lastErrorStage is a fixed token, never a message. The miner's raw errors are the
     // transport's and can carry the RPC URL, which can carry credentials in its
     // userinfo, and this response is public.
+    // THE PUBLIC HALF, CARVED OFF EXPLICITLY. `...minerReading` publishes whatever the
+    // reading carries, so reading a field and PUBLISHING it are one action - which is why
+    // the operator half is a nested object rather than three more flat fields. Pulling it
+    // out here means a leak needs someone to DELETE this line, not to forget one, and the
+    // suite can assert a token-less response does not carry these keys.
     miner: {
-      ...minerReading,
+      ...publicMinerReading,
       beatAgoSeconds: round(minerReading.beatAgoSeconds),
       templateAgoSeconds: round(minerReading.templateAgoSeconds),
       waitingAgoSeconds: round(minerReading.waitingAgoSeconds),
@@ -182,7 +192,15 @@ export const GET = withApi("status", async (req: NextRequest) => {
       // Rendered with the same minerRow() the unit tests cover rather than reshaped here, so the
       // wire format and the tested format cannot drift apart - the reason given twenty lines up
       // for sending the reading through as-is.
-      ...(ops ? { detail: minerRow(minerReading, box.minerUnit) } : {}),
+      //
+      // THE SAME RULE, APPLIED TO THE NEW FIELDS (#666). lastRejectReason is a fixed token
+      // and not the node's text - but a fixed token is still not a thing to publish, and
+      // abandonedCount/abandonedAgoSeconds say how often the miner is losing races, which
+      // is operator detail by the same standard as the rest of `detail`.
+      // Nested under `operator`, mirroring the reading, so the wire format and the tested
+      // format cannot drift apart - the reason given above for sending the rest through
+      // as-is.
+      ...(ops ? { detail: minerRow(minerReading, box.minerUnit), operator: minerOperator } : {}),
     },
     // Refill loop state. spendableTaz uses this request's balance read (fresher
     // than the reconciler's last tick); refilling is the reconciler's decision.

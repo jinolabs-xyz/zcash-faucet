@@ -123,6 +123,12 @@ const CONSUMED = [
   "nodeLag",
   "waitingSince",
   "waitingReason",
+  // SURFACED BY THIS PR, operator-only. They were KNOWINGLY_IGNORED because #666 wrote them
+  // and nothing read them; they are read now, and kept behind the ops token because a
+  // reject reason and a loss rate are operator detail, not public copy.
+  "lastRejectReason",
+  "abandonedCount",
+  "lastAbandonedAt",
 ];
 
 const KNOWINGLY_IGNORED: Record<string, string> = {
@@ -140,13 +146,11 @@ const KNOWINGLY_IGNORED: Record<string, string> = {
   // submittedRejected reads identically whether #657 is fixed or not, and stale-parent falling
   // to zero while duplicate rises is the fix working. Ignored here on purpose - whether the
   // operator row shows it is UI's call, and the writer emitting it does not oblige the page.
-  lastRejectReason: "why the last block was refused, as a fixed token - surface is UI's call",
+
   // #660 added a state - a solve dropped because the tip moved - and counted nothing, so an
   // abandoned solve and a genuine no-solution-in-window were identical from outside the box.
   // These say which. Ignored here on purpose: the operator surface is UI's call, and the pair
   // is read today by a human comparing it against solvedCount, not by this reader.
-  abandonedCount: "solves dropped because the tip moved (#660) - not surfaced yet",
-  lastAbandonedAt: "when the last solve was dropped - not surfaced yet",
   // The third outcome. A solved block ends accepted, rejected or DISCARDED before submission, and
   // only the first two were counted - which is why submittedRejected could not be derived and why
   // the page turned that null into "100% accepted". With this the accounting closes. Ignored here
