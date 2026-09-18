@@ -20,7 +20,7 @@ import { config, ZATOSHI_PER_TAZ } from "@/lib/config";
 import { dripsNow } from "@/lib/db";
 import { safeBalance } from "@/lib/zcash/send";
 import { readMinerHeartbeat } from "@/lib/miner/read";
-import { isActive } from "@/lib/miner/heartbeat";
+import { isActive, publicMinerView } from "@/lib/miner/heartbeat";
 import { getReserveReconciler } from "@/lib/reserve/reconciler";
 import { incomeSentence } from "@/lib/incomeSentence";
 import { CopyAddress } from "./CopyAddress";
@@ -46,7 +46,13 @@ export default async function Donate() {
   const maintenance = config.maintenanceAddress.trim();
 
   const balanceZat = await safeBalance();
-  const miner = readMinerHeartbeat(config.miner.heartbeatPath);
+  // THE PUBLIC HALF, AND THE WRAP IS THE GUARD (#679 follow-up). This page reads the heartbeat
+  // directly, outside /api/status, so the projection that keeps the operator fields off the wire
+  // does not reach it. It takes two scalars and forwards nothing today - but Next serialises
+  // server-component props to the client, so a future `<Shell miner={miner}>` here would ship the
+  // operator half to every visitor without anyone touching route.ts. Typed as
+  // Omit<MinerReading, "operator">, that edit stops compiling instead of needing a reviewer.
+  const miner = publicMinerView(readMinerHeartbeat(config.miner.heartbeatPath));
   const reserveState = getReserveReconciler().status;
   const income = incomeSentence({
     minerActive: isActive(miner.state),
