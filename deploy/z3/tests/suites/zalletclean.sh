@@ -37,8 +37,13 @@ zc_env() {
   # the volume's real host path before deleting; with that path absent the script dies at the
   # backup and "no delete happened" is true for the wrong reason. Standing it up here is what
   # lets a mutant that removes --read-only's force of --dry-run actually reach the delete.
-  mkdir -p "/var/lib/docker/volumes/$ZALLET_VOLUME/_data" 2>/dev/null || true
-  cp -f "$T/vol/wallet.db" "/var/lib/docker/volumes/$ZALLET_VOLUME/_data/wallet.db" 2>/dev/null || true
+  # THE DESTRUCTIVE PATH IS NOW ACTUALLY REACHABLE. This used to mkdir under
+  # /var/lib/docker/volumes and copy the fixture there, with `2>/dev/null || true` on both - and
+  # that path is ROOT-OWNED while the harness runs as a normal user by design, so it silently did
+  # nothing and the backup and delete were never once executed by a test. The comment said the
+  # opposite. ZALLET_VOL_DATA points the tools at the fixture volume instead, which is the same
+  # directory the snapshot rows already read.
+  export ZALLET_VOL_DATA="$T/vol"
   rm -f "$T/bin/docker"
   cat > "$T/bin/docker" <<'D'
 #!/usr/bin/env bash
@@ -127,6 +132,97 @@ check "and it names --read-only, so the look does not read as impossible" \
 zc_run "$DROPQ"
 check "drop-queue refuses the same way" "[ $RC -eq 1 ]"
 check "and points the same way out" "grep -q -- '--read-only' '$T/last.out'"
+
+echo "== zallet cleanup: the BACKUP takes the -wal and -shm, or it is not an undo"
+# THE RULE WAS WRITTEN FOR THE READ AND NOT APPLIED TO THE UNDO. The snapshot refuses a partial
+# copy and explains why in a comment; the backup one function later took wallet.db alone. A db
+# without its -wal is internally consistent and OLD, and a stale -wal beside a restored db reports
+# as "disk I/O error" - so the file that exists to reverse a 138-row cascade could be missing the
+# wallet's most recent commits. Both repair tools had it, and watchdog.sh runs BOTH unattended on
+# the poison path, so the incomplete copy is taken while nobody is watching.
+#
+# Normally there is nothing to take - sqlite checkpoints on last close and this runs stopped - but
+# the case these tools exist for is a CRASH-LOOPING wallet, which is where a clean close is least
+# likely. Checked rather than assumed.
+zc_env
+export STUB_ZALLET_RUNNING=false STUB_SQL_OUT="7:AABBCC" STUB_RPC_HAS_TX=0
+zc_run "$ABANDON"
+# ANTI-VACUITY FIRST, exactly as the snapshot case does it: every sidecar row below is satisfied
+# by a run that never reached the backup at all.
+check "the repair reached the backup and wrote one" \
+  "ls '$T/vol'/wallet.db.bak-abandon-* >/dev/null 2>&1"
+check "and the -wal came with it, so the undo is the state the wallet was actually in" \
+  "ls '$T/vol'/wallet.db.bak-abandon-*-wal >/dev/null 2>&1"
+check "and the -shm too" "ls '$T/vol'/wallet.db.bak-abandon-*-shm >/dev/null 2>&1"
+zc_env
+export STUB_ZALLET_RUNNING=false STUB_SQL_OUT="7:AABBCC" STUB_RPC_HAS_TX=0
+zc_run "$DROPQ"
+check "drop-queue backs up the same way, since the watchdog runs it on the same path" \
+  "ls '$T/vol'/wallet.db.bak-queuefix-*-wal >/dev/null 2>&1"
+
+echo "== zallet cleanup: the way BACK is printed, and it removes the LIVE sidecars first"
+# SDE-App's finding on the sidecar fix, and it is the same defect one layer out: after that change
+# the MATERIALS for an undo are complete and the PROCEDURE is not. Nothing in any runbook mentions
+# bak-abandon or bak-queuefix, so the restore is whatever an operator invents at 3am - and the
+# obvious one is wrong in exactly the way this file warns about: copy the db back, leave the LIVE
+# -wal, and sqlite replays a stale sidecar against a restored database. "disk I/O error". Eaten once
+# already.
+# THIS IS A TEXT ASSERTION AND THAT IS THE RIGHT KIND: the artefact under test IS the printed
+# instruction. What it must not do is print a restore that omits the step nobody thinks of.
+zc_env
+export STUB_ZALLET_RUNNING=false STUB_SQL_OUT="7:AABBCC" STUB_RPC_HAS_TX=0
+zc_run "$ABANDON"
+check "the repair reached the backup, so the rows below are not reading an early exit" \
+  "grep -q 'backup:' '$T/last.out'"
+check "and it prints a way back at all" "grep -q 'to undo:' '$T/last.out'"
+check "and the LIVE -wal and -shm are removed BEFORE the database is copied back" \
+  "awk '/to undo:/{u=1} u&&/rm -f .*wallet[.]db-wal/&&!r{r=NR} u&&/cp -f .*wallet[.]db/&&!/wallet[.]db-/&&!c{c=NR} END{exit !(r&&c&&r<c)}' '$T/last.out'"
+check "and it names the LIVE sidecars, not the backup's copies, for the removal" \
+  "grep -q \"rm -f $T/vol/wallet.db-wal $T/vol/wallet.db-shm\" '$T/last.out'"
+check "and the backup's own sidecars are copied back too, or the restore is the bug again" \
+  "grep -q 'cp -f .*wallet.db.bak-abandon-.*-wal' '$T/last.out'"
+zc_env
+export STUB_ZALLET_RUNNING=false STUB_SQL_OUT="7:AABBCC" STUB_RPC_HAS_TX=0
+zc_run "$DROPQ"
+check "drop-queue prints the same way back, since the watchdog runs it on the same path" \
+  "grep -q 'to undo:' '$T/last.out' && grep -q 'rm -f .*wallet.db-wal' '$T/last.out'"
+
+echo "== zallet cleanup: with NOTHING overridden, the tools use the REAL volume path"
+# THE KNOB THAT MADE THE WRITE PATH TESTABLE ALSO HIDES THE VALUE PRODUCTION USES. zc_env exports
+# ZALLET_VOL_DATA and ZALLET_VOLUME for every case above, so every row here is about a fixture
+# directory and NOTHING anchors what the tools resolve to when the owner runs them on the box. The
+# shipped default could be edited to any path and this suite would stay green - which is how the
+# destructive path went untested in the first place, so it is not a hypothetical family.
+# Both knobs are cleared, so the default resolves the way it does on the box and the run dies at the
+# backup cp against a path that does not exist here. THE ABORT IS THE OBSERVATION: cp names the path
+# it could not read, which is the one production would have used.
+zc_env
+unset ZALLET_VOL_DATA ZALLET_VOLUME
+export STUB_ZALLET_RUNNING=false STUB_SQL_OUT="7:AABBCC" STUB_RPC_HAS_TX=0
+zc_run "$ABANDON"
+check "with no override the run stops rather than repairing something it cannot back up" "[ $RC -ne 0 ]"
+check "and the path it reached for is the production one, volume name and layout both" \
+  "grep -q '/var/lib/docker/volumes/z3-testnet-zallet/_data/wallet.db' '$T/last.out'"
+check "and no delete was issued against it" \
+  "! grep -qi 'delete from transactions' '$STUB_LOG'"
+zc_env
+unset ZALLET_VOL_DATA ZALLET_VOLUME
+export STUB_ZALLET_RUNNING=false STUB_SQL_OUT="7:AABBCC" STUB_RPC_HAS_TX=0
+zc_run "$DROPQ"
+check "drop-queue resolves the same default, since the watchdog runs it on the same box" \
+  "grep -q '/var/lib/docker/volumes/z3-testnet-zallet/_data/wallet.db' '$T/last.out'"
+
+echo "== zallet cleanup: a wallet with NO -wal still backs up, rather than refusing"
+# The ordinary case after a clean stop. Refusing here would turn a safety check into an outage,
+# which is the failure mode the --read-only work was done to remove.
+zc_env
+rm -f "$T/vol/wallet.db-wal" "$T/vol/wallet.db-shm"
+export STUB_ZALLET_RUNNING=false STUB_SQL_OUT="7:AABBCC" STUB_RPC_HAS_TX=0
+zc_run "$ABANDON"
+check "a wallet with no sidecars is backed up and not refused" \
+  "[ $RC -eq 0 ] && ls '$T/vol'/wallet.db.bak-abandon-* >/dev/null 2>&1"
+check "and no phantom -wal is invented beside it" \
+  "! ls '$T/vol'/wallet.db.bak-abandon-*-wal >/dev/null 2>&1"
 
 echo "== zallet cleanup: A TYPO IN THE FLAG USED TO RUN THE REAL REPAIR"
 # `[ "$1" = "--dry-run" ]` left DRY_RUN=0 for every other spelling, so `--readonly`,
