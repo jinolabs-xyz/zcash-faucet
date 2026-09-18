@@ -455,7 +455,7 @@ export function acceptSentence(miner: { submittedAccepted?: number | null; submi
   // "100% accepted by our node" - a claim that nothing has ever been refused, built entirely on
   // a field the miner did not send. A rate needs BOTH halves; one half is a count, not a rate.
   if (a == null || r == null) {
-    const known = a == null ? `${r} refused` : `${a} accepted`;
+    const known = a == null ? `${groupDigits(r as number)} refused` : `${groupDigits(a)} accepted`;
     const missing = a == null ? "accepted" : "refused";
     return `${known}, and the ${missing} count is not known`;
   }
@@ -478,7 +478,10 @@ export function acceptSentence(miner: { submittedAccepted?: number | null; submi
   // it. The counts are what was measured, so the counts are what this says. A denominator anyone
   // can defend needs accepted + rejected + discarded to close, which is Infra's discarded counter
   // and is not built.
-  return `${a} accepted, ${r} refused`;
+  // groupDigits, because `solved` two lines up on the same card renders through it. Two formats
+  // for one kind of quantity in one card reads as a bug to the person looking at it, and the
+  // owner has already asked once why these numbers looked wrong (SDE-App).
+  return `${groupDigits(a)} accepted, ${groupDigits(r)} refused`;
 }
 
 /* ── the backend ──────────────────────────────────────────────────────── */

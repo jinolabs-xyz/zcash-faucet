@@ -1966,14 +1966,26 @@ async function checkRefusalCards(browser, base, address) {
       await page.goto(base, { waitUntil: "networkidle" });
       await page.waitForFunction(() => /\bLIVE\b/.test(document.body.innerText), null, { timeout: 30_000 });
       await page.getByTestId("address-input").fill(address);
+      // READ BEFORE THE CLICK, BECAUSE "SURVIVES" IS A CLAIM ABOUT A TRANSITION.
+      // The first version asserted the panel WAS present during the claim, which is only true
+      // where the reserve is actually low. My local stack forces that state; CI's reserve is
+      // healthy, so the panel correctly does not render and all seven rows failed on a page
+      // behaving perfectly - green on my machine, red in CI, from a row that never stated the
+      // state it needed. Comparing before against during is the assertion the NAME always made.
+      const reserveBefore = await page.locator('[data-phase="reserve-low"]').count();
       await page.getByTestId("claim-button").click();
       // THE SUBMITTING WINDOW, the owner's OTHER screenshot. The click sets phase "submitting"
       // before any response arrives, so this reads the state the proof-of-work screen is in.
       // Asserted once per shape rather than once overall: the panel must survive EVERY claim,
       // not merely the one case someone thought to check.
-      ok(`${s.name}: the reserve notice survives the claim itself (owner, item 2)`,
-        (await page.locator('[data-phase="reserve-low"]').count()) === 1,
-        `reserve-low panels while submitting: ${await page.locator('[data-phase="reserve-low"]').count()}`);
+      const reserveDuring = await page.locator('[data-phase="reserve-low"]').count();
+      if (reserveBefore > 0) {
+        ok(`${s.name}: the reserve notice survives the claim itself (owner, item 2)`,
+          reserveDuring === reserveBefore,
+          `reserve-low panels: ${reserveBefore} before the claim, ${reserveDuring} during it`);
+      } else {
+        console.log(`  --   ${s.name}: the reserve is not low in this run, so there was no notice to survive the claim`);
+      }
       // An EMPTY [role=alert] is always in the DOM; wait for one with text.
       await page.waitForFunction(() => [...document.querySelectorAll("[role=alert]")].some((e) => (e.textContent || "").trim()), null, { timeout: 60_000 }).catch(() => {});
       const c = await card();
@@ -1994,6 +2006,7 @@ async function checkRefusalCards(browser, base, address) {
     await page.goto(base, { waitUntil: "networkidle" });
     await page.waitForFunction(() => /\bLIVE\b/.test(document.body.innerText), null, { timeout: 30_000 });
     await page.getByTestId("address-input").fill(address);
+    const rlBefore = await page.locator('[data-phase="reserve-low"]').count();
     await page.getByTestId("claim-button").click();
     // WAIT FOR THE SUBJECT ITSELF, NOT FOR A PROXY THE WRONG STATE ALSO SATISFIES. The first
     // version waited for the claim button to be absent or disabled - which is ALREADY TRUE while
@@ -2009,9 +2022,14 @@ async function checkRefusalCards(browser, base, address) {
     const cooledDown = await page.evaluate(() => /already claimed|come back|try again|cooldown/i.test(document.body.innerText));
     ok("a 429 leaves the page rate-limited, so the next row has a subject",
       cooledDown, (await page.innerText("body")).replace(/\s+/g, " ").slice(0, 140));
-    ok("AND THE RESERVE NOTICE SURVIVES BEING RATE-LIMITED (owner, item 2)",
-      (await page.locator('[data-phase="reserve-low"]').count()) === 1,
-      `reserve-low panels: ${await page.locator('[data-phase="reserve-low"]').count()} - it was gated on phase === "ready" and vanished here`);
+    const rlAfter = await page.locator('[data-phase="reserve-low"]').count();
+    if (rlBefore > 0) {
+      ok("AND THE RESERVE NOTICE SURVIVES BEING RATE-LIMITED (owner, item 2)",
+        rlAfter === rlBefore,
+        `reserve-low panels: ${rlBefore} before, ${rlAfter} after being refused - it was gated on phase === "ready" and vanished here`);
+    } else {
+      console.log("  --   the reserve is not low in this run, so there was no notice to survive the rate limit");
+    }
     await page.unroute("**/api/faucet");
   } catch (err) {
     ok("refusal cards ran to completion", false, err instanceof Error ? err.message : String(err));
@@ -3539,6 +3557,12 @@ async function checkNoEmDashReachesTheReader(browser, base) {
   nulled.reserve = { ...(nulled.reserve ?? {}), spendableTaz: null, lowTaz: null, refilling: true };
   nulled.empty = true;
   nulled.balanceTaz = 0;
+  // AND THE DRIPS, because the SPOKEN placeholder had the same defect as the visible one.
+  // Shell passes `drips?.byDay ?? []` and `?? null`, so an absent block reaches the sparkline as
+  // an empty series and two nulls - and its aria-label said `${allTime ?? 0}`, so a sighted
+  // reader saw an em dash while a screen reader heard "0 counted": a measured zero for a count
+  // nobody has. SDE-App found it one line from a line I had just edited.
+  nulled.drips = null;
 
   for (const [label, payload] of [["as served", null], ["with every figure null", nulled]]) {
     const ctx = await browser.newContext({ viewport: DESKTOP });
@@ -3564,7 +3588,11 @@ async function checkNoEmDashReachesTheReader(browser, base) {
       // out. The claim card is `<article id="claim">` (page.tsx:1252-1884) and all four live
       // inside it, so the id is both the tightest anchor and the one that cannot drift with a
       // class rename.
-      return { hits, figs: document.querySelectorAll("#claim .figs b").length };
+      // The sparkline speaks its figures rather than drawing them, so the placeholder it owes a
+      // screen reader is a WORD. Read it here so the spoken and the visible are judged together.
+      const spark = document.querySelector("#spark");
+      return { hits, figs: document.querySelectorAll("#claim .figs b").length,
+               spark: spark ? (spark.getAttribute("aria-label") || "") : null };
     }, EM);
     ok(`${label}: no em dash reaches the reader`,
       r.hits.length === 0,
@@ -3578,6 +3606,12 @@ async function checkNoEmDashReachesTheReader(browser, base) {
     if (payload) {
       ok(`${label}: and the placeholders were actually on screen to be checked`,
         r.figs > 0, `${r.figs} claim-card figure slot(s) rendered under the nulled status, want > 0`);
+      // THE SPOKEN PLACEHOLDER. An em dash on screen and "0" in the ear is the same figure
+      // answering two different ways, and only one of them is true. The label must not invent a
+      // zero for a count that arrived null.
+      ok(`${label}: and the sparkline SPEAKS the absence rather than inventing a zero`,
+        r.spark !== null && /unknown/.test(r.spark) && !/\b0 counted\b/.test(r.spark),
+        r.spark === null ? "no #spark on the page, so the label was never read" : `aria-label: "${r.spark}"`);
     }
     await ctx.close();
   }

@@ -465,7 +465,7 @@ test("#645: a rate needs BOTH halves - a null refused count is not zero refusals
   // that nothing has ever been refused, drawn from a field the miner never sent.
   const half = acceptSentence({ submittedAccepted: 2172, submittedRejected: null });
   assert.doesNotMatch(half, /100%/, "a null refused count must not become a 100% acceptance rate");
-  assert.match(half, /2172 accepted/);
+  assert.match(half, /2,172 accepted/);
   assert.match(half, /refused count is not known/);
 
   const otherHalf = acceptSentence({ submittedAccepted: null, submittedRejected: 7 });
@@ -484,10 +484,10 @@ test("no percentage at all - the two counters do not cover the same period", () 
   // and it never self-corrects, because accepted carries a baseline rejected never will.
   const s = acceptSentence({ submittedAccepted: 2175, submittedRejected: 1 });
   assert.doesNotMatch(s, /%/, "a rate from two different periods is not a rate");
-  assert.equal(s, "2175 accepted, 1 refused");
+  assert.equal(s, "2,175 accepted, 1 refused");
 
   // The partner, so "never show a percent" cannot be satisfied by saying nothing useful.
-  assert.match(s, /2175/);
+  assert.match(s, /2,175/);
   assert.match(s, /\b1 refused\b/);
 });
 
