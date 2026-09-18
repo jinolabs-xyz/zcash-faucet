@@ -22,6 +22,8 @@
 //   RATE_LIMIT_SALT=ui-smoke HOSH_URL=http://127.0.0.1:28324/ TIP_ORACLE_ENDPOINT= \
 //   FAUCET_CTAZ_ENABLED=true CROSSLINK_RPC_URL=http://127.0.0.1:28611/ \
 //   FAUCET_CTAZ_RPC_SOCKET= LIGHTWALLETD_ENDPOINT=http://127.0.0.1:28612/ PORT=3120 npm start
+//   # then, once it is answering, a 30-day history so the chart is not a single bar:
+//   node scripts/seed-drips.mjs data/faucet.db
 //
 // CLEAR THE DB FIRST, AND IT IS NOT HOUSEKEEPING. This suite drives a real claim on every
 // run, so the rows accumulate in data/faucet.db. Drive it enough times on one worktree and the
@@ -3768,8 +3770,13 @@ async function checkDripsTooltip(browser, base) {
   // AND NOTHING LIGHTS UP, which is the same rule one layer along: there is no bar to highlight,
   // so the chart must be unchanged. This is the row that would have caught #677's own fix going
   // in backwards - a chart that still drew the bar would repaint here.
+  const afterUncounted = await bitmap();
   ok("#594/#677: and no bar lights up, because an uncounted day has no mark to light",
-    (await bitmap()) === atRest, "the bitmap is unchanged, as it must be with nothing drawn there");
+    afterUncounted === atRest,
+    // Reported, not asserted. A static "the bitmap is unchanged" here prints the OPPOSITE of what
+    // happened on the only run that matters - the failing one (L54, my own, the day I filed it).
+    afterUncounted === atRest ? "the bitmap is unchanged, as it must be with nothing drawn there"
+                              : "the bitmap CHANGED, so something was drawn for a day nobody counted");
   await leave();
   await ctx.close();
 }
