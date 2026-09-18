@@ -40,7 +40,7 @@ export interface Status {
    * deploy) means the ledger would not answer, which is unknown, never zero. */
   // `byDay` is the thirty-day series #549 added: counts only, zero-filled, oldest
   // first. The header sparkline is its first reader on the page.
-  drips?: { allTime: number; last7d: number; last30d: number; byDay?: DripDay[] } | null;
+  drips?: { allTime: number; last7d: number; last30d: number; byDay?: DripDay[]; countingSince?: string | null } | null;
   backend: { reachable: boolean; endpoint: string };
   node?: {
     ready: boolean; syncPercent: number | null; height: number | null; nodeHeight: number | null; canBuildTx?: boolean;
@@ -92,7 +92,7 @@ export interface Status {
         ageSeconds: number | null;
         /** Their fixed payout, as a decimal string: a bigint does not survive JSON. */
         dripZat: string;
-        drips?: { allTime: number; last7d: number; last30d: number; byDay?: DripDay[] } | null;
+        drips?: { allTime: number; last7d: number; last30d: number; byDay?: DripDay[]; countingSince?: string | null } | null;
         /** The literal string. Their surface has no balance method, so this is an
          *  answer rather than a gap, and it must not be rendered as a number. */
         reserve: "unknown";

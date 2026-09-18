@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+// isUncounted only - the DripDay type stays declared below, for the reason the comment there
+// gives: importing it from @/lib/db would pull better-sqlite3 into a client component.
+import { isUncounted } from "@/lib/charts";
 
 /**
  * The series' shape, declared here rather than imported from `@/lib/db`. That module
@@ -59,11 +62,14 @@ const say = (n: number | null | undefined) => (n == null ? "unknown" : String(n)
 
 export function Sparkline({
   byDay,
+  countingSince,
   last7d,
   allTime,
   theme,
 }: {
   byDay: DripDay[];
+  /** First day the counter has any record of (#675). Days before it are not plotted. */
+  countingSince?: string | null;
   last7d: number | null;
   allTime: number | null;
   theme: "paper" | "ink";
@@ -87,10 +93,15 @@ export function Sparkline({
       const T = 1;
       const ih = h - 2;
       const n = byDay.length;
-      const max = Math.max(1, ...byDay.map((d) => d.sent));
+      // UNCOUNTED DAYS ARE OUT OF THE SCALE AND OFF THE CHART (#677). Their `sent` is a
+      // zero-fill, not a measurement, and the strip drew them as served-none - the same mark a
+      // genuinely quiet day gets, which is the opposite news.
+      const counted = byDay.filter((d) => !isUncounted(d.day, countingSince));
+      const max = Math.max(1, ...counted.map((d) => d.sent));
       const gap = Math.max(1, ((w / n) * 0.3));
       const bw = (w - gap * (n - 1)) / n;
       byDay.forEach((d, i) => {
+        if (isUncounted(d.day, countingSince)) return;
         const bh = Math.max(bw, (d.sent / max) * ih);
         const bx = i * (bw + gap);
         const by0 = T + ih - bh;
@@ -118,14 +129,19 @@ export function Sparkline({
     ro.observe(c);
     return () => ro.disconnect();
     // `theme` is a dependency because the fills are read from CSS custom properties, so a
-    // theme flip changes the colours without changing the data.
-  }, [byDay, theme]);
+    // theme flip changes the colours without changing the data. `countingSince` because the
+    // draw reads it twice and a new `byDay` on every poll is a habit of the caller's, not a
+    // guarantee - and exhaustive-deps is a warning here, so nothing in CI would ever say so.
+  }, [byDay, theme, countingSince]);
 
   // NULL, NOT ZERO, AND THERE ARE THREE OF THEM ON THE LABEL BELOW. Shell passes
   // `byDay ?? []`, so an absent drips block arrives as an EMPTY ARRAY and this returned a
   // measured 0 for a day nobody counted - the same `(a ?? 0)` fault this PR removes from the
   // acceptance rate, one component over. An empty series means we were not told.
   const today = byDay.length ? byDay[byDay.length - 1].sent : null;
+  // Spoken, because a sighted reader sees the gap and a screen reader otherwise hears a
+  // thirty-day chart with no mention that part of it is blank.
+  const uncountedDays = byDay.filter((d) => isUncounted(d.day, countingSince)).length;
 
   return (
     <canvas
@@ -139,7 +155,8 @@ export function Sparkline({
       // measured zero for a count we do not have. Found by SDE-App one line from the line I had
       // just edited, which is the lesson - I changed the words and did not read the operator
       // beside them.
-      aria-label={`Drips per day over the last 30 days. ${say(last7d)} this week, ${say(allTime)} counted, ${say(today)} today.`}
+      aria-label={`Drips per day over the last 30 days. ${say(last7d)} this week, ${say(allTime)} counted, ${say(today)} today.`
+        + (uncountedDays > 0 ? ` ${uncountedDays} of them are before counting began and are not plotted.` : "")}
     />
   );
 }

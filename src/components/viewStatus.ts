@@ -26,7 +26,9 @@ export interface ViewStatus {
   dripTaz: number;
   cooldownSeconds?: number;
   balanceTaz: number | null;
-  drips?: { allTime: number; last7d: number; last30d: number; byDay?: ViewDripDay[] } | null;
+  /** `countingSince` is the first day the counter has any record of (#675). Absent or null means
+   *  the table is empty - it is NOT a date, and the figure beside it must not invent one. */
+  drips?: { allTime: number; last7d: number; last30d: number; byDay?: ViewDripDay[]; countingSince?: string | null } | null;
   backend: { reachable: boolean; endpoint: string };
   /** null when the wallet did not answer - a state the server really sends (#573). */
   node?: {

@@ -333,6 +333,15 @@ jobs:
             curl -sf "$UI_SMOKE_URL/api/status" >/dev/null && break
             sleep 1
           done
+          # A 30-DAY HISTORY, BEFORE THE SUITE LOOKS AT A CHART. The database is created fresh
+          # for this job, so without this the only drips in it are the ones ui-smoke's own claim
+          # makes - all dated today - and since #677 the chart correctly draws nothing for the
+          # other 29 days. Every drips row was therefore judging a ONE-BAR chart, a shape we run
+          # nowhere: production counts from 2026-08-01 against a window opening 2026-08-20, so all
+          # thirty of its bars draw. The script refuses a counter that already holds anything, so
+          # it cannot quietly seed on top of real data.
+          node scripts/seed-drips.mjs data/faucet.db
+
           # Say out loud whether cTAZ came up, BEFORE the smoke runs. ui-smoke skips its
           # cTAZ checks when the flag is off, and a skip buried in 30 lines of "ok" is
           # exactly the sort of thing that goes unread for a month.
