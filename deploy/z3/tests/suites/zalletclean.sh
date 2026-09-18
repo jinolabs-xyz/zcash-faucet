@@ -187,6 +187,31 @@ zc_run "$DROPQ"
 check "drop-queue prints the same way back, since the watchdog runs it on the same path" \
   "grep -q 'to undo:' '$T/last.out' && grep -q 'rm -f .*wallet.db-wal' '$T/last.out'"
 
+echo "== zallet cleanup: with NOTHING overridden, the tools use the REAL volume path"
+# THE KNOB THAT MADE THE WRITE PATH TESTABLE ALSO HIDES THE VALUE PRODUCTION USES. zc_env exports
+# ZALLET_VOL_DATA and ZALLET_VOLUME for every case above, so every row here is about a fixture
+# directory and NOTHING anchors what the tools resolve to when the owner runs them on the box. The
+# shipped default could be edited to any path and this suite would stay green - which is how the
+# destructive path went untested in the first place, so it is not a hypothetical family.
+# Both knobs are cleared, so the default resolves the way it does on the box and the run dies at the
+# backup cp against a path that does not exist here. THE ABORT IS THE OBSERVATION: cp names the path
+# it could not read, which is the one production would have used.
+zc_env
+unset ZALLET_VOL_DATA ZALLET_VOLUME
+export STUB_ZALLET_RUNNING=false STUB_SQL_OUT="7:AABBCC" STUB_RPC_HAS_TX=0
+zc_run "$ABANDON"
+check "with no override the run stops rather than repairing something it cannot back up" "[ $RC -ne 0 ]"
+check "and the path it reached for is the production one, volume name and layout both" \
+  "grep -q '/var/lib/docker/volumes/z3-testnet-zallet/_data/wallet.db' '$T/last.out'"
+check "and no delete was issued against it" \
+  "! grep -qi 'delete from transactions' '$STUB_LOG'"
+zc_env
+unset ZALLET_VOL_DATA ZALLET_VOLUME
+export STUB_ZALLET_RUNNING=false STUB_SQL_OUT="7:AABBCC" STUB_RPC_HAS_TX=0
+zc_run "$DROPQ"
+check "drop-queue resolves the same default, since the watchdog runs it on the same box" \
+  "grep -q '/var/lib/docker/volumes/z3-testnet-zallet/_data/wallet.db' '$T/last.out'"
+
 echo "== zallet cleanup: a wallet with NO -wal still backs up, rather than refusing"
 # The ordinary case after a clean stop. Refusing here would turn a safety check into an outage,
 # which is the failure mode the --read-only work was done to remove.
