@@ -1979,11 +1979,17 @@ async function checkRefusalCards(browser, base, address) {
     await page.waitForFunction(() => /\bLIVE\b/.test(document.body.innerText), null, { timeout: 30_000 });
     await page.getByTestId("address-input").fill(address);
     await page.getByTestId("claim-button").click();
-    // Wait for the page to actually LEAVE the claim form, so the row cannot pass by measuring a
-    // page that never got as far as being rate-limited.
-    await page.waitForFunction(() => !document.querySelector("[data-testid=claim-button]")
-      || document.querySelector("[data-testid=claim-button]").disabled, null, { timeout: 60_000 }).catch(() => {});
-    await page.waitForTimeout(1200);
+    // WAIT FOR THE SUBJECT ITSELF, NOT FOR A PROXY THE WRONG STATE ALSO SATISFIES. The first
+    // version waited for the claim button to be absent or disabled - which is ALREADY TRUE while
+    // proof-of-work runs, so it returned during `submitting` and the run below measured the wrong
+    // state. The pin caught it (FAIL: "a 429 leaves the page rate-limited") while the row behind
+    // it went GREEN, because the panel is visible in `submitting` too - right answer, wrong
+    // reason, which is the whole thing the pin is there to expose.
+    // The proof-of-work is real work at 12 bits and slow on a loaded machine, so the budget is
+    // generous; the pin below still fails honestly if it never arrives.
+    await page.waitForFunction(() => /already claimed|come back|try again later/i.test(document.body.innerText),
+      null, { timeout: 180_000 }).catch(() => {});
+    await page.waitForTimeout(600);
     const cooledDown = await page.evaluate(() => /already claimed|come back|try again|cooldown/i.test(document.body.innerText));
     ok("a 429 leaves the page rate-limited, so the next row has a subject",
       cooledDown, (await page.innerText("body")).replace(/\s+/g, " ").slice(0, 140));
