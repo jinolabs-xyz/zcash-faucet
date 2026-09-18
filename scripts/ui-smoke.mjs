@@ -336,6 +336,21 @@ async function checkHoverUnderAFlip(browser) {
     }, theme);
     await p.waitForTimeout(300);
 
+    // TRANSITIONS OFF BEFORE ANY SWEEP, AND THIS IS A BUG I PUT HERE IN #668. The sweep hovers a
+    // link, waits 25ms, and reads computed style. `a.tag` carries `transition:background .15s`
+    // (redesign-hero.css:69), so 25ms lands MID-TRANSITION and the value read is wherever the
+    // animation had got to - deltas of a few units in one channel, "1 moved", red on a page that
+    // had not changed at all. My donate link made this reachable: it is the first transitioning
+    // link this sweep hovers in the reserve-low state.
+    // WORSE, THE GATE COULD NOT SEE IT: the link only renders when the reserve is under its low
+    // mark, which CI never reaches at rest, so the flake was invisible to CI and reproducible only
+    // for whoever ran the suite locally against a low reserve - 2 of 4 runs the night I shipped it.
+    // Waiting longer would be slower and still a race. Disabling transitions removes the TIME
+    // dependence and keeps the CASCADE dependence, which is the only thing this row is about - the
+    // settled hover style under two chunk orders. Injected as a <style>, not a <link>, so the
+    // reversal below still reorders exactly the sheets it did before.
+    await p.addStyleTag({ content: "*,*::before,*::after{transition:none !important;animation:none !important}" });
+
     // RE-QUERIED PER SWEEP, NOT COLLECTED ONCE. `p.$$` returns handles to the elements that
     // existed when it ran, and the sweep below iterates them - so a link ADDED between the two
     // sweeps is never hovered and never compared, and a link REMOVED is skipped only because its
@@ -423,8 +438,9 @@ async function checkHoverUnderAFlip(browser) {
       if (!first) first = `${before[k].split("|")[0]} ${before[k].split("|")[1]} -> ${after[k].split("|")[1]}`;
     }
     // The floor is the anti-vacuity: a page that rendered no links would otherwise report
-    // "0 moved" and go green. FOUR rather than six, deliberately - this tree hovers exactly six,
-    // and a floor equal to today's count is a pin on the link count wearing a guard's clothes:
+    // "0 moved" and go green. FOUR rather than today's count, deliberately - this tree hovers six,
+    // or SEVEN in the reserve-low state since #668 added the donate link, and a floor equal to
+    // today's count is a pin on the link count wearing a guard's clothes:
     // it would go red the next time the design drops a footer link, for a reason that has
     // nothing to do with the cascade.
     ok(`${theme}: no link's HOVER styling changes when the CSS chunks are linked in the other order`,
@@ -967,10 +983,32 @@ async function checkLivePhasePanelsWearTheBox(browser) {
     await c.close();
   }
 
-  // COVERAGE PIN, the same one this file already puts on its viewport loops: if this list is cut
-  // the suite gets quieter and stays green, which is the hole #563 was blocked for.
-  ok("the phase drive covered every state it names",
-    seen.length === DRIVEN.length, seen.join(", "));
+  // COVERAGE PIN. IT DID NOT DO EITHER OF THE TWO JOBS ITS OWN COMMENT CLAIMED, and SDE-Infra
+  // spotted the first half while reviewing #668.
+  //
+  // IT COULD NOT FAIL. `seen.push` is unconditional inside the loop over DRIVEN, so
+  // `seen.length === DRIVEN.length` compared the list to ITSELF and was true on every possible
+  // run - including the one where a state drove nothing. Measured: with the reserve-low panel
+  // deleted the row printed `ok ... reserve-low->none`, green while naming its own miss.
+  //
+  // AND IT COULD NOT SEE A CUT LIST, which is the hole #563 was blocked for and the reason the
+  // comment said it existed. Delete an entry from DRIVEN and BOTH sides shrink together, so the
+  // suite gets quieter and stays green - exactly the failure it was written to stop.
+  //
+  // EXPECTED is deliberately a SEPARATE LITERAL rather than derived from DRIVEN. A pin computed
+  // from the thing it is pinning is not a pin; the duplication IS the mechanism, because it is the
+  // only part that does not move when someone edits the list.
+  const EXPECTED = ["syncing", "fault", "empty", "topping-up", "degraded", "reserve-low"];
+  const drove = new Map(seen.map((s) => { const i = s.indexOf("->"); return [s.slice(0, i), s.slice(i + 2)]; }));
+  const notListed = EXPECTED.filter((n) => !DRIVEN.some(([d]) => d === n));
+  const didNotDrive = EXPECTED.filter((n) => drove.get(n) === "none" || !drove.has(n));
+  ok("the phase drive still NAMES every state, and REACHED every one it names",
+    notListed.length === 0 && didNotDrive.length === 0,
+    notListed.length
+      ? `DRIVEN no longer lists ${notListed.join(", ")} - the list was cut, which is the hole this pin exists for; seen ${seen.join(", ")}`
+      : didNotDrive.length
+        ? `${didNotDrive.join(", ")} drove NOTHING - the state was attempted and no panel rendered: ${seen.join(", ")}`
+        : seen.join(", "));
 }
 
 async function checkTallCardStaysReachable(browser) {
