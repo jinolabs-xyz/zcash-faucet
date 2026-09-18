@@ -1951,6 +1951,13 @@ async function checkRefusalCards(browser, base, address) {
       await page.waitForFunction(() => /\bLIVE\b/.test(document.body.innerText), null, { timeout: 30_000 });
       await page.getByTestId("address-input").fill(address);
       await page.getByTestId("claim-button").click();
+      // THE SUBMITTING WINDOW, the owner's OTHER screenshot. The click sets phase "submitting"
+      // before any response arrives, so this reads the state the proof-of-work screen is in.
+      // Asserted once per shape rather than once overall: the panel must survive EVERY claim,
+      // not merely the one case someone thought to check.
+      ok(`${s.name}: the reserve notice survives the claim itself (owner, item 2)`,
+        (await page.locator('[data-phase="reserve-low"]').count()) === 1,
+        `reserve-low panels while submitting: ${await page.locator('[data-phase="reserve-low"]').count()}`);
       // An EMPTY [role=alert] is always in the DOM; wait for one with text.
       await page.waitForFunction(() => [...document.querySelectorAll("[role=alert]")].some((e) => (e.textContent || "").trim()), null, { timeout: 60_000 }).catch(() => {});
       const c = await card();
@@ -1958,6 +1965,32 @@ async function checkRefusalCards(browser, base, address) {
       else await s.expect(c);
       await page.unroute("**/api/faucet");
     }
+    // THE OWNER'S OTHER SCREENSHOT: RATE-LIMITED, DRIVEN ON ITS OWN TERMS.
+    // It is NOT a `shapes` entry, and that is the point: I added it as one first, and every arm
+    // of the mutant printed "a cooldown refusal: a card rendered" FAILED - a 429 puts the page in
+    // `cooldown`, which renders a refusal view rather than a [role=alert] card, so the loop's
+    // `if (!c.text)` guard skipped my expect and the assertion NEVER RAN. It was green-adjacent
+    // noise in a harness whose contract it did not meet.
+    await page.route("**/api/faucet", (route) => route.fulfill({
+      status: 429, contentType: "application/json",
+      body: JSON.stringify({ error: "You have already claimed for this address. Try again later.", kind: "address", nextAt: new Date(Date.now() + 3_600_000).toISOString(), requestId: "ui-smoke" }),
+    }));
+    await page.goto(base, { waitUntil: "networkidle" });
+    await page.waitForFunction(() => /\bLIVE\b/.test(document.body.innerText), null, { timeout: 30_000 });
+    await page.getByTestId("address-input").fill(address);
+    await page.getByTestId("claim-button").click();
+    // Wait for the page to actually LEAVE the claim form, so the row cannot pass by measuring a
+    // page that never got as far as being rate-limited.
+    await page.waitForFunction(() => !document.querySelector("[data-testid=claim-button]")
+      || document.querySelector("[data-testid=claim-button]").disabled, null, { timeout: 60_000 }).catch(() => {});
+    await page.waitForTimeout(1200);
+    const cooledDown = await page.evaluate(() => /already claimed|come back|try again|cooldown/i.test(document.body.innerText));
+    ok("a 429 leaves the page rate-limited, so the next row has a subject",
+      cooledDown, (await page.innerText("body")).replace(/\s+/g, " ").slice(0, 140));
+    ok("AND THE RESERVE NOTICE SURVIVES BEING RATE-LIMITED (owner, item 2)",
+      (await page.locator('[data-phase="reserve-low"]').count()) === 1,
+      `reserve-low panels: ${await page.locator('[data-phase="reserve-low"]').count()} - it was gated on phase === "ready" and vanished here`);
+    await page.unroute("**/api/faucet");
   } catch (err) {
     ok("refusal cards ran to completion", false, err instanceof Error ? err.message : String(err));
   } finally {
