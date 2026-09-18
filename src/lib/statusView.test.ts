@@ -133,8 +133,13 @@ test("the sync figure floors to two decimals, so it never rounds up into a claim
 });
 
 test("an unknown percentage is unknown, not zero and not full", () => {
-  assert.equal(syncFigure(null, false), "unknown");
-  assert.equal(syncFigure(undefined, true), "unknown");
+  // NULL, NOT THE WORD (owner, 2026-09-19): the caller omits the figure. The point of the
+  // row is unchanged and is the second line - absent must not become a percentage, least of
+  // all 0 or 100.
+  assert.equal(syncFigure(null, false), null);
+  assert.equal(syncFigure(undefined, true), null);
+  assert.notEqual(syncFigure(null, false), "0.00%");
+  assert.notEqual(syncFigure(null, true), "100.00%");
   // The bar is the half that matters: a null percentage filling the bar would draw a
   // complete sync for a node we have not heard from.
   assert.equal(syncBarPercent(null, false), 0);
@@ -150,7 +155,7 @@ test("an unknown balance buys an unknown number of drips, never zero", () => {
   // state with a full wallet (2026-07-29), and "0 drips left" would have sent someone
   // to refill it.
   assert.equal(dripsLeft(null, 0.1), null);
-  assert.equal(dripsLeftText(null, 0.1), "balance unknown");
+  assert.equal(dripsLeftText(null, 0.1), null);
   assert.equal(reserveTone({ spendableTaz: null, lowTaz: 500, targetTaz: 1000 }), "unknown");
   assert.notEqual(reserveTone({ spendableTaz: null, lowTaz: 500, targetTaz: 1000 }), "bad");
 });
@@ -170,7 +175,7 @@ test("drips-left is computed from SPENDABLE, and an unreadable spendable is not 
   // have not shielded is in the first and not the second, so a card that fell back to the
   // total when the spendable read failed would overstate the faucet's reach at exactly the
   // moment it knows least. The preview computes it from spendable only; so does this.
-  assert.equal(dripsLeftText(null, 0.1), "balance unknown");
+  assert.equal(dripsLeftText(null, 0.1), null);
   assert.equal(dripsLeftText(PROD.reserve.spendableTaz, PROD.dripTaz), "about 45,100 drips at 0.1");
   // A known total beside an unknown spendable is a legitimate state, not a contradiction
   // to paper over: the two must not produce the same sentence.
@@ -180,7 +185,7 @@ test("drips-left is computed from SPENDABLE, and an unreadable spendable is not 
 test("a drip size of zero does not divide", () => {
   // Configuration can be wrong and Infinity must not reach the page.
   assert.equal(dripsLeft(4506, 0), null);
-  assert.equal(dripsLeftText(4506, 0), "balance unknown");
+  assert.equal(dripsLeftText(4506, 0), null);
 });
 
 test("the reserve's tone turns at the marks it names", () => {
@@ -195,10 +200,15 @@ test("the reserve's tone turns at the marks it names", () => {
 });
 
 test("the reserve sentence survives a reserve block it has never seen", () => {
-  assert.equal(reserveSentence(undefined, 0.1), "spendable balance unknown right now · reserve line unknown");
+  // A reserve block we cannot read yields NO sentence rather than a sentence listing what we
+  // could not establish. The partner below is what stops "return null always" satisfying it.
+  assert.equal(reserveSentence(undefined, 0.1), null);
+  assert.notEqual(reserveSentence(PROD.reserve, PROD.dripTaz), null);
   assert.equal(
     reserveSentence({ spendableTaz: 4506.87, targetTaz: null }, 0.1),
-    "4,507 TAZ · reserve line unknown · about 45,100 drips at 0.1",
+    // The reserve line is DROPPED, not named as missing: the two clauses we can write still
+    // say something true, and "reserve line unknown" in the middle of them said nothing.
+    "4,507 TAZ · about 45,100 drips at 0.1",
   );
 });
 
@@ -328,8 +338,8 @@ test("the backend keeps its port when the scheme is dropped", () => {
   // not cosmetic even though the scheme is.
   assert.equal(backendHost(PROD.backend.endpoint), "testnet.zec.rocks:443");
   assert.equal(backendHost("http://127.0.0.1:9067"), "127.0.0.1:9067");
-  assert.equal(backendHost(null), "unknown");
-  assert.equal(backendHost(""), "unknown");
+  assert.equal(backendHost(null), null);
+  assert.equal(backendHost(""), null);
 });
 
 test("digit grouping", () => {
@@ -502,4 +512,38 @@ test("absent, zero and half-known are THREE DIFFERENT strings, asserted as diffe
   assert.notEqual(absent, half, "not told and partly told are different news");
   assert.notEqual(zero, half, "measured-none and 2172-accepted are different news");
   for (const s of [absent, zero, half]) assert.doesNotMatch(s, /%/, `no rate may appear: ${s}`);
+});
+
+/* ── the owner's rule, as a row ───────────────────────────────────────── */
+
+test("no figure the page PRINTS says 'unknown' when it has nothing (owner, 2026-09-19)", () => {
+  // THE FUNCTIONS THAT PRODUCE TEXT, given nothing to work with. Each must answer null so the
+  // caller omits it. The tone functions are deliberately NOT here: `reserveTone`, `sendsTone`,
+  // `boxTone` and `heightTone` return "unknown" as a CSS tone token, which is an attribute and
+  // never reaches the screen as a word.
+  assert.equal(syncFigure(null, false), null);
+  assert.equal(dripsLeftText(null, 0.1), null);
+  assert.equal(reserveSentence(undefined, 0.1), null);
+  assert.equal(backendHost(null), null);
+
+  // AND THE PARTNER THAT STOPS "return null always" SATISFYING THE ROW ABOVE. A function that
+  // answered null on real input would pass the four lines above and render a blank page, which
+  // is the L51 shape: an assertion about absence needs its presence case beside it.
+  assert.equal(syncFigure(100, true), "100.00%");
+  assert.equal(dripsLeftText(4506.87, 0.1), "about 45,100 drips at 0.1");
+  assert.notEqual(reserveSentence(PROD.reserve, PROD.dripTaz), null);
+  assert.equal(backendHost("https://testnet.zec.rocks:443"), "testnet.zec.rocks:443");
+});
+
+test("acceptSentence never prints the word either, and still distinguishes its three states", () => {
+  // This one keeps a SENTENCE rather than going null, because it sits under the miner bar where
+  // a missing line reads as a rendering fault - so the rule it follows is the other half of the
+  // owner's instruction: say what IS known in plain words, never the word "unknown".
+  const absent = acceptSentence({ submittedAccepted: null, submittedRejected: null });
+  const zero = acceptSentence({ submittedAccepted: 0, submittedRejected: 0 });
+  const half = acceptSentence({ submittedAccepted: 2175, submittedRejected: null });
+  for (const s of [absent, zero, half]) assert.doesNotMatch(s, /\bunknown\b/i, s);
+  assert.notEqual(absent, zero);
+  assert.notEqual(zero, half);
+  assert.notEqual(absent, half);
 });

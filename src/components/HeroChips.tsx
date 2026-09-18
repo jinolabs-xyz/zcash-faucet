@@ -33,10 +33,8 @@ import {
   nodeChipTone,
   reserveTone,
   boxTone,
-  sendsTone,
-} from "@/lib/statusView";
+  } from "@/lib/statusView";
 
-const UNKNOWN = "unknown";
 
 export interface HeroChipStatus {
   balanceTaz?: number | null;
@@ -84,22 +82,35 @@ export function HeroChips({
   return (
     <>
       <div className="chips" id="chips" aria-label="Faucet status">
+        {/* A CHIP GOES WITH ITS FIGURE (owner, 2026-09-19). "wallet unknown" in a coloured pill
+            is a status claim about a status we do not have, and a row of them is how the hero
+            looked whenever a poll failed. No figure, no chip. */}
+        {status?.balanceTaz != null && (
         <Chip name="wallet" tone={reserveTone(status?.reserve)} onOpen={() => onView("status")}>
-          wallet <b>{status?.balanceTaz == null ? UNKNOWN : `${groupDigits(Math.round(status.balanceTaz))} TAZ`}</b>
+          wallet <b>{`${groupDigits(Math.round(status.balanceTaz))} TAZ`}</b>
         </Chip>
+        )}
+        {node?.nodeHeight != null && (
         <Chip name="node" tone={nodeChipTone(node?.ready)} onOpen={() => onView("status")}>
-          node <b>{node?.nodeHeight == null ? UNKNOWN : groupDigits(node.nodeHeight)}</b>
+          node <b>{groupDigits(node.nodeHeight)}</b>
           {/* The second figure is the delta, and it is absent rather than "(unknown)" when we
               have nothing to compare against - the design shows a parenthetical only when there
               is one. */}
           {diff == null ? null : <b>{heightDiffChip(diff)}</b>}
         </Chip>
-        <Chip name="miner" tone={status ? minerTone(status.miner, unit) : UNKNOWN} onOpen={() => onView("status")}>
-          miner <b>{status ? minerWord(status.miner, unit) : UNKNOWN}</b>
+        )}
+        {/* Same rule, and this one is the pre-first-poll case: with no status at all the chip
+            used to render "miner unknown". The WORD the miner gets once status arrives is
+            minerLabel's business, not this file's - SDE-UI is changing it separately. */}
+        {status && (
+        <Chip name="miner" tone={minerTone(status.miner, unit)} onOpen={() => onView("status")}>
+          miner <b>{minerWord(status.miner, unit)}</b>
         </Chip>
-        <Chip name="sends" tone={sendsTone(status?.sends?.state)} onOpen={() => onView("status")}>
-          sends <b>{status?.sends?.state ?? UNKNOWN}</b>
-        </Chip>
+        )}
+        {/* THE SENDS CHIP IS GONE with its card. Its verdict needs three completed sends inside
+            fifteen minutes and prod serves about one drip every two hours, so it read "unknown"
+            permanently. The gate itself is untouched: a degraded wallet still stops claims and
+            still shows on the card as "Not taking claims right now". */}
         {/* ONE WORD ABOUT THE BOX AND NEVER A FAULT NAME (R-24), and hidden while it is well -
             the snapshot carries `hidden` on this chip and the script clears it. Hidden here
             means not rendered: an element with `hidden` is still in the accessibility tree for
@@ -125,10 +136,12 @@ export function HeroChips({
           Full status →
         </button>
       </div>
-      {/* The analytics link carries this week's count, and says `unknown` rather than 0 when we
-          have not been told - 0 drips this week is a fact about the faucet, not a placeholder. */}
+      {/* THE COUNT DROPS OUT OF THE SENTENCE rather than being replaced by a word. The old
+          comment here was right that 0 is a fact and not a placeholder - the fix for that is
+          not to write "unknown drips this week", it is to stop making the claim and still
+          offer the link. */}
       <a className="morelink" href="#analytics" data-view="analytics" onClick={(e) => { e.preventDefault(); onView("analytics"); }}>
-        <span className="num">{week == null ? UNKNOWN : groupDigits(week)}</span> drips this week. Usage analytics →
+        {week == null ? "Usage analytics →" : <><span className="num">{groupDigits(week)}</span> drips this week. Usage analytics →</>}
       </a>
     </>
   );
