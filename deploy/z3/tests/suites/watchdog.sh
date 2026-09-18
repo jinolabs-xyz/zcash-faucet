@@ -603,15 +603,33 @@ SIG='RPC Error (code: -5): No such mempool or main chain transaction'
 # Stub repair tools. STUB_HEAL_FIXES=1 makes the abandon stub clear the poison from
 # zallet's log (models the real tool removing the dead tx); unset leaves it (a poison it
 # cannot clear).
+# THE STUB TOOL USED TO PRINT ONE LINE, which is why nothing here could see the defect this
+# fixture now catches: `tail -3` over a one-line tool is the identity function, so every row
+# about the repair output was true of both the broken and the fixed watchdog. The shape below
+# mirrors the real tools - the backup path and the `to undo:` block are printed in the MIDDLE,
+# before the delete, and the last three lines are the sign-off. That ordering is the whole
+# point: a tail that keeps three lines keeps the wrong three.
+# BOTH tools need that sign-off, and the drop-queue one earned it the hard way: with a shorter
+# stub its backup path fell INSIDE the last three lines, so the row asserting the second tool's
+# way back survived the arm that restores the defect. A row that passes either way is not a row.
 mk_heal_tools() {
   mkdir -p "$T/tools"
   cat > "$T/tools/zallet-abandon-expired-txs.sh" <<TOOL
 #!/usr/bin/env bash
 echo "abandon: stub ran"
+echo "backup: /fixture/vol/wallet.db.bak-abandon-1700000000"
+echo "        /fixture/vol/wallet.db.bak-abandon-1700000000-wal"
+echo "to undo: docker stop z3-testnet-zallet-1"
+echo "         rm -f /fixture/vol/wallet.db-wal /fixture/vol/wallet.db-shm   # the LIVE ones"
+echo "         cp -f /fixture/vol/wallet.db.bak-abandon-1700000000 /fixture/vol/wallet.db"
+echo "         docker start z3-testnet-zallet-1"
+echo "done. start zallet:  docker start z3-testnet-zallet-1"
+echo "Expect ONE more crash on the boot already in flight, then recovery - read the"
+echo "NEWEST log and 'docker ps', not the first crash in the scrollback."
 [ "\${STUB_HEAL_FIXES:-0}" = "1" ] && : > "$STUB_CONTAINERS/z3-testnet-zallet-1.logs"
 exit 0
 TOOL
-  printf '#!/usr/bin/env bash\necho "drop-queue: stub ran"\nexit 0\n' > "$T/tools/zallet-drop-unfetchable-queue.sh"
+  printf '#!/usr/bin/env bash\necho "drop-queue: stub ran"\necho "backup: /fixture/vol/wallet.db.bak-queuefix-1700000000"\necho "to undo: docker stop z3-testnet-zallet-1"\necho "         rm -f /fixture/vol/wallet.db-wal /fixture/vol/wallet.db-shm"\necho "         cp -f /fixture/vol/wallet.db.bak-queuefix-1700000000 /fixture/vol/wallet.db"\necho "         docker start z3-testnet-zallet-1"\necho "drop-queue: done"\necho "queue rows removed: 3"\necho "read the NEWEST log, not the first crash in the scrollback."\nexit 0\n' > "$T/tools/zallet-drop-unfetchable-queue.sh"
   chmod +x "$T/tools/"*.sh
   export WATCHDOG_HEAL_TOOLS_DIR="$T/tools"
 }
@@ -630,6 +648,23 @@ check "and reports the fix once zallet is seen running clean" "grep -q 'FIXED: z
 check "exactly once" "[ \"\$(grep -c 'FIXED: zallet' '$T/alerts.log')\" = 1 ]"
 check "does not give up on a heal that worked" "! grep -q 'poison persists' '$T/alerts.log'"
 check "frees the heal budget once zallet is running and clean" "grep -q 'heal budget reset' '$T/run.log'"
+# AND THE WAY BACK SURVIVES, which is the reason these rows exist. The watchdog used to keep
+# `tail -3` of each tool, and these tools print the backup path and the restore procedure in the
+# MIDDLE of the run - so on the one path that runs them unattended, the operator was left with the
+# sign-off and no record of which backup existed or how to use it. #671 made the tools print the way
+# back; this is where it was being thrown away.
+check "the backup it created is in the journal, not just the sign-off" \
+  "grep -q 'wallet.db.bak-abandon-1700000000' '$T/run.log'"
+check "and the way back is there, all of it" \
+  "grep -q 'to undo: docker stop' '$T/run.log' && grep -q 'cp -f /fixture/vol/wallet.db.bak-abandon' '$T/run.log'"
+check "including the rm of the LIVE sidecars, which is the step an operator does not invent" \
+  "grep -q 'rm -f /fixture/vol/wallet.db-wal /fixture/vol/wallet.db-shm' '$T/run.log'"
+check "the SECOND tool's way back too, since the watchdog runs both" \
+  "grep -q 'wallet.db.bak-queuefix-1700000000' '$T/run.log'"
+check "and each line says which tool said it, so two runs are not one blur" \
+  "grep -q 'zallet-abandon-expired-txs.sh: to undo: docker stop' '$T/run.log'"
+check "and the one-line summary still says what happened, which is what the operator reads first" \
+  "grep -q 'ran the repair tools (attempt 1/2)' '$T/run.log'"
 
 echo "== watchdog: the QUIET form is noticed, and deliberately not acted on (#601 step 4)"
 # Zallet asks zebra about tracked transactions on every block. For one it can no longer fetch, the

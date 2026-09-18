@@ -1620,7 +1620,19 @@ while true; do
         heal_out=""
         for tool in zallet-abandon-expired-txs.sh zallet-drop-unfetchable-queue.sh; do
           if [ -x "$HEAL_TOOLS_DIR/$tool" ] || [ -f "$HEAL_TOOLS_DIR/$tool" ]; then
-            heal_out="$heal_out $(bash "$HEAL_TOOLS_DIR/$tool" 2>&1 | tail -3 | tr '\n' ' ')"
+            # THE WHOLE OUTPUT REACHES THE JOURNAL, not the last three lines. These tools print
+            # the backup path and the `to undo:` block in the MIDDLE of the run, before the delete,
+            # so `tail -3` kept the sign-off and threw away the only record of which backup exists
+            # and how to put it back - on the one path that runs them unattended, which is the path
+            # they were written for. Measured before changing it: 22 lines in, 3 out.
+            # Logged line by line rather than pattern-matched, deliberately. A grep for `to undo:`
+            # here would make the watchdog depend on the tools' output format, and a tool that
+            # renamed that line would go quiet without failing - the same silence, one layer up.
+            # This file is `set -uo pipefail` with no -e, so a repair tool exiting non-zero does not
+            # abort the sweep; dropping the pipeline does not change that.
+            tool_out="$(bash "$HEAL_TOOLS_DIR/$tool" 2>&1)"
+            [ -n "$tool_out" ] && printf '%s\n' "$tool_out" | while IFS= read -r ln; do log "  $tool: $ln"; done
+            heal_out="$heal_out $(printf '%s\n' "$tool_out" | tail -3 | tr '\n' ' ')"
           else
             log "WARNING: $HEAL_TOOLS_DIR/$tool missing, cannot heal"
           fi
