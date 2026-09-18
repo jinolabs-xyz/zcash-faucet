@@ -40,11 +40,28 @@ CREATE TABLE IF NOT EXISTS drip_days (
   PRIMARY KEY (network, day)
 );
 
+-- Feedback a visitor typed, waiting to be delivered. The app never sends it: it
+-- writes a row and answers 202, and a timer on the box drains unsent rows over
+-- loopback. sent_at NULL is the queue. Retention deletes rows whether or not
+-- anyone delivered them, because a broken drainer must not turn this into an
+-- unbounded store of human-written text.
+CREATE TABLE IF NOT EXISTS feedback (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at INTEGER NOT NULL,
+  body       TEXT    NOT NULL,
+  reply_to   TEXT,
+  ip_hash    TEXT,
+  sent_at    INTEGER,
+  attempts   INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT
+);
+
 DROP INDEX IF EXISTS idx_claims_addrhash;
 CREATE INDEX IF NOT EXISTS idx_claims_addr_net ON claims(address_hash, network, created_at);
 CREATE INDEX IF NOT EXISTS idx_claims_iphash   ON claims(ip_hash, created_at);
 CREATE INDEX IF NOT EXISTS idx_claims_created  ON claims(created_at);
 CREATE INDEX IF NOT EXISTS idx_used_exp        ON used_challenges(exp);
+CREATE INDEX IF NOT EXISTS idx_feedback_undelivered ON feedback(sent_at, created_at);
 
 -- An EXISTING D1 database gets the columns the sqlite side migrates. Not idempotent:
 -- ALTER TABLE ADD COLUMN errors if the column is there, and wrangler will say so.

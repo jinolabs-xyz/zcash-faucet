@@ -62,6 +62,42 @@ CREATE TABLE IF NOT EXISTS drip_days (
   sent    INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (network, day)
 );
+
+-- Feedback a visitor typed, waiting to be delivered. The app NEVER sends it:
+-- it writes a row and answers 202, and a timer on the box drains unsent rows to
+-- Signal over loopback. That seam is the whole design and it is a security
+-- decision, not a convenience. This is the only unauthenticated public WRITE
+-- path on the site that is not a claim, and giving the public-facing container
+-- outbound network access so a form can reach a webhook is how an SSRF surface
+-- gets built by accident. We have already had docker's publish rules bypass ufw
+-- once and leave the wallet RPC internet-reachable for nine days, which is the
+-- same mistake wearing different clothes.
+--
+-- RETENTION FROM DAY ONE, not added later. This holds a human-written body and
+-- an address someone chose to give us, which is more personal than anything
+-- else we store - and the drips counter is the standing lesson on what it costs
+-- to bolt history onto a table that was already being purged. Rows are deleted
+-- once delivered and aged out, and sent_at is what makes that possible.
+--
+-- reply_to is USER-CONTROLLED TEXT and is never trusted: not interpolated into
+-- a command anywhere downstream, and not validated into a promise that it is
+-- reachable. It is a string someone typed.
+CREATE TABLE IF NOT EXISTS feedback (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at INTEGER NOT NULL,
+  body       TEXT    NOT NULL,
+  reply_to   TEXT,
+  -- The SAME fingerprint the claims table uses, for the same reason and with the
+  -- same lifetime: an unauthenticated public write path needs a key to rate-limit
+  -- on, and this is the one we already compute. It is purged with the row.
+  ip_hash    TEXT,
+  -- NULL means not delivered. The drainer sets it; nothing else does.
+  sent_at    INTEGER,
+  -- So a row that keeps failing can be passed over rather than blocking the
+  -- queue behind it forever at the head.
+  attempts   INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT
+);
 `;
 
 /**
@@ -92,6 +128,10 @@ CREATE INDEX IF NOT EXISTS idx_claims_addr_net ON claims(address_hash, network, 
 CREATE INDEX IF NOT EXISTS idx_claims_iphash   ON claims(ip_hash, created_at);
 CREATE INDEX IF NOT EXISTS idx_claims_created  ON claims(created_at);
 CREATE INDEX IF NOT EXISTS idx_used_exp        ON used_challenges(exp);
+-- The drainer's only query: undelivered rows, oldest first. sent_at leads because it
+-- is the equality (IS NULL) and created_at is the ordering, which is the same rule the
+-- claims index above is written to.
+CREATE INDEX IF NOT EXISTS idx_feedback_undelivered ON feedback(sent_at, created_at);
 `;
 
 /**
@@ -519,3 +559,23 @@ ON CONFLICT(network, day) DO UPDATE SET sent = MAX(sent, excluded.sent)`;
  * We keep nothing longer than we must.
  */
 export const PURGE_SQL = `DELETE FROM claims WHERE created_at < ?`;
+
+/**
+ * Feedback a visitor typed. The app writes and answers; a timer on the box delivers.
+ * `sent_at` NULL is the queue.
+ */
+export const FEEDBACK_INSERT_SQL = `
+INSERT INTO feedback (created_at, body, reply_to, ip_hash) VALUES (?, ?, ?, ?)`;
+
+/** How many this fingerprint has left in the window. The cap is the caller's. */
+export const FEEDBACK_RECENT_SQL = `
+SELECT COUNT(*) AS n FROM feedback WHERE ip_hash = ? AND created_at >= ?`;
+
+/**
+ * Retention. Delivered rows age out, and so do undelivered ones - a row nobody could
+ * send is not a reason to keep someone's words forever. Both halves matter: without
+ * the second clause a broken drainer turns this table into an unbounded store of
+ * human-written text, which is the opposite of what the rest of the ledger does.
+ */
+export const FEEDBACK_PURGE_SQL = `
+DELETE FROM feedback WHERE created_at < ?`;
