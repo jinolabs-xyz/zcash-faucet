@@ -434,10 +434,28 @@ export function acceptPercent(miner: { submittedAccepted?: number | null; submit
  * not measured. The two states look identical at 0 and are not the same news.
  */
 export function acceptSentence(miner: { submittedAccepted?: number | null; submittedRejected?: number | null } | null | undefined): string {
+  const a = miner?.submittedAccepted, r = miner?.submittedRejected;
+  // ABSENT IS NOT ZERO, AND THIS FUNCTION SAID IT WAS. The comment above has claimed since #645
+  // that "absent renders as unknown rather than as zero" and the code returned the SAME SENTENCE
+  // for both, because acceptPercent() answers null to two different questions: nothing was
+  // submitted, and we were not told. The owner caught it from an Analytics screenshot reading
+  // "accepted unknown" two lines above a sentence asserting zero.
+  if (a == null && r == null) return "whether any block was submitted is not known";
+
+  // AND THE HALF-KNOWN CASE IS LIVE ON PROD RIGHT NOW, which is worse than the one reported.
+  // acceptPercent does `(a ?? 0) + (r ?? 0)`, so a null REFUSED count is counted as zero
+  // refusals: prod reads submittedAccepted 2172, submittedRejected null, and this rendered
+  // "100% accepted by our node" - a claim that nothing has ever been refused, built entirely on
+  // a field the miner did not send. A rate needs BOTH halves; one half is a count, not a rate.
+  if (a == null || r == null) {
+    const known = a == null ? `${r} refused` : `${a} accepted`;
+    const missing = a == null ? "accepted" : "refused";
+    return `${known}, and the ${missing} count is not known`;
+  }
+
   const pct = acceptPercent(miner);
-  // And "yet" is right again here too (#645, Rust half at 3f59ef5): the submitted counts are
-  // resumed from the heartbeat now, so a zero is a statement about the miner rather than about
-  // this process. Absent still renders as unknown rather than as zero.
+  // "yet" is right here (#645, Rust half at 3f59ef5): the submitted counts are resumed from the
+  // heartbeat now, so a zero is a statement about the MINER rather than about this process.
   if (pct === null) return "no blocks submitted yet";
   return `${pct}% accepted by our node`;
 }
