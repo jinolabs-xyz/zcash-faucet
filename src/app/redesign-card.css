@@ -164,4 +164,18 @@ li[data-active] .mark{border-color:var(--orange);border-top-color:transparent;an
    pay for it - measured: without this 1024x768 runs 2px past the fold, which is small and is
    still the owner's no-scrolling rule. */
 .reserve-aside{margin-top:calc(1.0*var(--u));align-self:start;width:100%}
-.reserve-aside .row{margin-top:calc(.5*var(--u))}
+/* THE ACTION SITS ON THE FIGURES' LINE (owner). margin-left:auto pushes it to the right edge and
+   baseline keeps it level with the numbers rather than with their labels. The wording costs more
+   than the panel has at 1024x768, so the width comes out of the gap BETWEEN the two figures
+   (1.4u -> .9u) rather than out of the copy: "point a miner" is the only option on this panel that
+   asks the reader for nothing but cycles, and it is not a phrase to trade for eleven pixels.
+   nowrap on the link because a two-line action defeats the point of putting it on this row. */
+.reserve-aside .figs-action{align-items:baseline;gap:calc(.7*var(--u));flex-wrap:wrap}
+.reserve-aside .reserve-act{margin-left:auto;white-space:nowrap}
+/* AND IT GIVES THE ROW UP BEFORE IT PUSHES THE PAGE SIDEWAYS. nowrap cannot shrink below its own
+   text, so at 320px the link was making .hero-copy 350px wide inside a 320px viewport - ui-smoke's
+   sideways-scroll row caught it, scrollWidth 350 against clientWidth 320. The one-line layout is a
+   DESKTOP ask; on a phone the honest answer is to let the action take its own line and wrap, which
+   is what the flex-wrap above and the 32rem rule here do together. 32rem is the breakpoint the hero
+   already uses. */
+@media (max-width:32rem){.reserve-aside .reserve-act{white-space:normal;margin-left:0}}

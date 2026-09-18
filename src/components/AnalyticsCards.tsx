@@ -175,7 +175,9 @@ export function AnalyticsCards({ status }: { status: ViewStatus | null }) {
             30 days<b>{drips?.last30d != null ? groupDigits(drips.last30d) : UNKNOWN}</b>
           </span>
           <span>
-            all time<b>{drips?.allTime != null ? groupDigits(drips.allTime) : UNKNOWN}</b>
+            {/* "counted", not "all time" - see Shell.tsx. The figure begins when the counter
+                shipped, not at genesis, and the label must not out-claim it. */}
+            counted<b>{drips?.allTime != null ? groupDigits(drips.allTime) : UNKNOWN}</b>
           </span>
         </div>
       </div>
@@ -226,7 +228,14 @@ export function AnalyticsCards({ status }: { status: ViewStatus | null }) {
           id="c-miner"
           height={34}
           role="img"
-          aria-label={`Miner. ${miner?.submittedAccepted ?? UNKNOWN} accepted and ${miner?.submittedRejected ?? UNKNOWN} rejected by our node, ${acceptSentence(miner)}.`}
+          // ONE SOURCE, BECAUSE THIS LABEL USED TO CONTRADICT ITSELF IN A SINGLE BREATH. It
+          // assembled the counts itself AND appended acceptSentence(), so on prod - accepted
+          // 2172, rejected null - a screen reader heard "2172 accepted and unknown rejected by
+          // our node, 100% accepted by our node": the unknown and the certainty in one sentence.
+          // Each half was defensible alone, which is the L51 shape at the level of a label
+          // rather than an assertion. The sentence already states both counts and handles
+          // absent, so it is the only thing said here (SDE-App).
+          aria-label={`Miner. ${acceptSentence(miner)}.`}
         />
         <div className="legend">
           <span>
