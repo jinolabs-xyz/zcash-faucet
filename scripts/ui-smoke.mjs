@@ -2453,9 +2453,20 @@ async function checkServedHtmlCarriesTheHero() {
     `tag more ${statusLink ? "present" : "ABSENT"}, morelink ${analyticsLink ? "present" : "ABSENT"} in ${html.length} bytes`);
 
   // And their words, because an element with the right class and no text is a link to nothing.
+  // "Usage analytics", NOT "drips this week" (owner, 2026-09-19: nothing says "unknown"). A server
+  // render has been told no count, and the old wording carried the count with it - "unknown drips
+  // this week" is the thing that was removed, and dropping the number drops the phrase. The link
+  // still states its purpose, which is what this row is actually for.
+  const purposeful = /Full status/.test(html) && /Usage analytics/.test(html);
   ok("and both say what they are for in those bytes",
-    /Full status/.test(html) && /drips this week/.test(html),
-    `"Full status" ${/Full status/.test(html) ? "y" : "n"}, "drips this week" ${/drips this week/.test(html) ? "y" : "n"}`);
+    purposeful,
+    `"Full status" ${/Full status/.test(html) ? "y" : "n"}, "Usage analytics" ${/Usage analytics/.test(html) ? "y" : "n"}`);
+  // AND NO INVENTED FIGURE RODE ALONG. The failure this guards is the one the owner's rule is
+  // about: a server render that has been told nothing must not print a count, and "0 drips this
+  // week" would satisfy the row above while being exactly the lie we removed.
+  ok("and the analytics link carries no count the server was never told",
+    !/\d+ drips this week/.test(html),
+    /\d+ drips this week/.test(html) ? "a count reached the served bytes" : "no count, as expected");
 }
 
 async function checkMinerPanel(page) {
@@ -2582,8 +2593,17 @@ async function checkMinerPanel(page) {
       return { name: cv.dataset.glyph ?? "", w: cv.width, painted };
     });
   });
-  ok("every analytics card title carries its glyph", glyphs.length === 5,
-    `${glyphs.length}: ${glyphs.map((g) => g.name).join(", ")}`);
+  // FOUR, AND ASSERTED AS THE SET RATHER THAN A COUNT. The sends card was removed (owner,
+  // 2026-09-19) because its verdict needed three completed sends in fifteen minutes and prod
+  // serves about one drip every two hours, so it read "unknown" permanently. A bare count of 4
+  // would go quiet if a DIFFERENT card vanished and a new one appeared; naming them means a
+  // card that disappears is named in the failure.
+  const WANT_GLYPHS = ["drips", "reserve", "miner", "network"];
+  const glyphNames = glyphs.map((g) => g.name);
+  ok("every analytics card title carries its glyph",
+    glyphs.length === WANT_GLYPHS.length && WANT_GLYPHS.every((n) => glyphNames.includes(n))
+      && !glyphNames.includes("sends"),
+    `${glyphs.length}: ${glyphNames.join(", ")} (want ${WANT_GLYPHS.join(", ")})`);
   ok("and every one of them actually painted, rather than being an empty canvas",
     glyphs.length > 0 && glyphs.every((g) => g.painted && g.w > 0),
     JSON.stringify(glyphs));
