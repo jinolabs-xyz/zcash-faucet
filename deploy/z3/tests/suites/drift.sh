@@ -11,6 +11,8 @@ drift_env() {
   ln -sf "$SCRATCH/stubs/audit-systemctl" "$T/bin/systemctl"
   export PATH="$T/bin:$BASE_PATH"
   export STUB_ENABLED="$T/enabled"; : > "$STUB_ENABLED"
+  # Cleared per case: a leaked STUB_ACTIVE would decide a later row's #701 check silently.
+  unset STUB_ACTIVE STUB_FAILED 2>/dev/null || true
   export AUDIT_REPO_DIR="$T/repo" AUDIT_OVERLAY_DIR="$T/repo/deploy/z3"
   export AUDIT_UNIT_DIR="$T/units" AUDIT_INSTALL_DIR="$T/install" AUDIT_ENV_DIR="$T/env"
   # A repo that ships one unit whose service runs one script.
@@ -83,6 +85,13 @@ make_clean_box() {
   cp "$T/repo/deploy/z3/faucet-thing.service" "$T/repo/deploy/z3/faucet-thing.timer" "$T/units/"
   cp "$T/repo/deploy/z3/thing.sh" "$T/install/"
   printf 'faucet-thing.service\nfaucet-thing.timer\n' > "$STUB_ENABLED"
+}
+# Ships and installs a watchdog unit, enabled and matching the repo, so the ONLY thing left to
+# decide is whether it is running. Reuses thing.sh so no file or ExecStart check changes.
+ship_watchdog() {
+  printf '[Service]\nExecStart=%s/thing.sh\n' "$T/install" > "$T/repo/deploy/z3/faucet-watchdog.service"
+  cp "$T/repo/deploy/z3/faucet-watchdog.service" "$T/units/"
+  printf 'faucet-watchdog.service\n' >> "$STUB_ENABLED"
 }
 
 echo "== drift: a box matching the repo reports no drift and exits 0"
@@ -695,3 +704,36 @@ export AUDIT_DOCKER="$T/bin/no-such-docker"
 bash "$AUDIT" > "$T/v-nodocker.log" 2>&1; rc=$?
 check "exits 2" "[ $rc -eq 2 ]"
 check "says the images were not compared" "grep -q 'were not compared' '$T/v-nodocker.log'"
+
+echo "== drift (#701): a stopped watchdog is drift, because its silence is what looks like a pass"
+# The watchdog reads watchdog.sh ONCE at start and install-ops deliberately will not restart a
+# stopped unit, so rungs merged while it is down sit on disk unrun with every other check green.
+drift_env; make_clean_box; ship_watchdog
+export STUB_ACTIVE="$T/active"; printf 'faucet-thing.service\n' > "$STUB_ACTIVE"
+bash "$AUDIT" > "$T/stopped.log" 2>&1
+check "exits 1" "[ $? -eq 1 ]"
+check "names the watchdog as not running" "grep -q 'faucet-watchdog.service is installed and enabled but NOT RUNNING' '$T/stopped.log'"
+# THE POINT OF THE ISSUE: the file matches and the unit is enabled, so every other check passes.
+# Without this row the finding could come from a file or enable fault and read the same.
+check "and not as a file or enable fault" "! grep -qE 'faucet-watchdog.service (differs|is not installed|is installed but NOT enabled)' '$T/stopped.log'"
+
+echo "== drift (#701): a running watchdog is not drift"
+drift_env; make_clean_box; ship_watchdog
+export STUB_ACTIVE="$T/active"; printf 'faucet-thing.service\nfaucet-thing.timer\nfaucet-watchdog.service\n' > "$STUB_ACTIVE"
+bash "$AUDIT" > "$T/running.log" 2>&1
+check "exits 0" "[ $? -eq 0 ]"
+check "prints no DRIFT lines" "! grep -q 'DRIFT' '$T/running.log'"
+
+echo "== drift (#701): only the watchdog is judged on running, never the units parked by design"
+# Nine shipped units are Type=oneshot and are inactive almost always; the miner and cTAZ node are
+# parked deliberately (#455). A blanket is-active sweep would report every one of them as drift.
+drift_env; make_clean_box; ship_watchdog
+export STUB_ACTIVE="$T/active"; printf 'faucet-watchdog.service\n' > "$STUB_ACTIVE"
+bash "$AUDIT" > "$T/onlywatchdog.log" 2>&1
+check "exits 0 with everything else inactive" "[ $? -eq 0 ]"
+check "judges no other unit on running" "! grep -q 'NOT RUNNING' '$T/onlywatchdog.log'"
+
+# STUB_ACTIVE MUST NOT LEAVE THIS SUITE. The suites share one shell and drift runs before
+# installops, whose restarts are gated on is-active - a leaked value pointing at this suite's
+# scratch dir reads as "inactive" and silently skips the restart it is asserting.
+unset STUB_ACTIVE STUB_FAILED 2>/dev/null || true
