@@ -407,7 +407,7 @@ jobs:
       - name: npm audit (fail on high)
         run: |
           npm audit || true
-          npm audit --audit-level=high >/dev/null
+          bash .github/scripts/npm-audit-gate.sh
       - name: cargo audit (fail on any advisory)
         run: |
           if [ -d deploy/z3/miner ]; then
