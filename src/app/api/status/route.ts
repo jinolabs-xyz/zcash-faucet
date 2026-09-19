@@ -10,7 +10,7 @@ import { safeBalance } from "@/lib/zcash/send";
 import { getCtazSendQueue, getSendQueue } from "@/lib/zcash/queue";
 import { readSendHealth } from "@/lib/zcash/sendHealth";
 import { countDrips } from "@/lib/db";
-import { getNodeStatus } from "@/lib/zcash/nodeStatus";
+import { nodeStatusForPage } from "@/lib/zcash/nodeStatusCache";
 import { getReserveReconciler } from "@/lib/reserve/reconciler";
 import { readMinerHeartbeat } from "@/lib/miner/read";
 import { isActive, publicMinerView } from "@/lib/miner/heartbeat";
@@ -93,7 +93,11 @@ export const GET = withApi("status", async (req: NextRequest) => {
   // "page", NOT the claim budget. A visitor who has just arrived is owed an answer quickly; a
   // status card that takes twelve seconds to fill reads as a broken site. The claim path is the
   // one that waits, because there a person pressed a button and expects work.
-  const [backend, balanceZat, node] = await Promise.all([pingBackend(), safeBalance(), getNodeStatus("page")]);
+  // THE HEIGHT NO LONGER GATES THE REST. It used to sit in this Promise.all, so the slowest of the
+  // three decided when the balance, the reserve, the miner and the drip count reached the visitor -
+  // and measured on prod the page's read refused 11.27% of the time and had a tail to ~10s. It is
+  // served from memory now and refreshed behind the response; see nodeStatusCache.ts.
+  const [backend, balanceZat, node] = await Promise.all([pingBackend(), safeBalance(), nodeStatusForPage()]);
   // Synchronous and off the await chain: a few hundred bytes from a bind mount, so it
   // does not belong in the Promise.all with three network calls.
   const minerReading = readMinerHeartbeat(config.miner.heartbeatPath);
