@@ -36,3 +36,36 @@ test("a broken override cannot disable the status read, which would look like an
   assert.equal(nodeStatusTimeoutMs(), 15_000);
   delete process.env.FAUCET_NODE_STATUS_TIMEOUT_MS;
 });
+
+test("the retry is bounded by a shared budget, not multiplied by the attempts", async () => {
+  // THE OWNER ASKED FOR "7 seconds, 3 times". Three full-length attempts is the shape to avoid:
+  // 21-36s of a visitor's time spent reaching the same refusal, and three requests to a backend
+  // that is slow BECAUSE it is loaded is how a wobble becomes an outage. So the attempts SHARE
+  // the budget rather than each getting it.
+  const { nodeStatusAttemptsMs, nodeStatusTimeoutMs } = await import("./nodeStatus.ts");
+  delete process.env.FAUCET_NODE_STATUS_TIMEOUT_MS;
+  const a = nodeStatusAttemptsMs();
+  assert.equal(a.reduce((x, y) => x + y, 0), nodeStatusTimeoutMs(),
+    "the attempts must sum to the budget, never exceed it");
+  assert.ok(a.length >= 2, "one attempt is not a retry");
+
+  // FAST FIRST, PATIENT SECOND. Eight of ten production samples answered under 3s, so the first
+  // attempt is cut short: a healthy faucet loses nothing, and a slow one has spent little before
+  // the attempt that is actually likely to succeed. Reversed, every visitor waits for the slow
+  // path before the fast one is ever tried.
+  assert.ok(a[0] < a[a.length - 1], `the first attempt must be the short one; got ${JSON.stringify(a)}`);
+  // And the patient attempt must clear the slowest reading we have actually seen on prod (6.7s),
+  // or the retry adds latency without adding a success.
+  assert.ok(a[a.length - 1] > 6_700, `the patient attempt must clear 6.7s; got ${a[a.length - 1]}`);
+});
+
+test("a tiny budget still yields attempts that can reach a node", async () => {
+  // The floor interacts with the split: a budget divided into attempts must not produce a first
+  // attempt of 0ms, which would abort before the request left and burn a retry on nothing.
+  const { nodeStatusAttemptsMs } = await import("./nodeStatus.ts");
+  process.env.FAUCET_NODE_STATUS_TIMEOUT_MS = "1000";
+  const a = nodeStatusAttemptsMs();
+  assert.ok(a.every((ms) => ms >= 0), JSON.stringify(a));
+  assert.ok(a[0] >= 1000, `the first attempt must still be able to reach the node; got ${a[0]}`);
+  delete process.env.FAUCET_NODE_STATUS_TIMEOUT_MS;
+});

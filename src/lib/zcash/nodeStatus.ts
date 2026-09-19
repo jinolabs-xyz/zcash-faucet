@@ -83,7 +83,28 @@ let lastTip: TipSample | null = null;
  */
 export function nodeStatusTimeoutMs(): number {
   const raw = Number(process.env.FAUCET_NODE_STATUS_TIMEOUT_MS);
-  return Number.isFinite(raw) && raw >= 1000 ? raw : 10_000;
+  return Number.isFinite(raw) && raw >= 1000 ? raw : 12_000;
+}
+
+/**
+ * The per-attempt deadlines, in order. The owner asked for a retry and they are right that one
+ * slow read should not refuse a claim - eight of ten production samples answered under 3s, so a
+ * single slow one is usually a wobble rather than a state.
+ *
+ * TWO ATTEMPTS, NOT THREE, AND A SHARED BUDGET RATHER THAN A MULTIPLIER. Three attempts at the
+ * full deadline is 36s of a visitor's time, spent to reach the same refusal - and three requests
+ * to a backend that is slow BECAUSE it is loaded is how a wobble becomes an outage. The budget is
+ * the ceiling either way: attempts never sum past it.
+ *
+ * FAST FIRST, PATIENT SECOND. The common case answers in under 3s, so the first attempt is cut
+ * short at a third of the budget: a healthy faucet loses nothing, and a slow one has already
+ * spent only 4s before the attempt that is actually likely to succeed. Reversing them would make
+ * every visitor wait for the slow path.
+ */
+export function nodeStatusAttemptsMs(): number[] {
+  const budget = nodeStatusTimeoutMs();
+  const first = Math.max(1000, Math.floor(budget / 3));
+  return [first, budget - first];
 }
 
 export async function getNodeStatus(): Promise<NodeStatus | null> {
@@ -96,25 +117,39 @@ export async function getNodeStatus(): Promise<NodeStatus | null> {
     // Ask our own node where it thinks the tip is. This is the only network call
     // on the readiness path - the independent tip is a cached, non-blocking read
     // (see externalTip.ts) so a slow public endpoint can never slow /api/ready.
-    const res = await fetch(endpoint, {
-      method: "POST",
-      headers,
-      body: `{"jsonrpc":"2.0","id":"status","method":"getwalletstatus","params":[]}`,
-      // MEASURED, NOT CHOSEN. 4000 was too tight and it was refusing real claims: on production,
-      // 2026-09-19, ten samples of /api/status split cleanly either side of this number -
-      // 0.9/0.9/1.4/1.9/1.9/2.4/2.8/3.0s answered with a node, and 4.8s and 6.7s answered with
-      // node: null. Zallet is simply slower than this sometimes, and every time it was, the page
-      // told a visitor "our node did not report its height just now, so we are not sending".
-      // The owner found that from their own phone, not from an alert.
-      //
-      // A TIMEOUT IS A CLAIM ABOUT THE NODE and this one was making it too early: "did not answer
-      // in 4s" was being rendered as "we cannot tell whether a drip would confirm", which is a
-      // much stronger sentence than the evidence supported.
-      //
-      // Configurable so the box can move it without a deploy, because the right value is a
-      // property of that machine's zallet rather than of this code.
-      signal: AbortSignal.timeout(nodeStatusTimeoutMs()),
-    });
+    // RETRIED, BOUNDED (owner's ask, 2026-09-19). Eight of ten production samples answered under
+    // 3s, so a single slow read is usually a wobble rather than a state, and refusing a claim on
+    // one of them was the outage. The budget is shared rather than multiplied - see
+    // nodeStatusAttemptsMs - because three full-length attempts is 36s of a visitor's time spent
+    // to reach the same refusal, and three requests to a backend that is slow BECAUSE it is
+    // loaded is how a wobble becomes an outage.
+    //
+    // A TIMEOUT IS A CLAIM ABOUT THE NODE, and 4000ms was making it too early: "did not answer in
+    // 4s" was rendered to a visitor as "we cannot tell whether a drip would confirm", which is a
+    // much stronger sentence than the evidence supported. Measured: 0.9/0.9/1.4/1.9/1.9/2.4/2.8/
+    // 3.0s carried a node; 4.8s and 6.7s carried null, and zebra was healthy and 100% synced
+    // throughout. The owner found it from their own phone rather than from an alert.
+    const res = await (async () => {
+      const attempts = nodeStatusAttemptsMs();
+      for (const [i, ms] of attempts.entries()) {
+        try {
+          return await fetch(endpoint, {
+            method: "POST",
+            headers,
+            body: `{"jsonrpc":"2.0","id":"status","method":"getwalletstatus","params":[]}`,
+            signal: AbortSignal.timeout(ms),
+          });
+        } catch (e) {
+          // ONLY A TIMEOUT OR A TRANSPORT FAILURE IS RETRIED, and a node that ANSWERED is not -
+          // whatever it answered. Re-asking a question that was already answered turns one honest
+          // "no" into three requests and the same "no".
+          if (i === attempts.length - 1) throw e;
+        }
+      }
+      // Unreachable: the loop either returns or throws on its last attempt. Thrown rather than
+      // returning null so a future edit to `attempts` cannot make this silently mean "no node".
+      throw new Error("node status: no attempts were made");
+    })();
     if (!res.ok) return null;
     const json = (await res.json()) as { result?: { wallet_tip?: { height?: number }; node_tip?: { height?: number } } };
     const w = json.result?.wallet_tip?.height ?? null;
