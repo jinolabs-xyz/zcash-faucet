@@ -138,9 +138,11 @@ MINER_HEAL_MAX="${WATCHDOG_MINER_HEAL_MAX:-3}"               # then page instead
 # asks whether it is ACCOMPLISHING anything, which is how a miner that templated every few seconds
 # and completed nothing for hours read as healthy on four instruments at once.
 MINER_OUTCOME_ENABLED="${WATCHDOG_MINER_OUTCOME_ENABLED:-1}"
-# The expected spacing between blocks, which is also the expected spacing between abandons: the
-# miner abandons its attempt when the tip moves, so ONE abandon per block is the mechanism working.
-MINER_BLOCK_SECS="${WATCHDOG_MINER_BLOCK_SECS:-75}"
+# NO BLOCK-INTERVAL CONSTANT. This rung shipped with MINER_BLOCK_SECS=75, the testnet TARGET, and
+# that was a defect: measured on the box the interval was 12.8s, so a HEALTHY miner - one abandon per
+# tip change - computed 5.86 against a threshold of 5 and would have been paged. The target is not
+# the rate, the rate moves, and a fresher constant would be the same mistake with a newer number.
+# The heartbeat already carries lastTemplateHeight, so the blocks in the window are COUNTED.
 # Abandons per block-interval before the RATE is anomalous rather than unlucky. Healthy is ~1.
 # Five is far from healthy and far below what a wedged miner produces, so the gap does the work
 # rather than the precision of the number.
@@ -162,6 +164,7 @@ MINER_OUTCOME_KEY="miner-completing-nothing"
 # numeric so the helper's hardening still applies.
 MINER_ABANDON_N_KEY="miner-abandon-count"
 MINER_ABANDON_T_KEY="miner-abandon-at"
+MINER_ABANDON_H_KEY="miner-abandon-height"
 # Step 7 stops the miner while it heals the node. A node being rewound ~100 blocks with a
 # miner still submitting on top of the old tip is how the 2026-09-07 fork kept growing.
 # The miner has its own sync guard (MINER_MAX_LAG); this is the layer that acts before
@@ -589,24 +592,39 @@ miner_completing_nothing() {
   # in my own code, and a surviving mutant is what found it: the arm that removed the uptime guard
   # changed nothing, because the guard was standing in for an arithmetic that was wrong underneath.
   # Measured against the PREVIOUS reading instead, which is the only form that means "right now".
-  local now_s base_n base_t win
+  local now_s base_n base_t base_h tmpl_now blocks win
   now_s="$(wd_now)"
   base_n="$(flap_get "$MINER_ABANDON_N_KEY")"
   base_t="$(flap_get "$MINER_ABANDON_T_KEY")"
+  base_h="$(flap_get "$MINER_ABANDON_H_KEY")"
+  tmpl_now="$(hb_num lastTemplateHeight)"
+  # Without a template height there is nothing to count blocks with, and a rate needs a denominator.
+  [ -n "$tmpl_now" ] || return 0
   # A timestamp of 0 is the helper's "nothing stored" answer, and it is never a real reading: wd_now
   # is an epoch on the box. So 0 means no baseline. A counter that went BACKWARDS is a miner that
   # started without resuming, which is a new baseline rather than a negative rate.
-  if [ "$base_t" = "0" ] || [ "$abandons" -lt "$base_n" ]; then
+  if [ "$base_t" = "0" ] || [ "$abandons" -lt "$base_n" ] || [ "$tmpl_now" -lt "$base_h" ]; then
     flap_set "$MINER_ABANDON_N_KEY" "$abandons"; flap_set "$MINER_ABANDON_T_KEY" "$now_s"
+    flap_set "$MINER_ABANDON_H_KEY" "$tmpl_now"
     return 0
   fi
   win=$(( now_s - base_t ))
   # Too short a window to divide by. KEEP the baseline rather than refreshing it, or a short sweep
   # interval would reset the window for ever and the rung would never measure anything.
   [ "$win" -ge "$MINER_RATE_WINDOW_SECS" ] || return 0
+  # THE DENOMINATOR IS COUNTED, NOT ASSUMED. blocks is how far the tip actually moved in this
+  # window. A TIP THAT DID NOT MOVE IS NOT A RATE OF ZERO, it is no rate at all - and it is also the
+  # only division guard this needs, so the guard and the meaning are the same line.
+  blocks=$(( tmpl_now - base_h ))
+  if [ "$blocks" -le 0 ]; then
+    flap_set "$MINER_ABANDON_N_KEY" "$abandons"; flap_set "$MINER_ABANDON_T_KEY" "$now_s"
+    flap_set "$MINER_ABANDON_H_KEY" "$tmpl_now"
+    return 0
+  fi
   # Integer arithmetic on purpose - this is a threshold, not a statistic.
-  per_block=$(( (abandons - base_n) * MINER_BLOCK_SECS / win ))
+  per_block=$(( (abandons - base_n) / blocks ))
   flap_set "$MINER_ABANDON_N_KEY" "$abandons"; flap_set "$MINER_ABANDON_T_KEY" "$now_s"
+  flap_set "$MINER_ABANDON_H_KEY" "$tmpl_now"
 
   if [ "$quiet" -ge "$MINER_NO_SOLVE_SECS" ] && [ "$per_block" -ge "$MINER_ABANDON_PER_BLOCK" ]; then
     # A STATE, said once, like every other state line here - not an event repeated every sweep.
