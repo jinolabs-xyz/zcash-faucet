@@ -1853,19 +1853,33 @@ async function checkFirstPaint(page, base, address) {
         puzzle: /solves a short puzzle instead of a CAPTCHA/.test(document.body.textContent || ""),
       };
     });
-    ok("first paint carries the four hero status chips",
-      ["wallet", "node", "miner", "sends"].every((n) => heroFirst.chips.some((c) => c.name === n)),
+    // THREE, NOT FOUR: the sends chip is gone (owner, 2026-09-19 - its verdict needed three
+    // completed sends inside fifteen minutes and prod serves about one drip every two hours, so
+    // it read "unknown" permanently). Asserted as the SET rather than a count, so a chip that
+    // disappears is named and a chip that is added fails until someone decides it belongs.
+    ok("first paint carries the three hero status chips",
+      ["wallet", "node", "miner"].every((n) => heroFirst.chips.some((c) => c.name === n))
+        && !heroFirst.chips.some((c) => c.name === "sends"),
       heroFirst.chips.map((c) => c.name).join(", ") || "no chips in the HTML");
-    ok("and each says unknown rather than a figure it has not been told",
-      heroFirst.chips.length > 0 && heroFirst.chips.every((c) => /unknown/.test(c.text)),
+    // THE CHIP IS PRESENT AND THE FIGURE IS NOT, which is the whole of the change. The old row
+    // required the WORD "unknown" in every chip; the owner asked for that word off the page, so
+    // what must hold now is that the chip carries its LABEL and no number. Both halves asserted:
+    // the label proves the element is really there, and the absence of a digit proves nothing was
+    // invented to fill it.
+    ok("and each carries its label with no figure it has not been told",
+      heroFirst.chips.length > 0
+        && heroFirst.chips.every((c) => c.text.length > 0 && !/unknown/i.test(c.text) && !/\d/.test(c.text)),
       heroFirst.chips.map((c) => `${c.name}="${c.text}"`).join("; ") || "none");
     // The ops chip is the one that must NOT be there: it is the word about the box, and a box we
     // have not heard from is not a box in trouble.
     ok("and no OPS ATTENTION before anything has been established",
       !heroFirst.chips.some((c) => c.name === "box"),
       heroFirst.chips.map((c) => c.name).join(", "));
+    // THE LINK SURVIVES WITHOUT ITS COUNT. It used to read "<n> drips this week. Usage analytics"
+    // and the count came from a status the server has not got, so the old row was asserting a
+    // figure into first paint. The LINK is the contract; the number joins it when it arrives.
     ok("first paint carries both hero links",
-      heroFirst.more && /drips this week/.test(heroFirst.analytics),
+      heroFirst.more && /Usage analytics/.test(heroFirst.analytics) && !/unknown/i.test(heroFirst.analytics),
       `more=${heroFirst.more} analytics="${heroFirst.analytics}"`);
     ok("first paint carries the puzzle sentence, which was absent from every served page before",
       heroFirst.puzzle, heroFirst.puzzle ? "present" : "absent from the HTML");
@@ -2223,8 +2237,12 @@ async function checkFirstPaintSentenceIsPainted(browser) {
   ok("before the status arrives, the puzzle sentence is not merely present but PAINTED",
     r.sentencePainted && r.sentenceBox > 0,
     `in DOM ${r.sentenceInDom}, painted ${r.sentencePainted}, ${r.sentenceBox}px tall`);
+  // THREE since the sends chip was removed. The equality on both sides is deliberate and is not
+  // a count pinned for its own sake: `chips === 3` says the set is what we expect, and
+  // `chipsPainted === chips` says every one of them is actually on screen rather than present in
+  // the DOM and invisible - which is the failure this row exists for.
   ok("and so is every hero chip",
-    r.chips === 4 && r.chipsPainted === 4, `${r.chipsPainted} of ${r.chips} chips painted`);
+    r.chips === 3 && r.chipsPainted === 3, `${r.chipsPainted} of ${r.chips} chips painted`);
   await c.close();
 }
 
@@ -2263,17 +2281,18 @@ async function checkOpsChipFollowsTheBox(browser) {
 
     const r = await p.evaluate(() => {
       const el = document.querySelector('.hero-copy .chips [data-chip="box"]');
-      const sends = document.querySelector('.hero-copy .chips [data-chip="sends"]');
       return {
         present: !!el,
         tone: el ? el.getAttribute("data-tone") : null,
         text: el ? (el.textContent || "").trim() : "",
-        sendsTone: sends ? sends.getAttribute("data-tone") : null,
         siblingChips: document.querySelectorAll('.hero-copy .chips [data-chip]').length,
-        // "has this page been told anything?" - the wallet chip reads `unknown` until a status
-        // arrives, so its leaving that value is the page's own signal that it has been told.
-        walletTold: !/unknown/i.test(
-          (document.querySelector('.hero-copy .chips [data-chip="wallet"]')?.textContent ?? "unknown")),
+        // "HAS THIS PAGE BEEN TOLD ANYTHING?" The wallet chip used to read `unknown` until a
+        // status arrived, and leaving that word was the signal. The word is gone (owner,
+        // 2026-09-19), so the signal is now the arrival of the FIGURE: an untold chip carries its
+        // label and no digits. Testing for a digit rather than for the absence of a word means
+        // this keeps working whatever the label says next.
+        walletTold: /\d/.test(
+          (document.querySelector('.hero-copy .chips [data-chip="wallet"]')?.textContent ?? "")),
       };
     });
     visited.push(state);
@@ -2301,30 +2320,31 @@ async function checkOpsChipFollowsTheBox(browser) {
     // something has a wallet figure, and only then does an absent ops chip mean "the box is ok".
     // (#606 item 1.)
     ok(`box ${state}: the ops chip is ${shouldShow ? "shown" : "absent"}`,
-      r.present === shouldShow && r.siblingChips >= 4 && r.walletTold,
+      // THE CONTRACT, NOT A FLOOR (SDE-Infra's ask). `>= 4` inferred breakage from a count it had
+      // assumed, and relaxing it to `>= 3` would leave the same inference one number over. What
+      // is actually true is: THREE chips always - wallet, node, miner - and the ops chip only
+      // when the box is unwell. So the expected total is 3, or 4 when ops should show, and any
+      // other number is a broken selection whichever direction it moved.
+      r.present === shouldShow && r.siblingChips === (shouldShow ? 4 : 3) && r.walletTold,
       !r.walletTold
-        ? `the page has not been told anything yet (wallet chip still reads unknown), so an absent ops chip means nothing`
-        : r.siblingChips < 4
-        ? `only ${r.siblingChips} sibling chips found - the chip selection is broken, so "absent" means nothing`
+        ? `the page has not been told anything yet (the wallet chip carries no figure), so an absent ops chip means nothing`
+        : r.siblingChips !== (shouldShow ? 4 : 3)
+        ? `${r.siblingChips} sibling chips found, expected ${shouldShow ? 4 : 3} - the chip selection is broken, so "absent" means nothing`
         // `siblingChips` counts EVERY [data-chip], the ops chip included, so when it is present
         // "beside 5 other chips" was counting it as its own sibling. Subtract it where it is there.
         : r.present ? `present, tone ${r.tone}, "${r.text}" (beside ${r.siblingChips - 1} other chips)`
                     : `absent (beside ${r.siblingChips} other chips, so the selection works)`);
 
+    // WHAT MAKES "ABSENT" MEAN SOMETHING is the `attention` case below: a chip that never
+    // rendered in ANY state would pass all three absence rows, so asserting presence AND tone
+    // there is what proves the element exists at all.
+    // The `else` here used to print a note about the sends chip beside it. That chip is gone
+    // (owner, 2026-09-19), so the note is gone with it rather than being left describing an
+    // element that is not there - and the branch with it, because an empty else is a comment
+    // about code that no longer exists.
     if (shouldShow) {
       ok(`box ${state}: and it is toned ${wantTone}, from statusView's map`,
         r.tone === wantTone, `tone ${r.tone}`);
-    } else {
-      // The comparison that makes "absent" mean something: a chip that never renders in ANY
-      // state would pass all three absence rows, so the attention case above is what proves the
-      // element exists at all, and this notes what the row beside it was saying at the time.
-      // A NOTE, PRINTED AS A NOTE. This was `ok(…, true, …)` - honestly named, genuinely useful
-      // context when reading a failure above it, and still two rows that could not go red,
-      // inflating a total that has been quoted as evidence in both directions on this PR.
-      // SDE-Infra's line: `console.log` costs nothing and keeps `ok` meaning "something was
-      // checked". What makes the absence meaningful is the `attention` case, which asserts
-      // presence AND tone, so deleting the chip outright still turns this family red there.
-      console.log(`note: box ${state}: no ops chip; sends chip beside it reads ${r.sendsTone}`);
     }
     await c.close();
   }
@@ -2363,10 +2383,14 @@ async function checkServedHtmlCarriesTheHero() {
   const html = await res.text();
 
   const has = (re) => re.test(html);
-  const chips = ["wallet", "node", "miner", "sends"].filter((n) => html.includes(`data-chip="${n}"`));
+  const chips = ["wallet", "node", "miner"].filter((n) => html.includes(`data-chip="${n}"`));
 
-  ok("the served HTML carries the four hero chips before any script runs",
-    res.ok && chips.length === 4, `${res.status}, chips in the body: ${chips.join(", ") || "none"}`);
+  // THREE, and the sends chip asserted ABSENT rather than simply dropped from the list: removing
+  // a name from an expectation makes the row quieter, and a row that goes quiet when something
+  // disappears is the vacuity this suite keeps finding in itself.
+  ok("the served HTML carries the three hero chips before any script runs",
+    res.ok && chips.length === 3 && !html.includes('data-chip="sends"'),
+    `${res.status}, chips in the body: ${chips.join(", ") || "none"}`);
 
   // The regression this whole PR exists for. Kept as its own row and worded as the defect, so
   // that if the gate is ever written back the failure names what went wrong rather than a count.
@@ -2375,14 +2399,34 @@ async function checkServedHtmlCarriesTheHero() {
     has(/solves a short puzzle instead of a CAPTCHA/) ? `present in ${html.length} bytes`
       : `absent from ${html.length} bytes - the status gate is back`);
 
-  // Unknown, not a figure: a server render has been told nothing, and a number in these bytes
-  // would be a number invented before the wallet was asked.
-  const untold = ["wallet", "node", "miner", "sends"].every((n) => {
+  // NO FIGURE, AND NO WORD EITHER. A server render has been told nothing, so a number in these
+  // bytes would be invented before the wallet was asked. The row used to require the word
+  // "unknown" in each chip's markup; the owner asked for that word off the page, so what must
+  // hold now is that a chip carries its LABEL and no digits.
+  // Asserted on the chip's own slice rather than the whole document, because the page is full of
+  // legitimate digits and a document-wide test would be satisfied by any of them.
+  const untold = ["wallet", "node", "miner"].map((n) => {
     const i = html.indexOf(`data-chip="${n}"`);
-    return i >= 0 && /unknown/i.test(html.slice(i, i + 400));
+    if (i < 0) return { n, ok: false, why: "chip missing" };
+    // To the end of that element's own markup, so a neighbour's figure cannot satisfy it.
+    const slice = html.slice(i, i + 400).split("</button>")[0];
+    // TEXT ONLY, ATTRIBUTES STRIPPED, and this row got it wrong first (SDE-Infra). The owner's
+    // rule is about what the page SAYS. `data-tone="unknown"` is a CSS token - one of
+    // ok|attention|unknown, read by a stylesheet and by nobody aloud - and testing the raw markup
+    // made a machine attribute trip a rule about vocabulary. The obvious fix from that failure
+    // would have been renaming the tone enum: changing state plumbing to satisfy a text rule.
+    // PAST THE OPENING TAG FIRST. The slice starts at the `data-chip=` attribute, which is INSIDE
+    // that tag, so there is no leading `<` for a tag-strip to match and the attributes survive it.
+    // I wrote the strip alone, ran it against the real markup, and watched it still trip - which
+    // is the whole reason to try a fix on the string it is meant to fix rather than reason about
+    // it.
+    const text = slice.slice(slice.indexOf(">") + 1).replace(/<[^>]*>/g, " ");
+    if (/unknown/i.test(text)) return { n, ok: false, why: "still says unknown" };
+    if (/[\d]/.test(text)) return { n, ok: false, why: "carries a figure" };
+    return { n, ok: true, why: "label only" };
   });
-  ok("and every one of them says unknown in those bytes, not a figure",
-    untold, untold ? "all four unknown" : "a chip carries a value the server was never told");
+  ok("and not one of them carries a figure the server was never told",
+    untold.every((u) => u.ok), untold.map((u) => `${u.n}: ${u.why}`).join("; "));
 
   ok("and the ops chip is absent from a server render, which has heard nothing about the box",
     !html.includes('data-chip="box"'), html.includes('data-chip="box"') ? "OPS ATTENTION in the served HTML" : "absent");
@@ -2409,9 +2453,20 @@ async function checkServedHtmlCarriesTheHero() {
     `tag more ${statusLink ? "present" : "ABSENT"}, morelink ${analyticsLink ? "present" : "ABSENT"} in ${html.length} bytes`);
 
   // And their words, because an element with the right class and no text is a link to nothing.
+  // "Usage analytics", NOT "drips this week" (owner, 2026-09-19: nothing says "unknown"). A server
+  // render has been told no count, and the old wording carried the count with it - "unknown drips
+  // this week" is the thing that was removed, and dropping the number drops the phrase. The link
+  // still states its purpose, which is what this row is actually for.
+  const purposeful = /Full status/.test(html) && /Usage analytics/.test(html);
   ok("and both say what they are for in those bytes",
-    /Full status/.test(html) && /drips this week/.test(html),
-    `"Full status" ${/Full status/.test(html) ? "y" : "n"}, "drips this week" ${/drips this week/.test(html) ? "y" : "n"}`);
+    purposeful,
+    `"Full status" ${/Full status/.test(html) ? "y" : "n"}, "Usage analytics" ${/Usage analytics/.test(html) ? "y" : "n"}`);
+  // AND NO INVENTED FIGURE RODE ALONG. The failure this guards is the one the owner's rule is
+  // about: a server render that has been told nothing must not print a count, and "0 drips this
+  // week" would satisfy the row above while being exactly the lie we removed.
+  ok("and the analytics link carries no count the server was never told",
+    !/\d+ drips this week/.test(html),
+    /\d+ drips this week/.test(html) ? "a count reached the served bytes" : "no count, as expected");
 }
 
 async function checkMinerPanel(page) {
@@ -2538,8 +2593,17 @@ async function checkMinerPanel(page) {
       return { name: cv.dataset.glyph ?? "", w: cv.width, painted };
     });
   });
-  ok("every analytics card title carries its glyph", glyphs.length === 5,
-    `${glyphs.length}: ${glyphs.map((g) => g.name).join(", ")}`);
+  // FOUR, AND ASSERTED AS THE SET RATHER THAN A COUNT. The sends card was removed (owner,
+  // 2026-09-19) because its verdict needed three completed sends in fifteen minutes and prod
+  // serves about one drip every two hours, so it read "unknown" permanently. A bare count of 4
+  // would go quiet if a DIFFERENT card vanished and a new one appeared; naming them means a
+  // card that disappears is named in the failure.
+  const WANT_GLYPHS = ["drips", "reserve", "miner", "network"];
+  const glyphNames = glyphs.map((g) => g.name);
+  ok("every analytics card title carries its glyph",
+    glyphs.length === WANT_GLYPHS.length && WANT_GLYPHS.every((n) => glyphNames.includes(n))
+      && !glyphNames.includes("sends"),
+    `${glyphs.length}: ${glyphNames.join(", ")} (want ${WANT_GLYPHS.join(", ")})`);
   ok("and every one of them actually painted, rather than being an empty canvas",
     glyphs.length > 0 && glyphs.every((g) => g.painted && g.w > 0),
     JSON.stringify(glyphs));

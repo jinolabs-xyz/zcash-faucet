@@ -144,8 +144,11 @@ export function heightTone(diff: number | null): "ok" | "warn" | "unknown" {
  * FLOOR, NEVER ROUND, for the same reason syncLabel floors: 99.994 must not round up
  * into a claim the node has not earned.
  */
-export function syncFigure(pct: number | null | undefined, ready: boolean): string {
-  if (pct == null) return "unknown";
+export function syncFigure(pct: number | null | undefined, ready: boolean): string | null {
+  // NULL, NOT "unknown" (owner, 2026-09-19). The caller omits the figure; a percentage we
+  // cannot read is not a percentage, and the word was the only thing this returned that the
+  // page could not act on.
+  if (pct == null) return null;
   const floored = Math.floor(pct * 100) / 100;
   if (!ready) return Math.min(floored, 99.99).toFixed(2) + "%";
   return floored.toFixed(2) + "%";
@@ -174,9 +177,10 @@ export function dripsLeft(spendableTaz: number | null | undefined, dripTaz: numb
 }
 
 /** The line under the wallet figure. */
-export function dripsLeftText(spendableTaz: number | null | undefined, dripTaz: number): string {
+export function dripsLeftText(spendableTaz: number | null | undefined, dripTaz: number): string | null {
   const drips = dripsLeft(spendableTaz, dripTaz);
-  if (drips === null) return "balance unknown";
+  // The line goes rather than announcing that it cannot be written.
+  if (drips === null) return null;
   return `about ${groupDigits(drips)} drips at ${dripTaz}`;
 }
 
@@ -184,14 +188,21 @@ export function dripsLeftText(spendableTaz: number | null | undefined, dripTaz: 
 export function reserveSentence(
   reserve: { spendableTaz?: number | null; targetTaz?: number | null } | null | undefined,
   dripTaz: number,
-): string {
-  const target = reserve?.targetTaz;
-  const line = target == null ? "reserve line unknown" : `reserve line ${groupDigits(target)}`;
+): string | null {
+  // BUILT FROM THE PARTS WE HAVE, rather than naming the ones we do not (owner, 2026-09-19).
+  // Every clause here had an "unknown" spelling, so a page with no wallet read said "spendable
+  // balance unknown right now · reserve line unknown" - two admissions and no information.
+  // Now each clause either appears or does not, and if none can be written the sentence is
+  // absent rather than a list of things we could not establish.
   const spendable = reserve?.spendableTaz;
-  if (spendable == null) return `spendable balance unknown right now · ${line}`;
-  const drips = dripsLeft(spendable, dripTaz);
-  const tail = drips === null ? "" : ` · about ${groupDigits(drips)} drips at ${dripTaz}`;
-  return `${groupDigits(Math.round(spendable))} TAZ · ${line}${tail}`;
+  const target = reserve?.targetTaz;
+  const drips = spendable == null ? null : dripsLeft(spendable, dripTaz);
+  const parts = [
+    spendable == null ? null : `${groupDigits(Math.round(spendable))} TAZ`,
+    target == null ? null : `reserve line ${groupDigits(target)}`,
+    drips === null ? null : `about ${groupDigits(drips)} drips at ${dripTaz}`,
+  ].filter((x): x is string => x !== null);
+  return parts.length === 0 ? null : parts.join(" · ");
 }
 
 /**
@@ -493,7 +504,8 @@ export function acceptSentence(miner: { submittedAccepted?: number | null; submi
  * port stays, because testnet.zec.rocks:443 and testnet.zec.rocks:9067 are different
  * answers when someone is working out why a lookup fails.
  */
-export function backendHost(endpoint: string | null | undefined): string {
-  if (!endpoint) return "unknown";
+export function backendHost(endpoint: string | null | undefined): string | null {
+  // An endpoint we were not given is not a host called "unknown".
+  if (!endpoint) return null;
   return endpoint.replace(/^https?:\/\//, "");
 }

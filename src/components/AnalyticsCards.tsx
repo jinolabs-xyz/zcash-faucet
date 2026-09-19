@@ -17,9 +17,8 @@
 import { useEffect, useRef, useState } from "react";
 import { drawDrips, dripHitAtX, drawReserve, drawSegments, barMax, isUncounted, sevenDayMean, type DripDay, type Segment } from "@/lib/charts";
 import { paintGlyph, type GlyphName } from "@/lib/glyphs";
-import { groupDigits, reserveSentence, reserveWord, reserveChipTone, acceptSentence, minerWord, minerTone, sendsTone, syncFigure, heightDiff, heightNote, backendHost } from "@/lib/statusView";
+import { groupDigits, reserveSentence, reserveWord, reserveChipTone, acceptSentence, minerWord, minerTone, syncFigure, heightDiff, heightNote, backendHost } from "@/lib/statusView";
 import type { Tone, ViewStatus } from "./viewStatus";
-import { UNKNOWN } from "./viewStatus";
 
 /**
  * Repaint on the three things that change a canvas and do not fire a render.
@@ -63,13 +62,51 @@ function Tag({ tone, children }: { tone: Tone; children: React.ReactNode }) {
   );
 }
 
+/**
+ * A figure the page shows ONLY when it has one. Owner's rule, 2026-09-19: nothing on the
+ * page says "unknown".
+ *
+ * THE TRAP IN THAT RULE IS `?? 0`, and this codebase has already fallen into it four times
+ * in one week - "100% accepted by our node" from a null refused count, a screen reader
+ * hearing "0 counted" where the page drew a dash, a day nobody counted plotted as a day
+ * that served none. Deleting the word "unknown" by writing a zero replaces an ugly truth
+ * with a confident lie.
+ *
+ * So there is a third option and it is the only honest one: SAY NOTHING. An omitted figure
+ * makes no claim. The label goes with it, because a label with no number is just the word
+ * "unknown" spelled differently.
+ *
+ * Structural rather than remembered (L53): a caller hands over `string | null` and cannot
+ * render the null case even by accident, so the next figure added here inherits the rule
+ * without anyone recalling that it exists.
+ */
+function Figs({ items, big }: { items: { label: string; value: string | null; note?: React.ReactNode }[]; big?: string }) {
+  const known = items.filter((i) => i.value !== null);
+  // Every figure absent is itself worth saying - an empty row under a heading reads as a
+  // rendering fault. Plain words, because "unknown" is the thing being removed.
+  if (known.length === 0) return <p className="sent">Not being reported right now.</p>;
+  return (
+    <div className="figs">
+      {known.map((i) => (
+        <span key={i.label} className={i.label === big ? "big" : undefined}>
+          {i.label}<b>{i.value}</b>{i.note}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/** The same rule for a prose fragment: absent contributes nothing rather than the word. */
+function said(parts: (string | null)[]): string {
+  return parts.filter((p): p is string => p !== null).join(", ");
+}
+
 export function AnalyticsCards({ status }: { status: ViewStatus | null }) {
   const drips = status?.drips ?? null;
   const series: DripDay[] = drips?.byDay ?? [];
   const reserve = status?.reserve;
   const miner = status?.miner;
   const unit = status?.box?.minerUnit ?? null;
-  const sends = status?.sends;
   const node = status?.node;
 
   // THE HOVER THE DESIGN DRAWS (#594). `drawDrips` already lit `i === hovered` with --orange-line
@@ -110,23 +147,14 @@ export function AnalyticsCards({ status }: { status: ViewStatus | null }) {
     if (c) drawSegments(c, c, minerSegments);
   }, `${miner?.submittedAccepted}:${miner?.submittedRejected}`);
 
-  const sendSegments: Segment[] = [
-    { value: sends?.ok ?? 0, token: "--green" },
-    { value: sends?.failed ?? 0, token: "--bad" },
-    { value: sends?.unknown ?? 0, token: "--unknown" },
-    { value: sends?.refused ?? 0, token: "--warn" },
-  ];
-  const sendsRef = useCanvasPainter(() => {
-    const c = sendsRef.current;
-    if (c) drawSegments(c, c, sendSegments);
-  }, `${sends?.ok}:${sends?.failed}:${sends?.unknown}:${sends?.refused}`);
-
   const mean = sevenDayMean(drips?.last7d);
   const today = series.length ? series[series.length - 1].sent : null;
   // How much of the window predates the counter, so the label can say it rather than leaving a
   // silent gap for a screen reader.
   const uncountedDays = series.filter((d) => isUncounted(d.day, drips?.countingSince)).length;
   const diff = heightDiff(node?.nodeHeight, node?.externalHeight);
+  const sync = syncFigure(node?.syncPercent, node?.ready ?? false);
+  const host = backendHost(status?.backend?.endpoint);
 
   return (
     <div className="pcards">
@@ -152,13 +180,21 @@ export function AnalyticsCards({ status }: { status: ViewStatus | null }) {
             aria-label={
               series.length === 0
                 ? "Drips per day for the last 30 days. The series is not available."
-                : `Drips per day for the last 30 days. ${drips?.last30d ?? UNKNOWN} drips in 30 days, ${drips?.last7d ?? UNKNOWN} this week, ` +
-                  `${mean === null ? "no 7 day mean" : `mean ${mean.toFixed(1)} per day over 7 days`}, busiest day ${barMax(series, drips?.countingSince)}. ` +
-                  // `today ?? 0` spoke a measured zero for a figure nobody has - the same defect as
-                  // Sparkline's label, in the other chart. And the uncounted span is said aloud
-                  // because a sighted reader sees the gap and a screen reader had no way to know.
-                  `${today == null ? "today unknown" : `${today} today`}.` +
-                  (uncountedDays > 0 ? ` ${uncountedDays} of the 30 days are before counting began and are not plotted.` : "")
+                : `Drips per day for the last 30 days. ${said([
+                    drips?.last30d != null ? `${groupDigits(drips.last30d)} drips in 30 days` : null,
+                    drips?.last7d != null ? `${groupDigits(drips.last7d)} this week` : null,
+                    mean !== null ? `mean ${mean.toFixed(1)} per day over 7 days` : null,
+                    // countingSince STAYS (#677, SDE-UI): the axis top must not be scaled by days
+                    // nobody counted. Dropping it here was the collision, and no row would have
+                    // noticed.
+                    `busiest day ${barMax(series, drips?.countingSince)}`,
+                    // `${today ?? 0} today` was a fourth invented zero, in the label rather than
+                    // the chart, and it survived the sweep that fixed Sparkline's three.
+                    // UI's version said "today unknown"; under the owner's instruction the right
+                    // shape is to omit the clause, and they said so themselves rather than
+                    // defending the wording they wrote before the instruction existed.
+                    today != null ? `${today} today` : null,
+                  ])}.${uncountedDays > 0 ? ` ${uncountedDays} of the 30 days are before counting began and are not plotted.` : ""}`
             }
           />
           {/* `hidden` rather than unmounting, because the design ships one `.tip` per chart and a
@@ -181,26 +217,24 @@ export function AnalyticsCards({ status }: { status: ViewStatus | null }) {
               : ""}
           </div>
         </div>
+        {/* "counted", not "all time" - see Shell.tsx. The figure begins when the counter
+            shipped, not at genesis, and the label must not out-claim it. */}
         <div className="tot">
-          <span>
-            this week<b>{drips?.last7d != null ? groupDigits(drips.last7d) : UNKNOWN}</b>
-          </span>
-          <span>
-            30 days<b>{drips?.last30d != null ? groupDigits(drips.last30d) : UNKNOWN}</b>
-          </span>
-          <span>
-            {/* "counted", not "all time" - see Shell.tsx. The figure begins when the counter
-                shipped, not at genesis, and the label must not out-claim it. */}
-            {/* AND NOW IT SAYS SINCE WHEN (#675 put the date on the wire). "counted" alone was
-                honest and incomplete: it dropped the false "all time" claim without replacing it
-                with the true one. The date goes HERE rather than on the shell chip, which is 56px
-                at 1024 and was given the shorter word for that reason. */}
-            counted<b>{drips?.allTime != null ? groupDigits(drips.allTime) : UNKNOWN}</b>
-            {/* A span, and no class of its own: `<i>` in this file is a swatch or a progress
-                fill, never prose, and it renders italic - a face the sheet uses nowhere. Bare,
-                it inherits `.tot`'s label style, which is what a secondary annotation wants. */}
-            {drips?.countingSince ? <span data-testid="counting-since">since {drips.countingSince}</span> : null}
-          </span>
+          <Figs items={[
+            { label: "this week", value: drips?.last7d != null ? groupDigits(drips.last7d) : null },
+            { label: "30 days", value: drips?.last30d != null ? groupDigits(drips.last30d) : null },
+            {
+              label: "counted",
+              value: drips?.allTime != null ? groupDigits(drips.allTime) : null,
+              // "counted", not "all time" - the figure begins when the counter shipped, not at
+              // genesis. AND NOW IT SAYS SINCE WHEN (#675 put the date on the wire): "counted"
+              // alone dropped the false claim without replacing it with the true one. A span and
+              // no class of its own - `<i>` here is a swatch or a progress fill, never prose.
+              // ui-smoke pins this testid, which is the one of SDE-UI's four that reds loudly if
+              // a careless merge drops it. The other three would have gone silently.
+              note: drips?.countingSince ? <span data-testid="counting-since">since {drips.countingSince}</span> : null,
+            },
+          ]} />
         </div>
       </div>
 
@@ -221,22 +255,19 @@ export function AnalyticsCards({ status }: { status: ViewStatus | null }) {
           aria-label={
             reserve?.spendableTaz == null
               ? "Wallet reserve. The spendable balance is unknown right now."
-              : `Wallet reserve. ${groupDigits(Math.round(reserve.spendableTaz))} TAZ spendable against a low mark of ${reserve.lowTaz ?? UNKNOWN} ` +
-                `and a target of ${reserve.targetTaz ?? UNKNOWN}.${reserve.refilling ? " Topping up." : ""}`
+              : `Wallet reserve. ${said([
+                  `${groupDigits(Math.round(reserve.spendableTaz))} TAZ spendable`,
+                  reserve.lowTaz != null ? `low mark ${groupDigits(reserve.lowTaz)}` : null,
+                  reserve.targetTaz != null ? `target ${groupDigits(reserve.targetTaz)}` : null,
+                ])}.${reserve.refilling ? " Topping up." : ""}`
           }
         />
         <p className="sent">{reserveSentence(reserve, status?.dripTaz ?? 0)}</p>
-        <div className="figs">
-          <span className="big">
-            spendable<b>{reserve?.spendableTaz != null ? groupDigits(Math.round(reserve.spendableTaz)) : UNKNOWN}</b>
-          </span>
-          <span>
-            low<b>{reserve?.lowTaz != null ? groupDigits(reserve.lowTaz) : UNKNOWN}</b>
-          </span>
-          <span>
-            target<b>{reserve?.targetTaz != null ? groupDigits(reserve.targetTaz) : UNKNOWN}</b>
-          </span>
-        </div>
+        <Figs big="spendable" items={[
+          { label: "spendable", value: reserve?.spendableTaz != null ? groupDigits(Math.round(reserve.spendableTaz)) : null },
+          { label: "low", value: reserve?.lowTaz != null ? groupDigits(reserve.lowTaz) : null },
+          { label: "target", value: reserve?.targetTaz != null ? groupDigits(reserve.targetTaz) : null },
+        ]} />
       </div>
 
       <div className="pc">
@@ -259,71 +290,40 @@ export function AnalyticsCards({ status }: { status: ViewStatus | null }) {
           // absent, so it is the only thing said here (SDE-App).
           aria-label={`Miner. ${acceptSentence(miner)}.`}
         />
+        {/* THE REJECTED SWATCH GOES WITH ITS NUMBER. A legend key for a quantity we do not
+            have is a coloured square next to nothing, and prod is exactly that case today:
+            submittedRejected is null and has been since the counts were seeded. */}
         <div className="legend">
-          <span>
-            <i style={{ background: "var(--orange)" }} />
-            accepted {miner?.submittedAccepted ?? UNKNOWN}
-          </span>
-          <span>
-            <i style={{ background: "var(--bar-soft)" }} />
-            rejected {miner?.submittedRejected ?? UNKNOWN}
-          </span>
+          {miner?.submittedAccepted != null && (
+            <span>
+              <i style={{ background: "var(--orange)" }} />
+              accepted {groupDigits(miner.submittedAccepted)}
+            </span>
+          )}
+          {miner?.submittedRejected != null && (
+            <span>
+              <i style={{ background: "var(--bar-soft)" }} />
+              rejected {groupDigits(miner.submittedRejected)}
+            </span>
+          )}
         </div>
         <p className="sent">{acceptSentence(miner)}</p>
-        <div className="figs">
-          <span>
-            template age<b>{miner?.templateAgoSeconds != null ? `${miner.templateAgoSeconds}s` : UNKNOWN}</b>
-          </span>
-          <span>
-            last beat<b>{miner?.beatAgoSeconds != null ? `${miner.beatAgoSeconds}s` : UNKNOWN}</b>
-          </span>
-          <span>
-            solved<b>{miner?.solvedCount != null ? groupDigits(miner.solvedCount) : UNKNOWN}</b>
-          </span>
-        </div>
+        <Figs items={[
+          { label: "template age", value: miner?.templateAgoSeconds != null ? `${miner.templateAgoSeconds}s` : null },
+          { label: "last beat", value: miner?.beatAgoSeconds != null ? `${miner.beatAgoSeconds}s` : null },
+          { label: "solved", value: miner?.solvedCount != null ? groupDigits(miner.solvedCount) : null },
+        ]} />
       </div>
 
-      <div className="pc">
-        <h3>
-          <Glyph name="sends" />
-          Sends, last 15 min
-          <Tag tone={sendsTone(sends?.state)}>{sends?.state ?? UNKNOWN}</Tag>
-        </h3>
-        <canvas
-          ref={sendsRef}
-          id="c-sends"
-          height={34}
-          role="img"
-          aria-label={
-            sends == null
-              ? "Sends in the last 15 minutes. Not reported by this deploy."
-              : `Sends in the last 15 minutes: ${sends.state}. ${sends.ok} ok, ${sends.failed} failed, ${sends.unknown} unknown, ${sends.refused ?? 0} refused. ${sends.reason}.`
-          }
-        />
-        <div className="legend">
-          <span>
-            <i style={{ background: "var(--green)" }} />
-            ok {sends?.ok ?? UNKNOWN}
-          </span>
-          <span>
-            <i style={{ background: "var(--bad)" }} />
-            failed {sends?.failed ?? UNKNOWN}
-          </span>
-          <span>
-            <i style={{ background: "var(--unknown)" }} />
-            {/* NESTED, not a fourth bucket: `unanswered` is the part of `unknown` whose reply was
-                lost, and the verdict counts it (#528). Side by side they would read as siblings and
-                double-count. Shown only when there are some, so a healthy wallet stays one word. */}
-            unknown {sends?.unknown ?? UNKNOWN}
-            {sends?.unanswered != null && sends.unanswered > 0 ? ` (${sends.unanswered} unanswered)` : ""}
-          </span>
-          <span>
-            <i style={{ background: "var(--warn)" }} />
-            refused {sends?.refused ?? UNKNOWN}
-          </span>
-        </div>
-        <p className="sent">{sends?.reason ?? "Not reported by this deploy."}</p>
-      </div>
+      {/* THE SENDS CARD IS GONE (owner, 2026-09-19). It judged a 15-minute window and needed
+          three completed sends to reach a verdict; prod serves about one drip every two hours,
+          so the window essentially never fills and the card read "unknown" permanently. A health
+          indicator that cannot reach a verdict is not one.
+          THE MECHANISM STAYS AND IS NOT COSMETIC: /api/faucet still refuses claims when sends are
+          degraded, /api/ready still reports sendsBlock, and `sends.state` still drives the page's
+          degraded phase - so a genuinely failing wallet still says "Not taking claims right now"
+          on the front page, which is where a visitor needs it. What was removed is a tile that
+          reported the absence of a sample. */}
 
       <div className="pc wide">
         <h3>
@@ -331,27 +331,44 @@ export function AnalyticsCards({ status }: { status: ViewStatus | null }) {
           Network
         </h3>
         <div className="figs">
-          <span className="big">
-            our height<b>{node?.nodeHeight != null ? groupDigits(node.nodeHeight) : UNKNOWN}</b>
-          </span>
-          <span className="big">
-            independent reference<b>{node?.externalHeight != null ? groupDigits(node.externalHeight) : UNKNOWN}</b>
-          </span>
-          <span>
-            difference<b>{diff === null ? UNKNOWN : `${diff >= 0 ? "+" : ""}${groupDigits(Math.abs(diff) * (diff < 0 ? -1 : 1))}`}</b>
-            <span>{heightNote(diff)}</span>
-          </span>
-          <span>
-            {/* The figure carries its own % and never wraps (owner ruling). */}
-            sync<b>{syncFigure(node?.syncPercent, node?.ready ?? false)}</b>
-          </span>
-          <span>
-            backend
-            <b>
-              <span className="rdot" data-on={String(Boolean(status?.backend?.reachable))} />
-              {backendHost(status?.backend?.endpoint)}
-            </b>
-          </span>
+          {node?.nodeHeight != null && (
+            <span className="big">
+              our height<b>{groupDigits(node.nodeHeight)}</b>
+            </span>
+          )}
+          {node?.externalHeight != null && (
+            <span className="big">
+              independent reference<b>{groupDigits(node.externalHeight)}</b>
+            </span>
+          )}
+          {/* THE DIFFERENCE NEEDS BOTH HEIGHTS AND SAYS SO BY ABSENCE. `heightDiff` already
+              returns null unless it has the pair, so this row disappears exactly when one of
+              the two above it has - it cannot be left behind claiming a comparison it could
+              not make. */}
+          {diff !== null && (
+            <span>
+              difference<b>{`${diff >= 0 ? "+" : ""}${groupDigits(Math.abs(diff) * (diff < 0 ? -1 : 1))}`}</b>
+              <span>{heightNote(diff)}</span>
+            </span>
+          )}
+          {sync !== null && (
+            <span>
+              {/* The figure carries its own % and never wraps (owner ruling). */}
+              sync<b>{sync}</b>
+            </span>
+          )}
+          {/* THE DOT IS NOT A SUBSTITUTE FOR THE HOST. Without a host the row would be a
+              label, a coloured dot and nothing else - a reachability claim about a backend
+              we cannot name. Both go together. */}
+          {host !== null && (
+            <span>
+              backend
+              <b>
+                <span className="rdot" data-on={String(Boolean(status?.backend?.reachable))} />
+                {host}
+              </b>
+            </span>
+          )}
         </div>
       </div>
     </div>
