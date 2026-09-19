@@ -23,10 +23,19 @@
         font-family="Archivo, 'Helvetica Neue', Helvetica, Arial, sans-serif"
         font-size="24" font-weight="500" fill="#f3f2f2" opacity="0.62">Shielded TAZ from a faucet that runs its own node and wallet.</text>
 
+  <!-- THE LABEL TAKES THE accent-text TOKEN, NOT accent, AND THE TWO BANNERS DIFFER ON PURPOSE.
+       redesign-tokens.css:24 points accent at orange for MARKS: the rule, the border, the hatch,
+       these chip strokes. Lines :25 and :47 keep a SEPARATE accent-text for type, #ae1800 on paper
+       and #ff9783 on ink, because the site ships two of them. Line :26 says it outright: orange is
+       for big display figures, use accent-text for strict AA.
+       Measured against this banner's own ground: orange on paper is 2.58:1 and fails AA, #ae1800 is
+       6.41:1. On ink orange is 6.26:1 and passes, #ff9783 is 8.61:1.
+       (No double hyphens in here: an XML comment may not contain them, which broke both files on
+       the first attempt and is why the CSS variables are written without their leading dashes.) -->
   <!-- No funding claim on purpose: mining income measured zero (#42). -->
   <g font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="15" letter-spacing="1.2">
     <rect x="56" y="234" width="196" height="38" fill="none" stroke="#ff6900" stroke-width="2"/>
-    <text x="72" y="259" fill="#ff6900">SHIELDED Z TO Z</text>
+    <text x="72" y="259" fill="#ff9783">SHIELDED Z TO Z</text>
 
     <rect x="268" y="234" width="228" height="38" fill="none" stroke="#f3f2f2" stroke-opacity="0.32" stroke-width="2"/>
     <text x="284" y="259" fill="#f3f2f2" opacity="0.72">ZEBRA + ZALLET</text>
