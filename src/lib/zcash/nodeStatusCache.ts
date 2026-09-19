@@ -146,31 +146,48 @@ export function cachedNodeStatusAgeMs(nowMs: number = Date.now()): number | null
 /**
  * The status for a page render: served from memory, refreshed behind the response.
  *
- * ONLY A COLD CACHE WAITS, and it waits on a cap rather than on the wallet. Against the local
- * doubles the first read finishes in milliseconds so the wait is invisible; against a slow wallet
- * the cap fires long before the read does and the caller gets the same "cannot say" the page
- * rendered before. crosslink/cache.ts records a CI flake from getting exactly this wrong - the
- * suite boots the server and drives the page immediately, and a first request that races the
- * warm-up renders not-ready against a perfectly healthy double.
+ * A COLD CACHE WAITS FOR THE FULL READ. Not a capped wait - the whole thing.
  *
- * 3s, NOT THE 1.5s I FIRST WROTE, and the reason is a measurement rather than a feel. The cache is
- * SERVER-SIDE and process-wide, so it is cold ONCE PER DEPLOY and not once per visitor (@SDE-App) -
- * the wait is paid by one request in a process's whole life. And SDE-Research's distribution puts
- * the mode of a successful read at 2-3s, so a 1.5s cap would have missed the TYPICAL first read and
- * handed that one visitor a gap for no reason. Sized to catch the mode, not the tail.
+ * I SHIPPED THE CAPPED VERSION AND api-integration CAUGHT IT. A capped cold wait converts
+ * "cannot verify, so the gate is CLOSED" into "no reading at all": getNodeStatus returns a complete
+ * NodeStatus with `canBuildTx: false` when the tip oracle cannot answer, and giving up on that read
+ * produces `node: null`, where canBuildTx is not false but UNDEFINED. That is the money gate's
+ * fail-closed property turning into an absent field, which is a worse bug than the latency this
+ * module removes. Three rows caught it and every one of them is about the same thing.
+ *
+ * AND THE CAP WAS PROTECTING AGAINST SOMETHING THAT CANNOT HAPPEN HERE. crosslink/cache.ts caps its
+ * cold wait because a cold cTAZ read can take 75 seconds. This read is `purpose: "page"` - ONE
+ * attempt at a 4s budget - so awaiting it fully is bounded by that budget, and it is EXACTLY what
+ * the route did before this module existed. So the cold request is never slower than main, every
+ * later request is far faster, and no request loses the verdict.
+ *
+ * The cache is process-wide, so this is paid by one request per deploy and not one per visitor
+ * (@SDE-App).
  */
-export async function nodeStatusForPage(
-  nowMs: number = Date.now(),
-  coldWaitMs = 3_000,
-): Promise<NodeStatus | null> {
+export async function nodeStatusForPage(nowMs: number = Date.now()): Promise<NodeStatus | null> {
   const c = cell();
   const age = c.at === 0 ? Infinity : nowMs - c.at;
-  if (age > REFRESH_AFTER_MS) {
-    const p = refresh();
-    // THE RESPONSE DOES NOT AWAIT A WARM REFRESH. That await is the entire defect this module
-    // exists to remove: awaiting here would put the wallet's latency back on the request path
-    // with extra steps.
-    if (c.at === 0) await Promise.race([p, new Promise((r) => setTimeout(r, coldWaitMs))]);
+  // ASK THE SERVE PATH WHETHER THERE IS ANYTHING TO SERVE, rather than re-deriving it (@SDE-App).
+  // "Nothing to serve" has TWO cases - never read, and read but past the window - and the first
+  // version of this gated on `c.at === 0`, which is only the first of them. Calling
+  // cachedNodeStatus here means the two definitions cannot drift apart later.
+  if (cachedNodeStatus(nowMs) === null) {
+    // NOTHING SERVEABLE MEANS WAIT. This is the bug api-integration caught and my first fix only
+    // covered half of it: an entry that EXISTS but is past the window still has nothing to return,
+    // so not waiting produced `node: null` - and node:null makes canBuildTx UNDEFINED rather than
+    // FALSE. The money gate's fail-closed verdict went missing exactly when the oracle could not
+    // verify it.
+    //
+    // AND IT IS A PRODUCTION DEFECT, NOT A SUITE ARTEFACT (@SDE-App measured it): the window is
+    // 15s and the page polls every 4s, so the cell stays serveable only while somebody is ALREADY
+    // looking. A visitor arriving more than 15s after the last page load hits a warm-but-stale
+    // cell - which on a quiet faucet is most first visits, and is exactly the reload the owner
+    // reported. Gated on `c.at === 0` this PR would have made that load WORSE than main.
+    await refresh();
+  } else if (age > REFRESH_AFTER_MS) {
+    // SERVEABLE BUT AGEING: refresh behind the response and answer from memory now. This is the
+    // whole point of the module and the only branch that must never await.
+    void refresh();
   }
   return cachedNodeStatus(nowMs);
 }

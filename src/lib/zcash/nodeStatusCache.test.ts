@@ -116,24 +116,42 @@ test("one refresh in flight at a time - a slow wallet does not get refreshes sta
   assert.equal(calls, 1, `three concurrent refreshes made ${calls} wallet reads`);
 });
 
-test("a COLD read waits briefly for the first reading, and the wait is capped, not the wallet's", async () => {
-  // crosslink/cache.ts records a CI flake from getting this wrong: the suite boots the server and
-  // drives the page immediately, so a first request that races the warm-up renders not-ready
-  // against a perfectly healthy double.
+test("a COLD read returns the reading rather than giving up on it - the fail-closed property", async () => {
+  // THIS ROW EXISTS BECAUSE I SHIPPED THE OPPOSITE AND api-integration CAUGHT IT. The first version
+  // capped the cold wait at 3s. getNodeStatus returns a COMPLETE NodeStatus with canBuildTx:false
+  // when the tip oracle cannot answer - "cannot verify, so the gate is closed" - and giving up on
+  // that read produces node:null, where canBuildTx is not false but UNDEFINED. Three rows in
+  // api-integration failed on exactly that, including "canBuildTx is false on cannot-verify, not
+  // just on too-far-behind (canBuildTx undefined)". The money gate's fail-closed property had
+  // become an absent field.
+  //
+  // The cold wait is bounded by the read's own page budget - one 4s attempt - so awaiting it fully
+  // is what the route did before this module existed, and is paid once per process.
   resetNodeStatusCacheForTests();
-  wallet({ delayMs: 30 });
-  const cold = await nodeStatusForPage(Date.now(), 1_000);
-  assert.ok(cold !== null, "a cold read did not wait for the first reading at all");
-  resetNodeStatusCacheForTests();
-  wallet({ delayMs: 5_000 });
+  wallet({ delayMs: 120, heights: [800_000, 800_000] });
   const t0 = Date.now();
-  const slow = await nodeStatusForPage(Date.now(), 60);
+  const cold = await nodeStatusForPage();
   const tookMs = Date.now() - t0;
   restore();
-  assert.equal(slow, null, "a cold read against a slow wallet should give up and say nothing");
-  assert.ok(tookMs < 400, `the cold wait was ${tookMs}ms - it is waiting on the wallet, not on the cap`);
+  assert.ok(cold !== null, "a cold read gave up and returned null - the verdict is now undefined rather than false");
+  assert.equal(cold.nodeHeight, 800_000);
+  assert.ok(typeof cold.canBuildTx === "boolean", "canBuildTx must be a boolean, never absent");
+  assert.ok(tookMs >= 100, `the cold read did not actually wait (${tookMs}ms) - it cannot have read anything`);
 });
 
+test("a WARM read still does not wait, so the cold-path fix did not put the latency back", async () => {
+  // The pair to the row above: making the COLD path await in full must not make the WARM path do
+  // it too, or the fix for the verdict would have undone the reason this module exists.
+  resetNodeStatusCacheForTests();
+  wallet({ delayMs: 0 });
+  await refreshNodeStatusForTests();
+  wallet({ delayMs: 400 });
+  const t0 = Date.now();
+  await nodeStatusForPage(Date.now() + 5_000);
+  const tookMs = Date.now() - t0;
+  restore();
+  assert.ok(tookMs < 150, `a warm read waited ${tookMs}ms on a 400ms wallet`);
+});
 
 test("a PAGE-purpose cached reading can never satisfy a CLAIM-purpose read", async () => {
   // @SDE-Infra asked for this one above all the others, from the consumer side. The watchdog reads
@@ -156,4 +174,68 @@ test("a PAGE-purpose cached reading can never satisfy a CLAIM-purpose read", asy
   assert.ok(claim !== null, "the claim read returned nothing, so the comparison below is vacuous");
   assert.equal(claim.nodeHeight, 700_050,
     "the claim path was served the page cache's reading - a gate decided on a cached height");
+});
+
+
+test("a STALE cache waits too, not just a cold one - the bug my first fix missed", async () => {
+  // api-integration caught this and a cold-cache reproduction could not: the suite reaches its
+  // cannot-verify assertion minutes after the entry was written, so the cache is STALE rather than
+  // COLD. My first fix awaited only when `at === 0`, so an entry past the window returned null
+  // without waiting - and node:null makes canBuildTx UNDEFINED rather than FALSE, which is the
+  // money gate's fail-closed verdict going missing.
+  //
+  // STALENESS IS SIMULATED BY BACKDATING THE ENTRY, not by passing a future clock. My first
+  // version of this row did the latter, and then the reading written DURING the await was itself
+  // "old" relative to that future instant, so the row failed against correct code. Production
+  // staleness is an old entry against a real clock; that is what this reproduces.
+  resetNodeStatusCacheForTests();
+  wallet({ heights: [600_000, 600_000] });
+  await refreshNodeStatusForTests();
+  const cell = (globalThis as unknown as { __nodeStatusCache?: { at: number } }).__nodeStatusCache;
+  assert.ok(cell && cell.at > 0, "nothing was cached, so this row would measure nothing");
+  cell.at = Date.now() - NODE_STATUS_MAX_AGE_MS * 4; // an entry far past the window
+  assert.equal(cachedNodeStatus(), null, "the backdated entry is still serveable - the setup did not take");
+  wallet({ delayMs: 60, heights: [600_100, 600_100] });
+  const served = await nodeStatusForPage();
+  restore();
+  assert.ok(served !== null, "a stale cache returned null instead of waiting - canBuildTx is undefined, not false");
+  assert.ok(typeof served.canBuildTx === "boolean", "canBuildTx must be a boolean, never absent");
+  assert.equal(served.nodeHeight, 600_100, "it served something other than the read it just waited for");
+});
+
+
+test("the boundary: one millisecond past MAX_AGE still waits", async () => {
+  // @SDE-App asked for exactly this age, because a mutant restoring `c.at === 0` is INVISIBLE to
+  // every row that starts from a cold cell - the cold case waits under either condition. Only an
+  // entry that exists and is just past the window separates them.
+  resetNodeStatusCacheForTests();
+  wallet({ heights: [500_000, 500_000] });
+  await refreshNodeStatusForTests();
+  const cell = (globalThis as unknown as { __nodeStatusCache?: { at: number } }).__nodeStatusCache;
+  assert.ok(cell && cell.at > 0, "nothing cached, so this row would measure nothing");
+  cell.at = Date.now() - (NODE_STATUS_MAX_AGE_MS + 1);
+  wallet({ delayMs: 40, heights: [500_001, 500_001] });
+  const served = await nodeStatusForPage();
+  restore();
+  assert.ok(served !== null, "one millisecond past the window returned null without waiting");
+  assert.equal(served.nodeHeight, 500_001);
+});
+
+test("and one millisecond INSIDE the window does NOT wait, so the fix did not make every read block", () => {
+  // The pair. Without this, "wait whenever in doubt" would pass the row above and quietly put the
+  // wallet's latency back on every request, which is the defect the module exists to remove.
+  resetNodeStatusCacheForTests();
+  wallet({ heights: [500_000, 500_000] });
+  return refreshNodeStatusForTests().then(async () => {
+    const cell = (globalThis as unknown as { __nodeStatusCache?: { at: number } }).__nodeStatusCache;
+    cell!.at = Date.now() - (NODE_STATUS_MAX_AGE_MS - 1);
+    wallet({ delayMs: 500, heights: [500_002, 500_002] });
+    const t0 = Date.now();
+    const served = await nodeStatusForPage();
+    const tookMs = Date.now() - t0;
+    restore();
+    assert.ok(served !== null, "a serveable entry returned nothing");
+    assert.equal(served.nodeHeight, 500_000, "it waited for the new read instead of serving what it had");
+    assert.ok(tookMs < 150, `a serveable entry waited ${tookMs}ms on a 500ms wallet`);
+  });
 });
