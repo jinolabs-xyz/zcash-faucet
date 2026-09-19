@@ -33,11 +33,10 @@ import { validateTestnetAddress } from "@/lib/zcash/address";
 import { powEstimateSeconds, powEstimateText } from "@/lib/powEstimate";
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
-// "checking" is NOT a variant of "syncing". It means we have not asked the backend
-// yet, and the page renders in 2ms while /api/status takes 460 to 770ms, so this
-// state is on screen for over half a second on localhost and longer over a network.
-// It used to render as "syncing", which told a first-time visitor that a healthy
-// faucet was busy coming up.
+// "checking" is NOT a variant of "syncing". It means we have no node reading: either we
+// have not asked yet, or a poll came back without one (#704). Sends are held either way.
+// It used to render as "syncing", which told a first-time visitor that a healthy faucet
+// was busy coming up.
 // The four sections behind the segmented nav. One is visible at a time and the rest
 // carry `hidden`, which the shell turns into display:none. The hash mirrors it so a
 // view survives a reload and can be linked to.

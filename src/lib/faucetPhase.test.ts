@@ -68,7 +68,8 @@ test("#573: a broken TAZ wallet does not decide cTAZ - the questions are differe
 /* faultReason names the component, so the sentence is never "the node" when it is the wallet. */
 test("#573: each fault names its own component", () => {
   assert.match(faultReason(w({ backend: { reachable: false } } as Partial<Status>))!, /indexer/);
-  assert.match(faultReason(w({ node: null } as Partial<Status>))!, /wallet is not answering/);
+  // balanceTaz too: a missing node reading alone is our deadline, not the wallet's silence (#704).
+  assert.match(faultReason(w({ node: null, balanceTaz: null } as Partial<Status>))!, /wallet is not answering/);
   assert.match(faultReason(w({ node: { frozen: true } } as Partial<Status>))!, /stopped following|blocks behind/);
   assert.equal(faultReason(ok), null, "a healthy stack must name no fault");
 });
@@ -89,4 +90,24 @@ test("#573: nodeGap is null unless both heights are known and ours is behind", (
 test("#573: holding() is the 'cannot send yet' set, and 'checking' is in it", () => {
   for (const p of ["checking", "syncing", "fault"] as const) assert.equal(holding(p), true, p);
   for (const p of ["ready", "empty", "degraded", "queued"] as const) assert.equal(holding(p), false, p);
+});
+
+test("#704: our own deadline expiring is not the wallet's silence", () => {
+  // The page gives the node read 4-6s; the balance call gets 15s against the SAME wallet RPC,
+  // so every wallet reply in that band lands here as node:null with a balance beside it.
+  // Announcing an outage over it told roughly one visitor in nine that the faucet was down.
+  const s = w({ node: null, balanceTaz: 4504.7 } as Partial<Status>);
+  assert.equal(faultReason(s), null, "a balance from that wallet outranks our timeout");
+  // NOT "ready" either. No reading is not a good reading, and a ready button here invites a
+  // proof of work that the claim path's own fresh read may then refuse (#457).
+  assert.equal(basePhase(s), "checking");
+  assert.equal(holding(basePhase(s)), true, "and sends are held while we do not know");
+});
+
+test("#704: the real outage still reports, which is what stops the fix going too far", () => {
+  // Both halves silent is the zallet crash-loop the branch was written for. A fix that simply
+  // stopped faulting on a missing node would satisfy the row above and delete this one.
+  const s = w({ node: null, balanceTaz: null } as Partial<Status>);
+  assert.equal(faultReason(s), "our wallet is not answering");
+  assert.equal(basePhase(s), "fault");
 });

@@ -113,11 +113,11 @@ export const nodeGap = (s: Status): number | null =>
 // it is the wallet, and never "first sync" when it is a fault.
 export const faultReason = (s: Status): string | null => {
   if (!s.backend?.reachable) return "a public indexer we use for balance lookups is unreachable right now";
-  // THE WALLET NOT ANSWERING is the most frequent real outage (the zallet crash-loops),
-  // and it arrives as node: null AND balanceTaz: null, so every node-guarded line
-  // below is silent about it. Readiness calls this "node status unknown"; the page
-  // said "first sync takes a while, one time" (review of #522).
-  if (s.sender === "zallet" && !s.node) return "our wallet is not answering";
+  // THE WALLET NOT ANSWERING is the most frequent real outage (the zallet crash-loops), and it
+  // arrives as node: null AND balanceTaz: null. BOTH HALVES are required: the balance call gets
+  // 15s against the same RPC the page's node read gives 4-6s, so a reply in that band lands as
+  // node:null with a balance beside it. That is our deadline expiring, not silence (#704).
+  if (s.sender === "zallet" && !s.node && s.balanceTaz == null) return "our wallet is not answering";
   if (s.node?.frozen) {
     // The distance, not a duration. tipStalledMs is how long THIS PROCESS has seen
     // our tip unchanged; it resets on every deploy and every tip move, so "stopped
@@ -180,6 +180,10 @@ export function basePhase(s: Status | null, net: FaucetNetwork = "taz"): Phase {
   // first sync. The server already tells them apart; the page now does too. Only a
   // node that is genuinely catching up (not ready, not frozen) is "syncing".
   if (faultReason(s)) return "fault";
+  // NO NODE READING IS NOT A GOOD ONE. The wallet answered the balance, so it is not down, but
+  // this poll got no height - we cannot call the faucet ready, and must not invite a proof of
+  // work the next gate may refuse (#457). Still checking, and the next poll is 4s away (#704).
+  if (s.sender === "zallet" && !s.node) return "checking";
   if (s.node && s.node.ready === false) return "syncing";
   // No node block at all (a sender the node status does not apply to) and no balance
   // yet: the old reading, a wallet still coming up.
