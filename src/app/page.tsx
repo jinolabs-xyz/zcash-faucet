@@ -18,6 +18,7 @@ import { CSSProperties, useEffect, useLayoutEffect, useRef, useState } from "rea
  * unstyled, with nothing failing at build time. It is in the Shell now, beside the other four. */
 import { Mascot } from "@/components/Mascot";
 import { readinessBadge } from "@/lib/readinessBadge";
+import { silentRetryWaitSeconds, retriesExhaustedNote, RETRY_STEP_LABEL } from "@/lib/claimRetry";
 import { basePhase, faultReason, holding, num, type Phase, type Status } from "@/lib/faucetPhase";
 import { Shell } from "@/components/Shell";
 import { HeroChips } from "@/components/HeroChips";
@@ -292,6 +293,9 @@ export default function Home() {
   // difficulty is null from the moment the solve starts until the challenge arrives, so
   // the card (and its Cancel) is on screen for the whole solve, fetch included.
   const [powState, setPowState] = useState<{ hashes: number; difficulty: number | null; ms: number } | null>(null);
+  // How many times we have quietly re-sent THIS claim. Drives the extra step, and nothing
+  // else: the branches that render a refusal never learn about it.
+  const [heldRetries, setHeldRetries] = useState(0);
   // Set while a solve is running; calling it abandons the solve and the claim (R-38).
   const powCancel = useRef<(() => void) | null>(null);
   const [genErr, setGenErr] = useState("");
@@ -554,12 +558,58 @@ export default function Home() {
     submitStart.current = Date.now();
     setElapsed(0);
     try {
-      const res = await fetch("/api/faucet", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ address, network, ...(pow ? { pow } : {}) }),
-      });
-      const data = await res.json().catch(() => ({}));
+      // A REFUSAL WE CAUSED IS RETRIED QUIETLY, WITH THE SAME PROOF (owner: "show the user that
+      // this is happening with one more green circle"). The server tells us which refusals are
+      // our own wobble by the length of the wait it asks for - 5s when OUR node did not answer,
+      // 20s when an outside reference is missing, 75s when we are genuinely behind - and only the
+      // first clears by itself. The decision is silentRetryWaitSeconds, not this loop.
+      //
+      // THE LOOP IS AROUND THE FETCH AND NOTHING ELSE, so every branch below sees the FINAL
+      // answer and none of them had to learn about retrying. Re-running the whole submit would
+      // mine the proof again, which is the cost this exists to avoid: prod runs difficulty 22,
+      // about 4.2 million hashes on a phone.
+      // THE FIELDS THIS PAGE ACTUALLY READS, named rather than widened to `any`. The reply used
+      // to be inferred from res.json(), which is `any`, and hoisting it out of the loop made that
+      // implicit - this file carries no explicit `any` and should not gain one for a retry. Each
+      // is optional because it is a stranger's JSON until it is checked.
+      interface ClaimReply {
+        ok?: unknown;
+        error?: string;
+        kind?: string;
+        scope?: string;
+        retryAfterSeconds?: number;
+        nextAt?: string;
+        requestId?: unknown;
+        txid?: string;
+        explorerUrl?: string;
+        network?: string;
+        paidZat?: string | number;
+      }
+      let res: Response;
+      let data: ClaimReply;
+      let heldAttempts = 0;
+      for (;;) {
+        res = await fetch("/api/faucet", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ address, network, ...(pow ? { pow } : {}) }),
+        });
+        data = await res.json().catch(() => ({}));
+        const wait = silentRetryWaitSeconds(
+          { status: res.status, kind: data.kind, retryAfterSeconds: data.retryAfterSeconds },
+          heldAttempts,
+        );
+        if (wait == null) break;
+        heldAttempts += 1;
+        // Drives the extra step. Set BEFORE the wait, or the circle appears after the thing it
+        // is describing has finished.
+        setHeldRetries(heldAttempts);
+        await new Promise((r) => setTimeout(r, wait * 1000));
+      }
+      // Cleared before the branches below so the step cannot outlive the retry - but the COUNT
+      // is kept, because the card has to account for the seconds the visitor already waited.
+      const retriedTimes = heldAttempts;
+      setHeldRetries(0);
       if (res.ok && data.ok) {
         const d = detect(address);
         setTx({
@@ -635,7 +685,13 @@ export default function Home() {
         else if (res.status === 403) setFail({ kind: "pow", requestId });
         else if (res.status === 400) setFail({ kind: "bad", requestId });
         else setFail({ kind: "failed", requestId });
-        setErrMsg(data.error || "The send didn't go through. Nothing left the wallet.");
+        // NAMING THE RETRIES IS NOT A FLOURISH. Without it a visitor who watched a spinner for
+        // ten seconds is handed a card implying the request only just failed, and the seconds are
+        // unaccounted for.
+        setErrMsg(
+          (typeof data.error === "string" && data.error ? data.error : "The send didn't go through. Nothing left the wallet.") +
+            retriesExhaustedNote(retriedTimes),
+        );
         setPhase("error");
       }
     } catch {
@@ -937,6 +993,12 @@ export default function Home() {
     ["Building the zero-knowledge proof", 0.63],
     ["Broadcasting to the testnet", 0.15],
   ];
+  // THE OWNER ASKED FOR ONE *MORE* CIRCLE, WHICH IS A DIFFERENT SHAPE FROM A FIFTH DIMMED ONE.
+  // Appending it only while a retry is in flight means the happy path never hints that something
+  // could go wrong; a permanently present step would spend every successful claim implying it.
+  // Weight 0, because the four weights are a transcribed budget that sums to 1 and this step is
+  // not part of the proof's progress - it is a thing that happened to it.
+  if (heldRetries > 0) steps.push([RETRY_STEP_LABEL, 0]);
   let acc = 0, curStep = 0;
   // A forEach, not a map whose array nobody reads. The legacy list rendered the returned
   // objects; the transcribed `.steps` list renders `data-done`/`data-active` from `curStep`,
@@ -948,6 +1010,10 @@ export default function Home() {
     if (active) curStep = i;
   });
   if (proofFrac >= 1) curStep = steps.length - 1;
+  // While retrying, the extra step IS the current one - the proof is finished and we are waiting
+  // on our own node, so leaving "Broadcasting" active would say we were doing something we are
+  // not.
+  if (heldRetries > 0) curStep = steps.length - 1;
 
   // ONE OWNER OF THE READINESS WORD (#573). This derivation used to live here and the subpages
   // derived their own from three other facts, which disagreed with it in production. It is now
