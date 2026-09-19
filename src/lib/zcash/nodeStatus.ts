@@ -126,19 +126,28 @@ export type NodeReadPurpose = "claim" | "page";
  */
 export function nodeStatusBudgetMs(purpose: NodeReadPurpose = "claim"): number {
   const budget = nodeStatusTimeoutMs();
-  // A third, floored: eight of ten production samples answer under 3s, so 4s keeps the page fast
-  // and right almost always.
+  // 6000. The reasoning is in #698 rather than here, because it moved three times in one hour and
+  // a file comment is the wrong place for a conclusion that is still settling.
   //
-  // AND IT STAYS AT 4s DESPITE THE MEASUREMENT THAT ARGUES FOR RAISING IT (SDE-UI). n=408 reads on
-  // the claim ladder put 8.1% over 4s with a tail to ~10s, so a higher page deadline would rescue
-  // about one visitor in eleven from an unfilled chip. It would also make them WAIT for it -
-  // status/route.ts:96 is a Promise.all, so the node read gates the WHOLE payload. Those visitors
-  // currently get balance, reserve, miner and drips at ~200ms with one chip unfilled, and the chip
-  // fills on the next poll 4s later. At 8000 they would get all of it at eight seconds instead.
-  // Rescuing one figure by delaying the other five is the wrong trade, and the right fix is to
-  // stop the node read gating the rest - which is a change to what /api/status promises, not a
-  // number here.
-  return purpose === "page" ? Math.max(4000, Math.floor(budget / 3)) : budget;
+  // WHAT THE DATA SUPPORTS, and it is less than the table it came from looks like it says:
+  //   RAISE IT ABOVE 4000. Measured on production, n=523 reads: 4s is the WORST of the deadlines
+  //     tested for time-until-the-card-is-complete, because slowness CLUSTERS - P(next slow | this
+  //     slow) = 0.206 against a 0.070 baseline - so a visitor who loses one poll tends to lose the
+  //     next and rides several four-second cycles.
+  //   THE CHOICE AMONG 6, 8 AND 12 IS NOT RESOLVED. Their bootstrap intervals overlap almost
+  //     completely. SDE-Research withdrew "6s is the best" as a point estimate read off a table
+  //     with no error bars, so nothing here should claim it.
+  // So 6000 is chosen on a different ground, and it is the sturdier one: the residual cost of a
+  // raise falls ENTIRELY on visitors who still fail, so the smallest raise that captures most of
+  // the tail is the right shape. Direct counts, not simulated percentiles: 6s recovers about half
+  // the over-4s reads, 8s about three quarters.
+  //
+  // AND THE p999 COLUMN IN THAT ISSUE IS DECORATION: zero observations above 10s in n=523, so
+  // every p999 figure is block structure extrapolated past the data. Do not pick a deadline off it.
+  //
+  // p50, p75 and p90 are IDENTICAL at every deadline tested. The typical visitor is untouched by
+  // this choice either way, which is what makes it safe to tune at all.
+  return purpose === "page" ? Math.max(4000, Math.min(6000, budget)) : budget;
 }
 
 export function nodeStatusAttemptsMs(purpose: NodeReadPurpose = "claim"): number[] {
