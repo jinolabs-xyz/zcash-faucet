@@ -69,3 +69,25 @@ test("a tiny budget still yields attempts that can reach a node", async () => {
   assert.ok(a[0] >= 1000, `the first attempt must still be able to reach the node; got ${a[0]}`);
   delete process.env.FAUCET_NODE_STATUS_TIMEOUT_MS;
 });
+
+test("a page and a claim are two different people waiting for two different reasons", async () => {
+  const { nodeStatusAttemptsMs, nodeStatusBudgetMs } = await import("./nodeStatus.ts");
+  delete process.env.FAUCET_NODE_STATUS_TIMEOUT_MS;
+
+  // THE CLAIM IS PATIENT. Someone pressed a button and expects work; being refused because we
+  // gave up at 4s is the outage this whole branch is about.
+  const claim = nodeStatusAttemptsMs("claim");
+  assert.ok(claim.length >= 2, "a claim retries");
+  assert.ok(claim.reduce((a, b) => a + b, 0) > 6_700, "and clears the slowest prod reading");
+
+  // THE PAGE IS FAST. Someone just arrived; a status card that takes twelve seconds to fill
+  // reads as a broken site, and a fast unknown they can act on beats a slow one.
+  const page = nodeStatusAttemptsMs("page");
+  assert.equal(page.length, 1, "a page does not retry - it would only be slower to say the same");
+  assert.ok(nodeStatusBudgetMs("page") < nodeStatusBudgetMs("claim"),
+    "the page must not inherit the claim's patience - raising the claim budget is what made the page slow");
+
+  // AND THE PAGE STILL CLEARS THE COMMON CASE. Eight of ten prod samples answered under 3s, so a
+  // fast page is not a page that gives up on a healthy node.
+  assert.ok(page[0] >= 3_000, `the page must still reach a healthy node; got ${page[0]}`);
+});

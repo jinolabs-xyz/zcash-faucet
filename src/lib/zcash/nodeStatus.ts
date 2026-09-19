@@ -101,13 +101,38 @@ export function nodeStatusTimeoutMs(): number {
  * spent only 4s before the attempt that is actually likely to succeed. Reversing them would make
  * every visitor wait for the slow path.
  */
-export function nodeStatusAttemptsMs(): number[] {
+export type NodeReadPurpose = "claim" | "page";
+
+/**
+ * How patient to be, and it depends on WHO IS WAITING.
+ *
+ * A CLAIM is a person who pressed a button and expects work to happen: waiting twelve seconds
+ * for TAZ is reasonable, and being refused because we gave up at four is not.
+ * A PAGE is a person who has just arrived. They are owed an answer quickly, and a status card
+ * that takes twelve seconds to fill reads as a broken site - so the page gives up sooner and
+ * shows what it knows.
+ *
+ * These were one number until 2026-09-19, and raising it to fix the claim made the page slower
+ * for everyone. Two different people are waiting for two different reasons.
+ */
+export function nodeStatusBudgetMs(purpose: NodeReadPurpose = "claim"): number {
   const budget = nodeStatusTimeoutMs();
+  // A third, floored so the page still clears the common case: eight of ten production samples
+  // answered under 3s, so 4s keeps the page fast AND right almost always.
+  return purpose === "page" ? Math.max(4000, Math.floor(budget / 3)) : budget;
+}
+
+export function nodeStatusAttemptsMs(purpose: NodeReadPurpose = "claim"): number[] {
+  const budget = nodeStatusBudgetMs(purpose);
+  // THE PAGE DOES NOT RETRY. A retry is for someone who asked us to do something; a visitor
+  // reading a status card is better served by a fast unknown they can act on than by a page that
+  // silently takes twice as long before telling them the same thing.
+  if (purpose === "page") return [budget];
   const first = Math.max(1000, Math.floor(budget / 3));
   return [first, budget - first];
 }
 
-export async function getNodeStatus(): Promise<NodeStatus | null> {
+export async function getNodeStatus(purpose: NodeReadPurpose = "claim"): Promise<NodeStatus | null> {
   if (config.sender !== "zallet") return null;
   const { endpoint, user, password } = config.zallet;
   const headers: Record<string, string> = { "content-type": "application/json" };
@@ -130,7 +155,7 @@ export async function getNodeStatus(): Promise<NodeStatus | null> {
     // 3.0s carried a node; 4.8s and 6.7s carried null, and zebra was healthy and 100% synced
     // throughout. The owner found it from their own phone rather than from an alert.
     const res = await (async () => {
-      const attempts = nodeStatusAttemptsMs();
+      const attempts = nodeStatusAttemptsMs(purpose);
       for (const [i, ms] of attempts.entries()) {
         try {
           return await fetch(endpoint, {
