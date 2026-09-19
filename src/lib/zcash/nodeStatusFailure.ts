@@ -49,8 +49,10 @@ export interface NodeStatusFailureCounts {
 
 const counts: NodeStatusFailureCounts = { timeout: 0, http: 0, parse: 0, network: 0 };
 /** When each class was last written to the log, and how many it has had since. */
-const lastLoggedAt: Record<NodeStatusFailureKind, number> = { timeout: 0, http: 0, parse: 0, network: 0 };
-const sinceLastLog: NodeStatusFailureCounts = { timeout: 0, http: 0, parse: 0, network: 0 };
+/** Keyed `kind:scope` - see the note in recordNodeStatusFailure for why the path is part of it. */
+const lastLoggedAt: Record<string, number> = {};
+const sinceLastLog: Record<string, number> = {};
+const countsByPath: Record<string, number> = {};
 
 const THROTTLE_MS = 60_000;
 
@@ -82,19 +84,26 @@ export function recordNodeStatusFailure(
   detail: string | null,
   now: number = Date.now(),
   write: (line: string) => void = (line) => console.warn(line),
+  scope: NodeStatusScope = "claim",
 ): string | null {
+  // THROTTLED PER CLASS **AND PER PATH**. Keyed by class alone, a `network` failure on the page
+  // ladder silences a `network` failure on the claim ladder a second later - and the line that did
+  // speak names only its own path, so a reader concludes one path is failing while the other is
+  // equally broken and silent. Seen in a real two-path run before this was keyed. The counts went
+  // the same way: "6 since the last line" was six across two different ladders.
+  const key = `${kind}:${scope}` as const;
   counts[kind] += 1;
-  sinceLastLog[kind] += 1;
-  const first = counts[kind] === 1;
-  const due = now - lastLoggedAt[kind] >= THROTTLE_MS;
+  sinceLastLog[key] = (sinceLastLog[key] ?? 0) + 1;
+  const first = (countsByPath[key] = (countsByPath[key] ?? 0) + 1) === 1;
+  const due = now - (lastLoggedAt[key] ?? 0) >= THROTTLE_MS;
   if (!first && !due) return null;
-  const n = sinceLastLog[kind];
+  const n = sinceLastLog[key];
   const suffix = detail ? ` (${detail})` : "";
   const line = first
     ? `[node-status] read failed: ${kind}${suffix}. Readiness answers "node status unknown" while this is happening.`
     : `[node-status] read failed: ${kind}${suffix}. ${n} since the last line, ${counts[kind]} since start.`;
-  lastLoggedAt[kind] = now;
-  sinceLastLog[kind] = 0;
+  lastLoggedAt[key] = now;
+  sinceLastLog[key] = 0;
   write(line);
   return line;
 }
@@ -106,18 +115,11 @@ export function nodeStatusFailureCounts(): NodeStatusFailureCounts {
 
 /** Test seam. Nothing in the app calls this. */
 export function resetNodeStatusFailures(): void {
-  for (const k of NODE_STATUS_FAILURE_KINDS) {
-    counts[k] = 0;
-    lastLoggedAt[k] = 0;
-    sinceLastLog[k] = 0;
-  }
+  for (const k of NODE_STATUS_FAILURE_KINDS) counts[k] = 0;
+  for (const k of Object.keys(lastLoggedAt)) delete lastLoggedAt[k];
+  for (const k of Object.keys(sinceLastLog)) delete sinceLastLog[k];
+  for (const k of Object.keys(countsByPath)) delete countsByPath[k];
   resetNodeStatusLatency();
-  lastShapeAt = 0;
-  everReported = false;
-  countingSince = 0;
-  failedAttempts = 0;
-  fastestFailureMs = null;
-  slowestFailureMs = null;
 }
 
 /* ── how long the reads take, which is a different question from why they fail ──────────────── */
@@ -148,18 +150,57 @@ export const LATENCY_BUCKET_EDGES_MS = [50, 250, 1_000, 2_000, 4_000, 8_000, 12_
 
 const LATENCY_LABELS = ["<50ms", "50-250ms", "250ms-1s", "1-2s", "2-4s", "4-8s", "8-12s", ">=12s"] as const;
 
-const latency = new Array<number>(LATENCY_LABELS.length).fill(0);
-/** Aborted by OUR deadline. A known-unknown, kept out of the buckets so nobody averages over it. */
-let censored = 0;
-/** The single worst reading that came back. A histogram loses it, and it often explains an outage. */
-let slowestMs = 0;
+/**
+ * ONE SET OF COUNTERS PER PURPOSE, BECAUSE A COUNTER WITH NO STATED CALLER IS THE SAME FAULT AS A
+ * BUDGET WITH NO STATED CALLER (L57, and it cost three of us a day).
+ * `/api/status` reads the node on the PAGE path - a single 4s attempt, no retry. `/api/ready` and
+ * the claim path get [4000, 8000]. Both run in this process. Summed together, one page read
+ * contributes at most one censored and never a recovered, while one claim read can contribute two
+ * censored and a recovered - so the censored-to-failed ratio, which is the whole diagnostic value
+ * of this line, could be moved by nothing more than the mix of page to ready traffic. Measured
+ * before splitting: censored=1 after one page read, censored=3 after also one claim read.
+ */
+export type NodeStatusScope = "claim" | "page";
+export const NODE_STATUS_SCOPES: readonly NodeStatusScope[] = ["claim", "page"];
+
+interface ShapeCounters {
+  latency: number[];
+  /** Aborted by OUR deadline. A known-unknown, kept out of the buckets so nobody averages over it. */
+  censored: number;
+  /** The single worst reading that came back. A histogram loses it, and it often explains an outage. */
+  slowestMs: number;
+  recoveredOnRetry: number;
+  countingSince: number;
+  failedAttempts: number;
+  fastestFailureMs: number | null;
+  slowestFailureMs: number | null;
+  lastShapeAt: number;
+  everReported: boolean;
+}
+
+function emptyCounters(): ShapeCounters {
+  return {
+    latency: new Array<number>(LATENCY_LABELS.length).fill(0),
+    censored: 0,
+    slowestMs: 0,
+    recoveredOnRetry: 0,
+    countingSince: 0,
+    failedAttempts: 0,
+    fastestFailureMs: null,
+    slowestFailureMs: null,
+    lastShapeAt: 0,
+    everReported: false,
+  };
+}
+
+const byScope: Record<NodeStatusScope, ShapeCounters> = { claim: emptyCounters(), page: emptyCounters() };
+const at = (scope: NodeStatusScope): ShapeCounters => byScope[scope];
 /**
  * A first attempt that failed and a second that SAVED it (@SDE-Infra). #688 retries on a shared
  * budget, so this is the wobble-versus-state distinction - and it cannot be made from outside at
  * all: an outside sampler and the watchdog both see one successful read either way. The app is the
  * only place it can be counted.
  */
-let recoveredOnRetry = 0;
 
 function bucketOf(ms: number): number {
   for (let i = 0; i < LATENCY_BUCKET_EDGES_MS.length; i++) if (ms < LATENCY_BUCKET_EDGES_MS[i]) return i;
@@ -167,11 +208,16 @@ function bucketOf(ms: number): number {
 }
 
 /** One read that CAME BACK, however it then turned out. Aborted reads go to recordCensoredRead. */
-export function recordNodeStatusLatency(ms: number, now: number = Date.now()): void {
+export function recordNodeStatusLatency(
+  ms: number,
+  now: number = Date.now(),
+  scope: NodeStatusScope = "claim",
+): void {
   if (!Number.isFinite(ms) || ms < 0) return;
-  if (countingSince === 0) countingSince = now;
-  latency[bucketOf(ms)] += 1;
-  if (ms > slowestMs) slowestMs = ms;
+  const c = at(scope);
+  if (c.countingSince === 0) c.countingSince = now;
+  c.latency[bucketOf(ms)] += 1;
+  if (ms > c.slowestMs) c.slowestMs = ms;
 }
 
 /** One read WE gave up on, named for the deadline that cut it off. Never a latency bucket. */
@@ -181,26 +227,32 @@ export function recordNodeStatusLatency(ms: number, now: number = Date.now()): v
  * so it must not enter a latency bucket: a node refusing in 3ms would otherwise pile into <50ms
  * and read as the fastest node we have ever seen.
  */
-export function recordFailedAttempt(ms: number, now: number = Date.now()): void {
-  if (countingSince === 0) countingSince = now;
-  failedAttempts += 1;
+export function recordFailedAttempt(
+  ms: number,
+  now: number = Date.now(),
+  scope: NodeStatusScope = "claim",
+): void {
+  const c = at(scope);
+  if (c.countingSince === 0) c.countingSince = now;
+  c.failedAttempts += 1;
   if (!Number.isFinite(ms) || ms < 0) return;
-  if (fastestFailureMs === null || ms < fastestFailureMs) fastestFailureMs = ms;
+  if (c.fastestFailureMs === null || ms < c.fastestFailureMs) c.fastestFailureMs = ms;
   // BOTH ENDS, FOR THE SAME REASON recovered AND censored ARE PRINTED TOGETHER. SDE-Research
   // decomposed eight production nulls and the second component runs 0.31s to 2.27s - an order of
   // magnitude. A lone fastest of 270ms would be true and would leave every reader believing the
   // second attempt dies instantly while a 2.27s case sits unreported inside the same count.
-  if (slowestFailureMs === null || ms > slowestFailureMs) slowestFailureMs = ms;
+  if (c.slowestFailureMs === null || ms > c.slowestFailureMs) c.slowestFailureMs = ms;
 }
 
-export function recordCensoredRead(now: number = Date.now()): void {
-  if (countingSince === 0) countingSince = now;
-  censored += 1;
+export function recordCensoredRead(now: number = Date.now(), scope: NodeStatusScope = "claim"): void {
+  const c = at(scope);
+  if (c.countingSince === 0) c.countingSince = now;
+  c.censored += 1;
 }
 
 /** One read that only succeeded because the second attempt did. */
-export function recordRecoveredOnRetry(): void {
-  recoveredOnRetry += 1;
+export function recordRecoveredOnRetry(scope: NodeStatusScope = "claim"): void {
+  at(scope).recoveredOnRetry += 1;
 }
 
 export interface NodeStatusLatencyView {
@@ -215,25 +267,23 @@ export interface NodeStatusLatencyView {
   slowestFailureMs: number | null;
 }
 
-export function nodeStatusLatency(): NodeStatusLatencyView {
+export function nodeStatusLatency(scope: NodeStatusScope = "claim"): NodeStatusLatencyView {
+  const c = at(scope);
   const buckets: Record<string, number> = {};
-  LATENCY_LABELS.forEach((label, i) => { buckets[label] = latency[i]; });
+  LATENCY_LABELS.forEach((label, i) => { buckets[label] = c.latency[i]; });
   return {
     buckets,
-    censoredAtOurDeadline: censored,
-    slowestObservedMs: slowestMs,
-    recoveredOnRetry,
-    failedAttempts,
-    fastestFailureMs,
-    slowestFailureMs,
+    censoredAtOurDeadline: c.censored,
+    slowestObservedMs: c.slowestMs,
+    recoveredOnRetry: c.recoveredOnRetry,
+    failedAttempts: c.failedAttempts,
+    fastestFailureMs: c.fastestFailureMs,
+    slowestFailureMs: c.slowestFailureMs,
   };
 }
 
 export function resetNodeStatusLatency(): void {
-  latency.fill(0);
-  censored = 0;
-  slowestMs = 0;
-  recoveredOnRetry = 0;
+  for (const scope of NODE_STATUS_SCOPES) byScope[scope] = emptyCounters();
 }
 
 /**
@@ -257,8 +307,11 @@ export function resetNodeStatusLatency(): void {
 export function reportNodeStatusShape(
   now: number = Date.now(),
   write: (line: string) => void = (line) => console.warn(line),
+  scope: NodeStatusScope = "claim",
+  ladderMs?: readonly number[],
 ): string | null {
-  const v = nodeStatusLatency();
+  const c = at(scope);
+  const v = nodeStatusLatency(scope);
   const reads = Object.values(v.buckets).reduce((a, b) => a + b, 0);
   // NOTHING TO SAY means nothing HAPPENED, not "nothing worked". A process whose every attempt was
   // refused has plenty to say and no successful read to say it with - staying quiet there is the
@@ -267,9 +320,9 @@ export function reportNodeStatusShape(
   // THE FIRST ONE ALWAYS SPEAKS, same rule as the failure classes: at now=0 against an unset
   // lastShapeAt the throttle would swallow the very first report, and a process that restarts
   // often would then never say its shape at all.
-  if (everReported && now - lastShapeAt < THROTTLE_MS) return null;
-  everReported = true;
-  lastShapeAt = now;
+  if (c.everReported && now - c.lastShapeAt < THROTTLE_MS) return null;
+  c.everReported = true;
+  c.lastShapeAt = now;
   const shape = Object.entries(v.buckets)
     .filter(([, n]) => n > 0)
     .map(([label, n]) => `${label}=${n}`)
@@ -280,7 +333,7 @@ export function reportNodeStatusShape(
   // SYSTEM (L49, @SDE-Research). "recovered 12, censored 3" is a claim about an unnamed period and
   // cannot be compared to anything; "in the last 11m" can. These are cumulative since this process
   // first saw a read, which a restart resets - so the duration is the only honest framing.
-  const overMs = Math.max(0, now - countingSince);
+  const overMs = Math.max(0, now - c.countingSince);
   const over = overMs >= 60_000 ? `${Math.round(overMs / 60_000)}m` : `${Math.round(overMs / 1000)}s`;
   // RECOVERED AND CENSORED ALWAYS TOGETHER, ON THIS LINE, whatever their values. They are the
   // success and failure halves of the same mitigation: recovered 50 / censored 0 means the retry
@@ -298,19 +351,20 @@ export function reportNodeStatusShape(
   // NOTHING RETURNED IS NOT "0ms". With reads=0 a slowest of 0ms reads as "every read was
   // instant" - the good-news spelling of no data, which is the whole fault this line exists to
   // stop telling.
+  // THE LADDER LEADS, AND THE PURPOSE IS A KEY RATHER THAN A DESCRIPTION (@SDE-Research, L57 a
+  // third time). The claim counters are fed by /api/ready AND /api/faucet, and the watchdog polls
+  // readiness every 30 seconds while a claim needs a real visitor - so the claim numbers are mostly
+  // a robot, and anyone reading the word "claim" as "what a visitor experiences when they claim"
+  // is reading a number about the watchdog. "ladder 4000+8000ms" cannot be misread that way, and it
+  // is computed rather than asserted, so it cannot go stale when a caller is added.
+  const ladder = ladderMs && ladderMs.length > 0 ? `ladder ${ladderMs.join("+")}ms, ` : "";
   const slowest = reads === 0 ? "none" : `${v.slowestObservedMs}ms`;
   const line =
-    `[node-status] shape over ${over}: recovered-on-retry=${v.recoveredOnRetry} ` +
+    `[node-status] shape (${ladder}purpose=${scope}) over ${over}: recovered-on-retry=${v.recoveredOnRetry} ` +
     `censored=${v.censoredAtOurDeadline} ${failures}slowest-returned=${slowest} ` +
     `reads=${reads} ${shape}`;
   write(line);
   return line;
 }
 
-let lastShapeAt = 0;
-let everReported = false;
-/** When this process first observed a read. The shape line is meaningless without it (L49). */
-let countingSince = 0;
-let failedAttempts = 0;
-let fastestFailureMs: number | null = null;
-let slowestFailureMs: number | null = null;
+

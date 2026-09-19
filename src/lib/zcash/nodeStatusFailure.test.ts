@@ -223,7 +223,7 @@ test("the shape line states its WINDOW, or the counters are facts about nothing"
   recordNodeStatusLatency(40, 0);
   const line = reportNodeStatusShape(660_000, write);
   assert.ok(line, "nothing reported");
-  assert.match(line, /shape over 11m/, `window missing or wrong: ${line}`);
+  assert.match(line, /shape \(purpose=claim\) over 11m/, `window or purpose missing: ${line}`);
 });
 
 test("recovered and censored are printed TOGETHER even when one of them is zero", () => {
@@ -249,7 +249,7 @@ test("a node that ONLY times out still reports a sane window, not the whole Unix
   recordCensoredRead(1_600_000_300_000);
   const line = reportNodeStatusShape(1_600_000_600_000, write);
   assert.ok(line, "nothing reported");
-  assert.match(line, /shape over 10m:/, `window is not measured from the first censored read: ${line}`);
+  assert.match(line, /shape \(purpose=claim\) over 10m:/, `window is not measured from the first censored read: ${line}`);
   assert.doesNotMatch(line, /over \d{5,}m/, `window computed against the epoch: ${line}`);
 });
 
@@ -321,4 +321,72 @@ test("failures report BOTH ends, because one number turns a spread into a story"
   assert.ok(line);
   assert.match(line, /fastest-failure=310ms/);
   assert.match(line, /slowest-failure=2270ms/, `only one end was reported: ${line}`);
+});
+
+
+test("a page read and a claim read do not share counters, or the ratio is a fact about traffic mix", () => {
+  // L57, one layer in. /api/status reads the node on the PAGE path (one 4s attempt, no retry) and
+  // /api/ready on the CLAIM path ([4000, 8000]). Summed, one page read contributes at most one
+  // censored and never a recovered, while one claim read can contribute two censored and a
+  // recovered - so SDE-Research's censored-to-failed ratio could be moved by nothing but the mix of
+  // page to ready traffic. Measured before the split: censored=1 after a page read, 3 after also a
+  // claim read.
+  fresh();
+  recordCensoredRead(0, "page");
+  recordCensoredRead(0, "claim");
+  recordCensoredRead(0, "claim");
+  recordRecoveredOnRetry("claim");
+  assert.equal(nodeStatusLatency("page").censoredAtOurDeadline, 1, "a claim read reached the page counters");
+  assert.equal(nodeStatusLatency("claim").censoredAtOurDeadline, 2, "a page read reached the claim counters");
+  assert.equal(nodeStatusLatency("page").recoveredOnRetry, 0, "the page path cannot recover - it does not retry");
+  assert.equal(nodeStatusLatency("claim").recoveredOnRetry, 1);
+});
+
+test("each path gets its own line, named, and its own throttle", () => {
+  // Two callers with two different ladders write to one log. A reader who cannot tell which line
+  // belongs to which path is in exactly the position that cost three sessions a day.
+  fresh();
+  recordCensoredRead(0, "page");
+  recordCensoredRead(0, "claim");
+  const pageLine = reportNodeStatusShape(0, write, "page");
+  const claimLine = reportNodeStatusShape(0, write, "claim");
+  assert.ok(pageLine && claimLine, "one of the paths stayed silent");
+  assert.match(pageLine, /shape \(purpose=page\)/, pageLine);
+  assert.match(claimLine, /shape \(purpose=claim\)/, claimLine);
+  // The claim line must NOT have been swallowed by the page line's throttle - they are separate
+  // instruments and one being recent says nothing about the other.
+  assert.notEqual(pageLine, claimLine);
+});
+
+
+test("the LADDER leads the line, so nobody reads the claim counters as what a visitor experiences", () => {
+  // SDE-Research: the claim counters are fed by /api/ready AND /api/faucet, and the watchdog polls
+  // readiness every 30s while a claim needs a real person. So "claim" is mostly a robot, and the
+  // word invites exactly the wrong reading. The ladder cannot be misread that way, and it is
+  // computed from the attempts rather than asserted, so a new caller cannot make it stale.
+  fresh();
+  recordCensoredRead(0, "claim");
+  const line = reportNodeStatusShape(0, write, "claim", [4000, 8000]);
+  assert.ok(line);
+  assert.match(line, /shape \(ladder 4000\+8000ms, purpose=claim\)/, line);
+  fresh();
+  recordCensoredRead(0, "page");
+  const pageLine = reportNodeStatusShape(0, write, "page", [4000]);
+  assert.ok(pageLine);
+  assert.match(pageLine, /shape \(ladder 4000ms, purpose=page\)/, pageLine);
+});
+
+
+test("a failure on one path does not silence the same class on the other", () => {
+  // Seen in a real two-path run: a `network` failure on the page ladder spoke, and the identical
+  // failure on the claim ladder a moment later was swallowed by a throttle keyed on the class
+  // alone. The line that DID speak names only its own path, so the reader concludes the page path
+  // is failing while the claim path is equally broken and silent.
+  fresh();
+  const page = recordNodeStatusFailure("network", "after 4000ms on the page path", 0, write, "page");
+  const claim = recordNodeStatusFailure("network", "after 12000ms on the claim path", 10, write, "claim");
+  assert.ok(page, "the page failure said nothing at all");
+  assert.ok(claim, "the claim failure was silenced by the page failure - different ladder, same class");
+  assert.match(page, /page path/);
+  assert.match(claim, /claim path/);
 });

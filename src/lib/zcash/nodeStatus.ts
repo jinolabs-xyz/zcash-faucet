@@ -180,14 +180,14 @@ export async function getNodeStatus(purpose: NodeReadPurpose = "claim"): Promise
           // ONLY A READ THAT ANSWERED 200 IS A LATENCY. A 500 comes back fast and carries no
           // wallet work; bucketing it would answer "how long does getwalletstatus take" with the
           // speed of the error path.
-          if (answered.ok) recordNodeStatusLatency(Date.now() - startedAt);
-          else recordFailedAttempt(Date.now() - startedAt);
+          if (answered.ok) recordNodeStatusLatency(Date.now() - startedAt, Date.now(), purpose);
+          else recordFailedAttempt(Date.now() - startedAt, Date.now(), purpose);
           // Throttled inside, so this is a no-op on all but one read a minute.
-          reportNodeStatusShape();
+          reportNodeStatusShape(Date.now(), undefined, purpose, attempts);
           // A SECOND ATTEMPT THAT SAVED THE CALL IS A WOBBLE; BOTH FAILING IS A STATE (SDE-Infra).
           // Nothing outside this process can tell them apart - an outside sampler and the watchdog
           // both see one successful read either way - so this is the only place it can be counted.
-          if (i > 0) recordRecoveredOnRetry();
+          if (i > 0) recordRecoveredOnRetry(purpose);
           return answered;
         } catch (e) {
           // CENSORED, NOT SLOW. We gave up at our own deadline, so this read has no measured
@@ -196,8 +196,8 @@ export async function getNodeStatus(purpose: NodeReadPurpose = "claim"): Promise
           // The same rule the line above states for a timeout, for the other half: a refused or
           // reset connection took time and produced no answer, so it is a failed attempt and not
           // a fast read.
-          if (classifyNodeStatusError(e) === "timeout") recordCensoredRead();
-          else recordFailedAttempt(Date.now() - startedAt);
+          if (classifyNodeStatusError(e) === "timeout") recordCensoredRead(Date.now(), purpose);
+          else recordFailedAttempt(Date.now() - startedAt, Date.now(), purpose);
           // ONLY A TIMEOUT OR A TRANSPORT FAILURE IS RETRIED, and a node that ANSWERED is not -
           // whatever it answered. Re-asking a question that was already answered turns one honest
           // "no" into three requests and the same "no".
@@ -270,12 +270,21 @@ export async function getNodeStatus(purpose: NodeReadPurpose = "claim"): Promise
     // A timeout and a refused connection are not the same event and must not read as one: "the
     // wallet is slow" and "nothing is listening" send an operator to different places. The CLASS
     // only - never the endpoint or the headers, which carry RPC credentials.
-    recordNodeStatusFailure(classifyNodeStatusError(err), `after ${nodeStatusBudgetMs(purpose)}ms`);
+    // THE PATH IS NAMED, because two callers with two different ladders write to this same log and
+    // a reader cannot tell which one they are holding otherwise - which is exactly what cost three
+    // sessions a day on 2026-09-19 (L57).
+    recordNodeStatusFailure(
+      classifyNodeStatusError(err),
+      `after ${nodeStatusBudgetMs(purpose)}ms on the ${purpose} path`,
+      Date.now(),
+      undefined,
+      purpose,
+    );
     // THE SHAPE HAS TO SPEAK DURING AN OUTAGE TOO. It was reported only on the success path, so a
     // node failing every read - the case these counters exist for - printed classes and never once
     // printed how many, how long, or how many the retry had been rescuing. Throttled inside, so it
     // costs one line a minute however hard the node is failing.
-    reportNodeStatusShape();
+    reportNodeStatusShape(Date.now(), undefined, purpose, nodeStatusAttemptsMs(purpose));
     return null;
   }
 }
