@@ -335,10 +335,34 @@ export default function Home() {
   }, [status, network]);
 
 
+  // ONE STATUS READ AT A TIME. The interval fired every 4000ms whether the last answer had
+  // arrived or not, and the read behind it is not free: /api/status asks the wallet for the node's
+  // height, and that call was MEASURED on 2026-09-19 at a 2.5s median with a tail past 9s. So on a
+  // slow wallet the page was starting a second read while the first was still outstanding, then a
+  // third - each one more work for the component that was already the reason it was slow.
+  //
+  // THE PAGE WAS PART OF ITS OWN PROBLEM, and this is the half of that we own. Whether zallet also
+  // serialises internally is still open (SDE-Research, probe 2); this does not depend on the
+  // answer, because asking again before the last answer came back is wasteful either way.
+  //
+  // A SKIPPED TICK IS NOT A MISSED UPDATE: the read still in flight is newer than the one this
+  // tick would have started, and the next tick is 4s away. The page loses nothing and the wallet
+  // is asked once per answer instead of once per tick.
   useEffect(() => {
     let alive = true;
-    const load = () =>
-      fetch("/api/status").then((r) => r.json()).then((s) => { if (alive) setStatus(s); }).catch(() => {});
+    let inFlight = false;
+    const load = () => {
+      if (inFlight) return;
+      inFlight = true;
+      fetch("/api/status")
+        .then((r) => r.json())
+        .then((s) => { if (alive) setStatus(s); })
+        .catch(() => {})
+        // FINALLY, not the success arm. A read that throws must release the guard or one failed
+        // fetch freezes the page's status for the life of the tab - a worse failure than the one
+        // this prevents, and the kind that looks like the poll "just stopped".
+        .finally(() => { inFlight = false; });
+    };
     load();
     const iv = setInterval(load, 4000);
     return () => { alive = false; clearInterval(iv); };
