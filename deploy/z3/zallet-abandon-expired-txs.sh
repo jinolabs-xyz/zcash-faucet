@@ -185,7 +185,16 @@ if [ "$DRY_RUN" = "1" ]; then
   echo; echo "before: $(label $BEFORE)"
   if [ "$READ_ONLY" = "1" ]; then
     echo "--read-only: ${#DEAD_IDS[@]} transaction(s) would be abandoned. Nothing was changed and the wallet was not stopped."
-    echo "To carry it out: docker stop $ZALLET_CONTAINER && bash $0 && docker start $ZALLET_CONTAINER"
+    # THE WATCHDOG STOP IS NOT OPTIONAL and this line used to omit it. watchdog.sh:1646 restarts
+    # zallet when sends fail, and a stopped zallet IS failing sends - so the short form invited a
+    # restart on top of a half-finished DELETE. The header has said so since the August outage;
+    # the line an operator actually copies now says it too.
+    echo "To carry it out, in this order:"
+    echo "  systemctl stop faucet-watchdog.service   # or it restarts zallet mid-repair"
+    echo "  docker stop $ZALLET_CONTAINER"
+    echo "  bash $0"
+    echo "  docker start $ZALLET_CONTAINER"
+    echo "  systemctl start faucet-watchdog.service"
   else
     echo "--dry-run: would abandon ${#DEAD_IDS[@]} transaction(s), nothing changed"
   fi
