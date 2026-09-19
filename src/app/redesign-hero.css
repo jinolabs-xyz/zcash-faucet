@@ -85,7 +85,30 @@ button.tag:disabled{cursor:not-allowed;opacity:.55}
  * to resolve against and the panel's `overflow:auto` finally has a bound to scroll inside. */
 .view.hero .hero-grid{flex:1 1 auto;min-height:0;height:100%;grid-template-rows:minmax(0,1fr)}
 .hero-grid{display:grid;grid-template-columns:1.1fr 1fr;gap:calc(4.5*var(--u));align-items:center;width:100%}
-.hero-copy{display:flex;flex-direction:column;gap:calc(1.5*var(--u));align-items:flex-start}
+/* THE COLUMN ABSORBS ITS OWN OVERFLOW RATHER THAN PUTTING IT UNDER THE FOOTER (#687).
+ * Above 56rem the shell is locked to the viewport - `.comp` is 100dvh and `.stage` hides overflow
+ * - and the hero row is `minmax(0,1fr)`, so this column may be given less height than its content
+ * needs. Measured on main at 960x800 with the reserve low: the column needs 577px, the row gives
+ * it 489, and the surplus 88px was painted under the footer. Between 940 and 1000px wide at 768
+ * and 800 high that put the reserve notice's /donate link under the footer's brand image, where
+ * it could not be clicked or scrolled to at all.
+ * The column fits at those sizes until the reserve-low notice appears (measured: everything else
+ * costs 260px of the 457 available), and the notice is 173px - far more than can be reclaimed by
+ * compacting it. So the column scrolls itself, which is what `.panel` already does one card over:
+ * ui-smoke's own row reads "the panel absorbed it by scrolling itself, not by clipping it".
+ * TWO DECLARATIONS, AND A THIRD I REMOVED BECAUSE A MUTANT PROVED IT INERT:
+ *   align-self:stretch  the grid sets `align-items:start`, so this item is sized to its CONTENT
+ *                       and is never constrained by the row. Without it the other one does
+ *                       nothing at all - measured: scrollHeight and clientHeight were both 577
+ *                       against a 489px row, and the sweep came back 8 of 48, unchanged.
+ *   overflow-y:auto     what it does once it is allowed to be shorter than its content.
+ * I first shipped `min-height:0` beside these and wrote that all three were load-bearing. The
+ * arm that removed it changed NOTHING - 420/0, the baseline - and a re-sweep of all 48 viewports
+ * without it was clean. A grid item's automatic minimum size is already zero once its overflow is
+ * not `visible`, so `overflow-y:auto` does that job and the extra declaration only asserted a
+ * dependency that was not there. Removed rather than kept with a corrected comment: a rule that
+ * does nothing, carrying a departure entry saying it matters, is a documented lie. */
+.hero-copy{display:flex;flex-direction:column;gap:calc(1.5*var(--u));align-items:flex-start;align-self:stretch;overflow-y:auto;overscroll-behavior:contain}
 .eyebrow{margin:0;font-size:calc(.8*var(--u));color:var(--muted)}
 .hero-copy h1{margin:0;color:var(--ink-3);font:600 calc(3.7*var(--u))/1 var(--sans-semibold);letter-spacing:calc(-.12*var(--u));text-wrap:balance}
 .lede{margin:0;font-size:calc(1.3*var(--u));color:var(--muted);font-weight:500;line-height:1.4;letter-spacing:calc(-.02*var(--u));max-width:34em}
