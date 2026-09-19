@@ -732,3 +732,8 @@ export STUB_ACTIVE="$T/active"; printf 'faucet-watchdog.service\n' > "$STUB_ACTI
 bash "$AUDIT" > "$T/onlywatchdog.log" 2>&1
 check "exits 0 with everything else inactive" "[ $? -eq 0 ]"
 check "judges no other unit on running" "! grep -q 'NOT RUNNING' '$T/onlywatchdog.log'"
+
+# STUB_ACTIVE MUST NOT LEAVE THIS SUITE. The suites share one shell and drift runs before
+# installops, whose restarts are gated on is-active - a leaked value pointing at this suite's
+# scratch dir reads as "inactive" and silently skips the restart it is asserting.
+unset STUB_ACTIVE STUB_FAILED 2>/dev/null || true
