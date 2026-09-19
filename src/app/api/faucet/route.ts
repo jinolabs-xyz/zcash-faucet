@@ -27,12 +27,14 @@ import { reserveClaim, finalizeClaim } from "@/lib/db";
 import { fingerprintIp, fingerprintSubnet } from "@/lib/privacy";
 import { clientIp } from "@/lib/clientIp";
 import { withApi, apiError } from "@/lib/api";
+import { freshnessRetrySeconds } from "./retry-hint";
 
 export const runtime = "nodejs"; // better-sqlite3 needs Node, not Edge.
 
 // Roughly one testnet block. Long enough that a retry is not a hot loop, short
 // enough that a lag of a few blocks clears within one or two retries.
 const FRESHNESS_RETRY_SECONDS = 75;
+
 // Send health is judged over a window, so a verdict clears when the window does and
 // not before; a shorter promise would send people back to the same refusal. THE
 // VERDICT'S OWN WINDOW, not a copy of its default: it widens with the send deadline.
@@ -230,7 +232,9 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     // Three refusals, three sentences, chosen by the gate itself (freshnessRefusalText)
     // and pinned there, because the same text is what an operator reads and it sends
     // them to a fix: the first version blamed the oracle for our own wallet being down.
-    return apiError(503, freshnessRefusalText(freshness), api, { retryAfterSeconds: FRESHNESS_RETRY_SECONDS });
+    return apiError(503, freshnessRefusalText(freshness), api, {
+      retryAfterSeconds: freshnessRetrySeconds(freshness.state, freshness.nodeHeight),
+    });
   }
 
   // 3.55. Our WALLET's lag behind our OWN node, which is a different question to 3.5 and
