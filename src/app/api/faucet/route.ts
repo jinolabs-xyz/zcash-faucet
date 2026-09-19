@@ -23,7 +23,7 @@ import { DRAIN_RETRY_SECONDS, isDraining } from "@/lib/drain";
 import { DEFAULT_NETWORK, NETWORKS, parseNetwork } from "@/lib/network";
 import { canServeCtaz } from "@/lib/crosslink/recency";
 import { readCtazNodeState } from "@/lib/crosslink/read";
-import { reserveClaim, finalizeClaim } from "@/lib/db";
+import { reserveClaim, finalizeClaim, challengeAlreadySpent } from "@/lib/db";
 import { fingerprintIp, fingerprintSubnet } from "@/lib/privacy";
 import { clientIp } from "@/lib/clientIp";
 import { withApi, apiError } from "@/lib/api";
@@ -167,6 +167,17 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     const verdict = await verifySolution(body.pow, ipHash ?? "anon", subnetHash, false);
     if (!verdict.ok) {
       return apiError(403, verdict.reason ?? "Proof of work failed.", api);
+    }
+    // AND REPLAY REJECTION STAYS IN FRONT OF THE EXPENSIVE WORK (SDE-UI, reviewing this change).
+    // Moving the burn past our own gates also moved the "already used" 403 past them, so one
+    // valid solution could buy N traversals of safeBalance, getNodeStatus, the freshness gates
+    // and the cTAZ read before being refused. This is one indexed lookup and it closes that
+    // without giving back the benefit.
+    // ADVISORY, NOT THE MUTEX: two requests can both read "not spent" and race, and the INSERT
+    // at 3.9 still decides. This only declines to do seconds of network work for a request that
+    // is already doomed.
+    if (await challengeAlreadySpent(body.pow.sig)) {
+      return apiError(403, "Challenge already used.", api);
     }
   }
 

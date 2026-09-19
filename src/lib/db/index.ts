@@ -30,6 +30,7 @@ import {
   SPEND_CHALLENGE_SQL,
   PURGE_CHALLENGES_SQL,
   FEEDBACK_INSERT_SQL, FEEDBACK_RECENT_SQL, FEEDBACK_PURGE_SQL,
+  CHALLENGE_SPENT_SQL,
 } from "./sql.ts";
 import { probeLedger, verdictFor, PROBE_EVERY_MS, type LedgerCacheEntry, type LedgerHealth } from "./probe.ts";
 
@@ -666,5 +667,26 @@ export async function purgeFeedback(nowMs: number): Promise<void> {
     await driver().run(FEEDBACK_PURGE_SQL, [Math.floor(nowMs / 1000) - FEEDBACK_RETENTION_SECONDS]);
   } catch (e) {
     console.error(`[feedback] purge failed: ${e instanceof Error ? e.message : e}`);
+  }
+}
+
+/**
+ * Has this solution already been burned? Advisory, read-only, and NOT the mutex.
+ *
+ * The burn moved after our own gates so a refusal we caused does not cost a visitor their proof -
+ * which also moved replay REJECTION after them, so one solution could buy N backend traversals
+ * before its 403 (SDE-UI, reviewing that change). This declines to do that work for a request
+ * already doomed, at the cost of one indexed lookup.
+ *
+ * Two requests CAN both read "not spent" and race; the INSERT still decides, and still runs.
+ * Answers false on any ledger error: a lookup we could not make is not evidence of a replay, and
+ * refusing a legitimate claim because the database hiccuped is the worse failure.
+ */
+export async function challengeAlreadySpent(sig: string): Promise<boolean> {
+  try {
+    return !!(await driver().get<{ spent: number }>(CHALLENGE_SPENT_SQL, [sig]));
+  } catch (e) {
+    console.error(`[pow] spent-check failed, letting the claim proceed: ${e instanceof Error ? e.message : e}`);
+    return false;
   }
 }

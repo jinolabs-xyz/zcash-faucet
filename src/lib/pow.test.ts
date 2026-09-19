@@ -174,3 +174,39 @@ test("and once spent it is spent - replay protection is unchanged by the split",
   assert.equal(again.ok, false);
   assert.match(again.reason ?? "", /already used/i);
 });
+
+test("a replayed solution is rejected BEFORE the expensive gates, not after them", async () => {
+  // SDE-UI's finding on the burn-later change. Moving the spend past our own gates also moved the
+  // "already used" 403 past them, so one valid solution could buy N traversals of safeBalance,
+  // getNodeStatus, the freshness gates and the cTAZ read before being refused. This is the cheap
+  // lookup that puts rejection back in front of that work.
+  const { challengeAlreadySpent } = await import("./db/index.ts");
+  const ch = await issueChallenge(IP);
+  const nonce = findNonce(ch.seed, ch.difficulty);
+  const sol = { ...ch, nonce };
+
+  // Unspent: the claim must proceed. A check that answered true here would refuse every first
+  // attempt, which is the failure worth more than the one it prevents.
+  assert.equal(await challengeAlreadySpent(sol.sig), false);
+
+  assert.equal(await spendVerifiedSolution(sol), true);
+  assert.equal(await challengeAlreadySpent(sol.sig), true, "a burned solution is seen as burned");
+});
+
+test("the spent-check is advisory: it never overrules the insert, and a ledger error lets the claim through", async () => {
+  // NOT THE MUTEX, and the comment says so, but a row is what keeps it true. Two requests can both
+  // read "not spent"; the INSERT still decides, and the second one still loses.
+  const { challengeAlreadySpent } = await import("./db/index.ts");
+  const ch = await issueChallenge(IP);
+  const nonce = findNonce(ch.seed, ch.difficulty);
+  const sol = { ...ch, nonce };
+
+  const [a, b] = await Promise.all([challengeAlreadySpent(sol.sig), challengeAlreadySpent(sol.sig)]);
+  assert.equal(a, false); assert.equal(b, false);
+  // Both saw "not spent". Only one burn wins.
+  const [x, y] = await Promise.all([spendVerifiedSolution(sol), spendVerifiedSolution(sol)]);
+  assert.equal([x, y].filter(Boolean).length, 1, "exactly one spend may win the race");
+
+  // And an unknown sig is not spent - the check must not answer true by accident on a miss.
+  assert.equal(await challengeAlreadySpent("no-such-sig"), false);
+});
