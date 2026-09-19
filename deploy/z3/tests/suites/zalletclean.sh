@@ -176,6 +176,24 @@ zc_run "$DROPQ"
 check "drop-queue refuses the same way" "[ $RC -eq 1 ]"
 check "and points the same way out" "grep -q -- '--read-only' '$T/last.out'"
 
+echo "== zallet cleanup: the command --read-only hands the operator stops the WATCHDOG first"
+# THE LINE AN OPERATOR COPIES IS THE ONE THAT HAS TO BE RIGHT. The header has carried the full
+# order since the August outage, but --read-only printed a short form omitting the watchdog stop -
+# and watchdog.sh:1646 restarts zallet when sends fail, which a stopped zallet is doing by
+# definition. Copying the short form invited a restart on top of a half-finished DELETE CASCADE.
+zc_env
+export STUB_ZALLET_RUNNING=false STUB_SQL_OUT="7:AABBCC" STUB_RPC_HAS_TX=0
+zc_run "$ABANDON" --read-only
+check "read-only exits 0 and reports what it would do" \
+  "[ $RC -eq 0 ] && grep -q 'would be abandoned' '$T/last.out'"
+check "and the handover names the watchdog stop, not just the container stop" \
+  "grep -q 'systemctl stop faucet-watchdog.service' '$T/last.out'"
+# ORDER, NOT JUST PRESENCE. A stop named AFTER the repair reads as complete and protects nothing,
+# so the whole sequence is asserted as one pattern: stop, then the repair, then start. No -q, for
+# the SIGPIPE reason given further down this file.
+check "and the stop comes BEFORE the repair and the start AFTER it, which is the whole order" \
+  "tr '\n' '|' < '$T/last.out' | grep 'stop faucet-watchdog.*bash .*start faucet-watchdog' >/dev/null"
+
 echo "== zallet cleanup: the BACKUP takes the -wal and -shm, or it is not an undo"
 # THE RULE WAS WRITTEN FOR THE READ AND NOT APPLIED TO THE UNDO. The snapshot refuses a partial
 # copy and explains why in a comment; the backup one function later took wallet.db alone. A db
