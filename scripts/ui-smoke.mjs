@@ -3870,8 +3870,11 @@ async function checkFeedbackForm(browser, base) {
     return { left: Math.round(b.left), fromBottom: Math.round(window.innerHeight - b.bottom),
              fromRight: Math.round(window.innerWidth - b.right), fixed: getComputedStyle(el.parentElement).position };
   });
-  ok("feedback: the launcher sits in the BOTTOM-LEFT corner, where the owner put it",
-    placed !== null && placed.fixed === "fixed" && placed.left >= 0 && placed.left < 120 && placed.fromBottom >= 0 && placed.fromBottom < 120 && placed.fromRight > placed.left,
+  // BOTTOM-RIGHT, AND THE OWNER ASKED FOR BOTTOM-LEFT. #659 put the reserve-low notice in that
+  // corner on the same authority and it was there first; SDE-App ranked the two. The row asserts
+  // the corner we actually ship so that a silent drift back is a failure rather than a surprise.
+  ok("feedback: the launcher sits in the bottom-RIGHT corner, out of the reserve notice's corner",
+    placed !== null && placed.fixed === "fixed" && placed.fromRight >= 0 && placed.fromRight < 120 && placed.fromBottom >= 0 && placed.fromBottom < 120 && placed.left > placed.fromRight,
     JSON.stringify(placed));
 
   await launch.click();
@@ -3915,6 +3918,53 @@ async function checkFeedbackForm(browser, base) {
       JSON.stringify((await page.locator(".fb-text").inputValue()).slice(0, 60)));
   }
   await page.unroute("**/api/feedback");
+
+  // ── THE LAUNCHER MUST NOT OCCLUDE THE RESERVE NOTICE (#659, and SDE-App made this row a
+  // condition of the placement) ───────────────────────────────────────────────────────────────
+  //
+  // DRIVEN, because CI's reserve is healthy and the notice is simply not on the page when an
+  // undriven row looks - the same blind fixture that let a one-bar chart pass for months (#681).
+  // HIT-TESTED, not box-compared, because two elements can intersect without occluding and a
+  // control can be below the fold and still reachable; only elementFromPoint answers the question
+  // being asked. Measured at the width where the bottom-LEFT placement failed, so the row is a
+  // regression guard for the decision rather than a general sweep.
+  {
+    const ctx2 = await browser.newContext({ viewport: { width: 900, height: 800 } });
+    const p2 = await ctx2.newPage();
+    const live = await (await fetch(base + "/api/status")).json();
+    await p2.route("**/api/status", (route) => {
+      const s2 = JSON.parse(JSON.stringify(live));
+      s2.empty = false; s2.balanceTaz = s2.balanceTaz || 4504;
+      s2.reserve = { ...(s2.reserve ?? {}), refilling: true, lowTaz: 5000, spendableTaz: 4504 };
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(s2) });
+    });
+    await p2.goto(base, { waitUntil: "domcontentloaded" });
+    await p2.waitForSelector('[data-phase="reserve-low"]', { timeout: 10_000 }).catch(() => {});
+    const r2 = await p2.evaluate(() => {
+      const notice = document.querySelector('[data-phase="reserve-low"]');
+      const fb = document.querySelector(".fb");
+      if (!notice || !fb) return { drove: false, notice: !!notice, launcher: !!fb };
+      const hitAt = (el) => {
+        const b = el.getBoundingClientRect();
+        const t = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+        return t ? String(t.className || t.tagName) : "nothing";
+      };
+      const link = notice.querySelector('a[href="/donate"]');
+      const onNotice = hitAt(notice), onLink = link ? hitAt(link) : null;
+      const inFb = (cls) => typeof cls === "string" && (cls.includes("fb-") || cls === "fb");
+      return { drove: true, onNotice, onLink,
+               launcherOverNotice: inFb(onNotice), launcherOverLink: inFb(onLink) };
+    });
+    // THE SUBJECT PIN FIRST. Without it a page that never rendered the notice passes both rows
+    // below by having nothing to occlude.
+    ok("feedback: the reserve-low notice is on the page, so the occlusion rows have a subject",
+      r2.drove === true, JSON.stringify(r2));
+    ok("feedback: and the launcher does not sit on the reserve notice (#659's corner)",
+      r2.drove === true && r2.launcherOverNotice === false, JSON.stringify(r2));
+    ok("feedback: nor on its donate link, which is the thing a low reserve is asking for",
+      r2.drove === true && r2.launcherOverLink === false, JSON.stringify(r2));
+    await ctx2.close();
+  }
 
   // Escape closes and hands the keyboard back, or the form is a trap.
   await page.keyboard.press("Escape");
