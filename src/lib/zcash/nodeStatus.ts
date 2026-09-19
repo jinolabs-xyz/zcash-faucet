@@ -10,6 +10,13 @@ import { referenceTip } from "./externalTip.ts";
 import { mayBuildTransaction, readChainFreshness, type ChainGate } from "./shieldGate.ts";
 import { tipProgress, type TipSample } from "./tipProgress.ts";
 import { getChainIdentity } from "./chainIdentityOracle.ts";
+import {
+  classifyNodeStatusError,
+  recordNodeStatusFailure,
+  recordNodeStatusLatency,
+  recordCensoredRead,
+  recordRecoveredOnRetry,
+} from "./nodeStatusFailure.ts";
 import type { IdentityVerdict } from "./chainIdentity.ts";
 
 export interface NodeStatus {
@@ -157,14 +164,29 @@ export async function getNodeStatus(purpose: NodeReadPurpose = "claim"): Promise
     const res = await (async () => {
       const attempts = nodeStatusAttemptsMs(purpose);
       for (const [i, ms] of attempts.entries()) {
+        // TIMED PER ATTEMPT, NOT PER CALL. With a shared budget a call that took 9s because its
+        // first attempt burned 4 is a different event from one read that took 9, and averaging
+        // them would hide the wobble the retry exists to absorb.
+        const startedAt = Date.now();
         try {
-          return await fetch(endpoint, {
+          const answered = await fetch(endpoint, {
             method: "POST",
             headers,
             body: `{"jsonrpc":"2.0","id":"status","method":"getwalletstatus","params":[]}`,
             signal: AbortSignal.timeout(ms),
           });
+          recordNodeStatusLatency(Date.now() - startedAt);
+          // A SECOND ATTEMPT THAT SAVED THE CALL IS A WOBBLE; BOTH FAILING IS A STATE (SDE-Infra).
+          // Nothing outside this process can tell them apart - an outside sampler and the watchdog
+          // both see one successful read either way - so this is the only place it can be counted.
+          if (i > 0) recordRecoveredOnRetry();
+          return answered;
         } catch (e) {
+          // CENSORED, NOT SLOW. We gave up at our own deadline, so this read has no measured
+          // duration and must never enter a latency bucket: an aborted call counted as "8-12s"
+          // reads like a measurement and is a limit of our patience.
+          if (classifyNodeStatusError(e) === "timeout") recordCensoredRead();
+          else recordNodeStatusLatency(Date.now() - startedAt);
           // ONLY A TIMEOUT OR A TRANSPORT FAILURE IS RETRIED, and a node that ANSWERED is not -
           // whatever it answered. Re-asking a question that was already answered turns one honest
           // "no" into three requests and the same "no".
@@ -175,11 +197,21 @@ export async function getNodeStatus(purpose: NodeReadPurpose = "claim"): Promise
       // returning null so a future edit to `attempts` cannot make this silently mean "no node".
       throw new Error("node status: no attempts were made");
     })();
-    if (!res.ok) return null;
+    if (!res.ok) {
+      // The wallet is up and said no. The status code is the whole of what an operator needs and
+      // is safe to write; the body is not.
+      recordNodeStatusFailure("http", `status ${res.status}`);
+      return null;
+    }
     const json = (await res.json()) as { result?: { wallet_tip?: { height?: number }; node_tip?: { height?: number } } };
     const w = json.result?.wallet_tip?.height ?? null;
     const n = json.result?.node_tip?.height ?? null;
-    if (w == null || n == null) return null;
+    if (w == null || n == null) {
+      // A 200 that does not carry the two heights. Names WHICH is missing, because a wallet that
+      // reports its own tip and not the node's is a different fault from one reporting neither.
+      recordNodeStatusFailure("parse", `wallet_tip ${w == null ? "missing" : "present"}, node_tip ${n == null ? "missing" : "present"}`);
+      return null;
+    }
     const syncPercent = n > 0 ? Math.min(100, (w / n) * 100) : null;
 
     // Frozen only on POSITIVE evidence, from two independent signals.
@@ -223,7 +255,11 @@ export async function getNodeStatus(purpose: NodeReadPurpose = "claim"): Promise
       chain: getChainIdentity(),
       canBuildTx: mayBuildTransaction(shield),
     };
-  } catch {
+  } catch (err) {
+    // A timeout and a refused connection are not the same event and must not read as one: "the
+    // wallet is slow" and "nothing is listening" send an operator to different places. The CLASS
+    // only - never the endpoint or the headers, which carry RPC credentials.
+    recordNodeStatusFailure(classifyNodeStatusError(err), `after ${nodeStatusBudgetMs(purpose)}ms`);
     return null;
   }
 }
