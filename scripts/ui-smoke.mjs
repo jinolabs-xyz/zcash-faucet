@@ -3781,6 +3781,67 @@ async function checkDripsTooltip(browser, base) {
   await ctx.close();
 }
 
+async function checkReserveLinkIsReachable(browser, base) {
+  // #687. THE DONATE LINK THE LOW RESERVE IS ASKING FOR, AND WHETHER IT CAN BE CLICKED.
+  //
+  // Above 56rem the shell is locked to the viewport and the hero row is `minmax(0,1fr)`, so the
+  // copy column can be handed less height than its content needs. On main the surplus was painted
+  // UNDER the footer: between 940 and 1000px wide at 768 and 800 high the /donate link sat beneath
+  // the footer's brand image, unreachable by click or by scroll. Eight of 48 viewports swept.
+  //
+  // DRIVEN, because CI's reserve is healthy and the panel is simply not on the page otherwise -
+  // which is why nothing caught this for as long as it existed. HIT-TESTED with elementFromPoint,
+  // because the link was PRESENT, correctly positioned and the right size the whole time; a box
+  // comparison says it is fine. The question is whether a pointer landing on it reaches it.
+  const live = await (await fetch(`${base}/api/status`)).json();
+  // The two widths either side of the band's middle, at the height it failed on. Not the whole
+  // sweep: 48 viewports is a measurement, a suite wants the two that broke.
+  for (const [w, h] of [[960, 800], [1000, 768]]) {
+    const ctx = await browser.newContext({ viewport: { width: w, height: h } });
+    const page = await ctx.newPage();
+    await page.route("**/api/status", (route) => {
+      const s2 = JSON.parse(JSON.stringify(live));
+      s2.empty = false; s2.balanceTaz = s2.balanceTaz || 4504;
+      s2.reserve = { ...(s2.reserve ?? {}), refilling: true, lowTaz: 5000, spendableTaz: 4504 };
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(s2) });
+    });
+    await page.goto(base, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector('[data-phase="reserve-low"]', { timeout: 10_000 }).catch(() => {});
+    const r = await page.evaluate(async () => {
+      const notice = document.querySelector('[data-phase="reserve-low"]');
+      if (!notice) return { drove: false };
+      const link = notice.querySelector('a[href="/donate"]');
+      if (!link) return { drove: true, link: false };
+      link.scrollIntoView({ block: "center" });
+      await new Promise((res) => requestAnimationFrame(res));
+      const b = link.getBoundingClientRect();
+      const t = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+      const reachable = !!t && (t === link || link.contains(t) || t.closest?.('a[href="/donate"]') === link);
+      return { drove: true, link: true, reachable,
+               onTop: t ? String(t.className || t.tagName).split(/\s+/)[0] : "nothing (outside the viewport)",
+               rect: `${Math.round(b.left)},${Math.round(b.top)} ${Math.round(b.width)}x${Math.round(b.height)}` };
+    });
+    // SUBJECT FIRST. A page that never rendered the notice has no link to fail on, and the row
+    // below would pass over nothing at all.
+    ok(`#687 ${w}x${h}: the reserve notice and its donate link are on the page`,
+      r.drove === true && r.link === true, JSON.stringify(r));
+    ok(`#687 ${w}x${h}: and a pointer on the donate link actually reaches it`,
+      r.reachable === true, JSON.stringify(r));
+    // AND THE HERO'S OWN CONTROLS SURVIVE THE FIX. The column scrolls now; a column that scrolled
+    // its chips out of reach would trade one unreachable control for another.
+    const chip = await page.evaluate(() => {
+      const c = document.querySelector(".hero-copy .chips .tag");
+      if (!c) return { there: false };
+      const b = c.getBoundingClientRect();
+      const t = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+      return { there: true, reachable: !!t && (t === c || c.contains(t) || t.closest?.(".tag") === c) };
+    });
+    ok(`#687 ${w}x${h}: and the hero's own chips are still reachable, not scrolled out of the way`,
+      chip.there === true && chip.reachable === true, JSON.stringify(chip));
+    await ctx.close();
+  }
+}
+
 async function checkNarrowViewport(browser, base) {
   // #623. TWO FAILURES THAT ONLY EXIST BELOW 415px, AND EVERY WIDTH THIS SUITE ALREADY VISITS
   // IS ABOVE THEM. checkTapFloor's list is 375, 600, 1024, 1440; the narrowest phone still in
@@ -4457,6 +4518,7 @@ try {
   await checkNoEmDashReachesTheReader(browser, BASE);
 
   await checkDripsTooltip(browser, BASE);
+  await checkReserveLinkIsReachable(browser, BASE);
   await checkNarrowViewport(browser, BASE);
   await checkTapFloor(browser, BASE);
   await checkMobile(browser, BASE);
