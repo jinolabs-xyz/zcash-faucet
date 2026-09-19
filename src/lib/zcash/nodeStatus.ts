@@ -14,6 +14,7 @@ import {
   classifyNodeStatusError,
   recordNodeStatusFailure,
   recordNodeStatusLatency,
+  recordFailedAttempt,
   recordCensoredRead,
   recordRecoveredOnRetry,
   reportNodeStatusShape,
@@ -176,7 +177,11 @@ export async function getNodeStatus(purpose: NodeReadPurpose = "claim"): Promise
             body: `{"jsonrpc":"2.0","id":"status","method":"getwalletstatus","params":[]}`,
             signal: AbortSignal.timeout(ms),
           });
-          recordNodeStatusLatency(Date.now() - startedAt);
+          // ONLY A READ THAT ANSWERED 200 IS A LATENCY. A 500 comes back fast and carries no
+          // wallet work; bucketing it would answer "how long does getwalletstatus take" with the
+          // speed of the error path.
+          if (answered.ok) recordNodeStatusLatency(Date.now() - startedAt);
+          else recordFailedAttempt(Date.now() - startedAt);
           // Throttled inside, so this is a no-op on all but one read a minute.
           reportNodeStatusShape();
           // A SECOND ATTEMPT THAT SAVED THE CALL IS A WOBBLE; BOTH FAILING IS A STATE (SDE-Infra).
@@ -188,8 +193,11 @@ export async function getNodeStatus(purpose: NodeReadPurpose = "claim"): Promise
           // CENSORED, NOT SLOW. We gave up at our own deadline, so this read has no measured
           // duration and must never enter a latency bucket: an aborted call counted as "8-12s"
           // reads like a measurement and is a limit of our patience.
+          // The same rule the line above states for a timeout, for the other half: a refused or
+          // reset connection took time and produced no answer, so it is a failed attempt and not
+          // a fast read.
           if (classifyNodeStatusError(e) === "timeout") recordCensoredRead();
-          else recordNodeStatusLatency(Date.now() - startedAt);
+          else recordFailedAttempt(Date.now() - startedAt);
           // ONLY A TIMEOUT OR A TRANSPORT FAILURE IS RETRIED, and a node that ANSWERED is not -
           // whatever it answered. Re-asking a question that was already answered turns one honest
           // "no" into three requests and the same "no".
@@ -263,6 +271,11 @@ export async function getNodeStatus(purpose: NodeReadPurpose = "claim"): Promise
     // wallet is slow" and "nothing is listening" send an operator to different places. The CLASS
     // only - never the endpoint or the headers, which carry RPC credentials.
     recordNodeStatusFailure(classifyNodeStatusError(err), `after ${nodeStatusBudgetMs(purpose)}ms`);
+    // THE SHAPE HAS TO SPEAK DURING AN OUTAGE TOO. It was reported only on the success path, so a
+    // node failing every read - the case these counters exist for - printed classes and never once
+    // printed how many, how long, or how many the retry had been rescuing. Throttled inside, so it
+    // costs one line a minute however hard the node is failing.
+    reportNodeStatusShape();
     return null;
   }
 }

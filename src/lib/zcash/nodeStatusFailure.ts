@@ -114,6 +114,9 @@ export function resetNodeStatusFailures(): void {
   resetNodeStatusLatency();
   lastShapeAt = 0;
   everReported = false;
+  countingSince = 0;
+  failedAttempts = 0;
+  fastestFailureMs = null;
 }
 
 /* ── how long the reads take, which is a different question from why they fail ──────────────── */
@@ -163,14 +166,29 @@ function bucketOf(ms: number): number {
 }
 
 /** One read that CAME BACK, however it then turned out. Aborted reads go to recordCensoredRead. */
-export function recordNodeStatusLatency(ms: number): void {
+export function recordNodeStatusLatency(ms: number, now: number = Date.now()): void {
   if (!Number.isFinite(ms) || ms < 0) return;
+  if (countingSince === 0) countingSince = now;
   latency[bucketOf(ms)] += 1;
   if (ms > slowestMs) slowestMs = ms;
 }
 
 /** One read WE gave up on, named for the deadline that cut it off. Never a latency bucket. */
-export function recordCensoredRead(): void {
+/**
+ * An attempt that FAILED without reaching our deadline - refused, reset, or answered with an error
+ * status. It has a duration, but it is not a measurement of how long the wallet takes to answer,
+ * so it must not enter a latency bucket: a node refusing in 3ms would otherwise pile into <50ms
+ * and read as the fastest node we have ever seen.
+ */
+export function recordFailedAttempt(ms: number, now: number = Date.now()): void {
+  if (countingSince === 0) countingSince = now;
+  failedAttempts += 1;
+  if (!Number.isFinite(ms) || ms < 0) return;
+  if (fastestFailureMs === null || ms < fastestFailureMs) fastestFailureMs = ms;
+}
+
+export function recordCensoredRead(now: number = Date.now()): void {
+  if (countingSince === 0) countingSince = now;
   censored += 1;
 }
 
@@ -185,12 +203,22 @@ export interface NodeStatusLatencyView {
   censoredAtOurDeadline: number;
   slowestObservedMs: number;
   recoveredOnRetry: number;
+  /** Attempts that failed BELOW our deadline. Never a bucket - they measure no answer. */
+  failedAttempts: number;
+  fastestFailureMs: number | null;
 }
 
 export function nodeStatusLatency(): NodeStatusLatencyView {
   const buckets: Record<string, number> = {};
   LATENCY_LABELS.forEach((label, i) => { buckets[label] = latency[i]; });
-  return { buckets, censoredAtOurDeadline: censored, slowestObservedMs: slowestMs, recoveredOnRetry };
+  return {
+    buckets,
+    censoredAtOurDeadline: censored,
+    slowestObservedMs: slowestMs,
+    recoveredOnRetry,
+    failedAttempts,
+    fastestFailureMs,
+  };
 }
 
 export function resetNodeStatusLatency(): void {
@@ -224,7 +252,10 @@ export function reportNodeStatusShape(
 ): string | null {
   const v = nodeStatusLatency();
   const reads = Object.values(v.buckets).reduce((a, b) => a + b, 0);
-  if (reads === 0 && v.censoredAtOurDeadline === 0) return null;
+  // NOTHING TO SAY means nothing HAPPENED, not "nothing worked". A process whose every attempt was
+  // refused has plenty to say and no successful read to say it with - staying quiet there is the
+  // reporter going silent exactly when it is most worth reading.
+  if (reads === 0 && v.censoredAtOurDeadline === 0 && v.failedAttempts === 0) return null;
   // THE FIRST ONE ALWAYS SPEAKS, same rule as the failure classes: at now=0 against an unset
   // lastShapeAt the throttle would swallow the very first report, and a process that restarts
   // often would then never say its shape at all.
@@ -237,9 +268,31 @@ export function reportNodeStatusShape(
     .join(" ");
   // CENSORED IS NAMED AS CENSORED, never folded into the buckets: it is how many reads WE gave up
   // on, not how long they took, and an empty top bucket beside it must not read as good news.
+  // THE WINDOW, BECAUSE A COUNTER WITH NO STATED SCOPE IS A FACT ABOUT A PROCESS AND NOT ABOUT THE
+  // SYSTEM (L49, @SDE-Research). "recovered 12, censored 3" is a claim about an unnamed period and
+  // cannot be compared to anything; "in the last 11m" can. These are cumulative since this process
+  // first saw a read, which a restart resets - so the duration is the only honest framing.
+  const overMs = Math.max(0, now - countingSince);
+  const over = overMs >= 60_000 ? `${Math.round(overMs / 60_000)}m` : `${Math.round(overMs / 1000)}s`;
+  // RECOVERED AND CENSORED ALWAYS TOGETHER, ON THIS LINE, whatever their values. They are the
+  // success and failure halves of the same mitigation: recovered 50 / censored 0 means the retry
+  // is working, recovered 50 / censored 40 means it is papering, and one number alone cannot tell
+  // those apart. Printing either without the other is L45's first question.
+  // A FAILURE THAT CAME BACK FAST IS NOT A FAST READ. It has a duration and no answer, so it is
+  // counted here and never bucketed - otherwise a node refusing in 3ms lands in <50ms and the
+  // histogram reports the fastest wallet we have ever run. `fastest-failure` is the one App needs:
+  // a second attempt dying instantly is what a null at 4.27s on a 4s-then-8s ladder is made of.
+  const failures =
+    v.failedAttempts > 0
+      ? `failed-attempts=${v.failedAttempts} fastest-failure=${v.fastestFailureMs}ms `
+      : `failed-attempts=0 `;
+  // NOTHING RETURNED IS NOT "0ms". With reads=0 a slowest of 0ms reads as "every read was
+  // instant" - the good-news spelling of no data, which is the whole fault this line exists to
+  // stop telling.
+  const slowest = reads === 0 ? "none" : `${v.slowestObservedMs}ms`;
   const line =
-    `[node-status] shape: recovered-on-retry=${v.recoveredOnRetry} ` +
-    `censored=${v.censoredAtOurDeadline} slowest-returned=${v.slowestObservedMs}ms ` +
+    `[node-status] shape over ${over}: recovered-on-retry=${v.recoveredOnRetry} ` +
+    `censored=${v.censoredAtOurDeadline} ${failures}slowest-returned=${slowest} ` +
     `reads=${reads} ${shape}`;
   write(line);
   return line;
@@ -247,3 +300,7 @@ export function reportNodeStatusShape(
 
 let lastShapeAt = 0;
 let everReported = false;
+/** When this process first observed a read. The shape line is meaningless without it (L49). */
+let countingSince = 0;
+let failedAttempts = 0;
+let fastestFailureMs: number | null = null;

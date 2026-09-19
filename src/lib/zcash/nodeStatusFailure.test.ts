@@ -4,6 +4,7 @@ import {
   recordNodeStatusLatency,
   recordCensoredRead,
   recordRecoveredOnRetry,
+  recordFailedAttempt,
   nodeStatusLatency,
   reportNodeStatusShape,
   LATENCY_BUCKET_EDGES_MS,
@@ -211,4 +212,94 @@ test("an empty top bucket is never presented as a measurement", () => {
   assert.ok(line);
   assert.doesNotMatch(line, />=12s=0/);
   assert.match(line, /censored=4/);
+});
+
+
+test("the shape line states its WINDOW, or the counters are facts about nothing", () => {
+  // L49: "recovered 12, censored 3" is a claim about an unnamed period and cannot be compared to
+  // anything. These are cumulative since this process first saw a read, so the duration is the
+  // only honest framing - and a restart resets them, which is exactly why it must be said.
+  fresh();
+  recordNodeStatusLatency(40, 0);
+  const line = reportNodeStatusShape(660_000, write);
+  assert.ok(line, "nothing reported");
+  assert.match(line, /shape over 11m/, `window missing or wrong: ${line}`);
+});
+
+test("recovered and censored are printed TOGETHER even when one of them is zero", () => {
+  // They are the success and failure halves of the same mitigation. recovered 50 / censored 0 is
+  // "working"; recovered 50 / censored 40 is "papering". One alone cannot tell them apart, so
+  // neither may be omitted for being zero.
+  fresh();
+  recordNodeStatusLatency(40, 0);
+  for (let i = 0; i < 7; i++) recordRecoveredOnRetry();
+  const line = reportNodeStatusShape(0, write);
+  assert.ok(line);
+  assert.match(line, /recovered-on-retry=7/);
+  assert.match(line, /censored=0/, "censored was omitted for being zero");
+});
+
+
+test("a node that ONLY times out still reports a sane window, not the whole Unix epoch", () => {
+  // The all-censored process is the one this feature exists for, and it is the one that records no
+  // latency at all - so if only the latency path starts the clock, countingSince stays 0 and the
+  // window is computed against the epoch. Found by a surviving mutant, not by reading the code.
+  fresh();
+  recordCensoredRead(1_600_000_000_000);
+  recordCensoredRead(1_600_000_300_000);
+  const line = reportNodeStatusShape(1_600_000_600_000, write);
+  assert.ok(line, "nothing reported");
+  assert.match(line, /shape over 10m:/, `window is not measured from the first censored read: ${line}`);
+  assert.doesNotMatch(line, /over \d{5,}m/, `window computed against the epoch: ${line}`);
+});
+
+
+test("a fast FAILURE never enters a latency bucket, or the histogram reports the fastest node we ever ran", () => {
+  // This is the whole point. A node refusing in 3ms and a node answering in 3ms are the same
+  // number and opposite facts. SDE-Research reads mass in <50ms as evidence that a slow external
+  // measurement was path rather than work - which is only true if everything in that bucket is an
+  // ANSWER. One refused connection in there inverts the conclusion.
+  fresh();
+  recordFailedAttempt(3, 0);
+  recordFailedAttempt(270, 1_000);
+  const v = nodeStatusLatency();
+  assert.equal(v.buckets["<50ms"], 0, "a 3ms refusal was counted as a 3ms read");
+  assert.equal(Object.values(v.buckets).reduce((a, b) => a + b, 0), 0, "a failure reached a bucket");
+  assert.equal(v.failedAttempts, 2);
+  assert.equal(v.fastestFailureMs, 3, "the fastest failure is the signal App needs");
+  assert.equal(v.slowestObservedMs, 0, "a failure moved slowest-RETURNED, which nothing returned");
+});
+
+test("the shape line reports failed attempts and how fast the fastest one died", () => {
+  // A null at 4.27s on a 4s-then-8s ladder is one timeout plus one attempt that died in ~270ms.
+  // Nothing outside the process can see the second half, so the line has to carry it.
+  fresh();
+  recordCensoredRead(0);
+  recordFailedAttempt(270, 0);
+  const line = reportNodeStatusShape(0, write);
+  assert.ok(line);
+  assert.match(line, /censored=1/);
+  assert.match(line, /failed-attempts=1/);
+  assert.match(line, /fastest-failure=270ms/);
+});
+
+test("failed-attempts is stated even when it is zero, so its absence is never read as 'not measured'", () => {
+  fresh();
+  recordNodeStatusLatency(40, 0);
+  const line = reportNodeStatusShape(0, write);
+  assert.ok(line);
+  assert.match(line, /failed-attempts=0/, `a zero went unsaid: ${line}`);
+});
+
+
+test("with no successful reads, slowest-returned says none rather than 0ms", () => {
+  // Seen on a real outage run: "failed-attempts=1 fastest-failure=2ms slowest-returned=0ms reads=0".
+  // The 0ms is the good-news spelling of no data - a reader skimming for a slow node sees the
+  // smallest possible number next to the word slowest.
+  fresh();
+  recordFailedAttempt(2, 0);
+  const line = reportNodeStatusShape(0, write);
+  assert.ok(line);
+  assert.match(line, /slowest-returned=none/, `nothing returned, yet: ${line}`);
+  assert.doesNotMatch(line, /slowest-returned=0ms/);
 });
