@@ -126,21 +126,19 @@ export type NodeReadPurpose = "claim" | "page";
  */
 export function nodeStatusBudgetMs(purpose: NodeReadPurpose = "claim"): number {
   const budget = nodeStatusTimeoutMs();
-  // MEASURED AGAIN, 2026-09-19, and 4000 was too tight for the page too. SDE-Research sampled
-  // n=408 successful reads on the claim ladder, which has the room to SHOW the region the page
-  // truncates:
-  //     over 4s  33 of 408 = 8.1%     over 6s  4.4%     over 8s  2.0%     over 9s  1.5%
-  //     the six slowest that SUCCEEDED: 9.08 9.20 9.58 9.65 9.88 9.94s
-  // Every one of those 33 is a REFUSAL at 4000ms. The page was showing an empty status card to
-  // about one visitor in nine, and the reads it was giving up on were mostly finishing well
-  // inside ten seconds.
+  // A third, floored: eight of ten production samples answer under 3s, so 4s keeps the page fast
+  // and right almost always.
   //
-  // 8000 RECOVERS ABOUT THREE QUARTERS OF THEM. Not 12000: the page must still be much faster
-  // than the claim, because a visitor who has just arrived is owed an answer and one who pressed
-  // a button is owed the work. And not higher than the poll can absorb - see the in-flight guard
-  // in page.tsx, which is what makes a read longer than the 4s tick safe at all. That guard is
-  // the prerequisite for this number, not a nicety beside it.
-  return purpose === "page" ? Math.max(4000, Math.min(8000, budget)) : budget;
+  // AND IT STAYS AT 4s DESPITE THE MEASUREMENT THAT ARGUES FOR RAISING IT (SDE-UI). n=408 reads on
+  // the claim ladder put 8.1% over 4s with a tail to ~10s, so a higher page deadline would rescue
+  // about one visitor in eleven from an unfilled chip. It would also make them WAIT for it -
+  // status/route.ts:96 is a Promise.all, so the node read gates the WHOLE payload. Those visitors
+  // currently get balance, reserve, miner and drips at ~200ms with one chip unfilled, and the chip
+  // fills on the next poll 4s later. At 8000 they would get all of it at eight seconds instead.
+  // Rescuing one figure by delaying the other five is the wrong trade, and the right fix is to
+  // stop the node read gating the rest - which is a change to what /api/status promises, not a
+  // number here.
+  return purpose === "page" ? Math.max(4000, Math.floor(budget / 3)) : budget;
 }
 
 export function nodeStatusAttemptsMs(purpose: NodeReadPurpose = "claim"): number[] {

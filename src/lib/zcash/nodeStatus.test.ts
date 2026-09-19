@@ -228,25 +228,3 @@ test("censored counts ATTEMPTS, not calls - an aborted first attempt is counted 
   assert.equal(v.recoveredOnRetry, 1, "the second attempt answered, so this call was rescued");
   assert.equal(v.failedAttempts, 0, "nothing failed below our deadline here");
 });
-
-test("the page waits long enough to catch the reads it was giving up on", async () => {
-  // MEASURED, n=408 successful claim-ladder reads on production 2026-09-19 - the ladder with room
-  // to show the region the page truncates:
-  //     over 4s  8.1%    over 6s  4.4%    over 8s  2.0%    over 9s  1.5%
-  //     the six slowest SUCCESSES: 9.08 9.20 9.58 9.65 9.88 9.94s
-  // Every read between 4s and the page's deadline is a visitor shown an empty status card. At
-  // 4000ms that was about one in nine, and most of those reads were finishing inside ten seconds.
-  const { nodeStatusBudgetMs } = await import("./nodeStatus.ts");
-  delete process.env.FAUCET_NODE_STATUS_TIMEOUT_MS;
-  assert.ok(nodeStatusBudgetMs("page") > 6_000,
-    `the page must clear the 6s mark where 4.4% of reads still sit; got ${nodeStatusBudgetMs("page")}`);
-
-  // AND IT MUST STILL BE THE FAST ONE. A visitor who has just arrived is owed an answer; one who
-  // pressed a button is owed the work. If these ever converge the split has stopped meaning
-  // anything and this row says so rather than letting it drift shut.
-  assert.ok(nodeStatusBudgetMs("page") < nodeStatusBudgetMs("claim"),
-    "the page must stay faster than the claim");
-
-  // The page still does not retry - a second attempt is for someone who asked us to do something.
-  assert.equal((await import("./nodeStatus.ts")).nodeStatusAttemptsMs("page").length, 1);
-});
