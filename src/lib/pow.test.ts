@@ -17,7 +17,7 @@ process.env.RATE_LIMIT_SALT = "pow-test-salt";
 process.env.FAUCET_POW_BITS = "8";
 process.env.FAUCET_POW_ESCALATE_BITS = "0";
 
-const { issueChallenge, verifySolution } = await import("./pow.ts");
+const { issueChallenge, verifySolution, spendVerifiedSolution } = await import("./pow.ts");
 const { config } = await import("./config.ts");
 
 const SALT = "pow-test-salt";
@@ -137,4 +137,76 @@ test("rejects a missing or fieldless solution", async () => {
   const ch = issueChallenge(IP);
   // @ts-expect-error nonce absent
   assert.equal((await verifySolution({ ...ch }, IP)).ok, false);
+});
+
+/* ── our failures must not cost someone their work ────────────────────── */
+
+test("a verify that does not spend leaves the solution usable, so OUR refusal is free to retry", async () => {
+  // THE DEFECT THIS EXISTS FOR. The route verified AND BURNED the proof before it asked whether
+  // our own node was healthy enough to send. Production runs difficulty 22 - about 4.2 million
+  // hashes on a visitor's phone - so a slow read on our side cost them all of it and made them
+  // mine again. The owner met it as "Try again in 71s" over a card reading "Our side, not yours".
+  const ch = await issueChallenge(IP);
+  const nonce = findNonce(ch.seed, ch.difficulty);
+  const sol = { ...ch, nonce };
+
+  // Verified, deliberately not spent - this is the shape the route uses before its own gates.
+  assert.deepEqual(await verifySolution(sol, IP, null, false), { ok: true });
+  // The same work is still good. Without this the visitor is mining again.
+  assert.deepEqual(await verifySolution(sol, IP, null, false), { ok: true },
+    "a refusal we caused must leave the proof usable");
+
+  // And it is still spendable when we actually go ahead.
+  assert.equal(await spendVerifiedSolution(sol), true);
+});
+
+test("and once spent it is spent - replay protection is unchanged by the split", async () => {
+  // THE PARTNER, and without it "never spend" would satisfy the row above. The whole point of
+  // moving the burn is that it still HAPPENS, just after every gate of ours has had its say.
+  const ch = await issueChallenge(IP);
+  const nonce = findNonce(ch.seed, ch.difficulty);
+  const sol = { ...ch, nonce };
+
+  assert.equal(await spendVerifiedSolution(sol), true);
+  assert.equal(await spendVerifiedSolution(sol), false, "a second spend must lose the race");
+  // And the ordinary verify-and-spend path still refuses it, so nothing downstream can replay it.
+  const again = await verifySolution(sol, IP);
+  assert.equal(again.ok, false);
+  assert.match(again.reason ?? "", /already used/i);
+});
+
+test("a replayed solution is rejected BEFORE the expensive gates, not after them", async () => {
+  // SDE-UI's finding on the burn-later change. Moving the spend past our own gates also moved the
+  // "already used" 403 past them, so one valid solution could buy N traversals of safeBalance,
+  // getNodeStatus, the freshness gates and the cTAZ read before being refused. This is the cheap
+  // lookup that puts rejection back in front of that work.
+  const { challengeAlreadySpent } = await import("./db/index.ts");
+  const ch = await issueChallenge(IP);
+  const nonce = findNonce(ch.seed, ch.difficulty);
+  const sol = { ...ch, nonce };
+
+  // Unspent: the claim must proceed. A check that answered true here would refuse every first
+  // attempt, which is the failure worth more than the one it prevents.
+  assert.equal(await challengeAlreadySpent(sol.sig), false);
+
+  assert.equal(await spendVerifiedSolution(sol), true);
+  assert.equal(await challengeAlreadySpent(sol.sig), true, "a burned solution is seen as burned");
+});
+
+test("the spent-check is advisory: it never overrules the insert, and a ledger error lets the claim through", async () => {
+  // NOT THE MUTEX, and the comment says so, but a row is what keeps it true. Two requests can both
+  // read "not spent"; the INSERT still decides, and the second one still loses.
+  const { challengeAlreadySpent } = await import("./db/index.ts");
+  const ch = await issueChallenge(IP);
+  const nonce = findNonce(ch.seed, ch.difficulty);
+  const sol = { ...ch, nonce };
+
+  const [a, b] = await Promise.all([challengeAlreadySpent(sol.sig), challengeAlreadySpent(sol.sig)]);
+  assert.equal(a, false); assert.equal(b, false);
+  // Both saw "not spent". Only one burn wins.
+  const [x, y] = await Promise.all([spendVerifiedSolution(sol), spendVerifiedSolution(sol)]);
+  assert.equal([x, y].filter(Boolean).length, 1, "exactly one spend may win the race");
+
+  // And an unknown sig is not spent - the check must not answer true by accident on a miss.
+  assert.equal(await challengeAlreadySpent("no-such-sig"), false);
 });

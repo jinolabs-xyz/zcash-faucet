@@ -250,6 +250,22 @@ export const PURGE_CHALLENGES_SQL = `
 DELETE FROM used_challenges WHERE exp < ?
 `;
 
+/**
+ * Has this solution already been burned? READ-ONLY, and it exists to put replay rejection back
+ * in FRONT of the expensive gates.
+ *
+ * Moving the burn after our own gates (so a refusal we caused does not cost a visitor their proof)
+ * also moved replay REJECTION after them - so one valid solution could buy N backend traversals
+ * before its 403. SDE-UI found that reviewing the change. This costs one indexed lookup and closes
+ * it without giving back the benefit.
+ *
+ * NOT A SUBSTITUTE FOR THE BURN. This is advisory: two requests can both read "not spent" and race.
+ * The INSERT is still the only mutex and still decides. This just declines to do five seconds of
+ * network work for a request that is already doomed.
+ */
+export const CHALLENGE_SPENT_SQL = `
+SELECT 1 AS spent FROM used_challenges WHERE sig = ?`;
+
 // A 'pending' row that never finalises (e.g. process died mid-send) shouldn't
 // lock a user out for the whole cooldown - it only blocks for this lease.
 //

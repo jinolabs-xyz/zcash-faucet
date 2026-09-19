@@ -12,7 +12,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { config } from "@/lib/config";
 import { validateTestnetAddress } from "@/lib/zcash/address";
-import { verifySolution } from "@/lib/pow";
+import { verifySolution, spendVerifiedSolution } from "@/lib/pow";
 import { getSenderFor, safeBalance, RecipientRefusedError, SendOutcomeUnknownError, type SendResult } from "@/lib/zcash/send";
 import { getNodeStatus } from "@/lib/zcash/nodeStatus";
 import { mayBuildTransaction, readChainFreshnessAsking, freshnessRefusalText } from "@/lib/zcash/shieldGate";
@@ -23,7 +23,7 @@ import { DRAIN_RETRY_SECONDS, isDraining } from "@/lib/drain";
 import { DEFAULT_NETWORK, NETWORKS, parseNetwork } from "@/lib/network";
 import { canServeCtaz } from "@/lib/crosslink/recency";
 import { readCtazNodeState } from "@/lib/crosslink/read";
-import { reserveClaim, finalizeClaim } from "@/lib/db";
+import { reserveClaim, finalizeClaim, challengeAlreadySpent } from "@/lib/db";
 import { fingerprintIp, fingerprintSubnet } from "@/lib/privacy";
 import { clientIp } from "@/lib/clientIp";
 import { withApi, apiError } from "@/lib/api";
@@ -156,9 +156,28 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     if (!body.pow) {
       return apiError(403, "Proof of work required.", api);
     }
-    const verdict = await verifySolution(body.pow, ipHash ?? "anon", subnetHash);
+    // VERIFIED NOW, SPENT LATER, AND THE GAP IS THE POINT. This used to verify-and-burn here,
+    // before anything asked whether OUR node was healthy enough to send - so a visitor could mine
+    // 4.2 million hashes on their phone, be refused at 3.5 because our own node answered slowly,
+    // and have to mine it all again to try. The owner met exactly that: "Try again in 71s" over a
+    // card reading "Our side, not yours".
+    // Nothing is weakened by waiting: the proof is fully verified right here, the insert is still
+    // the mutex against a race, and the burn still happens before a single zatoshi moves. What
+    // changes is that a refusal WE caused leaves the solution usable.
+    const verdict = await verifySolution(body.pow, ipHash ?? "anon", subnetHash, false);
     if (!verdict.ok) {
       return apiError(403, verdict.reason ?? "Proof of work failed.", api);
+    }
+    // AND REPLAY REJECTION STAYS IN FRONT OF THE EXPENSIVE WORK (SDE-UI, reviewing this change).
+    // Moving the burn past our own gates also moved the "already used" 403 past them, so one
+    // valid solution could buy N traversals of safeBalance, getNodeStatus, the freshness gates
+    // and the cTAZ read before being refused. This is one indexed lookup and it closes that
+    // without giving back the benefit.
+    // ADVISORY, NOT THE MUTEX: two requests can both read "not spent" and race, and the INSERT
+    // at 3.9 still decides. This only declines to do seconds of network work for a request that
+    // is already doomed.
+    if (await challengeAlreadySpent(body.pow.sig)) {
+      return apiError(403, "Challenge already used.", api);
     }
   }
 
@@ -307,6 +326,16 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
         api,
         { retryAfterSeconds: FRESHNESS_RETRY_SECONDS },
       );
+    }
+  }
+
+  // 3.9. BURN THE PROOF, now that every refusal we could have raised is behind us. From here on
+  //    a failure is the wallet's or the network's rather than a gate of ours, and the visitor has
+  //    had their attempt. Before the reservation, so the challenge cannot be replayed into two
+  //    concurrent claims.
+  if (config.challenge === "pow" && body.pow) {
+    if (!(await spendVerifiedSolution(body.pow))) {
+      return apiError(403, "Challenge already used.", api);
     }
   }
 
