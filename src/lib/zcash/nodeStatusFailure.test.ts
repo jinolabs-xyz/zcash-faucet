@@ -5,6 +5,7 @@ import {
   recordCensoredRead,
   recordRecoveredOnRetry,
   nodeStatusLatency,
+  reportNodeStatusShape,
   LATENCY_BUCKET_EDGES_MS,
   classifyNodeStatusError,
   recordNodeStatusFailure,
@@ -162,4 +163,52 @@ test("nonsense durations are dropped rather than skewing the shape", () => {
   for (const bad of [NaN, Infinity, -1]) recordNodeStatusLatency(bad as number);
   assert.equal(Object.values(nodeStatusLatency().buckets).reduce((a, b) => a + b, 0), 0);
   assert.equal(nodeStatusLatency().slowestObservedMs, 0);
+});
+
+
+test("the shape line leads with recovered-on-retry, because it is the headline not a footnote", () => {
+  // #688 raised the budget AND added a retry in one change, so "the nulls went away" afterwards has
+  // two meanings that are identical from outside: the calls got fast enough, or a second attempt is
+  // rescuing a first that still fails. This counter is the only thing that separates them
+  // (@SDE-Research), so it must be readable without an ops token.
+  fresh();
+  recordNodeStatusLatency(120);
+  recordRecoveredOnRetry();
+  recordCensoredRead();
+  const line = reportNodeStatusShape(0, write);
+  assert.ok(line, "nothing was reported at all");
+  assert.match(line, /recovered-on-retry=1/);
+  // Censored is NAMED as censored rather than folded into a bucket.
+  assert.match(line, /censored=1/);
+  assert.match(line, /slowest-returned=120ms/);
+  assert.ok(line.indexOf("recovered-on-retry") < line.indexOf("censored"), "the headline must come first");
+});
+
+test("it says nothing when nothing has happened, or it is the noise that trains a reader to skip", () => {
+  fresh();
+  assert.equal(reportNodeStatusShape(0, write), null, "reported a shape with no reads at all");
+  assert.equal(lines.length, 0);
+});
+
+test("and it is throttled, so a busy process does not write a line per read", () => {
+  fresh();
+  recordNodeStatusLatency(10);
+  assert.ok(reportNodeStatusShape(0, write), "the first report was swallowed");
+  for (let i = 1; i <= 50; i++) {
+    recordNodeStatusLatency(10);
+    assert.equal(reportNodeStatusShape(i * 1_000, write), null, `wrote a second line at ${i}s`);
+  }
+  assert.ok(reportNodeStatusShape(61_000, write), "the throttle never reopened");
+});
+
+test("an empty top bucket is never presented as a measurement", () => {
+  // The buckets it prints are the ones with reads in them. A ">=12s=0" beside a censored count
+  // would read as "nothing was that slow" when it means "we hung up first".
+  fresh();
+  recordNodeStatusLatency(30);
+  for (let i = 0; i < 4; i++) recordCensoredRead();
+  const line = reportNodeStatusShape(0, write);
+  assert.ok(line);
+  assert.doesNotMatch(line, />=12s=0/);
+  assert.match(line, /censored=4/);
 });

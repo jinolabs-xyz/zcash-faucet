@@ -112,6 +112,8 @@ export function resetNodeStatusFailures(): void {
     sinceLastLog[k] = 0;
   }
   resetNodeStatusLatency();
+  lastShapeAt = 0;
+  everReported = false;
 }
 
 /* ── how long the reads take, which is a different question from why they fail ──────────────── */
@@ -197,3 +199,51 @@ export function resetNodeStatusLatency(): void {
   slowestMs = 0;
   recoveredOnRetry = 0;
 }
+
+/**
+ * SAY THE SHAPE OUT LOUD, PERIODICALLY, BECAUSE A COUNTER NOBODY READS IS NOT AN INSTRUMENT.
+ *
+ * The failure classes reach the journal on their own throttle. Until this, the LATENCY half did
+ * not: it accumulated where only an ops-token reader could ever see it, which makes the most
+ * important number in the file a footnote (@SDE-Research).
+ *
+ * AND recoveredOnRetry IS THE HEADLINE, not a detail on the failure path. #688 raised the budget
+ * AND added a retry in one change, so afterwards "the nulls went away" has two possible meanings
+ * that are indistinguishable from outside this process: the calls got fast enough, or a second
+ * attempt is rescuing a first that still fails. One says zallet recovered; the other says we are
+ * retrying past a problem that is still there. This counter is the only thing in the system that
+ * separates them, so it is printed first and by name.
+ *
+ * Throttled on the same interval as the classes, and only when something has actually happened -
+ * a line every minute saying nothing is the noise that trains a reader to skip the ones that
+ * matter.
+ */
+export function reportNodeStatusShape(
+  now: number = Date.now(),
+  write: (line: string) => void = (line) => console.warn(line),
+): string | null {
+  const v = nodeStatusLatency();
+  const reads = Object.values(v.buckets).reduce((a, b) => a + b, 0);
+  if (reads === 0 && v.censoredAtOurDeadline === 0) return null;
+  // THE FIRST ONE ALWAYS SPEAKS, same rule as the failure classes: at now=0 against an unset
+  // lastShapeAt the throttle would swallow the very first report, and a process that restarts
+  // often would then never say its shape at all.
+  if (everReported && now - lastShapeAt < THROTTLE_MS) return null;
+  everReported = true;
+  lastShapeAt = now;
+  const shape = Object.entries(v.buckets)
+    .filter(([, n]) => n > 0)
+    .map(([label, n]) => `${label}=${n}`)
+    .join(" ");
+  // CENSORED IS NAMED AS CENSORED, never folded into the buckets: it is how many reads WE gave up
+  // on, not how long they took, and an empty top bucket beside it must not read as good news.
+  const line =
+    `[node-status] shape: recovered-on-retry=${v.recoveredOnRetry} ` +
+    `censored=${v.censoredAtOurDeadline} slowest-returned=${v.slowestObservedMs}ms ` +
+    `reads=${reads} ${shape}`;
+  write(line);
+  return line;
+}
+
+let lastShapeAt = 0;
+let everReported = false;

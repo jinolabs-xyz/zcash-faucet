@@ -16,6 +16,7 @@ import {
   recordNodeStatusLatency,
   recordCensoredRead,
   recordRecoveredOnRetry,
+  reportNodeStatusShape,
 } from "./nodeStatusFailure.ts";
 import type { IdentityVerdict } from "./chainIdentity.ts";
 
@@ -176,6 +177,8 @@ export async function getNodeStatus(purpose: NodeReadPurpose = "claim"): Promise
             signal: AbortSignal.timeout(ms),
           });
           recordNodeStatusLatency(Date.now() - startedAt);
+          // Throttled inside, so this is a no-op on all but one read a minute.
+          reportNodeStatusShape();
           // A SECOND ATTEMPT THAT SAVED THE CALL IS A WOBBLE; BOTH FAILING IS A STATE (SDE-Infra).
           // Nothing outside this process can tell them apart - an outside sampler and the watchdog
           // both see one successful read either way - so this is the only place it can be counted.
