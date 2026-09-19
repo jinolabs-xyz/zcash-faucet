@@ -303,3 +303,22 @@ test("with no successful reads, slowest-returned says none rather than 0ms", () 
   assert.match(line, /slowest-returned=none/, `nothing returned, yet: ${line}`);
   assert.doesNotMatch(line, /slowest-returned=0ms/);
 });
+
+
+test("failures report BOTH ends, because one number turns a spread into a story", () => {
+  // SDE-Research decomposed eight production nulls: the second component runs 0.31s to 2.27s, an
+  // order of magnitude. Reporting only the fastest is true and leaves a reader certain the second
+  // attempt dies instantly while a 2.27s case sits unreported in the same count. Same argument as
+  // printing recovered beside censored.
+  fresh();
+  recordFailedAttempt(310, 0);
+  recordFailedAttempt(2_270, 0);
+  recordFailedAttempt(900, 0);
+  const v = nodeStatusLatency();
+  assert.equal(v.fastestFailureMs, 310);
+  assert.equal(v.slowestFailureMs, 2_270);
+  const line = reportNodeStatusShape(0, write);
+  assert.ok(line);
+  assert.match(line, /fastest-failure=310ms/);
+  assert.match(line, /slowest-failure=2270ms/, `only one end was reported: ${line}`);
+});

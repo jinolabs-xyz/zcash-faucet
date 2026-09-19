@@ -117,6 +117,7 @@ export function resetNodeStatusFailures(): void {
   countingSince = 0;
   failedAttempts = 0;
   fastestFailureMs = null;
+  slowestFailureMs = null;
 }
 
 /* ── how long the reads take, which is a different question from why they fail ──────────────── */
@@ -185,6 +186,11 @@ export function recordFailedAttempt(ms: number, now: number = Date.now()): void 
   failedAttempts += 1;
   if (!Number.isFinite(ms) || ms < 0) return;
   if (fastestFailureMs === null || ms < fastestFailureMs) fastestFailureMs = ms;
+  // BOTH ENDS, FOR THE SAME REASON recovered AND censored ARE PRINTED TOGETHER. SDE-Research
+  // decomposed eight production nulls and the second component runs 0.31s to 2.27s - an order of
+  // magnitude. A lone fastest of 270ms would be true and would leave every reader believing the
+  // second attempt dies instantly while a 2.27s case sits unreported inside the same count.
+  if (slowestFailureMs === null || ms > slowestFailureMs) slowestFailureMs = ms;
 }
 
 export function recordCensoredRead(now: number = Date.now()): void {
@@ -206,6 +212,7 @@ export interface NodeStatusLatencyView {
   /** Attempts that failed BELOW our deadline. Never a bucket - they measure no answer. */
   failedAttempts: number;
   fastestFailureMs: number | null;
+  slowestFailureMs: number | null;
 }
 
 export function nodeStatusLatency(): NodeStatusLatencyView {
@@ -218,6 +225,7 @@ export function nodeStatusLatency(): NodeStatusLatencyView {
     recoveredOnRetry,
     failedAttempts,
     fastestFailureMs,
+    slowestFailureMs,
   };
 }
 
@@ -284,7 +292,8 @@ export function reportNodeStatusShape(
   // a second attempt dying instantly is what a null at 4.27s on a 4s-then-8s ladder is made of.
   const failures =
     v.failedAttempts > 0
-      ? `failed-attempts=${v.failedAttempts} fastest-failure=${v.fastestFailureMs}ms `
+      ? `failed-attempts=${v.failedAttempts} fastest-failure=${v.fastestFailureMs}ms ` +
+        `slowest-failure=${v.slowestFailureMs}ms `
       : `failed-attempts=0 `;
   // NOTHING RETURNED IS NOT "0ms". With reads=0 a slowest of 0ms reads as "every read was
   // instant" - the good-news spelling of no data, which is the whole fault this line exists to
@@ -304,3 +313,4 @@ let everReported = false;
 let countingSince = 0;
 let failedAttempts = 0;
 let fastestFailureMs: number | null = null;
+let slowestFailureMs: number | null = null;
