@@ -2185,11 +2185,11 @@ check "and nothing is touched on a reference the app itself will not use" \
 echo "== watchdog: a hash MISMATCH at a settled height is proof of a fork, and it parks and pages"
 wd_fork_env
 export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
-export STUB_READY_REFHEIGHT=4350180 STUB_READY_REFHASH=00000000aaaaaaaabbbbbbbbccccccccdddddddd
-export STUB_ZEBRA_HASH=00000000eeeeeeeeffffffff1111111122222222
+export STUB_READY_REFHEIGHT=4350180 STUB_READY_REFHASH=00000000aaaaaaaabbbbbbbbccccccccddddddddeeeeeeeeffffffff00000000
+export STUB_ZEBRA_HASH=00000000eeeeeeeeffffffff1111111122222222333333334444444455555555
 wd_run 2
 check "pages, naming the height and BOTH hashes so a human can check it against an explorer" \
-  "grep -q 'at height 4350180 our node has block 00000000eeeeeeeeffffffff1111111122222222' '$T/alerts.log' && grep -q 'independent source has 00000000aaaaaaaabbbbbbbbccccccccdddddddd' '$T/alerts.log'"
+  "grep -q 'at height 4350180 our node has block 00000000eeeeeeeeffffffff1111111122222222333333334444444455555555' '$T/alerts.log' && grep -q 'independent source has 00000000aaaaaaaabbbbbbbbccccccccddddddddeeeeeeeeffffffff00000000' '$T/alerts.log'"
 check "calls it PROOF rather than the ahead-by-N evidence the other rung uses" \
   "grep -q 'this is PROOF' '$T/alerts.log'"
 check "writes the park marker, because the marker is what stops the next deploy starting the miner" \
@@ -2224,8 +2224,8 @@ echo "== watchdog: a hash mismatch with a RELOADING miner leads with the stop, i
 wd_fork_env
 echo reloading > "$STUB_SYSTEMD/zcash-testnet-miner.service"
 export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
-export STUB_READY_REFHEIGHT=4350180 STUB_READY_REFHASH=00000000aaaaaaaabbbbbbbbccccccccdddddddd
-export STUB_ZEBRA_HASH=00000000eeeeeeeeffffffff1111111122222222
+export STUB_READY_REFHEIGHT=4350180 STUB_READY_REFHASH=00000000aaaaaaaabbbbbbbbccccccccddddddddeeeeeeeeffffffff00000000
+export STUB_ZEBRA_HASH=00000000eeeeeeeeffffffff1111111122222222333333334444444455555555
 wd_run 2
 check "HISTORY+RUNNING: the operator is told to stop the miner by hand FIRST" \
   "grep -q 'stop it by hand FIRST' '$T/alerts.log'"
@@ -2237,8 +2237,8 @@ check "HISTORY+RUNNING: and it still does not issue the stop itself, because tha
 echo "== watchdog: the SAME block at that height is not a fork, and says nothing at all"
 wd_fork_env
 export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
-export STUB_READY_REFHEIGHT=4350180 STUB_READY_REFHASH=00000000AAAAAAAABBBBBBBBCCCCCCCCDDDDDDDD
-export STUB_ZEBRA_HASH=00000000aaaaaaaabbbbbbbbccccccccdddddddd
+export STUB_READY_REFHEIGHT=4350180 STUB_READY_REFHASH=00000000AAAAAAAABBBBBBBBCCCCCCCCDDDDDDDDEEEEEEEEFFFFFFFF00000000
+export STUB_ZEBRA_HASH=00000000aaaaaaaabbbbbbbbccccccccddddddddeeeeeeeeffffffff00000000
 wd_run 2
 # CASE-INSENSITIVE ON PURPOSE, and the two knobs above differ only in case: chainIdentity.ts:94
 # already records that sources differ on hex case and that a case difference is not a fork. A rung
@@ -2250,19 +2250,53 @@ check "and nothing is parked" "[ ! -f '$T/park/$FORK_MARKER_REL' ]"
 echo "== watchdog: no reference block on /api/ready is silence, not a fork"
 wd_fork_env
 export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
-export STUB_ZEBRA_HASH=00000000eeeeeeeeffffffff1111111122222222
+export STUB_ZEBRA_HASH=00000000eeeeeeeeffffffff1111111122222222333333334444444455555555
 wd_run 2
 # This is the state on the day this lands, because the app half is not shipped. It has to be
 # silent AND it has to say why once, so the rung turning itself on later is visible in the journal.
 check "says once that there is no reference to compare, and touches nothing" \
-  "[ \"\$(grep -c 'history check: no reference block' '$T/run.log')\" = 1 ]"
+  "[ \"\$(grep -c 'history check: no usable reference block' '$T/run.log')\" = 1 ]"
 check "and pages nothing" "! grep -q 'this is PROOF' '$T/alerts.log'"
 check "and parks nothing" "[ ! -f '$T/park/$FORK_MARKER_REL' ]"
+
+echo "== watchdog: a TRUNCATED reference hash is cannot-tell, and must not read as proof of a fork"
+# THE FALSE-ALARM PATH THIS CLOSES. The field is matched as [0-9a-fA-F]*, which accepts any length,
+# so a short value used to compare against our 64 characters, differ, and page FORK - the loudest
+# alert we have - on a malformed field rather than on a fork. Driven at 40 chars because that is
+# what a half-written or differently-encoded hash actually looks like, not at 1.
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFHEIGHT=4350180 STUB_READY_REFHASH=00000000aaaaaaaabbbbbbbbccccccccdddddddd
+export STUB_ZEBRA_HASH=00000000eeeeeeeeffffffff1111111122222222333333334444444455555555
+wd_run 2
+check "does NOT page a fork on a hash that is not one" \
+  "! grep -q 'this is PROOF' '$T/alerts.log'"
+check "and parks nothing, so no deploy is blocked by a malformed field" \
+  "[ ! -f '$T/park/$FORK_MARKER_REL' ]"
+# NAMING IT IS THE POINT. "absent" would send an operator to look for a missing field that is
+# present and wrong, which is a different and much longer hunt.
+check "and says it is MALFORMED with its length, not that it is absent" \
+  "grep -q 'MALFORMED: 40 chars, not 64' '$T/run.log'"
+
+echo "== watchdog: a truncated hash from OUR OWN node is cannot-tell too, not a fork"
+# THE SYMMETRIC HALF. The guard above is on the value that crosses a lane boundary over HTTP, which
+# is the one that matters most - but zebra's answer is sed'd out of a JSON body and is no more
+# structurally guaranteed than theirs. A changed RPC shape or a partial read must reach cannot-tell,
+# not the comparison. Without this row the second guard would be code nothing drives.
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFHEIGHT=4350180 STUB_READY_REFHASH=00000000aaaaaaaabbbbbbbbccccccccddddddddeeeeeeeeffffffff00000000
+export STUB_ZEBRA_HASH=00000000eeeeeeee
+wd_run 2
+check "does not page a fork when OUR hash is the malformed one" \
+  "! grep -q 'this is PROOF' '$T/alerts.log'"
+check "and parks nothing on it either" \
+  "[ ! -f '$T/park/$FORK_MARKER_REL' ]"
 
 echo "== watchdog: a node that will not give us a hash is cannot-tell, never a fork"
 wd_fork_env
 export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
-export STUB_READY_REFHEIGHT=4350180 STUB_READY_REFHASH=00000000aaaaaaaabbbbbbbbccccccccdddddddd
+export STUB_READY_REFHEIGHT=4350180 STUB_READY_REFHASH=00000000aaaaaaaabbbbbbbbccccccccddddddddeeeeeeeeffffffff00000000
 wd_run 2
 # STUB_ZEBRA_HASH unset: the node answers the heights call and refuses this one. An absent answer
 # from OUR side must never become evidence about THEIR chain - that is the whole asymmetry.

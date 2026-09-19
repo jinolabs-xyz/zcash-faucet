@@ -1280,26 +1280,44 @@ ticks=0
 # the height and publishes it; we do not derive our own, so the two processes cannot disagree about
 # where they looked.
 check_history_against_reference() {
-  local name="$1" ref_h ref_hash ours_hash lower_ours lower_ref park stop_first hist_word
+  local name="$1" ref_h ref_hash ref_hash_bad ours_hash lower_ours lower_ref park stop_first hist_word
   [ "$FORK_HEAL_ENABLED" = "1" ] || return 0
   [ -n "$name" ] || return 0
 
   ref_h="$(printf '%s' "${ready_body:-}" | grep -o '"referenceHeight":[0-9][0-9]*' | head -n1 | cut -d: -f2)"
   ref_hash="$(printf '%s' "${ready_body:-}" | grep -o '"referenceHash":"[0-9a-fA-F]*"' | head -n1 | cut -d'"' -f4)"
   case "$ref_h" in ''|*[!0-9]*) ref_h="" ;; esac
+  # A HASH OF THE WRONG LENGTH IS NOT A HASH, and comparing one is how this rung pages FORK - the
+  # loudest alert we have - on a malformed field rather than on a fork. The pattern above accepts
+  # any run of hex, so an empty value is caught below but a TRUNCATED one would compare against our
+  # 64 characters, differ, and read as proof. #700 guards 32 bytes where the field is produced,
+  # which is the right place; this is the consumer refusing to treat garbage as evidence, which is
+  # the same contract as every other cannot-verify branch here.
+  ref_hash_bad=""
+  case "$ref_hash" in
+    '') ;;
+    *[!0-9a-fA-F]*)                   ref_hash_bad="not hex"; ref_hash="" ;;
+    *) [ "${#ref_hash}" -eq 64 ] || { ref_hash_bad="${#ref_hash} chars, not 64"; ref_hash=""; } ;;
+  esac
 
   # NO REFERENCE IS THE NORMAL STATE UNTIL THE APP HALF SHIPS, so this lands dark and turns itself
   # on the day those fields appear. Said once per episode for the reason the rung below says its
   # cannot-tell once: a state repeated every 30 s is noise that trains an operator to skim.
   if [ -z "$ref_h" ] || [ -z "$ref_hash" ]; then
     if [ "$history_cannot_tell_logged" != "1" ]; then
-      log "history check: no reference block on /api/ready (height=${ref_h:-absent}, hash=${ref_hash:+present}${ref_hash:-absent}), so nothing is compared and nothing is touched. Silent until this changes."
+      log "history check: no usable reference block on /api/ready (height=${ref_h:-absent}, hash=${ref_hash:+present}${ref_hash_bad:+MALFORMED: $ref_hash_bad}${ref_hash:-${ref_hash_bad:-absent}}), so nothing is compared and nothing is touched. Silent until this changes."
       history_cannot_tell_logged=1
     fi
     return 0
   fi
 
   ours_hash="$(zebra_block_hash "$name" "$ref_h")"
+  # Same rule applied to our own side rather than only to theirs: a partial read or a changed RPC
+  # shape must reach the cannot-tell branch below, not the comparison.
+  case "$ours_hash" in
+    *[!0-9a-fA-F]*) ours_hash="" ;;
+    *) [ "${#ours_hash}" -eq 64 ] || ours_hash="" ;;
+  esac
   if [ -z "$ours_hash" ]; then
     if [ "$history_cannot_tell_logged" != "1" ]; then
       log "history check: the reference says $ref_h but zebra did not give us a hash at that height, so nothing is compared. Silent until this changes."
