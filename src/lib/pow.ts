@@ -171,7 +171,7 @@ export interface Verdict { ok: boolean; reason?: string }
  * a restart, and the D1 backend is an HTTP round-trip. The cheap checks run
  * first so a junk solution never reaches the database.
  */
-export async function verifySolution(s: Solution, ipHash: string, subnetHash: string | null = null): Promise<Verdict> {
+export async function verifySolution(s: Solution, ipHash: string, subnetHash: string | null = null, spend = true): Promise<Verdict> {
   if (!s || !s.seed || typeof s.nonce !== "string") return { ok: false, reason: "Missing challenge solution." };
   const now = Math.floor(Date.now() / 1000);
   if (s.exp < now) return { ok: false, reason: "That challenge expired. The gate is busy right now, so come back in a few minutes." };
@@ -191,8 +191,26 @@ export async function verifySolution(s: Solution, ipHash: string, subnetHash: st
   // Last, because it is the only check that writes: burn the challenge. The
   // insert is the mutex, so two requests racing the same solution cannot both
   // win, on either ledger backend.
-  if (!(await spendChallenge(s.sig, s.exp, now))) {
+  if (spend && !(await spendChallenge(s.sig, s.exp, now))) {
     return { ok: false, reason: "Challenge already used." };
   }
   return { ok: true };
+}
+
+/**
+ * Burn a solution this process has already verified.
+ *
+ * SPLIT FROM THE VERIFY SO OUR OWN FAILURES DO NOT COST SOMEONE THEIR WORK. The route used to
+ * verify-and-spend before it checked whether our node was healthy enough to send, so a visitor
+ * could mine 4.2 million hashes on their phone, be refused because OUR node answered slowly, and
+ * have to mine it again to try. The owner met exactly that: "Try again in 71s" over a card saying
+ * "Our side, not yours".
+ *
+ * Nothing is weakened by waiting. The proof is still fully verified before any gate runs, the
+ * insert is still the mutex, and the spend still happens before a single zatoshi moves. What
+ * changes is that a refusal WE caused leaves the solution usable, so the retry is free to the
+ * person who did the work.
+ */
+export async function spendVerifiedSolution(s: Solution): Promise<boolean> {
+  return spendChallenge(s.sig, s.exp, Math.floor(Date.now() / 1000));
 }

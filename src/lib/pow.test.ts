@@ -17,7 +17,7 @@ process.env.RATE_LIMIT_SALT = "pow-test-salt";
 process.env.FAUCET_POW_BITS = "8";
 process.env.FAUCET_POW_ESCALATE_BITS = "0";
 
-const { issueChallenge, verifySolution } = await import("./pow.ts");
+const { issueChallenge, verifySolution, spendVerifiedSolution } = await import("./pow.ts");
 const { config } = await import("./config.ts");
 
 const SALT = "pow-test-salt";
@@ -137,4 +137,40 @@ test("rejects a missing or fieldless solution", async () => {
   const ch = issueChallenge(IP);
   // @ts-expect-error nonce absent
   assert.equal((await verifySolution({ ...ch }, IP)).ok, false);
+});
+
+/* ── our failures must not cost someone their work ────────────────────── */
+
+test("a verify that does not spend leaves the solution usable, so OUR refusal is free to retry", async () => {
+  // THE DEFECT THIS EXISTS FOR. The route verified AND BURNED the proof before it asked whether
+  // our own node was healthy enough to send. Production runs difficulty 22 - about 4.2 million
+  // hashes on a visitor's phone - so a slow read on our side cost them all of it and made them
+  // mine again. The owner met it as "Try again in 71s" over a card reading "Our side, not yours".
+  const ch = await issueChallenge(IP);
+  const nonce = findNonce(ch.seed, ch.difficulty);
+  const sol = { ...ch, nonce };
+
+  // Verified, deliberately not spent - this is the shape the route uses before its own gates.
+  assert.deepEqual(await verifySolution(sol, IP, null, false), { ok: true });
+  // The same work is still good. Without this the visitor is mining again.
+  assert.deepEqual(await verifySolution(sol, IP, null, false), { ok: true },
+    "a refusal we caused must leave the proof usable");
+
+  // And it is still spendable when we actually go ahead.
+  assert.equal(await spendVerifiedSolution(sol), true);
+});
+
+test("and once spent it is spent - replay protection is unchanged by the split", async () => {
+  // THE PARTNER, and without it "never spend" would satisfy the row above. The whole point of
+  // moving the burn is that it still HAPPENS, just after every gate of ours has had its say.
+  const ch = await issueChallenge(IP);
+  const nonce = findNonce(ch.seed, ch.difficulty);
+  const sol = { ...ch, nonce };
+
+  assert.equal(await spendVerifiedSolution(sol), true);
+  assert.equal(await spendVerifiedSolution(sol), false, "a second spend must lose the race");
+  // And the ordinary verify-and-spend path still refuses it, so nothing downstream can replay it.
+  const again = await verifySolution(sol, IP);
+  assert.equal(again.ok, false);
+  assert.match(again.reason ?? "", /already used/i);
 });
