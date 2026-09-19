@@ -15,6 +15,16 @@ test("our own node being slow is retried, because it clears by itself in seconds
   assert.equal(silentRetryWaitSeconds(held(1), 0), 1);
 });
 
+test("the threshold matches what the SERVER's own test guarantees, or the feature dies silently", () => {
+  // freshness-retry.test.ts asserts only `quick <= 10` for the wobble hint. If this threshold sat
+  // at 5, a server returning 8 would keep BOTH suites green and switch the retry off entirely.
+  // Two green suites that disagree about a number on the wire is the failure this row exists for.
+  assert.ok(SILENT_RETRY_MAX_SECONDS >= 10, `the server permits up to 10s; got ${SILENT_RETRY_MAX_SECONDS}`);
+  for (const quick of [1, 5, 8, 10]) assert.equal(silentRetryWaitSeconds(held(quick), 0), quick);
+  // And still strictly below the next hint up, so widening cannot swallow a refusal owed the card.
+  assert.ok(SILENT_RETRY_MAX_SECONDS < 20, "20s is a missing outside reference and must still show");
+});
+
 test("a wait long enough to mean the CHAIN is retried by nobody - that card is honest", () => {
   // 20s is a missing outside reference, 75s is genuinely behind. Neither clears because we asked
   // again, and hiding them behind a spinner would be a lie with a nicer animation.

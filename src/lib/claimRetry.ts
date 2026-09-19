@@ -25,8 +25,20 @@
 /**
  * A hint at or below this means "our own read wobbled". Above it, the wait is about the chain or
  * an outside reference and the visitor is owed the card instead of a spinner.
+ *
+ * TEN, NOT FIVE, AND THE DIFFERENCE IS A CONTRACT RATHER THAN A PREFERENCE. The server picks the
+ * wobble hint in `freshness-retry.ts` and today it returns 5 - but its own test asserts only
+ * `quick <= 10`, so 6, 8 or 10 would keep that suite green. At a threshold of 5 any such change
+ * would silently switch this whole feature off: the page would stop retrying, no row on either
+ * side would fail, and the first anyone knew would be a visitor being refused for our wobble
+ * again. Matching the bound the server's test actually guarantees is what stops two green suites
+ * from disagreeing.
+ *
+ * It stays well clear of the other two hints - 20s for a missing outside reference, 75s for
+ * genuinely behind - and the server's own test pins those as strictly greater, so widening to 10
+ * cannot start hiding a refusal that deserves the card.
  */
-export const SILENT_RETRY_MAX_SECONDS = 5;
+export const SILENT_RETRY_MAX_SECONDS = 10;
 
 /** How many times we quietly try again before the refusal becomes the visitor's problem. */
 export const SILENT_RETRY_CAP = 2;
