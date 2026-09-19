@@ -90,7 +90,10 @@ export const GET = withApi("status", async (req: NextRequest) => {
   // front, or the operator's body could be handed to the public. Caddy caches nothing
   // today; this is for the day something does.
   const headers = { "cache-control": "private, no-store", vary: OPS_HEADER };
-  const [backend, balanceZat, node] = await Promise.all([pingBackend(), safeBalance(), getNodeStatus()]);
+  // "page", NOT the claim budget. A visitor who has just arrived is owed an answer quickly; a
+  // status card that takes twelve seconds to fill reads as a broken site. The claim path is the
+  // one that waits, because there a person pressed a button and expects work.
+  const [backend, balanceZat, node] = await Promise.all([pingBackend(), safeBalance(), getNodeStatus("page")]);
   // Synchronous and off the await chain: a few hundred bytes from a bind mount, so it
   // does not belong in the Promise.all with three network calls.
   const minerReading = readMinerHeartbeat(config.miner.heartbeatPath);

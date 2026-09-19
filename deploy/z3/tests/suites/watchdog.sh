@@ -2390,3 +2390,23 @@ wd_fork_env
 export STUB_ZEBRA_BLOCKS=4331234 STUB_ZEBRA_EST=4332677 STUB_ZEBRA_ADVANCE=1 STUB_ZEBRA_STUCK_CALLS=2
 wd_run 4
 check "started again, so the guard above is the marker and not something else" "grep -q 'systemctl start zcash-testnet-miner.service' '$STUB_LOG'"
+
+echo "== watchdog: the readiness fetch outlasts the app's own node-status budget"
+# TWO NUMBERS IN TWO LANES THAT MUST AGREE. The app spends up to FAUCET_NODE_STATUS_TIMEOUT_MS
+# (src/lib/zcash/nodeStatus.ts, default 12000) reading our node before /api/ready can answer.
+# If this fetch's --max-time is below that, it aborts DURING the slow-wallet episode readiness
+# exists to report: the watchdog records a transport failure, the flap rung counts an un-ready
+# sweep, and we page ourselves about our own timeout. Found by SDE-UI on the PR that raised the
+# app budget from 4s. Asserted as an INEQUALITY against the app's default rather than pinned to
+# a number, so raising one and forgetting the other goes red instead of going quiet.
+wd_ready_timeout="$(grep -o -- '--max-time [0-9]* -w .*api/ready' "$WD" \
+  | grep -o -- '--max-time [0-9]*' | grep -o '[0-9]*' | head -n1)"
+wd_app_budget="$(grep -o 'raw >= 1000 ? raw : [0-9_]*' "$REPO/src/lib/zcash/nodeStatus.ts" \
+  | grep -o '[0-9_]*$' | tr -d '_' | head -n1)"
+check "the readiness fetch's timeout was found in watchdog.sh" \
+  "[ -n '$wd_ready_timeout' ]"
+check "and the app's node-status budget was found in nodeStatus.ts" \
+  "[ -n '$wd_app_budget' ]"
+# Both in milliseconds for the comparison; curl's --max-time is seconds.
+check "and the fetch outlasts it, so a slow wallet is REPORTED rather than timing us out" \
+  "[ \$(( ${wd_ready_timeout:-0} * 1000 )) -gt ${wd_app_budget:-999999} ]"
