@@ -17,6 +17,7 @@ import { getNodeStatus } from "@/lib/zcash/nodeStatus";
 import { cachedLedgerHealth } from "@/lib/db";
 import { ledgerBlocksServing } from "@/lib/db/probe";
 import { readSendHealthServed, sendHealthBlocksServing } from "@/lib/zcash/sendHealth";
+import { readForkReference } from "@/lib/zcash/forkReference";
 import { readTipReferences } from "@/lib/zcash/externalTip";
 import { readinessReason } from "@/lib/readiness";
 import { withApi } from "@/lib/api";
@@ -130,6 +131,14 @@ export const GET = withApi("ready", async () => {
        * or flapping shows up as a spread.
        */
       tipReferences: readTipReferences(),
+      // THE FORK REFERENCE (#533, R-20). Their hash at tip-10, for the watchdog to compare
+      // against zebra's own getblockhash at the same height - the half of the fork detector
+      // this process can see. The app cannot do the other half: it has no cookie and cannot
+      // exec into the zebra container.
+      // Published even when null, and carrying its own age, because "we have never read one"
+      // and "the last one is an hour old" are different facts and an absent key is neither.
+      // NOTHING HERE REFUSES A DRIP: a reference we could not fetch is not a fork.
+      forkReference: readForkReference(),
       backend: { reachable: backend.reachable },
       // Reported even when serving, and carrying its own three-state verdict, so
       // "container up but not serving" has a name in the alert. "The faucet is
