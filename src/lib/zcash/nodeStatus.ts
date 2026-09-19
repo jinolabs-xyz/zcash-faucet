@@ -74,6 +74,18 @@ const FREEZE_BLOCKS = num("FAUCET_FREEZE_BLOCKS", 200);
 // must not claim a stall it has not observed.
 let lastTip: TipSample | null = null;
 
+/**
+ * How long to wait for our own node to answer before calling its height unknown.
+ *
+ * Floored at 1000ms rather than trusted: an env var set to 0, to a word, or to something
+ * negative would disable the status read entirely and every claim would be refused with a
+ * sentence about the node - a configuration mistake that presents as an outage.
+ */
+export function nodeStatusTimeoutMs(): number {
+  const raw = Number(process.env.FAUCET_NODE_STATUS_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw >= 1000 ? raw : 10_000;
+}
+
 export async function getNodeStatus(): Promise<NodeStatus | null> {
   if (config.sender !== "zallet") return null;
   const { endpoint, user, password } = config.zallet;
@@ -88,7 +100,20 @@ export async function getNodeStatus(): Promise<NodeStatus | null> {
       method: "POST",
       headers,
       body: `{"jsonrpc":"2.0","id":"status","method":"getwalletstatus","params":[]}`,
-      signal: AbortSignal.timeout(4000),
+      // MEASURED, NOT CHOSEN. 4000 was too tight and it was refusing real claims: on production,
+      // 2026-09-19, ten samples of /api/status split cleanly either side of this number -
+      // 0.9/0.9/1.4/1.9/1.9/2.4/2.8/3.0s answered with a node, and 4.8s and 6.7s answered with
+      // node: null. Zallet is simply slower than this sometimes, and every time it was, the page
+      // told a visitor "our node did not report its height just now, so we are not sending".
+      // The owner found that from their own phone, not from an alert.
+      //
+      // A TIMEOUT IS A CLAIM ABOUT THE NODE and this one was making it too early: "did not answer
+      // in 4s" was being rendered as "we cannot tell whether a drip would confirm", which is a
+      // much stronger sentence than the evidence supported.
+      //
+      // Configurable so the box can move it without a deploy, because the right value is a
+      // property of that machine's zallet rather than of this code.
+      signal: AbortSignal.timeout(nodeStatusTimeoutMs()),
     });
     if (!res.ok) return null;
     const json = (await res.json()) as { result?: { wallet_tip?: { height?: number }; node_tip?: { height?: number } } };
