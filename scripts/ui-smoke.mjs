@@ -1857,8 +1857,13 @@ async function checkFirstPaint(page, base, address) {
     // completed sends inside fifteen minutes and prod serves about one drip every two hours, so
     // it read "unknown" permanently). Asserted as the SET rather than a count, so a chip that
     // disappears is named and a chip that is added fails until someone decides it belongs.
-    ok("first paint carries the three hero status chips",
-      ["wallet", "node", "miner"].every((n) => heroFirst.chips.some((c) => c.name === n))
+    // THE COUNT IS WHAT MAKES IT A SET. Membership plus a named absence leaves the row silent on a
+    // chip nobody has decided about: wallet+node+miner plus a new `reserve` chip passed green while
+    // the comment above promised it would not. The glyph row four hundred lines down had the shape
+    // right - length AND membership - so this is that shape, here.
+    ok("first paint carries the three hero status chips and no others",
+      heroFirst.chips.length === 3
+        && ["wallet", "node", "miner"].every((n) => heroFirst.chips.some((c) => c.name === n))
         && !heroFirst.chips.some((c) => c.name === "sends"),
       heroFirst.chips.map((c) => c.name).join(", ") || "no chips in the HTML");
     // THE CHIP IS PRESENT AND THE FIGURE IS NOT, which is the whole of the change. The old row
@@ -2464,9 +2469,22 @@ async function checkServedHtmlCarriesTheHero() {
   // AND NO INVENTED FIGURE RODE ALONG. The failure this guards is the one the owner's rule is
   // about: a server render that has been told nothing must not print a count, and "0 drips this
   // week" would satisfy the row above while being exactly the lie we removed.
-  ok("and the analytics link carries no count the server was never told",
-    !/\d+ drips this week/.test(html),
-    /\d+ drips this week/.test(html) ? "a count reached the served bytes" : "no count, as expected");
+  // THE LINK'S OWN TEXT, NOT THE WHOLE DOCUMENT, AND A DIGIT RATHER THAN A PHRASE. Pinned to the
+  // removed wording, this row could only catch a regression that retyped the exact words we just
+  // deleted: it passed "Usage analytics · 12", passed "12 · Usage analytics", and passed "unknown
+  // drips this week" - on a change whose whole point was that nothing says unknown. The chip rows
+  // ninety lines up already slice an element and test it for a digit; this is that, applied to the
+  // link the row is named after.
+  const analyticsText = (() => {
+    const m = html.match(/<a\b[^>]*class="[^"]*morelink[^"]*"[^>]*>([\s\S]*?)<\/a>/);
+    return m ? m[1].replace(/<[^>]*>/g, " ").replace(/&[a-z]+;|&#\d+;/gi, " ").trim() : null;
+  })();
+  ok("and the analytics link carries no count, and no 'unknown', in its own text",
+    analyticsText !== null && analyticsText.length > 0
+      && !/\d/.test(analyticsText) && !/unknown/i.test(analyticsText),
+    analyticsText === null
+      ? "no morelink anchor found in the served bytes, so this row measured nothing"
+      : `analytics link reads "${analyticsText}"`);
 }
 
 async function checkMinerPanel(page) {
