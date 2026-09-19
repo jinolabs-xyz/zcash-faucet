@@ -126,9 +126,21 @@ export type NodeReadPurpose = "claim" | "page";
  */
 export function nodeStatusBudgetMs(purpose: NodeReadPurpose = "claim"): number {
   const budget = nodeStatusTimeoutMs();
-  // A third, floored so the page still clears the common case: eight of ten production samples
-  // answered under 3s, so 4s keeps the page fast AND right almost always.
-  return purpose === "page" ? Math.max(4000, Math.floor(budget / 3)) : budget;
+  // MEASURED AGAIN, 2026-09-19, and 4000 was too tight for the page too. SDE-Research sampled
+  // n=408 successful reads on the claim ladder, which has the room to SHOW the region the page
+  // truncates:
+  //     over 4s  33 of 408 = 8.1%     over 6s  4.4%     over 8s  2.0%     over 9s  1.5%
+  //     the six slowest that SUCCEEDED: 9.08 9.20 9.58 9.65 9.88 9.94s
+  // Every one of those 33 is a REFUSAL at 4000ms. The page was showing an empty status card to
+  // about one visitor in nine, and the reads it was giving up on were mostly finishing well
+  // inside ten seconds.
+  //
+  // 8000 RECOVERS ABOUT THREE QUARTERS OF THEM. Not 12000: the page must still be much faster
+  // than the claim, because a visitor who has just arrived is owed an answer and one who pressed
+  // a button is owed the work. And not higher than the poll can absorb - see the in-flight guard
+  // in page.tsx, which is what makes a read longer than the 4s tick safe at all. That guard is
+  // the prerequisite for this number, not a nicety beside it.
+  return purpose === "page" ? Math.max(4000, Math.min(8000, budget)) : budget;
 }
 
 export function nodeStatusAttemptsMs(purpose: NodeReadPurpose = "claim"): number[] {
