@@ -91,3 +91,140 @@ test("a page and a claim are two different people waiting for two different reas
   // fast page is not a page that gives up on a healthy node.
   assert.ok(page[0] >= 3_000, `the page must still reach a healthy node; got ${page[0]}`);
 });
+
+
+test("an HTTP error is a FAILED ATTEMPT, not a fast read - measured through the real function", async () => {
+  // M-i survived without this row: every other test in this file exercises the pure config
+  // helpers, so nothing here had ever driven getNodeStatus itself, and the ok-check could be
+  // deleted with the suite still green. A 500 comes back in single-digit ms and carries no wallet
+  // work; bucketed, it is the fastest read we have ever recorded and it answers SDE-Research's
+  // question with the speed of the error path.
+  const { getNodeStatus } = await import("./nodeStatus.ts");
+  const { nodeStatusLatency, resetNodeStatusFailures } = await import("./nodeStatusFailure.ts");
+  const realFetch = globalThis.fetch;
+  resetNodeStatusFailures();
+  let asked = 0;
+  globalThis.fetch = (async () => {
+    asked += 1;
+    return new Response('{"error":"boom"}', { status: 500, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    await getNodeStatus("page");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.ok(asked > 0, "the stub was never called, so this row measured nothing");
+  const v = nodeStatusLatency();
+  const bucketed = Object.values(v.buckets).reduce((a, b) => a + b, 0);
+  assert.equal(bucketed, 0, `an HTTP 500 landed in a latency bucket: ${JSON.stringify(v.buckets)}`);
+  assert.equal(v.failedAttempts, asked, "the failed attempt was not counted");
+});
+
+
+test("a refused connection is a failed attempt too, however fast it comes back", async () => {
+  // The other half of the same rule, and the one App's 4.27s null is made of: a second attempt
+  // that dies instantly. Bucketed, it is indistinguishable from the node answering in 3ms.
+  const { getNodeStatus } = await import("./nodeStatus.ts");
+  const { nodeStatusLatency, resetNodeStatusFailures } = await import("./nodeStatusFailure.ts");
+  const realFetch = globalThis.fetch;
+  resetNodeStatusFailures();
+  let asked = 0;
+  globalThis.fetch = (async () => {
+    asked += 1;
+    throw Object.assign(new TypeError("fetch failed"), { name: "TypeError" });
+  }) as typeof fetch;
+  try {
+    await getNodeStatus("page");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.ok(asked > 0, "the stub was never called, so this row measured nothing");
+  const v = nodeStatusLatency();
+  const bucketed = Object.values(v.buckets).reduce((a, b) => a + b, 0);
+  assert.equal(bucketed, 0, `a refused connection landed in a latency bucket: ${JSON.stringify(v.buckets)}`);
+  assert.equal(v.failedAttempts, asked, `every refused attempt is counted; asked ${asked}, counted ${v.failedAttempts}`);
+  assert.equal(v.censoredAtOurDeadline, 0, "a refusal is not a censored read - we did not give up, it did");
+});
+
+
+test("a timeout is CENSORED, not a failed attempt, and the classifier is what decides", async () => {
+  // The distinction SDE-Research asked for, measured where it is actually made. A censored read
+  // has no duration we may quote - we stopped listening - while a failed attempt does. Counting a
+  // timeout as a failure would give it a "fastest-failure" made of our own patience.
+  const { getNodeStatus } = await import("./nodeStatus.ts");
+  const { nodeStatusLatency, resetNodeStatusFailures } = await import("./nodeStatusFailure.ts");
+  const realFetch = globalThis.fetch;
+  resetNodeStatusFailures();
+  let asked = 0;
+  globalThis.fetch = (async () => {
+    asked += 1;
+    throw Object.assign(new Error("timed out"), { name: "TimeoutError" });
+  }) as typeof fetch;
+  try {
+    await getNodeStatus("page");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.ok(asked > 0, "the stub was never called, so this row measured nothing");
+  const v = nodeStatusLatency();
+  assert.equal(v.censoredAtOurDeadline, asked, `every timeout is censored; asked ${asked}, censored ${v.censoredAtOurDeadline}`);
+  assert.equal(v.failedAttempts, 0, "a timeout was counted as a failed attempt, which gives it a duration it does not have");
+  assert.equal(v.fastestFailureMs, null, "our own deadline became a 'fastest failure'");
+});
+
+
+test("the shape line speaks during a total outage, not only when a read succeeds", async () => {
+  // It was reported on the success path alone. A node failing every read would print its failure
+  // CLASS and never the shape - so "censored 40, recovered 0" existed and was unreadable in the one
+  // state anybody would want it. A reporter that goes quiet as things get worse is the same fault
+  // as a check that reports by silence.
+  const { getNodeStatus } = await import("./nodeStatus.ts");
+  const { resetNodeStatusFailures } = await import("./nodeStatusFailure.ts");
+  const realFetch = globalThis.fetch;
+  const realWarn = console.warn;
+  const said: string[] = [];
+  resetNodeStatusFailures();
+  globalThis.fetch = (async () => {
+    throw Object.assign(new TypeError("fetch failed"), { name: "TypeError" });
+  }) as typeof fetch;
+  console.warn = (...a: unknown[]) => { said.push(a.map(String).join(" ")); };
+  try {
+    await getNodeStatus("page");
+  } finally {
+    globalThis.fetch = realFetch;
+    console.warn = realWarn;
+  }
+  const shape = said.filter((l) => l.includes("[node-status] shape"));
+  assert.equal(shape.length, 1, `the shape never spoke during an all-failure read: ${JSON.stringify(said)}`);
+  assert.match(shape[0], /failed-attempts=[1-9]/, `it spoke without saying what failed: ${shape[0]}`);
+});
+
+
+test("censored counts ATTEMPTS, not calls - an aborted first attempt is counted even when the call then succeeds", async () => {
+  // SDE-Research's discriminator rests on this and nothing else states it. Their two candidate
+  // explanations for the remaining production nulls are separated by the RATIO of censored to
+  // failed-attempts: near parity means attempt one always times out, failed-attempts running ahead
+  // means some calls fail fast twice. If censored only counted whole abandoned calls, an aborted
+  // first attempt inside a call that then succeeded would be invisible and the ratio would collapse
+  // - so this is pinned here rather than left true by accident.
+  const { getNodeStatus } = await import("./nodeStatus.ts");
+  const { nodeStatusLatency, resetNodeStatusFailures } = await import("./nodeStatusFailure.ts");
+  const realFetch = globalThis.fetch;
+  resetNodeStatusFailures();
+  let asked = 0;
+  globalThis.fetch = (async () => {
+    asked += 1;
+    if (asked === 1) throw Object.assign(new Error("timed out"), { name: "TimeoutError" });
+    return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    await getNodeStatus("claim");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.equal(asked, 2, "the claim path must have retried once for this row to mean anything");
+  const v = nodeStatusLatency();
+  assert.equal(v.censoredAtOurDeadline, 1, "the aborted FIRST attempt was not counted - censored is counting calls, not attempts");
+  assert.equal(v.recoveredOnRetry, 1, "the second attempt answered, so this call was rescued");
+  assert.equal(v.failedAttempts, 0, "nothing failed below our deadline here");
+});
