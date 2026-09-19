@@ -26,6 +26,21 @@ INTERVAL="${WATCHDOG_INTERVAL:-30}"                 # seconds between sweeps
 FAUCET_URL="${WATCHDOG_FAUCET_URL:-http://127.0.0.1:3000}"
 FAUCET_FAIL_LIMIT="${WATCHDOG_FAUCET_FAIL_LIMIT:-3}" # consecutive liveness misses before restart
 READY_GRACE_SECS="${WATCHDOG_READY_GRACE_SECS:-1800}" # 30 min un-ready before we page
+# A FLAPPING FAUCET NEVER REACHES THE GRACE ABOVE, and that is not a tuning problem. The grace
+# measures ONE UNBROKEN episode: unready_since is zeroed by any good read, so a faucet that answers
+# 503 on one sweep in three resets the clock every ninety seconds against a threshold of 1800 and
+# can never page, for ever. Measured on prod 2026-09-19: the node block came back null on 3 of 6
+# reads - a small sample, given as the count it is - including while the wallet was caught up.
+# Readiness answers "node status unknown" for exactly that, so those were 503s to visitors that
+# had recovered by the next read, and nothing told anyone: it took a hand-read to find.
+# So the SECOND question is asked separately - not "how long has it been down" but "how much of
+# this window was it down" - because a good read cannot reset a count the way it resets a clock.
+READY_FLAP_WINDOW_SECS="${WATCHDOG_READY_FLAP_WINDOW_SECS:-1800}"
+# Too few sweeps is not a sample. At the default 30s interval a full window is 60 of them.
+READY_FLAP_MIN_SWEEPS="${WATCHDOG_READY_FLAP_MIN_SWEEPS:-20}"
+# Percent of the window that must be un-ready. A faucet refusing a quarter of the time is refusing
+# a quarter of its visitors, which is an outage wearing a distribution.
+READY_FLAP_PCT="${WATCHDOG_READY_FLAP_PCT:-25}"
 # SENDS FAILING gets one self-heal (risk register II, R-18): a wallet that answers
 # balances and refuses every send is the zallet shape a restart has fixed every time so
 # far. The verdict is in-memory and ages out with its window (15 min from the older
@@ -1186,6 +1201,11 @@ faucet_restarts=0   # consecutive restarts with no healthy sweep in between
 unready_since=0
 alerted_unready=0
 sends_failing_since=0
+# The reason from the last UN-READY sweep. A flap usually ends on a good read, so ${reason}
+# is empty exactly when the counting rung fires - the one field meant to explain the page
+# would be 'unknown' every time. Loop state, not a flap_* key: that store sanitises anything
+# non-numeric to 0 on the way back off disk.
+fw_last_reason=""
 
 # An unrecognized format still sends (a watchdog that dies on a config typo
 # is worse than one that guesses), but say so, or a typo means alerts go out
@@ -1630,6 +1650,51 @@ while true; do
         fi ;;
       *) sends_failing_since=0 ;;
     esac
+  fi
+
+  # 4a: THE SAME QUESTION ASKED SO A FLAPPING ANSWER CANNOT HIDE FROM IT. Counted, not timed:
+  # sweeps and un-ready sweeps accumulate over a window and a good read cannot reset them. All four
+  # keys are NUMERIC because flap_get sanitises anything that is not all digits to 0 - a compound
+  # value read back as 0 across a process boundary is a defect I have already shipped once.
+  fw_start="$(flap_get ready.flap_start)"
+  # A start in the FUTURE is what a restart reads back after the clock is corrected BACKWARDS, and
+  # then now - fw_start is negative: the window never closes and this rung says nothing until wall
+  # time catches up, which for an NTP step of an hour is an hour. The continuous rung re-arms itself
+  # on the next good read; this one has no such path, so it needs the guard and that rung does not.
+  # A check that reports by silence cannot be told apart from one that was never wired in.
+  if [ "$fw_start" = "0" ] || [ "$now" -lt "$fw_start" ]; then fw_start="$now"; flap_set ready.flap_start "$now"; fi
+  fw_sweeps=$(( $(flap_get ready.flap_sweeps) + 1 ))
+  fw_unready="$(flap_get ready.flap_unready)"
+  if [ "$ready_rc" -eq 0 ] && [ "$ready_ok" = "1" ]; then
+    :
+  else
+    fw_unready=$((fw_unready + 1))
+    fw_last_reason="${reason:-unknown}"
+  fi
+  flap_set ready.flap_sweeps "$fw_sweeps"
+  flap_set ready.flap_unready "$fw_unready"
+  if [ $((now - fw_start)) -ge "$READY_FLAP_WINDOW_SECS" ]; then
+    fw_pct=0
+    [ "$fw_sweeps" -gt 0 ] && fw_pct=$(( fw_unready * 100 / fw_sweeps ))
+    if [ "$fw_sweeps" -ge "$READY_FLAP_MIN_SWEEPS" ] && [ "$fw_pct" -ge "$READY_FLAP_PCT" ]; then
+      # ONE EVENT, ONE PAGE. A continuous outage trips this too - it is 100% of the window - and the
+      # rung above has already said so in the words that fit it. This one speaks only for the shape
+      # that rung cannot see, so it stays quiet when that page is already standing.
+      if [ "$alerted_unready" = "0" ] && [ "$(flap_get ready.flap_paged)" != "1" ]; then
+        danger "faucet NOT READY on $fw_unready of the last $fw_sweeps checks ($fw_pct%) over $((READY_FLAP_WINDOW_SECS / 60)) min. It recovers between checks, so it never trips the $((READY_GRACE_SECS / 60))-minute continuous alarm - and it is refusing that share of visitors meanwhile. Last un-ready reason: ${fw_last_reason:-unknown}."; rc=$?
+        paged "$rc" && flap_set ready.flap_paged 1
+      fi
+    # THE SAME SAMPLE RULE, APPLIED TO THE GOOD NEWS. A window too small to have revealed a flap
+    # is too small to clear one, and this file exists because 812 "recovered" alerts were sent for a
+    # container that was never up. Neither page nor un-page: the counters reset and the next full
+    # window says something true. A steady faucet is still announced, one window later.
+    elif [ "$fw_sweeps" -ge "$READY_FLAP_MIN_SWEEPS" ] && [ "$(flap_get ready.flap_paged)" = "1" ]; then
+      fixed "faucet readiness is steady again ($fw_unready of $fw_sweeps checks un-ready in the last $((READY_FLAP_WINDOW_SECS / 60)) min)."
+      flap_set ready.flap_paged 0
+    fi
+    flap_set ready.flap_start "$now"
+    flap_set ready.flap_sweeps 0
+    flap_set ready.flap_unready 0
   fi
 
   # 5: POISON AUTO-HEAL. The one thing steps 1-4 could not do, and the reason
