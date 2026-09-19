@@ -114,7 +114,7 @@ test("an HTTP error is a FAILED ATTEMPT, not a fast read - measured through the 
     globalThis.fetch = realFetch;
   }
   assert.ok(asked > 0, "the stub was never called, so this row measured nothing");
-  const v = nodeStatusLatency();
+  const v = nodeStatusLatency("page");
   const bucketed = Object.values(v.buckets).reduce((a, b) => a + b, 0);
   assert.equal(bucketed, 0, `an HTTP 500 landed in a latency bucket: ${JSON.stringify(v.buckets)}`);
   assert.equal(v.failedAttempts, asked, "the failed attempt was not counted");
@@ -139,7 +139,7 @@ test("a refused connection is a failed attempt too, however fast it comes back",
     globalThis.fetch = realFetch;
   }
   assert.ok(asked > 0, "the stub was never called, so this row measured nothing");
-  const v = nodeStatusLatency();
+  const v = nodeStatusLatency("page");
   const bucketed = Object.values(v.buckets).reduce((a, b) => a + b, 0);
   assert.equal(bucketed, 0, `a refused connection landed in a latency bucket: ${JSON.stringify(v.buckets)}`);
   assert.equal(v.failedAttempts, asked, `every refused attempt is counted; asked ${asked}, counted ${v.failedAttempts}`);
@@ -166,7 +166,7 @@ test("a timeout is CENSORED, not a failed attempt, and the classifier is what de
     globalThis.fetch = realFetch;
   }
   assert.ok(asked > 0, "the stub was never called, so this row measured nothing");
-  const v = nodeStatusLatency();
+  const v = nodeStatusLatency("page");
   assert.equal(v.censoredAtOurDeadline, asked, `every timeout is censored; asked ${asked}, censored ${v.censoredAtOurDeadline}`);
   assert.equal(v.failedAttempts, 0, "a timeout was counted as a failed attempt, which gives it a duration it does not have");
   assert.equal(v.fastestFailureMs, null, "our own deadline became a 'fastest failure'");
@@ -223,8 +223,36 @@ test("censored counts ATTEMPTS, not calls - an aborted first attempt is counted 
     globalThis.fetch = realFetch;
   }
   assert.equal(asked, 2, "the claim path must have retried once for this row to mean anything");
-  const v = nodeStatusLatency();
+  const v = nodeStatusLatency("claim");
   assert.equal(v.censoredAtOurDeadline, 1, "the aborted FIRST attempt was not counted - censored is counting calls, not attempts");
   assert.equal(v.recoveredOnRetry, 1, "the second attempt answered, so this call was rescued");
   assert.equal(v.failedAttempts, 0, "nothing failed below our deadline here");
+});
+
+
+test("both ladders get their own failure line, driven through the real function", async () => {
+  // M-x survived without this: the row that checks per-path throttling calls the recorder directly,
+  // so removing `purpose` from the CALL SITE changed nothing any row could see. The wiring is a
+  // separate claim from the recorder's behaviour and needs its own measurement.
+  const { getNodeStatus } = await import("./nodeStatus.ts");
+  const { resetNodeStatusFailures } = await import("./nodeStatusFailure.ts");
+  const realFetch = globalThis.fetch;
+  const realWarn = console.warn;
+  const said: string[] = [];
+  resetNodeStatusFailures();
+  globalThis.fetch = (async () => {
+    throw Object.assign(new TypeError("fetch failed"), { name: "TypeError" });
+  }) as typeof fetch;
+  console.warn = (...a: unknown[]) => { said.push(a.map(String).join(" ")); };
+  try {
+    await getNodeStatus("page");
+    await getNodeStatus("claim");
+  } finally {
+    globalThis.fetch = realFetch;
+    console.warn = realWarn;
+  }
+  const failures = said.filter((l) => l.includes("read failed"));
+  assert.ok(failures.some((l) => /on the page path/.test(l)), `no page failure line: ${JSON.stringify(said)}`);
+  assert.ok(failures.some((l) => /on the claim path/.test(l)),
+    `the claim failure was swallowed by the page one - same class, different ladder: ${JSON.stringify(said)}`);
 });
