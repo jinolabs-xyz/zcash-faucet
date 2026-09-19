@@ -198,3 +198,33 @@ test("the shape line speaks during a total outage, not only when a read succeeds
   assert.equal(shape.length, 1, `the shape never spoke during an all-failure read: ${JSON.stringify(said)}`);
   assert.match(shape[0], /failed-attempts=[1-9]/, `it spoke without saying what failed: ${shape[0]}`);
 });
+
+
+test("censored counts ATTEMPTS, not calls - an aborted first attempt is counted even when the call then succeeds", async () => {
+  // SDE-Research's discriminator rests on this and nothing else states it. Their two candidate
+  // explanations for the remaining production nulls are separated by the RATIO of censored to
+  // failed-attempts: near parity means attempt one always times out, failed-attempts running ahead
+  // means some calls fail fast twice. If censored only counted whole abandoned calls, an aborted
+  // first attempt inside a call that then succeeded would be invisible and the ratio would collapse
+  // - so this is pinned here rather than left true by accident.
+  const { getNodeStatus } = await import("./nodeStatus.ts");
+  const { nodeStatusLatency, resetNodeStatusFailures } = await import("./nodeStatusFailure.ts");
+  const realFetch = globalThis.fetch;
+  resetNodeStatusFailures();
+  let asked = 0;
+  globalThis.fetch = (async () => {
+    asked += 1;
+    if (asked === 1) throw Object.assign(new Error("timed out"), { name: "TimeoutError" });
+    return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    await getNodeStatus("claim");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.equal(asked, 2, "the claim path must have retried once for this row to mean anything");
+  const v = nodeStatusLatency();
+  assert.equal(v.censoredAtOurDeadline, 1, "the aborted FIRST attempt was not counted - censored is counting calls, not attempts");
+  assert.equal(v.recoveredOnRetry, 1, "the second attempt answered, so this call was rescued");
+  assert.equal(v.failedAttempts, 0, "nothing failed below our deadline here");
+});
