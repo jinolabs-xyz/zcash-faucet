@@ -3975,6 +3975,163 @@ async function checkFeedbackForm(browser, base) {
   await ctx.close();
 }
 
+async function checkSilentRetry(browser, base) {
+  // THE OWNER'S SILENT RETRY WITH A VISIBLE STEP. "Show the user that this is happening with one
+  // more green circle."
+  //
+  // DRIVEN, BECAUSE NOTHING HAS EVER DRIVEN A 503-HELD. The behaviour would ship unmeasured
+  // otherwise - the same blind-fixture family as the one-bar drips chart and the reserve-low
+  // overlap: a real faucet refuses this way only when its own node is slow, which is not a state
+  // CI can be asked to reach. The refusal is fabricated and the PAGE is the subject.
+  //
+  // The server answers a freshness refusal with a wait chosen by the cause - 5s when OUR node did
+  // not answer, 20s when an outside reference is missing, 75s when we are genuinely behind - and
+  // only the first is a wobble worth hiding.
+  //
+  // A FRESH ADDRESS PER CASE, and that is not hygiene. The first case CLAIMS SUCCESSFULLY, which
+  // puts that address on cooldown; re-using it left the later cases unable to post at all and
+  // three rows failed against a page behaving correctly (0 POSTs, no card). A case whose subject
+  // was destroyed by an earlier case is not measuring what its name says.
+  const held = (seconds, text) => ({ status: 503, contentType: "application/json",
+    body: JSON.stringify({ error: text, retryAfterSeconds: seconds, requestId: "ui-smoke" }) });
+  const sent = { status: 200, contentType: "application/json",
+    body: JSON.stringify({ ok: true, txid: "a".repeat(64), network: "taz", requestId: "ui-smoke" }) };
+
+  const openClaim = async (handler) => {
+    const ctx = await browser.newContext({ viewport: DESKTOP });
+    const page = await ctx.newPage();
+    const state = { posts: 0 };
+    await page.route("**/api/faucet", (route) => { state.posts += 1; return handler(route, state.posts); });
+    await page.goto(base, { waitUntil: "networkidle" });
+    await page.waitForFunction(() => /\bLIVE\b/.test(document.body.innerText), null, { timeout: 30_000 });
+    await page.getByTestId("address-input").fill(await freshAddress());
+    await page.getByTestId("claim-button").click();
+    return { ctx, page, state };
+  };
+  // WAIT FOR THE POST, NOT FOR A CLOCK. The proof of work runs BEFORE the first request and this
+  // faucet ESCALATES difficulty per client, so by the time this case runs the suite's earlier
+  // claims have made it slow - measured, a fresh page solved in under 6s and the third took
+  // longer than a minute. Three rows failed on that with posts=0 against a page doing exactly the
+  // right thing. So every wait here is on an observed event with a budget that survives a
+  // hostile difficulty, never on elapsed time.
+  const waitForPosts = async (state, n, ms = 240_000) => {
+    const until = Date.now() + ms;
+    while (state.posts < n && Date.now() < until) await new Promise((r) => setTimeout(r, 200));
+    return state.posts;
+  };
+  /** Poll for the extra circle rather than sleeping: a fixed pause is a timing bet either way. */
+  const watchForSteps = async (page, wanted, ms = 20_000) => {
+    for (let i = 0; i < Math.ceil(ms / 100); i++) {
+      const labels = await page.locator(".steps li").allTextContents();
+      if (labels.length && (wanted == null || labels.some((t) => wanted.test(t)))) return labels;
+      await page.waitForTimeout(100);
+    }
+    return null;
+  };
+  const RETRY_LABEL = /asking it again/i;
+
+  // ORDER MATTERS AND IT IS NOT STYLE. A SUCCESSFUL claim puts this IP on cooldown, and every
+  // later case then cannot post at all - measured: three cases reported 0 POSTs and no card,
+  // against a page behaving perfectly, because an earlier case had spent the one claim available.
+  // So the refusal-only cases run FIRST and the single success runs LAST.
+
+  // ── 1. the CAP: a spinner that never resolves is worse than an error ───────────────────────
+  {
+    const { ctx, page, state } = await openClaim((route) =>
+      route.fulfill(held(1, "Our node did not report its height just now.")));
+    await waitForPosts(state, 3);
+    await page.waitForSelector("[role=alert]", { timeout: 30_000 }).catch(() => {});
+    const capped = await page.evaluate(() => ({ alert: document.querySelectorAll("[role=alert]").length,
+      text: (document.querySelector("[role=alert]")?.textContent || "").replace(/\s+/g, " ").trim().slice(0, 200) }));
+    ok("silent retry: it gives up and shows the card rather than spinning for ever",
+      capped.alert >= 1, JSON.stringify(capped));
+    ok("silent retry: and it stops at the cap - three POSTs, not a loop",
+      state.posts === 3, `${state.posts} POST(s) to /api/faucet`);
+    // THE SECONDS ARE ACCOUNTED FOR. Someone who watched a spinner through two waits must not be
+    // handed a card implying the request only just failed.
+    ok("silent retry: and the card says the retries happened, so the wait is not unexplained",
+      /tried again/i.test(capped.text), JSON.stringify(capped.text));
+    await ctx.close();
+  }
+
+  // ── 2. a LONG hold is shown AT ONCE, because that card is honest ───────────────────────────
+  //
+  // THE ROUTE HOLDS THE RESPONSE OPEN ON PURPOSE. The steps list exists only while a claim is
+  // SENDING, and a route that answers instantly closes that window in milliseconds - so reading
+  // the list after the card arrives asserts an absence over an EMPTY list, which is true of any
+  // page at all. Measured: with the fifth circle made unconditional, that version of this row
+  // stayed green, 424/0. Holding the reply for a beat gives the list a real existence to be
+  // checked in, and is the difference between this row and a decoration.
+  {
+    const { ctx, page, state } = await openClaim(async (route) => {
+      await new Promise((r) => setTimeout(r, 2_000));
+      return route.fulfill(held(75, "Our node is behind the network."));
+    });
+    await waitForPosts(state, 1);
+    // Now, while the send is still in flight and no retry is happening, the list must be the four
+    // ordinary steps and nothing else.
+    const sending = await watchForSteps(page, null, 20_000);
+    ok("silent retry: while a claim is in flight and nothing has gone wrong, the list is its four steps",
+      sending !== null && sending.length === 4, `${sending?.length ?? "none"}: ${JSON.stringify(sending)}`);
+    ok("silent retry: and no extra circle exists when we are not retrying",
+      sending !== null && !sending.some((t) => RETRY_LABEL.test(t)), JSON.stringify(sending));
+    // POLLED WITH THE PAGE'S OWN STATE IN THE DETAIL. A bare waitForSelector that times out tells
+    // you the alert was missing and nothing about what was there instead, which is a failure you
+    // cannot diagnose from the log - and this row failed once in-suite while passing standalone.
+    let long = null;
+    for (let i = 0; i < 300; i++) {
+      long = await page.evaluate(() => ({
+        alert: document.querySelectorAll("[role=alert]").length,
+        phase: document.querySelector("[data-phase]")?.getAttribute("data-phase") ?? null,
+        body: (document.body.innerText || "").replace(/\s+/g, " ").slice(0, 110),
+      }));
+      if (long.alert >= 1) break;
+      await page.waitForTimeout(200);
+    }
+    ok("silent retry: a 75s hold is shown at once - a block has to pass and hiding it would be a lie",
+      long !== null && long.alert >= 1 && state.posts === 1, JSON.stringify({ ...long, posts: state.posts }));
+    await ctx.close();
+  }
+
+  // ── 3. a SHORT hold, refused twice then served: the list GROWS, then it recovers ───────────
+  // THE ONE SUCCESS, LAST. It also carries the happy-path half of the owner's ask: the steps
+  // render during the proof of work, long before any refusal can arrive, so the four-step shape
+  // is captured from the SAME claim rather than from a second success this IP cannot afford.
+  {
+    const { ctx, page, state } = await openClaim((route, n) =>
+      n <= 2 ? route.fulfill(held(1, "Our node did not report its height just now.")) : route.fulfill(sent));
+    // NO "BEFORE" SAMPLE IS AVAILABLE HERE AND PRETENDING OTHERWISE WOULD BE A TIMING BET. The
+    // steps list renders only once the claim is SENDING, which is after the proof is built and
+    // after the first POST - so in a case that retries, the first observable list already has the
+    // extra circle. Measured: a row asking for a four-step "before" read 5 every time, against a
+    // page doing exactly the right thing. The growth is asserted from the list itself instead,
+    // and the no-retry shape is asserted in the 75s case above, where no retry ever happens.
+    await waitForPosts(state, 1);
+    const during = await watchForSteps(page, RETRY_LABEL, 60_000);
+    ok("silent retry: the extra step APPEARS while a short hold is being retried (the owner's one more circle)",
+      during !== null, JSON.stringify(during));
+    // GROWS BY ONE, which is the shape the owner asked for - not a fifth dimmed circle that
+    // spends every successful claim hinting at a failure. Read as: five circles, the LAST is the
+    // retry one, and the four before it are the ordinary steps untouched. That is the same claim
+    // as "it grew" without needing a second successful claim this IP cannot afford.
+    const ordinary = during ? during.filter((t) => !RETRY_LABEL.test(t)) : [];
+    ok("silent retry: and it is one MORE circle - the four ordinary steps are all still there, plus it",
+      during !== null && during.length === 5 && ordinary.length === 4 && RETRY_LABEL.test(during[during.length - 1]),
+      JSON.stringify({ steps: during?.length ?? null, ordinary: ordinary.length, last: during?.[during.length - 1] ?? null }));
+    ok("silent retry: and it says WHY rather than just that something is being retried",
+      during !== null && during.some((t) => /node/i.test(t) && RETRY_LABEL.test(t)),
+      JSON.stringify(during?.filter((t) => RETRY_LABEL.test(t)) ?? null));
+    await page.waitForSelector("[data-testid=sent-badge]", { timeout: 60_000 }).catch(() => {});
+    const after = await page.evaluate(() => ({ sent: !!document.querySelector("[data-testid=sent-badge]"),
+      alert: document.querySelectorAll("[role=alert]").length }));
+    ok("silent retry: the visitor is never shown the refusal, because it recovered",
+      after.sent === true && after.alert === 0, JSON.stringify({ ...after, posts: state.posts }));
+    ok("silent retry: and the POST was really re-sent, so this is a retry and not one slow try",
+      state.posts === 3, `${state.posts} POST(s) to /api/faucet`);
+    await ctx.close();
+  }
+}
+
 async function checkNarrowViewport(browser, base) {
   // #623. TWO FAILURES THAT ONLY EXIST BELOW 415px, AND EVERY WIDTH THIS SUITE ALREADY VISITS
   // IS ABOVE THEM. checkTapFloor's list is 375, 600, 1024, 1440; the narrowest phone still in
@@ -4651,6 +4808,7 @@ try {
   await checkNoEmDashReachesTheReader(browser, BASE);
 
   await checkDripsTooltip(browser, BASE);
+  await checkSilentRetry(browser, BASE);
   await checkFeedbackForm(browser, BASE);
   await checkReserveLinkIsReachable(browser, BASE);
   await checkNarrowViewport(browser, BASE);
