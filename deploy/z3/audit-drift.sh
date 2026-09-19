@@ -34,7 +34,7 @@ note()  { echo "  note     $*"; }
 have_systemctl=1
 if ! command -v "$SYSTEMCTL" >/dev/null 2>&1; then
   have_systemctl=0
-  note_unverified "whether any unit is ENABLED: no systemctl on this host, so reboot-survival was not checked"
+  note_unverified "whether any unit is ENABLED or the watchdog is RUNNING: no systemctl on this host, so reboot-survival and #701 were not checked"
 fi
 
 say "auditing $(hostname 2>/dev/null || echo this box) against $REPO_DIR"
@@ -64,6 +64,20 @@ for src in "$OVERLAY_DIR"/*.service "$OVERLAY_DIR"/*.timer; do
       found "$unit is installed but NOT enabled, so it will not survive a reboot" \
         "systemctl enable --now $unit"
     fi
+    # ENABLED IS NOT RUNNING, and for one unit that gap is the whole audit (#701). The watchdog reads
+    # watchdog.sh once at start and install-ops deliberately will not restart a stopped unit, so
+    # merged rungs sit unrun while every check above passes. Only units whose silence looks like a
+    # pass belong here: the oneshots are inactive by design, the miner and cTAZ are parked (#455).
+    case "$unit" in
+      faucet-watchdog.service)
+        if "$SYSTEMCTL" is-active --quiet "$unit" 2>/dev/null; then
+          ok "$unit is running"
+        else
+          found "$unit is installed and enabled but NOT RUNNING, so watchdog rungs shipped since it stopped are not executing" \
+            "systemctl start $unit   # if you stopped it deliberately, this line is the reminder, not an error"
+        fi
+        ;;
+    esac
   fi
 done
 say ""
