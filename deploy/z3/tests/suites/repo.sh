@@ -132,6 +132,42 @@ check "the Dockerfile's entrypoint is the script that drops root, and node is st
   "grep -q '^ENTRYPOINT \\[\"/app/docker-entrypoint.sh\"\\]' '$REPO/Dockerfile' && grep -q '^CMD \\[\"node\"' '$REPO/Dockerfile' && grep -q 'exec setpriv --reuid=node --regid=node' '$REPO/docker-entrypoint.sh'"
 check "and the build stage prunes devDependencies before the run stage copies it" \
   "grep -q 'npm prune --omit=dev' '$REPO/Dockerfile'"
+echo "== repo: the audit gate says WHICH failure it is, because npm exits 1 for both"
+# 2026-09-19: npm returned 503 from the advisory endpoint during maintenance, `npm audit
+# --audit-level=high` exited 1, and main went red with a message that reads like a security finding.
+# The control was already in the run history - the SAME sha ran green at 17:03 and red at 17:15 -
+# so nothing about the tree had changed. A security gate that reddens for a reason unrelated to
+# security is one people learn to skim, and skimming is how a real advisory gets waved through.
+AUDITGATE="$REPO/.github/scripts/npm-audit-gate.sh"
+mk_scratch "${TMPDIR:-/tmp}/repo-auditgate.XXXXXX"
+printf '{"error":{"code":"E503","summary":"503 Service Unavailable - POST /-/npm/v1/security/advisories/bulk"}}' > "$T/err.json"
+printf '{"auditReportVersion":2,"metadata":{"vulnerabilities":{"low":2,"moderate":1,"high":0,"critical":0}}}' > "$T/clean.json"
+printf '{"auditReportVersion":2,"metadata":{"vulnerabilities":{"low":0,"moderate":0,"high":1,"critical":2}}}' > "$T/bad.json"
+ag() { NPM_AUDIT_CMD="cat $T/$1" NPM_AUDIT_ATTEMPTS=2 NPM_AUDIT_BACKOFF=0 bash "$AUDITGATE" 2>&1; }
+
+check "the gate is a script in the repo, so it can be driven by a test at all" \
+  "[ -f '$AUDITGATE' ] && grep -q 'npm-audit-gate.sh' '$REPO/.github/workflows/ci.yml'"
+# THE DISTINCTION THIS EXISTS FOR, driven both ways from fixtures with no network.
+check "an unreachable registry is NOT MEASURED, and exits 2 rather than 1" \
+  "ag err.json >/dev/null; [ \"\$?\" = 2 ]"
+# The runner sets pipefail and this gate exits non-zero BY DESIGN, so `ag ... | grep` would return
+# the GATE's status rather than the grep's - the row would fail with the output exactly right. The
+# exit codes have their own rows above; these read the words.
+check "and it says so in words that cannot be read as a security finding" \
+  "{ ag err.json || true; } | grep -q 'AUDIT DID NOT RUN - THIS IS NOT A SECURITY RESULT'"
+# AND IT MUST NOT PASS. An npm outage that turns green is a free ride past the gate, which is the
+# false-green shape this tree keeps paying for.
+check "an unreachable registry does NOT pass, because an outage is not a clean bill" \
+  "! ag err.json >/dev/null"
+check "a high or critical advisory FAILS with exit 1, and names itself a security result" \
+  "ag bad.json >/dev/null; [ \"\$?\" = 1 ] && { ag bad.json || true; } | grep -q 'This IS a security result'"
+check "a tree with only low and moderate advisories passes, which is the bar for a hot wallet" \
+  "ag clean.json >/dev/null"
+# THE DISCRIMINATOR IS STRUCTURAL. Matching '503' or 'endpoint returned an error' breaks the day npm
+# rewords it, and npm has already reworded it once this year retiring the quick endpoint with a 400.
+check "it discriminates on the JSON shape, not on npm's wording" \
+  "grep -v '^[[:space:]]*#' '$AUDITGATE' | grep -q 'has(\"error\")' && ! grep -v '^[[:space:]]*#' '$AUDITGATE' | grep -qE \"'503'|endpoint returned an error\""
+
 check "the build context leaves out the ops scripts, the harnesses, the tests and the docs" \
   "( for p in deploy scripts docs design .github '**/*.test.ts' '**/*.test.mjs'; do grep -qxF \"\$p\" '$REPO/.dockerignore' || exit 1; done )"
 check "and the CI image job proves the runtime shape rather than assuming it" \
