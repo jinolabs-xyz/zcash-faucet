@@ -1553,7 +1553,16 @@ while true; do
   #
   # -sS not -fsS, because a 503 body carries the reason and -f discards it. The status
   # comes from -w instead, so a non-2xx is still recognised as not-ready.
-  ready_body="$(curl -sS --max-time 8 -w '\n%{http_code}' "$FAUCET_URL/api/ready" 2>/dev/null)"
+  # THE TIMEOUT MUST EXCEED THE APP'S OWN NODE-STATUS BUDGET, and these two numbers living in
+  # two lanes with nothing holding them together is how this breaks. src/lib/zcash/nodeStatus.ts
+  # spends up to FAUCET_NODE_STATUS_TIMEOUT_MS (default 12s) reading our node before /api/ready can
+  # answer at all. At --max-time 8 this fetch would abort at 8s DURING exactly the slow-wallet
+  # episode readiness exists to report - the watchdog would record a transport failure, the flap
+  # rung would count it as an un-ready sweep, and we would page ourselves about our own timeout.
+  # Found by SDE-UI reviewing the PR that raised that budget from 4s; #229 above is the same shape
+  # happening once already. 20 clears 12 with room for the app's other work on that path.
+  # IF YOU LOWER THE APP'S BUDGET, THIS MAY FOLLOW IT DOWN. If you raise it, this MUST.
+  ready_body="$(curl -sS --max-time 20 -w '\n%{http_code}' "$FAUCET_URL/api/ready" 2>/dev/null)"
   ready_rc=$?
   ready_code="${ready_body##*$'\n'}"
   reason="$(printf '%s' "$ready_body" | grep -o '"reason":"[^"]*"' | head -n1 | cut -d'"' -f4)"
