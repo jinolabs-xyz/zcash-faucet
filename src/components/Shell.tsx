@@ -39,6 +39,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { BrandMark } from "@/app/BrandMark";
 import { Sparkline, type DripDay } from "@/app/Sparkline";
+import { FeedbackWidget } from "@/components/FeedbackWidget";
 
 export type Theme = "paper" | "ink";
 
@@ -292,6 +293,10 @@ export function Shell({
               </a>
             </div>
           </footer>
+
+          {/* Outside the footer and outside the views: it is fixed to the corner and belongs to
+              the page rather than to any one of them (owner's item 3). */}
+          <FeedbackWidget />
         </div>
       </div>
     </div>

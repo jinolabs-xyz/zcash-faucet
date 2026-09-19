@@ -3842,6 +3842,139 @@ async function checkReserveLinkIsReachable(browser, base) {
   }
 }
 
+async function checkFeedbackForm(browser, base) {
+  // THE OWNER'S ITEM 3, THE VISITOR'S HALF. #683 shipped the endpoint: it writes a row and answers
+  // 202, and a timer on the box hands it on separately with no egress from this container. So at
+  // the moment the form gets its answer NOTHING has been delivered, and the page saying "sent"
+  // would claim more than it knows - the same rule the drips chart and the acceptance rate were
+  // both corrected for this week.
+  //
+  // The failure rows DRIVE their status through page.route rather than exhausting the real daily
+  // limit: a row that depends on the rate limiter's accumulated state is a row whose subject is
+  // whatever earlier rows happened to do (#681, the same correction one suite over).
+  const ctx = await browser.newContext({ viewport: DESKTOP });
+  const page = await ctx.newPage();
+  await page.goto(base + "/", { waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(400);
+
+  const launch = page.locator(".fb-launch");
+  ok("feedback: the launcher ships on every page", (await launch.count()) === 1,
+    `${await launch.count()} launcher(s)`);
+  ok("feedback: and the form is closed until it is asked for", (await page.locator(".fb-panel").count()) === 0);
+
+  // THE OWNER ASKED FOR BOTTOM-LEFT, so that is measured rather than assumed from a class name.
+  const placed = await page.evaluate(() => {
+    const el = document.querySelector(".fb-launch");
+    if (!el) return null;
+    const b = el.getBoundingClientRect();
+    return { left: Math.round(b.left), fromBottom: Math.round(window.innerHeight - b.bottom),
+             fromRight: Math.round(window.innerWidth - b.right), fixed: getComputedStyle(el.parentElement).position };
+  });
+  // BOTTOM-RIGHT, AND THE OWNER ASKED FOR BOTTOM-LEFT. #659 put the reserve-low notice in that
+  // corner on the same authority and it was there first; SDE-App ranked the two. The row asserts
+  // the corner we actually ship so that a silent drift back is a failure rather than a surprise.
+  ok("feedback: the launcher sits in the bottom-RIGHT corner, out of the reserve notice's corner",
+    placed !== null && placed.fixed === "fixed" && placed.fromRight >= 0 && placed.fromRight < 120 && placed.fromBottom >= 0 && placed.fromBottom < 120 && placed.left > placed.fromRight,
+    JSON.stringify(placed));
+
+  await launch.click();
+  await page.waitForTimeout(250);
+  ok("feedback: it opens", (await page.locator(".fb-panel").count()) === 1);
+  // A control that opens something and leaves the keyboard behind cannot be used from a keyboard.
+  ok("feedback: and the keyboard lands in the message box, not back at the top of the page",
+    (await page.evaluate(() => document.activeElement?.tagName?.toLowerCase())) === "textarea");
+  ok("feedback: an empty message cannot be submitted",
+    await page.locator('.fb-panel button[type="submit"]').isDisabled());
+  await page.locator(".fb-text").fill("the claim button did nothing until I scrolled");
+  // THE PARTNER FOR THE ROW ABOVE: disabled-always would satisfy it and ship a form nobody can use.
+  ok("feedback: and it CAN be submitted once there is one, so the row above is not just a dead button",
+    !(await page.locator('.fb-panel button[type="submit"]').isDisabled()));
+
+  // ── the 202, which is the only path that may clear what someone wrote ──────────────────────
+  await page.route("**/api/feedback", (route) =>
+    route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ ok: true, kind: "queued" }) }));
+  await page.locator('.fb-panel button[type="submit"]').click();
+  await page.waitForTimeout(350);
+  const queued = ((await page.locator(".fb-msg").textContent()) ?? "").trim();
+  ok("feedback: a queued message is reported as RECEIVED, never as sent or delivered",
+    /received/i.test(queued) && !/\bis (sent|delivered)\b/i.test(queued) && /not been delivered/i.test(queued),
+    JSON.stringify(queued));
+  ok("feedback: and only then is the box cleared",
+    (await page.locator(".fb-text").inputValue()) === "");
+
+  // ── every failure keeps what was written, which is the one unrecoverable outcome ───────────
+  for (const [status, kind, wants] of [[429, "rate", /limit for one day/i], [503, "ledger", /could not store/i]]) {
+    await page.unroute("**/api/feedback");
+    await page.route("**/api/feedback", (route) =>
+      route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ ok: false, kind }) }));
+    const written = `a message that must survive a ${status}`;
+    await page.locator(".fb-text").fill(written);
+    await page.locator('.fb-panel button[type="submit"]').click();
+    await page.waitForTimeout(350);
+    const msg = ((await page.locator(".fb-msg").textContent()) ?? "").trim();
+    ok(`feedback: a ${status} says what happened in its own words`, wants.test(msg), JSON.stringify(msg));
+    ok(`feedback: and a ${status} does NOT throw away what the visitor wrote`,
+      (await page.locator(".fb-text").inputValue()) === written,
+      JSON.stringify((await page.locator(".fb-text").inputValue()).slice(0, 60)));
+  }
+  await page.unroute("**/api/feedback");
+
+  // ── THE LAUNCHER MUST NOT OCCLUDE THE RESERVE NOTICE (#659, and SDE-App made this row a
+  // condition of the placement) ───────────────────────────────────────────────────────────────
+  //
+  // DRIVEN, because CI's reserve is healthy and the notice is simply not on the page when an
+  // undriven row looks - the same blind fixture that let a one-bar chart pass for months (#681).
+  // HIT-TESTED, not box-compared, because two elements can intersect without occluding and a
+  // control can be below the fold and still reachable; only elementFromPoint answers the question
+  // being asked. Measured at the width where the bottom-LEFT placement failed, so the row is a
+  // regression guard for the decision rather than a general sweep.
+  {
+    const ctx2 = await browser.newContext({ viewport: { width: 900, height: 800 } });
+    const p2 = await ctx2.newPage();
+    const live = await (await fetch(base + "/api/status")).json();
+    await p2.route("**/api/status", (route) => {
+      const s2 = JSON.parse(JSON.stringify(live));
+      s2.empty = false; s2.balanceTaz = s2.balanceTaz || 4504;
+      s2.reserve = { ...(s2.reserve ?? {}), refilling: true, lowTaz: 5000, spendableTaz: 4504 };
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(s2) });
+    });
+    await p2.goto(base, { waitUntil: "domcontentloaded" });
+    await p2.waitForSelector('[data-phase="reserve-low"]', { timeout: 10_000 }).catch(() => {});
+    const r2 = await p2.evaluate(() => {
+      const notice = document.querySelector('[data-phase="reserve-low"]');
+      const fb = document.querySelector(".fb");
+      if (!notice || !fb) return { drove: false, notice: !!notice, launcher: !!fb };
+      const hitAt = (el) => {
+        const b = el.getBoundingClientRect();
+        const t = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+        return t ? String(t.className || t.tagName) : "nothing";
+      };
+      const link = notice.querySelector('a[href="/donate"]');
+      const onNotice = hitAt(notice), onLink = link ? hitAt(link) : null;
+      const inFb = (cls) => typeof cls === "string" && (cls.includes("fb-") || cls === "fb");
+      return { drove: true, onNotice, onLink,
+               launcherOverNotice: inFb(onNotice), launcherOverLink: inFb(onLink) };
+    });
+    // THE SUBJECT PIN FIRST. Without it a page that never rendered the notice passes both rows
+    // below by having nothing to occlude.
+    ok("feedback: the reserve-low notice is on the page, so the occlusion rows have a subject",
+      r2.drove === true, JSON.stringify(r2));
+    ok("feedback: and the launcher does not sit on the reserve notice (#659's corner)",
+      r2.drove === true && r2.launcherOverNotice === false, JSON.stringify(r2));
+    ok("feedback: nor on its donate link, which is the thing a low reserve is asking for",
+      r2.drove === true && r2.launcherOverLink === false, JSON.stringify(r2));
+    await ctx2.close();
+  }
+
+  // Escape closes and hands the keyboard back, or the form is a trap.
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(250);
+  ok("feedback: Escape closes it and returns the keyboard to the launcher",
+    (await page.locator(".fb-panel").count()) === 0 &&
+    (await page.evaluate(() => document.activeElement?.className || "")).includes("fb-launch"));
+  await ctx.close();
+}
+
 async function checkNarrowViewport(browser, base) {
   // #623. TWO FAILURES THAT ONLY EXIST BELOW 415px, AND EVERY WIDTH THIS SUITE ALREADY VISITS
   // IS ABOVE THEM. checkTapFloor's list is 375, 600, 1024, 1440; the narrowest phone still in
@@ -4518,6 +4651,7 @@ try {
   await checkNoEmDashReachesTheReader(browser, BASE);
 
   await checkDripsTooltip(browser, BASE);
+  await checkFeedbackForm(browser, BASE);
   await checkReserveLinkIsReachable(browser, BASE);
   await checkNarrowViewport(browser, BASE);
   await checkTapFloor(browser, BASE);
