@@ -41,11 +41,23 @@ import { readChainFreshness, mayBuildTransaction } from "./shieldGate.ts";
 /**
  * How stale a reading may be before a read triggers a refresh behind it.
  *
- * Matched to the page's own 4s poll, so the cache is never more than one poll behind what a fresh
- * read would have said. The load reduction is per-PROCESS rather than per-interval: the read used
- * to happen once per visitor per poll, and now happens once per window however many are looking.
+ * STRICTLY BELOW THE PAGE POLL, AND THAT IS THE WHOLE POINT OF THE NUMBER.
+ *
+ * It was 4000 - exactly the page's poll (`page.tsx`, `setInterval(load, 4000)`) - and the test here
+ * is `age > REFRESH_AFTER_MS`, strictly greater. A lone viewer's poll arrives at an age of about
+ * 4000, which does NOT trigger, so the refresh landed on every SECOND poll and the served reading
+ * could be two polls plus a read old. The comment this replaces claimed "never more than one poll
+ * behind", which was false by a factor of two (@CTO, #706 red-team).
+ *
+ * Half the poll means every poll finds the entry stale and refreshes behind the response, so the
+ * true bound is ONE POLL PLUS ONE READ - which is what the row asserts and what this comment now
+ * says. Equality is the trap: any value equal to the caller's period leaves the trigger to
+ * scheduler jitter, and jitter is not a bound.
+ *
+ * The load reduction is unchanged and is per-PROCESS: the read used to happen once per visitor per
+ * poll, and happens once per window however many are looking.
  */
-const REFRESH_AFTER_MS = 4_000;
+const REFRESH_AFTER_MS = 2_000;
 
 /**
  * Past this, the cache is not an answer.
