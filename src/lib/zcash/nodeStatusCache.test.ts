@@ -239,3 +239,55 @@ test("and one millisecond INSIDE the window does NOT wait, so the fix did not ma
     assert.ok(tookMs < 150, `a serveable entry waited ${tookMs}ms on a 500ms wallet`);
   });
 });
+
+
+test("ready:true is never served more than ONE poll plus one read after the wallet falls behind", async () => {
+  // @CTO, #706 red-team. REFRESH_AFTER_MS was 4000 - exactly the page's poll (page.tsx,
+  // setInterval(load, 4000)) - and the trigger is `age > REFRESH_AFTER_MS`, strictly greater. A lone
+  // viewer's poll lands at an age of about 4000, which does NOT fire, so the refresh happened on
+  // every SECOND poll and a stale ready:true survived two polls plus a read. The module's own
+  // comment claimed one poll. It was wrong by a factor of two.
+  const POLL_MS = 4_000; // page.tsx's interval, the caller this cache is sized against
+  resetNodeStatusCacheForTests();
+  let behind = false;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    // caught up -> wallet level with the node; behind -> wallet 5000 blocks back, ready goes false
+    const n = 1_000_000;
+    const w = behind ? n - 5_000 : n;
+    return new Response(JSON.stringify({ result: { wallet_tip: { height: w }, node_tip: { height: n } } }), {
+      status: 200, headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+  try {
+    const t0 = Date.now();
+    await refreshNodeStatusForTests();
+    assert.equal(cachedNodeStatus(t0)?.ready, true, "setup: the cache should hold a ready reading");
+    behind = true; // the wallet falls behind at t0
+    // ONE poll later the page asks again. That read must find the entry stale and refresh.
+    await nodeStatusForPage(t0 + POLL_MS);
+    // the refresh is not awaited on a warm cache, so give the in-flight read a moment to land
+    await new Promise((r) => setTimeout(r, 60));
+    const served = cachedNodeStatus(Date.now());
+    assert.ok(served !== null, "nothing served at all");
+    assert.equal(served.ready, false,
+      "a stale ready:true survived a full poll - the refresh period is not strictly below the poll");
+  } finally {
+    globalThis.fetch = realFetch;
+    resetNodeStatusCacheForTests();
+  }
+});
+
+test("and the refresh period is strictly below the page poll, not equal to it", async () => {
+  // The rule behind the row above, asserted directly so the reason survives if the row is ever
+  // rewritten. Equality leaves the trigger to scheduler jitter, and jitter is not a bound.
+  const src = await import("node:fs").then((fs) => fs.readFileSync("src/lib/zcash/nodeStatusCache.ts", "utf8"));
+  const m = src.match(/const REFRESH_AFTER_MS = ([0-9_]+);/);
+  assert.ok(m, "REFRESH_AFTER_MS not found");
+  const refresh = Number(m[1].replace(/_/g, ""));
+  const page = await import("node:fs").then((fs) => fs.readFileSync("src/app/page.tsx", "utf8"));
+  const pm = page.match(/setInterval\(load, ([0-9_]+)\)/);
+  assert.ok(pm, "the page poll interval was not found - this row is pinned to page.tsx and must be updated with it");
+  const poll = Number(pm[1].replace(/_/g, ""));
+  assert.ok(refresh < poll, `refresh ${refresh}ms must be strictly below the page poll ${poll}ms, or a poll can fail to trigger it`);
+});
