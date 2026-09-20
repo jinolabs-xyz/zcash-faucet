@@ -72,10 +72,10 @@ const SERVED_SHEETS = [
   // Pinned to WHAT WE SERVE: Mascot.tsx points at these two, not at the bare sheets.
   { path: "/mascots/fox-riso-directions-blindfold.webp", bare: "/mascots/fox-riso-directions.webp",
     w: 1080, h: 1080, mustCover: true,
-    sha256: "9ff5fdeaf3cde8de8233607fff2fec257413327301e5310481eb05ad457f6dbe" },
+    sha256: "aab137f77a073e88852e1d7cee0c3c653411cce6ea7d8e455b6e21c1dc731c27" },
   { path: "/mascots/fox-riso-reactions-blindfold.webp", bare: "/mascots/fox-riso-reactions.webp",
     w: 1080, h: 1080, mustCover: false,
-    sha256: "34d2b40744610b43ddd98b839cca1dc42571f6ad99358af1f702942012c55dad" },
+    sha256: "7a6d1a4cb429d350cd8a6bf089eec50782da170606f03afb783aceaa7ac95065" },
 ];
 
 const fails = [];
