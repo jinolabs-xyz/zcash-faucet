@@ -256,3 +256,73 @@ test("both ladders get their own failure line, driven through the real function"
   assert.ok(failures.some((l) => /on the claim path/.test(l)),
     `the claim failure was swallowed by the page one - same class, different ladder: ${JSON.stringify(said)}`);
 });
+
+
+test("the PAGE budget can never exceed the CLAIM budget, at any configured knob", async () => {
+  // @SDE-Infra, #688 retro. `Math.max(4000, ...)` was unconditional, so a knob in [1000, 4000) gave
+  // the page MORE patience than the claim - configured 3000 produced page 4000 against claim 3000 -
+  // inverting the design the function's own comment states, and starving the claim path while an
+  // operator believed they were making the page snappier.
+  const { nodeStatusBudgetMs } = await import("./nodeStatus.ts");
+  for (const knob of ["1000", "1500", "2999", "3000", "3999", "4000", "5000", "6000", "12000", "20000"]) {
+    process.env.FAUCET_NODE_STATUS_TIMEOUT_MS = knob;
+    const claim = nodeStatusBudgetMs("claim");
+    const page = nodeStatusBudgetMs("page");
+    assert.ok(page <= claim, `knob ${knob}: page ${page} exceeds claim ${claim} - the page is more patient than the claim`);
+  }
+  delete process.env.FAUCET_NODE_STATUS_TIMEOUT_MS;
+});
+
+test("and the page is still CAPPED, so removing the floor did not remove the ceiling", async () => {
+  // The pair. Without this, `page = budget` would satisfy the row above at every knob and quietly
+  // hand the page the full claim budget - which is the thing #692 and #698 were about.
+  const { nodeStatusBudgetMs } = await import("./nodeStatus.ts");
+  process.env.FAUCET_NODE_STATUS_TIMEOUT_MS = "20000";
+  assert.equal(nodeStatusBudgetMs("page"), 6000, "a large claim budget must not raise the page past 6000");
+  process.env.FAUCET_NODE_STATUS_TIMEOUT_MS = "12000";
+  assert.equal(nodeStatusBudgetMs("page"), 6000);
+  delete process.env.FAUCET_NODE_STATUS_TIMEOUT_MS;
+});
+
+test("an http failure on the PAGE ladder does not silence one on the CLAIM ladder", async () => {
+  // @SDE-App, #696 retro. nodeStatus.ts:233 passed no scope, so it defaulted to "claim" and keyed
+  // http:claim. A page-path 500 then started a 60s throttle that swallowed a genuine claim-path 500
+  // seconds later - exactly what the per-path key was added to prevent, on two of three call sites.
+  const { getNodeStatus } = await import("./nodeStatus.ts");
+  const { resetNodeStatusFailures } = await import("./nodeStatusFailure.ts");
+  const realFetch = globalThis.fetch; const realWarn = console.warn;
+  const said: string[] = [];
+  resetNodeStatusFailures();
+  globalThis.fetch = (async () => new Response("{}", { status: 500 })) as typeof fetch;
+  console.warn = (...a: unknown[]) => { said.push(a.map(String).join(" ")); };
+  try {
+    await getNodeStatus("page");
+    await getNodeStatus("claim");
+  } finally { globalThis.fetch = realFetch; console.warn = realWarn; }
+  const fails = said.filter((l) => l.includes("read failed: http"));
+  assert.ok(fails.some((l) => /on the page path/.test(l)), `no page-path http line: ${JSON.stringify(said)}`);
+  assert.ok(fails.some((l) => /on the claim path/.test(l)),
+    `the claim-path http failure was swallowed by the page-path throttle: ${JSON.stringify(said)}`);
+});
+
+test("a parse failure on the PAGE ladder does not silence one on the CLAIM ladder", async () => {
+  // The same defect at nodeStatus.ts:242. A 200 carrying neither height is a different fault from a
+  // 500, and it had the same missing argument.
+  const { getNodeStatus } = await import("./nodeStatus.ts");
+  const { resetNodeStatusFailures } = await import("./nodeStatusFailure.ts");
+  const realFetch = globalThis.fetch; const realWarn = console.warn;
+  const said: string[] = [];
+  resetNodeStatusFailures();
+  globalThis.fetch = (async () => new Response(JSON.stringify({ result: {} }), {
+    status: 200, headers: { "content-type": "application/json" },
+  })) as typeof fetch;
+  console.warn = (...a: unknown[]) => { said.push(a.map(String).join(" ")); };
+  try {
+    await getNodeStatus("page");
+    await getNodeStatus("claim");
+  } finally { globalThis.fetch = realFetch; console.warn = realWarn; }
+  const fails = said.filter((l) => l.includes("read failed: parse"));
+  assert.ok(fails.some((l) => /on the page path/.test(l)), `no page-path parse line: ${JSON.stringify(said)}`);
+  assert.ok(fails.some((l) => /on the claim path/.test(l)),
+    `the claim-path parse failure was swallowed by the page-path throttle: ${JSON.stringify(said)}`);
+});

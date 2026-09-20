@@ -101,7 +101,15 @@ export function recordNodeStatusFailure(
   const suffix = detail ? ` (${detail})` : "";
   const line = first
     ? `[node-status] read failed: ${kind}${suffix}. Readiness answers "node status unknown" while this is happening.`
-    : `[node-status] read failed: ${kind}${suffix}. ${n} since the last line, ${counts[kind]} since start.`;
+    // BOTH NUMBERS COUNT THE SAME POPULATION, which they did not (@SDE-App, #696 retro).
+    // `n` is sinceLastLog[key] - per PATH - while this read counts[kind], which is global across
+    // both ladders, so one sentence paired a per-path figure with a two-path total and a reader
+    // takes them as one series. PER-PATH BOTH rather than global both, because the throttle that
+    // emits this line is per-path and the detail beside it already names the path: a line about
+    // the claim ladder must not carry a total that includes the page one.
+    // nodeStatusFailureCounts() stays GLOBAL on purpose - it answers a different question, how
+    // many of each kind overall, and nothing in this sentence reads it.
+    : `[node-status] read failed: ${kind}${suffix}. ${n} since the last line, ${countsByPath[key]} since start on this path.`;
   lastLoggedAt[key] = now;
   sinceLastLog[key] = 0;
   write(line);

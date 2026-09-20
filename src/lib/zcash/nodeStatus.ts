@@ -147,7 +147,16 @@ export function nodeStatusBudgetMs(purpose: NodeReadPurpose = "claim"): number {
   //
   // p50, p75 and p90 are IDENTICAL at every deadline tested. The typical visitor is untouched by
   // this choice either way, which is what makes it safe to tune at all.
-  return purpose === "page" ? Math.max(4000, Math.min(6000, budget)) : budget;
+  // AND THE PAGE BUDGET CAN NEVER EXCEED THE CLAIM BUDGET, which the 4000 floor broke
+  // (@SDE-Infra, #688 retro). `Math.max(4000, ...)` is unconditional, so any configured
+  // FAUCET_NODE_STATUS_TIMEOUT_MS in [1000, 4000) produced a PAGE budget ABOVE the claim one -
+  // measured, configured 3000 gave page 4000 against claim 3000 - inverting the design this
+  // comment states, and starving the claim path at the same time. An operator lowering the knob
+  // to make the page snappier got the opposite of both.
+  // `min(budget, 6000)` is the whole rule: at or above 4000 it caps at 6000 exactly as before,
+  // and below 4000 the page gets the claim budget rather than more than it. The floor is gone
+  // because the floor WAS the defect - nodeStatusTimeoutMs already refuses anything under 1000.
+  return purpose === "page" ? Math.min(budget, 6000) : budget;
 }
 
 export function nodeStatusAttemptsMs(purpose: NodeReadPurpose = "claim"): number[] {
@@ -230,7 +239,11 @@ export async function getNodeStatus(purpose: NodeReadPurpose = "claim"): Promise
     if (!res.ok) {
       // The wallet is up and said no. The status code is the whole of what an operator needs and
       // is safe to write; the body is not.
-      recordNodeStatusFailure("http", `status ${res.status}`);
+      // THE PATH IS IN THE DETAIL AS WELL AS THE KEY. Passing scope alone keys these correctly
+      // but leaves two identical `read failed: http (status 500)` lines in the log with nothing
+      // to tell a reader which ladder each came from - which is L57 in the log rather than in
+      // the arithmetic. The outer catch already words it this way; these two now match it.
+      recordNodeStatusFailure("http", `status ${res.status} on the ${purpose} path`, Date.now(), undefined, purpose);
       return null;
     }
     const json = (await res.json()) as { result?: { wallet_tip?: { height?: number }; node_tip?: { height?: number } } };
@@ -239,7 +252,13 @@ export async function getNodeStatus(purpose: NodeReadPurpose = "claim"): Promise
     if (w == null || n == null) {
       // A 200 that does not carry the two heights. Names WHICH is missing, because a wallet that
       // reports its own tip and not the node's is a different fault from one reporting neither.
-      recordNodeStatusFailure("parse", `wallet_tip ${w == null ? "missing" : "present"}, node_tip ${n == null ? "missing" : "present"}`);
+      recordNodeStatusFailure(
+        "parse",
+        `wallet_tip ${w == null ? "missing" : "present"}, node_tip ${n == null ? "missing" : "present"} on the ${purpose} path`,
+        Date.now(),
+        undefined,
+        purpose,
+      );
       return null;
     }
     const syncPercent = n > 0 ? Math.min(100, (w / n) * 100) : null;
