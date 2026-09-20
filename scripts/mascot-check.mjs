@@ -29,6 +29,7 @@
  */
 import { chromium } from "playwright";
 import { readFileSync, existsSync } from "node:fs";
+import { createHash } from "node:crypto";
 
 const PAGE = "src/app/page.tsx";
 const BASE = process.argv[2] || process.env.UI_SMOKE_URL || "http://localhost:3120";
@@ -67,6 +68,16 @@ if (!wired) {
   process.exit(0);
 }
 
+const SERVED_SHEETS = [
+  // Pinned to WHAT WE SERVE: Mascot.tsx points at these two, not at the bare sheets.
+  { path: "/mascots/fox-riso-directions-blindfold.webp", bare: "/mascots/fox-riso-directions.webp",
+    w: 1080, h: 1080, mustCover: true,
+    sha256: "9ff5fdeaf3cde8de8233607fff2fec257413327301e5310481eb05ad457f6dbe" },
+  { path: "/mascots/fox-riso-reactions-blindfold.webp", bare: "/mascots/fox-riso-reactions.webp",
+    w: 1080, h: 1080, mustCover: false,
+    sha256: "34d2b40744610b43ddd98b839cca1dc42571f6ad99358af1f702942012c55dad" },
+];
+
 const fails = [];
 const errors = [];
 const browser = await chromium.launch();
@@ -90,6 +101,125 @@ for (const { path, limit } of SHEETS) {
   if (body.length > limit) fails.push(`${path} is ${body.length} bytes, over the ${limit} gate`);
   console.log(`${path}: ${res.status()} ${body.length} bytes, WebP ${isWebp}, content-type ${type || "(none)"}`);
 }
+
+// ── THE BLINDFOLD IS WHERE THE EYES ARE, AND IS NOT WHERE THE EXPRESSIONS ARE ─────────────────
+//
+// The check above proves a sheet is SERVED. It says nothing about what is ON it, and the pointer
+// assertions below would pass over a sheet with no band drawn at all - they read
+// background-position, not pixels. These rows read pixels.
+//
+// THE ANCHORS ARE MEASURED, NOT ASSUMED, frame by frame off the source art (SDE-UI 2026-09-20).
+// SIX OF THE NINE DIRECTION FRAMES HAVE ONLY ONE EYE - the head turn hides the far one - so those
+// carry a single anchor. A row expecting two would be asserting against art that does not exist.
+//
+// AND THE SPAN IS THE EYE'S EXTENT, NOT ITS CENTRE. A band centred on a centre covers that centre
+// while leaving most of the eye showing: variant C round one scored twelve of twelve on a
+// centre-point check with 45 px of eye visible above and below a 22 px band. EYE_HALF sits inside
+// the measured half-height (32-34 px), so this tests the eye's core and not an edge pixel.
+// TWO WINDOWS, BECAUSE THE TWO SHEETS HAVE DIFFERENT EYES AND ONE NUMBER FOR BOTH IS WRONG.
+// DIRECTION eyes are open ellipses 64-68 px tall, so 30 sits inside them and tests the core.
+// REACTION eyes are thin closed arcs and icons, and the marks ABOVE them - brow ticks, the sparkle
+// - start around y=142. A 30 px half-window there reaches up into the brow and counts a correctly
+// pushed-up band as an intrusion: it reported 8 band px on eight of nine frames against a band
+// whose lower edge sits at about y=151, which is above every eye and below nothing.
+// Measured per frame on the BARE sheet, the smallest reaction feature half-height is 23 px (dizzy),
+// so 20 is inside ALL nine. Chosen from that measurement, not by lowering it until the row passed.
+const EYE_HALF = 30;
+const REA_EYE_HALF = 20;
+const DIR_ANCHORS = {
+  "0,0": [[182, 153]], "0,1": [[137, 138], [217, 138]], "0,2": [[172, 152]],
+  "1,0": [[148, 172]], "1,1": [[138, 170], [216, 170]], "1,2": [[207, 172]],
+  "2,0": [[164, 201]], "2,1": [[139, 210], [216, 210]], "2,2": [[190, 201]],
+};
+// Every reaction frame is front-on with its eyes in the same place; dizzy's spirals are wider.
+const REA_ANCHORS = Object.fromEntries(
+  [0, 1, 2].flatMap((r) => [0, 1, 2].map((c) => [`${r},${c}`,
+    r === 2 && c === 1 ? [[129, 174], [227, 174]] : [[138, 174], [222, 174]]])),
+);
+
+for (const { path, bare, sha256, w: wantW, h: wantH, mustCover } of SERVED_SHEETS) {
+  const res = await probe.request.get(BASE + path).catch(() => null);
+  if (!res || res.status() !== 200) { fails.push(`${path} is not served`); continue; }
+  const body = await res.body();
+
+  // SHA AND DIMENSIONS PINNED TO WHAT WE SERVE. A re-encode that changes a byte is a deliberate
+  // act and updates this constant; a silent one is what this catches.
+  const gotSha = createHash("sha256").update(body).digest("hex");
+  if (gotSha !== sha256) {
+    fails.push(`${path} sha256 ${gotSha}, pinned ${sha256} - if the render was deliberate, update SERVED_SHEETS`);
+  }
+  // VP8X carries width-1 and height-1 as three little-endian bytes each.
+  const fourcc = body.subarray(12, 16).toString("latin1");
+  const gotW = fourcc === "VP8X" ? 1 + body.readUIntLE(24, 3) : 0;
+  const gotH = fourcc === "VP8X" ? 1 + body.readUIntLE(27, 3) : 0;
+  if (gotW !== wantW || gotH !== wantH) fails.push(`${path} is ${gotW}x${gotH}, pinned ${wantW}x${wantH} (fourcc ${fourcc})`);
+
+  // THE CLOTH IS WHAT CHANGED, NOT WHAT IS DARK. This compares the served sheet against the BARE
+  // one frame for frame; the band is the difference between them.
+  //
+  // I WROTE THE DARKNESS VERSION FIRST AND IT WAS WRONG. It tested "is this pixel near-black",
+  // which cannot tell cloth from an eye, because the art's teal ink is near-black too. Positive
+  // control that caught it: run the same detector over the sheet with NO band drawn and it returns
+  // the IDENTICAL counts - 8, 8, 8, 40, 18, 8, 8, 18, 8 across the nine reaction frames. It was
+  // reading the eyes and reporting them as an intrusion, which would have blocked this PR on a
+  // defect that does not exist. SDE-App hit the same trap from the other direction and said so;
+  // I then reproduced it.
+  // Difference is immune to the colour question entirely: whatever the band is drawn in, it is not
+  // what was there before.
+  const pg = await browser.newPage();
+  // SAME ORIGIN FIRST, OR THE CANVAS IS TAINTED. Reading pixels back from an image drawn onto a
+  // canvas is forbidden when the image came from a different origin than the document - and
+  // about:blank is a different origin from the app. Navigating to the app and then loading the
+  // sheet by a RELATIVE path makes them the same origin, which is the only reason getImageData is
+  // allowed to answer. Without this the whole block throws SecurityError and every row is silently
+  // not run.
+  await pg.goto(BASE, { waitUntil: "domcontentloaded" });
+  const sampled = await pg.evaluate(async ({ url, bareUrl, anchors, half }) => {
+    const grab = async (u) => {
+      const img = new Image();
+      img.src = u;
+      await img.decode();
+      const cv = document.createElement("canvas");
+      cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+      const ctx = cv.getContext("2d");
+      ctx.drawImage(img, 0, 0);
+      return ctx;
+    };
+    const A = await grab(url), B = await grab(bareUrl);
+    const out = {};
+    for (const [cell, pts] of Object.entries(anchors)) {
+      const [r, c] = cell.split(",").map(Number);
+      out[cell] = pts.map(([ax, ay]) => {
+        const X = c * 360 + ax, Y = r * 360 + ay - half, N = half * 2 + 1;
+        const a = A.getImageData(X, Y, 1, N).data;
+        const b = B.getImageData(X, Y, 1, N).data;
+        let band = 0;
+        for (let k = 0; k < a.length; k += 4) {
+          // a material change, not re-encode noise
+          const d = Math.abs(a[k] - b[k]) + Math.abs(a[k + 1] - b[k + 1]) + Math.abs(a[k + 2] - b[k + 2]);
+          if (d > 60) band++;
+        }
+        return { band, total: N };
+      });
+    }
+    return out;
+  }, { url: path, bareUrl: bare, anchors: mustCover ? DIR_ANCHORS : REA_ANCHORS, half: mustCover ? EYE_HALF : REA_EYE_HALF });
+  await pg.close();
+
+  for (const [cell, pts] of Object.entries(sampled)) {
+    pts.forEach(({ band, total }, k) => {
+      const pct = Math.round((100 * band) / total);
+      if (mustCover && pct < 90) {
+        fails.push(`${path} (${cell}) eye ${k}: cloth covers ${pct}% of the eye's extent, needs >=90% - the eye is showing`);
+      }
+      if (!mustCover && band > 0) {
+        fails.push(`${path} (${cell}) eye ${k}: ${band} px changed over the eye - the pushed-up band has dropped onto the expression`);
+      }
+    });
+  }
+  console.log(`${path}: sha ok, ${gotW}x${gotH}, ${Object.keys(sampled).length} frames sampled for ${mustCover ? "cover" : "clear"}`);
+}
+
 await probe.close();
 
 let combos = 0;
