@@ -180,10 +180,6 @@ export function basePhase(s: Status | null, net: FaucetNetwork = "taz"): Phase {
   // first sync. The server already tells them apart; the page now does too. Only a
   // node that is genuinely catching up (not ready, not frozen) is "syncing".
   if (faultReason(s)) return "fault";
-  // NO NODE READING IS NOT A GOOD ONE. The wallet answered the balance, so it is not down, but
-  // this poll got no height - we cannot call the faucet ready, and must not invite a proof of
-  // work the next gate may refuse (#457). Still checking, and the next poll is 4s away (#704).
-  if (s.sender === "zallet" && !s.node) return "checking";
   if (s.node && s.node.ready === false) return "syncing";
   // No node block at all (a sender the node status does not apply to) and no balance
   // yet: the old reading, a wallet still coming up.
@@ -195,5 +191,11 @@ export function basePhase(s: Status | null, net: FaucetNetwork = "taz"): Phase {
   // holds: "unknown" is too few sends to judge, and a judgement nobody can make must
   // not close the faucet.
   if (s.sends?.state === "degraded") return "degraded";
+  // NO NODE READING IS NOT A GOOD ONE, and it ranks LAST among the things we do know. The wallet
+  // answered the balance so it is not down, but this poll got no height, and we must not invite a
+  // proof of work the next gate may refuse (#457). It sits below empty and degraded because those
+  // come from the ledger and the balance, not the node - ranking it above them made an EMPTY
+  // faucet say "checking" on the 11% of page reads that fail, instead of "out of TAZ" (Infra).
+  if (s.sender === "zallet" && !s.node) return "checking";
   return "ready";
 }
