@@ -1,14 +1,26 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
+
+// getNodeStatus judges `ready` against the tip oracle, and reading the oracle KICKS a background
+// refresh whose direct leg dials config.tipOracleEndpoints for real - which defaults to
+// testnet.zec.rocks:443 when nothing is set, as nothing is in CI's app job. On a runner with a
+// fast route that dial landed inside this file's first second, the real testnet tip (4.37M)
+// made the fixture's 1,000,000 read as `behind`, and the ready row failed at its own setup line
+// while passing on every laptop where the dial was slower than the file. Same rule as
+// gateFreshTip.test.ts: pin the oracle at a closed port and empty the direct list BEFORE the
+// import, because config reads env when it loads. A unit test must never be able to reach the
+// real one, and `ready` here has to mean the wallet's distance from the node and nothing else.
+process.env.HOSH_URL = "http://127.0.0.1:9/";
+process.env.TIP_ORACLE_ENDPOINT = "";
+const {
   cachedNodeStatus,
   cachedNodeStatusAgeMs,
   nodeStatusForPage,
   refreshNodeStatusForTests,
   resetNodeStatusCacheForTests,
   NODE_STATUS_MAX_AGE_MS,
-} from "./nodeStatusCache.ts";
-import { getNodeStatus } from "./nodeStatus.ts";
+} = await import("./nodeStatusCache.ts");
+const { getNodeStatus } = await import("./nodeStatus.ts");
 
 const realFetch = globalThis.fetch;
 
@@ -262,7 +274,13 @@ test("ready:true is never served more than ONE poll plus one read after the wall
   try {
     const t0 = Date.now();
     await refreshNodeStatusForTests();
-    assert.equal(cachedNodeStatus(t0)?.ready, true, "setup: the cache should hold a ready reading");
+    const first = cachedNodeStatus(t0);
+    assert.ok(first !== null, "setup: nothing was cached at all");
+    // The premise, named: if a reference tip ever reaches this process, `ready` stops being about
+    // the wallet and this row measures the network instead. Fail on THAT rather than on a `ready`
+    // whose reason is two modules away.
+    assert.equal(first.externalHeight, null, "setup: the tip oracle reached a reference - this file must run with no oracle");
+    assert.equal(first.ready, true, "setup: the cache should hold a ready reading");
     behind = true; // the wallet falls behind at t0
     // ONE poll later the page asks again. That read must find the entry stale and refresh.
     await nodeStatusForPage(t0 + POLL_MS);
