@@ -20,8 +20,13 @@ import { Mascot as PageMascot } from "page-mascot";
  * audit advisories on this tree are pre-existing (bitgo, elliptic, secp256k1) and none of
  * them is this.
  *
- * The sheets are served from `public/mascots/` and are byte-identical to the copies in the
- * frozen spec snapshot S2-S5-20260915T1943Z, verified by sha256 rather than by filename.
+ * THE SHEETS WE SERVE ARE NO LONGER THE FROZEN ONES, and that sentence used to say they were.
+ * The bare sheets in `public/mascots/` are still byte-identical to snapshot S2-S5-20260915T1943Z
+ * and are kept; what the page loads is the blindfolded pair derived from them:
+ *   fox-riso-directions-blindfold.webp  sha256 9ff5fdeaf3cde8de8233607fff2fec257413327301e5310481eb05ad457f6dbe
+ *   fox-riso-reactions-blindfold.webp   sha256 34d2b40744610b43ddd98b839cca1dc42571f6ad99358af1f702942012c55dad
+ * A comment asserting a property the code no longer has is worse than no comment, so these shas
+ * move whenever the art does.
  */
 
 /** The 3x3 sheets, served from public/. Paths live here so only this file knows them. */

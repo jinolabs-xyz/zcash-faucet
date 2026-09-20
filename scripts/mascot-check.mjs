@@ -33,8 +33,11 @@ import { readFileSync, existsSync } from "node:fs";
 const PAGE = "src/app/page.tsx";
 const BASE = process.argv[2] || process.env.UI_SMOKE_URL || "http://localhost:3120";
 const SHEETS = [
-  { path: "/mascots/fox-riso-directions.webp", limit: 300 * 1024 },
-  { path: "/mascots/fox-riso-reactions.webp", limit: 300 * 1024 },
+  // THE SERVED PAIR, not the bare one. Pointing this at files the page no longer loads would
+  // leave the weight gate green while the actual first load doubled - the blindfolded sheets came
+  // out at 630 KB and 785 KB before they were re-encoded, both over this limit.
+  { path: "/mascots/fox-riso-directions-blindfold.webp", limit: 300 * 1024 },
+  { path: "/mascots/fox-riso-reactions-blindfold.webp", limit: 300 * 1024 },
 ];
 // MASCOT.md's own list. Held to the ruling's count below rather than trusted as one, because
 // an array quietly losing an entry is a run that measured everything it happened to plan
