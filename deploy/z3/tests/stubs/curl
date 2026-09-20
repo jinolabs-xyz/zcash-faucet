@@ -154,7 +154,12 @@ case "$*" in
       if [ -z "${STUB_READY_REFHEIGHT:-}" ] || [ -z "${STUB_READY_REFHASH:-}" ]; then
         echo "stub curl: STUB_READY_REFHEIGHT and STUB_READY_REFHASH go together" >&2; exit 64
       fi
-      refblock=",\"referenceHeight\":${STUB_READY_REFHEIGHT},\"referenceHash\":\"${STUB_READY_REFHASH}\""
+      # THE SHAPE THE APP ACTUALLY PUBLISHES (#700, ready/route.ts -> forkReference), not the flat
+      # pair this stub emitted until 2026-09-20. The stub encoded a contract the app never shipped,
+      # so four cases passed against a body production has never produced while the rung they cover
+      # had never once run. A double that agrees with the test instead of with the producer is a
+      # green suite around a dark feature.
+      refblock=",\"forkReference\":{\"height\":${STUB_READY_REFHEIGHT},\"hash\":\"${STUB_READY_REFHASH}\",\"ageSeconds\":${STUB_READY_REFAGE:-5},\"depth\":${STUB_READY_REFDEPTH:-10}}"
     fi
     for a in "$@"; do
       case "$a" in *"%{http_code}"*)

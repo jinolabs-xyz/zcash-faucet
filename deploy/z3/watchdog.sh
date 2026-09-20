@@ -51,6 +51,13 @@ READY_FLAP_MIN_RUNS="${WATCHDOG_READY_FLAP_MIN_RUNS:-3}"
 # it alternates NEEDS YOU and FIXED every window. Recovery has to be clearly better than the trigger,
 # not marginally under it.
 READY_FLAP_CLEAR_PCT="${WATCHDOG_READY_FLAP_CLEAR_PCT:-10}"
+# HOW OLD A FORK REFERENCE MAY BE AND STILL BE EVIDENCE. The app refreshes it every 60s, so a healthy
+# box never approaches this - it bounds the case where the refresher itself is broken and the last
+# good reading sits there ageing. A reference is pinned to ITS OWN HEIGHT, so staleness is normally
+# harmless: block H does not change. The exception is a reorg deeper than the published depth, and
+# past that an old hash is a claim about a chain that no longer exists - which this rung would
+# report as PROOF OF A FORK, park the miner and wake someone.
+FORK_REF_MAX_AGE_SECS="${WATCHDOG_FORK_REF_MAX_AGE_SECS:-1800}"
 # SENDS FAILING gets one self-heal (risk register II, R-18): a wallet that answers
 # balances and refuses every send is the zallet shape a restart has fixed every time so
 # far. The verdict is in-memory and ages out with its window (15 min from the older
@@ -1300,12 +1307,25 @@ ticks=0
 # the height and publishes it; we do not derive our own, so the two processes cannot disagree about
 # where they looked.
 check_history_against_reference() {
-  local name="$1" ref_h ref_hash ref_hash_bad ours_hash lower_ours lower_ref park stop_first hist_word
+  local name="$1" fork_obj ref_h ref_hash ref_hash_bad ref_age ref_depth ours_hash lower_ours lower_ref park stop_first hist_word
   [ "$FORK_HEAL_ENABLED" = "1" ] || return 0
   [ -n "$name" ] || return 0
 
-  ref_h="$(printf '%s' "${ready_body:-}" | grep -o '"referenceHeight":[0-9][0-9]*' | head -n1 | cut -d: -f2)"
-  ref_hash="$(printf '%s' "${ready_body:-}" | grep -o '"referenceHash":"[0-9a-fA-F]*"' | head -n1 | cut -d'"' -f4)"
+  # THE OBJECT FIRST, THEN THE FIELDS OUT OF IT. This rung shipped reading FLAT `referenceHeight` and
+  # `referenceHash`; #700 published a NESTED `forkReference` instead, so the names never matched and
+  # THE DETECTOR HAS NEVER ONCE RUN - both halves merged, R-20 reading done, and a rung that exists
+  # because a self-mined fork went unnoticed saying nothing on every sweep since.
+  #
+  # I argued at the time that the app had to publish flat fields, because grep cannot address two
+  # levels down (#391). That is true of grepping '"height"' against the WHOLE body - it also matches
+  # the ledger height, the node heights and the tip references. It is not true once the object is
+  # isolated: every field in forkReference is a scalar, so [^}]* cannot over-run it, and inside it
+  # there is exactly one of each name.
+  fork_obj="$(printf '%s' "${ready_body:-}" | grep -o '"forkReference":{[^}]*}' | head -n1)"
+  ref_h="$(printf '%s' "$fork_obj" | grep -o '"height":[0-9][0-9]*' | head -n1 | cut -d: -f2)"
+  ref_hash="$(printf '%s' "$fork_obj" | grep -o '"hash":"[0-9a-fA-F]*"' | head -n1 | cut -d'"' -f4)"
+  ref_age="$(printf '%s' "$fork_obj" | grep -o '"ageSeconds":[0-9][0-9]*' | head -n1 | cut -d: -f2)"
+  ref_depth="$(printf '%s' "$fork_obj" | grep -o '"depth":[0-9][0-9]*' | head -n1 | cut -d: -f2)"
   case "$ref_h" in ''|*[!0-9]*) ref_h="" ;; esac
   # A HASH OF THE WRONG LENGTH IS NOT A HASH, and comparing one is how this rung pages FORK - the
   # loudest alert we have - on a malformed field rather than on a fork. The pattern above accepts
@@ -1318,6 +1338,14 @@ check_history_against_reference() {
     '') ;;
     *[!0-9a-fA-F]*)                   ref_hash_bad="not hex"; ref_hash="" ;;
     *) [ "${#ref_hash}" -eq 64 ] || { ref_hash_bad="${#ref_hash} chars, not 64"; ref_hash=""; } ;;
+  esac
+  # AND AN OLD ENOUGH REFERENCE IS NOT EVIDENCE EITHER. An absent or null age is not a failure here:
+  # it means nothing has ever been read, and the hash is null with it, which the branch below already
+  # handles. Only a number too large disqualifies a hash we otherwise have.
+  case "$ref_age" in
+    ''|*[!0-9]*) ;;
+    *) [ "$ref_age" -le "$FORK_REF_MAX_AGE_SECS" ] || {
+         ref_hash_bad="${ref_age}s old, older than ${FORK_REF_MAX_AGE_SECS}s"; ref_hash=""; } ;;
   esac
 
   # NO REFERENCE IS THE NORMAL STATE UNTIL THE APP HALF SHIPS, so this lands dark and turns itself
@@ -1340,7 +1368,10 @@ check_history_against_reference() {
   esac
   if [ -z "$ours_hash" ]; then
     if [ "$history_cannot_tell_logged" != "1" ]; then
-      log "history check: the reference says $ref_h but zebra did not give us a hash at that height, so nothing is compared. Silent until this changes."
+      # DEPTH IS PUBLISHED SO WE DO NOT HAVE TO ASSUME IT (#700). Saying how far below their tip the
+      # reference sits turns "no hash" into something an operator can act on: a node that is merely
+      # behind cannot answer for that height, and that is CANNOT-COMPARE, never a fork.
+      log "history check: the reference says $ref_h (${ref_depth:-?} blocks below the independent tip) but zebra did not give us a hash at that height, so nothing is compared - a node still catching up cannot answer for it. Silent until this changes."
       history_cannot_tell_logged=1
     fi
     return 0
