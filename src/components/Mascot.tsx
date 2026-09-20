@@ -25,8 +25,8 @@ import { Mascot as PageMascot } from "page-mascot";
  */
 
 /** The 3x3 sheets, served from public/. Paths live here so only this file knows them. */
-const DIRECTIONS = "/mascots/fox-riso-directions.webp";
-const REACTIONS = "/mascots/fox-riso-reactions.webp";
+const DIRECTIONS = "/mascots/fox-riso-directions-blindfold.webp";
+const REACTIONS = "/mascots/fox-riso-reactions-blindfold.webp";
 
 /**
  * The hero's intrinsic size. The component writes it inline, and `.mascot-riso` in the hero
