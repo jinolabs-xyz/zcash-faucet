@@ -128,6 +128,18 @@ const EYE_HALF = 30;
 const REA_EYE_HALF = 20;
 // How far past the eye's centre the band must reach in both directions. See the cover block.
 const EXTENT_HALF = 32;
+// THE NOSE, per frame, measured off the bare sheet the same way the eyes were (SDE-UI 2026-09-21):
+// the largest blob of luminance under 70 in the band 5 to 50 px below the eye line with the eye
+// boxes blanked, then each centre checked by eye against the art. Six frames turn the head, so the
+// nose is not the frame's centre and one number for all nine would be wrong for six.
+const NOSE_ANCHORS = {
+  "0,0": [108, 159], "0,1": [176, 148], "0,2": [245, 158],
+  "1,0": [88, 201], "1,1": [176, 193], "1,2": [265, 201],
+  "2,0": [111, 235], "2,1": [177, 245], "2,2": [243, 235],
+};
+// The nose window: 20 px either side, from the nose's CENTRE row down 14 - beside and below the
+// nose, where the muzzle's cream is, and not above it, where a correct band legitimately ends.
+const NOSE_HX = 20, NOSE_DOWN = 14;
 const DIR_ANCHORS = {
   "0,0": [[182, 153]], "0,1": [[137, 138], [217, 138]], "0,2": [[172, 152]],
   "1,0": [[148, 172]], "1,1": [[138, 170], [216, 170]], "1,2": [[207, 172]],
@@ -194,6 +206,15 @@ for (const { path, bare, sha256, w: wantW, h: wantH, mustCover } of SERVED_SHEET
   //   - a synthetic band ending at ay+31 passes whites at 100% and fails EXTENT alone. A band
   //     ending at ay+10 fails both (whites 23.28%).
   //
+  // AND THE ROW HAS AN UPPER BOUND NOW, BECAUSE IT DID NOT AND THE OWNER CAUGHT WHAT IT MISSED.
+  // "The eye is covered at 99%" is a presence test: a band that swallowed the muzzle, the chin or
+  // the whole head passed it, and the sheet that shipped ran from above the eyes to the bottom of
+  // the muzzle, over the nose and the mouth (band 106 px tall against a 360 px frame). A coverage
+  // row with no upper bound measures presence, not shape, and a shape is what a person sees. So a
+  // third assertion per frame holds the NOSE out: the bare frame's light pixels beside and below
+  // the nose must still read light on the served frame (>=98%), with a dark-pixel floor proving
+  // the window is on the nose. On the rejected sheet that reads 0% on five frames, 36-41% on four.
+  //
   // THE CLEAR ROW HAD THE SAME PROXY FAULT FROM THE OTHER SIDE. It counted ANY changed pixel in a
   // +/-20 window, and on the re-rendered reactions sheet the pushed-up band's antialiased lower
   // edge (served luminance fading 65 to 137 over ten rows) reaches rows 154-155 at the anchor
@@ -213,7 +234,7 @@ for (const { path, bare, sha256, w: wantW, h: wantH, mustCover } of SERVED_SHEET
   // allowed to answer. Without this the whole block throws SecurityError and every row is silently
   // not run.
   await pg.goto(BASE, { waitUntil: "domcontentloaded" });
-  const sampled = await pg.evaluate(async ({ url, bareUrl, anchors, half, extentHalf, cover }) => {
+  const sampled = await pg.evaluate(async ({ url, bareUrl, anchors, half, extentHalf, cover, noses, noseHx, noseDown }) => {
     const grab = async (u) => {
       const img = new Image();
       img.src = u;
@@ -233,7 +254,7 @@ for (const { path, bare, sha256, w: wantW, h: wantH, mustCover } of SERVED_SHEET
     const out = {};
     for (const [cell, pts] of Object.entries(anchors)) {
       const [r, c] = cell.split(",").map(Number);
-      out[cell] = pts.map(([ax, ay]) => {
+      const eyes = pts.map(([ax, ay]) => {
         if (!cover) {
           // CLEAR: a 1 px column through the eye. Count material changes against the bare sheet,
           // but ONLY where the bare pixel is the expression's INK. A change over the fur beside an
@@ -276,13 +297,36 @@ for (const { path, bare, sha256, w: wantW, h: wantH, mustCover } of SERVED_SHEET
         }
         return { light, hidden, top, bot, needTop: ay - extentHalf, needBot: ay + extentHalf };
       });
+      out[cell] = { eyes, nose: null };
+      // THE UPPER BOUND. The two assertions above say the eye is covered; nothing above says the
+      // band STOPS, and a band that swallowed the muzzle passed them - which is what shipped, and
+      // what the owner saw in one look. This measures the nose's window the way the eye window is
+      // measured: the bare frame's LIGHT pixels there (the muzzle's cream beside and below the
+      // nose) must still read light on the served frame. "Changed pixels over the nose ink" is not
+      // the instrument, for the reason the eye row learned: cloth over near-black ink is a small
+      // change (8 to 19 px on the middle row of the shipped sheet, whose band covers the nose
+      // entirely). The dark count is the anchor that proves the window landed on the nose.
+      if (cover && noses[cell]) {
+        const [nx, ny] = noses[cell];
+        const NW = noseHx * 2 + 1, NH = noseDown + 1;
+        const a = A.getImageData(c * 360 + nx - noseHx, r * 360 + ny, NW, NH).data;
+        const b = B.getImageData(c * 360 + nx - noseHx, r * 360 + ny, NW, NH).data;
+        let dark = 0, light = 0, kept = 0;
+        for (let k = 0; k < a.length; k += 4) {
+          const lb = lum(b, k);
+          if (lb < 70) dark++;
+          else if (lb > 150) { light++; if (lum(a, k) > 120) kept++; }
+        }
+        out[cell].nose = { dark, light, kept };
+      }
     }
     return out;
   }, { url: path, bareUrl: bare, anchors: mustCover ? DIR_ANCHORS : REA_ANCHORS,
-       half: mustCover ? EYE_HALF : REA_EYE_HALF, extentHalf: EXTENT_HALF, cover: mustCover });
+       half: mustCover ? EYE_HALF : REA_EYE_HALF, extentHalf: EXTENT_HALF, cover: mustCover,
+       noses: mustCover ? NOSE_ANCHORS : {}, noseHx: NOSE_HX, noseDown: NOSE_DOWN });
   await pg.close();
 
-  for (const [cell, pts] of Object.entries(sampled)) {
+  for (const [cell, { eyes: pts, nose }] of Object.entries(sampled)) {
     pts.forEach((s, k) => {
       if (!mustCover) {
         // The window must contain some of the expression, or "nothing changed over the ink" is
@@ -305,8 +349,21 @@ for (const { path, bare, sha256, w: wantW, h: wantH, mustCover } of SERVED_SHEET
         fails.push(`${path} (${cell}) eye ${k}: the band spans ${s.top}-${s.bot} at the eye's column, needs to reach ${s.needTop}-${s.needBot} - it ends inside the eye`);
       }
     });
+    if (mustCover) {
+      // THE NOSE STAYS OUT. Measured on the sheet that shipped and the owner rejected: the muzzle's
+      // light pixels beside and below the nose kept 0% of their light on five frames and at most
+      // 41% on the rest; every window holds 165+ dark px (the nose) and 497+ light (the cream).
+      if (!nose) fails.push(`${path} (${cell}): no nose window was measured - NOSE_ANCHORS has no entry, so the band's lower bound is unchecked here`);
+      // The window starts at the nose's centre row, so it holds the blob's lower half: 57 to 260
+      // dark px across the nine frames, measured. 40 near-black px beside cream is not fur.
+      else if (nose.dark < 40 || nose.light < 300) fails.push(`${path} (${cell}): the nose window holds ${nose.dark} dark and ${nose.light} light px (needs >=40 and >=300) - the anchor is not on the nose, so this row measured nothing`);
+      else {
+        const kept = (100 * nose.kept) / nose.light;
+        if (kept < 98) fails.push(`${path} (${cell}): only ${kept.toFixed(1)}% of the ${nose.light} light px beside and below the nose still read light on the served frame, needs >=98% - the band covers the nose`);
+      }
+    }
   }
-  console.log(`${path}: sha ok, ${gotW}x${gotH}, ${Object.keys(sampled).length} frames sampled for ${mustCover ? "cover" : "clear"}`);
+  console.log(`${path}: sha ok, ${gotW}x${gotH}, ${Object.keys(sampled).length} frames sampled for ${mustCover ? "cover, and the nose held out" : "clear"}`);
 }
 
 await probe.close();
