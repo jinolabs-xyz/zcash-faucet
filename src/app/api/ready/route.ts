@@ -20,12 +20,12 @@ import { readSendHealthServed, sendHealthBlocksServing } from "@/lib/zcash/sendH
 import { readForkReference } from "@/lib/zcash/forkReference";
 import { readTipReferences } from "@/lib/zcash/externalTip";
 import { readinessReason } from "@/lib/readiness";
-import { withApi } from "@/lib/api";
+import { withApi, notAllowed, SET_GATE } from "@/lib/api";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export const GET = withApi("ready", async () => {
+export const GET = withApi("ready", async (_req, api) => {
   const [backend, balanceZat, node] = await Promise.all([pingBackend(), safeBalance(), getNodeStatus()]);
   // SYNCHRONOUS and last-known, never awaited (#234). #228 awaited a real query
   // here, which put an IO call on the readiness critical path: the exact coupling
@@ -105,6 +105,7 @@ export const GET = withApi("ready", async () => {
   const ready = reason === null;
   const balanceTaz = balanceZat === null ? null : Number(balanceZat) / Number(ZATOSHI_PER_TAZ);
 
+  if (!ready) api[SET_GATE]("notReady");
   return NextResponse.json(
     {
       ready,
@@ -153,3 +154,9 @@ export const GET = withApi("ready", async () => {
     { status: ready ? 200 : 503 },
   );
 });
+// The readiness payload IS the body on a 503, so this is not an apiError. It still names its gate:
+// the watchdog polls this twice a minute, which made it the highest-volume unlabelled non-200 we had.
+export const POST = notAllowed;
+export const PUT = notAllowed;
+export const PATCH = notAllowed;
+export const DELETE = notAllowed;

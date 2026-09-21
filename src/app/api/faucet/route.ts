@@ -26,7 +26,7 @@ import { readCtazNodeState } from "@/lib/crosslink/read";
 import { reserveClaim, finalizeClaim, challengeAlreadySpent } from "@/lib/db";
 import { fingerprintIp, fingerprintSubnet } from "@/lib/privacy";
 import { clientIp } from "@/lib/clientIp";
-import { withApi, apiError } from "@/lib/api";
+import { withApi, apiError, notAllowed } from "@/lib/api";
 import { freshnessRetrySeconds } from "./retry-hint";
 
 export const runtime = "nodejs"; // better-sqlite3 needs Node, not Edge.
@@ -82,13 +82,13 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
   try {
     body = BodySchema.parse(await req.json());
   } catch {
-    return apiError(400, "Invalid request body.", api);
+    return apiError(400, "Invalid request body.", api, "badBody");
   }
 
   // 1. Address
   const info = validateTestnetAddress(body.address);
   if (!info.valid) {
-    return apiError(400, info.reason ?? "Invalid address.", api);
+    return apiError(400, info.reason ?? "Invalid address.", api, "badAddress");
   }
   const address = body.address.trim();
 
@@ -98,12 +98,12 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
   //     why the two cases are separated HERE rather than by a defaulting parser.
   const network = body.network === undefined ? DEFAULT_NETWORK : parseNetwork(body.network);
   if (network === null) {
-    return apiError(400, `Unknown network. This faucet serves ${NETWORKS.join(" and ")}.`, api);
+    return apiError(400, `Unknown network. This faucet serves ${NETWORKS.join(" and ")}.`, api, "badNetwork");
   }
   if (network === "ctaz" && !config.crosslink.enabled) {
     // 503 rather than 400: the request is well formed and will work on a deployment
     // with the flag on, so this is us not offering it rather than them asking wrongly.
-    return apiError(503, "cTAZ is not enabled on this faucet.", api);
+    return apiError(503, "cTAZ is not enabled on this faucet.", api, "ctazDisabled");
   }
 
   // Per-network policy. The cooldown is shared (a day is a day on either chain) but the
@@ -119,7 +119,7 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
   //    is reserved and no proof is spent; the page shows this as our side, not theirs,
   //    with a countdown, and the replacement container answers by then.
   if (isDraining()) {
-    return apiError(503, "The faucet is restarting and will be back in a moment. Nothing was claimed and no proof-of-work was spent.", api, {
+    return apiError(503, "The faucet is restarting and will be back in a moment. Nothing was claimed and no proof-of-work was spent.", api, "draining", {
       kind: "restarting",
       retryAfterSeconds: DRAIN_RETRY_SECONDS,
     });
@@ -142,7 +142,7 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
       "Sends are failing on our side right now, so we are not taking claims: " +
         "nothing was claimed and no proof-of-work was spent. This is watched on our side and usually clears within minutes. " +
         "Try again in a few minutes.",
-      api,
+      api, "sendHealth",
       { kind: "sends", retryAfterSeconds: SENDS_RETRY_SECONDS },
     );
   }
@@ -154,7 +154,7 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
   //    mode at boot and this handler never runs under it.
   if (config.challenge === "pow") {
     if (!body.pow) {
-      return apiError(403, "Proof of work required.", api);
+      return apiError(403, "Proof of work required.", api, "powRequired");
     }
     // VERIFIED NOW, SPENT LATER, AND THE GAP IS THE POINT. This used to verify-and-burn here,
     // before anything asked whether OUR node was healthy enough to send - so a visitor could mine
@@ -166,7 +166,7 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     // changes is that a refusal WE caused leaves the solution usable.
     const verdict = await verifySolution(body.pow, ipHash ?? "anon", subnetHash, false);
     if (!verdict.ok) {
-      return apiError(403, verdict.reason ?? "Proof of work failed.", api);
+      return apiError(403, verdict.reason ?? "Proof of work failed.", api, "powFailed");
     }
     // AND REPLAY REJECTION STAYS IN FRONT OF THE EXPENSIVE WORK (SDE-UI, reviewing this change).
     // Moving the burn past our own gates also moved the "already used" 403 past them, so one
@@ -177,7 +177,7 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     // at 3.9 still decides. This only declines to do seconds of network work for a request that
     // is already doomed.
     if (await challengeAlreadySpent(body.pow.sig)) {
-      return apiError(403, "Challenge already used.", api);
+      return apiError(403, "Challenge already used.", api, "challengeSpent");
     }
   }
 
@@ -192,7 +192,7 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
   if (network === "taz") {
     const balance = await safeBalance();
     if (balance !== null && balance < config.dripZatoshi + config.minReserveZatoshi) {
-      return apiError(503, "The faucet is empty right now. Please check back after it's refilled.", api);
+      return apiError(503, "The faucet is empty right now. Please check back after it's refilled.", api, "empty");
     }
   }
 
@@ -251,7 +251,7 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     // Three refusals, three sentences, chosen by the gate itself (freshnessRefusalText)
     // and pinned there, because the same text is what an operator reads and it sends
     // them to a fix: the first version blamed the oracle for our own wallet being down.
-    return apiError(503, freshnessRefusalText(freshness), api, {
+    return apiError(503, freshnessRefusalText(freshness), api, "freshness", {
       retryAfterSeconds: freshnessRetrySeconds(freshness.state, freshness.nodeHeight),
     });
   }
@@ -292,7 +292,7 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
       "Our wallet is still catching up with our node, so a drip sent right now would " +
         "expire before it could confirm. Nothing was claimed, your cooldown is untouched. " +
         "Try again shortly.",
-      api,
+      api, "walletLag",
       { retryAfterSeconds: FRESHNESS_RETRY_SECONDS },
     );
   }
@@ -323,7 +323,7 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
         503,
         "The Crosslink node is not current enough to hand out cTAZ right now. Nothing was " +
           "claimed and your cooldown is untouched. Try again shortly.",
-        api,
+        api, "ctazReadiness",
         { retryAfterSeconds: FRESHNESS_RETRY_SECONDS },
       );
     }
@@ -335,7 +335,7 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
   //    concurrent claims.
   if (config.challenge === "pow" && body.pow) {
     if (!(await spendVerifiedSolution(body.pow))) {
-      return apiError(403, "Challenge already used.", api);
+      return apiError(403, "Challenge already used.", api, "challengeSpent");
     }
   }
 
@@ -399,7 +399,7 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
       measured && reservation.retryAfterSeconds != null
         ? new Date((now + reservation.retryAfterSeconds) * 1000).toISOString()
         : undefined;
-    return apiError(reservation.kind === "cap" ? 503 : 429, reservation.reason, api, {
+    return apiError(reservation.kind === "cap" ? 503 : 429, reservation.reason, api, reservation.kind === "cap" ? "dailyCap" : "cooldown", {
       kind: reservation.kind,
       ...(reservation.scope ? { scope: reservation.scope } : {}),
       retryAfterSeconds: reservation.retryAfterSeconds,
@@ -473,7 +473,7 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
         504,
         "Your drip was submitted but we lost track of it before it confirmed. Do not retry yet: if it went " +
           "through, the coins are on their way. Check the address in a few minutes.",
-        api,
+        api, "sendUnknown",
       );
     }
 
@@ -493,7 +493,7 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
       // for the whole window. Twelve IPs could hold it open without one drip failing.
       // The wallet was never asked. Not recorded: queue depth is on /api/status and
       // says what this is.
-      return apiError(503, err.message, api, { kind: "busy" });
+      return apiError(503, err.message, api, "busy", { kind: "busy" });
     }
     if (err instanceof RecipientRefusedError) {
       // THE WALLET REFUSED THIS RECIPIENT, NOT THE SEND (review of #531). Our validator
@@ -509,7 +509,7 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
       // wallet's own sentence stays in the log under the request id: it can carry
       // note values and internals, and the visitor needs only the fact.
       recordSend("refused", network);
-      return apiError(400, "The wallet could not pay that address. Nothing left the wallet and your cooldown is untouched. Check the address, or use a different one.", api, { kind: "recipient" });
+      return apiError(400, "The wallet could not pay that address. Nothing left the wallet and your cooldown is untouched. Check the address, or use a different one.", api, "recipient", { kind: "recipient" });
     }
     // Counted, because this is the only place in the app that knows a drip failed. A
     // 502 to one caller and a log line is not a signal anything can act on, which is
@@ -519,7 +519,7 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     // The raw send error can carry wallet/RPC internals. Log it under the
     // request id, tell the user only what they need: nothing moved, retry.
     api.logError(err, "send failed");
-    return apiError(502, "The send failed on our side. Nothing left the wallet. Try again in a moment.", api);
+    return apiError(502, "The send failed on our side. Nothing left the wallet. Try again in a moment.", api, "sendFailed");
   }
 
   recordSend("ok", network);
@@ -570,3 +570,8 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     to: { kind: info.kind, shielded: info.shielded },
   });
 });
+// Methods this route does not serve: labelled 405s, not the framework's silent one.
+export const GET = notAllowed;
+export const PUT = notAllowed;
+export const PATCH = notAllowed;
+export const DELETE = notAllowed;

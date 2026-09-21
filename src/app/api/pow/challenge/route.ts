@@ -8,14 +8,14 @@ import { config } from "@/lib/config";
 import { clientIp } from "@/lib/clientIp";
 import { fingerprintIp, fingerprintSubnet } from "@/lib/privacy";
 import { issueChallenge } from "@/lib/pow";
-import { withApi, apiError } from "@/lib/api";
+import { withApi, apiError, notAllowed } from "@/lib/api";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export const GET = withApi("pow-challenge", async (req: NextRequest, api) => {
   if (config.challenge !== "pow") {
-    return apiError(404, "PoW challenge is not enabled.", api);
+    return apiError(404, "PoW challenge is not enabled.", api, "notFound");
   }
   const raw = clientIp(req);
   const ipHash = raw ? fingerprintIp(raw) : "anon";
@@ -25,3 +25,8 @@ export const GET = withApi("pow-challenge", async (req: NextRequest, api) => {
   const subnetHash = raw ? fingerprintSubnet(raw) : null;
   return NextResponse.json({ ok: true, ...issueChallenge(ipHash, subnetHash) });
 });
+// Methods this route does not serve: labelled 405s, not the framework's silent one.
+export const POST = notAllowed;
+export const PUT = notAllowed;
+export const PATCH = notAllowed;
+export const DELETE = notAllowed;

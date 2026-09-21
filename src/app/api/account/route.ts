@@ -8,7 +8,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { generateTransparentAccount, type ThrowawayAccount } from "@/lib/zcash/keys";
 import { generateShieldedAccount } from "@/lib/zcash/t2z";
-import { withApi, apiError } from "@/lib/api";
+import { withApi, apiError, notAllowed } from "@/lib/api";
 
 export const runtime = "nodejs";
 
@@ -19,7 +19,7 @@ export const POST = withApi("account", async (req: NextRequest, api) => {
   try {
     ({ type } = BodySchema.parse(await req.json().catch(() => ({}))));
   } catch {
-    return apiError(400, "Invalid request.", api);
+    return apiError(400, "Invalid request.", api, "badBody");
   }
 
   try {
@@ -41,6 +41,11 @@ export const POST = withApi("account", async (req: NextRequest, api) => {
     return NextResponse.json({ ok: true, account: generateTransparentAccount() });
   } catch (err) {
     api.logError(err, "account generation");
-    return apiError(500, "Account generation failed on our side. Try again in a moment.", api);
+    return apiError(500, "Account generation failed on our side. Try again in a moment.", api, "accountFailed");
   }
 });
+// Methods this route does not serve: labelled 405s, not the framework's silent one.
+export const GET = notAllowed;
+export const PUT = notAllowed;
+export const PATCH = notAllowed;
+export const DELETE = notAllowed;
