@@ -860,6 +860,16 @@ check "and so would an indented one" \
   "[ \"\$(printf '%s\\n' '  Z3_ZAINO_IMAGE=x' | pins_in)\" = Z3_ZAINO_IMAGE ]"
 check "and stack-versions.env says plainly that nothing automated watches them" \
   "grep -qi 'no dependabot ecosystem\|nothing automated watches' '$SV'"
+# A tag can be re-pushed; a digest cannot. Both pins carry one, full length, because the
+# pin file spent a fortnight naming versions the box did not run and the digest is the half
+# the audit compares. A bare tag here would pass the rows above and pin nothing.
+UNPINNED_DIGEST=""
+for img in $(pins_in < "$SV" 2>/dev/null | sort -u); do
+  case "$img" in Z3_ZAINO_IMAGE) continue ;; esac   # optional and shipped commented out
+  grep -E "^\s*(export\s+)?$img=[^@]+@sha256:[0-9a-f]{64}\s*$" "$SV" >/dev/null || UNPINNED_DIGEST="$UNPINNED_DIGEST $img"
+done
+check "and every hand-updated image is pinned tag@sha256 with a full 64-hex digest:$UNPINNED_DIGEST" \
+  "[ -z '$UNPINNED_DIGEST' ]"
 
 # \$MISSING is expanded when `check` evals the string, not here: the message now carries
 # whatever the Dockerfile said, and `${VARIANT}` interpolated at definition time was an
