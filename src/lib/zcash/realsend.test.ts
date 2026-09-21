@@ -3,6 +3,13 @@ import assert from "node:assert/strict";
 import type { AddressInfo } from "./address.ts";
 import type { Utxo } from "./grpc.ts";
 
+// NO REAL ORACLE FROM A UNIT TEST. Both legs: HOSH_URL to a closed port seals the aggregate,
+// TIP_ORACLE_ENDPOINT set EMPTY seals the direct gRPC leg, which defaults to testnet.zec.rocks
+// when merely unset (config.ts:140). Before any import that loads config. Enforced by
+// zcash/oraclePin.test.ts.
+process.env.HOSH_URL = "http://127.0.0.1:9/";
+process.env.TIP_ORACLE_ENDPOINT = "";
+
 process.env.FAUCET_SENDER = "real";
 // A throwaway testnet WIF so faucetWallet() can derive without touching a node.
 process.env.FAUCET_WALLET_SEED = "0".repeat(63) + "1";

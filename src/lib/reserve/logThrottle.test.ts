@@ -19,7 +19,13 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { shouldSay, sampledNote, LOUD_TICKS, SAMPLE_EVERY } from "./reconciler.ts";
+// NO REAL ORACLE FROM A UNIT TEST. Both legs: HOSH_URL to a closed port seals the aggregate,
+// TIP_ORACLE_ENDPOINT set EMPTY seals the direct gRPC leg, which defaults to testnet.zec.rocks
+// when merely unset (config.ts:140). Before any import that loads config. Enforced by
+// zcash/oraclePin.test.ts.
+process.env.HOSH_URL = "http://127.0.0.1:9/";
+process.env.TIP_ORACLE_ENDPOINT = "";
+const { shouldSay, sampledNote, LOUD_TICKS, SAMPLE_EVERY } = await import("./reconciler.ts");
 
 test("the first ticks of a new state are always loud, because that is when it is news", () => {
   for (let n = 1; n <= LOUD_TICKS; n++) {
