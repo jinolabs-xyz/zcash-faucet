@@ -1576,7 +1576,13 @@ export default function Home() {
                   ? "checking…"
                   : txSeen.known === true
                     ? txSeen.confirmations && txSeen.height !== null
-                      ? <>mined at block {txSeen.height.toLocaleString("en-US")}, {txSeen.confirmations} confirmation{txSeen.confirmations === 1 ? "" : "s"} on <a href={`/api/tx?txid=${encodeURIComponent(tx.txid ?? "")}`} target="_blank" rel="noreferrer" data-testid="our-node-answer">our node</a></>
+                      // ONE LINE IN THE VALUE COLUMN, MEASURED. "mined at block N, K confirmations on our
+                      // node" wrapped at every planned width (277 px against a 246.7 px column at 1440,
+                      // 253 against 227 at 1280) and grew the frozen receipt panel by a line - the #648
+                      // shape, from copy alone (@CTO, #736 red-team). "block N, K confirmations on our
+                      // node" still wrapped at 1024 (213 against 208). This fits with 40 px to spare at
+                      // the narrowest planned width, and the block itself is the link to our answer.
+                      ? <>in <a href={`/api/tx?txid=${encodeURIComponent(tx.txid ?? "")}`} target="_blank" rel="noreferrer" data-testid="our-node-answer" title="What our node says about this transaction">block {txSeen.height.toLocaleString("en-US")}</a>, {txSeen.confirmations} confirmation{txSeen.confirmations === 1 ? "" : "s"}</>
                       : txSeen.confirmations
                         ? `seen by our node, ${txSeen.confirmations} confirmation${txSeen.confirmations === 1 ? "" : "s"}`
                         : "seen by our node, in the mempool"

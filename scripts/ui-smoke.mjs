@@ -4891,20 +4891,26 @@ try {
     const dt = [...document.querySelectorAll(".receipt dt")].find((e) => (e.textContent || "").trim() === "Status");
     const dd = dt && dt.nextElementSibling;
     const a = dd && dd.querySelector("a[data-testid=our-node-answer]");
-    return { text: dd ? (dd.textContent || "").trim().replace(/\s+/g, " ") : "", href: a ? a.getAttribute("href") : null };
+    const cs = dd && getComputedStyle(dd);
+    // line boxes, from the value cell's own height against its line-height: the frozen receipt
+    // panel grows by a line for every wrap, and the first copy wrapped at every planned width.
+    const lines = dd ? Math.round(dd.getBoundingClientRect().height / parseFloat(cs.lineHeight)) : 0;
+    return { text: dd ? (dd.textContent || "").trim().replace(/\s+/g, " ") : "", href: a ? a.getAttribute("href") : null, lines, width: dd ? Math.round(dd.getBoundingClientRect().width) : 0 };
   });
   // The double answers the first poll after the receipt appears; wait on the line, not a clock.
   await page.waitForFunction(() => {
     const dt = [...document.querySelectorAll(".receipt dt")].find((e) => (e.textContent || "").trim() === "Status");
-    return /mined at block/.test(dt?.nextElementSibling?.textContent || "");
+    return /^in block/.test((dt?.nextElementSibling?.textContent || "").trim());
   }, null, { timeout: 15_000 }).catch(() => {});
   const mined = await statusLine();
   const apiTx = await fetch(`${BASE}/api/tx?txid=${copied}`).then((r) => r.json()).catch(() => null);
-  const m = mined.text.match(/^mined at block ([\d,]+), (\d+) confirmations? on our node$/);
-  ok("the receipt says where the drip was mined, and the block is /api/tx's own answer for this txid",
+  const m = mined.text.match(/^in block ([\d,]+), (\d+) confirmations?$/);
+  ok("the receipt says which block the drip is in, and the block is /api/tx's own answer for this txid",
     !!m && apiTx?.known === true && Number(m[1].replace(/,/g, "")) === apiTx.height && Number(m[2]) === apiTx.confirmations,
     `line "${mined.text}"; /api/tx says known=${apiTx?.known} height=${apiTx?.height} confirmations=${apiTx?.confirmations}`);
-  ok("and \"our node\" in that line links OUR /api/tx for this txid, which answers",
+  ok("and that line fits the value column on ONE line, so the frozen receipt panel does not grow",
+    mined.lines === 1, `${mined.lines} line(s) in a ${mined.width}px column: "${mined.text}"`);
+  ok("and the block in that line links OUR /api/tx for this txid, which answers",
     mined.href === `/api/tx?txid=${copied}` && apiTx?.ok === true,
     `href ${mined.href}`);
   await page.getByRole("button", { name: /Copy receipt/ }).click();
