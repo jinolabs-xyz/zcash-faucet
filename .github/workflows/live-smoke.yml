@@ -192,6 +192,10 @@ jobs:
           # failed on a deploy that never landed would re-probe green and read as a blip.
           SMOKE_OPS_TOKEN: ${{ secrets.FAUCET_OPS_TOKEN }}
           SMOKE_MAIN_REF: origin/main
+          # Unreachable in practice (a disabled probe exits 0 and this step never runs), set
+          # so the rule "every SMOKE_ knob the probe has, the re-probe has" holds without an
+          # exception list, and the repo row that enforces it stays one comparison.
+          SMOKE_DISABLED: ${{ vars.FAUCET_LIVE_SMOKE_DISABLED }}
         run: |
           if [ -z "$ALERT_URL" ]; then
             echo "FAUCET_ALERT_URL secret is not set, cannot page (email only)"
