@@ -444,3 +444,42 @@ check "and it tried, so the failure is the restart's and not a skipped step" \
   "grep -qx 'ctaz-rpc.socket' '$STUB_RESTARTED'"
 check "and it says the LIVE socket still has the old mode, which is what an operator needs" \
   "grep -q 'the LIVE socket still has the OLD mode' '$T/sock4.log'"
+
+echo "== install-ops: a CHANGED timer that is running is restarted, so its new schedule applies now"
+# The drift audit moved from daily to every 30 minutes (#721's follow-up). daemon-reload
+# re-reads the unit file and is not documented to reschedule a running timer, so without
+# this the box keeps the old daily elapse with the new file on disk - matching the repo,
+# passing the audit, and not doing what the repo says. Same rule as the watchdog and the
+# socket: only when changed, only when already active.
+ops_env
+export STUB_RESTARTED="$T/trestart"; : > "$STUB_RESTARTED"
+export STUB_ACTIVE="$T/active"; printf 'faucet-thing.timer\n' > "$STUB_ACTIVE"
+bash "$INSTALL_OPS" "$T/src" > /dev/null 2>&1          # first install: the timer is new, not changed
+: > "$STUB_RESTARTED"
+bash "$INSTALL_OPS" "$T/src" > "$T/t0.log" 2>&1
+check "an UNCHANGED timer is not restarted on a re-run" "! grep -qx 'faucet-thing.timer' '$STUB_RESTARTED'"
+printf '[Unit]\nDescription=t\n[Timer]\nOnUnitActiveSec=30min\n[Install]\nWantedBy=timers.target\n' > "$T/src/faucet-thing.timer"
+bash "$INSTALL_OPS" "$T/src" > "$T/t1.log" 2>&1
+check "exits 0" "[ $? -eq 0 ]"
+check "the changed, active timer was restarted" "grep -qx 'faucet-thing.timer' '$STUB_RESTARTED'"
+check "and the run says why" "grep -q 'faucet-thing.timer changed; restarted it so the new schedule applies now' '$T/t1.log'"
+
+echo "== install-ops: a changed timer that is NOT active is left alone - starting it is enabled-units' decision"
+ops_env
+export STUB_RESTARTED="$T/trestart2"; : > "$STUB_RESTARTED"
+export STUB_ACTIVE="$T/active2"; : > "$STUB_ACTIVE"
+bash "$INSTALL_OPS" "$T/src" > /dev/null 2>&1
+printf '[Unit]\nDescription=t\n[Timer]\nOnUnitActiveSec=30min\n[Install]\nWantedBy=timers.target\n' > "$T/src/faucet-thing.timer"
+bash "$INSTALL_OPS" "$T/src" > "$T/t2.log" 2>&1
+check "not restarted" "! grep -qx 'faucet-thing.timer' '$STUB_RESTARTED'"
+check "and the run says it was left as the operator has it" "grep -q 'faucet-thing.timer changed but is not active; leaving it' '$T/t2.log'"
+
+echo "== install-ops: a changed timer whose restart FAILS is an error, not a note"
+ops_env
+export STUB_RESTARTED="$T/trestart3"; : > "$STUB_RESTARTED"
+export STUB_ACTIVE="$T/active3"; printf 'faucet-thing.timer\n' > "$STUB_ACTIVE"
+bash "$INSTALL_OPS" "$T/src" > /dev/null 2>&1
+printf '[Unit]\nDescription=t\n[Timer]\nOnUnitActiveSec=30min\n[Install]\nWantedBy=timers.target\n' > "$T/src/faucet-thing.timer"
+STUB_RESTART_FAIL=faucet-thing.timer bash "$INSTALL_OPS" "$T/src" > "$T/t3.log" 2>&1
+check "exits non-zero" "[ $? -ne 0 ]"
+check "and names the timer still on the old schedule" "grep -q 'faucet-thing.timer changed but restarting it failed; it is still running on the OLD schedule' '$T/t3.log'"
