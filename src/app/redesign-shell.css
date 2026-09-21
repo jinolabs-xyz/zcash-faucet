@@ -409,7 +409,11 @@ html :focus-visible{outline-color:var(--accent-text)}
  * under the 4.5:1 body-text floor at this size (the token's own comment already says "set to
  * var(--ink) for strict AA"). #282828 - paper's ink - reads 5.17 to 7.08:1 across the gradient.
  * A literal because the gradient does not change with the theme and --ink does: in ink it is
- * near-white and would put the 2:1 back. The same colour on the link and the X.
+ * near-white and would put the 2:1 back. The same colour on the link and the X. A solid
+ * background-color under the gradient (its middle stop) is what the suite's contrast reader sees:
+ * it walks backgroundColor and is blind to a gradient image, so without the fallback it measured
+ * the text against the page behind the band and read 1.23:1 in ink. The fallback is also what a
+ * browser paints if the gradient ever fails.
  *
  * THE BACKGROUND BLEEDS EDGE TO EDGE, THE WORDS STAY ON THE COLUMN (owner, second look at 3221:
  * "the whole breadth of the page"). The band is a child of .comp, whose width is the content
@@ -417,7 +421,7 @@ html :focus-visible{outline-color:var(--accent-text)}
  * margin-inline of 50% - 50cqw (negative, half the gap each side) and the same amount back as
  * padding, so the text begins where the masthead's brand does and the X ends where its toggle does. cqw is
  * the stage's own width - .stage is the size container - so a scrollbar does not overshoot it. */
-.stage .grant{display:flex;align-items:center;gap:calc(1*var(--u));width:auto;min-height:calc(3.4*var(--u));margin:calc(-2.8*var(--u)) calc(50% - 50cqw) calc(.2*var(--u));padding:calc(.35*var(--u)) calc(50cqw - 50%) calc(.35*var(--u)) calc(50cqw - 50%);background:var(--cta);color:#282828;font-size:calc(.9*var(--u));line-height:1.4;animation:grant-in .3s var(--ease-place) both}
+.stage .grant{display:flex;align-items:center;gap:calc(1*var(--u));width:auto;min-height:calc(3.4*var(--u));margin:calc(-2.8*var(--u)) calc(50% - 50cqw) calc(.2*var(--u));padding:calc(.35*var(--u)) calc(50cqw - 50%) calc(.35*var(--u)) calc(50cqw - 50%);background-color:#ff8840;background-image:var(--cta);color:#282828;font-size:calc(.9*var(--u));line-height:1.4;animation:grant-in .3s var(--ease-place) both}
 .stage .grant p{margin:0;flex:1 1 auto}
 .stage .grant a{color:#282828;font-weight:600;text-decoration:underline;text-decoration-thickness:from-font;text-underline-offset:.12em;white-space:nowrap}
 .stage .grant a:hover{text-decoration-thickness:2px}
