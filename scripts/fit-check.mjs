@@ -209,6 +209,10 @@ const fitsNow = (r) =>
   (CLAMP_OVERRIDDEN || r.oneScreen);
 
 const browser = await chromium.launch();
+// How long a page may take to reach LIVE before its context is named as a stall. 8 s is two page
+// polls; the only reason to lower it is scripts/fit-check.test.mjs, which drives a page that never
+// gets there and must not wait 24 x 8 s to say so.
+const LIVE_TIMEOUT_MS = Number(process.env.FIT_LIVE_TIMEOUT_MS) || 8000;
 const rows = [];
 const errors = [];
 // Size/theme/pointer contexts whose page never reached LIVE: each one is a set of views NOT measured.
@@ -247,10 +251,10 @@ for (const [W, H] of SIZES) {
     // 168 rows this script prints are byte-identical with the sleep and with this wait. The sleep
     // was 77 s of the script's 288 s. AND A PAGE THAT NEVER GETS THERE IS A FAILURE, NOT A SLOWER
     // PASS: a swallowed timeout here would measure the CHECKING card and report it as the fit.
-    const live = await page.waitForFunction(() => /\bLIVE\b/.test(document.body.innerText), null, { timeout: 8000 })
+    const live = await page.waitForFunction(() => /\bLIVE\b/.test(document.body.innerText), null, { timeout: LIVE_TIMEOUT_MS })
       .then(() => true, () => false);
     if (!live) {
-      stalls.push(`${W}x${H} ${theme} ${pname}: the page never reached LIVE within 8 s, so its views were not measured`);
+      stalls.push(`${W}x${H} ${theme} ${pname}: the page never reached LIVE within ${LIVE_TIMEOUT_MS} ms, so its views were not measured`);
       await page.close(); await ctx.close();
       continue;
     }
@@ -283,7 +287,10 @@ for (const [W, H] of SIZES) {
       // +300 and +1200 on all three pages at 1440 and 1024), so this waits for facts and not for
       // 1200 ms - which was 86 s of the script. One frame after, for layout.
       await page.evaluate(() => document.fonts.ready);
-      await page.waitForFunction(() => !!document.documentElement.dataset.theme, null, { timeout: 5000 });
+      // A settle, not a check: the row below asserts `themeKept` from what the page actually
+      // shows, so a boot script that never sets the attribute is a red row with the theme named,
+      // not a crashed run. Waiting here only makes that row read the settled state.
+      await page.waitForFunction(() => !!document.documentElement.dataset.theme, null, { timeout: 2000 }).catch(() => {});
       await page.waitForTimeout(150);
       await page.evaluate(SCROLL_TO_BOTTOM);
       await page.waitForTimeout(150);
