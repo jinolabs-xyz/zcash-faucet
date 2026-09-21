@@ -193,6 +193,18 @@ for (const { path, bare, sha256, w: wantW, h: wantH, mustCover } of SERVED_SHEET
   //     does not claim to judge.
   //   - a synthetic band ending at ay+31 passes whites at 100% and fails EXTENT alone. A band
   //     ending at ay+10 fails both (whites 23.28%).
+  //
+  // THE CLEAR ROW HAD THE SAME PROXY FAULT FROM THE OTHER SIDE. It counted ANY changed pixel in a
+  // +/-20 window, and on the re-rendered reactions sheet the pushed-up band's antialiased lower
+  // edge (served luminance fading 65 to 137 over ten rows) reaches rows 154-155 at the anchor
+  // columns, where the window starts at 154 and the bare pixel is FUR at luminance ~140. Eight of
+  // nine frames read 1-2 px and the row called it "dropped onto the expression". Measured on all
+  // eighteen anchors: changed pixels over the expression's INK, zero; the nearest the tail comes
+  // to ink is one row (dizzy's spiral). So the row now counts changes only where the bare pixel IS
+  // ink (luminance under 110), with a floor on the ink count so the anchor is proven to be on the
+  // expression. Mutant: the band's lower twenty rows pasted twenty px lower, onto the eye, fires
+  // 14 of 18 (the other four have their ink below where the paste lands). Round two's reactions
+  // sheet reads zero, as the old row also found.
   const pg = await browser.newPage();
   // SAME ORIGIN FIRST, OR THE CANVAS IS TAINTED. Reading pixels back from an image drawn onto a
   // canvas is forbidden when the image came from a different origin than the document - and
@@ -202,34 +214,42 @@ for (const { path, bare, sha256, w: wantW, h: wantH, mustCover } of SERVED_SHEET
   // not run.
   await pg.goto(BASE, { waitUntil: "domcontentloaded" });
   const sampled = await pg.evaluate(async ({ url, bareUrl, anchors, half, extentHalf, cover }) => {
-    const grab = async (u, onWhite) => {
+    const grab = async (u) => {
       const img = new Image();
       img.src = u;
       await img.decode();
       const cv = document.createElement("canvas");
       cv.width = img.naturalWidth; cv.height = img.naturalHeight;
       const ctx = cv.getContext("2d");
-      if (onWhite) { ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, cv.width, cv.height); }
+      // ON WHITE, BOTH MODES: the sheets are riso-style with alpha 253 nearly everywhere and 0
+      // outside the fox, and an un-composited alpha-0 pixel carries whatever RGB the encoder left,
+      // which can read as ink. Inside the face the composite moves a channel by under 2.
+      ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, cv.width, cv.height);
       ctx.drawImage(img, 0, 0);
       return ctx;
     };
-    const A = await grab(url, cover), B = await grab(bareUrl, cover);
+    const A = await grab(url), B = await grab(bareUrl);
     const lum = (d, k) => 0.299 * d[k] + 0.587 * d[k + 1] + 0.114 * d[k + 2];
     const out = {};
     for (const [cell, pts] of Object.entries(anchors)) {
       const [r, c] = cell.split(",").map(Number);
       out[cell] = pts.map(([ax, ay]) => {
         if (!cover) {
-          // CLEAR: a 1 px column through the eye, count material changes against the bare sheet.
+          // CLEAR: a 1 px column through the eye. Count material changes against the bare sheet,
+          // but ONLY where the bare pixel is the expression's INK. A change over the fur beside an
+          // eye is the band's antialiased tail, and a viewer does not read that as a band on the
+          // expression - see the block comment for the 8-of-9 false red this replaced.
           const X = c * 360 + ax, Y = r * 360 + ay - half, N = half * 2 + 1;
           const a = A.getImageData(X, Y, 1, N).data;
           const b = B.getImageData(X, Y, 1, N).data;
-          let band = 0;
+          let band = 0, ink = 0;
           for (let k = 0; k < a.length; k += 4) {
+            if (lum(b, k) >= 110) continue;
+            ink++;
             const d = Math.abs(a[k] - b[k]) + Math.abs(a[k + 1] - b[k + 1]) + Math.abs(a[k + 2] - b[k + 2]);
             if (d > 60) band++;
           }
-          return { band, total: N };
+          return { band, ink, total: N };
         }
         // COVER, part one: every light pixel of the bare eye reads dark on the served one.
         const N = half * 2;
@@ -265,7 +285,10 @@ for (const { path, bare, sha256, w: wantW, h: wantH, mustCover } of SERVED_SHEET
   for (const [cell, pts] of Object.entries(sampled)) {
     pts.forEach((s, k) => {
       if (!mustCover) {
-        if (s.band > 0) fails.push(`${path} (${cell}) eye ${k}: ${s.band} px changed over the eye - the pushed-up band has dropped onto the expression`);
+        // The window must contain some of the expression, or "nothing changed over the ink" is
+        // true of nothing. Measured: 8 to 41 ink px per window across the eighteen anchors.
+        if (s.ink < 5) fails.push(`${path} (${cell}) eye ${k}: only ${s.ink} ink px in the bare eye window (needs >=5) - the anchor is not on the expression, so this row measured nothing`);
+        else if (s.band > 0) fails.push(`${path} (${cell}) eye ${k}: ${s.band} of the expression's ${s.ink} ink px changed - the pushed-up band has dropped onto the expression`);
         return;
       }
       // THE ANCHOR MUST BE ON AN EYE, or "every light pixel is hidden" is true of zero pixels. The
