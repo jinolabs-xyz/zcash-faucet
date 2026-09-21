@@ -13,7 +13,7 @@ import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createServer as createTlsServer } from "node:https";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -24,7 +24,7 @@ const PROBE = fileURLToPath(new URL("./live-probe.mjs", import.meta.url));
 // The fake answers the way the real route does (R-24): the detailed box only to a
 // request carrying the token in x-faucet-ops, one word to everyone else. `box` overrides
 // the detailed shape; `publicBox` the one-word one.
-function fakeFaucet(ready, { box, publicBox, token = "" } = {}) {
+function fakeFaucet(ready, { box, publicBox, token = "", buildCommit = "abc1234" } = {}) {
   const server = createServer((req, res) => {
     const detailed = box ?? { state: "complete", expected: 1, present: 1, notEnabled: 0, watchdogUnit: "active", alertBridge: "ok", minerBinary: "current", ageSeconds: 5 };
     const ops = token && req.headers["x-faucet-ops"] === token;
@@ -33,7 +33,7 @@ function fakeFaucet(ready, { box, publicBox, token = "" } = {}) {
       challenge: "pow", node: { ready: true, syncPercent: 100, height: 10, frozen: false },
       backend: { reachable: true },
       box: ops ? { ...detailed, verdict: detailed.verdict ?? "ok" } : (publicBox ?? { state: "ok", minerUnit: null }),
-      ...(ops ? { buildCommit: "abc1234" } : {}),
+      ...(ops ? { buildCommit } : {}),
     };
     const body = req.url.startsWith("/api/ready") ? ready : status;
     const code = req.url.startsWith("/api/ready") ? (ready.ready ? 200 : 503) : 200;
@@ -603,4 +603,80 @@ test("an http origin skips the certificate check rather than failing it", async 
   const r = await runProbe({});
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /certificate: skipped, http:\/\/127\.0\.0\.1:\d+ is not https/);
+});
+
+// ── THE BOX ANSWERS IN GITHUB: the drift verdict and the box's commit (#721's follow-up) ──
+
+const TOKEN = "t0ken-t0ken-t0ken-t0ken";
+const HEAD = spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
+const PARENT = spawnSync("git", ["rev-parse", "HEAD~1"], { encoding: "utf8" }).stdout.trim();
+
+test("drift: a server that does not send the word is cannot-verify, not a pass on silence and not a fault", async () => {
+  const r = await runProbe({}, READY, { token: TOKEN });
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /the box's drift audit reads clean.*server does not send `drift` yet, cannot verify/);
+});
+
+test("drift: the public word \"drift\" is RED, says the box and the repo disagree, and names no finding", async () => {
+  const r = await runProbe({}, READY, { token: TOKEN, publicBox: { state: "ok", minerUnit: null, drift: "drift" } });
+  assert.notEqual(r.code, 0);
+  assert.match(r.out, /FAIL: the box's drift audit reads clean.*the box and the repo DISAGREE/);
+  assert.match(r.out, /journalctl -u faucet-drift-report/, "the operator is sent to the box's own journal for the names");
+});
+
+test("drift: \"stale\" is red with its own sentence - an audit that stopped arriving is not yesterday's clean", async () => {
+  const r = await runProbe({}, READY, { token: TOKEN, publicBox: { state: "ok", minerUnit: null, drift: "stale" } });
+  assert.notEqual(r.code, 0);
+  assert.match(r.out, /older than 90 minutes.*stopped arriving/);
+});
+
+test("drift: \"unknown\" and \"incomplete\" are red too, each with a different sentence", async () => {
+  const u = await runProbe({}, READY, { token: TOKEN, publicBox: { state: "ok", minerUnit: null, drift: "unknown" } });
+  assert.notEqual(u.code, 0); assert.match(u.out, /has not published a drift audit result/);
+  const i = await runProbe({}, READY, { token: TOKEN, publicBox: { state: "ok", minerUnit: null, drift: "incomplete" } });
+  assert.notEqual(i.code, 0); assert.match(i.out, /could not run every check/);
+});
+
+test("drift: \"clean\" passes, and with the token the counts and age ride the line - numbers, never names", async () => {
+  const pub = await runProbe({}, READY, { token: TOKEN, publicBox: { state: "ok", minerUnit: null, drift: "clean" } });
+  assert.equal(pub.code, 0, pub.out);
+  const ops = await runProbe({ SMOKE_OPS_TOKEN: TOKEN }, READY, { token: TOKEN, buildCommit: HEAD.slice(0, 7), box: { state: "complete", expected: 1, present: 1, notEnabled: 0, watchdogUnit: "active", alertBridge: "ok", minerBinary: "current", ageSeconds: 5, drift: { state: "drift", findings: 3, unverified: 1, ageSeconds: 120, repoSha: HEAD } } });
+  assert.notEqual(ops.code, 0);
+  assert.match(ops.out, /FAIL: the box's drift audit reads clean.*DISAGREE.*\(3 finding\(s\), 1 unverified, 120s old\)/);
+});
+
+test("the box runs main: main's own head passes; a stranger commit is red; no ref means not compared, said so", async () => {
+  const onMain = await runProbe({ SMOKE_OPS_TOKEN: TOKEN, SMOKE_MAIN_REF: "HEAD" }, READY, { token: TOKEN, buildCommit: HEAD.slice(0, 7) });
+  assert.equal(onMain.code, 0, onMain.out);
+  assert.match(onMain.out, /ok: the box runs main.*which is HEAD/);
+  const stranger = await runProbe({ SMOKE_OPS_TOKEN: TOKEN, SMOKE_MAIN_REF: "HEAD" }, READY, { token: TOKEN, buildCommit: "deadbee" });
+  assert.notEqual(stranger.code, 0);
+  assert.match(stranger.out, /FAIL: the box runs main.*deadbee, which this checkout does not know/);
+  const noRef = await runProbe({ SMOKE_OPS_TOKEN: TOKEN }, READY, { token: TOKEN, buildCommit: "deadbee" });
+  assert.equal(noRef.code, 0, noRef.out);
+  assert.match(noRef.out, /SMOKE_MAIN_REF is not set, so the box's commit was not compared/);
+});
+
+test("the box runs main: an ancestor main just moved past is allowed inside the deploy window, a dirty checkout never is, and unknown is red", async () => {
+  // HEAD~1 is an ancestor; HEAD was committed within the allowance only if this test runs
+  // soon after the commit, so the window is widened to make the row about the ANCESTOR
+  // rule and not about the clock.
+  const ancestor = await runProbe({ SMOKE_OPS_TOKEN: TOKEN, SMOKE_MAIN_REF: "HEAD", SMOKE_DEPLOY_LAG_MIN: "100000000" }, READY, { token: TOKEN, buildCommit: PARENT.slice(0, 7) });
+  assert.equal(ancestor.code, 0, ancestor.out);
+  assert.match(ancestor.out, /runs its ancestor/);
+  // A repo of its own, with main committed two hours ago, so "the deploy did not land" is
+  // reached deterministically and not only when this test happens to run late.
+  const old = mkdtempSync(join(tmpdir(), "probe-main-"));
+  const g = (...a) => spawnSync("git", ["-C", old, ...a], { encoding: "utf8", env: { ...process.env, GIT_AUTHOR_DATE: "2020-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2020-01-01T00:00:00Z", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } }).stdout.trim();
+  g("init", "-q"); g("commit", "-q", "--allow-empty", "-m", "a"); const a = g("rev-parse", "HEAD"); g("commit", "-q", "--allow-empty", "-m", "b");
+  const late = await runProbe({ SMOKE_OPS_TOKEN: TOKEN, SMOKE_MAIN_REF: "HEAD", GIT_DIR: join(old, ".git") }, READY, { token: TOKEN, buildCommit: a.slice(0, 7) });
+  rmSync(old, { recursive: true, force: true });
+  assert.notEqual(late.code, 0, late.out);
+  assert.match(late.out, /has been at .* for \d+ minutes and the box still runs .*: the deploy did not land/);
+  const dirty = await runProbe({ SMOKE_OPS_TOKEN: TOKEN, SMOKE_MAIN_REF: "HEAD" }, READY, { token: TOKEN, buildCommit: HEAD.slice(0, 7) + "-modified" });
+  assert.notEqual(dirty.code, 0);
+  assert.match(dirty.out, /uncommitted changes on the box's checkout/);
+  const unknown = await runProbe({ SMOKE_OPS_TOKEN: TOKEN, SMOKE_MAIN_REF: "HEAD" }, READY, { token: TOKEN, buildCommit: "unknown" });
+  assert.notEqual(unknown.code, 0);
+  assert.match(unknown.out, /did not say which commit it runs/);
 });
