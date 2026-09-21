@@ -211,6 +211,8 @@ const fitsNow = (r) =>
 const browser = await chromium.launch();
 const rows = [];
 const errors = [];
+// Size/theme/pointer contexts whose page never reached LIVE: each one is a set of views NOT measured.
+const stalls = [];
 let missing = null;
 
 for (const [W, H] of SIZES) {
@@ -237,7 +239,22 @@ for (const [W, H] of SIZES) {
     // run reported both. The `themeKept` assertion would have failed for a reason that is
     // mine rather than the page's.
     await page.evaluate((t) => { localStorage.setItem("zfaucet_theme", t); document.documentElement.dataset.theme = t; }, theme);
-    await page.waitForTimeout(3200);
+    // WAIT FOR THE EVENT, NOT THE CLOCK. This was a 3200 ms sleep with no stated reason, ported
+    // from the preview's fit-test. What the card is waiting for is its own status read: the
+    // CHECKING card and the LIVE card are different heights, so a fit measured before LIVE is a
+    // fit of the wrong content. Measured 2026-09-21 against a local build: LIVE is already on
+    // screen when the theme flips (27 ms), the document height is identical at +3200, and the
+    // 168 rows this script prints are byte-identical with the sleep and with this wait. The sleep
+    // was 77 s of the script's 288 s. AND A PAGE THAT NEVER GETS THERE IS A FAILURE, NOT A SLOWER
+    // PASS: a swallowed timeout here would measure the CHECKING card and report it as the fit.
+    const live = await page.waitForFunction(() => /\bLIVE\b/.test(document.body.innerText), null, { timeout: 8000 })
+      .then(() => true, () => false);
+    if (!live) {
+      stalls.push(`${W}x${H} ${theme} ${pname}: the page never reached LIVE within 8 s, so its views were not measured`);
+      await page.close(); await ctx.close();
+      continue;
+    }
+    await page.waitForTimeout(300);
     for (const v of VIEWS) {
       // THE APP'S DRIVER, NOT THE PREVIEW'S. The preview's nav is `#seg [data-view="claim"]`;
       // the app's is a testid, which is also what ui-smoke's showView() clicks. Porting the
@@ -261,7 +278,13 @@ for (const [W, H] of SIZES) {
     if (missing) { await page.close(); break; }
     for (const p of PAGES_IN_SHELL) {
       await page.goto(BASE + p, { waitUntil: "networkidle" });
-      await page.waitForTimeout(1200);
+      // The subpage's own settle: fonts loaded and the boot script's theme attribute present.
+      // Both are already true at networkidle (measured: height, fonts and theme identical at +0,
+      // +300 and +1200 on all three pages at 1440 and 1024), so this waits for facts and not for
+      // 1200 ms - which was 86 s of the script. One frame after, for layout.
+      await page.evaluate(() => document.fonts.ready);
+      await page.waitForFunction(() => !!document.documentElement.dataset.theme, null, { timeout: 5000 });
+      await page.waitForTimeout(150);
       await page.evaluate(SCROLL_TO_BOTTOM);
       await page.waitForTimeout(150);
       const r = await page.evaluate(MEASURE);
@@ -295,6 +318,10 @@ for (const o of rows) {
 console.log("errors:", errors.length ? errors : "none");
 // A RUN THAT CHECKED NOTHING IS NOT A PASS. Without this an early `break`, a bad base URL
 // or an empty size list would print "errors: none" and exit 0 on zero measurements.
+if (stalls.length) {
+  console.error(`fit-check: FAIL - ${stalls.length} context(s) never reached LIVE:\n  ${stalls.join("\n  ")}`);
+  process.exit(1);
+}
 if (rows.length !== PLANNED) {
   console.error(`fit-check: FAIL - measured ${rows.length} of ${PLANNED} planned combinations, so this run proves nothing`);
   process.exit(1);
