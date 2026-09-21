@@ -4880,6 +4880,72 @@ try {
   const copied = String(await page.evaluate(() => navigator.clipboard.readText().catch(() => "")));
   ok("copy txid puts a 64-hex txid on the clipboard", /^[0-9a-f]{64}$/.test(copied), copied.slice(0, 16));
 
+  // ===== THE RECEIPT SAYS WHERE THE DRIP WAS MINED, FROM OUR NODE, AND LINKS OUR OWN ANSWER =====
+  // Born 2026-09-21: the owner's drip left the mempool into a block, a third-party explorer's tx
+  // page 404'd for two minutes while its block index already had the block, and "seen by our
+  // node" beside a dead explorer link read as dropped. /api/tx had the height the whole time and
+  // the page dropped it. These rows read the Status line the visitor reads BEFORE clicking, hold
+  // its number to /api/tx's own answer for this txid, and drive the two states a lagging node
+  // produces to prove the line says what the API says and never "dropped".
+  const statusLine = () => page.evaluate(() => {
+    const dt = [...document.querySelectorAll(".receipt dt")].find((e) => (e.textContent || "").trim() === "Status");
+    const dd = dt && dt.nextElementSibling;
+    const a = dd && dd.querySelector("a[data-testid=our-node-answer]");
+    const cs = dd && getComputedStyle(dd);
+    // line boxes, from the value cell's own height against its line-height: the frozen receipt
+    // panel grows by a line for every wrap, and the first copy wrapped at every planned width.
+    const lines = dd ? Math.round(dd.getBoundingClientRect().height / parseFloat(cs.lineHeight)) : 0;
+    return { text: dd ? (dd.textContent || "").trim().replace(/\s+/g, " ") : "", href: a ? a.getAttribute("href") : null, lines, width: dd ? Math.round(dd.getBoundingClientRect().width) : 0 };
+  });
+  // The double answers the first poll after the receipt appears; wait on the line, not a clock.
+  await page.waitForFunction(() => {
+    const dt = [...document.querySelectorAll(".receipt dt")].find((e) => (e.textContent || "").trim() === "Status");
+    return /^in block/.test((dt?.nextElementSibling?.textContent || "").trim());
+  }, null, { timeout: 15_000 }).catch(() => {});
+  const mined = await statusLine();
+  const apiTx = await fetch(`${BASE}/api/tx?txid=${copied}`).then((r) => r.json()).catch(() => null);
+  const m = mined.text.match(/^in block ([\d,]+), (\d+) confirmations?$/);
+  ok("the receipt says which block the drip is in, and the block is /api/tx's own answer for this txid",
+    !!m && apiTx?.known === true && Number(m[1].replace(/,/g, "")) === apiTx.height && Number(m[2]) === apiTx.confirmations,
+    `line "${mined.text}"; /api/tx says known=${apiTx?.known} height=${apiTx?.height} confirmations=${apiTx?.confirmations}`);
+  ok("and that line fits the value column on ONE line, so the frozen receipt panel does not grow",
+    mined.lines === 1, `${mined.lines} line(s) in a ${mined.width}px column: "${mined.text}"`);
+  ok("and the block in that line links OUR /api/tx for this txid, which answers",
+    mined.href === `/api/tx?txid=${copied}` && apiTx?.ok === true,
+    `href ${mined.href}`);
+  await page.getByRole("button", { name: /Copy receipt/ }).click();
+  await page.waitForTimeout(300);
+  const receiptClip = String(await page.evaluate(() => navigator.clipboard.readText().catch(() => "")));
+  ok("and the copied receipt carries the same fact and the same URL",
+    new RegExp(`^mined:\\s+block ${apiTx?.height}, ${apiTx?.confirmations} confirmations? on our node$`, "m").test(receiptClip)
+      && receiptClip.includes(`/api/tx?txid=${copied}`),
+    receiptClip.split("\n").filter((l) => /^(mined|our node):/.test(l)).join(" | ") || "neither line in the clipboard");
+  // A NODE THAT HAS NOT SEEN IT, AND A NODE THAT CANNOT SAY: the line says what /api/tx said.
+  // Each state lands on the next poll (TX_POLL_MS is 10 s), so each wait is one poll plus slack.
+  for (const [answer, expect] of [
+    [{ ok: true, txid: copied, known: false, confirmations: null, height: null }, "not seen by our node yet"],
+    [{ ok: true, txid: copied, known: null, confirmations: null, height: null }, "our node cannot say right now"],
+  ]) {
+    await page.route("**/api/tx?*", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(answer) }));
+    await page.waitForFunction((want) => {
+      const dt = [...document.querySelectorAll(".receipt dt")].find((e) => (e.textContent || "").trim() === "Status");
+      return (dt?.nextElementSibling?.textContent || "").trim() === want;
+    }, expect, { timeout: 13_000 }).catch(() => {});
+    const line = await statusLine();
+    // innerText, NOT textContent. textContent glues adjacent elements together with no
+    // separator - measured: "...it may have been droppedCopy txidCopy receipt..." - so a word
+    // boundary after "dropped" never exists and /\bdropped\b/ read a page that said dropped as
+    // clean. The first version of this row passed its own mutant that way (SDE-UI, this PR).
+    // innerText breaks between blocks the way the page renders. And the read is proven to
+    // include the line it is guarding, or "nothing says dropped" would be true of an empty read.
+    const body = await page.evaluate(() => document.body.innerText);
+    ok(`with /api/tx answering known=${answer.known} the line says what the API said: "${expect}"`, line.text === expect, `line "${line.text}"`);
+    ok(`and nothing on the page says dropped while known=${answer.known}`,
+      body.includes(line.text) && !/\bdropped\b/i.test(body),
+      !body.includes(line.text) ? "the body read does not contain the Status line, so it proves nothing" : (body.match(/[^.\n]*\bdropped\b[^.\n]*/i)?.[0]?.trim() ?? ""));
+    await page.unroute("**/api/tx?*");
+  }
+
   // ===== #515: PAY B WHILE HOLDING A's KEY, AND THE RECEIPT MUST NOT OFFER A's KEY =====
   // page.tsx:1672 gates the receipt's key on `genKey && genKey.address === tx.to`. The suite
   // covered generate -> copy -> pay THE GENERATED ADDRESS, so a regression to `genKey &&` alone
