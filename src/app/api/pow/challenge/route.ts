@@ -15,7 +15,7 @@ export const dynamic = "force-dynamic";
 
 export const GET = withApi("pow-challenge", async (req: NextRequest, api) => {
   if (config.challenge !== "pow") {
-    return apiError(404, "PoW challenge is not enabled.", api);
+    return apiError(404, "PoW challenge is not enabled.", api, "notFound");
   }
   const raw = clientIp(req);
   const ipHash = raw ? fingerprintIp(raw) : "anon";

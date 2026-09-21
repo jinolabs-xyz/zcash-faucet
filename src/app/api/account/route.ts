@@ -19,7 +19,7 @@ export const POST = withApi("account", async (req: NextRequest, api) => {
   try {
     ({ type } = BodySchema.parse(await req.json().catch(() => ({}))));
   } catch {
-    return apiError(400, "Invalid request.", api);
+    return apiError(400, "Invalid request.", api, "badRequest");
   }
 
   try {
@@ -41,6 +41,6 @@ export const POST = withApi("account", async (req: NextRequest, api) => {
     return NextResponse.json({ ok: true, account: generateTransparentAccount() });
   } catch (err) {
     api.logError(err, "account generation");
-    return apiError(500, "Account generation failed on our side. Try again in a moment.", api);
+    return apiError(500, "Account generation failed on our side. Try again in a moment.", api, "unhandled");
   }
 });

@@ -14,10 +14,55 @@ import type { NextRequest } from "next/server";
 import { clientIp } from "./clientIp.ts";
 import { fingerprintIp } from "./privacy.ts";
 
+/**
+ * WHICH GATE REFUSED. One value per apiError call site, on the log line that is written for
+ * EVERY request, so a refusal histogram is a group-by and never a regex over prose.
+ *
+ * On the info line and not the error line, because the error line exists only where a site
+ * remembered to call logError - thirteen of the nineteen refusal sites in the claim route never
+ * did, so a histogram built on it would have classified the wallet-lag refusals and nothing else
+ * (SDE-Research, item 3). A field on the always-written line cannot be forgotten per site.
+ *
+ * REQUIRED on apiError rather than optional: an optional field is a site that forgets, and the
+ * whole point is that forgetting fails at compile time. Grouped by what the number MEANS, which
+ * is the distinction the old "one in four" estimate collapsed:
+ *   REJECTED  the caller's mistake - not a faucet defect
+ *   REFUSED   a gate declined by design - a service the visitor did not get, still not a defect
+ *   FAILED    ours
+ */
+export type Gate =
+  // REJECTED
+  | "badRequest"      // malformed body, address or network
+  | "methodNotAllowed"
+  | "notFound"
+  | "powRequired"
+  | "powFailed"
+  | "challengeSpent"
+  | "cooldown"        // per address, per ip, or per subnet
+  | "lookupRate"      // too many /api/tx lookups
+  | "recipient"       // the wallet would not pay that address
+  // REFUSED
+  | "ctazDisabled"
+  | "draining"        // the process is restarting
+  | "sendHealth"
+  | "empty"
+  | "freshness"       // chain freshness could not be established
+  | "walletLag"       // the wallet is behind its own node
+  | "ctazReadiness"
+  | "dailyCap"
+  | "busy"
+  // FAILED
+  | "sendFailed"      // definite: nothing left the wallet
+  | "sendUnknown"     // lost the reply: coins may be on their way
+  | "backend"         // a chain backend we depend on did not answer
+  | "unhandled";      // the catch-all 500
+
 export interface ApiCtx {
   requestId: string;
   /** Record an internal error with full detail. Server log only, never the client. */
   logError(err: unknown, note?: string): void;
+  /** Set by apiError; read by withApi when it writes the info line. Null on a success. */
+  gate: Gate | null;
 }
 
 // No wallet claim here: this fires for ANY route, and only the faucet handler
@@ -28,8 +73,15 @@ function logLine(fields: Record<string, unknown>): void {
   console.log(JSON.stringify({ ts: new Date().toISOString(), ...fields }));
 }
 
-/** Standard error body: { ok:false, error, requestId }, plus route extras (e.g. retryAfterSeconds). */
-export function apiError(status: number, error: string, ctx: ApiCtx, extra?: Record<string, unknown>): Response {
+/**
+ * Standard error body: { ok:false, error, requestId }, plus route extras (e.g. retryAfterSeconds).
+ *
+ * Records `gate` on the ctx so the info line carries it. The body does not: the gate is for the
+ * operator's histogram, and the visitor already gets the sentence and, where a route chooses,
+ * `kind`. Keeping them separate means a wording change never moves a bucket.
+ */
+export function apiError(status: number, error: string, ctx: ApiCtx, gate: Gate, extra?: Record<string, unknown>): Response {
+  ctx.gate = gate;
   return Response.json({ ok: false, error, requestId: ctx.requestId, ...extra }, { status });
 }
 
@@ -42,6 +94,7 @@ export function withApi(
     const started = Date.now();
     const ctx: ApiCtx = {
       requestId,
+      gate: null,
       logError(err, note) {
         logLine({
           level: "error",
@@ -59,7 +112,7 @@ export function withApi(
       res = await handler(req, ctx);
     } catch (err) {
       ctx.logError(err, "unhandled");
-      res = apiError(500, GENERIC_500, ctx);
+      res = apiError(500, GENERIC_500, ctx, "unhandled");
     }
 
     // Raw IP never touches the log, only the salted fingerprint.
@@ -71,6 +124,7 @@ export function withApi(
       path: new URL(req.url).pathname,
       status: res.status,
       ms: Date.now() - started,
+      gate: ctx.gate,
       ipHash: ip ? fingerprintIp(ip) : null,
     });
     res.headers.set("x-request-id", requestId);

@@ -12,7 +12,7 @@
 // construction and cannot drift from the validator.
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { openSync, readFileSync, mkdtempSync, existsSync } from "node:fs";
+import { openSync, readFileSync, readdirSync, mkdtempSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bech32, bech32m } from "@scure/base";
@@ -1488,6 +1488,35 @@ try {
   stop(walletA);
   stop(walletB);
   stop(walletC);
+}
+
+// ITEM 3, THE RUNTIME HALF: every refusal this run produced carries a gate on the info line.
+// The unit rows prove the MECHANISM and count the SITES in the source; this reads what the
+// servers actually wrote across every refusal path the suite drove, and fails on the first
+// non-200 claim that landed with gate null. That is the row that stops a nineteenth site
+// shipping half-wired: tsc catches a missing argument, this catches a site whose gate never
+// reached the line.
+{
+  const logs = readdirSync(LOG_DIR).filter((f) => /^server-\d+\.log$/.test(f));
+  const seen = new Map();           // gate -> count
+  let refusals = 0, unnamed = 0;
+  for (const f of logs) {
+    for (const line of readFileSync(join(LOG_DIR, f), "utf8").split("\n")) {
+      if (!line.startsWith("{")) continue;
+      let j; try { j = JSON.parse(line); } catch { continue; }
+      if (j.level !== "info" || j.path !== "/api/faucet" || j.status === 200) continue;
+      refusals++;
+      if (j.gate == null) unnamed++; else seen.set(j.gate, (seen.get(j.gate) ?? 0) + 1);
+    }
+  }
+  ok("item 3: every non-200 claim this run produced carries a gate on its info line",
+     refusals > 0 && unnamed === 0,
+     `${refusals} refusals, ${unnamed} with gate null, gates seen: ${[...seen.keys()].sort().join(" ")}`);
+  // A POSITIVE CONTROL on the reader itself: a run that drove the freshness gate and the send
+  // failure must show both, or the row above is counting lines it cannot see.
+  ok("item 3: and the reader saw the gates this suite is known to drive",
+     seen.has("freshness") && seen.has("sendFailed") && seen.has("cooldown"),
+     `freshness=${seen.get("freshness") ?? 0} sendFailed=${seen.get("sendFailed") ?? 0} cooldown=${seen.get("cooldown") ?? 0}`);
 }
 
 console.log(failures === 0 ? "\napi-integration: all green" : `\napi-integration: ${failures} FAILED`);

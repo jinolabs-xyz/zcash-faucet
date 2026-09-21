@@ -34,7 +34,7 @@ export const GET = withApi("tx", async (req: NextRequest, api) => {
   if (raw) {
     const verdict = limiter.check(fingerprintIp(raw));
     if (!verdict.allowed) {
-      return apiError(429, "Too many lookups. Slow down for a moment.", api, {
+      return apiError(429, "Too many lookups. Slow down for a moment.", api, "lookupRate", {
         retryAfterSeconds: verdict.retryAfterSeconds,
       });
     }
@@ -42,7 +42,7 @@ export const GET = withApi("tx", async (req: NextRequest, api) => {
 
   const txid = req.nextUrl.searchParams.get("txid")?.trim() ?? "";
   if (!/^[0-9a-f]{64}$/i.test(txid)) {
-    return apiError(400, "Not a transaction id. Expected 64 hex characters.", api);
+    return apiError(400, "Not a transaction id. Expected 64 hex characters.", api, "badRequest");
   }
 
   const status = await getTxStatus(txid);
