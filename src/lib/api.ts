@@ -31,8 +31,13 @@ import { fingerprintIp } from "./privacy.ts";
  *   FAILED    ours
  */
 export type Gate =
-  // REJECTED
-  | "badRequest"      // malformed body, address or network
+  // REJECTED. The 400s are split because they have different remedies: a malformed body is
+  // a client bug, a bad address is the visitor's typo, an unknown network is a stale link -
+  // and in an 18-hour window they were 29% of all claim requests as ONE bucket (SDE-Research).
+  | "badBody"
+  | "badAddress"
+  | "badNetwork"
+  | "badRequest"      // a route with only one way to be malformed
   | "methodNotAllowed"
   | "notFound"
   | "powRequired"

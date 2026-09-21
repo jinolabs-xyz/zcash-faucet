@@ -82,13 +82,13 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
   try {
     body = BodySchema.parse(await req.json());
   } catch {
-    return apiError(400, "Invalid request body.", api, "badRequest");
+    return apiError(400, "Invalid request body.", api, "badBody");
   }
 
   // 1. Address
   const info = validateTestnetAddress(body.address);
   if (!info.valid) {
-    return apiError(400, info.reason ?? "Invalid address.", api, "badRequest");
+    return apiError(400, info.reason ?? "Invalid address.", api, "badAddress");
   }
   const address = body.address.trim();
 
@@ -98,7 +98,7 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
   //     why the two cases are separated HERE rather than by a defaulting parser.
   const network = body.network === undefined ? DEFAULT_NETWORK : parseNetwork(body.network);
   if (network === null) {
-    return apiError(400, `Unknown network. This faucet serves ${NETWORKS.join(" and ")}.`, api, "badRequest");
+    return apiError(400, `Unknown network. This faucet serves ${NETWORKS.join(" and ")}.`, api, "badNetwork");
   }
   if (network === "ctaz" && !config.crosslink.enabled) {
     // 503 rather than 400: the request is well formed and will work on a deployment

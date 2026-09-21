@@ -10,7 +10,7 @@ import type { ApiCtx, Gate } from "./api.ts";
 import { readFileSync } from "node:fs";
 // The enum as a runtime set, kept in step with the type by the exhaustive check below.
 const GATES = new Set<Gate>([
-  "badRequest","methodNotAllowed","notFound","powRequired","powFailed","challengeSpent","cooldown",
+  "badBody","badAddress","badNetwork","badRequest","methodNotAllowed","notFound","powRequired","powFailed","challengeSpent","cooldown",
   "lookupRate","recipient","ctazDisabled","draining","sendHealth","empty","freshness","walletLag",
   "ctazReadiness","dailyCap","busy","sendFailed","sendUnknown","backend","unhandled",
 ]);
