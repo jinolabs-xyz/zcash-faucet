@@ -1,9 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+// NO REAL ORACLE FROM A UNIT TEST. Both legs: HOSH_URL to a closed port seals the aggregate,
+// TIP_ORACLE_ENDPOINT set EMPTY seals the direct gRPC leg, which defaults to testnet.zec.rocks
+// when merely unset (config.ts:140). Before any import that loads config. Enforced by
+// zcash/oraclePin.test.ts.
+process.env.HOSH_URL = "http://127.0.0.1:9/";
+process.env.TIP_ORACLE_ENDPOINT = "";
+const { shieldFreshness, chainFreshness, mayShield, SHIELD_MAX_LAG_BLOCKS } = await import("./shieldGate.ts");
+
 // chainFreshness alongside the shieldFreshness alias the older cases use: the
 // module says new call sites should prefer the general name, and the #211 cases
 // below are about any transaction build rather than a shield specifically.
-import { shieldFreshness, chainFreshness, mayShield, SHIELD_MAX_LAG_BLOCKS } from "./shieldGate.ts";
 
 // The decision is a pure function of two heights, so every branch - including the
 // ones that only occur when a public endpoint is down - is reachable without
@@ -134,8 +141,10 @@ test("a positive lag inside the budget still says within, so the split is narrow
 });
 
 // ── THE MONEY PATH WAITS AT LEAST ONE FULL FETCH (risk register #6) ─────────────────────
-import { ORACLE_WAIT_MS, readChainFreshnessAsking, freshnessRefusalText, type ChainGate } from "./shieldGate.ts";
-import { HOSH_TIMEOUT_MS, MIN_ATTEMPT_GAP_MS, FALLBACK_TOTAL_MS, REFRESH_ATTEMPT_MS } from "./externalTip.ts";
+// Dynamic, like the block at the top: a static import here is hoisted above the pins on lines 7-8.
+const { ORACLE_WAIT_MS, readChainFreshnessAsking, freshnessRefusalText } = await import("./shieldGate.ts");
+type ChainGate = import("./shieldGate.ts").ChainGate;
+const { HOSH_TIMEOUT_MS, MIN_ATTEMPT_GAP_MS, FALLBACK_TOTAL_MS, REFRESH_ATTEMPT_MS } = await import("./externalTip.ts");
 
 test("the wait in front of a drip covers the primary oracle's own timeout, and both numbers are pinned", () => {
   // 2 s against a 5 s fetch refused claims as "unverifiable" while hosh was answering at

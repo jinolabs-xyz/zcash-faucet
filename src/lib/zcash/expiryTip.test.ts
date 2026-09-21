@@ -16,6 +16,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
+// NO REAL ORACLE FROM A UNIT TEST. Both legs: HOSH_URL to a closed port seals the aggregate,
+// TIP_ORACLE_ENDPOINT set EMPTY seals the direct gRPC leg, which defaults to testnet.zec.rocks
+// when merely unset (config.ts:140). Before any import that loads config. Enforced by
+// zcash/oraclePin.test.ts.
+process.env.HOSH_URL = "http://127.0.0.1:9/";
+process.env.TIP_ORACLE_ENDPOINT = "";
+
 process.env.RATE_LIMIT_SALT = "expiry-tip-test-salt";
 const { summarize, disagreement } = await import("./expiryTip.ts");
 const { SHIELD_MAX_LAG_BLOCKS } = await import("./shieldGate.ts");

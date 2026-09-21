@@ -2,6 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 
+// NO REAL ORACLE FROM A UNIT TEST, including the CHILD this file spawns: it inherits
+// { ...process.env }, so the seal goes here. Enforced by zcash/oraclePin.test.ts.
+process.env.HOSH_URL = "http://127.0.0.1:9/";
+process.env.TIP_ORACLE_ENDPOINT = "";
+
 /**
  * The budget is a module constant, evaluated at import, so these two failure modes
  * can only be tested in a fresh process. Both were found by SDE-App running the
