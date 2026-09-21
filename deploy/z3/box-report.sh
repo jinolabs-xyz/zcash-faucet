@@ -412,4 +412,23 @@ fi
 wr_json="${watchdog_restarts:-null}"
 wrd_json="${watchdog_restarts_delta:-null}"
 
-write "{\"expected\":${expected},\"present\":${present},\"notEnabled\":${not_enabled},\"enabledUndeclared\":${enabled_undeclared},\"minerBinary\":\"${miner_state}\",\"minerUnit\":\"${miner_unit}\",\"watchdogUnit\":\"${watchdog_unit}\",\"alertBridge\":\"${alert_bridge}\",\"platform\":\"${platform}\",\"watchdogRestarts\":${wr_json},\"watchdogRestartsDelta\":${wrd_json},\"at\":$(( $(date +%s) * 1000 )),\"readable\":true}"
+# THE DRIFT AUDIT'S OWN VERDICT, CARRIED NOT RECOMPUTED. drift-report.sh writes counts to
+# a fixed-shape summary every half hour; this embeds it as `drift` so /api/status and
+# live-smoke can read the box's answer to "does this box match the repo" - the answer that
+# lived only in a journal for a fortnight (#721). Embedded ONLY when it matches the exact
+# shape drift-report.sh prints, because a torn or foreign file spliced into this JSON would
+# take the whole report down with it; anything else is `null`, which the reader classifies
+# as unknown, and unknown fails the gate rather than reading as clean. The file's own `at`
+# carries its age; this report's `at` says nothing about when the audit ran.
+DRIFT_SUMMARY="${BOX_REPORT_DRIFT_SUMMARY:-/var/lib/faucet-drift/summary.json}"
+drift_json="null"
+if [ -f "$DRIFT_SUMMARY" ]; then
+  drift_line="$(head -c 512 "$DRIFT_SUMMARY" 2>/dev/null | head -n1)"
+  if printf '%s' "$drift_line" | grep -qE '^\{"at":[0-9]{1,16},"repoSha":"([0-9a-f]{40})?","config":\{"rc":[0-9],"findings":[0-9]{1,6},"unverified":[0-9]{1,6}\},"access":\{"rc":[0-9],"findings":[0-9]{1,6},"unverified":[0-9]{1,6}\}\}$'; then
+    drift_json="$drift_line"
+  else
+    echo "box-report: $DRIFT_SUMMARY is not the shape drift-report.sh writes, publishing drift as null" >&2
+  fi
+fi
+
+write "{\"expected\":${expected},\"present\":${present},\"notEnabled\":${not_enabled},\"enabledUndeclared\":${enabled_undeclared},\"minerBinary\":\"${miner_state}\",\"minerUnit\":\"${miner_unit}\",\"watchdogUnit\":\"${watchdog_unit}\",\"alertBridge\":\"${alert_bridge}\",\"platform\":\"${platform}\",\"watchdogRestarts\":${wr_json},\"watchdogRestartsDelta\":${wrd_json},\"drift\":${drift_json},\"at\":$(( $(date +%s) * 1000 )),\"readable\":true}"

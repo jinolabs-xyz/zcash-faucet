@@ -1,14 +1,19 @@
 # Fires faucet-drift-report.service. Install with the service, see its header.
 [Unit]
-Description=Daily config drift and access audit
+Description=Config drift and access audit, every half hour
 
 [Timer]
-# Daily at 03:40. Drift accumulates over hours of hand work, not minutes, and a
-# daily report is read while a noisier one is filtered.
-OnCalendar=03:40
-RandomizedDelaySec=20m
-# A box that was off at 03:40 still gets audited on the next boot.
-Persistent=true
+# EVERY 30 MINUTES, NOT DAILY. This ran at 03:40 for a fortnight while its report was
+# byte-identical every night and the one true new line was invisible (#721). The audit is
+# read-only and takes about ten seconds, box-report already runs every five minutes, and the
+# page now goes out only when the finding set CHANGES (drift-report.sh), so a faster cadence
+# costs nothing in noise. What it buys: the verdict live-smoke reads from /api/status goes
+# stale at 90 minutes, so a box a person changed at 09:00 reads as drift in GitHub before
+# 09:30 instead of clean until 03:40 the next day - which was the owner's sentence failing
+# quietly.
+OnBootSec=5min
+OnUnitActiveSec=30min
+RandomizedDelaySec=2min
 
 [Install]
 WantedBy=timers.target
