@@ -132,6 +132,44 @@ check "the Dockerfile's entrypoint is the script that drops root, and node is st
   "grep -q '^ENTRYPOINT \\[\"/app/docker-entrypoint.sh\"\\]' '$REPO/Dockerfile' && grep -q '^CMD \\[\"node\"' '$REPO/Dockerfile' && grep -q 'exec setpriv --reuid=node --regid=node' '$REPO/docker-entrypoint.sh'"
 check "and the build stage prunes devDependencies before the run stage copies it" \
   "grep -q 'npm prune --omit=dev' '$REPO/Dockerfile'"
+echo "== repo: the readiness stub publishes the SHAPE the app does, or the suite guards a fiction"
+# 2026-09-20: the fork detector (#533, R-20) had NEVER RUN. The rung greps flat referenceHeight and
+# referenceHash; #700 published a NESTED forkReference. Both halves merged, R-20 read done, and the
+# rung said nothing on every sweep since. FOUR CASES COVERED IT AND ALL FOUR PASSED - because the
+# STUB emitted the flat pair too. A double that agrees with the test instead of with the producer
+# makes a green suite around a dark feature, and nothing here compared the two.
+#
+# Helpers rather than inline check strings: check() is `eval` in the CURRENT shell, so an `exit`
+# inside one ends the whole suite - which it did, silently, leaving no total at all.
+STUBC="$REPO/deploy/z3/tests/stubs/curl"
+FORKREF="$REPO/src/lib/zcash/forkReference.ts"
+READYRT="$REPO/src/app/api/ready/route.ts"
+stub_json() { tr -d '\\' < "$STUBC"; }
+stub_fork_obj() { stub_json | grep '"forkReference":'; }
+fork_fields_declared() {
+  local k ok=1
+  for k in height hash ageSeconds depth; do
+    # PRESENT, not "if present": a vacuous pass here is what let the flat/nested mismatch ship.
+    [ "$(stub_fork_obj | grep -c "\"$k\":")" -gt 0 ] || { ok=0; continue; }
+    grep -qE "^  ${k}[?]?:" "$FORKREF" || ok=0
+  done
+  [ "$ok" = 1 ]
+}
+fork_fields_present() {
+  local k ok=1
+  for k in height hash ageSeconds; do [ "$(stub_fork_obj | grep -c "\"$k\":")" -gt 0 ] || ok=0; done
+  [ "$ok" = 1 ]
+}
+code_only() { grep -vE '^[[:space:]]*(#|//|\*|/\*)' "$1"; }
+has_code() { [ "$(code_only "$1" | grep -c "$2")" -gt 0 ]; }
+check "the app publishes a forkReference on /api/ready" "has_code '$READYRT' forkReference"
+check "the readiness stub emits that same object, not a shape of its own" "has_code '$STUBC' forkReference"
+check "and the watchdog reads that same object" "has_code '$REPO/deploy/z3/watchdog.sh' forkReference"
+# FIELD BY FIELD. A rename on either side goes red here rather than going quiet on a box: the stub
+# cannot emit a field the app does not declare, and the three the rung reads must exist in the stub.
+check "every field the stub emits is declared on the app's ForkReference" "fork_fields_declared"
+check "and the three the rung actually reads are present in the stub" "fork_fields_present"
+
 echo "== repo: the audit gate says WHICH failure it is, because npm exits 1 for both"
 # 2026-09-19: npm returned 503 from the advisory endpoint during maintenance, `npm audit
 # --audit-level=high` exited 1, and main went red with a message that reads like a security finding.

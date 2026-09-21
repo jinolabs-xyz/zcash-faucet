@@ -51,6 +51,13 @@ READY_FLAP_MIN_RUNS="${WATCHDOG_READY_FLAP_MIN_RUNS:-3}"
 # it alternates NEEDS YOU and FIXED every window. Recovery has to be clearly better than the trigger,
 # not marginally under it.
 READY_FLAP_CLEAR_PCT="${WATCHDOG_READY_FLAP_CLEAR_PCT:-10}"
+# HOW OLD A FORK REFERENCE MAY BE AND STILL BE EVIDENCE. The app refreshes it every 60s, so a healthy
+# box never approaches this - it bounds the case where the refresher itself is broken and the last
+# good reading sits there ageing. A reference is pinned to ITS OWN HEIGHT, so staleness is normally
+# harmless: block H does not change. The exception is a reorg deeper than the published depth, and
+# past that an old hash is a claim about a chain that no longer exists - which this rung would
+# report as PROOF OF A FORK, park the miner and wake someone.
+FORK_REF_MAX_AGE_SECS="${WATCHDOG_FORK_REF_MAX_AGE_SECS:-1800}"
 # SENDS FAILING gets one self-heal (risk register II, R-18): a wallet that answers
 # balances and refuses every send is the zallet shape a restart has fixed every time so
 # far. The verdict is in-memory and ages out with its window (15 min from the older
@@ -129,7 +136,7 @@ alerted_fork=0
 ZALLET_POISON_RE='No such mempool or main chain transaction|[Tt]ransaction not found in mempool or best chain'
 fork_cannot_tell_logged=0   # the cannot-tell line is a state, said once, and re-armed when it ends
 alerted_history_fork=0
-history_cannot_tell_logged=0   # same shape: a missing reference is a STATE, not a per-sweep event
+history_last_tell=""   # the LAST refusal reason, so a CHANGED one speaks and a repeated one does not
 
 # Poison auto-heal (step 5). Restarting zallet cannot fix a crash whose cause is a row
 # in wallet.db, so the watchdog runs the repair tools when it sees that exact signature.
@@ -991,7 +998,7 @@ heal_node_if_stalled() {
       # SAID WHEN IT CHANGES, NOT EVERY SWEEP. agreeBlocks is ~30 at testnet's cadence, so the
       # raise is true on every sweep: ~2,880 identical lines a day describing a healthy steady
       # state, which is the shape this file refuses everywhere else (fork_cannot_tell_logged,
-      # history_cannot_tell_logged, zallet.retryloop).
+      # history_last_tell, zallet.retryloop).
       if [ "$agree_limit_logged" != "$conf_limit" ]; then
         log "confirmed-lag limit now $conf_limit from the app's published agreeBlocks=$agree_b (floor $NODE_CONFIRMED_LAG_LIMIT, ceiling $conf_ceiling)"
         agree_limit_logged="$conf_limit"
@@ -1294,18 +1301,31 @@ ticks=0
 # wording predates that ruling and I am not reversing it from an issue; the page leads with the
 # stop INSTRUCTION when the unit is running, exactly as the other rung does.
 #
-# WHAT IT READS, and why the fields are flat: `referenceHeight` and `referenceHash` sit at the top
-# level of /api/ready beside `usedHeight`, for the reason usedHeight is there at all - this script
-# parses with grep, sed and cut, and two levels down is the #391 greedy-match trap. The app picks
-# the height and publishes it; we do not derive our own, so the two processes cannot disagree about
-# where they looked.
+# WHAT IT READS: the nested `forkReference` object on /api/ready (#700) - height, hash, ageSeconds,
+# depth - isolated first and then read field by field, because every field in it is a scalar and
+# `[^}]*` cannot over-run a flat object; the #391 greedy-match trap is a property of grepping the
+# whole body, not of nesting. The app picks the height and publishes it; we do not derive our own,
+# so the two processes cannot disagree about where they looked.
 check_history_against_reference() {
-  local name="$1" ref_h ref_hash ref_hash_bad ours_hash lower_ours lower_ref park stop_first hist_word
+  local name="$1" fork_obj ref_h ref_hash ref_hash_bad ref_stale ref_age ref_depth tell tell_key ours_h ours_hash lower_ours lower_ref park stop_first hist_word
   [ "$FORK_HEAL_ENABLED" = "1" ] || return 0
   [ -n "$name" ] || return 0
 
-  ref_h="$(printf '%s' "${ready_body:-}" | grep -o '"referenceHeight":[0-9][0-9]*' | head -n1 | cut -d: -f2)"
-  ref_hash="$(printf '%s' "${ready_body:-}" | grep -o '"referenceHash":"[0-9a-fA-F]*"' | head -n1 | cut -d'"' -f4)"
+  # THE OBJECT FIRST, THEN THE FIELDS OUT OF IT. This rung shipped reading FLAT `referenceHeight` and
+  # `referenceHash`; #700 published a NESTED `forkReference` instead, so the names never matched and
+  # THE DETECTOR HAS NEVER ONCE RUN - both halves merged, R-20 reading done, and a rung that exists
+  # because a self-mined fork went unnoticed saying nothing on every sweep since.
+  #
+  # I argued at the time that the app had to publish flat fields, because grep cannot address two
+  # levels down (#391). That is true of grepping '"height"' against the WHOLE body - it also matches
+  # the ledger height, the node heights and the tip references. It is not true once the object is
+  # isolated: every field in forkReference is a scalar, so [^}]* cannot over-run it, and inside it
+  # there is exactly one of each name.
+  fork_obj="$(printf '%s' "${ready_body:-}" | grep -o '"forkReference":{[^}]*}' | head -n1)"
+  ref_h="$(printf '%s' "$fork_obj" | grep -o '"height":[0-9][0-9]*' | head -n1 | cut -d: -f2)"
+  ref_hash="$(printf '%s' "$fork_obj" | grep -o '"hash":"[0-9a-fA-F]*"' | head -n1 | cut -d'"' -f4)"
+  ref_age="$(printf '%s' "$fork_obj" | grep -o '"ageSeconds":[0-9][0-9]*' | head -n1 | cut -d: -f2)"
+  ref_depth="$(printf '%s' "$fork_obj" | grep -o '"depth":[0-9][0-9]*' | head -n1 | cut -d: -f2)"
   case "$ref_h" in ''|*[!0-9]*) ref_h="" ;; esac
   # A HASH OF THE WRONG LENGTH IS NOT A HASH, and comparing one is how this rung pages FORK - the
   # loudest alert we have - on a malformed field rather than on a fork. The pattern above accepts
@@ -1319,33 +1339,67 @@ check_history_against_reference() {
     *[!0-9a-fA-F]*)                   ref_hash_bad="not hex"; ref_hash="" ;;
     *) [ "${#ref_hash}" -eq 64 ] || { ref_hash_bad="${#ref_hash} chars, not 64"; ref_hash=""; } ;;
   esac
-
-  # NO REFERENCE IS THE NORMAL STATE UNTIL THE APP HALF SHIPS, so this lands dark and turns itself
-  # on the day those fields appear. Said once per episode for the reason the rung below says its
-  # cannot-tell once: a state repeated every 30 s is noise that trains an operator to skim.
-  if [ -z "$ref_h" ] || [ -z "$ref_hash" ]; then
-    if [ "$history_cannot_tell_logged" != "1" ]; then
-      log "history check: no usable reference block on /api/ready (height=${ref_h:-absent}, hash=${ref_hash:+present}${ref_hash_bad:+MALFORMED: $ref_hash_bad}${ref_hash:-${ref_hash_bad:-absent}}), so nothing is compared and nothing is touched. Silent until this changes."
-      history_cannot_tell_logged=1
-    fi
-    return 0
-  fi
-
-  ours_hash="$(zebra_block_hash "$name" "$ref_h")"
-  # Same rule applied to our own side rather than only to theirs: a partial read or a changed RPC
-  # shape must reach the cannot-tell branch below, not the comparison.
-  case "$ours_hash" in
-    *[!0-9a-fA-F]*) ours_hash="" ;;
-    *) [ "${#ours_hash}" -eq 64 ] || ours_hash="" ;;
+  # AND AN OLD ENOUGH REFERENCE IS NOT EVIDENCE EITHER. An absent or null age is not a failure here:
+  # it means nothing has ever been read, and the hash is null with it, which the branch below already
+  # handles. Only a number too large disqualifies a hash we otherwise have.
+  # STALE IS NOT MALFORMED. A well-formed hash that is too old to describe the chain now is a
+  # different refusal from a hash that is not one, with a different owner (the app's refresh loop
+  # against the app's serialiser), so it gets its own class below rather than borrowing this one -
+  # otherwise a stale reference followed by a truncated hash is one class repeating, and silent.
+  ref_stale=""
+  case "$ref_age" in
+    ''|*[!0-9]*) ;;
+    *) [ "$ref_age" -le "$FORK_REF_MAX_AGE_SECS" ] || ref_stale="${ref_age}s old, older than ${FORK_REF_MAX_AGE_SECS}s" ;;
   esac
-  if [ -z "$ours_hash" ]; then
-    if [ "$history_cannot_tell_logged" != "1" ]; then
-      log "history check: the reference says $ref_h but zebra did not give us a hash at that height, so nothing is compared. Silent until this changes."
-      history_cannot_tell_logged=1
+
+  # EVERY REFUSAL IS A DIFFERENT FACT AND THE LATCH USED TO FLATTEN THEM ALL. One boolean, re-armed
+  # only by a successful compare, meant that after the first "no reference" line a stale reference, a
+  # 40-character hash, a node below the height and a zebra that would not answer were ALL SILENT -
+  # the silent-refusal shape this rung exists to end, arriving through its own logging. The latch is
+  # keyed on the REASON now: a changed reason speaks, a repeated one does not, and a successful
+  # compare re-arms it.
+  tell=""; tell_key=""
+  if [ -n "$ref_stale" ] && [ -n "$ref_h" ] && [ -n "$ref_hash" ]; then
+    tell_key="stale"; tell="the reference at $ref_h is $ref_stale. A hash that old may describe a chain that no longer exists, so nothing is compared until the app refreshes it."
+  elif [ -z "$ref_h" ] || [ -z "$ref_hash" ]; then
+    if [ -n "$ref_hash_bad" ]; then
+      tell_key="malformed"; tell="the reference hash is not one: $ref_hash_bad. Nothing is compared."
+    else
+      tell_key="noref"; tell="no usable reference block on /api/ready (height=${ref_h:-absent}, hash=${ref_hash:-absent}). Nothing is compared."
+    fi
+  else
+    # OUR OWN HEIGHT, NOT THE APP'S CONSTANT. `depth` is how far below THEIR tip the app chose to
+    # publish; it says nothing about where WE are. Blaming sync for every unanswered hash - a stopped
+    # container, a changed RPC, a cookie we cannot read - is five causes wearing one sentence, and it
+    # names the wrong machine four times out of five.
+    ours_h="${2:-}"; ours_h="${ours_h%% *}"
+    case "$ours_h" in ''|*[!0-9]*) ours_h="" ;; esac
+    if [ -n "$ours_h" ] && [ "$ours_h" -lt "$ref_h" ]; then
+      tell_key="below"; tell="our node is at $ours_h, BELOW the reference height $ref_h (behind by $((ref_h - ours_h)); the reference sits ${ref_depth:-?} blocks under the independent tip). A node still catching up cannot answer for that block, so nothing is compared - this is not a fork."
+    else
+      ours_hash="$(zebra_block_hash "$name" "$ref_h")"
+      # Same rule applied to our own side rather than only to theirs: a partial read or a changed RPC
+      # shape must reach a refusal, not the comparison.
+      case "$ours_hash" in
+        *[!0-9a-fA-F]*) ours_hash="" ;;
+        *) [ "${#ours_hash}" -eq 64 ] || ours_hash="" ;;
+      esac
+      if [ -z "$ours_hash" ]; then
+        tell_key="nohash"; tell="zebra returned no usable hash at $ref_h though it reports being at ${ours_h:-an unknown height}. The READ failed, not the height: a stopped container, a changed RPC shape and a cookie this watchdog cannot read all look like this. Nothing is compared."
+      fi
+    fi
+  fi
+  if [ -n "$tell" ]; then
+    # THE KEY IS THE CLASS, NOT THE SENTENCE. The sentences carry heights and gaps that move every
+    # sweep while a node catches up, so keying on the text would log on every sweep - trading a
+    # latch that says too little for one that says too much.
+    if [ "$tell_key" != "$history_last_tell" ]; then
+      log "history check: $tell Silent until this changes."
+      history_last_tell="$tell_key"
     fi
     return 0
   fi
-  history_cannot_tell_logged=0
+  history_last_tell=""
 
   # CASE-INSENSITIVE, inherited rather than rediscovered: chainIdentity.ts:94 already records that
   # sources differ on hex case and that a case difference is not a fork.
@@ -1954,7 +2008,7 @@ while true; do
   # may have just restarted the node; reads this sweep's /api/ready body (fetched in 4) and
   # zebra directly.
   heal_self_mined_fork "$zebra" "$zebra_heights"
-  check_history_against_reference "$zebra"
+  check_history_against_reference "$zebra" "$zebra_heights"
 
   # Bounded only under test. Production leaves MAX_TICKS at 0 and never exits,
   # and the sleep is skipped on the final tick so a suite is not paying for it.

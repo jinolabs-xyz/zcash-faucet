@@ -154,7 +154,30 @@ case "$*" in
       if [ -z "${STUB_READY_REFHEIGHT:-}" ] || [ -z "${STUB_READY_REFHASH:-}" ]; then
         echo "stub curl: STUB_READY_REFHEIGHT and STUB_READY_REFHASH go together" >&2; exit 64
       fi
-      refblock=",\"referenceHeight\":${STUB_READY_REFHEIGHT},\"referenceHash\":\"${STUB_READY_REFHASH}\""
+      # THE SHAPE THE APP ACTUALLY PUBLISHES (#700, ready/route.ts -> forkReference), not the flat
+      # pair this stub emitted until 2026-09-20. The stub encoded a contract the app never shipped,
+      # so four cases passed against a body production has never produced while the rung they cover
+      # had never once run. A double that agrees with the test instead of with the producer is a
+      # green suite around a dark feature.
+      refblock=",\"forkReference\":{\"height\":${STUB_READY_REFHEIGHT},\"hash\":\"${STUB_READY_REFHASH}\",\"ageSeconds\":${STUB_READY_REFAGE:-5},\"depth\":${STUB_READY_REFDEPTH:-10}}"
+      # STUB_READY_FORKREF_SEQ="present absent present": the reference block per CALL, one word each,
+      # the last repeating, counted beside the log like STUB_READY_SEQUENCE. `absent` drops the
+      # object, `stale` publishes it 99999 s old, `short` publishes a 40-character hash. For the
+      # latch: a refusal, a successful compare and the same refusal again inside ONE watchdog
+      # process is the only way to prove the re-arm exists, and no fixed knob can drive that.
+      if [ -n "${STUB_READY_FORKREF_SEQ:-}" ]; then
+        fcf="${STUB_LOG}.forkref-count"
+        fn=$(( $(cat "$fcf" 2>/dev/null || echo 0) + 1 )); echo "$fn" > "$fcf"
+        fshape=present; fi_=0
+        for x in $STUB_READY_FORKREF_SEQ; do fi_=$((fi_ + 1)); fshape="$x"; [ "$fi_" -ge "$fn" ] && break; done
+        case "$fshape" in
+          present) ;;
+          absent)  refblock="" ;;
+          stale)   refblock=",\"forkReference\":{\"height\":${STUB_READY_REFHEIGHT},\"hash\":\"${STUB_READY_REFHASH}\",\"ageSeconds\":99999,\"depth\":${STUB_READY_REFDEPTH:-10}}" ;;
+          short)   refblock=",\"forkReference\":{\"height\":${STUB_READY_REFHEIGHT},\"hash\":\"$(printf '%s' "$STUB_READY_REFHASH" | cut -c1-40)\",\"ageSeconds\":${STUB_READY_REFAGE:-5},\"depth\":${STUB_READY_REFDEPTH:-10}}" ;;
+          *) echo "stub curl: STUB_READY_FORKREF_SEQ word '$fshape' is not present|absent|stale|short" >&2; exit 64 ;;
+        esac
+      fi
     fi
     for a in "$@"; do
       case "$a" in *"%{http_code}"*)
