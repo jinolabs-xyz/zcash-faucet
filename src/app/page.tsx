@@ -1013,7 +1013,11 @@ export default function Home() {
   const steps: [string, number][] = [
     ["Checking eligibility", 0.09],
     ["Selecting shielded notes", 0.13],
-    ["Building the zero-knowledge proof", 0.63],
+    // NO POOL NAME AND NO DEFINITE SINGULAR (owner, 2026-09-21): "the zero-knowledge proof" is
+    // false for a Sapling recipient, and a pool name goes stale the next time the protocol moves -
+    // we spend Ironwood today and spent Orchard before. The actor is named in the heading above
+    // the list, because the visitor's browser did a proof-of-WORK a minute ago and this is not it.
+    ["Proving the payment in zero knowledge", 0.63],
     ["Broadcasting to the testnet", 0.15],
   ];
   // THE OWNER ASKED FOR ONE *MORE* CIRCLE, WHICH IS A DIFFERENT SHAPE FROM A FIFTH DIMMED ONE.
@@ -1517,7 +1521,7 @@ export default function Home() {
         {phase === "submitting" && !powState && (
           <div className="phase" data-phase="sending">
             <div className="kicker">Sending, keep this tab open</div>
-            <h3>Building the shielded transaction</h3>
+            <h3>Our wallet is building the shielded transaction</h3>
             <ul className="steps">
               {steps.map(([label], i) => (
                 <li key={label} data-done={i < curStep ? "" : undefined} data-active={i === curStep ? "" : undefined}>

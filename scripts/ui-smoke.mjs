@@ -4157,6 +4157,21 @@ async function checkSilentRetry(browser, base) {
       sending !== null && sending.length === 4, `${sending?.length ?? "none"}: ${JSON.stringify(sending)}`);
     ok("silent retry: and no extra circle exists when we are not retrying",
       sending !== null && !sending.some((t) => RETRY_LABEL.test(t)), JSON.stringify(sending));
+    // ===== THE PROOF STEP: no pool name, no definite singular, and the actor named (owner, 2026-09-21) =====
+    // The visitor's browser solved a proof-of-WORK a minute ago; the wallet on our side now builds a
+    // zero-knowledge proof, and the two share a word. "Building the zero-knowledge proof" was
+    // wrong twice: the definite singular is false for a Sapling recipient, and it let a reader think
+    // their laptop was doing it. And NO POOL NAME here on purpose: we spend Ironwood notes today
+    // (the box's own counts, ironwood=564 orchard=0 sapling=1), Orchard before that, and "shielded"
+    // stays true the next time the protocol moves. Read from the same list as the rows above, while
+    // the send is held, so the words on screen are the ones a visitor watches.
+    ok("the proof step is 'Proving the payment in zero knowledge': no pool, no definite proof",
+      sending !== null && sending.some((t) => /^Proving the payment in zero knowledge$/.test(t.trim()))
+        && !sending.some((t) => /zero-knowledge proof|orchard|ironwood|sapling/i.test(t)),
+      JSON.stringify(sending));
+    const sendingHead = ((await page.locator('.phase[data-phase="sending"] h3').textContent().catch(() => "")) ?? "").trim();
+    ok("and the heading over the steps names the actor - our wallet, not the visitor's browser",
+      /^Our wallet is building the shielded transaction$/.test(sendingHead), sendingHead || "no heading read");
     // POLLED WITH THE PAGE'S OWN STATE IN THE DETAIL. A bare waitForSelector that times out tells
     // you the alert was missing and nothing about what was there instead, which is a failure you
     // cannot diagnose from the log - and this row failed once in-suite while passing standalone.
@@ -4781,6 +4796,67 @@ try {
   await page.getByTestId("sent-badge").waitFor({ timeout: 120_000 });
   ok("a generated address is accepted by the faucet (#31)", true);
   ok("the receipt offers the spending key again", await page.getByRole("button", { name: "Copy spending key" }).isVisible());
+
+  // ===== THE RECEIPT'S ACTIONS READ AS BUTTONS, AND "ANOTHER ADDRESS" OWNS ITS ROW =====
+  // Owner ask 2026-09-21 from a screenshot of this panel: four faint outlines and a last button
+  // at half the width of a row it had to itself. This is the ONE receipt in the suite that
+  // carries all five controls (txid, receipt, spending key, explorer, another), which is the
+  // arrangement the complaint is about - the cTAZ receipt above has three and lays out clean.
+  //
+  // MEASURED IN BOTH THEMES FROM ONE RECEIPT, by flipping the theme attribute in place and
+  // reading again, because the paper hairline (1.23:1) and the ink one (1.18:1) fail the same
+  // floor for different token values, and a row that reads one theme certifies half the page.
+  // The property is the one a visitor sees - the border's contrast against the surface it sits
+  // on, 3:1 per WCAG 1.4.11 for a control's boundary - not the colour token's name, so a future
+  // token swap that keeps the boundary visible stays green and one that loses it goes red.
+  const receiptRow = await page.evaluate(`(async () => {
+    ${COLOUR_LIB}
+    const out = {};
+    const was = document.documentElement.dataset.theme;
+    for (const theme of ["paper", "ink"]) {
+      document.documentElement.dataset.theme = theme;
+      // THE FLIP STARTS TRANSITIONS, AND A READ AT t=0 IS THE OLD THEME. Measured: five animations
+      // running on each tag the instant the attribute changes, and getComputedStyle returned the
+      // paper border under the ink attribute - so the first version of this row reported 7.23:1
+      // for BOTH themes, which is the ink figure twice. Wait for the element's own animations to
+      // finish rather than for a clock; a sleep is a bet and this is the event.
+      const row = document.querySelector('.phase[data-phase="sent"] .row');
+      if (row) await Promise.all([...row.querySelectorAll(".tag")].flatMap((t) => t.getAnimations().map((a) => a.finished.catch(() => {}))));
+      if (!row) { out[theme] = { missing: true }; continue; }
+      const rw = row.getBoundingClientRect().width;
+      const tags = [...row.querySelectorAll(".tag")];
+      const actions = tags.filter((t) => !t.classList.contains("ink"));
+      const another = tags.find((t) => t.classList.contains("ink") && /Another address/.test(t.textContent || ""));
+      out[theme] = {
+        rowW: Math.round(rw),
+        actions: actions.map((t) => {
+          const cs = getComputedStyle(t);
+          return { text: (t.textContent || "").trim().slice(0, 18), w: Math.round(t.getBoundingClientRect().width),
+            borderPx: parseFloat(cs.borderTopWidth), ratio: ratioOf(cs.borderTopColor, t) };
+        }),
+        another: another ? { w: Math.round(another.getBoundingClientRect().width), col: getComputedStyle(another).gridColumnStart + " / " + getComputedStyle(another).gridColumnEnd } : null,
+      };
+    }
+    if (was === undefined) delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = was;
+    return out;
+  })()`);
+  for (const theme of ["paper", "ink"]) {
+    const r = receiptRow[theme];
+    // FOUR, EXACTLY: a receipt with fewer has nothing to prove here, and a row that iterated over
+    // zero actions would pass with nothing measured.
+    const faint = (r.actions || []).filter((a) => !(a.borderPx >= 1 && a.ratio != null && a.ratio >= 3));
+    ok(`${theme}: the receipt's four actions read as buttons - each border clears 3:1 against its surface`,
+      !r.missing && r.actions.length === 4 && faint.length === 0,
+      r.missing ? "no receipt row" : r.actions.length !== 4 ? `${r.actions.length} actions, expected 4`
+        : faint.length ? faint.map((a) => `${a.text} ${a.borderPx}px at ${a.ratio == null ? "unmeasurable" : a.ratio.toFixed(2) + ":1"}`).join(", ")
+        : r.actions.map((a) => `${a.ratio.toFixed(2)}:1`).join(" "));
+    // The row is two columns (each action under 60% of it) and the last control spans both.
+    const halfWide = (r.actions || []).every((a) => a.w < 0.6 * r.rowW);
+    ok(`${theme}: and Another address owns its row - it spans both columns`,
+      !r.missing && !!r.another && halfWide && r.another.w >= 0.98 * r.rowW,
+      r.missing || !r.another ? "no Another address in the row" : `${r.another.w}px of ${r.rowW}px, grid-column ${r.another.col}; actions ${r.actions.map((a) => a.w).join("/")}px`);
+  }
+
   await page.getByRole("button", { name: "Copy spending key" }).click();
   const clipAgain = await page.evaluate(() => navigator.clipboard.readText()).catch(() => "");
   ok("and it copies the same key", clipAgain === shown, `${clipAgain.length} chars`);

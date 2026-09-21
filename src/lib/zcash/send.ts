@@ -12,9 +12,13 @@
  *     a transparent→Orchard t2z bridge tx. Balance and drip origins are public.
  *
  *   ZalletSender  (FAUCET_SENDER=zallet, see ./zalletsend.ts)
- *     A genuinely shielded faucet: holds Orchard notes and pays z→z via a running
+ *     A genuinely shielded faucet: holds Ironwood notes and pays z→z via a running
  *     Zallet wallet (Z3 stack) over JSON-RPC. Faucet holdings and the faucet↔
  *     claimant link stay private, and it can pay Sapling recipients too.
+ *     (Ironwood, not Orchard: this line said Orchard from before the Ironwood
+ *     upgrade. The box's own note counts on 2026-09-21 read ironwood=564,
+ *     orchard=0, sapling=1, and DONATION_POOLS in donations.ts lists ironwood
+ *     first. Visitor-facing copy says "shielded" and names no pool, on purpose.)
  */
 // .ts extension for node --test resolution, same pattern as pow.ts.
 import { config } from "../config.ts";
