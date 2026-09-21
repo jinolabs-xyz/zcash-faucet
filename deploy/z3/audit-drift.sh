@@ -11,6 +11,9 @@ ENV_DIR="${AUDIT_ENV_DIR:-/etc/faucet}"
 # Injectable so tests can simulate a host without systemd hermetically,
 # rather than by manipulating PATH on a runner that has it.
 SYSTEMCTL="${AUDIT_SYSTEMCTL:-systemctl}"
+# The repo's list of what MUST be enabled. install-ops enforces it and its post-condition
+# checks it; this audit judges enablement against the same list, for the reason below.
+ENABLED_UNITS_FILE="${AUDIT_ENABLED_UNITS_FILE:-$OVERLAY_DIR/enabled-units}"
 VERBOSE=0
 [ "${1:-}" = "--verbose" ] && VERBOSE=1
 
@@ -41,14 +44,40 @@ say "auditing $(hostname 2>/dev/null || echo this box) against $REPO_DIR"
 say ""
 
 # Installed, matching, and enabled. A disabled unit is drift: it dies at reboot.
+#
+# ENABLED IS JUDGED AGAINST enabled-units, NOT AGAINST THE UNIT'S OWN [Install] SECTION.
+# `is-enabled` answers "disabled" for any unit that carries an [Install] section and is not
+# enabled, and six of the repo's timer-driven oneshots carry one - so this loop asked about
+# faucet-backup.service, got "disabled" on any box where nobody had enabled the service by
+# hand, and called that drift, when it is the correct state (its TIMER is what is enabled;
+# the DELIBERATELY ABSENT rule in enabled-units says so). A false line per such unit per run,
+# and the page is one fixed sentence, so when faucet-feedback-drain.timer landed disabled on
+# 2026-09-18 the new line changed the journal and nothing else. An audit that is always red
+# cannot contradict anyone. The repo decided what must be enabled; this reports where the
+# box disagrees with THAT decision, and says nothing about units the decision leaves to the
+# operator.
+declared_enabled() { # $1 unit; 0 if enabled-units lists it. Same normalisation as install-ops.
+  [ -f "$ENABLED_UNITS_FILE" ] || return 1
+  sed 's/#.*//; s/[[:space:]]//g' "$ENABLED_UNITS_FILE" | grep -qxF -- "$1"
+}
+if [ ! -f "$ENABLED_UNITS_FILE" ]; then
+  note_unverified "which units must be ENABLED: no enabled-units at $ENABLED_UNITS_FILE, so a declared unit left disabled was not checked"
+fi
 say "systemd units the repo ships"
 for src in "$OVERLAY_DIR"/*.service "$OVERLAY_DIR"/*.timer; do
   [ -e "$src" ] || continue
   unit="$(basename "$src")"
   installed="$UNIT_DIR/$unit"
   if [ ! -f "$installed" ]; then
-    found "$unit is not installed in $UNIT_DIR" \
-      "cp $OVERLAY_DIR/$unit $UNIT_DIR/ && systemctl daemon-reload && systemctl enable --now $unit"
+    # The fix enables it only if the repo says it must be enabled; a timer-driven service
+    # is installed and left alone, and telling the operator to enable one is a second bug.
+    if declared_enabled "$unit"; then
+      found "$unit is not installed in $UNIT_DIR" \
+        "cp $OVERLAY_DIR/$unit $UNIT_DIR/ && systemctl daemon-reload && systemctl enable --now $unit"
+    else
+      found "$unit is not installed in $UNIT_DIR" \
+        "cp $OVERLAY_DIR/$unit $UNIT_DIR/ && systemctl daemon-reload"
+    fi
     continue
   fi
   if cmp -s "$src" "$installed"; then
@@ -58,10 +87,14 @@ for src in "$OVERLAY_DIR"/*.service "$OVERLAY_DIR"/*.timer; do
       "diff $src $installed   # then either cp the repo copy over it, or commit the box's version"
   fi
   if [ "$have_systemctl" = "1" ]; then
-    if "$SYSTEMCTL" is-enabled --quiet "$unit" 2>/dev/null; then
-      ok "$unit is enabled"
+    if ! [ -f "$ENABLED_UNITS_FILE" ]; then
+      : # already noted as unverified above; do not judge against a list that is not there
+    elif ! declared_enabled "$unit"; then
+      ok "$unit is not declared in enabled-units, left as the operator has it"
+    elif "$SYSTEMCTL" is-enabled --quiet "$unit" 2>/dev/null; then
+      ok "$unit is enabled, as enabled-units declares"
     else
-      found "$unit is installed but NOT enabled, so it will not survive a reboot" \
+      found "$unit is DECLARED in enabled-units but NOT enabled on this box, so it does nothing now and will not survive a reboot" \
         "systemctl enable --now $unit"
     fi
     # ENABLED IS NOT RUNNING, and for one unit that gap is the whole audit (#701). The watchdog reads

@@ -250,7 +250,10 @@ ops=0
 # loads proto/service.proto, t2z.ts spawns workers/t2z-worker.mjs), so a change there
 # is a change to what the container runs, whatever `next build` thought of it.
 printf '%s\n' "$changed" | grep -qE '^(src/|public/|proto/|workers/|package|Dockerfile|\.dockerignore|next\.config|tsconfig|deploy/z3/(docker-compose|Caddyfile))' && app=1
-printf '%s\n' "$changed" | grep -qE '^deploy/z3/.*\.(sh|service|timer|socket)$' && ops=1
+# enabled-units is the file install-ops ENFORCES, so a commit that only adds a line to it
+# is an ops change: without this, the declaration lands on disk and nothing reads it until
+# an unrelated script changes, and the unit it declares stays disabled the whole time.
+printf '%s\n' "$changed" | grep -qE '^deploy/z3/(.*\.(sh|service|timer|socket)|enabled-units)$' && ops=1
 # THE MINER IS A COMPILED BINARY AND NOTHING REBUILT IT (#412).
 #
 # install-ops syncs scripts and units. It cannot rebuild a binary and does not try, so a
