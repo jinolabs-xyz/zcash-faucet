@@ -2164,3 +2164,27 @@ check "no shipped timer or socket is missing from enabled-units without being na
   "[ -z '$UNDECLARED_ARMING' ]"
 check "and the feedback drain timer is one of the declared ones, by name" \
   "printf '%s\n' '$ENABLED_UNITS_DECL' | grep -qxF faucet-feedback-drain.timer"
+
+echo "== repo: every env key the app reads is declared in faucet.env.example, judged by the audit's own check"
+# audit-drift.sh's env-completeness half runs on the box nightly and said "FAUCET_WALLET_MAX_LAG_BLOCKS
+# is read by the app but declared nowhere" for a fortnight to a page nobody could read (#721). The
+# check needs only src/ and the example, so it runs here too, on the PR that adds the read - with the
+# audit's own regexes, not a copy of them that can drift. Units and docker are unavailable on a runner,
+# so the audit exits 2 (unverified) by design; the row reads the one finding it is about.
+# EVERY AUDIT_ KNOB SET, not just the two that matter here: drift.sh runs before this suite in
+# CI order and exports AUDIT_OVERLAY_DIR and friends to its fixture, and a row that inherits
+# them audits a fixture example with no keys and reports every key the app reads as
+# undeclared. Red on the PR that added this row, green when run alone - the suite-order leak
+# this harness has paid for before.
+AUDIT_ENV_OUT="$(AUDIT_REPO_DIR="$REPO" AUDIT_OVERLAY_DIR="$REPO/deploy/z3" AUDIT_UNIT_DIR=/nonexistent \
+  AUDIT_INSTALL_DIR=/nonexistent AUDIT_ENV_DIR=/nonexistent AUDIT_VERSIONS_FILE="$REPO/deploy/z3/stack-versions.env" \
+  AUDIT_ENABLED_UNITS_FILE="$REPO/deploy/z3/enabled-units" AUDIT_SYSTEMCTL=/nonexistent AUDIT_DOCKER=/nonexistent \
+  bash "$REPO/deploy/z3/audit-drift.sh" --verbose 2>&1)"
+check "the env-completeness check actually ran, so an empty finding list means something" \
+  "printf '%s\n' \"\$AUDIT_ENV_OUT\" | grep -q 'env completeness (app reads vs deployment declares)' \
+   && ! printf '%s\n' \"\$AUDIT_ENV_OUT\" | grep -qE 'cannot list what the app reads|scan failed|cannot tell what the deployment declares'"
+UNDECLARED_READS="$(printf '%s\n' "$AUDIT_ENV_OUT" | grep -oE '[A-Z_][A-Z0-9_]* is read by the app but declared nowhere' | cut -d' ' -f1 | tr '\n' ' ')"
+check "and no key the app reads is undeclared:${UNDECLARED_READS:+ $UNDECLARED_READS}" \
+  "[ -z '$UNDECLARED_READS' ]"
+check "and the wallet-lag ceiling is one of the declared ones, by name" \
+  "grep -qE '^FAUCET_WALLET_MAX_LAG_BLOCKS=10$' '$REPO/deploy/z3/faucet.env.example'"
