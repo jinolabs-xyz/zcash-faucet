@@ -112,6 +112,12 @@ ctaz-rpc.socket
 # reads a table and passes text to alert.sh, which owns the destination.
 faucet-feedback-drain.timer
 
+# The DOCKER-USER firewall rules for the RPC-class ports. A rule in a running kernel is gone
+# at the next reboot; the August 2026 rule was, and the wallet RPC sat internet-reachable for
+# a month while the audit said so nightly. No money path: it only DROPs inbound connections
+# to ports that must never be reached from outside, and it names no public port.
+faucet-docker-user.service
+
 # DELIBERATELY ABSENT, and each for its own reason:
 #
 #   zcash-testnet-miner.service  Mining is always-on by the owner's decision, but it is

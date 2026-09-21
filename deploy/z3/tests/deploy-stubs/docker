@@ -53,7 +53,11 @@ case "${1:-}" in
   compose)
     shift
     # `docker compose version` (the capability probe at the top of deploy.sh)
-    for a in "$@"; do [ "$a" = "version" ] && { echo "Docker Compose version v2-stub"; exit 0; }; done
+    # `--short` prints the bare number the way the real plugin does; STUB_COMPOSE_VERSION
+    # drives the deploy.sh floor of 2.24 (ports: !override) from both sides.
+    for a in "$@"; do [ "$a" = "version" ] && {
+      for b in "$@"; do [ "$b" = "--short" ] && { echo "${STUB_COMPOSE_VERSION:-2.29.7}"; exit 0; }; done
+      echo "Docker Compose version v${STUB_COMPOSE_VERSION:-2.29.7}"; exit 0; }; done
     # run --rm --no-deps zallet <global flags> <subcommand>: the wallet init
     # one-offs. Mimic the real semantics tests care about.
     if printf '%s\n' "$@" | grep -qx "run"; then

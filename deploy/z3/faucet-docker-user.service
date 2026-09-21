@@ -1,0 +1,19 @@
+# Applies the DOCKER-USER DROP rules for the RPC-class ports. See docker-user-rules.sh.
+# Installed by install-ops.sh and enabled from enabled-units.
+[Unit]
+Description=Keep the z3 stack's RPC ports closed from the internet (DOCKER-USER)
+# After docker so the chain and the jump exist; PartOf so a docker restart re-runs this,
+# because docker rebuilds its chains on restart and a rule that is not re-applied is gone.
+After=docker.service network-online.target
+Wants=network-online.target
+PartOf=docker.service
+OnFailure=faucet-alert@%n.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=-/etc/faucet/docker-user.env
+ExecStart=/opt/faucet/docker-user-rules.sh
+
+[Install]
+WantedBy=multi-user.target
