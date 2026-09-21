@@ -4880,6 +4880,58 @@ try {
   const copied = String(await page.evaluate(() => navigator.clipboard.readText().catch(() => "")));
   ok("copy txid puts a 64-hex txid on the clipboard", /^[0-9a-f]{64}$/.test(copied), copied.slice(0, 16));
 
+  // ===== THE RECEIPT SAYS WHERE THE DRIP WAS MINED, FROM OUR NODE, AND LINKS OUR OWN ANSWER =====
+  // Born 2026-09-21: the owner's drip left the mempool into a block, a third-party explorer's tx
+  // page 404'd for two minutes while its block index already had the block, and "seen by our
+  // node" beside a dead explorer link read as dropped. /api/tx had the height the whole time and
+  // the page dropped it. These rows read the Status line the visitor reads BEFORE clicking, hold
+  // its number to /api/tx's own answer for this txid, and drive the two states a lagging node
+  // produces to prove the line says what the API says and never "dropped".
+  const statusLine = () => page.evaluate(() => {
+    const dt = [...document.querySelectorAll(".receipt dt")].find((e) => (e.textContent || "").trim() === "Status");
+    const dd = dt && dt.nextElementSibling;
+    const a = dd && dd.querySelector("a[data-testid=our-node-answer]");
+    return { text: dd ? (dd.textContent || "").trim().replace(/\s+/g, " ") : "", href: a ? a.getAttribute("href") : null };
+  });
+  // The double answers the first poll after the receipt appears; wait on the line, not a clock.
+  await page.waitForFunction(() => {
+    const dt = [...document.querySelectorAll(".receipt dt")].find((e) => (e.textContent || "").trim() === "Status");
+    return /mined at block/.test(dt?.nextElementSibling?.textContent || "");
+  }, null, { timeout: 15_000 }).catch(() => {});
+  const mined = await statusLine();
+  const apiTx = await fetch(`${BASE}/api/tx?txid=${copied}`).then((r) => r.json()).catch(() => null);
+  const m = mined.text.match(/^mined at block ([\d,]+), (\d+) confirmations? on our node$/);
+  ok("the receipt says where the drip was mined, and the block is /api/tx's own answer for this txid",
+    !!m && apiTx?.known === true && Number(m[1].replace(/,/g, "")) === apiTx.height && Number(m[2]) === apiTx.confirmations,
+    `line "${mined.text}"; /api/tx says known=${apiTx?.known} height=${apiTx?.height} confirmations=${apiTx?.confirmations}`);
+  ok("and \"our node\" in that line links OUR /api/tx for this txid, which answers",
+    mined.href === `/api/tx?txid=${copied}` && apiTx?.ok === true,
+    `href ${mined.href}`);
+  await page.getByRole("button", { name: /Copy receipt/ }).click();
+  await page.waitForTimeout(300);
+  const receiptClip = String(await page.evaluate(() => navigator.clipboard.readText().catch(() => "")));
+  ok("and the copied receipt carries the same fact and the same URL",
+    new RegExp(`^mined:\\s+block ${apiTx?.height}, ${apiTx?.confirmations} confirmations? on our node$`, "m").test(receiptClip)
+      && receiptClip.includes(`/api/tx?txid=${copied}`),
+    receiptClip.split("\n").filter((l) => /^(mined|our node):/.test(l)).join(" | ") || "neither line in the clipboard");
+  // A NODE THAT HAS NOT SEEN IT, AND A NODE THAT CANNOT SAY: the line says what /api/tx said.
+  // Each state lands on the next poll (TX_POLL_MS is 10 s), so each wait is one poll plus slack.
+  for (const [answer, expect] of [
+    [{ ok: true, txid: copied, known: false, confirmations: null, height: null }, "not seen by our node yet"],
+    [{ ok: true, txid: copied, known: null, confirmations: null, height: null }, "our node cannot say right now"],
+  ]) {
+    await page.route("**/api/tx?*", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(answer) }));
+    await page.waitForFunction((want) => {
+      const dt = [...document.querySelectorAll(".receipt dt")].find((e) => (e.textContent || "").trim() === "Status");
+      return (dt?.nextElementSibling?.textContent || "").trim() === want;
+    }, expect, { timeout: 13_000 }).catch(() => {});
+    const line = await statusLine();
+    const body = (await page.textContent("body")) ?? "";
+    ok(`with /api/tx answering known=${answer.known} the line says what the API said: "${expect}"`, line.text === expect, `line "${line.text}"`);
+    ok(`and nothing on the page says dropped while known=${answer.known}`, !/\bdropped\b/i.test(body), body.match(/[^.]*\bdropped\b[^.]*/i)?.[0]?.trim() ?? "");
+    await page.unroute("**/api/tx?*");
+  }
+
   // ===== #515: PAY B WHILE HOLDING A's KEY, AND THE RECEIPT MUST NOT OFFER A's KEY =====
   // page.tsx:1672 gates the receipt's key on `genKey && genKey.address === tx.to`. The suite
   // covered generate -> copy -> pay THE GENERATED ADDRESS, so a regression to `genKey &&` alone

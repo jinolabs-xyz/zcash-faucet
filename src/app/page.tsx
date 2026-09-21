@@ -298,7 +298,7 @@ export default function Home() {
   // Set while a solve is running; calling it abandons the solve and the claim (R-38).
   const powCancel = useRef<(() => void) | null>(null);
   const [genErr, setGenErr] = useState("");
-  const [txSeen, setTxSeen] = useState<{ known: boolean | null; confirmations: number | null } | null>(null);
+  const [txSeen, setTxSeen] = useState<{ known: boolean | null; confirmations: number | null; height: number | null } | null>(null);
   // A claim held while the node syncs. Persisted so a reload (or coming back
   // tomorrow) keeps the place in line; fires on its own when the node is ready.
   const [queuedAddr, setQueuedAddr] = useState<string | null>(null);
@@ -468,7 +468,12 @@ export default function Home() {
         .then((r) => r.json())
         .then((d) => {
           if (!alive) return;
-          const seen = { known: d.known ?? null, confirmations: d.confirmations ?? null };
+          // THE HEIGHT TOO. /api/tx has answered it all along and this read dropped it, so the
+          // receipt could only say "N confirmations" and never WHERE. Born 2026-09-21: the owner's
+          // own drip left the mempool into a block, a third-party explorer's tx page 404'd for two
+          // minutes while its block index already had the block, and "seen by our node" beside a
+          // dead explorer link read as dropped. Our node had it at 3 confirmations the whole time.
+          const seen = { known: d.known ?? null, confirmations: d.confirmations ?? null, height: typeof d.height === "number" ? d.height : null };
           setTxSeen(seen);
           if ((seen.confirmations ?? 0) >= CONFIRMATIONS_ENOUGH) stop();
         })
@@ -782,6 +787,12 @@ export default function Home() {
       `privacy: ${t.priv ? "shielded (z to z)" : "transparent (public on-chain)"}`,
       `sent:    ${new Date(t.at).toISOString()}`,
       t.explorerUrl ? `explorer: ${t.explorerUrl}` : "",
+      // Our node's own answer, so the pasted receipt carries where the drip was mined and the
+      // URL that says so, not only a third-party page that may lag the chain.
+      t.txid && txSeen?.known === true && txSeen.confirmations && txSeen.height !== null
+        ? `mined:   block ${txSeen.height}, ${txSeen.confirmations} confirmation${txSeen.confirmations === 1 ? "" : "s"} on our node`
+        : "",
+      t.txid ? `our node: ${typeof location !== "undefined" ? location.origin : ""}/api/tx?txid=${t.txid}` : "",
     ]
       .filter(Boolean)
       .join("\n");
@@ -1554,15 +1565,24 @@ export default function Home() {
               <dd className="mono" title={tx.txid ?? undefined}>{tx.txid ? short(tx.txid, 10, 8) : "none, this network returns none"}</dd>
               <dt>Status</dt>
               <dd>
+                {/* WHAT OUR NODE SAYS, IN ITS OWN WORDS, AND A LINK TO ITS OWN ANSWER. Every branch
+                    names the node, because the sentence a visitor reads here is the one that decides
+                    whether they believe a slow third-party explorer over us. After the mempool phase
+                    the line says WHERE the drip was mined, from /api/tx, and "our node" links that
+                    answer so a visitor never has to learn "dropped" from an indexer that has not
+                    caught up. None of these branches may ever say dropped: a transaction our node
+                    does not know is "not seen by our node yet", which is what /api/tx said. */}
                 {txSeen === null
                   ? "checking…"
                   : txSeen.known === true
-                    ? txSeen.confirmations
-                      ? `seen by our node, ${txSeen.confirmations} confirmation${txSeen.confirmations === 1 ? "" : "s"}`
-                      : "seen by our node, in the mempool"
+                    ? txSeen.confirmations && txSeen.height !== null
+                      ? <>mined at block {txSeen.height.toLocaleString("en-US")}, {txSeen.confirmations} confirmation{txSeen.confirmations === 1 ? "" : "s"} on <a href={`/api/tx?txid=${encodeURIComponent(tx.txid ?? "")}`} target="_blank" rel="noreferrer" data-testid="our-node-answer">our node</a></>
+                      : txSeen.confirmations
+                        ? `seen by our node, ${txSeen.confirmations} confirmation${txSeen.confirmations === 1 ? "" : "s"}`
+                        : "seen by our node, in the mempool"
                     : txSeen.known === false
-                      ? "not seen yet"
-                      : "cannot say right now"}
+                      ? "not seen by our node yet"
+                      : "our node cannot say right now"}
               </dd>
             </dl>
             <div className="row">
