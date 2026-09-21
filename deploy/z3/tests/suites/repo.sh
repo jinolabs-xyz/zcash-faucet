@@ -1449,6 +1449,26 @@ check "the balance lookup takes the address in a POST body, and the page sends i
 check "the probe has tests, and npm test runs them" \
   "[ -f '$REPO/scripts/live-probe.test.mjs' ] && grep -q 'scripts/\*\*/\*.test.mjs' '$REPO/package.json'"
 
+# THE BOX ANSWERS IN GITHUB (#721's follow-up). Two rows the probe now makes, and the workflow
+# has to feed both steps the same way, or the re-probe in the page step judges by a different
+# rule than the probe it confirms - which is the trap the page step's own comments name.
+check "the probe asserts the box's drift verdict, judged by the word, only clean passing" \
+  "grep -q 'the box.s drift audit reads clean' '$REPO/scripts/live-probe.mjs' && grep -q 'driftWord === \"clean\"' '$REPO/scripts/live-probe.mjs'"
+check "and asserts the box runs main, with git, not by printing the commit" \
+  "grep -q 'the box runs main' '$REPO/scripts/live-probe.mjs' && grep -q 'merge-base' '$REPO/scripts/live-probe.mjs'"
+check "the checkout has full history, or the ancestor question cannot be answered" \
+  "grep -qE '^\s+fetch-depth: 0' '$LS'"
+check "the probe step names the ref to compare against" \
+  "grep -q 'SMOKE_MAIN_REF: origin/main' '$T/probe-step.yml'"
+check "and so does the page step's re-probe, with the token that buys buildCommit" \
+  "grep -q 'SMOKE_MAIN_REF: origin/main' '$T/page-step.yml' && grep -q 'SMOKE_OPS_TOKEN: ..{ secrets.FAUCET_OPS_TOKEN }' '$T/page-step.yml'"
+# Every SMOKE_* the probe step sets, the page step sets too, so a knob added to one and not the
+# other cannot make the re-probe a different probe. Read from the two blocks, compared as sets.
+PROBE_KNOBS="$(grep -oE '^\s+SMOKE_[A-Z_]+:' "$T/probe-step.yml" | tr -d ' :' | sort -u)"
+PAGE_KNOBS="$(grep -oE '^\s+SMOKE_[A-Z_]+:' "$T/page-step.yml" | tr -d ' :' | sort -u)"
+check "every SMOKE_ knob the probe step sets, the page step sets: $(comm -23 <(printf '%s\n' "$PROBE_KNOBS") <(printf '%s\n' "$PAGE_KNOBS") | tr '\n' ' ')" \
+  "[ -n '$PROBE_KNOBS' ] && [ \"\$(comm -23 <(printf '%s\n' \"\$PROBE_KNOBS\") <(printf '%s\n' \"\$PAGE_KNOBS\") | wc -l)\" -eq 0 ]"
+
 echo "== repo: the harness reports where its own wall clock went"
 # THIS IS A TEXT PIN AND THAT IS ALL IT CAN BE from in here: repo.sh runs INSIDE the
 # harness, and the slowest-checks report is printed after every suite has finished, so
