@@ -91,6 +91,16 @@ case "$*" in
     # STUB_READY_SPB: the observed block rate the agree shape publishes as secondsPerBlock, 10.5 by
     # default; `null` is a real shape too (the app corroborates by the BLOCKS rule when it has no
     # rate), and it is the one that proves the watchdog's block constant is still the fallback.
+    # STUB_READY_SPB_SEQ="59 98 41.8": the rate per CALL, last repeating, counted beside the log -
+    # the shape prod showed (three GETs, three rates), for the row that holds the floor line to
+    # printing once per class and not once per number.
+    if [ -n "${STUB_READY_SPB_SEQ:-}" ]; then
+      scf="${STUB_LOG}.spb-count"
+      sn=$(( $(cat "$scf" 2>/dev/null || echo 0) + 1 )); echo "$sn" > "$scf"
+      sv=10.5; si=0
+      for x in $STUB_READY_SPB_SEQ; do si=$((si + 1)); sv="$x"; [ "$si" -ge "$sn" ] && break; done
+      STUB_READY_SPB="$sv"
+    fi
     uh="${STUB_READY_USEDHEIGHT:-}"
     # STUB_READY_EXTERNAL ALONE MEANS "THE NETWORK AGREES AND IS AT N", which is what every
     # case written before the corroboration axis existed meant by it, and what step 7 needs

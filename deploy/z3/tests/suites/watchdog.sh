@@ -42,7 +42,7 @@ wd_env() {
   # The first case that set the grace to 0 failed in CI and passed alone.
   unset STUB_READY_EXTERNAL STUB_CURL_RC STUB_READY_REFS STUB_READY_USEDHEIGHT WATCHDOG_NODE_CONFIRMED_LAG_LIMIT STUB_READY_AGREE_BLOCKS
   unset STUB_SLOWLOOP STUB_ALERT_FAIL_N STUB_ALERT_FAIL_RC WATCHDOG_RECOVERY_MIN_UPTIME WATCHDOG_RETRY_MIN WATCHDOG_RETRY_WINDOW
-  unset STUB_CRASHLOOP STUB_HEALTH_SEQUENCE STUB_HEAL_FIXES STUB_READY_REFHASH STUB_READY_REFHEIGHT STUB_READY_REFAGE STUB_READY_REFDEPTH STUB_READY_FORKREF_SEQ STUB_READY_SPB STUB_ZEBRA_ADVANCE STUB_ZEBRA_BLOCKS STUB_ZEBRA_EST STUB_ZEBRA_HASH STUB_ZEBRA_STUCK_CALLS WATCHDOG_CLOCK_FILE WATCHDOG_CLOCK_STEP \
+  unset STUB_CRASHLOOP STUB_HEALTH_SEQUENCE STUB_HEAL_FIXES STUB_READY_REFHASH STUB_READY_REFHEIGHT STUB_READY_REFAGE STUB_READY_REFDEPTH STUB_READY_FORKREF_SEQ STUB_READY_SPB STUB_READY_SPB_SEQ WATCHDOG_NODE_CONFIRMED_LAG_SECS STUB_ZEBRA_ADVANCE STUB_ZEBRA_BLOCKS STUB_ZEBRA_EST STUB_ZEBRA_HASH STUB_ZEBRA_STUCK_CALLS WATCHDOG_CLOCK_FILE WATCHDOG_CLOCK_STEP \
         WATCHDOG_NODE_HEAL_ENABLED WATCHDOG_NODE_STOPS_MINER WATCHDOG_MINER_HEARTBEAT WATCHDOG_MINER_UNIT STUB_START_FAIL \
         WATCHDOG_SIGNAL_MATCH STUB_READY_CANBUILD STUB_READY_CANBUILD_ONCE \
         STUB_READY STUB_READY_REASON STUB_READY_FAIL_UNTIL STUB_HEALTH \
@@ -1971,9 +1971,9 @@ check "and nothing is dropped or cleared on a lag inside the budget" \
   "[ -f '$STUB_VOLROOT/z3-testnet-chain/non_finalized_state/backup.bin' ] && [ -f '$STUB_VOLROOT/z3-testnet-chain/network/testnet.peers' ]"
 check "and the journal does not call it a stall" \
   "! grep -q 'zebra stalled' '$T/run.log'"
-check "and the journal names the floor it judged by, with the seconds and the rate it came from" \
-  "grep -q 'confirmed-lag floor now 29 blocks: 300s at the app.s published 10.5s/block' '$T/run.log'"
-check "said once, not every sweep" "[ \"\$(grep -c 'confirmed-lag floor now' '$T/run.log')\" = 1 ]"
+check "and the journal says the floor follows the published rate, with the seconds, the rate and the number" \
+  "grep -q 'confirmed-lag floor follows the app.s published rate now: 300s at 10.5s/block is 29 blocks' '$T/run.log'"
+check "said once, not every sweep" "[ \"\$(grep -c 'confirmed-lag floor' '$T/run.log')\" = 1 ]"
 
 wd_node_env
 unset WATCHDOG_NODE_CONFIRMED_LAG_LIMIT WATCHDOG_NODE_CONFIRMED_LAG_SECS
@@ -1994,8 +1994,8 @@ export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4351440  # 30 behind: outside
 wd_run 3
 check "30 behind the same tip does start it, so the edge is where the file says" \
   "grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
-check "and the journal names the corroborated number at the boundary" \
-  "grep -q 'zebra stalled.*30 behind per corroborated tip 4351440' '$T/run.log'"
+check "and the journal names the corroborated number at the boundary AND the limit it crossed" \
+  "grep -q 'zebra stalled.*30 behind per corroborated tip 4351440, limit 29' '$T/run.log'"
 
 echo "== watchdog: with NO rate published, the block constant is still the floor: 24 / 25 / 26"
 # The app corroborates by its BLOCKS rule when it has no rate (secondsPerBlock null on the wire),
@@ -2008,7 +2008,7 @@ export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4351435 STUB_READY_SPB=null  
 wd_run 3
 check "25 behind with no rate is ON the constant, not over it" "! grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
 check "and the journal says the constant governed, and why" \
-  "grep -q 'confirmed-lag floor now 25 blocks: the block constant, no rate published' '$T/run.log'"
+  "grep -q 'confirmed-lag floor is the block constant now: 25 blocks, no rate published' '$T/run.log'"
 wd_node_env
 unset WATCHDOG_NODE_CONFIRMED_LAG_LIMIT WATCHDOG_NODE_CONFIRMED_LAG_SECS
 echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
@@ -2031,7 +2031,9 @@ wd_run 3
 check "10 behind a corroborated tip at 75 s/block starts the ladder" \
   "grep -q 'zebra stalled.*10 behind per corroborated tip 4351420' '$T/run.log'"
 check "and the floor the journal names is 4 blocks from 300 s at 75 s" \
-  "grep -q 'confirmed-lag floor now 4 blocks: 300s at the app.s published 75s/block' '$T/run.log'"
+  "grep -q 'confirmed-lag floor follows the app.s published rate now: 300s at 75s/block is 4 blocks' '$T/run.log'"
+check "and the decision line carries the limit that decided, 9" \
+  "grep -q 'zebra stalled.*10 behind per corroborated tip 4351420, limit 9' '$T/run.log'"
 check "and the limit that decided was the app's tolerance plus the margin, 9" \
   "grep -q 'confirmed-lag limit now 9 from the app.s published agreeBlocks=4 (floor 4' '$T/run.log'"
 wd_node_env
@@ -2051,7 +2053,7 @@ export STUB_ZEBRA_BLOCKS=4351410 STUB_ZEBRA_EST=4351410
 export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4351470  # 60 behind: ON the overridden limit
 wd_run 3
 check "the override moves the floor: 60 behind at a 630 s floor is not a stall" "! grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG'"
-check "and the journal names 60 blocks from 630s" "grep -q 'confirmed-lag floor now 60 blocks: 630s at' '$T/run.log'"
+check "and the journal names 60 blocks from 630s" "grep -q '630s at 10.5s/block is 60 blocks' '$T/run.log'"
 unset WATCHDOG_NODE_CONFIRMED_LAG_SECS
 wd_node_env
 unset WATCHDOG_NODE_CONFIRMED_LAG_LIMIT WATCHDOG_NODE_CONFIRMED_LAG_SECS
@@ -2063,6 +2065,61 @@ check "a 1 s rate puts the floor at 300 and the ceiling caps it at 100, said onc
   "grep -q 'is 300 blocks; capping at 100. Nothing remote can switch this rung off' '$T/run.log' && [ \"\$(grep -c 'capping at 100' '$T/run.log')\" = 1 ]"
 check "and 101 behind is over the capped limit, so the ladder starts" \
   "grep -q 'zebra stalled.*101 behind per corroborated tip 4351511' '$T/run.log'"
+
+echo "== watchdog: a rate that MOVES every sweep prints the floor line ONCE - the class, not the number, is the key"
+# Prod, three GETs four minutes apart: 41.8 -> 27.4 -> 24.8 s/block, floor 8 -> 11 -> 13. Keyed on the
+# number that is a line per sweep, about a thousand a day describing a healthy box; keyed on the
+# class it is one line, and the number rides the decision line when the rung decides.
+wd_node_env
+unset WATCHDOG_NODE_CONFIRMED_LAG_LIMIT WATCHDOG_NODE_CONFIRMED_LAG_SECS
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4351410 STUB_ZEBRA_EST=4351410
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4351415 STUB_READY_SPB_SEQ="59 98 41.8 27.4 24.8 24.8"  # 5 behind, never a stall
+wd_run 6
+check "six sweeps, six different rates, ONE floor line" \
+  "[ \"\$(grep -c getblockchaininfo '$STUB_LOG')\" -ge 6 ] && [ \"\$(grep -c 'confirmed-lag floor' '$T/run.log')\" = 1 ]"
+check "and the rate moved between sweeps - the fixture is what it claims" "[ \"\$(cat '$STUB_LOG.spb-count')\" -ge 6 ]"
+
+echo "== watchdog: the rate class flips to the constant and back, and each flip is one line"
+wd_node_env
+unset WATCHDOG_NODE_CONFIRMED_LAG_LIMIT WATCHDOG_NODE_CONFIRMED_LAG_SECS
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4351410 STUB_ZEBRA_EST=4351410
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4351415 STUB_READY_SPB_SEQ="10.5 10.5 null null 27.7"
+wd_run 5
+check "rate, then constant, then rate: three lines" \
+  "[ \"\$(grep -c 'confirmed-lag floor' '$T/run.log')\" = 3 ] && grep -q 'floor is the block constant now' '$T/run.log'"
+
+echo "== watchdog: the env knob is VALIDATED - 0 and a word read as the shipped 300, said once, never as a floor of 0"
+# The wire side falls back to the constant on 0, null, a string; the operator side did not, and
+# WATCHDOG_NODE_CONFIRMED_LAG_SECS=0 put the floor at 0: two blocks behind would start the ladder.
+# walletLagGate.ts is the precedent - clamp, warn, use the shipped number, never trust the env.
+for bad in 0 abc 0300 -5; do
+  wd_node_env
+  unset WATCHDOG_NODE_CONFIRMED_LAG_LIMIT
+  export WATCHDOG_NODE_CONFIRMED_LAG_SECS="$bad"
+  echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+  export STUB_ZEBRA_BLOCKS=4351410 STUB_ZEBRA_EST=4351410
+  export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4351439   # 29 behind: on the SHIPPED limit at 10.5 s
+  wd_run 3
+  check "knob '$bad': the warning names the value and the 300 it used" \
+    "grep -q \"WARNING: WATCHDOG_NODE_CONFIRMED_LAG_SECS='$bad' is not a plain whole number of seconds at or above 1 (digits only, no leading zero); using 300\" '$T/run.log'"
+  check "knob '$bad': 29 behind is still ON the shipped limit, not over a floor of 0" \
+    "! grep -q 'docker restart z3-testnet-zebra-1' '$STUB_LOG' && grep -q '300s at 10.5s/block is 29 blocks' '$T/run.log'"
+done
+unset WATCHDOG_NODE_CONFIRMED_LAG_SECS
+
+echo "== watchdog: a published rate of ZERO is not a rate - the constant governs and the journal says so, not '0s/block'"
+wd_node_env
+unset WATCHDOG_NODE_CONFIRMED_LAG_LIMIT WATCHDOG_NODE_CONFIRMED_LAG_SECS
+echo active > "$STUB_SYSTEMD/zcash-testnet-miner.service"
+export STUB_ZEBRA_BLOCKS=4351410 STUB_ZEBRA_EST=4351410
+export STUB_READY_REFS=agree STUB_READY_USEDHEIGHT=4351436 STUB_READY_SPB=0   # 26 behind
+wd_run 3
+check "26 behind at a zero rate is over the CONSTANT 25, so the ladder starts" \
+  "grep -q 'zebra stalled.*26 behind per corroborated tip 4351436, limit 25' '$T/run.log'"
+check "and the journal says the constant governed, never 0s/block" \
+  "grep -q 'floor is the block constant now: 25 blocks' '$T/run.log' && ! grep -q '0s/block' '$T/run.log'"
 
 echo "== watchdog: ONE reference is not corroboration either, and cannot start the ladder"
 # corroborated is NULL for a single source, not false, and null must read the same as false

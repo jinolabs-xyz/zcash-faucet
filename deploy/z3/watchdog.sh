@@ -252,6 +252,15 @@ NODE_CONFIRMED_LAG_LIMIT="${WATCHDOG_NODE_CONFIRMED_LAG_LIMIT:-25}"  # blocks be
 # blocks at ~9.4 s, about 545 s of lag, and the suite's own case for that night showed a
 # 600 s floor letting the rung sleep through the outage it exists for. The night calibrates it.
 NODE_CONFIRMED_LAG_SECS="${WATCHDOG_NODE_CONFIRMED_LAG_SECS:-300}"
+# THE KNOB IS VALIDATED, the way walletLagGate.ts validates its own: an operator's "0" would put
+# the floor at 0 and "abc" at 1, and two blocks behind would start the heal ladder - a fail-open
+# from the env side while the wire side falls back. A value that is not a whole number of
+# seconds at or above 1 is replaced by the shipped 300 and said once at start.
+case "$NODE_CONFIRMED_LAG_SECS" in
+  ''|*[!0-9]*|0*) 
+    echo "$(date -u +%FT%TZ) watchdog: WARNING: WATCHDOG_NODE_CONFIRMED_LAG_SECS='$NODE_CONFIRMED_LAG_SECS' is not a plain whole number of seconds at or above 1 (digits only, no leading zero); using 300"
+    NODE_CONFIRMED_LAG_SECS=300 ;;
+esac
 NODE_STALL_SECS="${WATCHDOG_NODE_STALL_SECS:-300}"              # behind AND tip unmoved this long = wedged
 NODE_HEAL_MAX="${WATCHDOG_NODE_HEAL_MAX:-5}"                    # restarts before paging instead
 NODE_CLEAR_CACHE_AFTER="${WATCHDOG_NODE_CLEAR_CACHE_AFTER:-2}"  # from this attempt on, also drop the peer cache
@@ -993,7 +1002,7 @@ heal_node_if_stalled() {
   # THE CONSTANT STAYS AS THE FLOOR. A missing or garbage field leaves today's behaviour exactly as
   # it is - same shape as the retry counter's guard, and the reason a /api/ready that predates #651
   # is not a silent downgrade.
-  local agree_b conf_limit spb floor_blocks
+  local agree_b conf_limit spb floor_blocks floor_from
   agree_b="$(printf '%s' "${ready_body:-}" | grep -o '"agreeBlocks":[0-9][0-9]*' | head -n1 | cut -d: -f2)"
   case "$agree_b" in ''|*[!0-9]*) agree_b="" ;; esac
   # THE FLOOR, CONVERTED AT THE PUBLISHED RATE. secondsPerBlock is a decimal (27.7), so awk does
@@ -1003,11 +1012,15 @@ heal_node_if_stalled() {
   # own at 0.01 and publishes null below that, and the ceiling below bounds whatever gets
   # through, so this does not second-guess it.
   spb="$(printf '%s' "${ready_body:-}" | grep -o '"secondsPerBlock":[0-9][0-9]*\(\.[0-9][0-9]*\)\?' | head -n1 | cut -d: -f2)"
-  floor_blocks="$NODE_CONFIRMED_LAG_LIMIT"
+  floor_blocks="$NODE_CONFIRMED_LAG_LIMIT"; floor_from=constant
   if [ -n "$spb" ]; then
-    floor_blocks="$(awk -v s="$NODE_CONFIRMED_LAG_SECS" -v r="$spb" 'BEGIN { if (r + 0 <= 0) exit 1; b = int(s / r); if (b * r < s) b++; print b }' 2>/dev/null)" \
-      || floor_blocks="$NODE_CONFIRMED_LAG_LIMIT"
-    case "$floor_blocks" in ''|*[!0-9]*) floor_blocks="$NODE_CONFIRMED_LAG_LIMIT" ;; esac
+    if floor_blocks="$(awk -v s="$NODE_CONFIRMED_LAG_SECS" -v r="$spb" 'BEGIN { if (r + 0 <= 0) exit 1; b = int(s / r); if (b * r < s) b++; print b }' 2>/dev/null)" \
+       && [ -n "$floor_blocks" ] && [ "$floor_blocks" -eq "$floor_blocks" ] 2>/dev/null; then
+      floor_from=rate
+    else
+      # A rate of 0 (or one awk refuses) is not a rate: the constant governs, and says so below.
+      floor_blocks="$NODE_CONFIRMED_LAG_LIMIT"; floor_from=constant
+    fi
   fi
   # AND A CEILING, because a floor alone only protects us from a SILENT app (SDE-App, review of
   # #655). The point of floor-and-derive is that this constant still governs when the app is
@@ -1017,7 +1030,7 @@ heal_node_if_stalled() {
   conf_limit="$floor_blocks"
   local conf_ceiling=$(( NODE_CONFIRMED_LAG_LIMIT * 4 ))
   if [ "$conf_limit" -gt "$conf_ceiling" ]; then
-    # A 1 s rate would put the floor at 600 blocks; the ceiling is the same one the app's number
+    # A 1 s rate would put the floor at 300 blocks; the ceiling is the same one the app's number
     # meets below, for the same reason: nothing read over HTTP switches this rung off.
     if [ "$floor_capped_logged" != "1" ]; then
       log "the confirmed-lag floor of ${NODE_CONFIRMED_LAG_SECS}s at ${spb}s/block is $conf_limit blocks; capping at $conf_ceiling. Nothing remote can switch this rung off."
@@ -1025,15 +1038,19 @@ heal_node_if_stalled() {
     fi
     conf_limit="$conf_ceiling"
   fi
-  # SAID WHEN IT CHANGES, so the journal carries the number the sweep actually judged by and the
-  # rate it came from - the line a reader needs to reproduce a heal or its absence.
-  if [ "$floor_logged" != "$conf_limit" ]; then
-    if [ -n "$spb" ]; then
-      log "confirmed-lag floor now $conf_limit blocks: ${NODE_CONFIRMED_LAG_SECS}s at the app's published ${spb}s/block"
+  # SAID WHEN THE CLASS CHANGES - published rate versus the block constant - and not when the
+  # number does: the rate moves a little every sweep (41.8 -> 27.4 -> 24.8 s/block over three
+  # reads on prod), so a line keyed on the block count would print about a thousand times a
+  # day describing a healthy steady state. The number the sweep judged by is carried in the
+  # line that prints when the rung DECIDES (the stall line names the limit), which is the one a
+  # reader needs to reproduce a heal or its absence.
+  if [ "$floor_logged" != "$floor_from" ]; then
+    if [ "$floor_from" = rate ]; then
+      log "confirmed-lag floor follows the app's published rate now: ${NODE_CONFIRMED_LAG_SECS}s at ${spb}s/block is $conf_limit blocks (the exact number rides each decision line)"
     else
-      log "confirmed-lag floor now $conf_limit blocks: the block constant, no rate published"
+      log "confirmed-lag floor is the block constant now: $conf_limit blocks, no rate published"
     fi
-    floor_logged="$conf_limit"
+    floor_logged="$floor_from"
   fi
   if [ -n "$agree_b" ]; then
     local want=$(( agree_b + 5 ))
@@ -1066,14 +1083,14 @@ heal_node_if_stalled() {
   # that did not act. That was finding 4 of the same review: the line read "which the
   # independent tip does not support" about a lag that same tip had confirmed.
   if [ "$ext_over" = "1" ]; then
-    lag="$ext_lag"; lag_src="corroborated tip $external"
+    lag="$ext_lag"; lag_src="corroborated tip $external, limit $conf_limit"
   elif [ "$zebra_over" = "1" ]; then
     lag="$zebra_lag"
     lag_src="zebra's own clock estimate${external:+, which the corroborated tip $external does not support}"
     [ -z "$external" ] && lag_src="zebra's own clock estimate, no corroborated tip this sweep"
   elif [ -n "$ext_lag" ] && [ "$ext_lag" -ge "$zebra_lag" ]; then
     # Neither is over its limit, so nothing fires; the number is only for the idle line.
-    lag="$ext_lag"; lag_src="corroborated tip $external"
+    lag="$ext_lag"; lag_src="corroborated tip $external, limit $conf_limit"
   else
     lag="$zebra_lag"
     lag_src="zebra's own clock estimate${external:+, which the corroborated tip $external does not support}"
