@@ -3678,12 +3678,12 @@ async function checkGrantBanner(browser, base) {
       ok(`${tag}: is the first thing on the page, edge to edge across the viewport`,
         r.first && r.top === 0 && r.left === 0 && r.right === r.stageWidth,
         `first ${r.first}, top ${r.top}, ${r.left}..${r.right} of ${r.stageWidth}`);
-      ok(`${tag}: the masthead sits the page's own top padding below it, and the words and the X sit on the masthead's edges`,
-        r.gapBelow === r.compPad && Math.abs(r.textLeft - r.hdrLeft) <= 1 && Math.abs(r.xRight - r.hdrRight) <= 1,
-        `gap ${r.gapBelow} vs padding ${r.compPad}; text left ${r.textLeft} vs masthead ${r.hdrLeft}; X right ${r.xRight} vs masthead ${r.hdrRight}`);
+      ok(`${tag}: the masthead sits flush under it, never overlapped, and the words and the X sit on the masthead's edges`,
+        r.gapBelow >= 0 && r.gapBelow <= 40 && Math.abs(r.textLeft - r.hdrLeft) <= 1 && Math.abs(r.xRight - r.hdrRight) <= 1,
+        `masthead ${r.gapBelow}px below the band (negative = overlap); text left ${r.textLeft} vs masthead ${r.hdrLeft}; X right ${r.xRight} vs masthead ${r.hdrRight}`);
       // Dark text on the gradient in BOTH themes: white read 2.08:1 at the gradient's light end.
       ok(`${tag}: dark text on the gradient, the theme does not flip it`, r.color === "rgb(40, 40, 40)", r.color);
-      ok(`${tag}: one line at desktop and a 44px dismiss`, r.lines === 1 && !!r.xBox && r.xBox[0] >= 44 && r.xBox[1] >= 44, `${r.lines} line(s), X ${r.xBox ? r.xBox.join("x") : "missing"}`);
+      ok(`${tag}: one line at desktop and a 28px dismiss under a mouse`, r.lines === 1 && !!r.xBox && r.xBox[0] === 28 && r.xBox[1] === 28, `${r.lines} line(s), X ${r.xBox ? r.xBox.join("x") : "missing"}`);
     }
     // Dismiss lasts until the next page load and no longer: useState, no storage.
     await page.goto(base + "/", { waitUntil: "networkidle" });
@@ -3698,14 +3698,66 @@ async function checkGrantBanner(browser, base) {
     await ctx.close();
   }
 
+  // THE LEFT HERO COLUMN MUST NOT SCROLL EITHER. The #648 row guards the claim panel; nothing guarded
+  // .hero-copy, which is overflow-y:auto and flex-stretched, so the band's height came straight out of
+  // it. The first cut on prod scrolled it by 17 px at 1280x800, 10 at 1280x720 and 6 at 1366x768 while
+  // every row stayed green, and the owner saw the scrollbar. Same shape as L64, one column over.
+  // WITH THE RESERVE CARD SHOWING, because prod shows it (4,495 against a 5,000 low mark) and the
+  // double does not: without it the column has ~160 px of slack here and the row could not fail on
+  // the very overflow it exists for (L64, the double bounds what the row can see). Same injection
+  // as the phase sweep's reserve-low.
+  const liveStatus = await (await fetch(base + "/api/status")).json().catch(() => ({}));
+  const lowStatus = JSON.parse(JSON.stringify(liveStatus)); lowStatus.empty = false; lowStatus.balanceTaz = lowStatus.balanceTaz || 4504;
+  lowStatus.reserve = { ...(lowStatus.reserve ?? {}), refilling: true, lowTaz: 5000, spendableTaz: 4504 };
+  for (const theme of ["paper", "ink"]) for (const vp of [{ width: 1440, height: 900 }, { width: 1366, height: 768 }, { width: 1280, height: 800 }, { width: 1280, height: 720 }]) {
+    const ctx = await browser.newContext({ viewport: vp });
+    const page = await ctx.newPage();
+    await page.route("**/api/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(lowStatus) }));
+    await page.goto(base + "/", { waitUntil: "networkidle" });
+    await page.evaluate((t) => { try { localStorage.setItem("zfaucet_theme", t); } catch {} document.documentElement.dataset.theme = t; }, theme);
+    await page.waitForTimeout(400);
+    const r = await page.evaluate(() => { const c = document.querySelector(".hero-copy"); const g = document.querySelector("[data-testid=grant-banner]"); const reserve = !!document.querySelector(".hero-copy .reserve-aside");
+      return c ? { sh: c.scrollHeight, ch: c.clientHeight, ov: getComputedStyle(c).overflowY, band: !!g, reserve } : null; });
+    ok(`grant banner ${theme} ${vp.width}x${vp.height}: with the band and the reserve card shown, the left hero column shows all of its content rather than scrolling it`,
+      !!r && r.band && r.reserve && r.sh <= r.ch + 1,
+      r ? `hero-copy scrollHeight ${r.sh} vs clientHeight ${r.ch} (overflow-y: ${r.ov}), band ${r.band ? "shown" : "MISSING"}, reserve card ${r.reserve ? "shown" : "MISSING"}` : "no .hero-copy");
+    await ctx.close();
+  }
+
+  // AND THE DRIP CARD IN ITS TALLEST STATE. The #648 row measures the claim panel at rest; the
+  // receipt is taller, and before the band existed it had ZERO slack at 1366x768 and one pixel at
+  // 1280x720 (measured on b233418), so a band that costs anything at all puts a scrollbar on the
+  // receipt the owner just read. One real claim at each of those two sizes, then the panel is read.
+  for (const vp of [{ width: 1366, height: 768 }, { width: 1280, height: 720 }]) {
+    const ctx = await browser.newContext({ viewport: vp });
+    const page = await ctx.newPage();
+    try {
+      await page.goto(base + "/", { waitUntil: "networkidle" });
+      await page.getByRole("button", { name: "Make a throwaway address and key" }).first().click();
+      await page.waitForFunction(() => (document.querySelector("[data-testid=address-input]")?.value ?? "").length > 100, null, { timeout: 20_000 });
+      await page.getByRole("button", { name: "Copy key" }).first().click().catch(() => {});
+      await page.getByTestId("claim-button").click();
+      await page.getByTestId("sent-badge").waitFor({ timeout: 120_000 });
+      await page.waitForTimeout(600);
+      const r = await page.evaluate(() => { const p = document.querySelector(".card.claim > .panel"); const g = document.querySelector("[data-testid=grant-banner]");
+        return p ? { sh: p.scrollHeight, ch: p.clientHeight, band: !!g } : null; });
+      ok(`grant banner ${vp.width}x${vp.height}: with the band shown, the receipt shows all of its content rather than scrolling it`,
+        !!r && r.band && r.sh <= r.ch + 1,
+        r ? `receipt panel scrollHeight ${r.sh} vs clientHeight ${r.ch}, band ${r.band ? "shown" : "MISSING"}` : "no .card.claim > .panel");
+    } catch (err) {
+      ok(`grant banner ${vp.width}x${vp.height}: the receipt row ran to completion`, false, err instanceof Error ? err.message : String(err));
+    } finally {
+      await ctx.close();
+    }
+  }
+
   // THE COMPACT BAND UNDER 64rem HAS ITS OWN ROW, because the rows above run at 1280x720 where
   // that rule is inert. The CTO's red-team doubled the compact rule's negative margin-bottom and
   // the masthead overlapped the band by 2.6 px at 1024x768 with every row still green (L64: a rule
   // with no row is a wish). So at 1024x768: the band is still first and edge to edge, SHORTER than
   // at desktop (the point of the rule), the masthead's top is at or below the band's bottom with a
   // real gap, and the X is 32 px under a fine pointer and 44 under a coarse one (the tap floor).
-  // The band reads 34.6 px under a mouse and 46.6 under a finger (the 44 px X sets it); both are
-  // under the desktop's 53, which is what "compact" means here.
+  // The band is 2.8u under a mouse (the X is 28) and grows to hold a 44 px X under a finger.
   for (const theme of ["paper", "ink"]) for (const [pointer, hasTouch] of [["fine", false], ["coarse", true]]) {
     const ctx = await browser.newContext({ viewport: { width: 1024, height: 768 }, hasTouch });
     const page = await ctx.newPage();
@@ -3721,10 +3773,10 @@ async function checkGrantBanner(browser, base) {
     });
     const tag = `grant banner ${theme} 1024x768 ${pointer} pointer`;
     ok(`${tag}: compact, first and edge to edge, and the masthead clears it`,
-      r.present && r.first && r.top === 0 && r.left === 0 && r.right === r.stageWidth && r.band < 50 && r.gap >= 8 && r.gap <= 40,
+      r.present && r.first && r.top === 0 && r.left === 0 && r.right === r.stageWidth && r.band < 50 && r.gap >= 0 && r.gap <= 40,
       r.present ? `band ${r.band}px, masthead ${r.gap}px below its bottom (negative = overlap), ${r.left}..${r.right} of ${r.stageWidth}` : "no banner or no masthead");
-    ok(`${tag}: the X is ${hasTouch ? "44 for a finger" : "32 under a mouse"}`,
-      !!r.xBox && (hasTouch ? (r.xBox[0] >= 44 && r.xBox[1] >= 44) : (r.xBox[0] === 32 && r.xBox[1] === 32)),
+    ok(`${tag}: the X is ${hasTouch ? "44 for a finger" : "28 under a mouse"}`,
+      !!r.xBox && (hasTouch ? (r.xBox[0] >= 44 && r.xBox[1] >= 44) : (r.xBox[0] === 28 && r.xBox[1] === 28)),
       `X ${r.xBox ? r.xBox.join("x") : "missing"}`);
     await ctx.close();
   }
