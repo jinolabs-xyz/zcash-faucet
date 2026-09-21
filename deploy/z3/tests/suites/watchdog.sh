@@ -42,7 +42,7 @@ wd_env() {
   # The first case that set the grace to 0 failed in CI and passed alone.
   unset STUB_READY_EXTERNAL STUB_CURL_RC STUB_READY_REFS STUB_READY_USEDHEIGHT WATCHDOG_NODE_CONFIRMED_LAG_LIMIT STUB_READY_AGREE_BLOCKS
   unset STUB_SLOWLOOP STUB_ALERT_FAIL_N STUB_ALERT_FAIL_RC WATCHDOG_RECOVERY_MIN_UPTIME WATCHDOG_RETRY_MIN WATCHDOG_RETRY_WINDOW
-  unset STUB_CRASHLOOP STUB_HEALTH_SEQUENCE STUB_HEAL_FIXES STUB_READY_REFHASH STUB_READY_REFHEIGHT STUB_READY_REFAGE STUB_READY_REFDEPTH STUB_ZEBRA_ADVANCE STUB_ZEBRA_BLOCKS STUB_ZEBRA_EST STUB_ZEBRA_HASH STUB_ZEBRA_STUCK_CALLS WATCHDOG_CLOCK_FILE WATCHDOG_CLOCK_STEP \
+  unset STUB_CRASHLOOP STUB_HEALTH_SEQUENCE STUB_HEAL_FIXES STUB_READY_REFHASH STUB_READY_REFHEIGHT STUB_READY_REFAGE STUB_READY_REFDEPTH STUB_READY_FORKREF_SEQ STUB_ZEBRA_ADVANCE STUB_ZEBRA_BLOCKS STUB_ZEBRA_EST STUB_ZEBRA_HASH STUB_ZEBRA_STUCK_CALLS WATCHDOG_CLOCK_FILE WATCHDOG_CLOCK_STEP \
         WATCHDOG_NODE_HEAL_ENABLED WATCHDOG_NODE_STOPS_MINER WATCHDOG_MINER_HEARTBEAT WATCHDOG_MINER_UNIT STUB_START_FAIL \
         WATCHDOG_SIGNAL_MATCH STUB_READY_CANBUILD STUB_READY_CANBUILD_ONCE \
         STUB_READY STUB_READY_REASON STUB_READY_FAIL_UNTIL STUB_HEALTH \
@@ -2338,6 +2338,66 @@ check "and parks nothing on it" "[ ! -f '$T/park/$FORK_MARKER_REL' ]"
 check "and says it is the AGE that disqualified it, with the number" \
   "grep -q '99999s old, older than' '$T/run.log'"
 
+echo "== watchdog: the latch RE-ARMS on a successful compare - refuse, compare, the same refusal again, in ONE process"
+# Round one's M10: delete the re-arm and 438 rows stayed green, because no case had ever driven a
+# refusal, a good compare and the same refusal inside one watchdog process. Without the re-arm the
+# second silence is permanent: the reference vanishes again after a good sweep and the rung says
+# nothing for the rest of the process's life. Two lines here, or the detector's own silence is back.
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFHEIGHT=4350180 STUB_READY_REFHASH=00000000aaaaaaaabbbbbbbbccccccccddddddddeeeeeeeeffffffff00000000
+export STUB_ZEBRA_HASH=00000000aaaaaaaabbbbbbbbccccccccddddddddeeeeeeeeffffffff00000000
+export STUB_READY_FORKREF_SEQ="absent present absent"
+wd_run 3
+check "the reference was absent, present, absent across the three sweeps (the stub was driven, not assumed)" \
+  "[ \"\$(cat '$STUB_LOG.forkref-count' 2>/dev/null)\" -ge 3 ]"
+check "the same refusal is logged TWICE, once each side of the compare that re-armed it" \
+  "[ \"\$(grep -c 'no usable reference block' '$T/run.log')\" -eq 2 ]"
+check "and the compare in between paged nothing, because the hashes match" \
+  "! grep -q 'this is PROOF' '$T/alerts.log'"
+
+echo "== watchdog: a refusal whose NUMBERS move every sweep is logged once, because the key is the class"
+# The sentence carries our height and the gap, and both change every sweep while a node catches
+# up. Keyed on the text this would be one journal line per sweep, about 2,880 a day at 30 s - the
+# CTO's number - and the class key is what stops it. Twenty sweeps, one line.
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350100 STUB_ZEBRA_EST=4350200 STUB_ZEBRA_ADVANCE=1
+export STUB_READY_REFHEIGHT=4350180 STUB_READY_REFHASH=00000000aaaaaaaabbbbbbbbccccccccddddddddeeeeeeeeffffffff00000000
+export STUB_ZEBRA_HASH=00000000eeeeeeeeffffffff1111111122222222333333334444444455555555
+wd_run 20
+check "twenty sweeps ran" "[ \"\$(grep -c getblockchaininfo '$STUB_LOG')\" -ge 20 ]"
+check "exactly ONE below-the-reference line was logged, not one per sweep" \
+  "[ \"\$(grep -c 'BELOW the reference height' '$T/run.log')\" -eq 1 ]"
+
+echo "== watchdog: a DIFFERENT gap prints a different number - neither our height nor the gap is a constant"
+# The first BELOW case reads 4350100 and 80, so a rung that hard-coded either would pass it. Same
+# reference, a node 30 behind instead of 80: the line has to say 30, and say 4350150.
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350150 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFHEIGHT=4350180 STUB_READY_REFHASH=00000000aaaaaaaabbbbbbbbccccccccddddddddeeeeeeeeffffffff00000000
+export STUB_ZEBRA_HASH=00000000eeeeeeeeffffffff1111111122222222333333334444444455555555
+wd_run 2
+check "the line carries OUR height as read, 4350150" "grep -q 'our node is at 4350150, BELOW the reference height 4350180' '$T/run.log'"
+check "and the gap as computed, 30" "grep -q 'behind by 30;' '$T/run.log'"
+check "and never the other case's 80" "! grep -q 'behind by 80' '$T/run.log'"
+
+echo "== watchdog: a STALE reference is its own refusal, and a malformed hash after it still speaks"
+# Stale used to borrow the malformed class: "99999s old" was one more thing wrong with the hash. So
+# a reference that went stale and then came back truncated was one class repeating, and the second
+# defect - the app's serialiser, a different owner from the app's refresh loop - was silent.
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFHEIGHT=4350180 STUB_READY_REFHASH=00000000aaaaaaaabbbbbbbbccccccccddddddddeeeeeeeeffffffff00000000
+export STUB_ZEBRA_HASH=00000000eeeeeeeeffffffff1111111122222222333333334444444455555555
+export STUB_READY_FORKREF_SEQ="stale short"
+wd_run 2
+check "the stale sweep names the age and the height, and does not call the hash malformed" \
+  "grep -q 'the reference at 4350180 is 99999s old, older than' '$T/run.log' && ! grep 'older than' '$T/run.log' | grep -q 'is not one'"
+check "and the truncated hash on the next sweep is logged as its own refusal" \
+  "grep -q 'the reference hash is not one: 40 chars, not 64' '$T/run.log'"
+check "two refusals, two lines" "[ \"\$(grep -c 'history check' '$T/run.log')\" -eq 2 ]"
+check "and nothing paged across either" "! grep -q 'this is PROOF' '$T/alerts.log'"
+
 echo "== watchdog: a FRESH reference with the same difference still pages, which is the control"
 # Without this the row above passes for a rung that never pages at all. Same fixture, age inside
 # the bound, and the page must come back.
@@ -2394,7 +2454,7 @@ wd_run 2
 check "pages nothing when we cannot read our own hash" "! grep -q 'this is PROOF' '$T/alerts.log'"
 check "and parks nothing" "[ ! -f '$T/park/$FORK_MARKER_REL' ]"
 check "and it does NOT blame sync, because our node is ABOVE the reference height" \
-  "grep -q 'the height is not the reason' '$T/run.log' && ! grep -q 'still catching up' '$T/run.log'"
+  "grep -q 'The READ failed, not the height' '$T/run.log' && ! grep -q 'still catching up' '$T/run.log'"
 
 echo "== watchdog: a node BELOW the reference height is cannot-compare, named with OUR number"
 # THE REAL DEPTH REFUSAL. The app's `depth` is how far below THEIR tip the reference sits; it says
@@ -2428,7 +2488,7 @@ wd_run 4
 check "the FIRST reason is named" \
   "grep -q 'BELOW the reference height 4350180' '$T/run.log'"
 check "and the SECOND, different reason is named too rather than swallowed by the latch" \
-  "grep -q 'the height is not the reason' '$T/run.log'"
+  "grep -q 'The READ failed, not the height' '$T/run.log'"
 
 echo "== watchdog: and the same reason repeated is still said once"
 wd_fork_env

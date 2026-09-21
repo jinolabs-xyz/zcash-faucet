@@ -1301,13 +1301,13 @@ ticks=0
 # wording predates that ruling and I am not reversing it from an issue; the page leads with the
 # stop INSTRUCTION when the unit is running, exactly as the other rung does.
 #
-# WHAT IT READS, and why the fields are flat: `referenceHeight` and `referenceHash` sit at the top
-# level of /api/ready beside `usedHeight`, for the reason usedHeight is there at all - this script
-# parses with grep, sed and cut, and two levels down is the #391 greedy-match trap. The app picks
-# the height and publishes it; we do not derive our own, so the two processes cannot disagree about
-# where they looked.
+# WHAT IT READS: the nested `forkReference` object on /api/ready (#700) - height, hash, ageSeconds,
+# depth - isolated first and then read field by field, because every field in it is a scalar and
+# `[^}]*` cannot over-run a flat object; the #391 greedy-match trap is a property of grepping the
+# whole body, not of nesting. The app picks the height and publishes it; we do not derive our own,
+# so the two processes cannot disagree about where they looked.
 check_history_against_reference() {
-  local name="$1" fork_obj ref_h ref_hash ref_hash_bad ref_age ref_depth tell tell_key ours_h ours_hash lower_ours lower_ref park stop_first hist_word
+  local name="$1" fork_obj ref_h ref_hash ref_hash_bad ref_stale ref_age ref_depth tell tell_key ours_h ours_hash lower_ours lower_ref park stop_first hist_word
   [ "$FORK_HEAL_ENABLED" = "1" ] || return 0
   [ -n "$name" ] || return 0
 
@@ -1342,10 +1342,14 @@ check_history_against_reference() {
   # AND AN OLD ENOUGH REFERENCE IS NOT EVIDENCE EITHER. An absent or null age is not a failure here:
   # it means nothing has ever been read, and the hash is null with it, which the branch below already
   # handles. Only a number too large disqualifies a hash we otherwise have.
+  # STALE IS NOT MALFORMED. A well-formed hash that is too old to describe the chain now is a
+  # different refusal from a hash that is not one, with a different owner (the app's refresh loop
+  # against the app's serialiser), so it gets its own class below rather than borrowing this one -
+  # otherwise a stale reference followed by a truncated hash is one class repeating, and silent.
+  ref_stale=""
   case "$ref_age" in
     ''|*[!0-9]*) ;;
-    *) [ "$ref_age" -le "$FORK_REF_MAX_AGE_SECS" ] || {
-         ref_hash_bad="${ref_age}s old, older than ${FORK_REF_MAX_AGE_SECS}s"; ref_hash=""; } ;;
+    *) [ "$ref_age" -le "$FORK_REF_MAX_AGE_SECS" ] || ref_stale="${ref_age}s old, older than ${FORK_REF_MAX_AGE_SECS}s" ;;
   esac
 
   # EVERY REFUSAL IS A DIFFERENT FACT AND THE LATCH USED TO FLATTEN THEM ALL. One boolean, re-armed
@@ -1355,7 +1359,9 @@ check_history_against_reference() {
   # keyed on the REASON now: a changed reason speaks, a repeated one does not, and a successful
   # compare re-arms it.
   tell=""; tell_key=""
-  if [ -z "$ref_h" ] || [ -z "$ref_hash" ]; then
+  if [ -n "$ref_stale" ] && [ -n "$ref_h" ] && [ -n "$ref_hash" ]; then
+    tell_key="stale"; tell="the reference at $ref_h is $ref_stale. A hash that old may describe a chain that no longer exists, so nothing is compared until the app refreshes it."
+  elif [ -z "$ref_h" ] || [ -z "$ref_hash" ]; then
     if [ -n "$ref_hash_bad" ]; then
       tell_key="malformed"; tell="the reference hash is not one: $ref_hash_bad. Nothing is compared."
     else
@@ -1366,7 +1372,7 @@ check_history_against_reference() {
     # publish; it says nothing about where WE are. Blaming sync for every unanswered hash - a stopped
     # container, a changed RPC, a cookie we cannot read - is five causes wearing one sentence, and it
     # names the wrong machine four times out of five.
-    ours_h="${2%% *}"
+    ours_h="${2:-}"; ours_h="${ours_h%% *}"
     case "$ours_h" in ''|*[!0-9]*) ours_h="" ;; esac
     if [ -n "$ours_h" ] && [ "$ours_h" -lt "$ref_h" ]; then
       tell_key="below"; tell="our node is at $ours_h, BELOW the reference height $ref_h (behind by $((ref_h - ours_h)); the reference sits ${ref_depth:-?} blocks under the independent tip). A node still catching up cannot answer for that block, so nothing is compared - this is not a fork."
@@ -1379,7 +1385,7 @@ check_history_against_reference() {
         *) [ "${#ours_hash}" -eq 64 ] || ours_hash="" ;;
       esac
       if [ -z "$ours_hash" ]; then
-        tell_key="nohash"; tell="zebra returned no usable hash at $ref_h though our node is at ${ours_h:-unknown}, so the height is not the reason - check the container and its cookie. Nothing is compared."
+        tell_key="nohash"; tell="zebra returned no usable hash at $ref_h though it reports being at ${ours_h:-an unknown height}. The READ failed, not the height: a stopped container, a changed RPC shape and a cookie this watchdog cannot read all look like this. Nothing is compared."
       fi
     fi
   fi
