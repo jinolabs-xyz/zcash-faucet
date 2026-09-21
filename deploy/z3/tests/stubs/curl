@@ -88,6 +88,9 @@ case "$*" in
     # is absent, which is the pre-#651 body and must leave the watchdog on its own floor.
     agreeb=""
     [ -n "${STUB_READY_AGREE_BLOCKS:-}" ] && agreeb=",\"agreeBlocks\":${STUB_READY_AGREE_BLOCKS}"
+    # STUB_READY_SPB: the observed block rate the agree shape publishes as secondsPerBlock, 10.5 by
+    # default; `null` is a real shape too (the app corroborates by the BLOCKS rule when it has no
+    # rate), and it is the one that proves the watchdog's block constant is still the fallback.
     uh="${STUB_READY_USEDHEIGHT:-}"
     # STUB_READY_EXTERNAL ALONE MEANS "THE NETWORK AGREES AND IS AT N", which is what every
     # case written before the corroboration axis existed meant by it, and what step 7 needs
@@ -120,7 +123,7 @@ case "$*" in
       absent) refs="" ;;
       agree)
         [ -n "$uh" ] || { echo "stub curl: STUB_READY_REFS=agree needs STUB_READY_USEDHEIGHT" >&2; exit 64; }
-        refs=",\"tipReferences\":{\"sources\":{\"hosh\":{\"height\":${uh},\"ageSeconds\":2,\"stale\":false,\"host\":null},\"lightwalletd\":{\"height\":$((uh - 1)),\"ageSeconds\":9,\"stale\":false,\"host\":\"lwd\"}},\"spreadBlocks\":1,\"spreadSeconds\":11,\"secondsPerBlock\":10.5,\"corroborated\":true,\"used\":\"hosh\",\"usedHeight\":${uh},\"hoshHeight\":${uh},\"lightwalletdHeight\":$((uh - 1))}" ;;
+        refs=",\"tipReferences\":{\"sources\":{\"hosh\":{\"height\":${uh},\"ageSeconds\":2,\"stale\":false,\"host\":null},\"lightwalletd\":{\"height\":$((uh - 1)),\"ageSeconds\":9,\"stale\":false,\"host\":\"lwd\"}},\"spreadBlocks\":1,\"spreadSeconds\":11,\"secondsPerBlock\":${STUB_READY_SPB:-10.5},\"corroborated\":true,\"used\":\"hosh\",\"usedHeight\":${uh},\"hoshHeight\":${uh},\"lightwalletdHeight\":$((uh - 1))}" ;;
       disagree)
         [ -n "$uh" ] || { echo "stub curl: STUB_READY_REFS=disagree needs STUB_READY_USEDHEIGHT" >&2; exit 64; }
         refs=",\"tipReferences\":{\"sources\":{\"hosh\":{\"height\":${uh},\"ageSeconds\":2,\"stale\":false,\"host\":null},\"lightwalletd\":{\"height\":$((uh - 400)),\"ageSeconds\":9,\"stale\":false,\"host\":\"lwd\"}},\"spreadBlocks\":400,\"spreadSeconds\":4200,\"secondsPerBlock\":10.5,\"corroborated\":false,\"used\":\"hosh\",\"usedHeight\":${uh},\"hoshHeight\":${uh},\"lightwalletdHeight\":$((uh - 400))}" ;;

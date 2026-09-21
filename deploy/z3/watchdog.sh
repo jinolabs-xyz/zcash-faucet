@@ -234,7 +234,20 @@ NODE_LAG_LIMIT="${WATCHDOG_NODE_LAG_LIMIT:-100}"                # blocks behind 
 # a stall here. 25 is the first number clear of that, and it fires on 58. It sits deliberately
 # far above SHIELD_MAX_LAG_BLOCKS=5, where drips are already refused: the faucet degrades
 # quietly for a while before anything here stops a miner or touches state.
-NODE_CONFIRMED_LAG_LIMIT="${WATCHDOG_NODE_CONFIRMED_LAG_LIMIT:-25}"  # blocks behind a CORROBORATED tip before that counts as a stall
+NODE_CONFIRMED_LAG_LIMIT="${WATCHDOG_NODE_CONFIRMED_LAG_LIMIT:-25}"  # blocks behind a CORROBORATED tip before that counts as a stall - THE FALLBACK, see the next knob
+# THE FLOOR IS A TIME, AND THE 25 ABOVE IS WHAT IT FALLS BACK TO. A block count standing in for a
+# time property moves with the block rate: 25 blocks is 31 minutes of the network moving on at
+# the 75 s target and 5 minutes at the 12.8 s spacing of 2026-09-21 - the same rung six times
+# more eager on a fast night, which is the readiness bug of that night wearing this file's face.
+# The app already publishes the rate it observes (tipReferences.secondsPerBlock, #651), and its
+# own agreement window is written in seconds (TIP_AGREE_SECONDS=300), so the floor is too:
+# this many seconds of the network moving past a frozen tip, converted per sweep at the
+# published rate, and only when no rate is published does the 25 above apply, exactly as it
+# does today for a silent app. 600 IS THE ONE JUDGEMENT HERE, named beside the +5 below:
+# twice the app's agreement window, so a corroborated tip has to be two windows past us
+# before a lag is even a candidate for the 300 s stall clock. At 75 s that is 8 blocks, at
+# 27.7 s 22, at 12.8 s 47 - one meaning, three numbers.
+NODE_CONFIRMED_LAG_SECS="${WATCHDOG_NODE_CONFIRMED_LAG_SECS:-600}"
 NODE_STALL_SECS="${WATCHDOG_NODE_STALL_SECS:-300}"              # behind AND tip unmoved this long = wedged
 NODE_HEAL_MAX="${WATCHDOG_NODE_HEAL_MAX:-5}"                    # restarts before paging instead
 NODE_CLEAR_CACHE_AFTER="${WATCHDOG_NODE_CLEAR_CACHE_AFTER:-2}"  # from this attempt on, also drop the peer cache
@@ -265,6 +278,8 @@ node_budget_repaid=0
 # re-announcing the limit it is now using is information, not noise.
 agree_limit_logged=""
 agree_capped_logged=0
+floor_capped_logged=0
+floor_logged=""
 
 # 0 = loop forever (production). Tests set this to run an exact number of sweeps.
 MAX_TICKS="${WATCHDOG_MAX_TICKS:-0}"
@@ -974,16 +989,48 @@ heal_node_if_stalled() {
   # THE CONSTANT STAYS AS THE FLOOR. A missing or garbage field leaves today's behaviour exactly as
   # it is - same shape as the retry counter's guard, and the reason a /api/ready that predates #651
   # is not a silent downgrade.
-  local agree_b conf_limit
+  local agree_b conf_limit spb floor_blocks
   agree_b="$(printf '%s' "${ready_body:-}" | grep -o '"agreeBlocks":[0-9][0-9]*' | head -n1 | cut -d: -f2)"
   case "$agree_b" in ''|*[!0-9]*) agree_b="" ;; esac
+  # THE FLOOR, CONVERTED AT THE PUBLISHED RATE. secondsPerBlock is a decimal (27.7), so awk does
+  # the division and the ceiling; anything that is not a positive number - absent, null, a
+  # pre-#651 body - leaves the block constant in charge, which is today's behaviour unchanged.
+  # A rate under one second a block is not a chain we have ever measured; the app floors its
+  # own at 0.01 and publishes null below that, and the ceiling below bounds whatever gets
+  # through, so this does not second-guess it.
+  spb="$(printf '%s' "${ready_body:-}" | grep -o '"secondsPerBlock":[0-9][0-9]*\(\.[0-9][0-9]*\)\?' | head -n1 | cut -d: -f2)"
+  floor_blocks="$NODE_CONFIRMED_LAG_LIMIT"
+  if [ -n "$spb" ]; then
+    floor_blocks="$(awk -v s="$NODE_CONFIRMED_LAG_SECS" -v r="$spb" 'BEGIN { if (r + 0 <= 0) exit 1; b = int(s / r); if (b * r < s) b++; print b }' 2>/dev/null)" \
+      || floor_blocks="$NODE_CONFIRMED_LAG_LIMIT"
+    case "$floor_blocks" in ''|*[!0-9]*) floor_blocks="$NODE_CONFIRMED_LAG_LIMIT" ;; esac
+  fi
   # AND A CEILING, because a floor alone only protects us from a SILENT app (SDE-App, review of
   # #655). The point of floor-and-derive is that this constant still governs when the app is
   # WRONG - a runaway tolerance would otherwise raise the limit without bound and switch this rung
   # off from the far end of an HTTP call. Four times the floor is far above any cadence we have
   # measured and still finite; past it the app is not telling us about block spacing any more.
-  conf_limit="$NODE_CONFIRMED_LAG_LIMIT"
+  conf_limit="$floor_blocks"
   local conf_ceiling=$(( NODE_CONFIRMED_LAG_LIMIT * 4 ))
+  if [ "$conf_limit" -gt "$conf_ceiling" ]; then
+    # A 1 s rate would put the floor at 600 blocks; the ceiling is the same one the app's number
+    # meets below, for the same reason: nothing read over HTTP switches this rung off.
+    if [ "$floor_capped_logged" != "1" ]; then
+      log "the confirmed-lag floor of ${NODE_CONFIRMED_LAG_SECS}s at ${spb}s/block is $conf_limit blocks; capping at $conf_ceiling. Nothing remote can switch this rung off."
+      floor_capped_logged=1
+    fi
+    conf_limit="$conf_ceiling"
+  fi
+  # SAID WHEN IT CHANGES, so the journal carries the number the sweep actually judged by and the
+  # rate it came from - the line a reader needs to reproduce a heal or its absence.
+  if [ "$floor_logged" != "$conf_limit" ]; then
+    if [ -n "$spb" ]; then
+      log "confirmed-lag floor now $conf_limit blocks: ${NODE_CONFIRMED_LAG_SECS}s at the app's published ${spb}s/block"
+    else
+      log "confirmed-lag floor now $conf_limit blocks: the block constant, no rate published"
+    fi
+    floor_logged="$conf_limit"
+  fi
   if [ -n "$agree_b" ]; then
     local want=$(( agree_b + 5 ))
     if [ "$want" -gt "$conf_ceiling" ]; then
@@ -1000,7 +1047,7 @@ heal_node_if_stalled() {
       # state, which is the shape this file refuses everywhere else (fork_cannot_tell_logged,
       # history_last_tell, zallet.retryloop).
       if [ "$agree_limit_logged" != "$conf_limit" ]; then
-        log "confirmed-lag limit now $conf_limit from the app's published agreeBlocks=$agree_b (floor $NODE_CONFIRMED_LAG_LIMIT, ceiling $conf_ceiling)"
+        log "confirmed-lag limit now $conf_limit from the app's published agreeBlocks=$agree_b (floor $floor_blocks, ceiling $conf_ceiling)"
         agree_limit_logged="$conf_limit"
       fi
     fi
