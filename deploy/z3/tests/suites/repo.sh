@@ -1608,6 +1608,14 @@ check "a wired page with no matching selector FAILS rather than passing quietly"
   "grep -q 'has no .mascot-riso at' '$REPO/scripts/mascot-check.mjs' && grep -q 'is in the tree but' '$REPO/scripts/fit-check.mjs'"
 check "both run in the ui job against the URL the smoke server already has" \
   "grep -qF 'node scripts/fit-check.mjs \"\$UI_SMOKE_URL\"' '$CIWF' && grep -qF 'node scripts/mascot-check.mjs \"\$UI_SMOKE_URL\"' '$CIWF'"
+# The fit check waits for LIVE instead of sleeping, and a page that never gets there must be
+# named and skipped, never measured. The row that proves it needs a browser, so npm test skips it
+# in the app job and the ui job has to run it itself - a line that is easy to drop and quiet when
+# dropped.
+check "and the ui job runs fit-check's stall row, since npm test cannot" \
+  "grep -qF 'node --test scripts/fit-check.test.mjs' '$CIWF'"
+check "and that row asserts a stalled context is named AND unmeasured, the two halves of safe" \
+  "grep -qF 'never reached LIVE' '$REPO/scripts/fit-check.test.mjs' && grep -qF 'were measured anyway' '$REPO/scripts/fit-check.test.mjs'"
 # WHAT THE RUN PLANS IS HELD TO THE RULING, not to its own arrays (SDE-App, review of #563).
 # Both counts derive FROM the arrays that drive the loops, so shrinking one leaves a run that
 # measured everything it happened to plan - three viewports to one recomputed the total and

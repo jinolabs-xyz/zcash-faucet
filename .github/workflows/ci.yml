@@ -361,6 +361,12 @@ jobs:
           # no matching selector on the page is a FAILURE. That is what a rename looks like,
           # and a check that shrugs at it would pass for ever afterwards.
           node scripts/fit-check.mjs "$UI_SMOKE_URL"
+          # THE STALL ROW RUNS HERE, NOT ONLY UNDER npm test. fit-check waits for the page's own
+          # events now instead of sleeping, and that is safe only because a page that never
+          # reaches LIVE is named and skipped rather than measured on the CHECKING card. The row
+          # that proves it drives a real browser against a page that never gets there; the app
+          # job's npm test has no browser, so it skips there by name and is measured here.
+          node --test scripts/fit-check.test.mjs
 
           # The mascot's acceptance test from MASCOT.md, ported from the frozen snapshot's
           # mascot-shots.mjs and made to fail rather than print: the sheets are served and
