@@ -17,7 +17,7 @@
  * the Signal page, the box's own report, and the token-gated /api/status the off-box
  * probe reads. The predicates below are that verdict; the public words are at the end.
  */
-import type { IntegrityStatus } from "./boxIntegrity.ts";
+import type { DriftState, IntegrityStatus } from "./boxIntegrity.ts";
 
 /**
  * How many restarts the watchdog took since the box's previous report (#365).
@@ -81,6 +81,12 @@ export interface PublicBox {
   /** systemd's word for the miner unit, passed through: the miner panel uses it to tell a
    *  parked miner from a dead one, and the miner strip already says which. */
   minerUnit: string | null;
+  /** The drift audit's one word (DriftState), public because it is a word and not a file
+   *  name: the off-box probe fails on anything but "clean", and the counts, the age and the
+   *  checkout it compared against travel only with the operator token. Kept OUT of `state`
+   *  on purpose: box-report already counts installed-and-current files and the audit counts
+   *  them again, so folding one into the other would count one fault twice. */
+  drift: DriftState;
 }
 
 export function publicBox(s: IntegrityStatus): PublicBox {
@@ -93,7 +99,7 @@ export function publicBox(s: IntegrityStatus): PublicBox {
     : boxIsBad(s) ? "attention"
     : s.state === "complete" && watchdogAffirmed && pagerAffirmed ? "ok"
     : "unknown";
-  return { state, minerUnit: s.minerUnit };
+  return { state, minerUnit: s.minerUnit, drift: s.drift.state };
 }
 
 /** The strip's one slot. Nothing for ok: a permanent "box ok" would spend the slot on

@@ -105,3 +105,100 @@ test("alertBridge rides through classification untouched, complete or not", () =
   assert.equal(classifyIntegrity(rep({ present: 1, alertBridge: "ok" }), NOW).alertBridge, "ok");
   assert.equal(classifyIntegrity(null, NOW).alertBridge, null);
 });
+
+// ---- THE DRIFT AUDIT'S OWN VERDICT (#721's follow-up): every word reachable, pure -------------
+import { classifyDrift, DRIFT_STALE_AFTER_MS, type DriftReport } from "./boxIntegrity.ts";
+
+const counts = (rc: number, findings = 0, unverified = 0) => ({ rc, findings, unverified });
+const fresh = (over: Partial<DriftReport> = {}): DriftReport => ({
+  at: NOW - 5 * 60_000,
+  repoSha: "0123456789abcdef0123456789abcdef01234567",
+  config: counts(0),
+  access: counts(0),
+  ...over,
+});
+
+test("drift: a report older than the field is unknown, and says so", () => {
+  const d = classifyDrift(undefined, NOW);
+  assert.equal(d.state, "unknown");
+  assert.match(d.reason, /predates the drift field/);
+  assert.equal(d.findings, null);
+});
+
+test("drift: a box that published nothing is unknown, not clean", () => {
+  const d = classifyDrift(null, NOW);
+  assert.equal(d.state, "unknown");
+  assert.match(d.reason, /not published/);
+});
+
+test("drift: clean is affirmative - both audits ran, nothing found, nothing skipped", () => {
+  const d = classifyDrift(fresh(), NOW);
+  assert.equal(d.state, "clean");
+  assert.equal(d.findings, 0);
+  assert.equal(d.unverified, 0);
+  assert.equal(d.ageSeconds, 300);
+  assert.equal(d.repoSha, "0123456789abcdef0123456789abcdef01234567");
+});
+
+test("drift: findings in EITHER audit read as drift, summed", () => {
+  const d = classifyDrift(fresh({ config: counts(1, 3), access: counts(1, 2) }), NOW);
+  assert.equal(d.state, "drift");
+  assert.equal(d.findings, 5);
+  assert.match(d.reason, /5 finding/);
+});
+
+test("drift: a check that could not run is incomplete even with zero findings", () => {
+  const d = classifyDrift(fresh({ config: counts(2, 0, 2) }), NOW);
+  assert.equal(d.state, "incomplete");
+  assert.equal(d.unverified, 2);
+  assert.match(d.reason, /2 check\(s\) could not run/);
+});
+
+test("drift: an audit that could not run at all (rc 3) is incomplete, and its zeros are not clean", () => {
+  const d = classifyDrift(fresh({ access: counts(3, 0, 0) }), NOW);
+  assert.equal(d.state, "incomplete");
+  assert.match(d.reason, /could not run on the box/);
+});
+
+test("drift: findings outrank incomplete when both are true", () => {
+  const d = classifyDrift(fresh({ config: counts(2, 1, 1) }), NOW);
+  assert.equal(d.state, "drift");
+});
+
+test("drift: past the bound the word is STALE whatever the counts said - silence is not yesterday's clean", () => {
+  const d = classifyDrift(fresh({ at: NOW - DRIFT_STALE_AFTER_MS - 1000 }), NOW);
+  assert.equal(d.state, "stale");
+  assert.match(d.reason, /stopped arriving/);
+  assert.equal(d.findings, 0, "the counts are still carried, so an operator sees what the last run said");
+});
+
+test("drift: exactly at the bound is still fresh; one second past is not", () => {
+  assert.equal(classifyDrift(fresh({ at: NOW - DRIFT_STALE_AFTER_MS }), NOW).state, "clean");
+  assert.equal(classifyDrift(fresh({ at: NOW - DRIFT_STALE_AFTER_MS - 1 }), NOW).state, "stale");
+});
+
+test("drift: the bound is 90 minutes - three missed half-hour runs, not a day", () => {
+  assert.equal(DRIFT_STALE_AFTER_MS, 90 * 60_000);
+});
+
+test("drift: the verdict rides on classifyIntegrity whatever the box's own state, because the two clocks are independent", () => {
+  const stale = classifyIntegrity({ ...rep({ agoMs: 60 * 60_000 }), drift: fresh({ config: counts(1, 2) }) }, NOW);
+  assert.equal(stale.state, "unknown", "the box report itself is stale");
+  assert.equal(stale.drift.state, "drift", "and the drift verdict is still read from what it carried");
+  const none = classifyIntegrity(null, NOW);
+  assert.equal(none.drift.state, "unknown");
+});
+
+test("drift: rc 1 with a count of ZERO is still drift - the exit code outranks a grep that missed the word", () => {
+  // The access audit prints FINDING, not DRIFT; a wrapper counting one word published rc 1 /
+  // findings 0 and a count-first reader called it clean (App's block on #726).
+  const d = classifyDrift(fresh({ access: counts(1, 0, 0) }), NOW);
+  assert.equal(d.state, "drift");
+  assert.match(d.reason, /reported but the wrapper did not count/);
+});
+
+test("drift: rc 0 with findings above zero is drift, never clean - a contradiction reads as the worse half", () => {
+  const d = classifyDrift(fresh({ config: counts(0, 2, 0) }), NOW);
+  assert.equal(d.state, "drift");
+  assert.equal(d.findings, 2);
+});

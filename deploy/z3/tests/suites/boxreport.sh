@@ -658,3 +658,59 @@ check "and the writer's fallback is under the shared stock root, keyed by the vo
   "[ \"$writer_path\" = '$BOX_REPORT_VOLUME_ROOT/no-such-volume/_data/box-integrity.json' ]"
 check "and the writer says so on stderr rather than leaving the operator to guess" \
   "grep -qF 'report path $BOX_REPORT_VOLUME_ROOT/no-such-volume/_data/box-integrity.json' '$T/fb.err'"
+
+echo "== box-report: the drift audit's summary is CARRIED, in exactly the shape drift-report.sh writes"
+# drift-report.sh writes /var/lib/faucet-drift/summary.json; box-report embeds it as `drift`
+# so /api/status and live-smoke can read the box's own answer to "does this box match the
+# repo". Written by drift-report's real write path here, not a literal, so the two shapes
+# cannot drift apart in the fixture while agreeing in prose.
+box_env
+mkdir -p "$T/drift-state" "$T/drift-bin" "$T/drift-repo"
+git -C "$T/drift-repo" init -q && git -C "$T/drift-repo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m fixture
+printf '#!/usr/bin/env bash\necho "  DRIFT    something"\nexit 1\n' > "$T/drift-bin/audit-drift"; chmod +x "$T/drift-bin/audit-drift"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$T/drift-bin/audit-access"; chmod +x "$T/drift-bin/audit-access"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$T/drift-bin/alert"; chmod +x "$T/drift-bin/alert"
+DRIFT_STATE_DIR="$T/drift-state" DRIFT_AUDIT="$T/drift-bin/audit-drift" DRIFT_ACCESS_AUDIT="$T/drift-bin/audit-access" \
+  DRIFT_ALERT_SH="$T/drift-bin/alert" AUDIT_REPO_DIR="$T/drift-repo" bash "$REPO/deploy/z3/drift-report.sh" > /dev/null 2>&1
+check "the fixture's drift-report run produced a summary" "[ -s '$T/drift-state/summary.json' ]"
+BOX_REPORT_DRIFT_SUMMARY="$T/drift-state/summary.json" bash "$BOX_REPORT" > /dev/null 2>&1
+check "the report still parses with drift embedded" "[ \"\$(jqf '$BOX_REPORT_OUT' readable)\" = 'True' ]"
+check "and drift carries the audit's counts: 1 finding, rc 1" \
+  "python3 -c \"import json,sys; d=json.load(open(sys.argv[1]))['drift']; sys.exit(0 if d['config']['findings']==1 and d['config']['rc']==1 and d['access']['rc']==0 else 1)\" '$BOX_REPORT_OUT'"
+check "and the sha the audit compared against" \
+  "python3 -c \"import json,sys; d=json.load(open(sys.argv[1]))['drift']; sys.exit(0 if len(d['repoSha'])==40 else 1)\" '$BOX_REPORT_OUT'"
+
+echo "== box-report: no summary on the box is drift null, which the reader classifies as unknown, never as clean"
+box_env
+BOX_REPORT_DRIFT_SUMMARY="$T/no-such-summary.json" bash "$BOX_REPORT" > /dev/null 2>&1
+check "drift is the literal null" "python3 -c \"import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))['drift'] is None else 1)\" '$BOX_REPORT_OUT'"
+check "and the report is otherwise intact" "[ \"\$(jqf '$BOX_REPORT_OUT' readable)\" = 'True' ]"
+
+echo "== box-report: a summary that is NOT the shape drift-report writes is dropped, not spliced in"
+# A torn write, a hand-edited file, or a future drift-report with a new field: anything that
+# is not exactly the printf'd shape would either corrupt this JSON or smuggle text onto a
+# public endpoint. Both are worse than an honest null.
+box_env
+printf '{"at":1,"repoSha":"","config":{"rc":0,"findings":0,"unverified":0},"access":{"rc":0,"findings":0,"unverified":0},"note":"the file name that is missing"}\n' > "$T/bad-summary.json"
+BOX_REPORT_DRIFT_SUMMARY="$T/bad-summary.json" bash "$BOX_REPORT" > /dev/null 2> "$T/bad.err"
+check "drift is null" "python3 -c \"import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))['drift'] is None else 1)\" '$BOX_REPORT_OUT'"
+check "the report still parses (the foreign text never reached it)" "[ \"\$(jqf '$BOX_REPORT_OUT' readable)\" = 'True' ] && ! grep -q 'file name that is missing' '$BOX_REPORT_OUT'"
+check "and stderr says why" "grep -q 'not the shape drift-report.sh writes' '$T/bad.err'"
+printf '{"at":1,"repoSha":"","config":{"rc":0,"findings":0,"unverified":0},"access":{"rc":0,"findings":0,"unverified":0}}\n' > "$T/ok-summary.json"
+BOX_REPORT_DRIFT_SUMMARY="$T/ok-summary.json" bash "$BOX_REPORT" > /dev/null 2>&1
+check "control: the same file without the extra field IS embedded (empty sha allowed, git may not answer)" \
+  "python3 -c \"import json,sys; d=json.load(open(sys.argv[1]))['drift']; sys.exit(0 if d and d['at']==1 else 1)\" '$BOX_REPORT_OUT'"
+
+echo "== box-report: a summary whose exit code says clean beside a finding count above zero is dropped as the lie it is"
+box_env
+printf '{"at":1,"repoSha":"","config":{"rc":0,"findings":2,"unverified":0},"access":{"rc":0,"findings":0,"unverified":0}}\n' > "$T/lie-summary.json"
+BOX_REPORT_DRIFT_SUMMARY="$T/lie-summary.json" bash "$BOX_REPORT" > /dev/null 2> "$T/lie.err"
+check "drift is null" "python3 -c \"import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))['drift'] is None else 1)\" '$BOX_REPORT_OUT'"
+check "and stderr names the contradiction" "grep -q 'exited clean beside a finding count above zero' '$T/lie.err'"
+printf '{"at":1,"repoSha":"","config":{"rc":0,"findings":0,"unverified":0},"access":{"rc":0,"findings":3,"unverified":0}}\n' > "$T/lie2-summary.json"
+BOX_REPORT_DRIFT_SUMMARY="$T/lie2-summary.json" bash "$BOX_REPORT" > /dev/null 2>&1
+check "the same lie on the access side is dropped too" "python3 -c \"import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))['drift'] is None else 1)\" '$BOX_REPORT_OUT'"
+printf '{"at":1,"repoSha":"","config":{"rc":1,"findings":0,"unverified":0},"access":{"rc":0,"findings":0,"unverified":0}}\n' > "$T/rc1-summary.json"
+BOX_REPORT_DRIFT_SUMMARY="$T/rc1-summary.json" bash "$BOX_REPORT" > /dev/null 2>&1
+check "control: rc 1 with findings 0 is CARRIED (the reader refuses that one, as drift)" \
+  "python3 -c \"import json,sys; d=json.load(open(sys.argv[1]))['drift']; sys.exit(0 if d and d['config']['rc']==1 else 1)\" '$BOX_REPORT_OUT'"

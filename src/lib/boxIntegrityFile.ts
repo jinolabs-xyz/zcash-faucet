@@ -11,16 +11,33 @@
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { IntegrityReport } from "./boxIntegrity.ts";
+import type { DriftAuditCounts, DriftReport, IntegrityReport } from "./boxIntegrity.ts";
 
 const PATH =
   process.env.FAUCET_BOX_REPORT_PATH ?? join(process.cwd(), "data", "box-integrity.json");
+
+function readDrift(v: unknown): DriftReport | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  const n = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : null);
+  const counts = (x: unknown): DriftAuditCounts | null => {
+    if (!x || typeof x !== "object") return null;
+    const c = x as Record<string, unknown>;
+    const rc = n(c.rc), findings = n(c.findings), unverified = n(c.unverified);
+    if (rc === null || findings === null || unverified === null) return null;
+    return { rc, findings, unverified };
+  };
+  const at = n(o.at), config = counts(o.config), access = counts(o.access);
+  if (at === null || !config || !access) return null;
+  const repoSha = typeof o.repoSha === "string" && /^[0-9a-f]{40}$/.test(o.repoSha) ? o.repoSha : null;
+  return { at, repoSha, config, access };
+}
 
 export function readBoxIntegrity(): IntegrityReport | null {
   try {
     const j = JSON.parse(readFileSync(PATH, "utf8")) as Record<string, unknown>;
     if (j.readable === false)
-      return { expected: 0, present: 0, notEnabled: 0, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, platform: null, minerBinary: null, minerUnit: null, watchdogUnit: null, alertBridge: null, at: null, readable: false };
+      return { expected: 0, present: 0, notEnabled: 0, enabledUndeclared: null, watchdogRestarts: null, watchdogRestartsDelta: null, platform: null, minerBinary: null, minerUnit: null, watchdogUnit: null, alertBridge: null, at: null, readable: false, drift: null };
     const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
     // Strings, and empty is not a value. box-report defaults platform to the literal
     // "unknown" when uname says nothing, so an empty string here means the field was
@@ -57,7 +74,14 @@ export function readBoxIntegrity(): IntegrityReport | null {
     const minerUnit = s(j.minerUnit);
     const watchdogUnit = s(j.watchdogUnit);
     const alertBridge = s(j.alertBridge);
-    return { expected, present, notEnabled, enabledUndeclared, watchdogRestarts, watchdogRestartsDelta, platform, minerBinary, minerUnit, watchdogUnit, alertBridge, at, readable: true };
+    // THE DRIFT AUDIT'S VERDICT (#721's follow-up). Three shapes arrive: the key absent (a
+    // box-report older than the field) stays `undefined`; `null` (the box published no
+    // summary, or one that was not the shape drift-report.sh writes) stays null; an object
+    // is read field by field, and one missing or non-numeric count makes the whole thing
+    // null rather than a verdict with a zero in it. All three classify as unknown, and
+    // unknown fails the gate; a zero would pass it.
+    const drift = "drift" in j ? readDrift(j.drift) : undefined;
+    return { expected, present, notEnabled, enabledUndeclared, watchdogRestarts, watchdogRestartsDelta, platform, minerBinary, minerUnit, watchdogUnit, alertBridge, at, readable: true, drift };
   } catch {
     return null;
   }

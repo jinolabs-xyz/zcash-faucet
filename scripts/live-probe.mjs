@@ -42,6 +42,8 @@
 // the trim the value cleared the gate and then died on EVERY scheduled run with
 // "Failed to parse URL from  https://host /api/status", which names nothing about the
 // variable and is a worse diagnosis than the refusal it replaced.
+import { execFileSync } from "node:child_process";
+
 const BASE = (process.env.SMOKE_URL ?? "").trim().replace(/\/$/, "");
 // The operator's view of /api/status (risk register II, R-24): the box's named faults
 // and the running commit come back only with FAUCET_OPS_TOKEN, sent as x-faucet-ops.
@@ -436,6 +438,45 @@ async function checkExplorerProperty() {
 // caller can retry a transient failure without a stale tally leaking between
 // attempts. Everything that was here before is unchanged; it just reports up
 // instead of mutating a module global.
+// How long main may be ahead of the box before that is a deploy that did not land. The box
+// polls every 2 minutes and a rebuild is measured at ~6; twenty is generous and still inside
+// one scheduled run of this workflow.
+const DEPLOY_LAG_MIN = numEnv("SMOKE_DEPLOY_LAG_MIN", 20, 1);
+function git(args) {
+  return execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+}
+function boxRunsMain(buildCommit) {
+  const ref = (process.env.SMOKE_MAIN_REF ?? "").trim();
+  if (!ref) return { skip: "SMOKE_MAIN_REF is not set, so the box's commit was not compared to main" };
+  if (buildCommit === undefined) return { skip: "no operator token, so the box did not say which commit it runs; not compared" };
+  if (typeof buildCommit !== "string" || buildCommit === "" || buildCommit === "unknown") {
+    return { fail: "the box did not say which commit it runs (buildCommit unknown): the deploy did not stamp the image" };
+  }
+  // redeploy.sh appends -modified / -untracked when the checkout it built from was dirty.
+  // That is main's code plus something nobody reviewed, which is exactly what this row is
+  // for, so the suffix is a failure before any comparison.
+  const m = /^([0-9a-f]{7,40})(-.+)?$/.exec(buildCommit);
+  if (!m) return { fail: `the box's buildCommit ${JSON.stringify(buildCommit)} is not a commit` };
+  if (m[2]) return { fail: `the box runs ${m[1]}${m[2]}: main's code plus uncommitted changes on the box's checkout` };
+  const sha = m[1];
+  let mainSha, mainAt;
+  try {
+    mainSha = git(["rev-parse", ref]);
+    mainAt = Number(git(["log", "-1", "--format=%ct", ref])) * 1000;
+  } catch (e) {
+    return { fail: `could not read ${ref} in this checkout (${e.message.split("\n")[0]}): the comparison was NOT made, which is not the same as the box being on main` };
+  }
+  if (mainSha.startsWith(sha)) return { ok: `the box runs ${sha}, which is ${ref}` };
+  let ancestor;
+  try { execFileSync("git", ["merge-base", "--is-ancestor", sha, ref], { stdio: "ignore" }); ancestor = true; }
+  catch (e) { ancestor = e.status === 1 ? false : null; }
+  if (ancestor === null) return { fail: `the box runs ${sha}, which this checkout does not know: not on ${ref}'s fetched history, or never on main` };
+  if (!ancestor) return { fail: `the box runs ${sha}, which is not an ancestor of ${ref}: not main's code` };
+  const minutes = Math.max(0, (Date.now() - mainAt) / 60_000);
+  if (minutes <= DEPLOY_LAG_MIN) return { ok: `${ref} moved to ${mainSha.slice(0, 7)} ${minutes.toFixed(0)} min ago and the box runs its ancestor ${sha}; auto-deploy has ${DEPLOY_LAG_MIN} minutes` };
+  return { fail: `${ref} has been at ${mainSha.slice(0, 7)} for ${minutes.toFixed(0)} minutes and the box still runs ${sha}: the deploy did not land (journalctl -u faucet-autodeploy on the box)` };
+}
+
 async function runFaucetChecks() {
   const { ok, count } = tally();
 
@@ -505,6 +546,44 @@ async function runFaucetChecks() {
       word === "ok",
       word === "ok" ? "the box reports ok" : `the box reports ${JSON.stringify(word)}; which fault is on the box's own report and the Signal page, not here`,
     );
+
+    // DOES THE BOX MATCH THE REPO, as the box's own drift audit last answered. For a
+    // fortnight that answer lived in a journal on the box, byte-identical every night, and
+    // the one new line in it was invisible (#721). Now the box publishes counts and a word
+    // (drift-report.sh -> box-report.sh -> /api/status), and this is where the word becomes
+    // a red run the owner can see. The public shape carries the word alone; the operator's
+    // carries the counts, the age and the checkout the audit compared against. Judged by the
+    // word, so both shapes read the same, and only "clean" passes: "drift" is a box that
+    // disagrees with the repo, "incomplete" is an audit that could not check everything,
+    // "stale" is an audit that stopped arriving (it runs every 30 minutes; 90 is the bound),
+    // and "unknown" is a box that has not said. NONE of those four is "asked and clean", and
+    // each prints its own sentence so the red run says which.
+    const driftWord = box.drift === undefined ? undefined : typeof box.drift === "string" ? box.drift : box.drift?.state;
+    if (driftWord === undefined) {
+      ok("the box's drift audit reads clean", true, "server does not send `drift` yet, cannot verify");
+    } else {
+      const why = {
+        clean: "the box matches the repo in every check its audit made",
+        drift: "the box and the repo DISAGREE; the findings are on the box's own journal (journalctl -u faucet-drift-report), never here",
+        incomplete: "the box's audit could not run every check, so this is not a clean result",
+        stale: "the box's last drift audit is older than 90 minutes: it runs every 30, so it has stopped arriving, and silence is not clean",
+        unknown: "the box has not published a drift audit result",
+      };
+      const detail = typeof box.drift === "object" && box.drift ? ` (${box.drift.findings ?? "?"} finding(s), ${box.drift.unverified ?? "?"} unverified, ${box.drift.ageSeconds ?? "?"}s old)` : "";
+      ok("the box's drift audit reads clean", driftWord === "clean", (why[driftWord] ?? `the box reports drift ${JSON.stringify(driftWord)}`) + detail);
+    }
+  }
+
+  // THE BOX RUNS MAIN. buildCommit is served with the token and, until now, printed and
+  // never compared: a merge that never reached the box (a stalled timer, a failed rebuild)
+  // was indistinguishable from up to date. This is also what makes the drift row above worth
+  // reading: the audit compares the box against ITS OWN CHECKOUT, so a checkout that stopped
+  // moving makes every audit clean against the wrong repo, and only an outside comparison to
+  // main can see that. SMOKE_MAIN_REF names the ref this checkout has (the workflow fetches
+  // main's history before the probe); without it the comparison is not made, and says so.
+  {
+    const r = boxRunsMain(status.body.buildCommit);
+    ok("the box runs main: the commit it serves is main's head, or an ancestor main moved past within the deploy allowance", !r.fail, r.fail ?? r.ok ?? r.skip);
   }
   // THE COMPOSITION CHECK cTAZ NEVER HAD, and the reason this file grew it. Every
   // pre-merge layer was green while prod could not serve cTAZ, twice in one day: the

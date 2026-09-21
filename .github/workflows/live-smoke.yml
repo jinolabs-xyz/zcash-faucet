@@ -64,6 +64,11 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history, not the default depth of 1: the probe asks git whether the commit
+          # the box serves is an ancestor of main, and a one-commit checkout cannot answer
+          # that for anything but main's own head. The repo is small; the fetch is seconds.
+          fetch-depth: 0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           # Matches the Dockerfile (node:24-slim), like every job in ci.yml. #257
@@ -91,6 +96,14 @@ jobs:
           # bridge name, token or not. The token buys the operator's shape (buildCommit
           # and the counts) for checks that print nothing sensitive.
           SMOKE_OPS_TOKEN: ${{ secrets.FAUCET_OPS_TOKEN }}
+          # THE BOX RUNS MAIN. With the token the probe gets buildCommit, and with this ref it
+          # compares that commit to main's history in this checkout: main's head, or an
+          # ancestor main moved past inside the deploy allowance, passes; anything else -
+          # a stalled auto-deploy, a dirty checkout on the box, a commit that was never on
+          # main - is a red run that names it. The drift audit on the box compares the box
+          # against its OWN checkout, so this is the only check that can see that checkout
+          # standing still (#721's follow-up).
+          SMOKE_MAIN_REF: origin/main
           # #533 / R-20. Off by default: node.chain.state has read cannot-verify since it
           # shipped, so enforcing today takes this workflow permanently red and pages a human
           # every 30 minutes for a gap already on the board. Set the repository variable to 1
@@ -174,6 +187,15 @@ jobs:
           # Same knob as the probe above: a re-probe judging by a different rule than the probe
           # it is confirming would turn a reported state into a paged one, or the reverse.
           SMOKE_FORK_CHECK_ENFORCED: ${{ vars.FAUCET_FORK_CHECK_ENFORCED }}
+          # And the same token and ref, for the same reason: without the token the re-probe
+          # gets no buildCommit and the "box runs main" row is not made, so a probe that
+          # failed on a deploy that never landed would re-probe green and read as a blip.
+          SMOKE_OPS_TOKEN: ${{ secrets.FAUCET_OPS_TOKEN }}
+          SMOKE_MAIN_REF: origin/main
+          # Unreachable in practice (a disabled probe exits 0 and this step never runs), set
+          # so the rule "every SMOKE_ knob the probe has, the re-probe has" holds without an
+          # exception list, and the repo row that enforces it stays one comparison.
+          SMOKE_DISABLED: ${{ vars.FAUCET_LIVE_SMOKE_DISABLED }}
         run: |
           if [ -z "$ALERT_URL" ]; then
             echo "FAUCET_ALERT_URL secret is not set, cannot page (email only)"

@@ -117,6 +117,7 @@ rc=0
 # scripts re-exec their installed copy each run and so update themselves.
 watchdog_changed=0
 ctaz_socket_changed=0
+timers_changed=""
 for src in "$SRC"/*.sh; do
   [ -e "$src" ] || continue
   case "$(basename "$src")" in
@@ -140,6 +141,7 @@ for src in "$SRC"/*.service "$SRC"/*.timer "$SRC"/*.socket; do
   place "$src" "$UNIT_DIR/$(basename "$src")" 644 || rc=1
   [ "$changed" != "$before" ] && units=$((units + 1))
   [ "$(basename "$src")" = "ctaz-rpc.socket" ] && [ "$changed" != "$before" ] && ctaz_socket_changed=1
+  case "$src" in *.timer) [ "$changed" != "$before" ] && timers_changed="$timers_changed $(basename "$src")" ;; esac
 done
 
 # DROP-INS, because this script globbed the top level only and a file in a subdirectory
@@ -263,6 +265,28 @@ fi
 # RemoveOnStop=yes on the unit means the restart removes and recreates the socket file,
 # which is what applies the new mode. Any broker instance mid-call is per-connection
 # (Accept=yes) and finishes on its own fd.
+# --- restart a changed timer that is running --------------------------------------
+# THE SAME LESSON A THIRD TIME, and this time it is the drift audit's cadence. A running
+# timer computed its next elapse from the unit text it was started with; daemon-reload
+# re-reads the file and is not documented to reschedule, and betting a 30-minute cadence on
+# it would leave the box on the old daily schedule with the new file on disk - matching the
+# repo, passing the audit, and not doing what the repo says. Same rule as the socket and the
+# watchdog: only when the unit CHANGED, only when it is already active. A stopped timer is
+# an arming decision and belongs to enabled-units.
+for t in $timers_changed; do
+  [ "$DRY" != "1" ] || continue
+  if "$SYSTEMCTL" is-active --quiet "$t" 2>/dev/null; then
+    if "$SYSTEMCTL" restart "$t" >/dev/null 2>&1; then
+      log "$t changed; restarted it so the new schedule applies now rather than at the next boot"
+    else
+      log "ERROR: $t changed but restarting it failed; it is still running on the OLD schedule"
+      rc=1
+    fi
+  else
+    log "$t changed but is not active; leaving it as the operator has it"
+  fi
+done
+
 if [ "$ctaz_socket_changed" = "1" ] && [ "$DRY" != "1" ]; then
   if "$SYSTEMCTL" is-active --quiet ctaz-rpc.socket 2>/dev/null; then
     if "$SYSTEMCTL" restart ctaz-rpc.socket >/dev/null 2>&1; then
