@@ -20,13 +20,20 @@ import { Mascot as PageMascot } from "page-mascot";
  * audit advisories on this tree are pre-existing (bitgo, elliptic, secp256k1) and none of
  * them is this.
  *
- * The sheets are served from `public/mascots/` and are byte-identical to the copies in the
- * frozen spec snapshot S2-S5-20260915T1943Z, verified by sha256 rather than by filename.
+ * THE SHEETS WE SERVE ARE NO LONGER THE FROZEN ONES, and that sentence used to say they were.
+ * The bare sheets in `public/mascots/` are still byte-identical to snapshot S2-S5-20260915T1943Z
+ * and are kept; what the page loads is the blindfolded pair derived from them.
+ *
+ * NO SHAS HERE, ON PURPOSE. The first version of this comment pinned them, with a line saying
+ * they "move whenever the art does" - and the art moved twice the same day and the comment did
+ * not, because a comment is a pin that cannot go red. The enforced pin is SERVED_SHEETS in
+ * scripts/mascot-check.mjs, whose row fails on a mismatch. One source of truth, and it is the one
+ * that can fail.
  */
 
 /** The 3x3 sheets, served from public/. Paths live here so only this file knows them. */
-const DIRECTIONS = "/mascots/fox-riso-directions.webp";
-const REACTIONS = "/mascots/fox-riso-reactions.webp";
+const DIRECTIONS = "/mascots/fox-riso-directions-blindfold.webp";
+const REACTIONS = "/mascots/fox-riso-reactions-blindfold.webp";
 
 /**
  * The hero's intrinsic size. The component writes it inline, and `.mascot-riso` in the hero

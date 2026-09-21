@@ -1674,7 +1674,7 @@ check "the boop finds the reactions layer by the sheet it paints, and asserts a 
 # is the assertion, and gating that on the content-type header instead of the bytes is the
 # exact mistake this check was rewritten to stop making.
 check "the sheets are checked over the wire before the pointer assertions, since a 404 passes them" \
-  "grep -qF '/mascots/fox-riso-directions.webp' '$REPO/scripts/mascot-check.mjs' && grep -qF '/mascots/fox-riso-reactions.webp' '$REPO/scripts/mascot-check.mjs' && grep -q 'is not served' '$REPO/scripts/mascot-check.mjs' && grep -qF 'body.subarray(0, 4).toString(\"latin1\") === \"RIFF\"' '$REPO/scripts/mascot-check.mjs' && grep -qF 'body.subarray(8, 12).toString(\"latin1\") === \"WEBP\"' '$REPO/scripts/mascot-check.mjs'"
+  "grep -qF '/mascots/fox-riso-directions-blindfold.webp' '$REPO/scripts/mascot-check.mjs' && grep -qF '/mascots/fox-riso-reactions-blindfold.webp' '$REPO/scripts/mascot-check.mjs' && grep -q 'is not served' '$REPO/scripts/mascot-check.mjs' && grep -qF 'body.subarray(0, 4).toString(\"latin1\") === \"RIFF\"' '$REPO/scripts/mascot-check.mjs' && grep -qF 'body.subarray(8, 12).toString(\"latin1\") === \"WEBP\"' '$REPO/scripts/mascot-check.mjs'"
 check "the image job measures each sheet against MASCOT.md's 300 KB and refuses a served PNG" \
   "grep -qF 'LIMIT=307200' '$CIWF' && grep -q 'the sheets ship as WebP' '$CIWF'"
 check "and the CI context probe proves the sheets reach the image, both directions" \

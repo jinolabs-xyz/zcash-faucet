@@ -1,14 +1,26 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
+
+// getNodeStatus judges `ready` against the tip oracle, and reading the oracle KICKS a background
+// refresh whose direct leg dials config.tipOracleEndpoints for real - which defaults to
+// testnet.zec.rocks:443 when nothing is set, as nothing is in CI's app job. On a runner with a
+// fast route that dial landed inside this file's first second, the real testnet tip (4.37M)
+// made the fixture's 1,000,000 read as `behind`, and the ready row failed at its own setup line
+// while passing on every laptop where the dial was slower than the file. Same rule as
+// gateFreshTip.test.ts: pin the oracle at a closed port and empty the direct list BEFORE the
+// import, because config reads env when it loads. A unit test must never be able to reach the
+// real one, and `ready` here has to mean the wallet's distance from the node and nothing else.
+process.env.HOSH_URL = "http://127.0.0.1:9/";
+process.env.TIP_ORACLE_ENDPOINT = "";
+const {
   cachedNodeStatus,
   cachedNodeStatusAgeMs,
   nodeStatusForPage,
   refreshNodeStatusForTests,
   resetNodeStatusCacheForTests,
   NODE_STATUS_MAX_AGE_MS,
-} from "./nodeStatusCache.ts";
-import { getNodeStatus } from "./nodeStatus.ts";
+} = await import("./nodeStatusCache.ts");
+const { getNodeStatus } = await import("./nodeStatus.ts");
 
 const realFetch = globalThis.fetch;
 
@@ -238,4 +250,62 @@ test("and one millisecond INSIDE the window does NOT wait, so the fix did not ma
     assert.equal(served.nodeHeight, 500_000, "it waited for the new read instead of serving what it had");
     assert.ok(tookMs < 150, `a serveable entry waited ${tookMs}ms on a 500ms wallet`);
   });
+});
+
+
+test("ready:true is never served more than ONE poll plus one read after the wallet falls behind", async () => {
+  // @CTO, #706 red-team. REFRESH_AFTER_MS was 4000 - exactly the page's poll (page.tsx,
+  // setInterval(load, 4000)) - and the trigger is `age > REFRESH_AFTER_MS`, strictly greater. A lone
+  // viewer's poll lands at an age of about 4000, which does NOT fire, so the refresh happened on
+  // every SECOND poll and a stale ready:true survived two polls plus a read. The module's own
+  // comment claimed one poll. It was wrong by a factor of two.
+  const POLL_MS = 4_000; // page.tsx's interval, the caller this cache is sized against
+  resetNodeStatusCacheForTests();
+  let behind = false;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    // caught up -> wallet level with the node; behind -> wallet 5000 blocks back, ready goes false
+    const n = 1_000_000;
+    const w = behind ? n - 5_000 : n;
+    return new Response(JSON.stringify({ result: { wallet_tip: { height: w }, node_tip: { height: n } } }), {
+      status: 200, headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+  try {
+    const t0 = Date.now();
+    await refreshNodeStatusForTests();
+    const first = cachedNodeStatus(t0);
+    assert.ok(first !== null, "setup: nothing was cached at all");
+    // The premise, named: if a reference tip ever reaches this process, `ready` stops being about
+    // the wallet and this row measures the network instead. Fail on THAT rather than on a `ready`
+    // whose reason is two modules away.
+    assert.equal(first.externalHeight, null, "setup: the tip oracle reached a reference - this file must run with no oracle");
+    assert.equal(first.ready, true, "setup: the cache should hold a ready reading");
+    behind = true; // the wallet falls behind at t0
+    // ONE poll later the page asks again. That read must find the entry stale and refresh.
+    await nodeStatusForPage(t0 + POLL_MS);
+    // the refresh is not awaited on a warm cache, so give the in-flight read a moment to land
+    await new Promise((r) => setTimeout(r, 60));
+    const served = cachedNodeStatus(Date.now());
+    assert.ok(served !== null, "nothing served at all");
+    assert.equal(served.ready, false,
+      "a stale ready:true survived a full poll - the refresh period is not strictly below the poll");
+  } finally {
+    globalThis.fetch = realFetch;
+    resetNodeStatusCacheForTests();
+  }
+});
+
+test("and the refresh period is strictly below the page poll, not equal to it", async () => {
+  // The rule behind the row above, asserted directly so the reason survives if the row is ever
+  // rewritten. Equality leaves the trigger to scheduler jitter, and jitter is not a bound.
+  const src = await import("node:fs").then((fs) => fs.readFileSync("src/lib/zcash/nodeStatusCache.ts", "utf8"));
+  const m = src.match(/const REFRESH_AFTER_MS = ([0-9_]+);/);
+  assert.ok(m, "REFRESH_AFTER_MS not found");
+  const refresh = Number(m[1].replace(/_/g, ""));
+  const page = await import("node:fs").then((fs) => fs.readFileSync("src/app/page.tsx", "utf8"));
+  const pm = page.match(/setInterval\(load, ([0-9_]+)\)/);
+  assert.ok(pm, "the page poll interval was not found - this row is pinned to page.tsx and must be updated with it");
+  const poll = Number(pm[1].replace(/_/g, ""));
+  assert.ok(refresh < poll, `refresh ${refresh}ms must be strictly below the page poll ${poll}ms, or a poll can fail to trigger it`);
 });
