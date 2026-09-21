@@ -22,11 +22,13 @@ import { Mascot as PageMascot } from "page-mascot";
  *
  * THE SHEETS WE SERVE ARE NO LONGER THE FROZEN ONES, and that sentence used to say they were.
  * The bare sheets in `public/mascots/` are still byte-identical to snapshot S2-S5-20260915T1943Z
- * and are kept; what the page loads is the blindfolded pair derived from them:
- *   fox-riso-directions-blindfold.webp  sha256 9ff5fdeaf3cde8de8233607fff2fec257413327301e5310481eb05ad457f6dbe
- *   fox-riso-reactions-blindfold.webp   sha256 34d2b40744610b43ddd98b839cca1dc42571f6ad99358af1f702942012c55dad
- * A comment asserting a property the code no longer has is worse than no comment, so these shas
- * move whenever the art does.
+ * and are kept; what the page loads is the blindfolded pair derived from them.
+ *
+ * NO SHAS HERE, ON PURPOSE. The first version of this comment pinned them, with a line saying
+ * they "move whenever the art does" - and the art moved twice the same day and the comment did
+ * not, because a comment is a pin that cannot go red. The enforced pin is SERVED_SHEETS in
+ * scripts/mascot-check.mjs, whose row fails on a mismatch. One source of truth, and it is the one
+ * that can fail.
  */
 
 /** The 3x3 sheets, served from public/. Paths live here so only this file knows them. */
