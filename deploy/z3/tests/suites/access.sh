@@ -287,6 +287,8 @@ check "says the chain does not exist" "grep -q 'the DOCKER-USER chain does not e
 
 echo "== access: the full chain is ok, and the clean baseline still holds with it"
 access_env
+printf '0.0.0.0:22\n0.0.0.0:80\n0.0.0.0:443\n127.0.0.1:18232\n127.0.0.1:40232\n' > "$STUB_LISTEN"; ufw_active
+printf 'maxstartups 30:30:100\n' > "$STUB_SSHD_T"
 bash "$AUDIT_A" --verbose > "$T/du-ok.log" 2>&1
 check "exits 0" "[ $? -eq 0 ]"
 check "and says every RPC-class port is dropped" "grep -q 'DOCKER-USER drops every RPC-class port' '$T/du-ok.log'"
