@@ -4926,9 +4926,17 @@ try {
       return (dt?.nextElementSibling?.textContent || "").trim() === want;
     }, expect, { timeout: 13_000 }).catch(() => {});
     const line = await statusLine();
-    const body = (await page.textContent("body")) ?? "";
+    // innerText, NOT textContent. textContent glues adjacent elements together with no
+    // separator - measured: "...it may have been droppedCopy txidCopy receipt..." - so a word
+    // boundary after "dropped" never exists and /\bdropped\b/ read a page that said dropped as
+    // clean. The first version of this row passed its own mutant that way (SDE-UI, this PR).
+    // innerText breaks between blocks the way the page renders. And the read is proven to
+    // include the line it is guarding, or "nothing says dropped" would be true of an empty read.
+    const body = await page.evaluate(() => document.body.innerText);
     ok(`with /api/tx answering known=${answer.known} the line says what the API said: "${expect}"`, line.text === expect, `line "${line.text}"`);
-    ok(`and nothing on the page says dropped while known=${answer.known}`, !/\bdropped\b/i.test(body), body.match(/[^.]*\bdropped\b[^.]*/i)?.[0]?.trim() ?? "");
+    ok(`and nothing on the page says dropped while known=${answer.known}`,
+      body.includes(line.text) && !/\bdropped\b/i.test(body),
+      !body.includes(line.text) ? "the body read does not contain the Status line, so it proves nothing" : (body.match(/[^.\n]*\bdropped\b[^.\n]*/i)?.[0]?.trim() ?? ""));
     await page.unroute("**/api/tx?*");
   }
 
