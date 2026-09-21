@@ -222,5 +222,25 @@
     "kind": "divergence",
     "shipped": "display:flex; flex-direction:column; gap:calc(1.5*var(--u)); align-items:flex-start; align-self:stretch; overflow-y:auto; overscroll-behavior:contain",
     "why": "#687: the column absorbs its own overflow instead of painting it under the footer. Above 56rem the shell is locked to the viewport (.comp 100dvh, .stage overflow hidden) and the hero row is minmax(0,1fr), so this column can be given less height than its content needs. Measured on main at 960x800 with the reserve low: it needs 577px, the row gives 489, and the 88px surplus was painted under the footer - which put the reserve notice's /donate link under the footer's brand image between 940 and 1000px wide at 768 and 800 high, unreachable by click or scroll. The column fits until the reserve-low notice appears (everything else costs 260 of the 457 available) and the notice is 173px, more than compacting could reclaim. Scrolling is what .panel already does one card over - ui-smoke: 'the panel absorbed it by scrolling itself, not by clipping it'. The spec's three declarations are unchanged. align-self:stretch is the one that makes overflow-y mean anything: the grid sets align-items:start, so without it the column is sized to its content and never constrained - measured, scrollHeight and clientHeight were both 577 against a 489px row and the fix changed nothing. A min-height:0 shipped here first and a mutant proved it inert - removing it changed nothing and a 48-viewport re-sweep was clean, because a grid item's automatic minimum size is already zero once overflow is not visible. Dropped rather than kept with a corrected comment."
+  },
+  ".phase[data-phase=sent] .row .tag": {
+    "kind": "override",
+    "shipped": "height:calc(2.7*var(--u)); border:calc(.12*var(--u)) solid var(--accent-text); color:var(--accent-text); font-weight:600 || justify-content:center; width:100%",
+    "why": "#723, owner 2026-09-21 from a screenshot of the receipt: the four actions read as faint outlines. The spec's .tag hairline (.06u solid --hair on --tag-bg) measures 1.23:1 on paper and 1.18:1 on ink against its own surface, under the 3:1 floor WCAG 1.4.11 sets for a control's boundary, so this is a floor the design cannot satisfy rather than a taste. Border and label in --accent-text (7.17:1 paper, 7.91:1 ink; --orange-line was rejected at 2.84:1 on paper), 2.7u tall so it reads as a control, the chip's radius and surface kept. The claim button (.automate) is the family and this is one step down: the accent as an outline, not a fill."
+  },
+  ".phase[data-phase=sent] .row button.tag:hover,.phase[data-phase=sent] .row a.tag:hover": {
+    "kind": "override",
+    "shipped": "background:var(--orange-soft); border-color:var(--accent-text)",
+    "why": "#723, follows the rule above: a control with a visible border needs a hover that is not the spec's border-color:--muted (which would DROP contrast on hover). Fills --orange-soft and keeps the accent border, the family's own soft fill."
+  },
+  ".phase[data-phase=sent] .row .tag.ink": {
+    "kind": "divergence",
+    "shipped": "grid-column:1 / -1; border-color:var(--ink); color:var(--surface)",
+    "why": "#723, owner 2026-09-21: Another address sat at one button's width in a row it should own. The spec's grid (repeat(2,1fr)) holds FOUR items - Copy txid, Copy receipt, View on Cipherscan, Another address - a clean 2x2; the page grew a fifth (Copy spending key, R-31) after the snapshot froze, and five into two columns leaves the last one alone in a half cell. grid-column:1/-1 restores the shape the design drew, for an item the design never saw; reconciles when the design is redrawn for five. border-color:--ink and color:--surface only restore the spec's own ink look against the accent rule above, which would otherwise recolour this button too."
+  },
+  ".phase[data-phase=sent] .row .tag.ink:hover": {
+    "kind": "override",
+    "shipped": "background:var(--ink-3); border-color:var(--ink-3)",
+    "why": "#723, follows the two above: the accent hover rule matches button.tag, which this is, so without this line Another address would hover orange-soft. Restores the spec's ink hover (--ink-3) and carries the border with it."
   }
 }
