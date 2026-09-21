@@ -3628,6 +3628,108 @@ async function checkTabAffordanceAndLimits(browser, base) {
 // behind a null, so a page with a healthy backend renders none of them and a check that only
 // loaded the page would go green against all five. So the status is served back with the fields
 // nulled and the placeholders forced onto the screen before anything is asserted.
+// ===== THE GRANT BANNER (owner ask 2026-09-21T12:04Z), on every page the shell owns ============
+// Eight days of a band under the masthead asking for a vote. The things a visitor can be
+// failed by: the wrong link, a page without it, copy that breaks the site's rules, a band that
+// floats under the nav instead of touching it, a dismiss that remembers (a returning visitor
+// should see it again). The href is the forum thread of the proposal itself, held here as the
+// literal so a typo in the component is red on every page.
+const GRANT_URL = "https://forum.zcashcommunity.com/t/retroactive-grant-application-self-sovereign-zcash-testnet-faucet/57002";
+async function checkGrantBanner(browser, base) {
+  const pages = ["/", "/terms", "/donate", "/fund", "/limits"];
+  for (const theme of ["paper", "ink"]) {
+    const ctx = await browser.newContext({ viewport: DESKTOP });
+    const page = await ctx.newPage();
+    for (const path of pages) {
+      await page.goto(base + path, { waitUntil: "networkidle" });
+      await page.evaluate((t) => { try { localStorage.setItem("zfaucet_theme", t); } catch {} document.documentElement.dataset.theme = t; }, theme);
+      await page.waitForTimeout(400);
+      const r = await page.evaluate(() => {
+        const g = document.querySelector("[data-testid=grant-banner]");
+        if (!g) return { present: false };
+        const a = g.querySelector("[data-testid=grant-link]");
+        const h = document.querySelector(".hdr"); const comp = document.querySelector(".comp"); const st = document.querySelector(".stage");
+        const gr = g.getBoundingClientRect(); const hr = h ? h.getBoundingClientRect() : null; const cs = getComputedStyle(g);
+        const pEl = g.querySelector("p"); const x = g.querySelector("[data-testid=grant-dismiss]");
+        return {
+          present: true, text: (g.textContent || "").replace(/\s+/g, " ").trim(),
+          href: a ? a.getAttribute("href") : null, target: a ? a.getAttribute("target") : null, rel: a ? a.getAttribute("rel") : null,
+          first: !!comp && comp.firstElementChild === g, top: Math.round(gr.top), left: Math.round(gr.left), right: Math.round(gr.right),
+          stageWidth: st ? st.clientWidth : -1,
+          gapBelow: hr ? Math.round(hr.top - gr.bottom) : -1, compPad: comp ? Math.round(parseFloat(getComputedStyle(comp).paddingTop)) : -1,
+          textLeft: pEl ? Math.round(pEl.getBoundingClientRect().left) : -1, hdrLeft: hr ? Math.round(hr.left) : -1,
+          xRight: x ? Math.round(x.getBoundingClientRect().right) : -1, hdrRight: hr ? Math.round(hr.right) : -1,
+          color: cs.color, lines: pEl ? Math.round(pEl.getBoundingClientRect().height / parseFloat(getComputedStyle(pEl).lineHeight)) : 0,
+          xBox: (() => { const x = g.querySelector("[data-testid=grant-dismiss]"); if (!x) return null; const b = x.getBoundingClientRect(); return [Math.round(b.width), Math.round(b.height)]; })(),
+        };
+      });
+      const tag = `grant banner ${theme} ${path}`;
+      ok(`${tag}: renders, and its link is the proposal's own forum thread, opened in a new tab`,
+        r.present && r.href === GRANT_URL && r.target === "_blank" && /noreferrer/.test(r.rel || ""),
+        r.present ? `href ${r.href} target ${r.target} rel ${r.rel}` : "no banner on this page");
+      if (!r.present) continue;
+      // The site's copy rules, on the words the visitor reads: no em dash, no semicolon, no prose
+      // colon, no pool name ("shielded" is the word). A false positive here is a real one.
+      const bad = [/\u2014/.test(r.text) && "em dash", /;/.test(r.text) && "semicolon", /:\s/.test(r.text) && "prose colon", /\b(orchard|sapling|ironwood|sprout)\b/i.test(r.text) && "a pool name"].filter(Boolean);
+      ok(`${tag}: the copy keeps the site's rules`, bad.length === 0, bad.join(", ") || `"${r.text.slice(0, 70)}…"`);
+      // The standard announcement bar: the first thing on the page, edge to edge, and the masthead
+      // sitting exactly as far below it as .comp pads the page's top - so everything below moves
+      // down by the band's height and by nothing else.
+      ok(`${tag}: is the first thing on the page, edge to edge across the viewport`,
+        r.first && r.top === 0 && r.left === 0 && r.right === r.stageWidth,
+        `first ${r.first}, top ${r.top}, ${r.left}..${r.right} of ${r.stageWidth}`);
+      ok(`${tag}: the masthead sits the page's own top padding below it, and the words and the X sit on the masthead's edges`,
+        r.gapBelow === r.compPad && Math.abs(r.textLeft - r.hdrLeft) <= 1 && Math.abs(r.xRight - r.hdrRight) <= 1,
+        `gap ${r.gapBelow} vs padding ${r.compPad}; text left ${r.textLeft} vs masthead ${r.hdrLeft}; X right ${r.xRight} vs masthead ${r.hdrRight}`);
+      // Dark text on the gradient in BOTH themes: white read 2.08:1 at the gradient's light end.
+      ok(`${tag}: dark text on the gradient, the theme does not flip it`, r.color === "rgb(40, 40, 40)", r.color);
+      ok(`${tag}: one line at desktop and a 44px dismiss`, r.lines === 1 && !!r.xBox && r.xBox[0] >= 44 && r.xBox[1] >= 44, `${r.lines} line(s), X ${r.xBox ? r.xBox.join("x") : "missing"}`);
+    }
+    // Dismiss lasts until the next page load and no longer: useState, no storage.
+    await page.goto(base + "/", { waitUntil: "networkidle" });
+    await page.getByTestId("grant-dismiss").click();
+    await page.waitForTimeout(300);
+    const gone = (await page.locator("[data-testid=grant-banner]").count()) === 0;
+    await page.reload({ waitUntil: "networkidle" });
+    const back = (await page.locator("[data-testid=grant-banner]").count()) === 1;
+    const stored = await page.evaluate(() => Object.keys(localStorage).concat(Object.keys(sessionStorage)).filter((k) => /grant|banner|dismiss/i.test(k)));
+    ok(`grant banner ${theme}: dismiss hides it for this page load only, and remembers nothing`, gone && back && stored.length === 0,
+      `hidden ${gone}, back after reload ${back}, storage keys ${JSON.stringify(stored)}`);
+    await ctx.close();
+  }
+
+  // THE COMPACT BAND UNDER 64rem HAS ITS OWN ROW, because the rows above run at 1280x720 where
+  // that rule is inert. The CTO's red-team doubled the compact rule's negative margin-bottom and
+  // the masthead overlapped the band by 2.6 px at 1024x768 with every row still green (L64: a rule
+  // with no row is a wish). So at 1024x768: the band is still first and edge to edge, SHORTER than
+  // at desktop (the point of the rule), the masthead's top is at or below the band's bottom with a
+  // real gap, and the X is 32 px under a fine pointer and 44 under a coarse one (the tap floor).
+  // The band reads 34.6 px under a mouse and 46.6 under a finger (the 44 px X sets it); both are
+  // under the desktop's 53, which is what "compact" means here.
+  for (const theme of ["paper", "ink"]) for (const [pointer, hasTouch] of [["fine", false], ["coarse", true]]) {
+    const ctx = await browser.newContext({ viewport: { width: 1024, height: 768 }, hasTouch });
+    const page = await ctx.newPage();
+    await page.goto(base + "/", { waitUntil: "networkidle" });
+    await page.evaluate((t) => { try { localStorage.setItem("zfaucet_theme", t); } catch {} document.documentElement.dataset.theme = t; }, theme);
+    await page.waitForTimeout(400);
+    const r = await page.evaluate(() => {
+      const g = document.querySelector("[data-testid=grant-banner]"); const h = document.querySelector(".hdr"); const comp = document.querySelector(".comp"); const st = document.querySelector(".stage");
+      if (!g || !h) return { present: false };
+      const gr = g.getBoundingClientRect(); const hr = h.getBoundingClientRect(); const x = g.querySelector("[data-testid=grant-dismiss]"); const xb = x ? x.getBoundingClientRect() : null;
+      return { present: true, first: !!comp && comp.firstElementChild === g, top: Math.round(gr.top), left: Math.round(gr.left), right: Math.round(gr.right), stageWidth: st ? st.clientWidth : -1,
+        band: Math.round(gr.height * 10) / 10, gap: Math.round((hr.top - gr.bottom) * 10) / 10, xBox: xb ? [Math.round(xb.width), Math.round(xb.height)] : null };
+    });
+    const tag = `grant banner ${theme} 1024x768 ${pointer} pointer`;
+    ok(`${tag}: compact, first and edge to edge, and the masthead clears it`,
+      r.present && r.first && r.top === 0 && r.left === 0 && r.right === r.stageWidth && r.band < 50 && r.gap >= 8 && r.gap <= 40,
+      r.present ? `band ${r.band}px, masthead ${r.gap}px below its bottom (negative = overlap), ${r.left}..${r.right} of ${r.stageWidth}` : "no banner or no masthead");
+    ok(`${tag}: the X is ${hasTouch ? "44 for a finger" : "32 under a mouse"}`,
+      !!r.xBox && (hasTouch ? (r.xBox[0] >= 44 && r.xBox[1] >= 44) : (r.xBox[0] === 32 && r.xBox[1] === 32)),
+      `X ${r.xBox ? r.xBox.join("x") : "missing"}`);
+    await ctx.close();
+  }
+}
+
 async function checkNoEmDashReachesTheReader(browser, base) {
   const EM = "\u2014";
   const base0 = await (await fetch(`${base}/api/status`)).json();
@@ -5030,6 +5132,7 @@ try {
   await checkTabAffordanceAndLimits(browser, BASE);
   await checkFooterHeldAgainstGrowth(browser, BASE);
   await checkNoEmDashReachesTheReader(browser, BASE);
+  await checkGrantBanner(browser, BASE);
 
   await checkDripsTooltip(browser, BASE);
   await checkSilentRetry(browser, BASE);

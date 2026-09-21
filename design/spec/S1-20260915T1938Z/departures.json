@@ -261,5 +261,70 @@
     "kind": "divergence",
     "shipped": "position:static; max-width:100%; margin-top:calc(1.2*var(--u))",
     "why": "Owner's item 3, 2026-09-19: the launcher stops being fixed at the width where the layout starts to scroll. `.stage` is the scroll container (height:100dvh, overflow:auto) and `.comp` is locked to the viewport only at 56rem and up - so above that nothing passes under a fixed corner, and below it everything does. Measured at 390px: it covered the footer brand on /fund, a control on /, and the footer on /terms, at the top of the page and at the end of the scroll alike; ui-smoke's 'nothing pinned covers a control' row caught it on the first run. Reserving space in the document cannot fix it because the document is not what scrolls. Belongs with the other .fb entries."
+  },
+  ".stage .grant": {
+    "kind": "divergence",
+    "shipped": "display:flex; align-items:center; gap:calc(1*var(--u)); width:auto; min-height:calc(3.4*var(--u)); margin:calc(-2.8*var(--u)) calc(50% - 50cqw) calc(.2*var(--u)); padding:calc(.35*var(--u)) calc(50cqw - 50%) calc(.35*var(--u)) calc(50cqw - 50%); background-color:#ff8840; background-image:var(--cta); color:#282828; font-size:calc(.9*var(--u)); line-height:1.4; animation:grant-in .3s var(--ease-place) both",
+    "why": "#737, owner ask 2026-09-21T12:04Z, dated on purpose: a band across the top of every page's content, ABOVE the masthead, the first thing on the page (the owner's third look), saying the Coinholder-Directed Retroactive Grants vote is open (17 to 29 September 2026) and asking for a vote if the faucet has been useful. The snapshot has no such element; the masthead meets the hero directly. This is a DIVERGENCE, not an override: the design is still the authority, the band is up for the vote's eight days and comes out after the 29th, and while it is up everything below it - the hero included - sits lower by exactly its height, which fit-check's one-screen rule at every planned size bounds (the band gets shorter, the rule does not get looser). Built from the owner's reference (a Tailwind + motion sticky banner) with the site's own tokens: the CTA gradient and text colour, in flow rather than sticky. Its negative top margin cancels .comp's top padding so its edge is the page's, and its bottom margin makes gap plus margin equal that padding, so the masthead sits as far under the band as it sat under the page's edge. Text is #282828, not the CTA's white: white reads 2.08 to 2.85:1 on the gradient at this size and the dark reads 5.17 to 7.08:1, a literal because the gradient does not follow the theme and --ink does. The background bleeds edge to edge (owner's second look) by negative inline margins of half the gap between the stage and the content column, paid back as padding, so the words and the X stay on the column."
+  },
+  ".stage .grant p": {
+    "kind": "divergence",
+    "shipped": "margin:0; flex:1 1 auto",
+    "why": "#737, the band's text: no margin so the band's padding is the rhythm, grows to fill beside the X, a soft shadow for white on the gradient as the owner's reference has."
+  },
+  ".stage .grant a": {
+    "kind": "divergence",
+    "shipped": "color:#282828; font-weight:600; text-decoration:underline; text-decoration-thickness:from-font; text-underline-offset:.12em; white-space:nowrap",
+    "why": "#737, the band's link in the CTA text colour, underlined, kept on one line so the call to action never breaks across the wrap."
+  },
+  ".stage .grant a:hover": {
+    "kind": "divergence",
+    "shipped": "text-decoration-thickness:2px",
+    "why": "#737, the underline thickens on hover, the site's link language on a gradient where colour cannot change."
+  },
+  ".stage .grant-x": {
+    "kind": "divergence",
+    "shipped": "flex:none; display:inline-flex; align-items:center; justify-content:center; width:44px; height:44px; padding:0; border:0; border-radius:calc(.5*var(--u)); background:none; color:#282828; cursor:pointer",
+    "why": "#737, the dismiss control, drawn inline like every icon on the site, 44 px square so it clears the tap floor on its own; useState only, no storage, so a returning visitor sees the band again."
+  },
+  ".stage .grant-x:hover": {
+    "kind": "divergence",
+    "shipped": "background:rgb(255 255 255 / 28%)",
+    "why": "#737, a translucent white wash on hover, visible on the orange in both themes."
+  },
+  ".stage .grant-x:focus-visible": {
+    "kind": "divergence",
+    "shipped": "outline:2px solid #282828; outline-offset:2px",
+    "why": "#737, a focus ring in the band's own text colour: the gradient hides the accent ring the rest of the site uses."
+  },
+  "@keyframes grant-in": {
+    "kind": "divergence",
+    "shipped": "from{transform:translateY(-100%);opacity:0}to{transform:none;opacity:1}",
+    "why": "#737, the 300 ms slide-in from above on the site's own easing, the one trait of the owner's reference that is motion; the shell's prefers-reduced-motion rule turns every animation off, so nothing moves for a reader who asked for that."
+  },
+  "@media (max-width:32rem) | .stage .grant": {
+    "kind": "divergence",
+    "shipped": "margin-top:-12px; margin-bottom:0",
+    "why": "#737, the band on a phone: .comp's gap is 12px under 32rem so the pull-up matches it (19 px of overlap with the masthead at 390 before), and the second sentence is hidden there so the copy is two lines, not three."
+  },
+  "@media (max-width:32rem) | .stage .grant .grant-more": {
+    "kind": "divergence",
+    "shipped": "display:none",
+    "why": "#737, the band on a phone: .comp's gap is 12px under 32rem so the pull-up matches it (19 px of overlap with the masthead at 390 before), and the second sentence is hidden there so the copy is two lines, not three."
+  },
+  "@media (max-width:64rem) and (min-width:32.01rem) | .stage .grant": {
+    "kind": "divergence",
+    "shipped": "min-height:calc(2.4*var(--u)); padding-top:calc(.1*var(--u)); padding-bottom:calc(.1*var(--u)); margin-bottom:calc(-1.4*var(--u)); font-size:calc(.85*var(--u)); line-height:1.3",
+    "why": "#737, CTO 2026-09-21: under 64rem the band gets compact. At 1024x768 the full 53 px band pushed the claim panel into scrolling by 33 px (ui-smoke's #648 row, 352 vs 319); this shrinks the band to ~35 px and gives back half the flex gap under it (masthead top 89 -> 50), and the row reads 352 vs 352. Phones keep their own rule; the copy, link and X are unchanged."
+  },
+  "@media (max-width:64rem) and (min-width:32.01rem) and (pointer:fine) | .stage .grant-x": {
+    "kind": "divergence",
+    "shipped": "width:32px; height:32px",
+    "why": "#737, CTO 2026-09-21: the X shrinks to 32 px only under a fine pointer, so the compact band holds it; a finger keeps the site's 44 px tap floor (ui-smoke's tap-floor rows red at 32x44 on touch) and the band grows to hold that."
+  },
+  ".stage .grant a:focus-visible": {
+    "kind": "divergence",
+    "shipped": "outline:2px solid #282828; outline-offset:2px; border-radius:2px",
+    "why": "#737, CTO 2026-09-21: the link's focus ring in the band's own text colour, like the X's. The site's ring is the accent, which is the band's colour, and read 1.13:1 on the link (ui-smoke's WCAG 1.4.11 row); ink reads 6.21:1."
   }
 }
