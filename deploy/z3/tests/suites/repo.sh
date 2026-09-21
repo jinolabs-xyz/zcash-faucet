@@ -145,18 +145,19 @@ STUBC="$REPO/deploy/z3/tests/stubs/curl"
 FORKREF="$REPO/src/lib/zcash/forkReference.ts"
 READYRT="$REPO/src/app/api/ready/route.ts"
 stub_json() { tr -d '\\' < "$STUBC"; }
+stub_fork_obj() { stub_json | grep '"forkReference":'; }
 fork_fields_declared() {
   local k ok=1
   for k in height hash ageSeconds depth; do
     # PRESENT, not "if present": a vacuous pass here is what let the flat/nested mismatch ship.
-    [ "$(stub_json | grep -c "\"$k\":")" -gt 0 ] || { ok=0; continue; }
+    [ "$(stub_fork_obj | grep -c "\"$k\":")" -gt 0 ] || { ok=0; continue; }
     grep -qE "^  ${k}[?]?:" "$FORKREF" || ok=0
   done
   [ "$ok" = 1 ]
 }
 fork_fields_present() {
   local k ok=1
-  for k in height hash ageSeconds; do [ "$(stub_json | grep -c "\"$k\":")" -gt 0 ] || ok=0; done
+  for k in height hash ageSeconds; do [ "$(stub_fork_obj | grep -c "\"$k\":")" -gt 0 ] || ok=0; done
   [ "$ok" = 1 ]
 }
 code_only() { grep -vE '^[[:space:]]*(#|//|\*|/\*)' "$1"; }

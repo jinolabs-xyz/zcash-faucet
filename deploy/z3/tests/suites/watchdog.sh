@@ -2366,8 +2366,8 @@ check "and parks nothing, so no deploy is blocked by a malformed field" \
   "[ ! -f '$T/park/$FORK_MARKER_REL' ]"
 # NAMING IT IS THE POINT. "absent" would send an operator to look for a missing field that is
 # present and wrong, which is a different and much longer hunt.
-check "and says it is MALFORMED with its length, not that it is absent" \
-  "grep -q 'MALFORMED: 40 chars, not 64' '$T/run.log'"
+check "and says the hash is not one, with its length, rather than that it is absent" \
+  "grep -q 'the reference hash is not one: 40 chars, not 64' '$T/run.log'"
 
 echo "== watchdog: a truncated hash from OUR OWN node is cannot-tell too, not a fork"
 # THE SYMMETRIC HALF. The guard above is on the value that crosses a lane boundary over HTTP, which
@@ -2393,11 +2393,54 @@ wd_run 2
 # from OUR side must never become evidence about THEIR chain - that is the whole asymmetry.
 check "pages nothing when we cannot read our own hash" "! grep -q 'this is PROOF' '$T/alerts.log'"
 check "and parks nothing" "[ ! -f '$T/park/$FORK_MARKER_REL' ]"
-# DEPTH IS PUBLISHED SO THE MESSAGE DOES NOT HAVE TO ASSUME IT (#700). "no hash" alone sends an
-# operator looking at zebra; "10 blocks below the independent tip" tells them a node still catching
-# up cannot answer for that height, which is the usual cause and not a fault.
-check "and the cannot-compare line says how far below their tip the reference sits" \
-  "grep -q '10 blocks below the independent tip' '$T/run.log'"
+check "and it does NOT blame sync, because our node is ABOVE the reference height" \
+  "grep -q 'the height is not the reason' '$T/run.log' && ! grep -q 'still catching up' '$T/run.log'"
+
+echo "== watchdog: a node BELOW the reference height is cannot-compare, named with OUR number"
+# THE REAL DEPTH REFUSAL. The app's `depth` is how far below THEIR tip the reference sits; it says
+# nothing about where WE are. This reads our own height out of the same getblockchaininfo the
+# stall rung uses and names the gap, so an operator is sent to the right machine.
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350100 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFHEIGHT=4350180 STUB_READY_REFHASH=00000000aaaaaaaabbbbbbbbccccccccddddddddeeeeeeeeffffffff00000000
+export STUB_ZEBRA_HASH=00000000eeeeeeeeffffffff1111111122222222333333334444444455555555
+export STUB_READY_REFDEPTH=7
+wd_run 2
+# The hashes DIFFER. A rung that compared anyway would page FORK about a block we have not reached.
+check "pages nothing when our node has not reached that height" \
+  "! grep -q 'this is PROOF' '$T/alerts.log'"
+check "and names OUR height and the gap, not the app's constant" \
+  "grep -q 'our node is at 4350100, BELOW the reference height 4350180 (behind by 80' '$T/run.log'"
+# 7, NOT THE STUB'S DEFAULT 10: a rung that hard-coded the usual value would pass a row written
+# against it. The number has to come from the field.
+check "and carries the reference's own published offset rather than a hard-coded one" \
+  "grep -q 'the reference sits 7 blocks under the independent tip' '$T/run.log'"
+
+echo "== watchdog: a CHANGED refusal reason speaks; the same one repeated does not"
+# THE LATCH WAS ONE BOOLEAN FOR EVERY REASON, re-armed only by a successful compare. So after the
+# first "no reference" line, a malformed hash, a stale reference, a node below the height and a
+# zebra that would not answer were ALL SILENT - the silent-refusal shape this rung exists to end,
+# arriving through its own logging.
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350178 STUB_ZEBRA_EST=4350200 STUB_ZEBRA_ADVANCE=1
+export STUB_READY_REFHEIGHT=4350180 STUB_READY_REFHASH=00000000aaaaaaaabbbbbbbbccccccccddddddddeeeeeeeeffffffff00000000
+wd_run 4
+check "the FIRST reason is named" \
+  "grep -q 'BELOW the reference height 4350180' '$T/run.log'"
+check "and the SECOND, different reason is named too rather than swallowed by the latch" \
+  "grep -q 'the height is not the reason' '$T/run.log'"
+
+echo "== watchdog: and the same reason repeated is still said once"
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350200 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFHEIGHT=4350180 STUB_READY_REFHASH=00000000aaaaaaaabbbbbbbbccccccccdddddddd
+wd_run 3
+check "the malformed reference is named" \
+  "grep -q 'the reference hash is not one: 40 chars, not 64' '$T/run.log'"
+check "and its reason is printed ONCE in the sentence, not twice" \
+  "! grep -q 'not 6440 chars' '$T/run.log'"
+check "and it is still said once across three sweeps, because a repeat is not news" \
+  "[ \"\$(grep -c 'the reference hash is not one' '$T/run.log')\" = 1 ]"
 
 echo "== watchdog: two references that DISAGREE cannot establish a fork, so nothing happens"
 wd_fork_env
