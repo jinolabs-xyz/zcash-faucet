@@ -7,7 +7,7 @@ process.env.TRUSTED_PROXY_COUNT = "1";
 
 const { withApi, apiError } = await import("./api.ts");
 import type { ApiCtx, Gate } from "./api.ts";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 // The enum as a runtime set, kept in step with the type by the exhaustive check below.
 const GATES = new Set<Gate>([
   "badBody","badAddress","badNetwork","badRequest","methodNotAllowed","notFound","powRequired","powFailed","challengeSpent","cooldown",
@@ -136,4 +136,39 @@ test("item 3: EVERY apiError site in the claim route names a gate from the enum 
   // it is the list a reader can check against the histogram's buckets.
   const literals = new Set(named.map((n) => n.replace(/^api,\s*/, "")).filter((n) => n.startsWith('"')).map((n) => n.replace(/"/g, "")));
   for (const g of literals) assert.ok(GATES.has(g as Gate), `${g} is not in the Gate enum`);
+});
+
+test("item 3: no route answers a 4xx or 5xx with a direct JSON response - every refusal goes through apiError", () => {
+  // THE ROW ON THE OTHER SIDE. Counting apiError call sites proves every site that USES apiError
+  // names a gate; it says nothing about a site that never calls it. /api/feedback built all six
+  // of its refusals with NextResponse.json and merged with gate null on every one, and tsc, the
+  // count row and api-integration were all scoped to the files that had been converted rather
+  // than the files that exist (SDE-Infra, #720 block). This walks every route and refuses any
+  // 4xx/5xx JSON that is not apiError's own.
+  const apiDir = new URL("../app/api/", import.meta.url);
+  const routes: string[] = [];
+  const walk = (dir: URL) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const child = new URL(e.name + (e.isDirectory() ? "/" : ""), dir);
+      if (e.isDirectory()) walk(child);
+      else if (e.name === "route.ts") routes.push(child.pathname);
+    }
+  };
+  walk(apiDir);
+  assert.ok(routes.length >= 6, `expected the api routes, found ${routes.length}`);
+  const offenders: string[] = [];
+  for (const file of routes) {
+    const src = readFileSync(file, "utf8");
+    // Each .json( call, with its argument list up to the closing `);`, so a status on a later
+    // line is still seen. Only NextResponse/Response - a body .json() read is a different call.
+    const re = /(?:NextResponse|Response)\.json\(([\s\S]*?)\);/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(src)) !== null) {
+      if (/status:\s*[45]\d\d\b/.test(m[1])) {
+        const line = src.slice(0, m.index).split("\n").length;
+        offenders.push(`${file.split("/src/")[1]}:${line}`);
+      }
+    }
+  }
+  assert.deepEqual(offenders, [], `direct error responses that carry no gate: ${offenders.join(", ")}`);
 });

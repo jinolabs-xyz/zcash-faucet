@@ -46,6 +46,9 @@ export type Gate =
   | "cooldown"        // per address, per ip, or per subnet
   | "lookupRate"      // too many /api/tx lookups
   | "recipient"       // the wallet would not pay that address
+  | "emptyMessage"    // feedback: nothing to send. NOT "empty", which is the faucet
+  | "tooLong"         // feedback: over the body cap
+  | "feedbackRate"    // feedback: the per-fingerprint daily cap
   // REFUSED
   | "ctazDisabled"
   | "draining"        // the process is restarting
@@ -60,6 +63,7 @@ export type Gate =
   | "sendFailed"      // definite: nothing left the wallet
   | "sendUnknown"     // lost the reply: coins may be on their way
   | "backend"         // a chain backend we depend on did not answer
+  | "ledger"          // our own database refused a write
   | "unhandled";      // the catch-all 500
 
 export interface ApiCtx {

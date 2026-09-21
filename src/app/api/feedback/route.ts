@@ -17,7 +17,7 @@
  * do not claim more than you know.
  */
 import { NextResponse, type NextRequest } from "next/server";
-import { withApi } from "@/lib/api";
+import { withApi, apiError } from "@/lib/api";
 import { clientIp } from "@/lib/clientIp";
 import { fingerprintIp } from "@/lib/privacy";
 import { recordFeedback, MAX_FEEDBACK_BODY } from "@/lib/db";
@@ -30,12 +30,12 @@ export const POST = withApi("feedback", async (req: NextRequest, api) => {
   try {
     payload = await req.json();
   } catch {
-    return NextResponse.json({ ok: false, kind: "bad-request" }, { status: 400 });
+    return apiError(400, "The request body is not JSON.", api, "badBody", { kind: "bad-request" });
   }
   // Read as unknown and narrow, rather than casting: this body is whatever a stranger sent.
   const b = payload as { body?: unknown; replyTo?: unknown } | null;
   if (typeof b?.body !== "string") {
-    return NextResponse.json({ ok: false, kind: "bad-request" }, { status: 400 });
+    return apiError(400, "The request needs a body string.", api, "badBody", { kind: "bad-request" });
   }
   // A non-string replyTo is dropped rather than refused - it is optional, and rejecting the
   // whole message because an optional field arrived malformed loses something someone wrote.
@@ -55,15 +55,16 @@ export const POST = withApi("feedback", async (req: NextRequest, api) => {
   }
   switch (result.reason) {
     case "empty":
-      return NextResponse.json({ ok: false, kind: "empty" }, { status: 400 });
+      // "emptyMessage", not "empty": that gate already means the FAUCET is empty.
+      return apiError(400, "The message is empty.", api, "emptyMessage", { kind: "empty" });
     case "too-long":
-      return NextResponse.json({ ok: false, kind: "too-long", maxBody: MAX_FEEDBACK_BODY }, { status: 400 });
+      return apiError(400, "The message is too long.", api, "tooLong", { kind: "too-long", maxBody: MAX_FEEDBACK_BODY });
     case "rate":
-      return NextResponse.json({ ok: false, kind: "rate" }, { status: 429 });
+      return apiError(429, "Too many messages today. Try again tomorrow.", api, "feedbackRate", { kind: "rate" });
     default:
       // The ledger refused. Logged with a request id so it is findable, and the sender is
       // told plainly rather than being handed a 202 for a row that does not exist.
       api.logError(new Error("feedback write refused by the ledger"), "feedback");
-      return NextResponse.json({ ok: false, kind: "ledger" }, { status: 503 });
+      return apiError(503, "We could not store the message right now. Try again shortly.", api, "ledger", { kind: "ledger" });
   }
 });
