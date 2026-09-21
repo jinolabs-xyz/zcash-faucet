@@ -188,3 +188,17 @@ test("drift: the verdict rides on classifyIntegrity whatever the box's own state
   const none = classifyIntegrity(null, NOW);
   assert.equal(none.drift.state, "unknown");
 });
+
+test("drift: rc 1 with a count of ZERO is still drift - the exit code outranks a grep that missed the word", () => {
+  // The access audit prints FINDING, not DRIFT; a wrapper counting one word published rc 1 /
+  // findings 0 and a count-first reader called it clean (App's block on #726).
+  const d = classifyDrift(fresh({ access: counts(1, 0, 0) }), NOW);
+  assert.equal(d.state, "drift");
+  assert.match(d.reason, /reported but the wrapper did not count/);
+});
+
+test("drift: rc 0 with findings above zero is drift, never clean - a contradiction reads as the worse half", () => {
+  const d = classifyDrift(fresh({ config: counts(0, 2, 0) }), NOW);
+  assert.equal(d.state, "drift");
+  assert.equal(d.findings, 2);
+});

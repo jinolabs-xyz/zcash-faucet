@@ -104,6 +104,26 @@ check "and it paged as incomplete, with the count" "grep -q 'config audit INCOMP
 bash "$DR" > /dev/null 2>&1
 check "and only once" "[ \"\$(wc -l < '$PAGES')\" -eq 1 ]"
 
+echo "== drift-report: an ACCESS finding is counted, paged with its number, and published - it prints FINDING, not DRIFT"
+# audit-access.sh:50 prints "  FINDING  " where audit-drift.sh prints "  DRIFT    ". The first cut
+# counted one word, so the internet-reachable-wallet-RPC class (nine days, 36 audits, dead channel)
+# would have published rc 1 with findings 0, paged "0 now", and never moved the set hash. The
+# line below is audit-access.sh's own found() output, verbatim, not a lookalike.
+dr_env
+audit_says "$T/bin/audit-access" 1 "auditing box
+  FINDING  wallet RPC 40232 is bound on 0.0.0.0 and reachable from the internet
+           fix: rebind to 127.0.0.1 through deploy.sh
+ACCESS FINDINGS"
+bash "$DR" > "$T/run1.log" 2>&1
+check "the summary counts the access finding: rc 1, findings 1" "[ \"\$(field access rc)\" = 1 ] && [ \"\$(field access findings)\" = 1 ]"
+check "and the page carries the number, not a zero" "grep -q 'access findings CHANGED on .*: 1 now\.' '$PAGES'"
+audit_says "$T/bin/audit-access" 1 "auditing box
+  FINDING  sshd allows password authentication
+           fix: PasswordAuthentication no
+ACCESS FINDINGS"
+bash "$DR" > "$T/run2.log" 2>&1
+check "and a DIFFERENT access finding moves the set, so it pages again" "[ \"\$(wc -l < '$PAGES')\" -eq 2 ]"
+
 echo "== drift-report: an UNDELIVERED change is not remembered, so it is tried again next run"
 dr_env
 audit_says "$T/bin/audit-drift" 1 "$DRIFT2"

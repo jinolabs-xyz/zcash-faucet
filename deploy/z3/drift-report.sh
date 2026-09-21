@@ -70,14 +70,20 @@ notify_finding() {
 # hash is stored only after the page was DELIVERED, so an undeliverable change is tried again
 # next run rather than forgotten. GitHub (live-smoke reading the summary) is the channel the
 # owner watches; this page is for waking someone, and a change is the only thing worth that.
+# TWO AUDITS, TWO WORDS. audit-drift.sh prints "  DRIFT    " and audit-access.sh prints
+# "  FINDING  " (its found(), :50). The first cut of this counted DRIFT alone, so an ACCESS
+# finding - the internet-reachable wallet RPC is that class - published rc 1 with findings 0,
+# and a reader that trusted the count read it as clean. App measured it end to end with the
+# real line. Both words, and the reader trusts the exit code over the count either way.
+FINDING_LINE='^  (DRIFT|FINDING) '
 findings_count=0; unverified_count=0
 count_findings() { # $1 audit output -> sets findings_count and unverified_count
-  findings_count="$(printf '%s\n' "$1" | grep -c '^  DRIFT ')"
+  findings_count="$(printf '%s\n' "$1" | grep -cE "$FINDING_LINE")"
   # note_unverified items are the "  - " lines after the NOT VERIFIED heading.
   unverified_count="$(printf '%s\n' "$1" | awk '/^NOT VERIFIED$/{f=1; next} f && /^  - /{n++} END{print n+0}')"
 }
 finding_set_hash() { # $1 audit output -> a hash of the sorted finding lines
-  { printf '%s\n' "$1" | grep -E '^  DRIFT '; printf '%s\n' "$1" | awk '/^NOT VERIFIED$/{f=1; next} f && /^  - /'; } \
+  { printf '%s\n' "$1" | grep -E "$FINDING_LINE"; printf '%s\n' "$1" | awk '/^NOT VERIFIED$/{f=1; next} f && /^  - /'; } \
     | sort | sha256sum 2>/dev/null | cut -d' ' -f1
 }
 changed_since_last() { # $1 label, $2 hash -> 0 if the set differs from the stored one

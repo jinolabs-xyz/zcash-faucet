@@ -700,3 +700,17 @@ printf '{"at":1,"repoSha":"","config":{"rc":0,"findings":0,"unverified":0},"acce
 BOX_REPORT_DRIFT_SUMMARY="$T/ok-summary.json" bash "$BOX_REPORT" > /dev/null 2>&1
 check "control: the same file without the extra field IS embedded (empty sha allowed, git may not answer)" \
   "python3 -c \"import json,sys; d=json.load(open(sys.argv[1]))['drift']; sys.exit(0 if d and d['at']==1 else 1)\" '$BOX_REPORT_OUT'"
+
+echo "== box-report: a summary whose exit code says clean beside a finding count above zero is dropped as the lie it is"
+box_env
+printf '{"at":1,"repoSha":"","config":{"rc":0,"findings":2,"unverified":0},"access":{"rc":0,"findings":0,"unverified":0}}\n' > "$T/lie-summary.json"
+BOX_REPORT_DRIFT_SUMMARY="$T/lie-summary.json" bash "$BOX_REPORT" > /dev/null 2> "$T/lie.err"
+check "drift is null" "python3 -c \"import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))['drift'] is None else 1)\" '$BOX_REPORT_OUT'"
+check "and stderr names the contradiction" "grep -q 'exited clean beside a finding count above zero' '$T/lie.err'"
+printf '{"at":1,"repoSha":"","config":{"rc":0,"findings":0,"unverified":0},"access":{"rc":0,"findings":3,"unverified":0}}\n' > "$T/lie2-summary.json"
+BOX_REPORT_DRIFT_SUMMARY="$T/lie2-summary.json" bash "$BOX_REPORT" > /dev/null 2>&1
+check "the same lie on the access side is dropped too" "python3 -c \"import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))['drift'] is None else 1)\" '$BOX_REPORT_OUT'"
+printf '{"at":1,"repoSha":"","config":{"rc":1,"findings":0,"unverified":0},"access":{"rc":0,"findings":0,"unverified":0}}\n' > "$T/rc1-summary.json"
+BOX_REPORT_DRIFT_SUMMARY="$T/rc1-summary.json" bash "$BOX_REPORT" > /dev/null 2>&1
+check "control: rc 1 with findings 0 is CARRIED (the reader refuses that one, as drift)" \
+  "python3 -c \"import json,sys; d=json.load(open(sys.argv[1]))['drift']; sys.exit(0 if d and d['config']['rc']==1 else 1)\" '$BOX_REPORT_OUT'"

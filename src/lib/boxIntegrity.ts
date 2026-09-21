@@ -156,13 +156,21 @@ export function classifyDrift(d: DriftReport | null | undefined, now: number): D
   if (ageMs > DRIFT_STALE_AFTER_MS) {
     return { state: "stale", ...carried, reason: `the last drift audit is ${Math.round(age / 60)} minutes old; it runs every 30, so it has stopped arriving` };
   }
-  // An audit that could not RUN (rc 3) is incomplete before it is anything: its zero
-  // findings are a zero it never measured.
+  // THE EXIT CODE OUTRANKS THE COUNT, in both directions. The counts are a grep over the
+  // audit's text and a grep can miss a word - it did: audit-access.sh says FINDING where
+  // audit-drift.sh says DRIFT, and the first cut of the wrapper counted one word, so an
+  // access finding arrived as rc 1 with findings 0 and a count-first reader called it clean
+  // (App's block on #726). The rc is the audit's own verdict and needs no parsing, so:
+  //   rc 3   could not run       -> incomplete, whatever the zeros say
+  //   rc 1   findings            -> drift, even at a count of 0 (the count is then unmeasured)
+  //   rc 2   incomplete          -> incomplete
+  //   rc 0 with findings above 0 -> drift: a contradiction never reads clean
   if (d.config.rc >= 3 || d.access.rc >= 3) {
     return { state: "incomplete", ...carried, reason: "a drift audit could not run on the box, so its findings are unmeasured" };
   }
-  if (findings > 0) {
-    return { state: "drift", ...carried, reason: `${findings} finding(s): the box and the repo disagree; the box's own journal names them` };
+  if (d.config.rc === 1 || d.access.rc === 1 || findings > 0) {
+    const count = findings > 0 ? `${findings} finding(s)` : "findings the audit reported but the wrapper did not count";
+    return { state: "drift", ...carried, reason: `${count}: the box and the repo disagree; the box's own journal names them` };
   }
   if (unverified > 0 || d.config.rc === 2 || d.access.rc === 2) {
     return { state: "incomplete", ...carried, reason: `no drift in what could be checked, but ${unverified} check(s) could not run` };

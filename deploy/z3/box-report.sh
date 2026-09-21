@@ -425,7 +425,16 @@ drift_json="null"
 if [ -f "$DRIFT_SUMMARY" ]; then
   drift_line="$(head -c 512 "$DRIFT_SUMMARY" 2>/dev/null | head -n1)"
   if printf '%s' "$drift_line" | grep -qE '^\{"at":[0-9]{1,16},"repoSha":"([0-9a-f]{40})?","config":\{"rc":[0-9],"findings":[0-9]{1,6},"unverified":[0-9]{1,6}\},"access":\{"rc":[0-9],"findings":[0-9]{1,6},"unverified":[0-9]{1,6}\}\}$'; then
-    drift_json="$drift_line"
+    # THE SHAPE CAN BE RIGHT AND THE CONTENT A LIE: an audit that exited 0 (clean) beside a
+    # finding count above zero is a contradiction, and a reader that trusts either half reads
+    # it as something. Dropped here so it reaches the app as null, which is unknown, which
+    # fails the gate. The other direction (rc 1, findings 0) is the reader's to refuse, and it
+    # does: the exit code wins there.
+    if printf '%s' "$drift_line" | grep -qE '"rc":0,"findings":0*[1-9]'; then
+      echo "box-report: $DRIFT_SUMMARY reports an audit that exited clean beside a finding count above zero, publishing drift as null" >&2
+    else
+      drift_json="$drift_line"
+    fi
   else
     echo "box-report: $DRIFT_SUMMARY is not the shape drift-report.sh writes, publishing drift as null" >&2
   fi
