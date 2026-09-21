@@ -11,7 +11,7 @@
 # is fetched on its own (no --pull needed, and --pull would not add anything: a pinned
 # base present locally is used from the local store either way). Both stages carry
 # the same digest and the repo suite keeps them equal.
-FROM node:24-slim@sha256:2fe369e969550cde8e867afc3fe370b260140cab4a23d467074295b42163d553 AS build
+FROM node:25-slim@sha256:81db02c4b671288a03915da9534dbd54f96d0e7c24d80ccc54f5b36b2e684370 AS build
 WORKDIR /app
 # Toolchain in case better-sqlite3 has to compile instead of using a prebuilt.
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
@@ -31,7 +31,7 @@ RUN npm run build \
   && mv /tmp/package-lock.json package-lock.json \
   && rm -rf .next/cache
 
-FROM node:24-slim@sha256:2fe369e969550cde8e867afc3fe370b260140cab4a23d467074295b42163d553 AS run
+FROM node:25-slim@sha256:81db02c4b671288a03915da9534dbd54f96d0e7c24d80ccc54f5b36b2e684370 AS run
 WORKDIR /app
 ENV NODE_ENV=production
 # The whole build tree, then pruned (risk register II, R-10). Copying the tree rather
