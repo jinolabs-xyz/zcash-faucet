@@ -3648,14 +3648,17 @@ async function checkGrantBanner(browser, base) {
         const g = document.querySelector("[data-testid=grant-banner]");
         if (!g) return { present: false };
         const a = g.querySelector("[data-testid=grant-link]");
-        const h = document.querySelector(".hdr"); const comp = document.querySelector(".comp");
-        const gr = g.getBoundingClientRect(); const cs = getComputedStyle(g);
-        const pEl = g.querySelector("p");
+        const h = document.querySelector(".hdr"); const comp = document.querySelector(".comp"); const st = document.querySelector(".stage");
+        const gr = g.getBoundingClientRect(); const hr = h ? h.getBoundingClientRect() : null; const cs = getComputedStyle(g);
+        const pEl = g.querySelector("p"); const x = g.querySelector("[data-testid=grant-dismiss]");
         return {
           present: true, text: (g.textContent || "").replace(/\s+/g, " ").trim(),
           href: a ? a.getAttribute("href") : null, target: a ? a.getAttribute("target") : null, rel: a ? a.getAttribute("rel") : null,
-          top: Math.round(gr.top), hdrBottom: h ? Math.round(h.getBoundingClientRect().bottom) : -1,
-          width: Math.round(gr.width), compWidth: comp ? Math.round(comp.getBoundingClientRect().width) : -1,
+          first: !!comp && comp.firstElementChild === g, top: Math.round(gr.top), left: Math.round(gr.left), right: Math.round(gr.right),
+          stageWidth: st ? st.clientWidth : -1,
+          gapBelow: hr ? Math.round(hr.top - gr.bottom) : -1, compPad: comp ? Math.round(parseFloat(getComputedStyle(comp).paddingTop)) : -1,
+          textLeft: pEl ? Math.round(pEl.getBoundingClientRect().left) : -1, hdrLeft: hr ? Math.round(hr.left) : -1,
+          xRight: x ? Math.round(x.getBoundingClientRect().right) : -1, hdrRight: hr ? Math.round(hr.right) : -1,
           color: cs.color, lines: pEl ? Math.round(pEl.getBoundingClientRect().height / parseFloat(getComputedStyle(pEl).lineHeight)) : 0,
           xBox: (() => { const x = g.querySelector("[data-testid=grant-dismiss]"); if (!x) return null; const b = x.getBoundingClientRect(); return [Math.round(b.width), Math.round(b.height)]; })(),
         };
@@ -3669,9 +3672,15 @@ async function checkGrantBanner(browser, base) {
       // colon, no pool name ("shielded" is the word). A false positive here is a real one.
       const bad = [/\u2014/.test(r.text) && "em dash", /;/.test(r.text) && "semicolon", /:\s/.test(r.text) && "prose colon", /\b(orchard|sapling|ironwood|sprout)\b/i.test(r.text) && "a pool name"].filter(Boolean);
       ok(`${tag}: the copy keeps the site's rules`, bad.length === 0, bad.join(", ") || `"${r.text.slice(0, 70)}…"`);
-      ok(`${tag}: sits directly below the masthead at the content's full width`,
-        r.top === r.hdrBottom && Math.abs(r.width - r.compWidth) <= 1,
-        `top ${r.top} vs masthead bottom ${r.hdrBottom}; ${r.width}px of ${r.compWidth}px`);
+      // The standard announcement bar: the first thing on the page, edge to edge, and the masthead
+      // sitting exactly as far below it as .comp pads the page's top - so everything below moves
+      // down by the band's height and by nothing else.
+      ok(`${tag}: is the first thing on the page, edge to edge across the viewport`,
+        r.first && r.top === 0 && r.left === 0 && r.right === r.stageWidth,
+        `first ${r.first}, top ${r.top}, ${r.left}..${r.right} of ${r.stageWidth}`);
+      ok(`${tag}: the masthead sits the page's own top padding below it, and the words and the X sit on the masthead's edges`,
+        r.gapBelow === r.compPad && Math.abs(r.textLeft - r.hdrLeft) <= 1 && Math.abs(r.xRight - r.hdrRight) <= 1,
+        `gap ${r.gapBelow} vs padding ${r.compPad}; text left ${r.textLeft} vs masthead ${r.hdrLeft}; X right ${r.xRight} vs masthead ${r.hdrRight}`);
       // Dark text on the gradient in BOTH themes: white read 2.08:1 at the gradient's light end.
       ok(`${tag}: dark text on the gradient, the theme does not flip it`, r.color === "rgb(40, 40, 40)", r.color);
       ok(`${tag}: one line at desktop and a 44px dismiss`, r.lines === 1 && !!r.xBox && r.xBox[0] >= 44 && r.xBox[1] >= 44, `${r.lines} line(s), X ${r.xBox ? r.xBox.join("x") : "missing"}`);

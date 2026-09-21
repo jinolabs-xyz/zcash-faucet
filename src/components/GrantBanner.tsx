@@ -27,8 +27,8 @@ export function GrantBanner() {
   return (
     <aside className="grant" data-testid="grant-banner" aria-label="Coinholder grant vote">
       <p>
-        This faucet is up for a Coinholder-Directed Retroactive Grant, and voting is open until 29 September.
-        If it has been useful to you, your vote helps.{" "}
+        This faucet is up for a Coinholder-Directed Retroactive Grant, and voting is open until 29 September.{" "}
+        <span className="grant-more">If it has been useful to you, your vote helps.{" "}</span>
         <a href={GRANT_URL} target="_blank" rel="noreferrer" data-testid="grant-link">Read the proposal ↗</a>
       </p>
       <button type="button" className="grant-x" aria-label="Dismiss" title="Dismiss" data-testid="grant-dismiss" onClick={() => setOpen(false)}>

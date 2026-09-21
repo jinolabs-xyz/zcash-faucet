@@ -166,6 +166,9 @@ export function Shell({
     <div className={"app " + (theme === "ink" ? "ink" : "")}>
       <div className="stage">
         <div className="comp">
+          {/* Owner ask 2026-09-21T12:04Z: the grant vote, the first thing on every page, above the
+              masthead, edge to edge, in flow. The standard site announcement bar. */}
+          <GrantBanner />
           <header className="hdr">
             <div className="brand">
               <Link className="home" href="/" aria-label="Zcash Testnet Faucet, home">
@@ -262,9 +265,6 @@ export function Shell({
               </button>
             </div>
           </header>
-
-          {/* Owner ask 2026-09-21T12:04Z: the grant vote, above every page's content, in flow. */}
-          <GrantBanner />
 
           {children}
 

@@ -264,8 +264,8 @@
   },
   ".stage .grant": {
     "kind": "divergence",
-    "shipped": "display:flex; align-items:center; gap:calc(1*var(--u)); width:100%; min-height:calc(3.4*var(--u)); margin-top:calc(-2.6*var(--u)); padding:calc(.35*var(--u)) calc(.4*var(--u)) calc(.35*var(--u)) calc(1.1*var(--u)); background:var(--cta); color:#282828; font-size:calc(.9*var(--u)); line-height:1.4; animation:grant-in .3s var(--ease-place) both",
-    "why": "#737, owner ask 2026-09-21T12:04Z, dated on purpose: a band across the top of every page's content, directly below the masthead, saying the Coinholder-Directed Retroactive Grants vote is open (17 to 29 September 2026) and asking for a vote if the faucet has been useful. The snapshot has no such element; the masthead meets the hero directly. This is a DIVERGENCE, not an override: the design is still the authority, the band is up for the vote's eight days and comes out after the 29th, and while it is up everything below it - the hero included - sits lower by exactly its height, which fit-check's one-screen rule at every planned size bounds (the band gets shorter, the rule does not get looser). Built from the owner's reference (a Tailwind + motion sticky banner) with the site's own tokens: the CTA gradient and text colour, in flow rather than sticky. Its negative top margin is .comp's own column gap, so the band touches the masthead instead of floating 34 px under it. Text is #282828, not the CTA's white: white reads 2.08 to 2.85:1 on the gradient at this size and the dark reads 5.17 to 7.08:1, a literal because the gradient does not follow the theme and --ink does."
+    "shipped": "display:flex; align-items:center; gap:calc(1*var(--u)); width:auto; min-height:calc(3.4*var(--u)); margin:calc(-2.8*var(--u)) calc(50% - 50cqw) calc(.2*var(--u)); padding:calc(.35*var(--u)) calc(50cqw - 50%) calc(.35*var(--u)) calc(50cqw - 50%); background:var(--cta); color:#282828; font-size:calc(.9*var(--u)); line-height:1.4; animation:grant-in .3s var(--ease-place) both",
+    "why": "#737, owner ask 2026-09-21T12:04Z, dated on purpose: a band across the top of every page's content, ABOVE the masthead, the first thing on the page (the owner's third look), saying the Coinholder-Directed Retroactive Grants vote is open (17 to 29 September 2026) and asking for a vote if the faucet has been useful. The snapshot has no such element; the masthead meets the hero directly. This is a DIVERGENCE, not an override: the design is still the authority, the band is up for the vote's eight days and comes out after the 29th, and while it is up everything below it - the hero included - sits lower by exactly its height, which fit-check's one-screen rule at every planned size bounds (the band gets shorter, the rule does not get looser). Built from the owner's reference (a Tailwind + motion sticky banner) with the site's own tokens: the CTA gradient and text colour, in flow rather than sticky. Its negative top margin cancels .comp's top padding so its edge is the page's, and its bottom margin makes gap plus margin equal that padding, so the masthead sits as far under the band as it sat under the page's edge. Text is #282828, not the CTA's white: white reads 2.08 to 2.85:1 on the gradient at this size and the dark reads 5.17 to 7.08:1, a literal because the gradient does not follow the theme and --ink does. The background bleeds edge to edge (owner's second look) by negative inline margins of half the gap between the stage and the content column, paid back as padding, so the words and the X stay on the column."
   },
   ".stage .grant p": {
     "kind": "divergence",
@@ -301,5 +301,15 @@
     "kind": "divergence",
     "shipped": "from{transform:translateY(-100%);opacity:0}to{transform:none;opacity:1}",
     "why": "#737, the 300 ms slide-in from above on the site's own easing, the one trait of the owner's reference that is motion; the shell's prefers-reduced-motion rule turns every animation off, so nothing moves for a reader who asked for that."
+  },
+  "@media (max-width:32rem) | .stage .grant": {
+    "kind": "divergence",
+    "shipped": "margin-top:-12px; margin-bottom:0",
+    "why": "#737, the band on a phone: .comp's gap is 12px under 32rem so the pull-up matches it (19 px of overlap with the masthead at 390 before), and the second sentence is hidden there so the copy is two lines, not three."
+  },
+  "@media (max-width:32rem) | .stage .grant .grant-more": {
+    "kind": "divergence",
+    "shipped": "display:none",
+    "why": "#737, the band on a phone: .comp's gap is 12px under 32rem so the pull-up matches it (19 px of overlap with the masthead at 390 before), and the second sentence is hidden there so the copy is two lines, not three."
   }
 }

@@ -385,8 +385,9 @@ html :focus-visible{outline-color:var(--accent-text)}
 
 /* ===== THE GRANT BANNER (owner ask 2026-09-21T12:04Z, up for the vote's eight days) ==============
  *
- * NOT IN THE SPEC, and declared in departures.json as such. A band across the top of every page's
- * content, directly below the masthead, in the CTA's own gradient and text colour so it reads as
+ * NOT IN THE SPEC, and declared in departures.json as such. The first thing on every page: a band
+ * ABOVE the masthead, edge to edge, the standard site announcement bar (the owner's third look:
+ * "above the navbar at the top most"), in the CTA's own gradient so it reads as
  * the site's one accent and not a foreign element. Built from the owner's reference (a Tailwind +
  * motion sticky banner) with ours: same traits, no second styling system. In flow, not sticky -
  * the page is one screen on desktop by rule and a sticky band on a phone would eat the viewport.
@@ -396,19 +397,27 @@ html :focus-visible{outline-color:var(--accent-text)}
  * rule does not get looser. The dismiss X keeps the 44 px tap floor on its own, so the band is
  * never shorter than that plus its hairlines.
  *
- * DIRECTLY BELOW THE NAV, which `.comp`'s column gap (2.6u, :52) would otherwise deny it: as a
- * flex child the band would get that gap above AND below, 34 px of air between the masthead and
- * a band that is meant to touch it. The negative top margin is exactly that gap, so the band
- * sits flush under the masthead and the gap below it is the one the hero already had. Held by a
- * row: the band's top equals the masthead's bottom.
+ * AT THE VERY TOP, and the masthead exactly where it was relative to what is above it: .comp pads
+ * 2.8u at the top (:52) and gaps its children by 2.6u, so the band's top margin cancels the
+ * padding (its top edge is the page's) and its bottom margin of .2u makes gap + margin = 2.8u,
+ * the air the masthead had from the page's edge before. Everything below moves down by the
+ * band's height and by nothing else. Held by a row: the band's top is 0 and the masthead's top
+ * is the band's bottom plus 2.8u.
  *
  * DARK TEXT, NOT THE CTA'S WHITE, and a literal rather than --ink. The reference has white on the
  * gradient; measured, white reads 2.08:1 at the gradient's light end and 2.85:1 at its dark end,
  * under the 4.5:1 body-text floor at this size (the token's own comment already says "set to
  * var(--ink) for strict AA"). #282828 - paper's ink - reads 5.17 to 7.08:1 across the gradient.
  * A literal because the gradient does not change with the theme and --ink does: in ink it is
- * near-white and would put the 2:1 back. The same colour on the link and the X. */
-.stage .grant{display:flex;align-items:center;gap:calc(1*var(--u));width:100%;min-height:calc(3.4*var(--u));margin-top:calc(-2.6*var(--u));padding:calc(.35*var(--u)) calc(.4*var(--u)) calc(.35*var(--u)) calc(1.1*var(--u));background:var(--cta);color:#282828;font-size:calc(.9*var(--u));line-height:1.4;animation:grant-in .3s var(--ease-place) both}
+ * near-white and would put the 2:1 back. The same colour on the link and the X.
+ *
+ * THE BACKGROUND BLEEDS EDGE TO EDGE, THE WORDS STAY ON THE COLUMN (owner, second look at 3221:
+ * "the whole breadth of the page"). The band is a child of .comp, whose width is the content
+ * column, so it bleeds by the difference between the stage's width and its own containing block:
+ * margin-inline of 50% - 50cqw (negative, half the gap each side) and the same amount back as
+ * padding, so the text begins where the masthead's brand does and the X ends where its toggle does. cqw is
+ * the stage's own width - .stage is the size container - so a scrollbar does not overshoot it. */
+.stage .grant{display:flex;align-items:center;gap:calc(1*var(--u));width:auto;min-height:calc(3.4*var(--u));margin:calc(-2.8*var(--u)) calc(50% - 50cqw) calc(.2*var(--u));padding:calc(.35*var(--u)) calc(50cqw - 50%) calc(.35*var(--u)) calc(50cqw - 50%);background:var(--cta);color:#282828;font-size:calc(.9*var(--u));line-height:1.4;animation:grant-in .3s var(--ease-place) both}
 .stage .grant p{margin:0;flex:1 1 auto}
 .stage .grant a{color:#282828;font-weight:600;text-decoration:underline;text-decoration-thickness:from-font;text-underline-offset:.12em;white-space:nowrap}
 .stage .grant a:hover{text-decoration-thickness:2px}
@@ -416,3 +425,7 @@ html :focus-visible{outline-color:var(--accent-text)}
 .stage .grant-x:hover{background:rgb(255 255 255 / 28%)}
 .stage .grant-x:focus-visible{outline:2px solid #282828;outline-offset:2px}
 @keyframes grant-in{from{transform:translateY(-100%);opacity:0}to{transform:none;opacity:1}}
+/* Under 32rem .comp pads and gaps 12px (:141), so the pull-up is 12px and no bottom margin is
+ * needed for the masthead to sit 12px under the band, as it sat 12px under the page's edge. And the copy is one sentence
+ * plus the link on a phone: the second sentence made three lines at 390 against a two-line rule. */
+@media (max-width:32rem){.stage .grant{margin-top:-12px;margin-bottom:0}.stage .grant .grant-more{display:none}}
