@@ -4157,6 +4157,21 @@ async function checkSilentRetry(browser, base) {
       sending !== null && sending.length === 4, `${sending?.length ?? "none"}: ${JSON.stringify(sending)}`);
     ok("silent retry: and no extra circle exists when we are not retrying",
       sending !== null && !sending.some((t) => RETRY_LABEL.test(t)), JSON.stringify(sending));
+    // ===== THE PROOF STEP: no pool name, no definite singular, and the actor named (owner, 2026-09-21) =====
+    // The visitor's browser solved a proof-of-WORK a minute ago; the wallet on our side now builds a
+    // zero-knowledge proof, and the two share a word. "Building the zero-knowledge proof" was
+    // wrong twice: the definite singular is false for a Sapling recipient, and it let a reader think
+    // their laptop was doing it. And NO POOL NAME here on purpose: we spend Ironwood notes today
+    // (the box's own counts, ironwood=564 orchard=0 sapling=1), Orchard before that, and "shielded"
+    // stays true the next time the protocol moves. Read from the same list as the rows above, while
+    // the send is held, so the words on screen are the ones a visitor watches.
+    ok("the proof step is 'Proving the payment in zero knowledge': no pool, no definite proof",
+      sending !== null && sending.some((t) => /^Proving the payment in zero knowledge$/.test(t.trim()))
+        && !sending.some((t) => /zero-knowledge proof|orchard|ironwood|sapling/i.test(t)),
+      JSON.stringify(sending));
+    const sendingHead = ((await page.locator('.phase[data-phase="sending"] h3').textContent().catch(() => "")) ?? "").trim();
+    ok("and the heading over the steps names the actor - our wallet, not the visitor's browser",
+      /^Our wallet is building the shielded transaction$/.test(sendingHead), sendingHead || "no heading read");
     // POLLED WITH THE PAGE'S OWN STATE IN THE DETAIL. A bare waitForSelector that times out tells
     // you the alert was missing and nothing about what was there instead, which is a failure you
     // cannot diagnose from the log - and this row failed once in-suite while passing standalone.
