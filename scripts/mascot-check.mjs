@@ -126,6 +126,8 @@ for (const { path, limit } of SHEETS) {
 // so 20 is inside ALL nine. Chosen from that measurement, not by lowering it until the row passed.
 const EYE_HALF = 30;
 const REA_EYE_HALF = 20;
+// How far past the eye's centre the band must reach in both directions. See the cover block.
+const EXTENT_HALF = 32;
 const DIR_ANCHORS = {
   "0,0": [[182, 153]], "0,1": [[137, 138], [217, 138]], "0,2": [[172, 152]],
   "1,0": [[148, 172]], "1,1": [[138, 170], [216, 170]], "1,2": [[207, 172]],
@@ -154,18 +156,43 @@ for (const { path, bare, sha256, w: wantW, h: wantH, mustCover } of SERVED_SHEET
   const gotH = fourcc === "VP8X" ? 1 + body.readUIntLE(27, 3) : 0;
   if (gotW !== wantW || gotH !== wantH) fails.push(`${path} is ${gotW}x${gotH}, pinned ${wantW}x${wantH} (fourcc ${fourcc})`);
 
-  // THE CLOTH IS WHAT CHANGED, NOT WHAT IS DARK. This compares the served sheet against the BARE
-  // one frame for frame; the band is the difference between them.
+  // TWO SHEETS, TWO QUESTIONS. The reaction sheet must have NOTHING drawn over the eyes, and for
+  // that "did any pixel change" is the right instrument. The direction sheet must have the eyes
+  // COVERED, and for that it is the wrong one - measured, twice, on this branch:
   //
-  // I WROTE THE DARKNESS VERSION FIRST AND IT WAS WRONG. It tested "is this pixel near-black",
-  // which cannot tell cloth from an eye, because the art's teal ink is near-black too. Positive
-  // control that caught it: run the same detector over the sheet with NO band drawn and it returns
-  // the IDENTICAL counts - 8, 8, 8, 40, 18, 8, 8, 18, 8 across the nine reaction frames. It was
-  // reading the eyes and reporting them as an intrusion, which would have blocked this PR on a
-  // defect that does not exist. SDE-App hit the same trap from the other direction and said so;
-  // I then reproduced it.
-  // Difference is immune to the colour question entirely: whatever the band is drawn in, it is not
-  // what was there before.
+  //   1. "Is this pixel dark" cannot tell cloth from an eye, because the art's teal ink is
+  //      near-black too. Positive control: the same detector over the sheet with NO band returns
+  //      the identical counts (8, 8, 8, 40, 18, 8, 8, 18, 8 across the nine reaction frames). It
+  //      was reading the eyes.
+  //   2. "Did this pixel change" cannot see cloth lying over the eye's own dark ink, because dark
+  //      over dark is not a change. That version read 54-79% on a sheet whose eyes are fully
+  //      covered at 4x, and - worse - the better the coverage the LOWER it read. It measured a proxy
+  //      and the proxy pointed the wrong way (@CTO, @SDE-App, both independently).
+  //
+  // SO THE COVER ROW MEASURES WHAT A VIEWER SEES. The bare frame's LIGHT eye pixels - the sclera
+  // and the glints, luminance over 200 - are the part of an eye that shows through a gap, and on
+  // the served frame every one of them must read DARK (under 120). That is a direct question about
+  // visibility and it has no colour-of-the-cloth problem. A second, independent assertion requires
+  // the band's changed-pixel extent at the eye's column to span past the eye in BOTH directions, so
+  // a band that ends exactly at the sclera's last row - whites 100%, no margin - still fails.
+  //
+  // THE NUMBERS ARE MEASURED, AND EACH ASSERTION HAS A MUTANT THAT FAILS IT (SDE-UI 2026-09-21):
+  //   - a circular window, because the square's corners reach bright fur beside the eye: with the
+  //     square, frame (0,1) eye 1 read 98.96% from 11 corner pixels that were never eye. The disc
+  //     reads 100.00% on all twelve, 687-820 light pixels each. The floor of 99 is a margin against
+  //     coverage, not against box geometry.
+  //   - composited on white before reading, because the sheet is riso-style and nearly every
+  //     pixel carries alpha 253. Inside the eye the ink is opaque either way: the served reading is
+  //     21-90 on a white ground AND on a dark one, so the theme does not move this row.
+  //   - EXTENT_HALF is 32, the SMALLER of the measured eye half-heights (32-34), because at 34 the
+  //     centre column's right eyes have one pixel of margin at the top (band 103, eye top 104) and
+  //     one pixel is a decoder's rounding away from red.
+  //   - variant C round one (1922c0, the sheet that started this) FAILS both: whites 32.82%, band
+  //     139-168 against a needed 121-185 on frame (0,0). The pre-12px sheet (9ff5fd) PASSES both -
+  //     it covered the whites; the 12px move was about the lower-rim contact line, which this row
+  //     does not claim to judge.
+  //   - a synthetic band ending at ay+31 passes whites at 100% and fails EXTENT alone. A band
+  //     ending at ay+10 fails both (whites 23.28%).
   const pg = await browser.newPage();
   // SAME ORIGIN FIRST, OR THE CANVAS IS TAINTED. Reading pixels back from an image drawn onto a
   // canvas is forbidden when the image came from a different origin than the document - and
@@ -174,46 +201,85 @@ for (const { path, bare, sha256, w: wantW, h: wantH, mustCover } of SERVED_SHEET
   // allowed to answer. Without this the whole block throws SecurityError and every row is silently
   // not run.
   await pg.goto(BASE, { waitUntil: "domcontentloaded" });
-  const sampled = await pg.evaluate(async ({ url, bareUrl, anchors, half }) => {
-    const grab = async (u) => {
+  const sampled = await pg.evaluate(async ({ url, bareUrl, anchors, half, extentHalf, cover }) => {
+    const grab = async (u, onWhite) => {
       const img = new Image();
       img.src = u;
       await img.decode();
       const cv = document.createElement("canvas");
       cv.width = img.naturalWidth; cv.height = img.naturalHeight;
       const ctx = cv.getContext("2d");
+      if (onWhite) { ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, cv.width, cv.height); }
       ctx.drawImage(img, 0, 0);
       return ctx;
     };
-    const A = await grab(url), B = await grab(bareUrl);
+    const A = await grab(url, cover), B = await grab(bareUrl, cover);
+    const lum = (d, k) => 0.299 * d[k] + 0.587 * d[k + 1] + 0.114 * d[k + 2];
     const out = {};
     for (const [cell, pts] of Object.entries(anchors)) {
       const [r, c] = cell.split(",").map(Number);
       out[cell] = pts.map(([ax, ay]) => {
-        const X = c * 360 + ax, Y = r * 360 + ay - half, N = half * 2 + 1;
-        const a = A.getImageData(X, Y, 1, N).data;
-        const b = B.getImageData(X, Y, 1, N).data;
-        let band = 0;
-        for (let k = 0; k < a.length; k += 4) {
-          // a material change, not re-encode noise
-          const d = Math.abs(a[k] - b[k]) + Math.abs(a[k + 1] - b[k + 1]) + Math.abs(a[k + 2] - b[k + 2]);
-          if (d > 60) band++;
+        if (!cover) {
+          // CLEAR: a 1 px column through the eye, count material changes against the bare sheet.
+          const X = c * 360 + ax, Y = r * 360 + ay - half, N = half * 2 + 1;
+          const a = A.getImageData(X, Y, 1, N).data;
+          const b = B.getImageData(X, Y, 1, N).data;
+          let band = 0;
+          for (let k = 0; k < a.length; k += 4) {
+            const d = Math.abs(a[k] - b[k]) + Math.abs(a[k + 1] - b[k + 1]) + Math.abs(a[k + 2] - b[k + 2]);
+            if (d > 60) band++;
+          }
+          return { band, total: N };
         }
-        return { band, total: N };
+        // COVER, part one: every light pixel of the bare eye reads dark on the served one.
+        const N = half * 2;
+        const a = A.getImageData(c * 360 + ax - half, r * 360 + ay - half, N, N).data;
+        const b = B.getImageData(c * 360 + ax - half, r * 360 + ay - half, N, N).data;
+        let light = 0, hidden = 0;
+        for (let y = 0; y < N; y++) {
+          for (let x = 0; x < N; x++) {
+            const dx = x - half + 0.5, dy = y - half + 0.5;
+            if (dx * dx + dy * dy > half * half) continue;
+            const k = (y * N + x) * 4;
+            if (lum(b, k) > 200) { light++; if (lum(a, k) < 120) hidden++; }
+          }
+        }
+        // COVER, part two: the band's extent at this column, over the whole frame height.
+        const W = 7;
+        const ca = A.getImageData(c * 360 + ax - 3, r * 360, W, 360).data;
+        const cb = B.getImageData(c * 360 + ax - 3, r * 360, W, 360).data;
+        let top = -1, bot = -1;
+        for (let y = 0; y < 360; y++) {
+          let mx = 0;
+          for (let x = 0; x < W; x++) { const k = (y * W + x) * 4; mx = Math.max(mx, Math.abs(lum(ca, k) - lum(cb, k))); }
+          if (mx > 25) { if (top < 0) top = y; bot = y; }
+        }
+        return { light, hidden, top, bot, needTop: ay - extentHalf, needBot: ay + extentHalf };
       });
     }
     return out;
-  }, { url: path, bareUrl: bare, anchors: mustCover ? DIR_ANCHORS : REA_ANCHORS, half: mustCover ? EYE_HALF : REA_EYE_HALF });
+  }, { url: path, bareUrl: bare, anchors: mustCover ? DIR_ANCHORS : REA_ANCHORS,
+       half: mustCover ? EYE_HALF : REA_EYE_HALF, extentHalf: EXTENT_HALF, cover: mustCover });
   await pg.close();
 
   for (const [cell, pts] of Object.entries(sampled)) {
-    pts.forEach(({ band, total }, k) => {
-      const pct = Math.round((100 * band) / total);
-      if (mustCover && pct < 90) {
-        fails.push(`${path} (${cell}) eye ${k}: cloth covers ${pct}% of the eye's extent, needs >=90% - the eye is showing`);
+    pts.forEach((s, k) => {
+      if (!mustCover) {
+        if (s.band > 0) fails.push(`${path} (${cell}) eye ${k}: ${s.band} px changed over the eye - the pushed-up band has dropped onto the expression`);
+        return;
       }
-      if (!mustCover && band > 0) {
-        fails.push(`${path} (${cell}) eye ${k}: ${band} px changed over the eye - the pushed-up band has dropped onto the expression`);
+      // THE ANCHOR MUST BE ON AN EYE, or "every light pixel is hidden" is true of zero pixels. The
+      // twelve measured eyes carry 687-820; a window that finds under 500 is looking at fur.
+      if (s.light < 500) {
+        fails.push(`${path} (${cell}) eye ${k}: only ${s.light} light px in the bare eye window (needs >=500) - the anchor is not on an eye, so this row measured nothing`);
+        return;
+      }
+      const pct = (100 * s.hidden) / s.light;
+      if (pct < 99) {
+        fails.push(`${path} (${cell}) eye ${k}: ${pct.toFixed(2)}% of the eye's ${s.light} light px read dark on the served frame, needs >=99% - the eye is showing`);
+      }
+      if (s.top < 0 || s.top > s.needTop || s.bot < s.needBot) {
+        fails.push(`${path} (${cell}) eye ${k}: the band spans ${s.top}-${s.bot} at the eye's column, needs to reach ${s.needTop}-${s.needBot} - it ends inside the eye`);
       }
     });
   }
