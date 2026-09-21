@@ -161,7 +161,8 @@ test("alertBridge arrives as the box's word, and an older report reads null, nev
 
 // ---- the drift field's three shapes on the wire ---------------------------------------------
 test("drift: absent from an older report reads undefined, null reads null, and a malformed object reads null - never a verdict with a zero in it", () => {
-  const { drift: _d, ...older } = WRITER_FIELDS;
+  const older: Record<string, unknown> = { ...WRITER_FIELDS };
+  delete older.drift;
   write(older);
   assert.equal(readBoxIntegrity()?.drift, undefined, "a report that predates the field");
   write({ ...WRITER_FIELDS, drift: null });
