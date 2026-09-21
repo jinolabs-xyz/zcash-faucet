@@ -390,3 +390,22 @@ test("a failure on one path does not silence the same class on the other", () =>
   assert.match(page, /page path/);
   assert.match(claim, /claim path/);
 });
+
+
+test("the two numbers on the repeat line count ONE population, not two", () => {
+  // @SDE-App, #696 retro. `n` is per-path and the total was counts[kind], which is global across
+  // both ladders, so the sentence paired a per-path figure with a two-path total. A reader takes
+  // "3 since the last line, 9 since start" as one series; it was two.
+  fresh();
+  // five failures on the PAGE path, then one on the CLAIM path, all the same kind
+  for (let i = 0; i < 5; i++) recordNodeStatusFailure("network", null, i, write, "page");
+  const claimFirst = recordNodeStatusFailure("network", null, 0, write, "claim");
+  assert.ok(claimFirst && /Readiness answers/.test(claimFirst), "the claim path's FIRST line should be the first-failure wording");
+  // a second claim-path failure, past the throttle, so it prints the repeat line
+  const line = recordNodeStatusFailure("network", null, 120_000, write, "claim");
+  assert.ok(line, "the repeat line was throttled away, so this row measured nothing");
+  assert.match(line, /since start on this path/, line);
+  // TWO on the claim path, not seven. Seven would be the two ladders added together.
+  assert.match(line, /2 since start on this path/,
+    `the total counts both ladders, so it disagrees with the per-path figure beside it: ${line}`);
+});

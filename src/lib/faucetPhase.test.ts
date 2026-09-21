@@ -111,3 +111,26 @@ test("#704: the real outage still reports, which is what stops the fix going too
   assert.equal(faultReason(s), "our wallet is not answering");
   assert.equal(basePhase(s), "fault");
 });
+
+test("#707 retro: an EMPTY faucet says so even when the node read failed", () => {
+  // The node read fails on about 11% of page loads, and "checking" outranked "empty", so on those
+  // loads a faucet that is out of TAZ declined to say the one true, actionable thing it knew.
+  // Emptiness comes from the balance, not the node, so a missing height cannot make it unknown.
+  const s = w({ node: null, balanceTaz: 0 } as Partial<Status>);
+  assert.equal(basePhase(s), "empty");
+  assert.equal(holding(basePhase(s)), false, "empty is not a holding phase and must not become one");
+});
+
+test("#707 retro: a DEGRADED faucet still names its degradation without a node reading", () => {
+  // Same shape, different source: degraded comes from the send ledger.
+  const s = w({ node: null, balanceTaz: 100, sends: { state: "degraded" } } as Partial<Status>);
+  assert.equal(basePhase(s), "degraded");
+});
+
+test("#707 retro: with nothing else known, a missing node reading is still 'checking'", () => {
+  // The floor from #704 stays put: this must not fall through to "ready" and invite a proof of
+  // work on no node evidence. This is the row the reordering could have broken.
+  const s = w({ node: null, balanceTaz: 4504.7 } as Partial<Status>);
+  assert.equal(basePhase(s), "checking");
+  assert.equal(holding(basePhase(s)), true);
+});
