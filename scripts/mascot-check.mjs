@@ -206,6 +206,10 @@ for (const { path, bare, sha256, w: wantW, h: wantH, mustCover } of SERVED_SHEET
   //     does not claim to judge.
   //   - a synthetic band ending at ay+31 passes whites at 100% and fails EXTENT alone. A band
   //     ending at ay+10 fails both (whites 23.28%).
+  //   - AND THE TOP EDGE, the last unbounded side: the forehead fur 12 to 26 rows above each eye's
+  //     ink run must still read as fur on the served frame (98%). The band's texture tiled to the
+  //     crown - the CTO's mutant against #728, which every row here passed - fails it on all
+  //     twelve eyes; the approved sheet reads 100% on all twelve.
   //
   // AND THE ROW HAS AN UPPER BOUND NOW, BECAUSE IT DID NOT AND THE OWNER CAUGHT WHAT IT MISSED.
   // "The eye is covered at 99%" is a presence test: a band that swallowed the muzzle, the chin or
@@ -332,7 +336,24 @@ for (const { path, bare, sha256, w: wantW, h: wantH, mustCover } of SERVED_SHEET
         let inkTop = ay, inkBot = ay;
         while (inkTop > 0 && inkRow(inkTop - 1)) inkTop--;
         while (inkBot < 359 && inkRow(inkBot + 1)) inkBot++;
-        return { interior, glint, hidden, overlap, top, bot, inkTop, inkBot, needTop: inkTop, needBot: inkBot };
+        // THE TOP EDGE. The nose row bounds the band below; nothing bounded it above, and a sheet
+        // with the band's texture tiled from its top edge to the crown - a fox whose forehead and
+        // ears are cloth - passed every row here but the sha pin (@CTO, #728 red-team). Same
+        // instrument as the nose row, turned upward: the forehead fur above the eye must still
+        // read as fur. The window sits 12 to 26 rows above the eye's ink run at its column, clear
+        // of a band that sits 3 to 8 px above the outline (the approved sheet, measured) and of
+        // its antialiased tail; fur is luminance over 120 on the bare frame (median 139), cloth is
+        // under 90 on the served one (median 55), and "kept" is served over 105, fifteen above the
+        // cloth's maximum. Measured on the twelve eyes: ~576 fur px per window, 100% kept.
+        const BW = 20, BROW_UP = 26, BROW_DOWN = 12;
+        const by0 = Math.max(0, inkTop - BROW_UP), bh = inkTop - BROW_DOWN - by0 + 1;
+        let browFur = 0, browKept = 0;
+        if (bh > 0) {
+          const ba = A.getImageData(c * 360 + ax - BW, r * 360 + by0, BW * 2 + 1, bh).data;
+          const bb = B.getImageData(c * 360 + ax - BW, r * 360 + by0, BW * 2 + 1, bh).data;
+          for (let k = 0; k < bb.length; k += 4) if (lum(bb, k) > 120) { browFur++; if (lum(ba, k) > 105) browKept++; }
+        }
+        return { interior, glint, hidden, overlap, top, bot, inkTop, inkBot, needTop: inkTop, needBot: inkBot, browFur, browKept };
       });
       out[cell] = { eyes, nose: null };
       // THE UPPER BOUND. The two assertions above say the eye is covered; nothing above says the
@@ -394,6 +415,14 @@ for (const { path, bare, sha256, w: wantW, h: wantH, mustCover } of SERVED_SHEET
       if (s.top < 0 || s.top > s.needTop || s.bot < s.needBot) {
         fails.push(`${path} (${cell}) eye ${k}: the band spans ${s.top}-${s.bot} at the eye's column, needs to reach ${s.needTop}-${s.needBot} (the eye's ink runs ${s.inkTop}-${s.inkBot}) - it ends inside the eye`);
       }
+      // THE BROW STAYS FUR. The floor proves the window is on the forehead (measured 564-584 fur
+      // px of 615 per window); under 300 is an ear's ink or a window off the head.
+      if (s.browFur < 300) {
+        fails.push(`${path} (${cell}) eye ${k}: only ${s.browFur} fur px in the window above the eye (needs >=300) - the window is not on the forehead, so the band's top edge is unbounded here`);
+      } else {
+        const kept = (100 * s.browKept) / s.browFur;
+        if (kept < 98) fails.push(`${path} (${cell}) eye ${k}: only ${kept.toFixed(1)}% of the ${s.browFur} fur px above the eye still read as fur on the served frame, needs >=98% - the band reaches up the forehead`);
+      }
     });
     if (mustCover) {
       // THE NOSE STAYS OUT. Measured on the sheet that shipped and the owner rejected: the muzzle's
@@ -409,7 +438,7 @@ for (const { path, bare, sha256, w: wantW, h: wantH, mustCover } of SERVED_SHEET
       }
     }
   }
-  console.log(`${path}: sha ok, ${gotW}x${gotH}, ${Object.keys(sampled).length} frames sampled for ${mustCover ? "cover, and the nose held out" : "clear"}`);
+  console.log(`${path}: sha ok, ${gotW}x${gotH}, ${Object.keys(sampled).length} frames sampled for ${mustCover ? "cover, the nose held out, the brow kept" : "clear"}`);
 }
 
 await probe.close();
