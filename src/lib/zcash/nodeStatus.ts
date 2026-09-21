@@ -8,6 +8,7 @@
 import { config, num } from "../config.ts";
 import { referenceTip } from "./externalTip.ts";
 import { mayBuildTransaction, readChainFreshness, type ChainGate } from "./shieldGate.ts";
+import { mayBuildFromWallet, walletLagFreshness } from "./walletLagGate.ts";
 import { tipProgress, type TipSample } from "./tipProgress.ts";
 import { getChainIdentity } from "./chainIdentityOracle.ts";
 import {
@@ -289,7 +290,16 @@ export async function getNodeStatus(purpose: NodeReadPurpose = "claim"): Promise
     const frozen = behind || progress.stalled;
 
     const shield = readChainFreshness(n);
-    const walletCaughtUp = n > 0 && w >= n - 5;
+    // ONE PREDICATE, THE DRIP GATE'S OWN. This read `w >= n - 5`: a second threshold beside
+    // walletLagGate's budget of 10, stricter by half, and nothing kept the two in step. In the
+    // 6-to-10 band the page said NOT READY and turned visitors away that /api/faucet would have
+    // served, because the route asks walletLagFreshness and this line did not. Now it asks the
+    // same function with the same two heights, so LIVE means exactly "a drip built now passes
+    // the wallet-lag gate", and moving the budget (FAUCET_WALLET_MAX_LAG_BLOCKS) moves both.
+    // The gate stays in blocks because zallet's expiry is in blocks (EXPIRY_DELTA_BLOCKS); how
+    // fast blocks arrive belongs in choosing that budget, not in a second rule here.
+    // `n > 0` is not a lag rule: a node with no chain is not caught up with anything.
+    const walletCaughtUp = n > 0 && mayBuildFromWallet(walletLagFreshness(w, n));
     return {
       ready: walletCaughtUp && !frozen,
       syncPercent,

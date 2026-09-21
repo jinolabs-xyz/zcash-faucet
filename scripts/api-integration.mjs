@@ -34,6 +34,8 @@ const PORT_O = 3223; // O for a z_sendmany reply that never arrives: the no-opid
 const PORT_P = 3224; // P for a 401 on the SEND itself: a definite failure that releases the claim, never a held one (R-41)
 const PORT_Q = 3225; // Q for the one server this suite deliberately RESTARTS, to watch uptimeSeconds fall
 const PORT_R = 3226; // R for a wallet that REFUSES THE RECIPIENT: the visitor's address, not our wallet (#536)
+const PORT_S = 3227; // S for a wallet 8 blocks behind our node: INSIDE the drip budget, so the page is LIVE and the drip is served
+const PORT_T = 3228; // T for a wallet 11 behind: over it, so the page refuses with the number and the drip is refused by the same gate
 // Somewhere to keep the output of the server that is supposed to die, so the
 // assertion can check WHY it died rather than only that it did.
 const LOG_DIR = mkdtempSync(join(tmpdir(), "faucet-api-integration-"));
@@ -59,6 +61,8 @@ const BASE_H = `http://localhost:${PORT_H}`;
 const BASE_I = `http://localhost:${PORT_I}`;
 const BASE_J = `http://localhost:${PORT_J}`;
 const BASE_R = `http://localhost:${PORT_R}`;
+const BASE_S = `http://localhost:${PORT_S}`;
+const BASE_T = `http://localhost:${PORT_T}`;
 const BASE_K = `http://localhost:${PORT_K}`;
 const BASE_L = `http://localhost:${PORT_L}`;
 const BASE_M = `http://localhost:${PORT_M}`;
@@ -284,6 +288,12 @@ const walletR = spawn("node", ["scripts/fake-zallet.mjs"], {
   detached: true,
 });
 
+// S and T: the ONLY thing wrong with either is where the wallet's scan sits under the node -
+// 8 blocks for S, 11 for T - which is the drip gate's budget of 10 from both sides.
+const WALLET_S = 28339;
+const WALLET_T = 28340;
+const walletS = wallet(WALLET_S, 10, { WALLET_LAG: "8" });
+const walletT = wallet(WALLET_T, 10, { WALLET_LAG: "11" });
 const WALLET_E = 28327;
 const walletE = wallet(WALLET_E, 10);
 
@@ -561,6 +571,18 @@ const serverR = boot(PORT_R, {
   FAUCET_CHALLENGE: "none",
   RATE_LIMIT_SALT: "integration-test-salt-r",
 });
+const serverS = boot(PORT_S, {
+  ...zallet(WALLET_S),
+  ...chainView,
+  FAUCET_CHALLENGE: "none",
+  RATE_LIMIT_SALT: "integration-test-salt-s",
+});
+const serverT = boot(PORT_T, {
+  ...zallet(WALLET_T),
+  ...chainView,
+  FAUCET_CHALLENGE: "none",
+  RATE_LIMIT_SALT: "integration-test-salt-t",
+});
 const serverJ = boot(PORT_J, {
   ...zallet(WALLET_J),
   ...chainView,
@@ -591,7 +613,7 @@ try {
   // false: this fixture serves no testnet row BY DESIGN, so requiring one would
   // hang and then throw. Responding at all is the whole requirement.
   await waitHosh(false, 15_000, HOSH_EMPTY_PORT);
-  await Promise.all([waitReady(BASE_A), waitReady(BASE_B), waitReady(BASE_C), waitReady(BASE_D), waitReady(BASE_E), waitReady(BASE_H), waitReady(BASE_I), waitReady(BASE_J), waitReady(BASE_K), waitReady(BASE_L), waitReady(BASE_M), waitReady(BASE_N), waitReady(BASE_O), waitReady(BASE_P)]);
+  await Promise.all([waitReady(BASE_A), waitReady(BASE_B), waitReady(BASE_C), waitReady(BASE_D), waitReady(BASE_E), waitReady(BASE_H), waitReady(BASE_I), waitReady(BASE_J), waitReady(BASE_K), waitReady(BASE_L), waitReady(BASE_M), waitReady(BASE_N), waitReady(BASE_O), waitReady(BASE_P), waitReady(BASE_S), waitReady(BASE_T)]);
   // THE LEDGER IS WHERE THIS RUN PUT IT. A driver that ignored FAUCET_DATA_DIR kept every
   // other assertion green while the claims went back to cwd/data (review of #537), which
   // is the shape this suite exists to refuse: a green that proves nothing.
@@ -832,6 +854,36 @@ try {
   // would be locked out for a day over an address we never paid.
   const recipRefusedAgain = await claim(BASE_R, UNIFIED_A, null);
   ok("R a refusal does NOT consume the cooldown", recipRefusedAgain.status === 400, `status ${recipRefusedAgain.status}`);
+
+  /* ── S and T: LIVE means "a drip passes the wallet-lag gate" ───────────── */
+  // The page used to decide readiness with its own `w >= n - 5` while the route decides a drip
+  // with walletLagFreshness's budget of 10, so in the 6-to-10 band /api/ready said NOT READY and
+  // visitors were turned away from a drip that would have been served. One predicate on both
+  // sides now. S sits at 8 (inside the budget), T at 11 (over it): the page and the route have
+  // to agree on each, and T's reason has to carry the number an operator acts on.
+  const readyS = await get(BASE_S, "/api/ready");
+  ok("S a wallet 8 behind our node is inside the drip budget, so /api/ready is 200 and ready",
+     readyS.status === 200 && readyS.body?.ready === true,
+     `status ${readyS.status} ready ${JSON.stringify(readyS.body?.ready)} reason ${JSON.stringify(readyS.body?.reason ?? null)}`);
+  ok("S the lag the page measured is the lag the double set, so the row above is about 8 and not 0",
+     readyS.body?.node?.nodeHeight - readyS.body?.node?.height === 8,
+     `node ${readyS.body?.node?.nodeHeight} wallet ${readyS.body?.node?.height}`);
+  const addrS = (await post(BASE_S, "/api/account", { kind: "shielded" })).body.account.address;
+  const dripS = await claim(BASE_S, addrS, null);
+  // 200 with a txid here, because the double completes the send inside the request; 202 is the
+  // queued shape a slow wallet produces. Either is served; what must not appear is a 503.
+  ok("S and the drip is served (ok with a txid): the page's LIVE and the route's gate are the same verdict",
+     (dripS.status === 200 || dripS.status === 202) && dripS.body?.ok === true && typeof dripS.body?.txid === "string",
+     `status ${dripS.status} ${JSON.stringify(dripS.body).slice(0, 160)}`);
+  const readyT = await get(BASE_T, "/api/ready");
+  ok("T a wallet 11 behind is over the budget, so /api/ready is 503 and names the lag",
+     readyT.status === 503 && /^wallet re-scanning, 11 blocks behind our node$/.test(readyT.body?.reason ?? ""),
+     `status ${readyT.status} reason ${JSON.stringify(readyT.body?.reason ?? null)}`);
+  const addrT = (await post(BASE_T, "/api/account", { kind: "shielded" })).body.account.address;
+  const dripT = await claim(BASE_T, addrT, null);
+  ok("T and the drip is refused by the wallet-lag gate (503), so a refused page never hides a drip that would have gone",
+     dripT.status === 503 && /catching up with our node/.test(dripT.body?.error ?? ""),
+     `status ${dripT.status} ${JSON.stringify(dripT.body?.error ?? dripT.body).slice(0, 160)}`);
 
   const noPow = await claim(BASE_A, UNIFIED_A, null);
   ok("A claim without pow is 403", noPow.status === 403, `status ${noPow.status}`);
@@ -1468,6 +1520,10 @@ try {
   stop(serverJ);
   stop(walletJ);
   stop(serverR);
+  stop(serverS);
+  stop(serverT);
+  stop(walletS);
+  stop(walletT);
   stop(walletR);
   stop(serverK);
   try { serverL.kill("SIGKILL"); } catch { /* already gone */ }
@@ -1514,9 +1570,10 @@ try {
      `${refusals} refusals, ${unnamed} with gate null, gates seen: ${[...seen.keys()].sort().join(" ")}`);
   // A POSITIVE CONTROL on the reader itself: a run that drove the freshness gate and the send
   // failure must show both, or the row above is counting lines it cannot see.
+  // walletLag is driven by T alone; until T existed no test emitted that gate at all.
   ok("item 3: and the reader saw the gates this suite is known to drive",
-     seen.has("freshness") && seen.has("sendFailed") && seen.has("cooldown"),
-     `freshness=${seen.get("freshness") ?? 0} sendFailed=${seen.get("sendFailed") ?? 0} cooldown=${seen.get("cooldown") ?? 0}`);
+     seen.has("freshness") && seen.has("sendFailed") && seen.has("cooldown") && seen.has("walletLag"),
+     `freshness=${seen.get("freshness") ?? 0} sendFailed=${seen.get("sendFailed") ?? 0} cooldown=${seen.get("cooldown") ?? 0} walletLag=${seen.get("walletLag") ?? 0}`);
 }
 
 console.log(failures === 0 ? "\napi-integration: all green" : `\napi-integration: ${failures} FAILED`);
