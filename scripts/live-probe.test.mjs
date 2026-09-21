@@ -627,8 +627,16 @@ function mainRepo(whenB) {
   const a = g({}, "rev-parse", "HEAD");
   g(at(whenB), "commit", "-q", "--allow-empty", "-m", "b");
   const b = g({}, "rev-parse", "HEAD");
-  for (const sha of [a, b]) assert.match(sha, /^[0-9a-f]{40}$/, "the fixture must hand the probe a real sha");
-  return { a, b, env: { SMOKE_MAIN_REF: "HEAD", GIT_DIR: join(dir, ".git") }, done: () => rmSync(dir, { recursive: true, force: true }) };
+  // A commit that genuinely exists in this repo and is NOT on main: a side branch off `a`.
+  // Different from a sha git has never seen, and the case the owner's question turns on -
+  // a box serving code that was real, was built, and was never merged.
+  g({}, "checkout", "-q", "-b", "side", a);
+  g(at("2020-01-03T00:00:00Z"), "commit", "-q", "--allow-empty", "-m", "c");
+  const c = g({}, "rev-parse", "HEAD");
+  g({}, "checkout", "-q", "-");
+  for (const sha of [a, b, c]) assert.match(sha, /^[0-9a-f]{40}$/, "the fixture must hand the probe a real sha");
+  assert.notEqual(spawnSync("git", ["-C", dir, "merge-base", "--is-ancestor", c, b]).status, 0, "the side commit must not be an ancestor of main, or the row below tests nothing");
+  return { a, b, c, env: { SMOKE_MAIN_REF: "HEAD", GIT_DIR: join(dir, ".git") }, done: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 test("drift: a server that does not send the word is cannot-verify, not a pass on silence and not a fault", async () => {
@@ -695,6 +703,16 @@ test("the box runs main: a STALE ancestor is red - main moved and the deploy did
     const r = await runProbe({ SMOKE_OPS_TOKEN: TOKEN, ...repo.env }, READY, { token: TOKEN, buildCommit: repo.a.slice(0, 7) });
     assert.notEqual(r.code, 0, r.out);
     assert.match(r.out, /FAIL: the box runs main.*has been at .* for \d+ minutes and the box still runs .*: the deploy did not land/);
+  } finally { repo.done(); }
+});
+
+test("the box runs main: a REAL commit that is not on main is red as not main's code - not as unknown, not as late", async () => {
+  const repo = mainRepo(new Date().toISOString());
+  try {
+    const r = await runProbe({ SMOKE_OPS_TOKEN: TOKEN, ...repo.env }, READY, { token: TOKEN, buildCommit: repo.c.slice(0, 7) });
+    assert.notEqual(r.code, 0, r.out);
+    assert.match(r.out, /FAIL: the box runs main.*which is not an ancestor of HEAD: not main's code/);
+    assert.doesNotMatch(r.out, /does not know|did not land/, "a commit git knows must not be reported as a stranger or as a slow deploy");
   } finally { repo.done(); }
 });
 
