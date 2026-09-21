@@ -8,6 +8,7 @@
 import { config, num } from "../config.ts";
 import { referenceTip } from "./externalTip.ts";
 import { mayBuildTransaction, readChainFreshness, type ChainGate } from "./shieldGate.ts";
+import { mayBuildFromWallet, walletLagFreshness } from "./walletLagGate.ts";
 import { tipProgress, type TipSample } from "./tipProgress.ts";
 import { getChainIdentity } from "./chainIdentityOracle.ts";
 import {
@@ -246,15 +247,27 @@ export async function getNodeStatus(purpose: NodeReadPurpose = "claim"): Promise
       recordNodeStatusFailure("http", `status ${res.status} on the ${purpose} path`, Date.now(), undefined, purpose);
       return null;
     }
-    const json = (await res.json()) as { result?: { wallet_tip?: { height?: number }; node_tip?: { height?: number } } };
-    const w = json.result?.wallet_tip?.height ?? null;
-    const n = json.result?.node_tip?.height ?? null;
+    const json = (await res.json()) as { result?: { wallet_tip?: { height?: unknown }; node_tip?: { height?: unknown } } };
+    // A HEIGHT IS A FINITE NUMBER OR IT IS NOTHING. `?? null` let a present-but-not-a-number height
+    // through as itself, and both consumers downstream guard only against null: the lag gate then
+    // computed NaN, which is neither over the budget nor at-or-under it, and fell through to safe -
+    // a string for a height read as LIVE on the page and as a drip served (CTO's red-team of #734,
+    // wallet_tip.height "abc"). Real zallet answers integers, which is why nobody saw it; the gate
+    // is written for the wallet we did not expect, so the parse is where the shape is refused, once,
+    // for everyone who reads these two numbers.
+    const height = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+    const rawW = json.result?.wallet_tip?.height;
+    const rawN = json.result?.node_tip?.height;
+    const w = height(rawW);
+    const n = height(rawN);
     if (w == null || n == null) {
-      // A 200 that does not carry the two heights. Names WHICH is missing, because a wallet that
-      // reports its own tip and not the node's is a different fault from one reporting neither.
+      // A 200 that does not carry the two heights as numbers. Names WHICH and HOW, because a wallet
+      // that reports its own tip and not the node's is a different fault from one reporting neither,
+      // and a height that is present but not a number is a third.
+      const shape = (v: number | null, raw: unknown) => (v != null ? "present" : raw == null ? "missing" : "not a number");
       recordNodeStatusFailure(
         "parse",
-        `wallet_tip ${w == null ? "missing" : "present"}, node_tip ${n == null ? "missing" : "present"} on the ${purpose} path`,
+        `wallet_tip ${shape(w, rawW)}, node_tip ${shape(n, rawN)} on the ${purpose} path`,
         Date.now(),
         undefined,
         purpose,
@@ -289,7 +302,16 @@ export async function getNodeStatus(purpose: NodeReadPurpose = "claim"): Promise
     const frozen = behind || progress.stalled;
 
     const shield = readChainFreshness(n);
-    const walletCaughtUp = n > 0 && w >= n - 5;
+    // ONE PREDICATE, THE DRIP GATE'S OWN. This read `w >= n - 5`: a second threshold beside
+    // walletLagGate's budget of 10, stricter by half, and nothing kept the two in step. In the
+    // 6-to-10 band the page said NOT READY and turned visitors away that /api/faucet would have
+    // served, because the route asks walletLagFreshness and this line did not. Now it asks the
+    // same function with the same two heights, so LIVE means exactly "a drip built now passes
+    // the wallet-lag gate", and moving the budget (FAUCET_WALLET_MAX_LAG_BLOCKS) moves both.
+    // The gate stays in blocks because zallet's expiry is in blocks (EXPIRY_DELTA_BLOCKS); how
+    // fast blocks arrive belongs in choosing that budget, not in a second rule here.
+    // `n > 0` is not a lag rule: a node with no chain is not caught up with anything.
+    const walletCaughtUp = n > 0 && mayBuildFromWallet(walletLagFreshness(w, n));
     return {
       ready: walletCaughtUp && !frozen,
       syncPercent,
