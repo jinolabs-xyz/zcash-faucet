@@ -17,7 +17,7 @@
  * do not claim more than you know.
  */
 import { NextResponse, type NextRequest } from "next/server";
-import { withApi, apiError } from "@/lib/api";
+import { withApi, apiError, notAllowed } from "@/lib/api";
 import { clientIp } from "@/lib/clientIp";
 import { fingerprintIp } from "@/lib/privacy";
 import { recordFeedback, MAX_FEEDBACK_BODY } from "@/lib/db";
@@ -68,3 +68,8 @@ export const POST = withApi("feedback", async (req: NextRequest, api) => {
       return apiError(503, "We could not store the message right now. Try again shortly.", api, "ledger", { kind: "ledger" });
   }
 });
+// Methods this route does not serve: labelled 405s, not the framework's silent one.
+export const GET = notAllowed;
+export const PUT = notAllowed;
+export const PATCH = notAllowed;
+export const DELETE = notAllowed;

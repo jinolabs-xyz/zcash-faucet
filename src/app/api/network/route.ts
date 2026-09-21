@@ -1,7 +1,7 @@
 /** GET /api/network - live testnet chain info via lightwalletd (Network tab). */
 import { NextResponse } from "next/server";
 import { getLightdInfo, getLatestBlock } from "@/lib/zcash/grpc";
-import { withApi } from "@/lib/api";
+import { withApi, notAllowed } from "@/lib/api";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,3 +37,8 @@ export const GET = withApi("network", async (_req, api) => {
     });
   }
 });
+// Methods this route does not serve: labelled 405s, not the framework's silent one.
+export const POST = notAllowed;
+export const PUT = notAllowed;
+export const PATCH = notAllowed;
+export const DELETE = notAllowed;

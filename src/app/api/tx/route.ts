@@ -10,7 +10,7 @@ import { getTxStatus } from "@/lib/zcash/txstatus";
 import { createRateLimiter } from "@/lib/rateLimit";
 import { fingerprintIp } from "@/lib/privacy";
 import { clientIp } from "@/lib/clientIp";
-import { withApi, apiError } from "@/lib/api";
+import { withApi, apiError, notAllowed } from "@/lib/api";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -42,7 +42,7 @@ export const GET = withApi("tx", async (req: NextRequest, api) => {
 
   const txid = req.nextUrl.searchParams.get("txid")?.trim() ?? "";
   if (!/^[0-9a-f]{64}$/i.test(txid)) {
-    return apiError(400, "Not a transaction id. Expected 64 hex characters.", api, "badRequest");
+    return apiError(400, "Not a transaction id. Expected 64 hex characters.", api, "badTxid");
   }
 
   const status = await getTxStatus(txid);
@@ -55,3 +55,8 @@ export const GET = withApi("tx", async (req: NextRequest, api) => {
     height: status.height,
   });
 });
+// Methods this route does not serve: labelled 405s, not the framework's silent one.
+export const POST = notAllowed;
+export const PUT = notAllowed;
+export const PATCH = notAllowed;
+export const DELETE = notAllowed;

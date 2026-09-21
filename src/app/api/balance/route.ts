@@ -15,7 +15,7 @@ import { z } from "zod";
 import { ZATOSHI_PER_TAZ } from "@/lib/config";
 import { validateTestnetAddress } from "@/lib/zcash/address";
 import { getTaddressBalance } from "@/lib/zcash/grpc";
-import { withApi, apiError } from "@/lib/api";
+import { withApi, apiError, notAllowed } from "@/lib/api";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,12 +33,12 @@ export const POST = withApi("balance", async (req: NextRequest, api) => {
   try {
     ({ address } = BodySchema.parse(await req.json().catch(() => ({}))));
   } catch {
-    return apiError(400, "Invalid request.", api, "badRequest");
+    return apiError(400, "Invalid request.", api, "badBody");
   }
   address = address.trim();
   const info = validateTestnetAddress(address);
   if (!info.valid) {
-    return apiError(400, info.reason ?? "Invalid address.", api, "badRequest");
+    return apiError(400, info.reason ?? "Invalid address.", api, "badBody");
   }
 
   if (info.shielded) {
@@ -69,3 +69,7 @@ export const POST = withApi("balance", async (req: NextRequest, api) => {
     return apiError(502, "Balance lookup failed. The chain backend is unreachable right now.", api, "backend");
   }
 });
+// Methods this route does not serve: labelled 405s, not the framework's silent one.
+export const PUT = notAllowed;
+export const PATCH = notAllowed;
+export const DELETE = notAllowed;

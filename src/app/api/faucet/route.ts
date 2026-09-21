@@ -26,7 +26,7 @@ import { readCtazNodeState } from "@/lib/crosslink/read";
 import { reserveClaim, finalizeClaim, challengeAlreadySpent } from "@/lib/db";
 import { fingerprintIp, fingerprintSubnet } from "@/lib/privacy";
 import { clientIp } from "@/lib/clientIp";
-import { withApi, apiError } from "@/lib/api";
+import { withApi, apiError, notAllowed } from "@/lib/api";
 import { freshnessRetrySeconds } from "./retry-hint";
 
 export const runtime = "nodejs"; // better-sqlite3 needs Node, not Edge.
@@ -570,3 +570,8 @@ export const POST = withApi("faucet", async (req: NextRequest, api) => {
     to: { kind: info.kind, shielded: info.shielded },
   });
 });
+// Methods this route does not serve: labelled 405s, not the framework's silent one.
+export const GET = notAllowed;
+export const PUT = notAllowed;
+export const PATCH = notAllowed;
+export const DELETE = notAllowed;
