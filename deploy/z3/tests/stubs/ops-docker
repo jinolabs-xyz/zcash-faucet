@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Stub docker for install-ops: `ps --format ...` prints $STUB_DOCKER_PS (empty = no containers).
+# STUB_DOCKER_PS_FAIL=1 makes it fail, the daemon-down shape.
+set -uo pipefail
+if [ "${1:-}" = "ps" ]; then
+  [ "${STUB_DOCKER_PS_FAIL:-0}" = "1" ] && { echo "Cannot connect to the Docker daemon" >&2; exit 1; }
+  [ -f "${STUB_DOCKER_PS:-/nonexistent}" ] && cat "$STUB_DOCKER_PS"; exit 0
+fi
+echo "stub docker: refused: $*" >&2; exit 64

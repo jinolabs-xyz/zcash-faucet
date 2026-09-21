@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Stub iptables/ip6tables for docker-user-rules.sh. Every call is recorded in $STUB_IPT_LOG
+# (prefixed by the family in $STUB_IPT_FAMILY). Rules live in $STUB_IPT_RULES: `-C` answers
+# 0 only for a rule a previous `-I` wrote, so idempotence is measurable and not assumed.
+# STUB_IPT_FAIL_INSERT=1 makes `-I` fail, for the error path.
+set -uo pipefail
+fam="${STUB_IPT_FAMILY:-v4}"
+printf '%s %s\n' "$fam" "$*" >> "${STUB_IPT_LOG:?}"
+rule="$(printf '%s' "$*" | sed -E 's/^-[CI] //')"
+case "${1:-}" in
+  -N) exit 0 ;;
+  -C) grep -qxF -- "$fam $rule" "${STUB_IPT_RULES:?}" 2>/dev/null ;;
+  -I) [ "${STUB_IPT_FAIL_INSERT:-0}" = "1" ] && exit 1; printf '%s\n' "$fam $rule" >> "${STUB_IPT_RULES:?}" ;;
+  *) echo "stub iptables: refused: $*" >&2; exit 64 ;;
+esac

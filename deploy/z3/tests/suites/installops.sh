@@ -22,6 +22,10 @@ ops_env() {
   # The stub refuses to enable a unit whose file is absent, the way systemd would.
   export STUB_UNIT_DIR="$T/units"
   export OPS_SYSTEMCTL="$SCRATCH/stubs/audit-systemctl"
+  # docker's view of published ports: none by default, so the post-condition's port check is
+  # a clean pass here and the cases that publish one say so themselves.
+  export OPS_DOCKER="$SCRATCH/stubs/ops-docker" STUB_DOCKER_PS="$T/docker-ps"; : > "$STUB_DOCKER_PS"
+  unset STUB_DOCKER_PS_FAIL 2>/dev/null || true
   export STUB_ENABLED="$T/enabled"; : > "$STUB_ENABLED"
   # Records any `systemctl disable` call. App reviewed this PR by SABOTAGING the code and
   # found the suite stayed green: "nothing is ever disabled" was asserted by a heading and
@@ -483,3 +487,30 @@ printf '[Unit]\nDescription=t\n[Timer]\nOnUnitActiveSec=30min\n[Install]\nWanted
 STUB_RESTART_FAIL=faucet-thing.timer bash "$INSTALL_OPS" "$T/src" > "$T/t3.log" 2>&1
 check "exits non-zero" "[ $? -ne 0 ]"
 check "and names the timer still on the old schedule" "grep -q 'faucet-thing.timer changed but restarting it failed; it is still running on the OLD schedule' '$T/t3.log'"
+
+echo "== install-ops: an RPC port published on 0.0.0.0 is NOT AT SPEC, named by container and port"
+# The wallet RPC was published on 0.0.0.0 for a month while every run here said "verified". A wide
+# bind is internet-reachable past ufw whatever the firewall says, and a DOCKER-USER rule closes it
+# only until the next reboot: the binding is the control, and until it is right the box is not
+# at spec, which auto-deploy reads as a failed tick. That is the point.
+ops_env
+printf 'z3-testnet-zallet-1 0.0.0.0:40232->28232/tcp, [::]:40232->28232/tcp\nz3-testnet-zebra-1 127.0.0.1:18232->18232/tcp, 0.0.0.0:18233->18233/tcp, [::]:18233->18233/tcp\n' > "$STUB_DOCKER_PS"
+bash "$INSTALL_OPS" "$T/src" > "$T/exposed.log" 2>&1
+check "exits non-zero" "[ $? -ne 0 ]"
+check "the post-condition fails" "grep -q 'POST-CONDITION FAILED' '$T/exposed.log'"
+check "and names the container and the port, once" \
+  "grep -q 'published on 0.0.0.0 outside the intended set (22 80 443 18233 8233): z3-testnet-zallet-1:40232' '$T/exposed.log' && ! grep -q 'z3-testnet-zebra-1:' '$T/exposed.log'"
+check "and never claims verified" "! grep -q 'verified: every ops script' '$T/exposed.log'"
+
+echo "== install-ops: loopback and intended-public binds are at spec"
+ops_env
+printf 'z3-testnet-zallet-1 127.0.0.1:40232->28232/tcp\nz3-testnet-zebra-1 127.0.0.1:18232->18232/tcp, 0.0.0.0:18233->18233/tcp, [::]:18233->18233/tcp, 127.0.0.1:18080->8080/tcp\nzcash-faucet-caddy-1 0.0.0.0:80->80/tcp, 0.0.0.0:443->443/tcp\n' > "$STUB_DOCKER_PS"
+bash "$INSTALL_OPS" "$T/src" > "$T/bound.log" 2>&1
+check "exits 0" "[ $? -eq 0 ]"
+check "and verifies" "grep -q 'verified: every ops script' '$T/bound.log'"
+
+echo "== install-ops: a docker that cannot list ports is NOT VERIFIED, and not verified is not at spec"
+ops_env
+STUB_DOCKER_PS_FAIL=1 bash "$INSTALL_OPS" "$T/src" > "$T/psfail.log" 2>&1
+check "exits non-zero" "[ $? -ne 0 ]"
+check "and says the ports could not be checked" "grep -q 'published ports could not be checked: not verified is not verified' '$T/psfail.log'"

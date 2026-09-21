@@ -11,6 +11,10 @@ access_env() {
   export ACCESS_SSHD_CONFIG="$T/sshd_config"
   export ACCESS_SSHD="$SCRATCH/stubs/access-sshd" STUB_SSHD_T="$T/sshd_effective"
   export STUB_UFW_APPDIR="$T/ufw-apps"; mkdir -p "$STUB_UFW_APPDIR"
+  # DOCKER-USER as the rules unit leaves it: a DROP per RPC-class port. The empty-chain and
+  # no-chain cases below rewrite this file; every other case inherits a clean chain.
+  export ACCESS_IPTABLES="$SCRATCH/stubs/access-iptables" STUB_DOCKER_USER="$T/docker-user"
+  { echo "-N DOCKER-USER"; for p in 18232 18080 40232 8232 8080 28232; do echo "-A DOCKER-USER -i eth0 -p tcp -m conntrack --ctorigdstport $p -j DROP"; done; } > "$STUB_DOCKER_USER"
   : > "$T/sshd_effective"
   : > "$STUB_LISTEN"; : > "$STUB_UFW_STATUS"; : > "$ACCESS_SSHD_CONFIG"
   export PATH="$BASE_PATH"
@@ -254,3 +258,35 @@ bash "$AUDIT_A" > "$T/wallet.log" 2>&1
 check "exits 1" "[ $? -eq 1 ]"
 check "flags the wallet RPC" "grep -q 'port 40232 is bound on 0.0.0.0' '$T/wallet.log'"
 check "says rebind, because docker bypasses ufw" "grep -q 'docker writes its own iptables chain' '$T/wallet.log'"
+
+echo "== access: an EMPTY DOCKER-USER chain is a finding of its own, naming every unguarded RPC port"
+# The August 2026 rule vanished and nothing said so for a month while the wallet RPC sat published on
+# 0.0.0.0. The chain is docker's one firewall hook; empty means every docker-published port is
+# internet-reachable past ufw, whether or not one happens to be bound wide tonight.
+access_env
+printf -- '-N DOCKER-USER\n' > "$STUB_DOCKER_USER"
+bash "$AUDIT_A" > "$T/du-empty.log" 2>&1
+check "exits 1" "[ $? -eq 1 ]"
+check "names the chain and the ports it does not drop" \
+  "grep -q 'DOCKER-USER carries no DROP for RPC port(s): 18232 18080 40232 8232 8080 28232' '$T/du-empty.log'"
+check "and the fix names the unit that writes them" "grep -q 'fix: systemctl status faucet-docker-user.service' '$T/du-empty.log'"
+
+echo "== access: a chain missing ONE port names that port, not all of them"
+access_env
+grep -v 'ctorigdstport 40232 ' "$STUB_DOCKER_USER" > "$T/du-partial" && mv "$T/du-partial" "$STUB_DOCKER_USER"
+bash "$AUDIT_A" > "$T/du-partial.log" 2>&1
+check "exits 1" "[ $? -eq 1 ]"
+check "names 40232 alone" "grep -q 'no DROP for RPC port(s): 40232 -' '$T/du-partial.log'"
+
+echo "== access: no DOCKER-USER chain at all is a finding, not a skip"
+access_env
+rm -f "$STUB_DOCKER_USER"
+bash "$AUDIT_A" > "$T/du-none.log" 2>&1
+check "exits 1" "[ $? -eq 1 ]"
+check "says the chain does not exist" "grep -q 'the DOCKER-USER chain does not exist' '$T/du-none.log'"
+
+echo "== access: the full chain is ok, and the clean baseline still holds with it"
+access_env
+bash "$AUDIT_A" --verbose > "$T/du-ok.log" 2>&1
+check "exits 0" "[ $? -eq 0 ]"
+check "and says every RPC-class port is dropped" "grep -q 'DOCKER-USER drops every RPC-class port' '$T/du-ok.log'"

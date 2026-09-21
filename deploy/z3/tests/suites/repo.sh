@@ -2254,3 +2254,21 @@ check "and no key the app reads is undeclared:${UNDECLARED_READS:+ $UNDECLARED_R
   "[ -z '$UNDECLARED_READS' ]"
 check "and the wallet-lag ceiling is one of the declared ones, by name" \
   "grep -qE '^FAUCET_WALLET_MAX_LAG_BLOCKS=10$' '$REPO/deploy/z3/faucet.env.example'"
+
+echo "== repo: the RPC ports are closed by three files that have to agree, and they are held to it"
+# The intended-public set is one list in two places (install-ops refuses spec, the access audit
+# finds), the rules script must never name a port from it, and the override generator has to use
+# the tag that REPLACES upstream's port list. Each is a literal a future edit can break quietly.
+OPS_SET="$(sed -nE 's/^OPS_PUBLIC_PORTS="\$\{OPS_PUBLIC_PORTS:-([0-9 ]+)\}".*/\1/p' "$REPO/deploy/z3/install-ops.sh")"
+ACC_SET="$(sed -nE 's/^ACCESS_PUBLIC_PORTS="\$\{ACCESS_PUBLIC_PORTS:-([0-9 ]+)\}".*/\1/p' "$REPO/deploy/z3/audit-access.sh")"
+check "install-ops and the access audit declare the same intended-public set ($OPS_SET)" \
+  "[ -n '$OPS_SET' ] && [ '$OPS_SET' = '$ACC_SET' ]"
+DU_PORTS="$(sed -nE 's/^RPC_PORTS="\$\{FAUCET_RPC_PORTS:-([0-9 ]+)\}".*/\1/p' "$REPO/deploy/z3/docker-user-rules.sh")"
+DU_CLASH=""; for p in $OPS_SET; do case " $DU_PORTS " in *" $p "*) DU_CLASH="$DU_CLASH $p" ;; esac; done
+check "and the rules script drops none of the public set:$DU_CLASH" "[ -n '$DU_PORTS' ] && [ -z '$DU_CLASH' ]"
+check "the override generator uses the tag that REPLACES upstream's ports, not one that merges" \
+  "[ \"\$(grep -vE '^[[:space:]]*#' '$REPO/deploy/deploy.sh' | grep -c 'ports: !override')\" -ge 3 ]"
+check "and deploy.sh refuses a compose that would ignore the tag" \
+  "grep -vE '^[[:space:]]*#' '$REPO/deploy/deploy.sh' | grep -q 'compose_at_least \"\$compose_ver\" \"2.24.0\"'"
+check "the audit's RPC list and the rules script's agree on the six that matter" \
+  "for p in \$(sed -nE 's/^ACCESS_RPC_PORTS=\"\\\$\\{ACCESS_RPC_PORTS:-([0-9 ]+)\\}\".*/\\1/p' '$REPO/deploy/z3/audit-access.sh'); do case ' $DU_PORTS ' in *\" \$p \"*) ;; *) exit 1 ;; esac; done"

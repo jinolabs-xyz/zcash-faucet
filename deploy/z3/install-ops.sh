@@ -43,6 +43,14 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="${OPS_INSTALL_DIR:-/opt/faucet}"
 UNIT_DIR="${OPS_UNIT_DIR:-/etc/systemd/system}"
 SYSTEMCTL="${OPS_SYSTEMCTL:-systemctl}"
+# THE BOX IS NOT AT SPEC WHILE AN RPC PORT IS PUBLISHED ON 0.0.0.0. docker publishes a port by
+# writing its own iptables chain, ahead of ufw, so a wide bind is an internet-reachable service
+# whatever the firewall says; a DOCKER-USER rule closes it only until the next reboot. The
+# wallet RPC sat published on 0.0.0.0 for a month (2026-08-19 to 09-21) while every install-ops
+# run said "verified" and the access audit said the opposite nightly. The intended public set
+# is the same list audit-access.sh carries, and the repo suite holds the two equal.
+OPS_DOCKER="${OPS_DOCKER:-docker}"
+OPS_PUBLIC_PORTS="${OPS_PUBLIC_PORTS:-22 80 443 18233 8233}"
 # Declared with the other configuration rather than beside its first use: the post-condition
 # below also reads it, and under `set -u` a later definition is a fatal unbound variable.
 # That is exactly how my first version of this failed, with the enable step never reached.
@@ -357,11 +365,34 @@ if [ "$DRY" != "1" ]; then
       "$SYSTEMCTL" is-enabled --quiet "$unit" 2>/dev/null || not_enabled="$not_enabled $unit"
     done < "$ENABLED_UNITS_FILE"
   fi
-  if [ -n "$missing" ] || [ -n "$differs" ] || [ -n "$not_enabled" ]; then
+  # Published ports, from docker's own view of them. `0.0.0.0:40232->28232/tcp` and its
+  # `[::]:` twin are the shapes; a `127.0.0.1:` one is the binding we want. Anything wide
+  # whose host port is not in the intended set fails the post-condition by NAME, so the
+  # journal says which container and which port rather than "not at spec".
+  exposed=""; ports_unread=""
+  if command -v "$OPS_DOCKER" >/dev/null 2>&1; then
+    if ! ports_out="$("$OPS_DOCKER" ps --format '{{.Names}} {{.Ports}}' 2>/dev/null)"; then
+      ports_unread="docker ps failed, so published ports could not be checked"
+    else
+      while read -r cname cports; do
+        [ -n "${cname:-}" ] || continue
+        for entry in $(printf '%s' "$cports" | tr ',' ' '); do
+          hp="$(printf '%s' "$entry" | sed -nE 's/^(0\.0\.0\.0|\[::\]|\*):([0-9]+)->.*/\2/p')"
+          [ -n "$hp" ] || continue
+          case " $OPS_PUBLIC_PORTS " in *" $hp "*) ;; *) exposed="$exposed $cname:$hp" ;; esac
+        done
+      done <<< "$ports_out"
+    fi
+  else
+    ports_unread="no $OPS_DOCKER on this host, so published ports could not be checked"
+  fi
+  if [ -n "$missing" ] || [ -n "$differs" ] || [ -n "$not_enabled" ] || [ -n "$exposed" ] || [ -n "$ports_unread" ]; then
     log "POST-CONDITION FAILED: the box does not match the repo after this run."
     [ -n "$missing" ] && log "  never arrived:$missing"
     [ -n "$differs" ] && log "  present but different:$differs"
     [ -n "$not_enabled" ] && log "  declared enabled but is NOT:$not_enabled"
+    [ -n "$exposed" ] && log "  published on 0.0.0.0 outside the intended set ($OPS_PUBLIC_PORTS):$exposed - rebind to 127.0.0.1 (deploy.sh writes the override; the recreate is the owner's)"
+    [ -n "$ports_unread" ] && log "  $ports_unread: not verified is not verified"
     log "Not reporting success for a box that is not at spec. Nothing above errored,"
     log "which is exactly why this check exists."
     exit 1

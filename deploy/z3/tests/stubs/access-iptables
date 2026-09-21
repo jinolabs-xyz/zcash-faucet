@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Stub iptables for the access audit: `-S DOCKER-USER` prints $STUB_DOCKER_USER's lines
+# (a missing file is a missing chain, exit 1, the way iptables answers for one that does not
+# exist). Anything else is refused: the audit only reads.
+set -uo pipefail
+if [ "${1:-}" = "-S" ] && [ "${2:-}" = "DOCKER-USER" ]; then
+  [ -f "${STUB_DOCKER_USER:-/nonexistent}" ] || { echo "iptables: No chain/target/match by that name." >&2; exit 1; }
+  cat "$STUB_DOCKER_USER"; exit 0
+fi
+echo "stub iptables: refused: $*" >&2; exit 64

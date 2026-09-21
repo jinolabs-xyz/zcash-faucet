@@ -708,3 +708,53 @@ STUB_ZALLET_ACCEPT_ANY=1 run_deploy > "$T/post-anypw.log" 2>&1
 check "a wallet accepting a wrong password FAILS the deploy" "[ $? -ne 0 ]"
 check "and says the probe proves nothing about authentication" \
   "grep -q 'accepted a WRONG password' '$T/post-anypw.log'"
+
+echo "== deploy: the generated override BINDS every RPC-class port to loopback, and leaves P2P public"
+# 2026-09-21: zebra's RPC, its health port and the WALLET RPC were published on 0.0.0.0 for a month.
+# The 127.0.0.1 prefix lived only as shell env on this script's own compose call, so the Aug 30
+# hand-run compose in the clone published wide open. The override is a file the stack reads on
+# EVERY invocation; `!override` makes compose replace the upstream list instead of merging into it.
+# Read from both sides: every entry under a ports: block is either 127.0.0.1-bound or the P2P line,
+# and a copy of the file with ONE 0.0.0.0 entry fails the same reader (the control below).
+OVR="$D/z3-stack/docker-compose.override.yml"
+# Every `- "..."` port entry that is neither loopback-bound nor the public P2P line.
+wide_entries() { grep -E '^      - "' "$1" | grep -vE '^      - "127\.0\.0\.1:' | grep -vE '^      - "18233:18233"$|^      - "8233:8233"$' || true; }
+deploy_fresh_env
+run_deploy > "$T/bind.log" 2>&1
+check "a deploy with no miner address and no pin still writes the override" "[ -f '$OVR' ]"
+check "it carries a ports block that REPLACES upstream's for zebra, zallet and zaino" \
+  "[ \"\$(grep -c '^    ports: !override$' '$OVR')\" = 3 ]"
+check "zebra's RPC and health ports are loopback, the P2P port is not" \
+  "grep -q '^      - \"127.0.0.1:18232:18232\"$' '$OVR' && grep -q '^      - \"127.0.0.1:18080:8080\"$' '$OVR' && grep -q '^      - \"18233:18233\"$' '$OVR'"
+check "the wallet RPC is loopback" "grep -q '^      - \"127.0.0.1:40232:28232\"$' '$OVR'"
+check "zaino's two are loopback" "grep -q '^      - \"127.0.0.1:18137:8137\"$' '$OVR' && grep -q '^      - \"127.0.0.1:18237:8237\"$' '$OVR'"
+check "and NO port entry in the file is anything else" "[ -z \"\$(wide_entries '$OVR')\" ]"
+check "and the reader is not vacuous: it counted the entries it judged" "[ \"\$(grep -c '^      - \"' '$OVR')\" = 6 ]"
+# THE CONTROL: the same reader against a copy carrying one wide entry must fail, or the row above
+# proves only that the reader is quiet.
+sed 's/^      - "127.0.0.1:40232:28232"$/      - "0.0.0.0:40232:28232"/' "$OVR" > "$T/override-wide.yml"
+check "control: a copy with the wallet RPC on 0.0.0.0 is caught by the same reader, by line" \
+  "[ \"\$(wide_entries '$T/override-wide.yml')\" = '      - \"0.0.0.0:40232:28232\"' ]"
+sed 's/^      - "127.0.0.1:40232:28232"$/      - "40232:28232"/' "$OVR" > "$T/override-bare.yml"
+check "control: a bare host port (docker's 0.0.0.0) is caught too" \
+  "[ \"\$(wide_entries '$T/override-bare.yml')\" = '      - \"40232:28232\"' ]"
+
+echo "== deploy: with a miner address AND pins the same override carries all three, in one file"
+deploy_fresh_env
+printf 'Z3_ZEBRA_IMAGE=zfnd/zebra:6.3.0\n' > "$D/z3/stack-versions.env"
+FAUCET_MINER_ADDRESS="$GOOD_ADDR" run_deploy > "$T/bind2.log" 2>&1
+check "the pin, the address and the bindings share the override" \
+  "grep -q 'image: \"zfnd/zebra:6.3.0\"' '$OVR' && grep -q 'ZEBRA_MINING__MINER_ADDRESS: \"$GOOD_ADDR\"' '$OVR' && [ -z \"\$(wide_entries '$OVR')\" ] && [ \"\$(grep -c '^    ports: !override$' '$OVR')\" = 3 ]"
+
+echo "== deploy: a compose older than 2.24 is REFUSED, because it would merge the port lists and leave 0.0.0.0"
+deploy_fresh_env
+STUB_COMPOSE_VERSION=2.20.3 run_deploy > "$T/oldcompose.log" 2>&1
+check "exits non-zero" "[ $? -ne 0 ]"
+check "and says why, with the version it found" "grep -q 'Need Docker Compose 2.24 or newer for .ports: !override. (found 2.20.3)' '$T/oldcompose.log'"
+check "and writes NO override for a compose that would misread it" "[ ! -f '$OVR' ]"
+deploy_fresh_env
+STUB_COMPOSE_VERSION=2.24.0 run_deploy > "$T/edgecompose.log" 2>&1
+check "2.24.0 itself is accepted" "[ $? -eq 0 ] && [ -f '$OVR' ]"
+deploy_fresh_env
+STUB_COMPOSE_VERSION="not-a-version" run_deploy > "$T/badcompose.log" 2>&1
+check "an unreadable version is refused rather than guessed" "[ $? -ne 0 ] && grep -q 'Cannot read the Docker Compose version' '$T/badcompose.log'"

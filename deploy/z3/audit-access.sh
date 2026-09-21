@@ -33,6 +33,13 @@ ACCESS_SSHD_CONFIG="${ACCESS_SSHD_CONFIG:-/etc/ssh/sshd_config}"
 ACCESS_SSHD="${ACCESS_SSHD:-sshd}"
 ACCESS_SS="${ACCESS_SS:-ss}"
 ACCESS_UFW="${ACCESS_UFW:-ufw}"
+# The DOCKER-USER chain, docker's one firewall hook. faucet-docker-user.service keeps a DROP
+# there for every RPC-class port; the August 2026 hand-run rule vanished and nothing said so
+# for a month. An empty chain is a finding of its own now, whether or not a port happens to
+# be bound wide today - the rule is the thing that has to be there BEFORE the next hand-run
+# compose publishes one.
+ACCESS_IPTABLES="${ACCESS_IPTABLES:-iptables}"
+ACCESS_RPC_PORTS="${ACCESS_RPC_PORTS:-18232 18080 40232 8232 8080 28232}"
 VERBOSE=0
 [ "${1:-}" = "--verbose" ] && VERBOSE=1
 
@@ -85,6 +92,28 @@ PROFILES
 }
 
 say "access audit for $(hostname 2>/dev/null || echo this box)"
+say ""
+
+say "DOCKER-USER: the one chain docker honours"
+if command -v "$ACCESS_IPTABLES" >/dev/null 2>&1; then
+  if chain="$("$ACCESS_IPTABLES" -S DOCKER-USER 2>/dev/null)"; then
+    unguarded=""
+    for p in $ACCESS_RPC_PORTS; do
+      printf '%s\n' "$chain" | grep -qE -- "--ctorigdstport $p( |$).*-j DROP" || unguarded="$unguarded $p"
+    done
+    if [ -n "$unguarded" ]; then
+      found "DOCKER-USER carries no DROP for RPC port(s):$unguarded - a docker-published port there is internet-reachable past ufw" \
+        "systemctl status faucet-docker-user.service   # the unit that writes them; enabled-units declares it"
+    else
+      ok "DOCKER-USER drops every RPC-class port ($ACCESS_RPC_PORTS)"
+    fi
+  else
+    found "the DOCKER-USER chain does not exist, so docker-published ports have no firewall at all" \
+      "systemctl start faucet-docker-user.service"
+  fi
+else
+  skip "DOCKER-USER: no $ACCESS_IPTABLES on this host"
+fi
 say ""
 
 say "listening sockets reachable from off-box"
