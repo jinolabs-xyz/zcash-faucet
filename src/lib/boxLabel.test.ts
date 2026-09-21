@@ -189,3 +189,10 @@ test("undeclared enabled units are a fact, not a fault: a drifted box is still o
   assert.equal(boxIsBad(s), false);
   assert.equal(publicBox(s).state, "ok");
 });
+
+test("the public box carries the drift audit's one word, and only the word", () => {
+  const s = classifyIntegrity(null, 0);
+  const b = publicBox(s);
+  assert.equal(b.drift, "unknown");
+  assert.deepEqual(Object.keys(b).sort(), ["drift", "minerUnit", "state"], "no count, age or sha reaches the public shape");
+});

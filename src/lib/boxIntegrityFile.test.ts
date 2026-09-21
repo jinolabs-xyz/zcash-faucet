@@ -55,6 +55,7 @@ const WRITER_FIELDS = {
   watchdogRestartsDelta: 0,
   at: 1_700_000_000_000,
   readable: true,
+  drift: { at: 1_700_000_000_000, repoSha: "0123456789abcdef0123456789abcdef01234567", config: { rc: 0, findings: 0, unverified: 0 }, access: { rc: 0, findings: 0, unverified: 0 } },
 };
 
 test("THE READER LOSES NOTHING: every field the writer emits arrives", () => {
@@ -156,4 +157,25 @@ test("alertBridge arrives as the box's word, and an older report reads null, nev
   void _a;
   write(older);
   assert.equal(readBoxIntegrity()?.alertBridge, null);
+});
+
+// ---- the drift field's three shapes on the wire ---------------------------------------------
+test("drift: absent from an older report reads undefined, null reads null, and a malformed object reads null - never a verdict with a zero in it", () => {
+  const { drift: _d, ...older } = WRITER_FIELDS;
+  write(older);
+  assert.equal(readBoxIntegrity()?.drift, undefined, "a report that predates the field");
+  write({ ...WRITER_FIELDS, drift: null });
+  assert.equal(readBoxIntegrity()?.drift, null, "the box published no summary");
+  write({ ...WRITER_FIELDS, drift: { at: 1, repoSha: "x", config: { rc: 0, findings: "0", unverified: 0 }, access: { rc: 0, findings: 0, unverified: 0 } } });
+  assert.equal(readBoxIntegrity()?.drift, null, "a count that is not a number voids the whole object");
+  write({ ...WRITER_FIELDS, drift: { at: 1, config: { rc: 0, findings: 0, unverified: 0 } } });
+  assert.equal(readBoxIntegrity()?.drift, null, "a missing audit voids it too");
+});
+
+test("drift: a well-formed object arrives whole, and a repoSha that is not 40 hex reads null rather than a wrong sha", () => {
+  write(WRITER_FIELDS);
+  assert.deepEqual(readBoxIntegrity()?.drift, WRITER_FIELDS.drift);
+  write({ ...WRITER_FIELDS, drift: { ...WRITER_FIELDS.drift, repoSha: "" } });
+  assert.equal(readBoxIntegrity()?.drift?.repoSha, null, "drift-report writes an empty sha when git could not answer");
+  assert.equal(readBoxIntegrity()?.drift?.at, WRITER_FIELDS.drift.at);
 });
