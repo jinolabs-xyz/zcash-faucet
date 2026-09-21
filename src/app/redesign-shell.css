@@ -382,3 +382,37 @@ html :focus-visible{outline-color:var(--accent-text)}
  * that because the document is not what scrolls; the honest fix is to stop being fixed. In the
  * flow it sits after the footer, scrolls with the page, and can cover nothing. */
 @media (max-width:56rem){.fb{position:static;max-width:100%;margin-top:calc(1.2*var(--u))}}
+
+/* ===== THE GRANT BANNER (owner ask 2026-09-21T12:04Z, up for the vote's eight days) ==============
+ *
+ * NOT IN THE SPEC, and declared in departures.json as such. A band across the top of every page's
+ * content, directly below the masthead, in the CTA's own gradient and text colour so it reads as
+ * the site's one accent and not a foreign element. Built from the owner's reference (a Tailwind +
+ * motion sticky banner) with ours: same traits, no second styling system. In flow, not sticky -
+ * the page is one screen on desktop by rule and a sticky band on a phone would eat the viewport.
+ *
+ * HEIGHT IS THE BUDGET. Everything under it moves down by exactly this band, and fit-check's
+ * one-screen rule at every planned size decides how tall it may be: the band gets shorter, the
+ * rule does not get looser. The dismiss X keeps the 44 px tap floor on its own, so the band is
+ * never shorter than that plus its hairlines.
+ *
+ * DIRECTLY BELOW THE NAV, which `.comp`'s column gap (2.6u, :52) would otherwise deny it: as a
+ * flex child the band would get that gap above AND below, 34 px of air between the masthead and
+ * a band that is meant to touch it. The negative top margin is exactly that gap, so the band
+ * sits flush under the masthead and the gap below it is the one the hero already had. Held by a
+ * row: the band's top equals the masthead's bottom.
+ *
+ * DARK TEXT, NOT THE CTA'S WHITE, and a literal rather than --ink. The reference has white on the
+ * gradient; measured, white reads 2.08:1 at the gradient's light end and 2.85:1 at its dark end,
+ * under the 4.5:1 body-text floor at this size (the token's own comment already says "set to
+ * var(--ink) for strict AA"). #282828 - paper's ink - reads 5.17 to 7.08:1 across the gradient.
+ * A literal because the gradient does not change with the theme and --ink does: in ink it is
+ * near-white and would put the 2:1 back. The same colour on the link and the X. */
+.stage .grant{display:flex;align-items:center;gap:calc(1*var(--u));width:100%;min-height:calc(3.4*var(--u));margin-top:calc(-2.6*var(--u));padding:calc(.35*var(--u)) calc(.4*var(--u)) calc(.35*var(--u)) calc(1.1*var(--u));background:var(--cta);color:#282828;font-size:calc(.9*var(--u));line-height:1.4;animation:grant-in .3s var(--ease-place) both}
+.stage .grant p{margin:0;flex:1 1 auto}
+.stage .grant a{color:#282828;font-weight:600;text-decoration:underline;text-decoration-thickness:from-font;text-underline-offset:.12em;white-space:nowrap}
+.stage .grant a:hover{text-decoration-thickness:2px}
+.stage .grant-x{flex:none;display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;padding:0;border:0;border-radius:calc(.5*var(--u));background:none;color:#282828;cursor:pointer}
+.stage .grant-x:hover{background:rgb(255 255 255 / 28%)}
+.stage .grant-x:focus-visible{outline:2px solid #282828;outline-offset:2px}
+@keyframes grant-in{from{transform:translateY(-100%);opacity:0}to{transform:none;opacity:1}}

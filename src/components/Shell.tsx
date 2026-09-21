@@ -29,6 +29,7 @@
  * sets that a transcribed rule never names (LESSONS L20). These sheets must land after it.
  */
 import "@/app/redesign-tokens.css";
+import { GrantBanner } from "./GrantBanner";
 import "@/app/redesign-shell.css";
 import "@/app/redesign-hero.css";
 import "@/app/redesign-views.css";
@@ -261,6 +262,9 @@ export function Shell({
               </button>
             </div>
           </header>
+
+          {/* Owner ask 2026-09-21T12:04Z: the grant vote, above every page's content, in flow. */}
+          <GrantBanner />
 
           {children}
 

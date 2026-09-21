@@ -3628,6 +3628,68 @@ async function checkTabAffordanceAndLimits(browser, base) {
 // behind a null, so a page with a healthy backend renders none of them and a check that only
 // loaded the page would go green against all five. So the status is served back with the fields
 // nulled and the placeholders forced onto the screen before anything is asserted.
+// ===== THE GRANT BANNER (owner ask 2026-09-21T12:04Z), on every page the shell owns ============
+// Eight days of a band under the masthead asking for a vote. The things a visitor can be
+// failed by: the wrong link, a page without it, copy that breaks the site's rules, a band that
+// floats under the nav instead of touching it, a dismiss that remembers (a returning visitor
+// should see it again). The href is the forum thread of the proposal itself, held here as the
+// literal so a typo in the component is red on every page.
+const GRANT_URL = "https://forum.zcashcommunity.com/t/retroactive-grant-application-self-sovereign-zcash-testnet-faucet/57002";
+async function checkGrantBanner(browser, base) {
+  const pages = ["/", "/terms", "/donate", "/fund", "/limits"];
+  for (const theme of ["paper", "ink"]) {
+    const ctx = await browser.newContext({ viewport: DESKTOP });
+    const page = await ctx.newPage();
+    for (const path of pages) {
+      await page.goto(base + path, { waitUntil: "networkidle" });
+      await page.evaluate((t) => { try { localStorage.setItem("zfaucet_theme", t); } catch {} document.documentElement.dataset.theme = t; }, theme);
+      await page.waitForTimeout(400);
+      const r = await page.evaluate(() => {
+        const g = document.querySelector("[data-testid=grant-banner]");
+        if (!g) return { present: false };
+        const a = g.querySelector("[data-testid=grant-link]");
+        const h = document.querySelector(".hdr"); const comp = document.querySelector(".comp");
+        const gr = g.getBoundingClientRect(); const cs = getComputedStyle(g);
+        const pEl = g.querySelector("p");
+        return {
+          present: true, text: (g.textContent || "").replace(/\s+/g, " ").trim(),
+          href: a ? a.getAttribute("href") : null, target: a ? a.getAttribute("target") : null, rel: a ? a.getAttribute("rel") : null,
+          top: Math.round(gr.top), hdrBottom: h ? Math.round(h.getBoundingClientRect().bottom) : -1,
+          width: Math.round(gr.width), compWidth: comp ? Math.round(comp.getBoundingClientRect().width) : -1,
+          color: cs.color, lines: pEl ? Math.round(pEl.getBoundingClientRect().height / parseFloat(getComputedStyle(pEl).lineHeight)) : 0,
+          xBox: (() => { const x = g.querySelector("[data-testid=grant-dismiss]"); if (!x) return null; const b = x.getBoundingClientRect(); return [Math.round(b.width), Math.round(b.height)]; })(),
+        };
+      });
+      const tag = `grant banner ${theme} ${path}`;
+      ok(`${tag}: renders, and its link is the proposal's own forum thread, opened in a new tab`,
+        r.present && r.href === GRANT_URL && r.target === "_blank" && /noreferrer/.test(r.rel || ""),
+        r.present ? `href ${r.href} target ${r.target} rel ${r.rel}` : "no banner on this page");
+      if (!r.present) continue;
+      // The site's copy rules, on the words the visitor reads: no em dash, no semicolon, no prose
+      // colon, no pool name ("shielded" is the word). A false positive here is a real one.
+      const bad = [/\u2014/.test(r.text) && "em dash", /;/.test(r.text) && "semicolon", /:\s/.test(r.text) && "prose colon", /\b(orchard|sapling|ironwood|sprout)\b/i.test(r.text) && "a pool name"].filter(Boolean);
+      ok(`${tag}: the copy keeps the site's rules`, bad.length === 0, bad.join(", ") || `"${r.text.slice(0, 70)}…"`);
+      ok(`${tag}: sits directly below the masthead at the content's full width`,
+        r.top === r.hdrBottom && Math.abs(r.width - r.compWidth) <= 1,
+        `top ${r.top} vs masthead bottom ${r.hdrBottom}; ${r.width}px of ${r.compWidth}px`);
+      // Dark text on the gradient in BOTH themes: white read 2.08:1 at the gradient's light end.
+      ok(`${tag}: dark text on the gradient, the theme does not flip it`, r.color === "rgb(40, 40, 40)", r.color);
+      ok(`${tag}: one line at desktop and a 44px dismiss`, r.lines === 1 && !!r.xBox && r.xBox[0] >= 44 && r.xBox[1] >= 44, `${r.lines} line(s), X ${r.xBox ? r.xBox.join("x") : "missing"}`);
+    }
+    // Dismiss lasts until the next page load and no longer: useState, no storage.
+    await page.goto(base + "/", { waitUntil: "networkidle" });
+    await page.getByTestId("grant-dismiss").click();
+    await page.waitForTimeout(300);
+    const gone = (await page.locator("[data-testid=grant-banner]").count()) === 0;
+    await page.reload({ waitUntil: "networkidle" });
+    const back = (await page.locator("[data-testid=grant-banner]").count()) === 1;
+    const stored = await page.evaluate(() => Object.keys(localStorage).concat(Object.keys(sessionStorage)).filter((k) => /grant|banner|dismiss/i.test(k)));
+    ok(`grant banner ${theme}: dismiss hides it for this page load only, and remembers nothing`, gone && back && stored.length === 0,
+      `hidden ${gone}, back after reload ${back}, storage keys ${JSON.stringify(stored)}`);
+    await ctx.close();
+  }
+}
+
 async function checkNoEmDashReachesTheReader(browser, base) {
   const EM = "\u2014";
   const base0 = await (await fetch(`${base}/api/status`)).json();
@@ -4964,6 +5026,7 @@ try {
   await checkTabAffordanceAndLimits(browser, BASE);
   await checkFooterHeldAgainstGrowth(browser, BASE);
   await checkNoEmDashReachesTheReader(browser, BASE);
+  await checkGrantBanner(browser, BASE);
 
   await checkDripsTooltip(browser, BASE);
   await checkSilentRetry(browser, BASE);
