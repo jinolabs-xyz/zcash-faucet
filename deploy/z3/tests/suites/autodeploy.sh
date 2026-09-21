@@ -212,6 +212,19 @@ check "and the installer ran" "[ -s '$INSTALLOPS_LOG' ]"
 check "and it did NOT rebuild the app" "[ ! -s '$REDEPLOY_LOG' ]"
 check "and the log states ops=1 app=0" "grep -q 'app=0 ops=1' '$T/ops.log'"
 
+echo "== auto-deploy: A COMMIT THAT ONLY DECLARES A UNIT IN enabled-units INSTALLS OPS"
+# enabled-units is the file install-ops enforces. The filter matched scripts and unit files
+# and not the declaration, so a PR that only added a timer to the list would land on the box,
+# install nothing, and leave the timer disabled until an unrelated .sh changed - the
+# feedback-drain silence, one layer over.
+ad_env
+ad_advance deploy/z3/enabled-units
+bash "$AD" > "$T/decl.log" 2>&1
+check "a declaration-only commit exits 0" "[ $? -eq 0 ]"
+check "and the installer ran, so the declaration is enforced the tick it lands" "[ -s '$INSTALLOPS_LOG' ]"
+check "and it did NOT rebuild the app" "[ ! -s '$REDEPLOY_LOG' ]"
+check "and the log states ops=1 app=0" "grep -q 'app=0 ops=1' '$T/decl.log'"
+
 echo "== auto-deploy: THE INSTALLED INSTALLER IS GIVEN THE REPO AS ITS SOURCE"
 # This is the #290 regression guard and the reason 19 of 25 files were never installed.
 # Run with no argument, the installed copy took its own directory as the source, globbed

@@ -104,6 +104,14 @@ ctaz-status.timer
 # is the case where the decision to serve is made and the channel is not there.
 ctaz-rpc.socket
 
+# Feedback delivery. The app writes a row and answers "queued for the operator"; this timer is
+# the only thing that ever reads the row back out and hands it to alert.sh. Its unit files
+# were installed on 2026-09-18 and nothing enabled them, so the owner's own messages sat
+# queued for three days with the page's sentence true the whole time - the failure this
+# file exists for, verbatim, three weeks after it was written down. No money path: it
+# reads a table and passes text to alert.sh, which owns the destination.
+faucet-feedback-drain.timer
+
 # DELIBERATELY ABSENT, and each for its own reason:
 #
 #   zcash-testnet-miner.service  Mining is always-on by the owner's decision, but it is

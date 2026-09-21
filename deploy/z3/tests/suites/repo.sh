@@ -2130,3 +2130,27 @@ done
 check "and no required job is conditional, because a SKIPPED job reports nothing and strands the queue" \
   "[ -z '$MQ_COND' ]"
 
+
+echo "== repo: every timer and socket the repo ships is declared in enabled-units, or deliberately absent by name"
+# faucet-feedback-drain.timer shipped on 2026-09-18 without a line in enabled-units. Nothing
+# was wrong with the unit, the script, or the install: the box did exactly what the repo said,
+# which was nothing, and the owner's messages sat queued for three days. This is the row that
+# goes red on that PR. A timer or socket is a unit nothing else starts, so "shipped and not
+# declared" has one meaning: it will never run. A service can be behind a timer or a template
+# and is judged by the enablement rule in the file, not here.
+UNDECLARED_ARMING=""
+ENABLED_UNITS_DECL="$(sed 's/#.*//; s/[[:space:]]//g' "$REPO/deploy/z3/enabled-units")"
+ABSENT_BLOCK="$(awk '/^# DELIBERATELY ABSENT/{f=1} f' "$REPO/deploy/z3/enabled-units")"
+for f in "$REPO"/deploy/z3/*.timer "$REPO"/deploy/z3/*.socket; do
+  [ -e "$f" ] || continue
+  u="$(basename "$f")"
+  printf '%s\n' "$ENABLED_UNITS_DECL" | grep -qxF -- "$u" && continue
+  printf '%s\n' "$ABSENT_BLOCK" | grep -qF -- "$u" && continue
+  UNDECLARED_ARMING="$UNDECLARED_ARMING $u"
+done
+check "the declaration was actually read, so an empty list cannot pass this row" \
+  "[ \"\$(printf '%s\n' \"\$ENABLED_UNITS_DECL\" | grep -c '\.timer$')\" -ge 5 ]"
+check "no shipped timer or socket is missing from enabled-units without being named as deliberately absent:$UNDECLARED_ARMING" \
+  "[ -z '$UNDECLARED_ARMING' ]"
+check "and the feedback drain timer is one of the declared ones, by name" \
+  "printf '%s\n' '$ENABLED_UNITS_DECL' | grep -qxF faucet-feedback-drain.timer"

@@ -19,6 +19,10 @@ drift_env() {
   printf '[Service]\nExecStart=%s/thing.sh\n' "$T/install" > "$T/repo/deploy/z3/faucet-thing.service"
   printf '[Timer]\nOnCalendar=hourly\n' > "$T/repo/deploy/z3/faucet-thing.timer"
   printf '#!/usr/bin/env bash\necho thing\n' > "$T/repo/deploy/z3/thing.sh"
+  # The repo's declaration of what must be enabled: the TIMER, never the oneshot behind it.
+  # The audit judges enablement against this file and not against is-enabled alone, because
+  # a timer-driven service with an [Install] section reads "disabled" on a correct box.
+  printf '# the timer arms the service\nfaucet-thing.timer\n' > "$T/repo/deploy/z3/enabled-units"
   # The env-completeness half needs src/ and a declaring env file, or the fixture
   # does not model its inputs at all. It did not, so every clean-box case hit the
   # "no src, cannot list what the app reads" path, which is correctly an UNVERIFIED
@@ -84,7 +88,10 @@ STUB
 make_clean_box() {
   cp "$T/repo/deploy/z3/faucet-thing.service" "$T/repo/deploy/z3/faucet-thing.timer" "$T/units/"
   cp "$T/repo/deploy/z3/thing.sh" "$T/install/"
-  printf 'faucet-thing.service\nfaucet-thing.timer\n' > "$STUB_ENABLED"
+  # Only the timer is enabled, which is what a real box looks like: the service behind it
+  # answers is-enabled with "disabled" and that is correct. The old fixture enabled both,
+  # modelling a box that never existed, which is how the six false reds stayed green here.
+  printf 'faucet-thing.timer\n' > "$STUB_ENABLED"
 }
 # Ships and installs a watchdog unit, enabled and matching the repo, so the ONLY thing left to
 # decide is whether it is running. Reuses thing.sh so no file or ExecStart check changes.
@@ -92,6 +99,7 @@ ship_watchdog() {
   printf '[Service]\nExecStart=%s/thing.sh\n' "$T/install" > "$T/repo/deploy/z3/faucet-watchdog.service"
   cp "$T/repo/deploy/z3/faucet-watchdog.service" "$T/units/"
   printf 'faucet-watchdog.service\n' >> "$STUB_ENABLED"
+  printf 'faucet-watchdog.service\n' >> "$T/repo/deploy/z3/enabled-units"
 }
 
 echo "== drift: a box matching the repo reports no drift and exits 0"
@@ -179,11 +187,41 @@ bash "$AUDIT" > "$T/missing.log" 2>&1
 check "exits 1" "[ $? -eq 1 ]"
 check "names the missing unit" "grep -q 'faucet-thing.timer is not installed' '$T/missing.log'"
 
-echo "== drift: an installed-but-disabled unit is drift (it dies at reboot)"
-drift_env; make_clean_box; printf 'faucet-thing.service\n' > "$STUB_ENABLED"
+echo "== drift: a DECLARED unit that is installed but disabled is drift (it dies at reboot)"
+# The feedback-drain shape: unit files on disk since 2026-09-18, timer never enabled, the
+# drainer never ran once. enabled-units says the timer must be enabled; the box disagrees.
+drift_env; make_clean_box; : > "$STUB_ENABLED"
 bash "$AUDIT" > "$T/disabled.log" 2>&1
 check "exits 1" "[ $? -eq 1 ]"
 check "says it will not survive a reboot" "grep -q 'NOT enabled' '$T/disabled.log'"
+check "and says the repo DECLARED it, so the reader knows this is a decision the box is not honouring" \
+  "grep -q 'faucet-thing.timer is DECLARED in enabled-units but NOT enabled' '$T/disabled.log'"
+check "and does NOT also call the timer-driven service disabled, which would bury the line that matters" \
+  "! grep -q 'faucet-thing.service is DECLARED' '$T/disabled.log' && [ \"\$(grep -c 'NOT enabled' '$T/disabled.log')\" = 1 ]"
+
+echo "== drift: a timer-driven service the repo leaves UNDECLARED reads disabled and is NOT drift"
+# The six false reds. faucet-backup.service, faucet-metrics.service and four more carry an
+# [Install] section and sit behind a timer; is-enabled says "disabled" on every correct box.
+# The old loop called each one drift every night, so the audit was always red and the page
+# was always the same sentence - and the one true line, when it came, changed nothing.
+drift_env; make_clean_box
+bash "$AUDIT" --verbose > "$T/undeclared.log" 2>&1
+check "exits 0" "[ $? -eq 0 ]"
+check "the service is not enabled in the fixture, so the only way this is green is the declaration" \
+  "! grep -qx 'faucet-thing.service' '$STUB_ENABLED'"
+check "and the audit says it left the service alone, by name" \
+  "grep -q 'faucet-thing.service is not declared in enabled-units, left as the operator has it' '$T/undeclared.log'"
+check "and prints no DRIFT line at all" "! grep -q 'DRIFT' '$T/undeclared.log'"
+
+echo "== drift: with no enabled-units in the overlay, enablement is NOT VERIFIED rather than clean"
+# A list that is not there is not an empty list: judging against nothing would report every
+# box clean, which is the silence this whole block exists to end.
+drift_env; make_clean_box; : > "$STUB_ENABLED"; rm -f "$T/repo/deploy/z3/enabled-units"
+bash "$AUDIT" > "$T/nodecl.log" 2>&1
+check "exits 2, not 0" "[ $? -eq 2 ]"
+check "and says which check was skipped" "grep -q 'which units must be ENABLED' '$T/nodecl.log'"
+check "and never claims the box matches the repo" "! grep -q 'no drift: this box matches the repo' '$T/nodecl.log'"
+check "and does not judge a unit against a list it does not have" "! grep -q 'NOT enabled' '$T/nodecl.log'"
 
 echo "== drift: a unit whose content diverged is drift"
 drift_env; make_clean_box; echo "# edited by hand" >> "$T/units/faucet-thing.service"
@@ -321,9 +359,16 @@ check "there is no --apply branch" "! grep -qE -- '[-][-]apply[)\"]' '$REPO/depl
 echo "== drift: every finding carries a paste-able fix command"
 drift_env; make_clean_box; rm -f "$T/units/faucet-thing.timer"
 bash "$AUDIT" > "$T/fix1.log" 2>&1
-check "missing unit prints an install command" "grep -A1 'faucet-thing.timer is not installed' '$T/fix1.log' | grep -q 'fix: cp .* && systemctl daemon-reload && systemctl enable --now faucet-thing.timer'"
+check "missing DECLARED unit prints an install-and-enable command" "grep -A1 'faucet-thing.timer is not installed' '$T/fix1.log' | grep -q 'fix: cp .* && systemctl daemon-reload && systemctl enable --now faucet-thing.timer'"
 
-drift_env; make_clean_box; printf 'faucet-thing.service\n' > "$STUB_ENABLED"
+# A missing timer-driven service is installed, not enabled: telling the operator to enable a
+# oneshot behind a timer starts it at boot on its own, which is a second bug in a fix line.
+drift_env; make_clean_box; rm -f "$T/units/faucet-thing.service"
+bash "$AUDIT" > "$T/fix1b.log" 2>&1
+check "missing UNDECLARED unit prints an install command that does NOT enable it" \
+  "grep -A1 'faucet-thing.service is not installed' '$T/fix1b.log' | grep -q 'fix: cp .* && systemctl daemon-reload$'"
+
+drift_env; make_clean_box; : > "$STUB_ENABLED"
 bash "$AUDIT" > "$T/fix2.log" 2>&1
 check "disabled unit prints the enable command" "grep -A1 'NOT enabled' '$T/fix2.log' | grep -q 'fix: systemctl enable --now faucet-thing.timer'"
 
