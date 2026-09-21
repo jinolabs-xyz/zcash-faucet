@@ -4,6 +4,14 @@ import type { NextRequest } from "next/server";
 
 // One trusted proxy so the ipHash path is exercisable via X-Forwarded-For.
 process.env.TRUSTED_PROXY_COUNT = "1";
+// THE ORACLE PINS, though nothing here dials: the rows below read the route files as TEXT
+// (readFileSync, never import) and the oracle-pin row (zcash/oraclePin.test.ts) counts any path
+// that resolves to a reaching module, on purpose, because a spawned child reaches through a
+// string too. It cannot tell a text read from an import, so the pins sit here for the row and
+// cost nothing; the merge queue was the first run to say so (#725 landed after this head).
+process.env.HOSH_URL = "http://127.0.0.1:9/";
+process.env.LIGHTWALLETD_ENDPOINT = "https://127.0.0.1:9";
+process.env.TIP_ORACLE_ENDPOINT = "";
 
 const { withApi, apiError } = await import("./api.ts");
 import type { ApiCtx, Gate } from "./api.ts";
