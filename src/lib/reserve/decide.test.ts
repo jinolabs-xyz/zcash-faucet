@@ -1,5 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+// NO REAL ORACLE FROM A UNIT TEST. Both legs: HOSH_URL to a closed port seals the aggregate,
+// TIP_ORACLE_ENDPOINT set EMPTY seals the direct gRPC leg, which defaults to testnet.zec.rocks
+// when merely unset (config.ts:140). Before any import that loads config. Enforced by
+// zcash/oraclePin.test.ts.
+process.env.HOSH_URL = "http://127.0.0.1:9/";
+process.env.TIP_ORACLE_ENDPOINT = "";
+// The THIRD leg: chainIdentityOracle dials LIGHTWALLETD_ENDPOINT directly (config.ts:116).
+process.env.LIGHTWALLETD_ENDPOINT = "https://127.0.0.1:9";
+
 import { decideRefilling, initialRefilling, shouldHarvest, shouldStartStep } from "./decide.ts";
 
 const levels = { lowZat: 5_0000_0000n, targetZat: 15_0000_0000n }; // 5 / 15 TAZ

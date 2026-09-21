@@ -6,6 +6,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { encodeBlockIDHeight, hashFromCompactBlock, REFERENCE_DEPTH } from "./externalBlock.ts";
 
+// NO REAL ORACLE FROM A UNIT TEST. Both legs: HOSH_URL to a closed port seals the aggregate,
+// TIP_ORACLE_ENDPOINT set EMPTY seals the direct gRPC leg, which defaults to testnet.zec.rocks
+// when merely unset (config.ts:140). Before any import that loads config. Enforced by
+// zcash/oraclePin.test.ts.
+process.env.HOSH_URL = "http://127.0.0.1:9/";
+process.env.TIP_ORACLE_ENDPOINT = "";
+// The THIRD leg: chainIdentityOracle dials LIGHTWALLETD_ENDPOINT directly (config.ts:116).
+process.env.LIGHTWALLETD_ENDPOINT = "https://127.0.0.1:9";
+
 test("a BlockID carries the height as field 1, and survives a round trip through the reader", async () => {
   const { heightFromBlockID } = await import("./externalTip.ts");
   for (const h of [0, 1, 127, 128, 4_367_000, 16_777_215]) {

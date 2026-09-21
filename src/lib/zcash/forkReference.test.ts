@@ -11,7 +11,15 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readForkReference, resetForkReference, type ForkReference } from "./forkReference.ts";
+// NO REAL ORACLE FROM A UNIT TEST, three legs. HOSH_URL seals the aggregate; LIGHTWALLETD_ENDPOINT
+// seals the read-side leg the chain-identity oracle dials directly (config.ts:116, real by default)
+// and, left unset, the direct tip leg inherits it (config.ts:140). All before any import that loads
+// config. Enforced by zcash/oraclePin.test.ts.
+process.env.HOSH_URL = "http://127.0.0.1:9/";
+process.env.LIGHTWALLETD_ENDPOINT = "https://127.0.0.1:9";
+process.env.TIP_ORACLE_ENDPOINT = "";
+const { readForkReference, resetForkReference } = await import("./forkReference.ts");
+type ForkReference = import("./forkReference.ts").ForkReference;
 
 const serialised = (r: ForkReference) => JSON.stringify({ forkReference: r });
 

@@ -22,6 +22,8 @@ import assert from "node:assert/strict";
 // empty direct list before importing: a unit test must never be able to dial the real one.
 process.env.HOSH_URL = "http://127.0.0.1:9/";
 process.env.TIP_ORACLE_ENDPOINT = "";
+// The THIRD leg: chainIdentityOracle dials LIGHTWALLETD_ENDPOINT directly (config.ts:116).
+process.env.LIGHTWALLETD_ENDPOINT = "https://127.0.0.1:9";
 const { readChainFreshness, readChainFreshnessAsking, SHIELD_MAX_LAG_BLOCKS } = await import("./shieldGate.ts");
 const { resetExternalTipForTests, MAX_AGE_MS_FOR_TESTS } = await import("./externalTip.ts");
 
