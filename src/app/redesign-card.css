@@ -155,6 +155,29 @@ li[data-active] .mark{border-color:var(--orange);border-top-color:transparent;an
  * "receipt actions: even grid" section). */
 .phase[data-phase="sent"] .row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:calc(.6*var(--u))}
 .phase[data-phase="sent"] .row .tag{justify-content:center;width:100%}
+/* THE FOUR ACTIONS READ AS BUTTONS, AND "ANOTHER ADDRESS" OWNS ITS ROW. Owner ask, 2026-09-21,
+ * from a screenshot of the panel after a drip: the actions were faint outlines, and the last
+ * button sat at half the width of a row it had to itself.
+ *
+ * THE SNAPSHOT SPECIFIES THIS PANEL AND THE FAINT OUTLINE IS THE SPEC. `.tag` is `border
+ * .06u solid var(--hair)` on `--tag-bg`, and that is what shipped: measured 1.23:1 border
+ * against its surface on paper and 1.18:1 on ink, against the 3:1 floor WCAG 1.4.11 sets for a
+ * control's boundary. So this is a DECLARED DEPARTURE at the owner's request, not a drift
+ * repaired. It stays in the design's language: the claim button (`.automate`) is the family,
+ * and these are one step down - the accent as an outline rather than a fill, the chip's shape
+ * kept. `--accent-text` rather than `--orange-line` for the border because the line token
+ * reads 2.84:1 on paper, under the floor, while the text token is 7.17:1 paper and 7.91:1 ink
+ * and is already the accent `.tag.more` carries. A little taller than the chip (2.7u, the
+ * strip's height, against `.automate`'s 3.3u) so it reads as a control and not a label.
+ *
+ * THE SPAN IS THE SPEC'S OWN INTENT, NOT A NEW LAYOUT. The snapshot's grid holds FOUR items -
+ * Copy txid, Copy receipt, View on Cipherscan, Another address - a clean 2x2. The page grew a
+ * fifth (Copy spending key, #R-31) after the snapshot froze, and five into two columns leaves
+ * the last one alone in a half cell. Spanning it restores the shape the design drew. */
+.phase[data-phase="sent"] .row .tag{height:calc(2.7*var(--u));border:calc(.12*var(--u)) solid var(--accent-text);color:var(--accent-text);font-weight:600}
+.phase[data-phase="sent"] .row button.tag:hover,.phase[data-phase="sent"] .row a.tag:hover{background:var(--orange-soft);border-color:var(--accent-text)}
+.phase[data-phase="sent"] .row .tag.ink{grid-column:1 / -1;border-color:var(--ink);color:var(--surface)}
+.phase[data-phase="sent"] .row .tag.ink:hover{background:var(--ink-3);border-color:var(--ink-3)}
 
 /* #654: the reserve notice sits in the hero column now, not in the claim card. It keeps the .phase
    box so it still reads as one of the page's status panels, and takes a top margin because it is
