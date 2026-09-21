@@ -99,3 +99,31 @@ test("moving the budget moves the page with it - one number, in a fresh process"
   const line = out.trim().split("\n").pop();
   assert.equal(line, "15:true 16:false", `with the budget at 15 the page must serve 15 and refuse 16, read: ${line}`);
 });
+
+test("a height that is present but not a number is nothing: the read fails closed for the page AND the drip", async () => {
+  // CTO's red-team of round one: wallet_tip.height "abc" passed `?? null`, the gate computed NaN,
+  // and NaN is neither over the budget nor under it, so it fell through to safe - LIVE on the
+  // page, and the drip served. The parse is the one place both consumers read the number.
+  const realFetch = globalThis.fetch;
+  const { resetNodeStatusFailures } = await import("./nodeStatusFailure.ts");
+  for (const [label, wallet, node] of [["wallet_tip", "abc", 4_375_000], ["node_tip", 4_374_997, "abc"], ["wallet_tip float-looking", "4374997", 4_375_000]] as const) {
+    resetNodeStatusFailures();
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ result: { wallet_tip: { height: wallet }, node_tip: { height: node } } }),
+        { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+    try {
+      const s = await getNodeStatus("claim");
+      assert.equal(s, null, `${label} as a string must make the read fail, not a verdict: read ${JSON.stringify(s && { ready: s.ready, height: s.height, nodeHeight: s.nodeHeight })}`);
+      // and the drip's own gate, fed what the route feeds it from a failed read (both null), refuses too
+      const gate = walletLagFreshness(null, null);
+      assert.equal(gate.state, "unverifiable", `${label}: the gate must be unverifiable on a failed read, was ${gate.state}`);
+      assert.equal(mayBuildFromWallet(gate), false);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  }
+});
+
+test("and a real integer height still reads: the check refuses shapes, not numbers", async () => {
+  assert.equal(await readyAt(3, BASE + 300), true, "lag 3 with integer heights must still be LIVE");
+});

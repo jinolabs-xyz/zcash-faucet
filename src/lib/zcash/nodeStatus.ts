@@ -247,15 +247,27 @@ export async function getNodeStatus(purpose: NodeReadPurpose = "claim"): Promise
       recordNodeStatusFailure("http", `status ${res.status} on the ${purpose} path`, Date.now(), undefined, purpose);
       return null;
     }
-    const json = (await res.json()) as { result?: { wallet_tip?: { height?: number }; node_tip?: { height?: number } } };
-    const w = json.result?.wallet_tip?.height ?? null;
-    const n = json.result?.node_tip?.height ?? null;
+    const json = (await res.json()) as { result?: { wallet_tip?: { height?: unknown }; node_tip?: { height?: unknown } } };
+    // A HEIGHT IS A FINITE NUMBER OR IT IS NOTHING. `?? null` let a present-but-not-a-number height
+    // through as itself, and both consumers downstream guard only against null: the lag gate then
+    // computed NaN, which is neither over the budget nor at-or-under it, and fell through to safe -
+    // a string for a height read as LIVE on the page and as a drip served (CTO's red-team of #734,
+    // wallet_tip.height "abc"). Real zallet answers integers, which is why nobody saw it; the gate
+    // is written for the wallet we did not expect, so the parse is where the shape is refused, once,
+    // for everyone who reads these two numbers.
+    const height = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+    const rawW = json.result?.wallet_tip?.height;
+    const rawN = json.result?.node_tip?.height;
+    const w = height(rawW);
+    const n = height(rawN);
     if (w == null || n == null) {
-      // A 200 that does not carry the two heights. Names WHICH is missing, because a wallet that
-      // reports its own tip and not the node's is a different fault from one reporting neither.
+      // A 200 that does not carry the two heights as numbers. Names WHICH and HOW, because a wallet
+      // that reports its own tip and not the node's is a different fault from one reporting neither,
+      // and a height that is present but not a number is a third.
+      const shape = (v: number | null, raw: unknown) => (v != null ? "present" : raw == null ? "missing" : "not a number");
       recordNodeStatusFailure(
         "parse",
-        `wallet_tip ${w == null ? "missing" : "present"}, node_tip ${n == null ? "missing" : "present"} on the ${purpose} path`,
+        `wallet_tip ${shape(w, rawW)}, node_tip ${shape(n, rawN)} on the ${purpose} path`,
         Date.now(),
         undefined,
         purpose,
