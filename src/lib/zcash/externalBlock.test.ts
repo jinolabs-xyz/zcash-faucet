@@ -12,6 +12,8 @@ import { encodeBlockIDHeight, hashFromCompactBlock, REFERENCE_DEPTH } from "./ex
 // zcash/oraclePin.test.ts.
 process.env.HOSH_URL = "http://127.0.0.1:9/";
 process.env.TIP_ORACLE_ENDPOINT = "";
+// The THIRD leg: chainIdentityOracle dials LIGHTWALLETD_ENDPOINT directly (config.ts:116).
+process.env.LIGHTWALLETD_ENDPOINT = "https://127.0.0.1:9";
 
 test("a BlockID carries the height as field 1, and survives a round trip through the reader", async () => {
   const { heightFromBlockID } = await import("./externalTip.ts");

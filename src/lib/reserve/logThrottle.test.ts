@@ -25,6 +25,8 @@ import assert from "node:assert/strict";
 // zcash/oraclePin.test.ts.
 process.env.HOSH_URL = "http://127.0.0.1:9/";
 process.env.TIP_ORACLE_ENDPOINT = "";
+// The THIRD leg: chainIdentityOracle dials LIGHTWALLETD_ENDPOINT directly (config.ts:116).
+process.env.LIGHTWALLETD_ENDPOINT = "https://127.0.0.1:9";
 const { shouldSay, sampledNote, LOUD_TICKS, SAMPLE_EVERY } = await import("./reconciler.ts");
 
 test("the first ticks of a new state are always loud, because that is when it is news", () => {

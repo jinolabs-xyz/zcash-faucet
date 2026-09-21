@@ -6,6 +6,8 @@ import { execFileSync } from "node:child_process";
 // { ...process.env }, so the seal goes here. Enforced by zcash/oraclePin.test.ts.
 process.env.HOSH_URL = "http://127.0.0.1:9/";
 process.env.TIP_ORACLE_ENDPOINT = "";
+// The THIRD leg: chainIdentityOracle dials LIGHTWALLETD_ENDPOINT directly (config.ts:116).
+process.env.LIGHTWALLETD_ENDPOINT = "https://127.0.0.1:9";
 
 /**
  * The budget is a module constant, evaluated at import, so these two failure modes

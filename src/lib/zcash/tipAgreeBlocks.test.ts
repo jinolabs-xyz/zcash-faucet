@@ -19,6 +19,8 @@ import assert from "node:assert/strict";
 // zcash/oraclePin.test.ts.
 process.env.HOSH_URL = "http://127.0.0.1:9/";
 process.env.TIP_ORACLE_ENDPOINT = "";
+// The THIRD leg: chainIdentityOracle dials LIGHTWALLETD_ENDPOINT directly (config.ts:116).
+process.env.LIGHTWALLETD_ENDPOINT = "https://127.0.0.1:9";
 
 process.env.TIP_AGREE_BLOCKS = ""; // the spelling CI now uses for other variables
 const { AGREE_BLOCKS } = await import("./externalTip.ts");

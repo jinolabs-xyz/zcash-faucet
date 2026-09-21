@@ -9,10 +9,10 @@
  * and after its last row on a slow one: the same test, decided by runner speed.
  *
  * Three things follow, and each is a row here:
- *   1. BOTH legs need sealing. HOSH_URL seals the aggregate. The direct leg is sealed either by
- *      TIP_ORACLE_ENDPOINT set explicitly, or by LIGHTWALLETD_ENDPOINT pinned to a closed port
- *      with TIP_ORACLE_ENDPOINT left unset, because unset inherits it (config.ts:140). Per L62 a
- *      fetch stub seals nothing here because the direct leg is not fetch.
+ *   1. THREE LEGS, sealed by two pins. HOSH_URL seals the aggregate. LIGHTWALLETD_ENDPOINT seals
+ *      the read-side leg the chain-identity oracle dials directly (config.ts:116) AND, left
+ *      unset, the direct tip leg inherits it (config.ts:140). TIP_ORACLE_ENDPOINT="" is then a
+ *      belt over braces. Per L62 a fetch stub seals nothing here: none of the three is fetch.
  *   2. The pin must precede the import, and a STATIC value import is hoisted above every env
  *      line in the file, so it cannot be pinned at all. Dynamic only. `import type` is erased
  *      and loads nothing, so it is not an import for this purpose.
@@ -114,13 +114,15 @@ test("every test that imports an oracle-reaching module pins BOTH legs before a 
     }
     const before = src.slice(0, mention.index!);
     const hosh = /process\.env\.HOSH_URL\s*=/.test(before);
-    // TWO SPELLINGS SEAL THE DIRECT LEG, and the first version of this row accepted only one.
-    // TIP_ORACLE_ENDPOINT set (empty or loopback) is the explicit seal. TIP_ORACLE_ENDPOINT left
-    // unset INHERITS LIGHTWALLETD_ENDPOINT (config.ts:117-121, 140), so pinning that to a closed
-    // port seals it too - five tests were already sealed that way and the row called them exposed.
-    const direct = /process\.env\.(TIP_ORACLE_ENDPOINT|LIGHTWALLETD_ENDPOINT)\s*=/.test(before);
-    if (!hosh || !direct) {
-      const missing = [!hosh && "HOSH_URL", !direct && "TIP_ORACLE_ENDPOINT (or LIGHTWALLETD_ENDPOINT)"].filter(Boolean).join(" and ");
+    // THREE LEGS, TWO PINS. LIGHTWALLETD_ENDPOINT is REQUIRED, not an alternative: the chain
+    // identity oracle dials config.lightwalletdEndpoints directly (config.ts:116, real by default)
+    // and neither of the other two variables touches it. The second version of this row treated
+    // it as an alternate seal for the direct tip leg - which it also is, because an unset
+    // TIP_ORACLE_ENDPOINT inherits it (config.ts:140) - and the CTO's red-team measured a pinned
+    // test still dialling testnet.zec.rocks through the leg this row was not asking about.
+    const lwd = /process\.env\.LIGHTWALLETD_ENDPOINT\s*=/.test(before);
+    if (!hosh || !lwd) {
+      const missing = [!hosh && "HOSH_URL", !lwd && "LIGHTWALLETD_ENDPOINT"].filter(Boolean).join(" and ");
       offenders.push(`${rel}: reaches ${mention.module} without pinning ${missing} first`);
     }
   }
@@ -163,4 +165,86 @@ test("the reaching list is closed under import: a module that imports a listed o
     }
   }
   assert.deepEqual(unlisted, [], `modules that reach the oracle and are not in REACHING:\n  ${unlisted.join("\n  ")}`);
+});
+
+/**
+ * THE INSTRUMENT, not the rule. Everything above reads source; this DIALS. A child process is
+ * started with a preload that patches dns.lookup, net.connect and tls.connect to record every
+ * destination that is not loopback, imports the oracle modules the way a test would, takes one
+ * page read, and reports what tried to leave the machine. With the three pins: nothing. Without
+ * them, the positive control: at least one dial to a real host, or the instrument is blind and
+ * the zero above means nothing. This is the measurement the CTO's red-team ran to find the third
+ * leg, and it is what the rows above should have carried from the start (L45).
+ */
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+
+const PRELOAD = `
+import dns from "node:dns";
+import net from "node:net";
+import tls from "node:tls";
+const seen = new Set();
+const loopback = (h) => !h || h === "localhost" || /^127\\./.test(h) || h === "::1";
+const note = (h) => { if (!loopback(String(h))) seen.add(String(h)); };
+const wrapLookup = (fn) => function (host, ...rest) { note(host); return fn.call(this, host, ...rest); };
+dns.lookup = wrapLookup(dns.lookup);
+if (dns.promises?.lookup) dns.promises.lookup = wrapLookup(dns.promises.lookup);
+const wrapConnect = (mod, name) => { const orig = mod[name]; mod[name] = function (...a) {
+  const o = typeof a[0] === "object" && a[0] ? a[0] : {}; note(o.host ?? o.hostname ?? (typeof a[1] === "string" ? a[1] : "")); return orig.apply(this, a); }; };
+wrapConnect(net, "connect"); wrapConnect(net, "createConnection"); wrapConnect(tls, "connect");
+process.on("exit", () => { process.stdout.write("DIALS " + JSON.stringify([...seen]) + "\\n"); });
+`;
+
+/** Where each leg is aimed for one probe: the loopback pins, or one sentinel name per leg. */
+type Aim = { HOSH_URL: string; LIGHTWALLETD_ENDPOINT: string; TIP_ORACLE_ENDPOINT: string };
+const PINNED: Aim = { HOSH_URL: "http://127.0.0.1:9/", LIGHTWALLETD_ENDPOINT: "https://127.0.0.1:9", TIP_ORACLE_ENDPOINT: "" };
+// .invalid never resolves (RFC 2606), so the control proves each leg is SEEN without a packet
+// leaving beyond the resolver. Aiming the control at the real defaults would make this suite
+// reach zec.rocks from CI, which is the thing the rows above exist to stop.
+const SENTINEL: Aim = { HOSH_URL: "https://hosh-leg.invalid/", LIGHTWALLETD_ENDPOINT: "https://lwd-leg.invalid:443", TIP_ORACLE_ENDPOINT: "https://tip-leg.invalid:443" };
+
+function dialsWith(aim: Aim): string[] {
+  const dir = mkdtempSync(join(tmpdir(), "oracle-dial-"));
+  const preload = join(dir, "preload.mjs");
+  writeFileSync(preload, PRELOAD);
+  const tip = JSON.stringify(join(SRC, "lib/zcash/externalTip.ts"));
+  const ident = JSON.stringify(join(SRC, "lib/zcash/chainIdentityOracle.ts"));
+  // KICK EACH LEG BY NAME rather than through getNodeStatus: a page read consults the oracle
+  // only after the wallet answers, and with no wallet it never gets there - the first version of
+  // this control read DIALS [] unpinned and would have called a blind instrument sighted. The
+  // budget is the real shape: a bare number made AbortSignal.timeout(undefined) throw inside
+  // fetchBothReferencesWithin's catch, and the hosh leg was silently never fetched.
+  const script = `
+    process.env.DB_BACKEND = "sqlite";
+    const tip = await import(${tip});
+    const ident = await import(${ident});
+    try { await tip.fetchBothReferencesWithin({ hoshTimeoutMs: 1500, fallbackTotalMs: 1500 }); } catch {}  // hosh + direct
+    try { await ident.warmChainIdentity(); } catch {}                                                  // read-side, the third leg
+    await new Promise((r) => setTimeout(r, 800));
+  `;
+  let out = "";
+  try {
+    out = execFileSync(process.execPath, ["--import", preload, "--input-type=module", "--eval", script],
+      // cwd is the REPO ROOT: grpc.ts loads proto/service.proto relative to it (grpc.ts:15).
+      { cwd: resolve(SRC, ".."), env: { ...process.env, ...aim, ZALLET_RPC_URL: "http://127.0.0.1:9/", FAUCET_SENDER: "zallet", DATA_DIR: dir },
+        encoding: "utf8", timeout: 30_000, stdio: ["ignore", "pipe", "pipe"] });
+  } catch (e) {
+    const err = e as { stdout?: string; stderr?: string; status?: number };
+    throw new Error(`dial probe exited ${err.status}: ${(err.stderr ?? "").split("\n").filter((l) => !/Warning|Reparsing|eliminate this warning|^\s*$/.test(l)).slice(-12).join(" | ")}`);
+  }
+  const line = out.split("\n").find((l) => l.startsWith("DIALS "));
+  return line ? (JSON.parse(line.slice(6)) as string[]) : [];
+}
+
+test("MEASURED: with the three pins, the oracle legs dial nothing off the machine", () => {
+  const dials = dialsWith(PINNED);
+  assert.deepEqual(dials, [], `hosts a pinned test still tried to reach: ${dials.join(", ")}`);
+});
+
+test("MEASURED, positive control: aimed at a sentinel per leg, the instrument sees all three - so the zero above is a zero", () => {
+  const dials = dialsWith(SENTINEL);
+  const unseen = (["HOSH_URL", "LIGHTWALLETD_ENDPOINT", "TIP_ORACLE_ENDPOINT"] as const)
+    .filter((leg) => !dials.some((h) => SENTINEL[leg].includes(h)));
+  assert.deepEqual(unseen, [], `legs the instrument is blind to: ${unseen.join(", ")} (saw: ${dials.join(", ") || "nothing"})`);
 });
