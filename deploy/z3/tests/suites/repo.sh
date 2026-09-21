@@ -357,6 +357,20 @@ check "and it DERIVES the working limit from the app's published agreeBlocks rat
   "[ \"\$(grep -vE '^[[:space:]]*#' '$REPO/deploy/z3/watchdog.sh' | grep 'agree_b=' | grep -c 'agreeBlocks')\" -ge 1 ] && [ \"\$(grep -vE '^[[:space:]]*#' '$REPO/deploy/z3/watchdog.sh' | grep -c 'agree_b + 5')\" -ge 1 ]"
 check "and the floor is still the fallback, so a body without the field keeps today's behaviour" \
   "grep -qF 'conf_limit=' '$REPO/deploy/z3/watchdog.sh' && grep -qF 'NODE_CONFIRMED_LAG_LIMIT' '$REPO/deploy/z3/watchdog.sh'"
+# THE FLOOR IS A TIME NOW, in the unit the app's own agreement window is written in, so the
+# relationship this block exists for can be held as the inequality it always was: the watchdog's
+# floor in seconds must not sit under the app's AGREE_SECONDS, or the rung would call a stall at
+# a distance the app calls agreement. Two literals in two files, compared - and a mutant that
+# lowers one is what this row is for. The block constant stays as the fallback for a body with
+# no rate, held by the row above.
+WD_CONF_SECS="$(sed -nE 's/^NODE_CONFIRMED_LAG_SECS="\$\{WATCHDOG_NODE_CONFIRMED_LAG_SECS:-([0-9]+)\}".*/\1/p' "$REPO/deploy/z3/watchdog.sh")"
+APP_AGREE_SECS="$(sed -nE 's/^export const AGREE_SECONDS = num\("TIP_AGREE_SECONDS", ([0-9]+)\);.*/\1/p' "$REPO/src/lib/zcash/externalTip.ts")"
+check "the watchdog declares its confirmed-lag floor in SECONDS" "[ -n '$WD_CONF_SECS' ]"
+check "and the app's agreement window was read, not assumed" "[ -n '$APP_AGREE_SECS' ]"
+check "and the floor is at or above the app's agreement window ($WD_CONF_SECS s vs $APP_AGREE_SECS s)" \
+  "[ -n '$WD_CONF_SECS' ] && [ -n '$APP_AGREE_SECS' ] && [ '$WD_CONF_SECS' -ge '$APP_AGREE_SECS' ]"
+check "and the floor is converted at the app's PUBLISHED rate, read from the body and not assumed" \
+  "[ \"\$(grep -vE '^[[:space:]]*#' '$REPO/deploy/z3/watchdog.sh' | grep 'spb=' | grep -c 'secondsPerBlock')\" -ge 1 ]"
 check "and the stall comparison uses the derived limit rather than the constant" \
   "grep -qF -e '-gt \"\$conf_limit\"' '$REPO/deploy/z3/watchdog.sh' && ! grep -qF -e '-gt \"\$NODE_CONFIRMED_LAG_LIMIT\"' '$REPO/deploy/z3/watchdog.sh'"
 # AND THE TWO RUNGS READ THE SAME GATE. Step 7 read `externalHeight` while step 8 read
