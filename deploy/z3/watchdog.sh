@@ -41,6 +41,16 @@ READY_FLAP_MIN_SWEEPS="${WATCHDOG_READY_FLAP_MIN_SWEEPS:-20}"
 # Percent of the window that must be un-ready. A faucet refusing a quarter of the time is refusing
 # a quarter of its visitors, which is an outage wearing a distribution.
 READY_FLAP_PCT="${WATCHDOG_READY_FLAP_PCT:-25}"
+# OSCILLATION, NOT DURATION. A single unbroken un-ready stretch is the CONTINUOUS rung's business,
+# whatever share of a window it happens to fill: 7.5 minutes in one piece is 25% of half an hour and
+# this rung used to page on it twenty minutes after the faucet had recovered. What only this rung
+# can see is a readiness that keeps COMING BACK, so it counts RUNS - maximal un-ready stretches -
+# and needs several before it says anything.
+READY_FLAP_MIN_RUNS="${WATCHDOG_READY_FLAP_MIN_RUNS:-3}"
+# HYSTERESIS ON THE GOOD NEWS. Clearing at the same threshold that pages means a faucet sitting near
+# it alternates NEEDS YOU and FIXED every window. Recovery has to be clearly better than the trigger,
+# not marginally under it.
+READY_FLAP_CLEAR_PCT="${WATCHDOG_READY_FLAP_CLEAR_PCT:-10}"
 # SENDS FAILING gets one self-heal (risk register II, R-18): a wallet that answers
 # balances and refuses every send is the zallet shape a restart has fixed every time so
 # far. The verdict is in-memory and ages out with its window (15 min from the older
@@ -382,6 +392,17 @@ ensure_restart_policy() {
 STATE_WRITE_OK=unknown
 
 flap_var()  { printf 'FLAP_%s' "$(printf '%s' "$1" | tr -c 'A-Za-z0-9' '_')"; }
+# THE LAST UN-READY REASON, PERSISTED. It cannot ride in a flap_* key: that store feeds $(( )) and
+# sanitises anything non-numeric to 0 on the way back off disk. It cannot ride in a shell variable
+# either - the counts survive a restart and the sentence explaining them did not, so a watchdog that
+# restarted mid-window paged with "unknown" beside counts it had kept. Its own file, printable
+# characters only and bounded, because the text comes from a body we did not write.
+flap_reason_file() { printf '%s/ready.flap_reason' "$STATE_DIR"; }
+flap_reason_set() {
+  mkdir -p "$STATE_DIR" 2>/dev/null
+  printf '%s' "$1" | tr -cd '[:print:]' | cut -c1-200 > "$(flap_reason_file)" 2>/dev/null || true
+}
+flap_reason_get() { cut -c1-200 "$(flap_reason_file)" 2>/dev/null | tr -cd '[:print:]' | head -n1; }
 flap_file() { printf '%s/%s.flaps' "$STATE_DIR" "$(printf '%s' "$1" | tr -c 'A-Za-z0-9_.-' '_')"; }
 
 # Never trust the file. Its contents are fed to $(( )) below, and under `set -u`
@@ -1205,7 +1226,6 @@ sends_failing_since=0
 # is empty exactly when the counting rung fires - the one field meant to explain the page
 # would be 'unknown' every time. Loop state, not a flap_* key: that store sanitises anything
 # non-numeric to 0 on the way back off disk.
-fw_last_reason=""
 
 # An unrecognized format still sends (a watchdog that dies on a config typo
 # is worse than one that guesses), but say so, or a typo means alerts go out
@@ -1632,7 +1652,11 @@ while true; do
     reason="drips refused: ${gate_reason:-the chain tip cannot be verified}"
   fi
   if [ "$ready_rc" -eq 0 ] && [ "$ready_ok" = "1" ]; then
-    if [ "$alerted_unready" = "1" ]; then fixed "faucet is READY again."; fi
+    # AND THE FLAP RUNG MUST NOT SPEAK FOR THIS WINDOW. Clearing alerted_unready here used to hand
+    # the flap rung a free pass: its suppression guard is "no continuous page is standing", which
+    # becomes true the instant this fires, so the window closed minutes later and sent a SECOND
+    # NEEDS YOU saying the faucet "recovers between checks" about an outage that did no such thing.
+    if [ "$alerted_unready" = "1" ]; then fixed "faucet is READY again."; flap_set ready.flap_contfixed 1; fi
     unready_since=0
     alerted_unready=0
     sends_failing_since=0
@@ -1683,36 +1707,61 @@ while true; do
   if [ "$fw_start" = "0" ] || [ "$now" -lt "$fw_start" ]; then fw_start="$now"; flap_set ready.flap_start "$now"; fi
   fw_sweeps=$(( $(flap_get ready.flap_sweeps) + 1 ))
   fw_unready="$(flap_get ready.flap_unready)"
+  fw_runs="$(flap_get ready.flap_runs)"
   if [ "$ready_rc" -eq 0 ] && [ "$ready_ok" = "1" ]; then
-    :
+    # A run ENDS here. Nothing else to record: the count of runs is what distinguishes an
+    # oscillation from one long outage, and it is incremented where a run BEGINS.
+    flap_set ready.flap_inrun 0
   else
     fw_unready=$((fw_unready + 1))
-    fw_last_reason="${reason:-unknown}"
+    # A RUN BEGINS on the transition into un-ready, not on every un-ready sweep. Fifteen contiguous
+    # bad sweeps are ONE run; five separated pairs are five.
+    if [ "$(flap_get ready.flap_inrun)" != "1" ]; then
+      fw_runs=$((fw_runs + 1))
+      flap_set ready.flap_runs "$fw_runs"
+      flap_set ready.flap_inrun 1
+    fi
+    flap_reason_set "${reason:-unknown}"
   fi
   flap_set ready.flap_sweeps "$fw_sweeps"
   flap_set ready.flap_unready "$fw_unready"
   if [ $((now - fw_start)) -ge "$READY_FLAP_WINDOW_SECS" ]; then
     fw_pct=0
     [ "$fw_sweeps" -gt 0 ] && fw_pct=$(( fw_unready * 100 / fw_sweeps ))
-    if [ "$fw_sweeps" -ge "$READY_FLAP_MIN_SWEEPS" ] && [ "$fw_pct" -ge "$READY_FLAP_PCT" ]; then
-      # ONE EVENT, ONE PAGE. A continuous outage trips this too - it is 100% of the window - and the
-      # rung above has already said so in the words that fit it. This one speaks only for the shape
-      # that rung cannot see, so it stays quiet when that page is already standing.
+    # FOUR CONDITIONS, AND THREE OF THEM EXIST BECAUSE THIS RUNG GOT IT WRONG IN PRODUCTION.
+    #   enough sweeps  - a window too small to be a sample judges nothing
+    #   enough RUNS    - the oscillation test. One unbroken stretch is the continuous rung's, however
+    #                    large its share; this rung pages only for readiness that keeps COMING BACK
+    #   enough percent - it has to be worth waking someone for
+    #   no continuous FIXED in this window - the outage already had its page and its recovery notice,
+    #                    in the words that fit it, and a second one here would contradict both
+    if [ "$fw_sweeps" -ge "$READY_FLAP_MIN_SWEEPS" ] \
+       && [ "$fw_runs" -ge "$READY_FLAP_MIN_RUNS" ] \
+       && [ "$fw_pct" -ge "$READY_FLAP_PCT" ] \
+       && [ "$(flap_get ready.flap_contfixed)" != "1" ]; then
       if [ "$alerted_unready" = "0" ] && [ "$(flap_get ready.flap_paged)" != "1" ]; then
-        danger "faucet NOT READY on $fw_unready of the last $fw_sweeps checks ($fw_pct%) over $((READY_FLAP_WINDOW_SECS / 60)) min. It recovers between checks, so it never trips the $((READY_GRACE_SECS / 60))-minute continuous alarm - and it is refusing that share of visitors meanwhile. Last un-ready reason: ${fw_last_reason:-unknown}."; rc=$?
+        danger "faucet readiness is FLAPPING: NOT READY on $fw_unready of the last $fw_sweeps checks ($fw_pct%) in $fw_runs separate episodes over $((READY_FLAP_WINDOW_SECS / 60)) min. Each one recovers, so the $((READY_GRACE_SECS / 60))-minute continuous alarm never trips. Last un-ready reason: $(flap_reason_get)."; rc=$?
         paged "$rc" && flap_set ready.flap_paged 1
       fi
-    # THE SAME SAMPLE RULE, APPLIED TO THE GOOD NEWS. A window too small to have revealed a flap
-    # is too small to clear one, and this file exists because 812 "recovered" alerts were sent for a
-    # container that was never up. Neither page nor un-page: the counters reset and the next full
-    # window says something true. A steady faucet is still announced, one window later.
-    elif [ "$fw_sweeps" -ge "$READY_FLAP_MIN_SWEEPS" ] && [ "$(flap_get ready.flap_paged)" = "1" ]; then
+    # THE GOOD NEWS NEEDS A SAMPLE AND A MARGIN. The sample rule is the same one the page uses, and
+    # it is here because this file exists after 812 "recovered" alerts for a container that was never
+    # up. The MARGIN is newer: clearing at the same percentage that pages makes a faucet sitting on
+    # the threshold alternate NEEDS YOU and FIXED every window, so recovery has to be clearly better
+    # rather than marginally under.
+    elif [ "$fw_sweeps" -ge "$READY_FLAP_MIN_SWEEPS" ] \
+         && [ "$fw_pct" -lt "$READY_FLAP_CLEAR_PCT" ] \
+         && [ "$(flap_get ready.flap_paged)" = "1" ]; then
       fixed "faucet readiness is steady again ($fw_unready of $fw_sweeps checks un-ready in the last $((READY_FLAP_WINDOW_SECS / 60)) min)."
       flap_set ready.flap_paged 0
     fi
     flap_set ready.flap_start "$now"
     flap_set ready.flap_sweeps 0
     flap_set ready.flap_unready 0
+    flap_set ready.flap_runs 0
+    flap_set ready.flap_contfixed 0
+    # flap_inrun is DELIBERATELY NOT RESET: a stretch that straddles the boundary is one run, not
+    # two, and resetting here would let a single unbroken outage look like an oscillation simply by
+    # being long enough to cross a window edge.
   fi
 
   # 5: POISON AUTO-HEAL. The one thing steps 1-4 could not do, and the reason

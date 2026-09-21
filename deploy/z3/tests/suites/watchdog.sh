@@ -831,88 +831,149 @@ fl_env() {
   printf '1700000000' > "$T/fl.clock"
   export WATCHDOG_READY_FLAP_WINDOW_SECS=300 WATCHDOG_READY_FLAP_MIN_SWEEPS=4 WATCHDOG_READY_FLAP_PCT=25
 }
-
-echo "== watchdog: a faucet that RECOVERS BETWEEN CHECKS is still refusing people, and now says so"
-# THE DEFECT THIS EXISTS FOR. unready_since is zeroed by any good read, so one failure in three
-# resets the continuous clock every ninety seconds against an 1800s threshold and can NEVER page.
-# Counting cannot be reset that way, which is the whole difference.
+echo "== watchdog: readiness that keeps COMING BACK is what only this rung can see"
+# THE DEFECT THIS EXISTS FOR. unready_since is zeroed by any good read, so a faucet failing
+# intermittently resets the continuous clock every ninety seconds against an 1800s threshold and can
+# NEVER page. Counting cannot be reset that way, which is the whole difference.
+# THE FIXTURE IS AN OSCILLATION, NOT A STRETCH: three separate un-ready episodes, each recovering.
 fl_env
-# 120s, not the inherited never-page 999999: the continuous rung MUST be able to fire here, or
-# "it stayed silent" is a fact about the fixture. Two failures 60s apart cannot reach 120.
 export WATCHDOG_READY_GRACE_SECS=120
-export STUB_READY_SEQUENCE="1 0 0 1 1 1"
+export STUB_READY_SEQUENCE="0 1 0 1 0 1"
 wd_run 6
 check "the flapping is named, with the count that shows it" \
-  "grep -q 'NEEDS YOU: faucet NOT READY on 2 of the last 6 checks (33%)' '$T/alerts.log'"
+  "grep -q 'NEEDS YOU: faucet readiness is FLAPPING: NOT READY on 3 of the last 6 checks (50%)' '$T/alerts.log'"
+# THE EPISODE COUNT IS THE POINT. A percentage alone cannot tell three outages from one long one,
+# and it was the missing half that paged an operator about a repair's own stop-start.
+check "and it counts the EPISODES, which is what makes it an oscillation rather than an outage" \
+  "grep -q 'in 3 separate episodes' '$T/alerts.log'"
 check "and it says WHY nothing else caught it, so the reader is not left wondering" \
-  "grep -q 'recovers between checks' '$T/alerts.log'"
+  "grep -q 'Each one recovers' '$T/alerts.log'"
+# 120s, not the inherited never-page 999999: the continuous rung MUST be able to fire here, or
+# "it stayed silent" is a fact about the fixture. No episode here is longer than one sweep.
 check "and the CONTINUOUS alarm stayed silent, which is the defect being demonstrated" \
   "! grep -q 'NOT READY for' '$T/alerts.log'"
-# The window closes on a READY sweep here, deliberately: that is what a flap looks like. $reason is
-# the CURRENT sweep's, so a page that read it would say "unknown" every single time it fired.
 check "and it names the reason from the last UN-READY check, not the good one that closed the window" \
   "grep -q 'Last un-ready reason: node syncing' '$T/alerts.log'"
+# THE CLAUSE THE RED-TEAM HAD REMOVED: the rung counts SWEEPS, not visitors, and it has no idea what
+# share of arrivals met a 503.
+check "and it does NOT claim to know what share of visitors were refused" \
+  "! grep -q 'refusing that share' '$T/alerts.log'"
+
+echo "== watchdog: ONE unbroken stretch is the continuous rung's business, whatever share it fills"
+# RUN A, the MEDIUM defect. Ten contiguous un-ready sweeps out of a window is a large percentage and
+# it is NOT a flap - it is one outage. This rung used to page on it at window close, which is twenty
+# minutes after the faucet had already recovered, in words that said it "recovers between checks".
+fl_env
+export WATCHDOG_READY_GRACE_SECS=999999
+export STUB_READY_SEQUENCE="0 0 0 0 0 1 1 1 1 1 1 1"
+wd_run 12
+check "one contiguous run does not page the flap rung, however big its share" \
+  "! grep -q 'FLAPPING' '$T/alerts.log'"
+check "and neither readiness rung says anything about it" \
+  "! grep -q 'NOT READY' '$T/alerts.log'"
+
+echo "== watchdog: a CONTINUOUS outage that ENDS gets ONE page and ONE recovery, not three"
+# RUN C, the HIGH defect, and the likely shape of the owner's page on 2026-09-20. The continuous
+# rung pages, the faucet recovers, its FIXED fires - and FIXED cleared alerted_unready, which was
+# the flap rung's only suppression. So the window closed later and sent a SECOND NEEDS YOU saying
+# the faucet "recovers between checks" about an outage that did nothing of the kind.
+fl_env
+export WATCHDOG_READY_GRACE_SECS=120
+export STUB_READY_SEQUENCE="0 0 0 0 0 0 1 1 1 1 1 1"
+wd_run 12
+check "the continuous rung pages, because that is what this is" \
+  "[ \"\$(grep -c 'NOT READY for' '$T/alerts.log')\" = 1 ]"
+check "and reports its own recovery once" \
+  "[ \"\$(grep -c 'faucet is READY again' '$T/alerts.log')\" = 1 ]"
+check "and the flap rung adds NOTHING after that FIXED" \
+  "! grep -q 'FLAPPING' '$T/alerts.log'"
+check "so the readiness episode is exactly one page and one recovery" \
+  "[ \"\$(grep -c 'NEEDS YOU: faucet NOT READY' '$T/alerts.log')\" = 1 ] && [ \"\$(grep -c 'FIXED: faucet is READY again' '$T/alerts.log')\" = 1 ]"
+
+echo "== watchdog: an outage that ENDS silences the flap rung for that window even when it oscillates after"
+# THE CASE THAT MAKES THE VETO LOAD-BEARING, and the shape of the 2026-09-20 repair: one stretch long
+# enough for the CONTINUOUS rung, its recovery, and then genuine oscillation - all inside one window.
+# The runs test alone does NOT cover this: there are three episodes here, so without the veto the
+# window closes on a FLAPPING page minutes after the operator has already had NOT READY and READY
+# again for the same event. One event, one page, whichever rung owns it.
+fl_env
+export WATCHDOG_READY_GRACE_SECS=120 WATCHDOG_READY_FLAP_WINDOW_SECS=600
+export STUB_READY_SEQUENCE="0 0 0 1 0 1 0 1 1 1 1"
+wd_run 11
+check "the continuous rung owns this episode and pages for it" \
+  "[ \"\$(grep -c 'NOT READY for' '$T/alerts.log')\" = 1 ]"
+check "and its recovery is reported" "grep -q 'faucet is READY again' '$T/alerts.log'"
+# THREE EPISODES AND 45% UN-READY: every other condition to page is satisfied. Only the veto stops it.
+check "and the flap rung stays silent for that window even though it oscillated afterwards" \
+  "! grep -q 'FLAPPING' '$T/alerts.log'"
+
+echo "== watchdog: FOUR episodes of unequal length page ONCE, not once per episode"
+# RUN D. Episodes differ in length on purpose - a rung keyed on runs rather than on duration must
+# not care, and a rung that paged per EPISODE would send four. One event, one page, and the count in
+# the sentence is what tells the operator how bad it is.
+fl_env
+export WATCHDOG_READY_GRACE_SECS=999999 WATCHDOG_READY_FLAP_WINDOW_SECS=600
+export STUB_READY_SEQUENCE="0 0 1 0 1 0 0 0 1 0 1 1"
+wd_run 12
+check "four episodes page exactly once" \
+  "[ \"\$(grep -c 'FLAPPING' '$T/alerts.log')\" = 1 ]"
+check "and the page carries the episode count rather than one page per episode" \
+  "grep -qE 'in [34] separate episodes' '$T/alerts.log'"
 
 echo "== watchdog: a STEADY faucet is not paged by the counting rung either"
 fl_env
 export STUB_READY_SEQUENCE="1"
 wd_run 6
-check "every check ready, nothing said" "! grep -q 'NOT READY on' '$T/alerts.log'"
+check "every check ready, nothing said" "! grep -q 'FLAPPING' '$T/alerts.log'"
 
 echo "== watchdog: TOO FEW CHECKS IS NOT A SAMPLE, however bad they look"
 # A window that closed on two sweeps says nothing about a faucet. Without this, a watchdog restarted
 # just before a window boundary would page on whatever it happened to catch.
 fl_env
 export WATCHDOG_READY_FLAP_MIN_SWEEPS=20
-export STUB_READY_SEQUENCE="0"
+export STUB_READY_SEQUENCE="0 1 0 1 0 1"
 wd_run 6
-check "a window with too few checks is not judged, even at 100% un-ready" \
-  "! grep -q 'NOT READY on' '$T/alerts.log'"
-
-echo "== watchdog: a CONTINUOUS outage pages ONCE, from the rung whose words fit it"
-# The counting rung trips on a continuous outage too - it is 100% of the window - and that would be
-# two pages for one event. It stays quiet while the continuous page is standing.
-fl_env
-export WATCHDOG_READY_GRACE_SECS=120
-export STUB_READY_SEQUENCE="0"
-wd_run 6
-check "the continuous alarm fires, because that is what this is" \
-  "grep -q 'NOT READY for' '$T/alerts.log'"
-check "and the counting rung does NOT add a second page for the same event" \
-  "! grep -q 'NOT READY on' '$T/alerts.log'"
+check "a window with too few checks is not judged, even when it is oscillating" \
+  "! grep -q 'FLAPPING' '$T/alerts.log'"
 
 echo "== watchdog: and steady readiness afterwards is reported ONCE, so a second episode pages"
 fl_env
-export STUB_READY_SEQUENCE="1 0 0 1 1 1 1 1 1 1 1 1"
+export STUB_READY_SEQUENCE="0 1 0 1 0 1 1 1 1 1 1 1 1 1 1 1"
 wd_run 16
 check "the readiness recovery is reported" "grep -q 'FIXED: faucet readiness is steady again' '$T/alerts.log'"
 check "exactly once, so a second flap can page again" "[ \"\$(grep -c 'readiness is steady again' '$T/alerts.log')\" = 1 ]"
 
+echo "== watchdog: recovery needs a MARGIN, not merely to be under the trigger"
+# HYSTERESIS. Clearing at the same percentage that pages makes a faucet sitting on the threshold
+# alternate NEEDS YOU and FIXED every window for as long as it sits there.
+fl_env
+export WATCHDOG_READY_FLAP_PCT=25 WATCHDOG_READY_FLAP_CLEAR_PCT=10
+export STUB_READY_SEQUENCE="0 1 0 1 0 1 1 1 1 0 1 1 1 1 1 1"
+wd_run 11
+check "a window between the clear threshold and the trigger does NOT declare recovery" \
+  "! grep -q 'readiness is steady again' '$T/alerts.log'"
+
 echo "== watchdog: a recovery is not declared off a sample too small to have shown the flap"
-# MIN_SWEEPS=6: the first window has exactly six sweeps and pages; the one after it has five, which
-# is not enough to have caught the flap and so not enough to call it over. The alternative is this
-# file's original sin - announcing a recovery nobody verified.
 fl_env
 export WATCHDOG_READY_FLAP_MIN_SWEEPS=6
-export STUB_READY_SEQUENCE="1 0 0 1 1 1 1 1 1 1 1 1"
+export STUB_READY_SEQUENCE="0 1 0 1 0 1 1 1 1 1 1 1"
 wd_run 11
 check "the flap still pages, from the window that did have the sample" \
-  "grep -q 'NOT READY on 2 of the last 6 checks' '$T/alerts.log'"
+  "grep -q 'FLAPPING' '$T/alerts.log'"
 check "and the short window after it does not declare the faucet fixed" \
   "! grep -q 'readiness is steady again' '$T/alerts.log'"
 
 echo "== watchdog: a window start left in the FUTURE by a backwards clock does not silence the rung"
 # What a restart reads back after NTP steps the clock back: a start well ahead of the run's clock,
-# so now - fw_start stays negative and the window can never close on its own. Every other rung here
-# would carry on; this one would go quiet, and quiet is what it looks like when there is nothing wrong.
+# so now - fw_start stays negative and the window can never close on its own.
 fl_env
 export WATCHDOG_READY_GRACE_SECS=120
 mkdir -p "$WATCHDOG_STATE_DIR"
 printf '1700009999' > "$WATCHDOG_STATE_DIR/ready.flap_start.flaps"
-export STUB_READY_SEQUENCE="1 0 0 1 1 1"
+export STUB_READY_SEQUENCE="0 1 0 1 0 1"
 wd_run 6
 check "the window restarts from now, so the flap is still named rather than lost for hours" \
-  "grep -q 'NOT READY on 2 of the last 6 checks' '$T/alerts.log'"
+  "grep -q 'FLAPPING: NOT READY on 3 of the last 6 checks' '$T/alerts.log'"
 
 echo "== watchdog: the poison signature triggers a repair, and a heal that works frees the budget again"
 wd_env
