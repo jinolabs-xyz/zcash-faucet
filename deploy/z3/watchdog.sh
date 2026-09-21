@@ -243,11 +243,15 @@ NODE_CONFIRMED_LAG_LIMIT="${WATCHDOG_NODE_CONFIRMED_LAG_LIMIT:-25}"  # blocks be
 # own agreement window is written in seconds (TIP_AGREE_SECONDS=300), so the floor is too:
 # this many seconds of the network moving past a frozen tip, converted per sweep at the
 # published rate, and only when no rate is published does the 25 above apply, exactly as it
-# does today for a silent app. 600 IS THE ONE JUDGEMENT HERE, named beside the +5 below:
-# twice the app's agreement window, so a corroborated tip has to be two windows past us
-# before a lag is even a candidate for the 300 s stall clock. At 75 s that is 8 blocks, at
-# 27.7 s 22, at 12.8 s 47 - one meaning, three numbers.
-NODE_CONFIRMED_LAG_SECS="${WATCHDOG_NODE_CONFIRMED_LAG_SECS:-600}"
+# does today for a silent app. 300 IS THE APP'S OWN AGREEMENT WINDOW (TIP_AGREE_SECONDS), and
+# the repo suite holds this at or above it: a corroborated tip has to be a whole window past
+# us before a lag is even a candidate for the 300 s stall clock, and the +5 blocks below is
+# the margin above the app's tolerance, as before. At 75 s that is 4 blocks (the +5 margin then
+# governs at 9: eleven minutes, not the 31 the constant gave), at 27.7 s 11, at 12.8 s 24 -
+# one meaning, three numbers. NOT 600, which was the first cut: the 2026-09-15 outage was 58
+# blocks at ~9.4 s, about 545 s of lag, and the suite's own case for that night showed a
+# 600 s floor letting the rung sleep through the outage it exists for. The night calibrates it.
+NODE_CONFIRMED_LAG_SECS="${WATCHDOG_NODE_CONFIRMED_LAG_SECS:-300}"
 NODE_STALL_SECS="${WATCHDOG_NODE_STALL_SECS:-300}"              # behind AND tip unmoved this long = wedged
 NODE_HEAL_MAX="${WATCHDOG_NODE_HEAL_MAX:-5}"                    # restarts before paging instead
 NODE_CLEAR_CACHE_AFTER="${WATCHDOG_NODE_CLEAR_CACHE_AFTER:-2}"  # from this attempt on, also drop the peer cache
