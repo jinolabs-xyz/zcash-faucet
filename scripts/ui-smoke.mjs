@@ -3697,6 +3697,37 @@ async function checkGrantBanner(browser, base) {
       `hidden ${gone}, back after reload ${back}, storage keys ${JSON.stringify(stored)}`);
     await ctx.close();
   }
+
+  // THE COMPACT BAND UNDER 64rem HAS ITS OWN ROW, because the rows above run at 1280x720 where
+  // that rule is inert. The CTO's red-team doubled the compact rule's negative margin-bottom and
+  // the masthead overlapped the band by 2.6 px at 1024x768 with every row still green (L64: a rule
+  // with no row is a wish). So at 1024x768: the band is still first and edge to edge, SHORTER than
+  // at desktop (the point of the rule), the masthead's top is at or below the band's bottom with a
+  // real gap, and the X is 32 px under a fine pointer and 44 under a coarse one (the tap floor).
+  // The band reads 34.6 px under a mouse and 46.6 under a finger (the 44 px X sets it); both are
+  // under the desktop's 53, which is what "compact" means here.
+  for (const theme of ["paper", "ink"]) for (const [pointer, hasTouch] of [["fine", false], ["coarse", true]]) {
+    const ctx = await browser.newContext({ viewport: { width: 1024, height: 768 }, hasTouch });
+    const page = await ctx.newPage();
+    await page.goto(base + "/", { waitUntil: "networkidle" });
+    await page.evaluate((t) => { try { localStorage.setItem("zfaucet_theme", t); } catch {} document.documentElement.dataset.theme = t; }, theme);
+    await page.waitForTimeout(400);
+    const r = await page.evaluate(() => {
+      const g = document.querySelector("[data-testid=grant-banner]"); const h = document.querySelector(".hdr"); const comp = document.querySelector(".comp"); const st = document.querySelector(".stage");
+      if (!g || !h) return { present: false };
+      const gr = g.getBoundingClientRect(); const hr = h.getBoundingClientRect(); const x = g.querySelector("[data-testid=grant-dismiss]"); const xb = x ? x.getBoundingClientRect() : null;
+      return { present: true, first: !!comp && comp.firstElementChild === g, top: Math.round(gr.top), left: Math.round(gr.left), right: Math.round(gr.right), stageWidth: st ? st.clientWidth : -1,
+        band: Math.round(gr.height * 10) / 10, gap: Math.round((hr.top - gr.bottom) * 10) / 10, xBox: xb ? [Math.round(xb.width), Math.round(xb.height)] : null };
+    });
+    const tag = `grant banner ${theme} 1024x768 ${pointer} pointer`;
+    ok(`${tag}: compact, first and edge to edge, and the masthead clears it`,
+      r.present && r.first && r.top === 0 && r.left === 0 && r.right === r.stageWidth && r.band < 50 && r.gap >= 8 && r.gap <= 40,
+      r.present ? `band ${r.band}px, masthead ${r.gap}px below its bottom (negative = overlap), ${r.left}..${r.right} of ${r.stageWidth}` : "no banner or no masthead");
+    ok(`${tag}: the X is ${hasTouch ? "44 for a finger" : "32 under a mouse"}`,
+      !!r.xBox && (hasTouch ? (r.xBox[0] >= 44 && r.xBox[1] >= 44) : (r.xBox[0] === 32 && r.xBox[1] === 32)),
+      `X ${r.xBox ? r.xBox.join("x") : "missing"}`);
+    await ctx.close();
+  }
 }
 
 async function checkNoEmDashReachesTheReader(browser, base) {

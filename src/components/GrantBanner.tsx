@@ -1,7 +1,7 @@
 "use client";
 /**
- * THE GRANT BANNER. Owner ask, 2026-09-21T12:04Z: a band across the top of the hero, directly
- * below the nav, saying the Coinholder-Directed Retroactive Grants vote is open and asking for a
+ * THE GRANT BANNER. Owner ask, 2026-09-21T12:04Z, placed on the owner's third look at 12:40Z: a
+ * band at the very top of every page, ABOVE the masthead, edge to edge, saying the Coinholder-Directed Retroactive Grants vote is open and asking for a
  * vote if the faucet has been useful. Voting is open 17 to 29 September 2026 (forum thread
  * 57056); our proposal is #7, "Self-Sovereign Zcash Testnet Faucet", and its own thread is the
  * link. Eight days, so it ships today and comes out after the 29th.
@@ -11,8 +11,8 @@
  * underlines on hover, a dismiss X drawn inline like every icon on the site, a 300 ms slide-in on
  * the site's own easing that reduced-motion turns off, and a close that lasts until the next
  * page load - useState only, no storage, because a returning visitor should see it again for the
- * eight days it is up. THE ONE DELIBERATE DEPARTURE FROM THE REFERENCE: it is IN FLOW below the
- * nav, not sticky. The page is one screen on desktop by rule and a sticky band on a phone would
+ * eight days it is up. THE ONE DELIBERATE DEPARTURE FROM THE REFERENCE: it is IN FLOW at the top,
+ * not sticky. The page is one screen on desktop by rule and a sticky band on a phone would
  * eat the viewport; the reference's scroll listener (and its console.log) never ships.
  *
  * The copy is under the site's rules: no em dash, no semicolon, no prose colon, no pool name.
