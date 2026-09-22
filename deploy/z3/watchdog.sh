@@ -58,6 +58,16 @@ READY_FLAP_CLEAR_PCT="${WATCHDOG_READY_FLAP_CLEAR_PCT:-10}"
 # past that an old hash is a claim about a chain that no longer exists - which this rung would
 # report as PROOF OF A FORK, park the miner and wake someone.
 FORK_REF_MAX_AGE_SECS="${WATCHDOG_FORK_REF_MAX_AGE_SECS:-1800}"
+# HOW FAR PAST THE REFERENCE OUR NODE MUST BE BEFORE ITS BLOCK AT THAT HEIGHT IS EVIDENCE.
+# The reference already sits ~10 blocks under the independent tip so THEIR side is settled. Ours
+# was not: the rung compared as soon as our height reached the reference, with zero margin, so a
+# block we held for one minute and then reorged away read as PROOF of a fork. It paged the owner
+# five times in 24 h on 2026-09-21 and 22, twice at 09:12 and 09:18 with our node 7 and 3 blocks
+# past the reference; at both heights our node now holds the hash the page said the independent
+# source had, which is what a normal reorg during catch-up looks like and not a fork. 10 blocks is
+# the same depth the app already trusts on the other side. A REAL fork is not missed by this, only
+# delayed: a forked node keeps extending its own chain, so it passes 10 within a couple of minutes.
+FORK_SETTLE_BLOCKS="${WATCHDOG_FORK_SETTLE_BLOCKS:-10}"
 # SENDS FAILING gets one self-heal (risk register II, R-18): a wallet that answers
 # balances and refuses every send is the zallet shape a restart has fixed every time so
 # far. The verdict is in-memory and ages out with its window (15 min from the older
@@ -1376,6 +1386,11 @@ check_history_against_reference() {
     case "$ours_h" in ''|*[!0-9]*) ours_h="" ;; esac
     if [ -n "$ours_h" ] && [ "$ours_h" -lt "$ref_h" ]; then
       tell_key="below"; tell="our node is at $ours_h, BELOW the reference height $ref_h (behind by $((ref_h - ours_h)); the reference sits ${ref_depth:-?} blocks under the independent tip). A node still catching up cannot answer for that block, so nothing is compared - this is not a fork."
+    elif [ -n "$ours_h" ] && [ "$((ours_h - ref_h))" -lt "$FORK_SETTLE_BLOCKS" ]; then
+      # OUR SIDE HAS TO BE SETTLED TOO. Reaching the reference height is not holding it: the top
+      # few blocks of any node are the ones a reorg takes, and this rung pages a human and parks
+      # the miner, so it compares only what both sides have kept.
+      tell_key="unsettled"; tell="our node is at $ours_h, only $((ours_h - ref_h)) block(s) past the reference height $ref_h and under the ${FORK_SETTLE_BLOCKS} this rung needs. The top of a chain is what a reorg takes, so a difference here is not yet evidence of one. Nothing is compared."
     else
       ours_hash="$(zebra_block_hash "$name" "$ref_h")"
       # Same rule applied to our own side rather than only to theirs: a partial read or a changed RPC

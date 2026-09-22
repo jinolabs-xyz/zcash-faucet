@@ -14,7 +14,9 @@ OnFailure=faucet-alert@%n.service
 
 [Service]
 Type=simple
-# MINER_MODE stays 'proposal' until the first live block is coordinated.
+# MINER_MODE is 'proposal' here and the shipped drop-in (zcash-testnet-miner.service.d/submit.conf)
+# raises it to 'submit'. The comment used to say proposal stayed until the first live block was
+# coordinated; that happened long ago and the box has run submit since 2026-07-28.
 EnvironmentFile=-/etc/faucet/miner.env
 Environment=MINER_MODE=proposal
 # The heartbeat, which is the only thing that can say whether this miner is WORKING as
