@@ -562,6 +562,17 @@ check "and the stage field cannot hold a formatted string" \
   "grep -q 'last_error_stage: Option<&' '$HB_SRC'"
 
 echo "== repo: every service routes its failures somewhere"
+# THE MINER'S LIVE MODE IS IN THE REPO, not only on the box. The drop-in was hand-made on the box
+# on 2026-07-28 and nothing shipped it, so a rebuild came back in proposal mode with no cookie path
+# and mined nothing. The nightly audit reported it for eight weeks and the live-smoke went red on
+# the public drift word. A rebuild has to reproduce the box, which is the whole point of that check.
+check "the miner's submit drop-in ships, so a rebuild mines as the box does" \
+  "[ -f '$REPO/deploy/z3/zcash-testnet-miner.service.d/submit.conf' ]"
+check "and it carries the mode and the cookie path, not an empty file" \
+  "grep -q '^Environment=MINER_MODE=submit$' '$REPO/deploy/z3/zcash-testnet-miner.service.d/submit.conf' && grep -q '^Environment=MINER_COOKIE_PATH=' '$REPO/deploy/z3/zcash-testnet-miner.service.d/submit.conf'"
+check "and the unit no longer claims proposal stays until a block is coordinated, which the drop-in contradicts" \
+  "! grep -q \"MINER_MODE stays 'proposal' until\" '$REPO/deploy/z3/zcash-testnet-miner.service'"
+
 # App found faucet-box-report.service had no OnFailure while every other service did.
 # Fixing that instance leaves the next one to be found the same way, so the rule is here.
 #

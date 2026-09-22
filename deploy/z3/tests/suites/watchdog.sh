@@ -54,7 +54,8 @@ wd_env() {
   # set would make a later case's silence mean nothing.
   unset STUB_READY_REFS STUB_READY_USEDHEIGHT STUB_READY_USEDHEIGHT_SEQ STUB_READY_REFS_SEQ \
         WATCHDOG_FORK_HEAL_ENABLED \
-        WATCHDOG_FORK_AHEAD_BLOCKS WATCHDOG_FORK_MINER_MIN_SECS WATCHDOG_FORK_PARK_DIR
+        WATCHDOG_FORK_AHEAD_BLOCKS WATCHDOG_FORK_MINER_MIN_SECS WATCHDOG_FORK_PARK_DIR \
+        WATCHDOG_FORK_SETTLE_BLOCKS
   # Capture what would have been paged, without a webhook.
   # Records EVERY argument, so the suite can see that the watchdog passes --now (its
   # messages are one per episode and must never be held by alert.sh's cooldown).
@@ -2476,12 +2477,63 @@ check "and names OUR height and the gap, not the app's constant" \
 check "and carries the reference's own published offset rather than a hard-coded one" \
   "grep -q 'the reference sits 7 blocks under the independent tip' '$T/run.log'"
 
+echo "== watchdog: a node that has only just REACHED the reference is cannot-compare too"
+# THE FALSE PAGE OF 2026-09-22. The guard above only refused a node BELOW the reference, so the
+# compare ran the moment our height reached it, with zero margin. The top few blocks of any node
+# are the ones a reorg takes: at 09:12Z our node was 7 blocks past the reference and held a block
+# that was reorged away a minute later, and the rung called it PROOF of a fork, paged the owner
+# and parked the miner. At both paged heights our node now holds the hash the page attributed to
+# the independent source. Their side is settled by the app's own depth; ours needs the same.
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350187 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFHEIGHT=4350180 STUB_READY_REFHASH=00000000aaaaaaaabbbbbbbbccccccccddddddddeeeeeeeeffffffff00000000
+export STUB_ZEBRA_HASH=00000000eeeeeeeeffffffff1111111122222222333333334444444455555555
+wd_run 2
+# The hashes DIFFER and our height is PAST the reference: the old guard let this through.
+check "pages nothing when our node is 7 blocks past the reference, under the settle depth" \
+  "! grep -q 'this is PROOF' '$T/alerts.log'"
+check "and says how far past it is and what it needs, in blocks" \
+  "grep -q 'only 7 block(s) past the reference height 4350180 and under the 10' '$T/run.log'"
+check "and no park marker is written for a block neither side has kept" \
+  "[ ! -f '$T/park/miner-parked-by-fork-heal' ]"
+
+echo "== watchdog: and once it IS settled, a different block is still PROOF"
+# The other side of the same boundary: the guard delays a real fork, it does not hide one. One
+# block further and the page fires, so a forked node is caught within a couple of minutes.
+wd_fork_env
+export STUB_ZEBRA_BLOCKS=4350190 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFHEIGHT=4350180 STUB_READY_REFHASH=00000000aaaaaaaabbbbbbbbccccccccddddddddeeeeeeeeffffffff00000000
+export STUB_ZEBRA_HASH=00000000eeeeeeeeffffffff1111111122222222333333334444444455555555
+wd_run 2
+check "pages PROOF when our node is 10 blocks past the reference and the block differs" \
+  "grep -q 'this is PROOF' '$T/alerts.log'"
+check "and the marker is written, so no deploy starts the miner" \
+  "[ -f '$T/park/miner-parked-by-fork-heal' ]"
+
+echo "== watchdog: the settle depth is read from the knob, not hard-coded"
+# A rung that baked in 10 would pass both rows above. Driven at 4 with our node 5 past.
+wd_fork_env
+export WATCHDOG_FORK_SETTLE_BLOCKS=4
+export STUB_ZEBRA_BLOCKS=4350185 STUB_ZEBRA_EST=4350200
+export STUB_READY_REFHEIGHT=4350180 STUB_READY_REFHASH=00000000aaaaaaaabbbbbbbbccccccccddddddddeeeeeeeeffffffff00000000
+export STUB_ZEBRA_HASH=00000000eeeeeeeeffffffff1111111122222222333333334444444455555555
+wd_run 2
+check "a lower settle depth lets the same 5-block gap through to the compare" \
+  "grep -q 'this is PROOF' '$T/alerts.log'"
+unset WATCHDOG_FORK_SETTLE_BLOCKS
+
 echo "== watchdog: a CHANGED refusal reason speaks; the same one repeated does not"
 # THE LATCH WAS ONE BOOLEAN FOR EVERY REASON, re-armed only by a successful compare. So after the
 # first "no reference" line, a malformed hash, a stale reference, a node below the height and a
 # zebra that would not answer were ALL SILENT - the silent-refusal shape this rung exists to end,
 # arriving through its own logging.
 wd_fork_env
+# SETTLE_BLOCKS=0 here, and only here: this case is about the LATCH naming a second, different
+# reason, not about the settle depth the rest of this PR adds. With the shipped 10 the node would
+# crawl one block a sweep and never reach the compare, so the second reason would never arrive and
+# the case would be testing the new guard instead of the latch. The guard has its own three rows
+# above, one of them driving this same knob.
+export WATCHDOG_FORK_SETTLE_BLOCKS=0
 export STUB_ZEBRA_BLOCKS=4350178 STUB_ZEBRA_EST=4350200 STUB_ZEBRA_ADVANCE=1
 export STUB_READY_REFHEIGHT=4350180 STUB_READY_REFHASH=00000000aaaaaaaabbbbbbbbccccccccddddddddeeeeeeeeffffffff00000000
 wd_run 4
@@ -2489,6 +2541,7 @@ check "the FIRST reason is named" \
   "grep -q 'BELOW the reference height 4350180' '$T/run.log'"
 check "and the SECOND, different reason is named too rather than swallowed by the latch" \
   "grep -q 'The READ failed, not the height' '$T/run.log'"
+unset WATCHDOG_FORK_SETTLE_BLOCKS
 
 echo "== watchdog: and the same reason repeated is still said once"
 wd_fork_env
