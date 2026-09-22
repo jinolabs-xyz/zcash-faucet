@@ -250,6 +250,34 @@ check "names the drop-in" "grep -q 'drop-in zcash-testnet-miner.service.d/overri
 bash "$AUDIT" --verbose > "$T/dropinv.log" 2>&1
 check "verbose shows the directive name, value redacted" "grep -q 'MINER_MODE=<redacted>' '$T/dropinv.log'"
 
+echo "== drift: a drop-in the repo SHIPS is not drift, so the finding can actually be cleared"
+# THE CHECK COULD NOT BE SATISFIED. It reported every drop-in on the box and never looked at the
+# repo, so its own fix line ("add the drop-in to the repo") did nothing: the miner's submit.conf
+# was shipped in #740 and the finding stood on the next run, red in the live smoke.
+drift_env; make_clean_box
+mkdir -p "$T/units/zcash-testnet-miner.service.d" "$T/repo/deploy/z3/zcash-testnet-miner.service.d"
+printf '[Service]\nEnvironment=MINER_MODE=submit\n' > "$T/units/zcash-testnet-miner.service.d/override.conf"
+printf '# why this exists, at length\n\n[Service]\nEnvironment=MINER_MODE=submit\n' > "$T/repo/deploy/z3/zcash-testnet-miner.service.d/override.conf"
+bash "$AUDIT" > "$T/dropinok.log" 2>&1
+check "the shipped drop-in is not reported" \
+  "! grep -q 'drop-in zcash-testnet-miner.service.d/override.conf' '$T/dropinok.log'"
+check "and comments in the repo's copy are not drift, because systemd never reads them" \
+  "! grep -q 'differs from the repo' '$T/dropinok.log'"
+
+echo "== drift: and a drop-in whose DIRECTIVES differ is its own finding"
+# The other half: shipped is not the same as matching. A box running submit against a repo that
+# says proposal would rebuild into a miner that mines nothing, which is what this audit is for.
+drift_env; make_clean_box
+mkdir -p "$T/units/zcash-testnet-miner.service.d" "$T/repo/deploy/z3/zcash-testnet-miner.service.d"
+printf '[Service]\nEnvironment=MINER_MODE=submit\n' > "$T/units/zcash-testnet-miner.service.d/override.conf"
+printf '[Service]\nEnvironment=MINER_MODE=proposal\n' > "$T/repo/deploy/z3/zcash-testnet-miner.service.d/override.conf"
+bash "$AUDIT" > "$T/dropindiff.log" 2>&1
+check "exits 1" "[ $? -eq 1 ]"
+check "names it as a DIFFERENCE, not as missing" \
+  "grep -q 'drop-in zcash-testnet-miner.service.d/override.conf differs from the repo' '$T/dropindiff.log'"
+check "and does not also claim the repo has no copy of it" \
+  "! grep -q 'override.conf exists on the box and is not in the repo' '$T/dropindiff.log'"
+
 echo "== drift: a stale installed script means the box runs unreviewed code"
 drift_env; make_clean_box; echo "# hand edit on the box" >> "$T/install/thing.sh"
 bash "$AUDIT" > "$T/stale.log" 2>&1

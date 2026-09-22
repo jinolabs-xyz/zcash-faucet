@@ -142,6 +142,13 @@ for installed in "$UNIT_DIR"/*.service "$UNIT_DIR"/*.timer; do
     || found "$unit is installed but the repo has no copy of it, so a rebuild loses it" \
          "cp $installed $OVERLAY_DIR/ && git -C $REPO_DIR add deploy/z3/$unit   # then commit it"
 done
+# Two unit files agree when their DIRECTIVES agree. The repo's copy carries comments explaining
+# why it exists and the box's does not, and a comment is not configuration: systemd never reads it.
+same_directives() {
+  [ "$(grep -vE '^[[:space:]]*(#|$)' "$1" | sed -E 's/[[:space:]]+$//' | sort | sha256sum | cut -d" " -f1)" \
+  = "$(grep -vE '^[[:space:]]*(#|$)' "$2" | sed -E 's/[[:space:]]+$//' | sort | sha256sum | cut -d" " -f1)" ]
+}
+
 for dropin_dir in "$UNIT_DIR"/*.d; do
   [ -d "$dropin_dir" ] || continue
   unit="$(basename "$dropin_dir" .d)"
@@ -149,8 +156,19 @@ for dropin_dir in "$UNIT_DIR"/*.d; do
   is_ours "$unit" || continue
   for conf in "$dropin_dir"/*.conf; do
     [ -e "$conf" ] || continue
-    found "drop-in $unit.d/$(basename "$conf") exists on the box and is not in the repo" \
-      "fold its directives into $OVERLAY_DIR/$unit (or add the drop-in to the repo), then commit"
+    # THE CHECK HAS TO BE SATISFIABLE. This reported every drop-in on the box unconditionally and
+    # never looked at the repo, so its own fix line ("add the drop-in to the repo") could not clear
+    # it: the miner's submit.conf was shipped in #740 and the finding stood anyway. The unit check
+    # ten lines up has always compared against the repo; this one now does the same, and a drop-in
+    # whose CONTENTS differ is its own finding, because a rebuild would then install something else.
+    shipped="$OVERLAY_DIR/$unit.d/$(basename "$conf")"
+    if [ ! -f "$shipped" ]; then
+      found "drop-in $unit.d/$(basename "$conf") exists on the box and is not in the repo" \
+        "fold its directives into $OVERLAY_DIR/$unit (or add it at $shipped), then commit"
+    elif ! same_directives "$conf" "$shipped"; then
+      found "drop-in $unit.d/$(basename "$conf") differs from the repo's copy, so a rebuild installs something else" \
+        "diff the two and commit the box's version, or re-run install-ops to put the repo's on the box"
+    fi
     # Allowlist: only KEY= lines print, so nothing can slip through a rule
     # that does not exist. Continuation lines and comments carry secrets too.
     if [ "$VERBOSE" = "1" ]; then
