@@ -3727,17 +3727,29 @@ async function checkGrantBanner(browser, base) {
   // AND THE DRIP CARD IN ITS TALLEST STATE. The #648 row measures the claim panel at rest; the
   // receipt is taller, and before the band existed it had ZERO slack at 1366x768 and one pixel at
   // 1280x720 (measured on b233418), so a band that costs anything at all puts a scrollbar on the
-  // receipt the owner just read. One real claim at each of those two sizes, then the panel is read.
+  // receipt the owner just read. The claim and the tx read are ROUTED, not real: two more real
+  // claims here spent the per-client proof-of-work budget and the silent-retry and mobile rows
+  // later in the same run could no longer POST (main's ui job at c475682, 4 FAILED). The receipt
+  // renders from the answers, and a routed answer paints the same receipt.
+  const routedTxid = "b3bfc65acf8d2e28c78270f7b48802b12b4406881d533b354f1338d7b0f107f8";
   for (const vp of [{ width: 1366, height: 768 }, { width: 1280, height: 720 }]) {
     const ctx = await browser.newContext({ viewport: vp });
     const page = await ctx.newPage();
     try {
+      // The puzzle too: difficulty escalates per client across a run, and a real 2^25 puzzle
+      // takes the browser past a minute. The routed faucet never checks the proof.
+      await page.route("**/api/pow/challenge", (route) => route.fulfill({ status: 200, contentType: "application/json",
+        body: JSON.stringify({ ok: true, seed: "00000000000000000000000000000000", difficulty: 8, exp: Math.floor(Date.now() / 1000) + 600, sig: "0000000000000000000000000000000000000000000000000000000000000000" }) }));
+      await page.route("**/api/faucet", (route) => route.fulfill({ status: 200, contentType: "application/json",
+        body: JSON.stringify({ ok: true, txid: routedTxid, network: "taz", paidZat: "10000000", explorerUrl: `https://testnet.cipherscan.app/tx/${routedTxid}`, requestId: "ui-smoke-receipt" }) }));
+      await page.route("**/api/tx**", (route) => route.fulfill({ status: 200, contentType: "application/json",
+        body: JSON.stringify({ ok: true, txid: routedTxid, known: true, confirmations: 3, height: 4374583 }) }));
       await page.goto(base + "/", { waitUntil: "networkidle" });
       await page.getByRole("button", { name: "Make a throwaway address and key" }).first().click();
       await page.waitForFunction(() => (document.querySelector("[data-testid=address-input]")?.value ?? "").length > 100, null, { timeout: 20_000 });
       await page.getByRole("button", { name: "Copy key" }).first().click().catch(() => {});
       await page.getByTestId("claim-button").click();
-      await page.getByTestId("sent-badge").waitFor({ timeout: 120_000 });
+      await page.getByTestId("sent-badge").waitFor({ timeout: 60_000 });
       await page.waitForTimeout(600);
       const r = await page.evaluate(() => { const p = document.querySelector(".card.claim > .panel"); const g = document.querySelector("[data-testid=grant-banner]");
         return p ? { sh: p.scrollHeight, ch: p.clientHeight, band: !!g } : null; });
