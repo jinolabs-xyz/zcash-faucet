@@ -3628,13 +3628,13 @@ async function checkTabAffordanceAndLimits(browser, base) {
 // behind a null, so a page with a healthy backend renders none of them and a check that only
 // loaded the page would go green against all five. So the status is served back with the fields
 // nulled and the placeholders forced onto the screen before anything is asserted.
-// ===== THE GRANT BANNER (owner ask 2026-09-21T12:04Z), on every page the shell owns ============
-// Eight days of a band under the masthead asking for a vote. The things a visitor can be
-// failed by: the wrong link, a page without it, copy that breaks the site's rules, a band that
-// floats under the nav instead of touching it, a dismiss that remembers (a returning visitor
-// should see it again). The href is the forum thread of the proposal itself, held here as the
-// literal so a typo in the component is red on every page.
-const GRANT_URL = "https://forum.zcashcommunity.com/t/retroactive-grant-application-self-sovereign-zcash-testnet-faucet/57002";
+// ===== THE NOTICE BAND (the #737 grant band, NU7 notice since 2026-10-08), on every page ========
+// A band under the masthead saying drips are paused for NU7 and pointing at a faucet that pays.
+// The things a visitor can be failed by: the wrong link, a page without it, copy that breaks the
+// site's rules, a band that floats under the nav instead of touching it, a dismiss that remembers
+// (a returning visitor should see it again). The href is held here as the literal so a typo in
+// the component is red on every page.
+const GRANT_URL = "https://faucet.testnet.valargroup.dev";
 async function checkGrantBanner(browser, base) {
   const pages = ["/", "/terms", "/donate", "/fund", "/limits"];
   for (const theme of ["paper", "ink"]) {
@@ -3664,7 +3664,7 @@ async function checkGrantBanner(browser, base) {
         };
       });
       const tag = `grant banner ${theme} ${path}`;
-      ok(`${tag}: renders, and its link is the proposal's own forum thread, opened in a new tab`,
+      ok(`${tag}: renders, and its link is the NU7 faucet it names, opened in a new tab`,
         r.present && r.href === GRANT_URL && r.target === "_blank" && /noreferrer/.test(r.rel || ""),
         r.present ? `href ${r.href} target ${r.target} rel ${r.rel}` : "no banner on this page");
       if (!r.present) continue;
