@@ -55,7 +55,7 @@ wd_env() {
   unset STUB_READY_REFS STUB_READY_USEDHEIGHT STUB_READY_USEDHEIGHT_SEQ STUB_READY_REFS_SEQ \
         WATCHDOG_FORK_HEAL_ENABLED \
         WATCHDOG_FORK_AHEAD_BLOCKS WATCHDOG_FORK_MINER_MIN_SECS WATCHDOG_FORK_PARK_DIR \
-        WATCHDOG_FORK_SETTLE_BLOCKS
+        WATCHDOG_FORK_SETTLE_BLOCKS WATCHDOG_CONTAINER_PARK_DIR
   # Capture what would have been paged, without a webhook.
   # Records EVERY argument, so the suite can see that the watchdog passes --now (its
   # messages are one per episode and must never be held by alert.sh's cooldown).
@@ -2793,3 +2793,63 @@ check "and the app's node-status budget was found in nodeStatus.ts" \
 # Both in milliseconds for the comparison; curl's --max-time is seconds.
 check "and the fetch outlasts it, so a slow wallet is REPORTED rather than timing us out" \
   "[ \$(( ${wd_ready_timeout:-0} * 1000 )) -gt ${wd_app_budget:-999999} ]"
+
+echo "== watchdog: a parked container is left alone, and the REST of the stack is still watched"
+# The 2026-10-08 shape: an intentional pause used to require stopping the watchdog, so
+# parking zallet silenced supervision of everything. These cases are about the supervision
+# that must survive the pause, not about the pause itself.
+wd_env
+export WATCHDOG_CONTAINER_PARK_DIR="$T/park"; mkdir -p "$WATCHDOG_CONTAINER_PARK_DIR"
+: > "$WATCHDOG_CONTAINER_PARK_DIR/container-parked-z3-testnet-zallet-1"
+echo exited  > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo exited  > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+wd_run 1
+check "does NOT start the parked container" \
+  "! grep -qE 'docker (start|restart) z3-testnet-zallet-1' '$STUB_LOG'"
+check "says why it declined, rather than going silent" \
+  "grep -q 'z3-testnet-zallet-1 is parked' '$T/run.log'"
+# The point of the whole change: the other containers keep being recovered.
+check "STILL starts the unparked container that is down" \
+  "grep -qE 'docker start z3-testnet-zebra-1' '$STUB_LOG'"
+check "and does not count the park as a crash-loop attempt" \
+  "! grep -q 'z3-testnet-zallet-1 is .* - starting it' '$T/run.log'"
+
+echo "== watchdog: a park never escalates into a page"
+wd_env
+export WATCHDOG_CONTAINER_PARK_DIR="$T/park"; mkdir -p "$WATCHDOG_CONTAINER_PARK_DIR"
+: > "$WATCHDOG_CONTAINER_PARK_DIR/container-parked-z3-testnet-zallet-1"
+echo exited  > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+wd_run 5
+check "no crash-loop page for a container the owner stopped" \
+  "! grep -q 'NEEDS YOU: z3-testnet-zallet-1 crash loop' '$T/alerts.log'"
+check "and never claims it fixed one either" \
+  "! grep -q 'FIXED: z3-testnet-zallet-1' '$T/alerts.log'"
+
+echo "== watchdog: clearing the marker resumes recovery"
+wd_env
+export WATCHDOG_CONTAINER_PARK_DIR="$T/park"; mkdir -p "$WATCHDOG_CONTAINER_PARK_DIR"
+echo exited > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+wd_run 1    # no marker at all: ordinary recovery, proving the gate is the file and not the name
+check "an unparked container is started as before" \
+  "grep -qE 'docker start z3-testnet-zallet-1' '$STUB_LOG'"
+
+echo "== watchdog: an un-ready page during a pause says the pause is deliberate"
+wd_env
+export WATCHDOG_CONTAINER_PARK_DIR="$T/park"; mkdir -p "$WATCHDOG_CONTAINER_PARK_DIR"
+: > "$WATCHDOG_CONTAINER_PARK_DIR/container-parked-z3-testnet-zallet-1"
+export WATCHDOG_READY_GRACE_SECS=0 STUB_READY=0   # STUB_READY is what the curl double reads; the closed port alone is not enough
+echo exited  > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+echo running > "$STUB_CONTAINERS/faucet-web"
+wd_run 1
+check "the page still fires, because the faucet really is not serving" \
+  "grep -q 'NOT READY' '$T/alerts.log'"
+check "but it names the park, so it does not read as a fresh outage" \
+  "grep -q 'PARKED ON PURPOSE' '$T/alerts.log'"
+check "and says the rest of the stack is still supervised" \
+  "grep -q 'rest of the stack is still supervised' '$T/alerts.log'"
+unset WATCHDOG_READY_GRACE_SECS STUB_READY   # STUB_READY leaking is the worst of this suite's order bugs
+
