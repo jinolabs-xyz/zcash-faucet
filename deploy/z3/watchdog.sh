@@ -118,6 +118,32 @@ STATE_DIR="${WATCHDOG_STATE_DIR:-/run/faucet-watchdog}"
 FORK_PARK_DIR="${WATCHDOG_FORK_PARK_DIR:-/var/lib/faucet-watchdog}"
 FORK_PARK_MARKER="$FORK_PARK_DIR/miner-parked-by-fork-heal"
 
+# THE CONTAINER PARK MARKER. Same idea as the fork marker above, persistent for the same
+# reason: a parking decision outlives a reboot.
+#
+# It exists because an intentional pause used to cost us the whole watchdog. The NU7 guard
+# had to `systemctl stop faucet-watchdog` before stopping zallet, because step 2 restarts
+# any stopped container - so parking ONE container silenced supervision of ALL of them. On
+# 2026-10-08 that is what happened: zallet and the watchdog stopped in the same second, and
+# for the 45 hours that followed nothing watched caddy, faucet-web or zebra and nothing
+# would have paged if one had died. The pause was correct; losing the watchdog with it was
+# not.
+#
+# With a marker the watchdog keeps sweeping and keeps paging, and declines to start only
+# the container a human parked. Cleared only by a human, like the fork marker.
+CONTAINER_PARK_DIR="${WATCHDOG_CONTAINER_PARK_DIR:-$FORK_PARK_DIR}"
+container_park_marker() { printf '%s/container-parked-%s' "$CONTAINER_PARK_DIR" "$1"; }
+container_parked() { [ -f "$(container_park_marker "$1")" ]; }
+
+# Parked container names, so a page about un-readiness can say the pause is deliberate.
+parked_names() {
+  local n out=""
+  for n in "$zebra" "$zallet" "$faucet"; do
+    [ -n "$n" ] && container_parked "$n" && out="$out $n"
+  done
+  printf '%s' "${out# }"
+}
+
 # THE AHEAD RUNG'S BOUNDS (R-12). Step 7 handles a node the network has left BEHIND. This
 # is the other shape: our node higher than every independent reference, which is what a
 # private chain looks like from the inside. A couple of blocks ahead is ordinary for a node
@@ -476,6 +502,15 @@ flap_set() {
 recover_if_down() {
   local name="$1"
   [ -n "$name" ] || return 0
+
+  # PARKED: a human stopped this on purpose, so starting it is the one thing we must not do.
+  # Logged every sweep rather than returning silently, or a marker becomes a way to lose a
+  # service quietly. BEFORE the flap counter deliberately: a park is not a failure, and
+  # counting it would escalate into a page for a state the owner chose.
+  if container_parked "$name"; then
+    log "$name is parked ($(container_park_marker "$name")); not starting it. Clear the marker to resume - see OPERATIONS.md."
+    return 0
+  fi
 
   local state
   if ! state="$(docker inspect -f '{{.State.Status}}' "$name" 2>/dev/null)" || [ -z "$state" ]; then
@@ -1733,7 +1768,14 @@ while true; do
     [ "$unready_since" = "0" ] && unready_since="$now"
     elapsed=$((now - unready_since))
     if [ "$elapsed" -ge "$READY_GRACE_SECS" ] && [ "$alerted_unready" = "0" ]; then
-      danger "faucet NOT READY for $((elapsed / 60)) min. Reason: ${reason:-unknown}."; rc=$?
+      # Name any parked container. Un-readiness during a deliberate pause is expected, and a
+      # page that does not say so reads as a fresh outage to whoever wakes up to it.
+      _parked="$(parked_names)"
+      if [ -n "$_parked" ]; then
+        danger "faucet NOT READY for $((elapsed / 60)) min. Reason: ${reason:-unknown}. PARKED ON PURPOSE: ${_parked}. Expected while the pause is in force; the rest of the stack is still supervised."; rc=$?
+      else
+        danger "faucet NOT READY for $((elapsed / 60)) min. Reason: ${reason:-unknown}."; rc=$?
+      fi
       paged "$rc" && alerted_unready=1
     fi
     # 4b: SENDS FAILING → one zallet restart (R-18). Keyed on the app's own readiness
