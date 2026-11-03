@@ -411,12 +411,20 @@ elif [ -n "$MINER_ADDRESS$CARRY_ADDRESS" ] || [ -n "$ZEBRA_IMG$ZALLET_IMG$ZAINO_
     if [ -n "$EFF_ADDRESS" ] || [ -n "$ZEBRA_IMG" ]; then
       echo "  zebra:"
       [ -n "$ZEBRA_IMG" ] && echo "    image: \"$ZEBRA_IMG\""
-      if [ -n "$EFF_ADDRESS" ]; then
-        echo "    environment:"
-        echo "      ZEBRA_MINING__MINER_ADDRESS: \"$EFF_ADDRESS\""
-      fi
+      echo "    environment:"
+      # zallet 0.1.0-beta.4's zebra backend follows the non-finalized chain over this gRPC
+      # service. Unauthenticated, so it stays on the compose network and is never published.
+      echo "      ZEBRA_RPC__INDEXER_LISTEN_ADDR: \"0.0.0.0:8230\""
+      [ -n "$EFF_ADDRESS" ] && echo "      ZEBRA_MINING__MINER_ADDRESS: \"$EFF_ADDRESS\""
     fi
-    [ -n "$ZALLET_IMG" ] && { echo "  zallet:"; echo "    image: \"$ZALLET_IMG\""; }
+    if [ -n "$ZALLET_IMG" ]; then
+      echo "  zallet:"
+      echo "    image: \"$ZALLET_IMG\""
+      # beta.4 dropped the zaino backend binary; the zebra backend reads zebrad state directly.
+      echo "    entrypoint: [\"/usr/local/bin/zallet-zebra\"]"
+      echo "    volumes:"
+      echo "      - \"\${Z3_CHAIN_DATA_PATH:-chain}:/var/lib/zebra-state:ro\""
+    fi
     [ -n "$ZAINO_IMG" ]  && { echo "  zaino:";  echo "    image: \"$ZAINO_IMG\""; }
     true
   } > "$OVERRIDE"
@@ -548,6 +556,21 @@ case "$(faucet_auth_kind "$ZCFG")" in
     echo "wallet would reject the faucet and every drip would fail." >&2
     exit 1 ;;
 esac
+
+# zallet 0.1.0-beta.4's zebra backend refuses to start without this section: it reads
+# zebrad's state at the mounted path and follows the tip over zebrad's indexer gRPC.
+python3 - "$ZCFG" <<'PY2'
+import re, sys
+path = sys.argv[1]
+src = open(path).read()
+src = re.sub(r'\n*\[indexer\.read_state_service\][^\[]*', '\n', src).rstrip("\n")
+src += '\n\n[indexer.read_state_service]\ngrpc_address = "zebra:8230"\nzebra_state_path = "/var/lib/zebra-state"\n'
+open(path, "w").write(src)
+PY2
+grep -q '^zebra_state_path = "/var/lib/zebra-state"$' "$ZCFG" || {
+  echo "REFUSING TO CONTINUE: $ZCFG has no [indexer.read_state_service] after writing it," >&2
+  echo "and zallet's zebra backend will not start without one." >&2
+  exit 1; }
 
 say "Starting Zebra (the node) - first sync takes hours, one time"
 z3 up -d zebra
@@ -803,7 +826,7 @@ fi
 # --config is required: the RPC client reads the server port from the same
 # config the server started with, and without it zallet looks for a config
 # in the datadir that does not exist ("No JSON-RPC port available").
-zrpc(){ z3 exec -T zallet zallet-zaino \
+zrpc(){ z3 exec -T zallet zallet-zebra \
           --datadir /var/lib/zallet --config /etc/zallet/zallet.toml rpc "$@"; }
 ACCTFILE="$HERE/.faucet-account"
 
