@@ -204,6 +204,34 @@ check "and the miner address survived alongside the image" \
 check "an unpinned component says so rather than guessing a tag" \
   "grep -q 'zallet has no pinned image' '$T/pin.log'"
 
+# ZALLET 0.1.0-beta.4 RUNS THE ZEBRA BACKEND, and three things have to reach the stack for it
+# to start against a real chain: zebrad serving its indexer gRPC, zallet's entrypoint renamed
+# from the removed zallet-zaino, and zebrad's state mounted read-only into zallet. Miss the
+# mount and zallet has nothing to read; keep zallet-zaino and the container does not start.
+deploy_fresh_env
+printf 'Z3_ZEBRA_IMAGE=ghcr.io/example/zebra-indexer:v7.0.0\nZ3_ZALLET_IMAGE=zodlinc/zallet:v0.1.0-beta.4\n' \
+  > "$D/z3/stack-versions.env"
+FAUCET_MINER_ADDRESS="$GOOD_ADDR" run_deploy > "$T/beta4.log" 2>&1
+OVR4="$D/z3-stack/docker-compose.override.yml"
+check "a beta.4 deploy exits 0" "[ $? -eq 0 ]"
+check "zebrad serves the indexer gRPC that zallet follows the tip over" \
+  "grep -q 'ZEBRA_RPC__INDEXER_LISTEN_ADDR: \"0.0.0.0:8230\"' '$OVR4'"
+check "and the miner address shares zebra's one environment block, not a second one" \
+  "[ \"\$(grep -c '^    environment:\$' '$OVR4')\" = '1' ] && grep -q 'ZEBRA_MINING__MINER_ADDRESS: \"$GOOD_ADDR\"' '$OVR4'"
+check "zallet runs the zebra backend binary, not the removed zallet-zaino" \
+  "grep -q 'entrypoint: \[\"/usr/local/bin/zallet-zebra\"\]' '$OVR4'"
+check "and reads zebrad's state through a READ-ONLY mount" \
+  "grep -qF -- '- \"\${Z3_CHAIN_DATA_PATH:-chain}:/var/lib/zebra-state:ro\"' '$OVR4'"
+check "the unauthenticated indexer port is never published to the host" \
+  "! grep -q '8230:' '$OVR4'"
+check "zallet.toml gets the read-state section the zebra backend refuses to start without" \
+  "grep -q '^\[indexer.read_state_service\]\$' '$D/z3-stack/config/testnet/zallet.toml' && grep -q '^zebra_state_path = \"/var/lib/zebra-state\"\$' '$D/z3-stack/config/testnet/zallet.toml'"
+FAUCET_MINER_ADDRESS="$GOOD_ADDR" run_deploy > "$T/beta4-again.log" 2>&1
+check "and a second deploy leaves exactly one such section, not two" \
+  "[ \"\$(grep -c '^\[indexer.read_state_service\]\$' '$D/z3-stack/config/testnet/zallet.toml')\" = '1' ]"
+check "no zallet-zaino is left anywhere in deploy.sh" \
+  "! grep -q 'zallet-zaino' '$REPO/deploy/deploy.sh'"
+
 # Images must land even with no miner address: a box that serves without mining still
 # has to run the versions we reviewed.
 deploy_fresh_env
