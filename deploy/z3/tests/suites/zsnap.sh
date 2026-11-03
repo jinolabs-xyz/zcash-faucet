@@ -42,7 +42,8 @@ check "latest symlink points at the newest height" \
   "[ \"\$(readlink '$ZSNAP_DIR/snapshots/latest.tar.zst')\" = \"zsnap-testnet-3652104-\$(cut -c1-12 < '$ZSNAP_DIR/snapshots/latest.manifest-hash').tar.zst\" ]"
 check "sidecar has the FULL manifest hash, not the truncated name form" \
   "[ \"\$(wc -c < '$ZSNAP_DIR/snapshots/latest.manifest-hash' | tr -d ' ')\" = '65' ]"
-check "archive unpacks to snapshot/MANIFEST.json" "zstd -dc \"$ZSNAP_DIR/snapshots/\$(readlink '$ZSNAP_DIR/snapshots/latest.tar.zst')\" | tar -tf - | grep -q 'snapshot/MANIFEST.json'"
+# tar finds the member itself: `| grep -q` quits on the first hit, tar dies writing into the closed pipe, pipefail fails the row.
+check "archive unpacks to snapshot/MANIFEST.json" "zstd -dc \"$ZSNAP_DIR/snapshots/\$(readlink '$ZSNAP_DIR/snapshots/latest.tar.zst')\" | tar -tf - snapshot/MANIFEST.json >/dev/null"
 check "workdir cleaned up" "[ -z \"\$(ls -A '$ZSNAP_DIR/work')\" ]"
 check "hot mode never stops a container" "! grep -q 'docker stop' '$STUB_LOG'"
 
