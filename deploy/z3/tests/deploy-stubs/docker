@@ -45,7 +45,7 @@ case "${1:-}" in
     cmd="${1:-}"; shift || true
     case "$cmd" in
       test)  [ "$1" = "-f" ] && { [ -f "$vdir/${2#/data/}" ]; exit $?; }; exit 64 ;;
-      chown) echo "vol-chown $vol" >> "$STUB_LOG" ;;
+      chown) echo "vol-chown $vol $*" >> "$STUB_LOG" ;;
       touch) touch "$vdir/${1#/data/}" ;;
       *) echo "stub docker run: unsupported: $cmd" >&2; exit 64 ;;
     esac

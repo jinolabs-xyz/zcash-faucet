@@ -203,6 +203,8 @@ check "and the miner address survived alongside the image" \
   "grep -q 'ZEBRA_MINING__MINER_ADDRESS: \"$GOOD_ADDR\"' '$D/z3-stack/docker-compose.override.yml'"
 check "an unpinned component says so rather than guessing a tag" \
   "grep -q 'zallet has no pinned image' '$T/pin.log'"
+check "and an unpinned zallet keeps upstream's uid, so its volume stays uid 1000's" \
+  "grep -q 'vol-chown z3-testnet-zallet -R 1000:1000 /data' '$STUB_LOG' && ! grep -q 'user:' '$D/z3-stack/docker-compose.override.yml'"
 
 # ZALLET 0.1.0-beta.4 RUNS THE ZEBRA BACKEND, and three things have to reach the stack for it
 # to start against a real chain: zebrad serving its indexer gRPC, zallet's entrypoint renamed
@@ -224,6 +226,15 @@ check "and reads zebrad's state through a READ-ONLY mount" \
   "grep -qF -- '- \"\${Z3_CHAIN_DATA_PATH:-chain}:/var/lib/zebra-state:ro\"' '$OVR4'"
 check "the unauthenticated indexer port is never published to the host" \
   "! grep -q '8230:' '$OVR4'"
+# Each of these three stopped zallet on the box, in this order, on the first real start.
+check "zallet runs as zebrad's uid, the only one that can read the 0600 state version file" \
+  "grep -q '^    user: \"10001:10001\"\$' '$OVR4'"
+check "and its wallet volume is handed to that uid, or it loses its own wallet" \
+  "grep -q 'vol-chown z3-testnet-zallet -R 10001:10001 /data' '$STUB_LOG'"
+check "the state reader gets the /tmp the image does not ship, writable by a non-root uid" \
+  "grep -qF 'tmpfs: [\"/tmp:mode=1777\"]' '$OVR4'"
+check "and enough descriptors for every WAL and SST at once" \
+  "grep -q '^        soft: 65536\$' '$OVR4'"
 check "zallet.toml gets the read-state section the zebra backend refuses to start without" \
   "grep -q '^\[indexer.read_state_service\]\$' '$D/z3-stack/config/testnet/zallet.toml' && grep -q '^zebra_state_path = \"/var/lib/zebra-state\"\$' '$D/z3-stack/config/testnet/zallet.toml'"
 FAUCET_MINER_ADDRESS="$GOOD_ADDR" run_deploy > "$T/beta4-again.log" 2>&1
