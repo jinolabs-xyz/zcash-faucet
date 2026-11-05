@@ -422,8 +422,18 @@ elif [ -n "$MINER_ADDRESS$CARRY_ADDRESS" ] || [ -n "$ZEBRA_IMG$ZALLET_IMG$ZAINO_
       echo "    image: \"$ZALLET_IMG\""
       # beta.4 dropped the zaino backend binary; the zebra backend reads zebrad state directly.
       echo "    entrypoint: [\"/usr/local/bin/zallet-zebra\"]"
+      # zebrad rewrites its state version file 0600 on every start, so only its uid can read it.
+      echo "    user: \"10001:10001\""
       echo "    volumes:"
       echo "      - \"\${Z3_CHAIN_DATA_PATH:-chain}:/var/lib/zebra-state:ro\""
+      # The state reader's RocksDB scratch dir goes under /tmp, which the image does not ship.
+      echo "    tmpfs: [\"/tmp:mode=1777\"]"
+      # It holds a descriptor per WAL on top of the SSTs: 1500 on a synced testnet node.
+      # Short of that it panics with "Database likely already open".
+      echo "    ulimits:"
+      echo "      nofile:"
+      echo "        soft: 65536"
+      echo "        hard: 524288"
     fi
     [ -n "$ZAINO_IMG" ]  && { echo "  zaino:";  echo "    image: \"$ZAINO_IMG\""; }
     true
@@ -703,11 +713,13 @@ ZIDFILE="${ZALLET_IDENTITY_FILE:-identity.txt}"
 zwallet(){ z3 run --rm --no-deps zallet \
              --datadir /var/lib/zallet --config /etc/zallet/zallet.toml "$@"; }
 zvol_has(){ docker run --rm -v "$ZVOL:/data" busybox test -f "/data/$1"; }
+# Docker creates the volume root-owned on first use, and a volume from before the zebra
+# backend belongs to uid 1000. Either way zallet must own it as the uid it runs under.
+ZOWNER=1000:1000
+if grep -q '^    user: "10001:10001"$' "$OVERRIDE" 2>/dev/null; then ZOWNER=10001:10001; fi
+docker run --rm -v "$ZVOL:/data" busybox chown -R "$ZOWNER" /data
 if ! zvol_has .faucet-wallet-initialized; then
   say "Initializing the Zallet wallet (one-time: identity, encryption, mnemonic)"
-  # Docker creates the volume root-owned on first use; zallet runs as uid
-  # 1000 and must be able to write into it.
-  docker run --rm -v "$ZVOL:/data" busybox chown 1000:1000 /data
   zvol_has "$ZIDFILE" || zwallet generate-encryption-identity
   zwallet init-wallet-encryption
   zwallet generate-mnemonic
