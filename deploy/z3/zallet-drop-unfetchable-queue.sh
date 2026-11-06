@@ -109,6 +109,10 @@ rpc() { # $1=method $2=json params
     -d "{\"jsonrpc\":\"1.0\",\"id\":1,\"method\":\"$1\",\"params\":$2}" "http://zebra:18232/" 2>/dev/null
 }
 
+# wallet.db stores txids in internal byte order and zebra's RPC takes them reversed. Asked as
+# stored, every lookup misses and reads as gone, so the node check could never say keep.
+rpc_txid() { printf '%s' "$1" | tr 'A-F' 'a-f' | awk '{ for (i = length($0) - 1; i > 0; i -= 2) printf "%s", substr($0, i, 2) }'; }
+
 # Prove the node is answering BEFORE concluding anything is unfetchable. Without this a
 # down node looks like every transaction being missing, and the script would cheerfully
 # empty the whole queue.
@@ -128,8 +132,7 @@ if [ -z "$QUEUED" ]; then
   echo "  empty"
 else
   for HX in $QUEUED; do
-    LOWER="$(echo "$HX" | tr 'A-F' 'a-f')"
-    if rpc getrawtransaction "[\"$LOWER\"]" | grep -q '"error":null'; then
+    if rpc getrawtransaction "[\"$(rpc_txid "$HX")\"]" | grep -q '"error":null'; then
       echo "  ${HX:0:12}… zebra has it, leaving alone"
     else
       echo "  ${HX:0:12}… UNFETCHABLE"
@@ -147,8 +150,7 @@ if [ -z "$SPEND_TXIDS" ]; then
   echo "  no rows anchored to unmined transactions"
 else
   for HX in $SPEND_TXIDS; do
-    LOWER="$(echo "$HX" | tr 'A-F' 'a-f')"
-    if rpc getrawtransaction "[\"$LOWER\"]" | grep -q '"error":null'; then
+    if rpc getrawtransaction "[\"$(rpc_txid "$HX")\"]" | grep -q '"error":null'; then
       echo "  ${HX:0:12}… unmined but zebra still has it, leaving alone"
     else
       echo "  ${HX:0:12}… UNFETCHABLE (its outputs never existed on chain)"
