@@ -313,8 +313,9 @@ echo "== zallet cleanup: TWO candidates, one alive - only the dead one is delete
 # same list. Discriminating needs a fixture where they DIFFER.
 # Two candidates, zebra still has the second. The verified list is a strict subset, and a tool
 # that deletes what it was given rather than what it checked names both.
+# Zebra's copy is the byte-reversed id, as on the real chain, so a lookup in stored order misses.
 zc_env
-export STUB_ZALLET_RUNNING=false STUB_SQL_OUT="7:AABBCC 8:DDEEFF" STUB_RPC_HAS_TXIDS="ddeeff"
+export STUB_ZALLET_RUNNING=false STUB_SQL_OUT="7:AABBCC 8:D1E2F3" STUB_RPC_HAS_TXIDS="f3e2d1"
 zc_run "$ABANDON"
 check "the run reached a delete, so the two rows below are not reporting on an early exit" \
   "grep -qi 'delete from transactions' '$STUB_LOG'"
@@ -324,6 +325,24 @@ check "and the one zebra still has is NOT in the delete, which is the whole of t
   "! zc_ids_have 8"
 check "and the journal says which way each went" \
   "grep -q 'gone from the chain' '$T/last.out' && grep -q 'zebra still has it' '$T/last.out'"
+
+echo "== zallet cleanup: drop-queue asks zebra in RPC byte order and deletes in stored order"
+# wallet.db holds txids reversed from what getrawtransaction takes. Asked as stored, every id
+# missed, which on 2026-11-06 marked all 153 live retrieval rows UNFETCHABLE. D1E2F3 also differs
+# from its character reversal, so a reverse that splits the bytes goes red here too.
+zc_env
+export STUB_ZALLET_RUNNING=false STUB_SQL_OUT="AABBCC D1E2F3" STUB_RPC_HAS_TXIDS="f3e2d1"
+zc_run "$DROPQ"
+check "the queued row zebra has is left alone" \
+  "grep -q 'D1E2F3.*zebra has it, leaving alone' '$T/last.out'"
+check "and so is its spend-search row" \
+  "grep -q 'D1E2F3.*unmined but zebra still has it' '$T/last.out'"
+check "and the dead id is still caught, so those rows are not a tool that keeps everything" \
+  "grep -q 'AABBCC.*UNFETCHABLE' '$T/last.out'"
+check "and the retrieval delete names the dead id as stored, and only that id" \
+  "grep -qF \"delete from tx_retrieval_queue where hex(txid) in ('AABBCC');\" '$STUB_LOG'"
+check "and so does the spend-search delete" \
+  "grep -qF \"where hex(txid) in ('AABBCC'));\" '$STUB_LOG'"
 
 echo "== zallet cleanup: a backup that CANNOT be written stops the run before any delete"
 # THE ORDERING PROPERTY, TESTED WHERE IT IS OBSERVABLE. My first attempt at this asserted that a

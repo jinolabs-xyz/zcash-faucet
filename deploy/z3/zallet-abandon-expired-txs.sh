@@ -143,6 +143,10 @@ rpc() {
     -d "{\"jsonrpc\":\"1.0\",\"id\":1,\"method\":\"$1\",\"params\":$2}" "http://zebra:18232/" 2>/dev/null
 }
 
+# wallet.db stores txids in internal byte order and zebra's RPC takes them reversed. Asked as
+# stored, every lookup misses and reads as gone, so the node check could never say keep.
+rpc_txid() { printf '%s' "$1" | tr 'A-F' 'a-f' | awk '{ for (i = length($0) - 1; i > 0; i -= 2) printf "%s", substr($0, i, 2) }'; }
+
 TIP="$(rpc getblockcount '[]' | grep -oE '"result":[0-9]+' | cut -d: -f2)"
 [ -n "$TIP" ] || { echo "ABORT: zebra is not answering getblockcount. An unreachable node is not proof a transaction is gone." >&2; exit 1; }
 CUTOFF=$(( TIP - MARGIN ))
@@ -159,8 +163,7 @@ echo "candidates: $(echo "$CANDIDATES" | wc -l | tr -d ' ')"
 DEAD_IDS=()
 for ROW in $CANDIDATES; do
   ID="${ROW%%:*}"; HX="${ROW#*:}"
-  LOWER="$(echo "$HX" | tr 'A-F' 'a-f')"
-  if rpc getrawtransaction "[\"$LOWER\"]" | grep -q '"error":null'; then
+  if rpc getrawtransaction "[\"$(rpc_txid "$HX")\"]" | grep -q '"error":null'; then
     echo "  id=$ID ${HX:0:12}… zebra still has it, leaving alone"
   else
     echo "  id=$ID ${HX:0:12}… gone from the chain, abandoning"
