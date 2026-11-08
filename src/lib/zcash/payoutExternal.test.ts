@@ -24,6 +24,28 @@ test("a mined height plus the right txid is the only thing that confirms", async
   assert.equal(s.height, 4221730);
 });
 
+test("zecblock's shape confirms: the payload under `data`, the height as a string", async () => {
+  // Measured 2026-11-08 from api.testnet.zecblock.com/v1/transactions/<txid>, trimmed.
+  const body = { data: { txid: TXID, blockHeight: "4219007", confirmations: 378794, isCanonical: true }, meta: { network: "testnet" } };
+  const s = await askOneSource(TXID, src("zecblock"), 500, canned(200, JSON.stringify(body)));
+  assert.equal(s.state, "confirmed");
+  assert.equal(s.height, 4219007);
+});
+
+test("a height in a block the source calls non-canonical is not a confirmation", async () => {
+  const body = { data: { txid: TXID, blockHeight: "4219007", isCanonical: false } };
+  const s = await askOneSource(TXID, src("zecblock"), 500, canned(200, JSON.stringify(body)));
+  assert.equal(s.state, "cannot-verify");
+  assert.match(s.detail, /no longer canonical/);
+});
+
+test("a height string that is not a whole number is no height", async () => {
+  const body = { data: { txid: TXID, blockHeight: "4219007.5" } };
+  const s = await askOneSource(TXID, src("zecblock"), 500, canned(200, JSON.stringify(body)));
+  assert.equal(s.state, "cannot-verify");
+  assert.match(s.detail, /names the transaction but reports no mined height/);
+});
+
 test("a 404 is NOT absent, because a real txid 404s when the host is unwell", async () => {
   // Measured: cipherscan served this exact 404 for a txid it had described correctly
   // minutes before. Reading it as a negative reports a successful payout as missing.
