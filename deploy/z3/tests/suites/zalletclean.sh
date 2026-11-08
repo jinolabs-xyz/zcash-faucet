@@ -36,7 +36,7 @@ zc_env() {
   # because TXIDS takes precedence over the global HAS_TX, the leak turns a "zebra still has it"
   # case into a "zebra has nothing" case and the row fails for a reason that is not the subject.
   # Measured: two rows went red in the case AFTER mine before this line existed.
-  unset STUB_TOUCH_DURING_COPY STUB_RPC_HAS_TXIDS
+  unset STUB_TOUCH_DURING_COPY STUB_RPC_HAS_TXIDS STUB_RPC_BREAK_AT STUB_RPC_BREAK_REPLY STUB_RPC_BREAK_RC
   export ZALLET_CONTAINER="zallet-under-test" ZEBRA_CONTAINER="zebra-under-test" ZALLET_VOLUME="fixture-volume"
   # THE DESTRUCTIVE PATH HAS TO BE REACHABLE OR THE SAFETY ROWS PIN NOTHING. The repair copies
   # the volume's real host path before deleting; with that path absent the script dies at the
@@ -100,6 +100,13 @@ fi
 case "$*" in
   *getblockcount*)    echo '{"result":4350000,"error":null}'; exit 0 ;;
   *getrawtransaction*)
+    # STUB_RPC_BREAK_AT=N: the Nth lookup of the run gets STUB_RPC_BREAK_REPLY and exits
+    # STUB_RPC_BREAK_RC, which is a node failing partway through the loop.
+    _f="${STUB_LOG%/*}/lookup.calls"
+    _seq=$(cat "$_f" 2>/dev/null || echo 0); _seq=$((_seq + 1)); printf '%s' "$_seq" > "$_f"
+    if [ "$_seq" = "${STUB_RPC_BREAK_AT:-}" ]; then
+      printf '%s' "${STUB_RPC_BREAK_REPLY:-}"; exit "${STUB_RPC_BREAK_RC:-0}"
+    fi
     # PER-TXID WHEN ASKED. STUB_RPC_HAS_TX is one global answer, so a fixture with two candidates
     # got the same verdict for both - and a row asserting "the VERIFIED-dead id, not the candidate
     # list" cannot discriminate when the two lists are identical. Measured: a mutant deleting the
@@ -380,6 +387,34 @@ check "a candidate zebra still has is left alone, and no delete is issued" \
   "! grep -qi 'delete from transactions' '$STUB_LOG'"
 check "and it says so rather than exiting silently" \
   "grep -q 'still fetchable' '$T/last.out'"
+
+echo "== zallet cleanup: only -5 means gone, any other answer stops the run before a delete"
+# A failed lookup used to read as gone, so a node dying mid-loop deleted live rows. Every lookup
+# before the break is a real -5: a tool that skips the bad row and carries on still reaches a delete.
+zc_lookup_breaks() { # $1=site $2=tool $3=candidates $4=lookup that breaks $5=verdict in hand by then
+  local shape reply rc
+  while IFS='|' read -r shape rc reply; do
+    zc_env
+    export STUB_ZALLET_RUNNING=false STUB_SQL_OUT="$3" STUB_RPC_HAS_TX=0
+    export STUB_RPC_BREAK_AT="$4" STUB_RPC_BREAK_RC="$rc" STUB_RPC_BREAK_REPLY="$reply"
+    zc_run "$2"
+    check "$1, $shape: the run reached lookup $4 with a dead row in hand, so the rows below are not an early exit" \
+      "[ \"\$(grep -c getrawtransaction '$STUB_LOG')\" = '$4' ] && grep -q '$5' '$T/last.out'"
+    check "$1, $shape: it exits non-zero" "[ $RC -ne 0 ]"
+    check "$1, $shape: and says an unreachable node is not proof" \
+      "grep -q 'ABORT: no usable answer.*not proof a transaction is gone' '$T/last.out'"
+    check "$1, $shape: and issues no delete" "! grep -qi 'delete from' '$STUB_LOG'"
+  done <<'SHAPES'
+an empty reply|0|
+a timeout that cut off a -5|28|{"result":null,"error":{"code":-5,
+a non -5 error|0|{"result":null,"error":{"code":-1,"message":"state is busy"}}
+a code that only starts with -5|0|{"result":null,"error":{"code":-50,"message":"not ours"}}
+SHAPES
+}
+zc_lookup_breaks "abandon" "$ABANDON" "7:AABBCC 8:D1E2F3" 2 'AABBCC.*gone from the chain'
+zc_lookup_breaks "drop-queue retrieval" "$DROPQ" "AABBCC D1E2F3" 2 'AABBCC.*UNFETCHABLE'
+# The retrieval loop has finished with dead rows by now, and they must not be deleted either.
+zc_lookup_breaks "drop-queue spend-search" "$DROPQ" "AABBCC D1E2F3" 4 'AABBCC.*its outputs never existed'
 
 echo "== zallet cleanup: the before/after report is actually produced"
 # IT NEVER HAS BEEN. The docker stub answered EVERY sqlite query with STUB_SQL_OUT, so the counts
