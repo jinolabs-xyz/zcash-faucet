@@ -163,6 +163,13 @@ RETRY_MIN="${WATCHDOG_RETRY_MIN:-6}"
 heal_attempts=0
 alerted_heal_giveup=0
 
+# Fork storm (zebra#11820). Zebra 7 holds up to 100 testnet side chains and copies them all every
+# block, and zallet embeds the same code. One storm OOM-killed zallet three times on 2026-11-06.
+# Nothing here can fix that; the page buys the hours before RAM and swap run out.
+FORK_STORM_WINDOW="${WATCHDOG_FORK_STORM_WINDOW:-30m}"
+FORK_STORM_MIN="${WATCHDOG_FORK_STORM_MIN:-3}"
+MEMINFO="${WATCHDOG_MEMINFO:-/proc/meminfo}"
+
 # Miner stall recovery (step 6). The miner holds ONE persistent RPC connection to zebra
 # and does not reconnect when zebra restarts: it loops `getblocktemplate: Peer
 # disconnected` forever while its heartbeat stays fresh, so Restart=always never fires
@@ -1594,6 +1601,25 @@ heal_self_mined_fork() {
   return 0
 }
 
+# Pages once when zebra starts dropping side chains, reports once after a quiet window.
+# Zero evictions in Nov 5-8's logs outside the one storm, so a small floor is not noisy.
+page_on_fork_storm() {
+  local zebra="$1" n left rc
+  [ -n "$zebra" ] || return 0
+  n="$(docker logs --since "$FORK_STORM_WINDOW" "$zebra" 2>&1 | grep -c 'fork limit evicted a chain' || true)"
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  if [ "$n" -ge "$FORK_STORM_MIN" ] && [ "$(flap_get zebra.forkstorm)" != "1" ]; then
+    left="unknown"
+    [ -r "$MEMINFO" ] && left="$(awk '/^(MemAvailable|SwapFree):/ {kb += $2} END {printf "%.1f GB", kb / 1048576}' "$MEMINFO")"
+    danger "testnet fork storm: zebra hit its side-chain limit $n times in the last $FORK_STORM_WINDOW. The last one OOM-killed zallet three times (zebra#11820). RAM+swap left: $left. Nothing to restart; if it runs out, zallet is killed and drips pause ~20 min per kill."; rc=$?
+    paged "$rc" && flap_set zebra.forkstorm 1
+  elif [ "$n" -eq 0 ] && [ "$(flap_get zebra.forkstorm)" = "1" ]; then
+    fixed "testnet fork storm over: no side chains dropped in the last $FORK_STORM_WINDOW. Memory falls as they age out of the 1000-block window (~7 h)."; rc=$?
+    paged "$rc" && flap_set zebra.forkstorm 0
+  fi
+  return 0
+}
+
 while true; do
   ticks=$((ticks + 1))
   wd_clock_tick
@@ -2024,6 +2050,7 @@ while true; do
   # zebra directly.
   heal_self_mined_fork "$zebra" "$zebra_heights"
   check_history_against_reference "$zebra" "$zebra_heights"
+  page_on_fork_storm "$zebra"
 
   # Bounded only under test. Production leaves MAX_TICKS at 0 and never exits,
   # and the sleep is skipped on the final tick so a suite is not paying for it.

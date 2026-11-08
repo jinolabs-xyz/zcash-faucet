@@ -304,6 +304,15 @@ grace window and reports once when it recovers. It deliberately does not page
 for un-readiness during a first sync or a refill, because those are un-ready on
 purpose.
 
+**Testnet fork storms.** Zebra 7 keeps up to 100 testnet side chains and copies
+them all on every block (zebra#11820), and zallet embeds the same code. A storm
+of min-difficulty forks on 2026-11-06 used the box's RAM and swap and got zallet
+OOM-killed three times. The watchdog pages `🚨 NEEDS YOU: testnet fork storm`
+once zebra hits its side-chain limit `WATCHDOG_FORK_STORM_MIN` (3) times inside
+`WATCHDOG_FORK_STORM_WINDOW` (30m), with the RAM plus swap left, and reports
+`✅ FIXED` once a window passes with none. It restarts nothing, because a
+restarted zallet reloads the same forks.
+
 **Disk.** `faucet-metrics.sh` pages `🚨 NEEDS YOU: disk low` when a watched
 filesystem drops under `METRICS_DISK_FLOOR_PCT` (10%). `faucet-prune.timer` runs `prune.sh` daily at 04:10 UTC (plus up to
 ten minutes of jitter) to remove

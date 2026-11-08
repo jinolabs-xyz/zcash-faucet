@@ -55,7 +55,7 @@ wd_env() {
   unset STUB_READY_REFS STUB_READY_USEDHEIGHT STUB_READY_USEDHEIGHT_SEQ STUB_READY_REFS_SEQ \
         WATCHDOG_FORK_HEAL_ENABLED \
         WATCHDOG_FORK_AHEAD_BLOCKS WATCHDOG_FORK_MINER_MIN_SECS WATCHDOG_FORK_PARK_DIR \
-        WATCHDOG_FORK_SETTLE_BLOCKS
+        WATCHDOG_FORK_SETTLE_BLOCKS WATCHDOG_FORK_STORM_MIN WATCHDOG_FORK_STORM_WINDOW WATCHDOG_MEMINFO
   # Capture what would have been paged, without a webhook.
   # Records EVERY argument, so the suite can see that the watchdog passes --now (its
   # messages are one per episode and must never be held by alert.sh's cooldown).
@@ -2793,3 +2793,59 @@ check "and the app's node-status budget was found in nodeStatus.ts" \
 # Both in milliseconds for the comparison; curl's --max-time is seconds.
 check "and the fetch outlasts it, so a slow wallet is REPORTED rather than timing us out" \
   "[ \$(( ${wd_ready_timeout:-0} * 1000 )) -gt ${wd_app_budget:-999999} ]"
+
+# Fork storm page (zebra#11820). The line is zebra's own, from the 2026-11-06 storm.
+wd_storm_env() {
+  wd_env
+  echo running > "$STUB_CONTAINERS/z3-testnet-zallet-1"
+  echo running > "$STUB_CONTAINERS/z3-testnet-zebra-1"
+  echo running > "$STUB_CONTAINERS/faucet-web"
+  printf 'MemTotal: 8131632 kB\nMemAvailable: 1048576 kB\nSwapFree: 2097152 kB\n' > "$T/meminfo"
+  export WATCHDOG_MEMINFO="$T/meminfo"
+}
+storm_lines() {
+  for _ in $(seq "$1"); do
+    printf '2026-11-06T21:06:20.303529Z  WARN sync: zebra_state::service::non_finalized_state: the fork limit evicted a chain: if the node stops advancing, restart it tip=block::Hash("00007a95")\n'
+  done > "$STUB_CONTAINERS/z3-testnet-zebra-1.logs"
+}
+
+echo "== watchdog: a fork storm pages once, at the shipped floor, with the headroom left"
+wd_storm_env
+storm_lines 3
+wd_run 3
+check "three evictions with nothing overridden is a storm" \
+  "grep -q 'NEEDS YOU: testnet fork storm: zebra hit its side-chain limit 3 times in the last 30m' '$T/alerts.log'"
+check "said once across three sweeps" "[ \"\$(grep -c 'fork storm' '$T/alerts.log')\" = 1 ]"
+check "and it carries MemAvailable + SwapFree" "grep -q 'RAM+swap left: 3.0 GB' '$T/alerts.log'"
+check "it reads zebra's log over the shipped window" \
+  "grep -q -- 'docker logs --since 30m z3-testnet-zebra-1' '$STUB_LOG'"
+check "and restarts nothing, since a restart reloads the same forks" \
+  "! grep -qE 'docker (restart|stop) z3-testnet-(zebra|zallet)' '$STUB_LOG'"
+
+echo "== watchdog: two evictions are under the floor"
+wd_storm_env
+storm_lines 2
+wd_run 2
+check "nothing paged" "! grep -q 'fork storm' '$T/alerts.log'"
+
+echo "== watchdog: the storm ending is reported once, and the page re-arms"
+wd_storm_env
+storm_lines 5
+wd_run 1
+: > "$STUB_CONTAINERS/z3-testnet-zebra-1.logs"
+wd_run 3
+check "one report when the window goes quiet" \
+  "[ \"\$(grep -c 'FIXED: testnet fork storm over' '$T/alerts.log')\" = 1 ]"
+storm_lines 5
+wd_run 1
+check "and the next storm pages again" \
+  "[ \"\$(grep -c 'NEEDS YOU: testnet fork storm' '$T/alerts.log')\" = 2 ]"
+
+echo "== watchdog: a storm page that fails to send is retried, and a missing meminfo says unknown"
+wd_storm_env
+storm_lines 4
+export STUB_ALERT_FAIL_N=1 WATCHDOG_MEMINFO="$T/no-such-meminfo"
+wd_run 2
+check "the second sweep delivers it" "[ \"\$(grep -c 'fork storm' '$T/alerts.log')\" = 1 ]"
+check "after one failed attempt" "[ \"\$(grep -c 'fork storm' '$T/attempts.log')\" = 2 ]"
+check "and an unreadable meminfo is not reported as zero" "grep -q 'RAM+swap left: unknown' '$T/alerts.log'"
