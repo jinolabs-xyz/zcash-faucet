@@ -83,7 +83,9 @@ export interface ExternalSource {
  * agreement with our own upstream is not independent confirmation.
  */
 export const DEFAULT_SOURCES: ExternalSource[] = [
-  { org: "cipherscan", url: (t) => `https://testnet.cipherscan.app/api/tx/${t}` },
+  // Cipherscan renamed itself zecblock. The old /api/tx path now sits behind a bot wall
+  // (429 to every script) and the API moved to its own host, answering scripts directly.
+  { org: "zecblock", url: (t) => `https://api.testnet.zecblock.com/v1/transactions/${t}` },
 ];
 
 /**
@@ -165,7 +167,9 @@ export async function askOneSource(
     return unverifiable(source.org, "JSON that is not an object");
   }
 
-  const d = parsed as Record<string, unknown>;
+  // zecblock's v1 API wraps the payload in `data`; a bare object is read as it stands.
+  const top = parsed as Record<string, unknown>;
+  const d = (typeof top.data === "object" && top.data !== null ? top.data : top) as Record<string, unknown>;
 
   // The echo check. A source that hands back a generic, cached or mismatched body
   // would otherwise let one transaction's confirmation stand in for another's, and
@@ -175,7 +179,15 @@ export async function askOneSource(
     return unverifiable(source.org, `answered about a different transaction (${echoed.slice(0, 12)}…)`);
   }
 
-  const height = typeof d.blockHeight === "number" ? d.blockHeight : typeof d.height === "number" ? d.height : null;
+  // zecblock sends heights as decimal strings ("4219007").
+  const num = (v: unknown) => (typeof v === "number" ? v : typeof v === "string" && /^\d+$/.test(v) ? Number(v) : null);
+  const height = num(d.blockHeight) ?? num(d.height);
+
+  // A height in a block the source itself calls orphaned is the reorg case: mined once,
+  // not on the chain now.
+  if (d.isCanonical === false) {
+    return unverifiable(source.org, `height ${height ?? "none"} but in a block the source says is no longer canonical, so this proves nothing`);
+  }
 
   // POSITIVE EVIDENCE: a mined height, and the source naming the transaction we
   // asked about. Everything short of that is unverifiable, INCLUDING a tidy body

@@ -182,8 +182,8 @@ async function probe(path) {
 //   unknown txid renders   -> FAIL. The property is gone. Unambiguous.
 //   real txid 404s         -> cannot-verify. A hard-coded txid ages, and a pruning
 //                             or reorged explorer would fail us for the wrong reason.
-//   explorer unreachable   -> cannot-verify. Otherwise a cipherscan outage pages an
-//                             operator about a faucet that is perfectly healthy,
+//   explorer unreachable   -> cannot-verify. Otherwise an explorer outage pages an
+//   or behind a bot wall      operator about a faucet that is perfectly healthy,
 //                             which is the false-alarm cost this probe must not add.
 //
 // Both UAs, because a 404 that only happens to curl is worthless: the person
@@ -369,7 +369,7 @@ async function explorerHit(explorerTxUrl, txid, ua) {
 
 // Returns its own failure count. Not retried: its only failure is a real property
 // break (an unknown txid rendering), never a transient, and it already downgrades
-// an unreachable/5xx explorer to cannot-verify so a cipherscan outage never pages.
+// an unreachable, 5xx or bot-walled explorer to cannot-verify so an explorer outage never pages.
 async function checkExplorerProperty() {
   const { ok, count } = tally();
   // The explorer is a third party on the public internet. A test of THIS script's own
@@ -392,26 +392,30 @@ async function checkExplorerProperty() {
     explorerHit(explorerTxUrl, UNKNOWN_TXID, null),
     explorerHit(explorerTxUrl, UNKNOWN_TXID, BROWSER_UA),
   ]);
-  const unreachable = dflt.status === 0 && browser.status === 0;
+  // The property is that an unknown txid is REPORTED ABSENT, not shown as if it exists
+  // (#71). Two ways an explorer can report absent, and both are fine:
+  //   404                              - the classic clean not-found
+  //   200 whose page SAYS not-found    - a single-page-app explorer (cipherscan, 2026-09-04)
+  // A 200 page with tx content and NO not-found marker is the violation: an invented
+  // txid gets a real-looking page. Unreachable, 5xx and 429 showed us no page at all, so
+  // they cannot be lying. 429 is zecblock's bot wall: it sits behind Vercel's checkpoint,
+  // which answers every client that does not run its JavaScript 429 (2026-11-08).
+  const verdict = (h) => {
+    if (h.status === 0 || h.status === 429 || h.status >= 500) return "cannot-verify";
+    if (h.status === 404) return "ok";
+    if (h.status === 200) return NOT_FOUND_RE.test(h.text) ? "ok" : "RENDERED";
+    return "RENDERED";
+  };
+  const [vd, vb] = [verdict(dflt), verdict(browser)];
 
-  if (unreachable) {
-    // Not a failure. Absence of evidence is not evidence that the property broke.
-    console.log(`cannot-verify: explorer unreachable, so the not-found property is unchecked this run`);
+  if (vd === "cannot-verify" && vb === "cannot-verify") {
+    // Not a failure, and not a pass either: neither request saw a page, so printing "ok"
+    // here would claim a property nothing checked.
+    console.log(
+      `cannot-verify: the explorer showed no page (default-UA ${dflt.status || "unreachable"}, browser-UA ${browser.status || "unreachable"}), ` +
+        `so the not-found property is unchecked this run`,
+    );
   } else {
-    // The property is that an unknown txid is REPORTED ABSENT, not shown as if it exists
-    // (#71). Two ways an explorer can report absent, and both are fine:
-    //   404                              - the classic clean not-found
-    //   200 whose page SAYS not-found    - a single-page-app explorer (cipherscan, 2026-09-04)
-    // A 200 page with tx content and NO not-found marker is the violation: an invented
-    // txid gets a real-looking page. A 5xx/unreachable is the explorer broken, not lying,
-    // so it reads as cannot-verify per source rather than a property break.
-    const verdict = (h) => {
-      if (h.status === 0 || h.status >= 500) return "cannot-verify";
-      if (h.status === 404) return "ok";
-      if (h.status === 200) return NOT_FOUND_RE.test(h.text) ? "ok" : "RENDERED";
-      return "RENDERED";
-    };
-    const [vd, vb] = [verdict(dflt), verdict(browser)];
     const bad = [vd, vb].some((v) => v === "RENDERED");
     ok(
       "an unknown txid is reported absent, not shown as a real tx",
@@ -428,8 +432,10 @@ async function checkExplorerProperty() {
     console.log(`ok: a real txid renders its page (${REAL_TXID.slice(0, 12)}… 200), so the negative above means something`);
   } else {
     console.log(
-      `cannot-verify: the pinned real txid answered ${real.status}${real.status === 200 ? " but reads as not-found" : ""}, ` +
-        `a stale fixture or a pruning explorer rather than a broken property. Repin it from a recent claims.txid.`,
+      real.status === 429 || real.status === 0 || real.status >= 500
+        ? `cannot-verify: the pinned real txid answered ${real.status || "unreachable"}, the explorer refusing us rather than the fixture aging`
+        : `cannot-verify: the pinned real txid answered ${real.status}${real.status === 200 ? " but reads as not-found" : ""}, ` +
+            `a stale fixture or a pruning explorer rather than a broken property. Repin it from a recent claims.txid.`,
     );
   }
   return count();

@@ -743,6 +743,57 @@ test("the box runs main: a dirty-checkout suffix is red, and an unstamped image 
   } finally { repo.done(); }
 });
 
+// ── THE EXPLORER PROPERTY (#179) AGAINST A FAKE EXPLORER ──
+// Every other case skips the explorer. These point the shipped URL builder at a local
+// server, so the verdicts are exercised without touching the real one.
+async function runProbeWithExplorer(answer) {
+  const explorer = createServer((req, res) => {
+    const { status, body = "" } = answer(req.url.split("/").pop(), req.headers["user-agent"] ?? "");
+    res.writeHead(status, { "content-type": "text/html" });
+    res.end(body);
+  });
+  await new Promise((r) => explorer.listen(0, "127.0.0.1", r));
+  try {
+    return await runProbe({
+      SMOKE_SKIP_EXPLORER: "",
+      FAUCET_EXPLORER_TX_URL: `http://127.0.0.1:${explorer.address().port}/tx/{txid}`,
+    });
+  } finally {
+    explorer.close();
+  }
+}
+const ZERO_TXID = "0".repeat(64);
+
+test("explorer: a bot wall (429 to everyone, zecblock's Vercel checkpoint) is cannot-verify, not a failure and not a pass", async () => {
+  const r = await runProbeWithExplorer(() => ({ status: 429, body: "<title>Vercel Security Checkpoint</title>" }));
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /cannot-verify: the explorer showed no page \(default-UA 429, browser-UA 429\)/);
+  assert.doesNotMatch(r.out, /ok: an unknown txid is reported absent/, "claimed a property nothing checked");
+  assert.match(r.out, /answered 429, the explorer refusing us rather than the fixture aging/);
+});
+
+test("explorer: two 5xx answers are cannot-verify too, not an ok row", async () => {
+  const r = await runProbeWithExplorer(() => ({ status: 503 }));
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /cannot-verify: the explorer showed no page \(default-UA 503, browser-UA 503\)/);
+  assert.doesNotMatch(r.out, /ok: an unknown txid is reported absent/);
+});
+
+test("explorer: one UA walled and the other a clean 404 still verifies the property", async () => {
+  const r = await runProbeWithExplorer((txid, ua) =>
+    txid === ZERO_TXID ? { status: ua.includes("Chrome") ? 404 : 429 } : { status: 200, body: "<h1>Zcash Transaction</h1>" });
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /ok: an unknown txid is reported absent, not shown as a real tx/);
+  assert.match(r.out, /ok: a real txid renders its page/);
+});
+
+test("explorer: a page for an invented txid still FAILS, so the wall did not loosen the property", async () => {
+  const r = await runProbeWithExplorer(() => ({ status: 200, body: "<h1>Zcash Transaction</h1><p>1 confirmation</p>" }));
+  assert.notEqual(r.code, 0, r.out);
+  assert.match(r.out, /an unknown txid is reported absent/);
+  assert.match(r.out, /RENDERED/);
+});
+
 // ── THE BOX'S CHECKOUT IS MAIN: ops changes land through it, and the drift audit says which one it compared ──
 
 const opsBox = (drift) => ({ state: "complete", expected: 1, present: 1, notEnabled: 0, watchdogUnit: "active", alertBridge: "ok", minerBinary: "current", ageSeconds: 5, drift: { state: "clean", findings: 0, unverified: 0, reason: "", ...drift } });

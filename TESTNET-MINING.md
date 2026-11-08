@@ -94,7 +94,7 @@ moved past. You will burn CPU producing blocks nobody can use, and if you submit
 them you fork yourself off the chain you were trying to join. Wait it out.
 
 You can tell you are close by comparing your height to a source that is not your
-own node, for example [a public explorer](https://testnet.cipherscan.app) or
+own node, for example [a public explorer](https://testnet.zecblock.com) or
 the [hosh dashboard](https://hosh.zec.rocks) which lists the tip every public
 testnet server reports.
 

@@ -218,7 +218,7 @@ own. The check is here rather than cross-referenced, because an earlier draft po
 sudo docker exec z3-testnet-zebra-1 sh -lc 'CK=$(cat /run/auth/.cookie 2>/dev/null || cat /var/run/auth/.cookie); curl -s -u "$CK" --data-binary "{\"jsonrpc\":\"1.0\",\"id\":\"ops\",\"method\":\"getbestblockhash\",\"params\":[]}" -H content-type:text/plain http://127.0.0.1:18232/'
 
 # the same height from somewhere that is not us, in a browser:
-#   https://testnet.zcashexplorer.app  or  https://testnet.cipherscan.app
+#   https://testnet.zcashexplorer.app  or  https://testnet.zecblock.com
 # Same hash at the same height: we are on the network's chain and the marker can go.
 # Different hash: we are on our own chain, and the fix is a snapshot reimport (SNAPSHOTS.md),
 # not clearing the marker.
@@ -732,7 +732,8 @@ transparent balance at the miner address **falls**, seen from a source that is n
 us.
 
 ```sh
-curl -s "https://testnet.cipherscan.app/api/address/$FAUCET_MINER_ADDRESS" | jq .balance
+# zecblock (formerly cipherscan); the balance is in zatoshis
+curl -s "https://api.testnet.zecblock.com/v1/addresses/$FAUCET_MINER_ADDRESS?limit=1" | jq -r .data.balanceZat
 ```
 
 Coinbase leaving that address is the event. Nothing else in the system moves it,
