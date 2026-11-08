@@ -25,8 +25,8 @@
 # data it re-enqueues on the next scan. Nothing here is a note, a spend or an amount.
 #
 # It still refuses to guess: every candidate is CHECKED AGAINST THE LIVE NODE first and
-# only rows zebra actually cannot serve are deleted. A queue row for a transaction zebra
-# has is a row that would have succeeded, and this script leaves it alone.
+# only rows zebra answers with RPC error -5 are deleted; any other answer aborts the run.
+# A queue row for a transaction zebra has would have succeeded, so it is left alone.
 #
 # Usage (on the box; stop zallet first or sqlite and the wallet fight over the file):
 #     docker stop z3-testnet-zallet-1
@@ -113,6 +113,19 @@ rpc() { # $1=method $2=json params
 # stored, every lookup misses and reads as gone, so the node check could never say keep.
 rpc_txid() { printf '%s' "$1" | tr 'A-F' 'a-f' | awk '{ for (i = length($0) - 1; i > 0; i -= 2) printf "%s", substr($0, i, 2) }'; }
 
+# Only -5 proves a transaction is gone. Any other reply, or none, ends the run before any delete.
+# A failed curl counts as no reply, even with half a -5 in hand.
+zebra_has() {
+  local reply
+  reply="$(rpc getrawtransaction "[\"$(rpc_txid "$1")\"]")" || reply=""
+  case "$reply" in
+    *'"error":null'*)        return 0 ;;
+    *'"error":{"code":-5,'*) return 1 ;;
+  esac
+  echo "ABORT: no usable answer from zebra for ${1:0:12}… (got: ${reply:0:200}). An unreachable node is not proof a transaction is gone, so nothing was deleted." >&2
+  exit 1
+}
+
 # Prove the node is answering BEFORE concluding anything is unfetchable. Without this a
 # down node looks like every transaction being missing, and the script would cheerfully
 # empty the whole queue.
@@ -132,7 +145,7 @@ if [ -z "$QUEUED" ]; then
   echo "  empty"
 else
   for HX in $QUEUED; do
-    if rpc getrawtransaction "[\"$(rpc_txid "$HX")\"]" | grep -q '"error":null'; then
+    if zebra_has "$HX"; then
       echo "  ${HX:0:12}… zebra has it, leaving alone"
     else
       echo "  ${HX:0:12}… UNFETCHABLE"
@@ -150,7 +163,7 @@ if [ -z "$SPEND_TXIDS" ]; then
   echo "  no rows anchored to unmined transactions"
 else
   for HX in $SPEND_TXIDS; do
-    if rpc getrawtransaction "[\"$(rpc_txid "$HX")\"]" | grep -q '"error":null'; then
+    if zebra_has "$HX"; then
       echo "  ${HX:0:12}… unmined but zebra still has it, leaving alone"
     else
       echo "  ${HX:0:12}… UNFETCHABLE (its outputs never existed on chain)"

@@ -43,6 +43,7 @@
 // "Failed to parse URL from  https://host /api/status", which names nothing about the
 // variable and is a worse diagnosis than the refusal it replaced.
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 
 const BASE = (process.env.SMOKE_URL ?? "").trim().replace(/\/$/, "");
 // The operator's view of /api/status (risk register II, R-24): the box's named faults
@@ -451,6 +452,30 @@ const DEPLOY_LAG_MIN = numEnv("SMOKE_DEPLOY_LAG_MIN", 20, 1);
 function git(args) {
   return execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
+// auto-deploy rebuilds the image only when one of these paths changes, so an image older than
+// main is still main's app when none did. Read from auto-deploy.sh so the two cannot disagree.
+function appFilter() {
+  const src = readFileSync(new URL("../deploy/z3/auto-deploy.sh", import.meta.url), "utf8");
+  const m = /grep -qE '([^']+)' && app=1/.exec(src);
+  return m ? new RegExp(m[1]) : null;
+}
+// Where `sha` sits relative to `ref`: {mainSha, mainAt, ancestor} or {fail}.
+function placeOnMain(sha, ref) {
+  let mainSha, mainAt;
+  try {
+    mainSha = git(["rev-parse", ref]);
+    mainAt = Number(git(["log", "-1", "--format=%ct", ref])) * 1000;
+  } catch (e) {
+    return { fail: `could not read ${ref} in this checkout (${e.message.split("\n")[0]}): the comparison was NOT made, which is not the same as the box being on main` };
+  }
+  if (mainSha.startsWith(sha)) return { mainSha, mainAt, ancestor: true };
+  let ancestor;
+  try { execFileSync("git", ["merge-base", "--is-ancestor", sha, ref], { stdio: "ignore" }); ancestor = true; }
+  catch (e) { ancestor = e.status === 1 ? false : null; }
+  if (ancestor === null) return { fail: `${sha}, which this checkout does not know: not on ${ref}'s fetched history, or never on main` };
+  if (!ancestor) return { fail: `${sha}, which is not an ancestor of ${ref}: not main's code` };
+  return { mainSha, mainAt, ancestor };
+}
 function boxRunsMain(buildCommit) {
   const ref = (process.env.SMOKE_MAIN_REF ?? "").trim();
   if (!ref) return { skip: "SMOKE_MAIN_REF is not set, so the box's commit was not compared to main" };
@@ -465,22 +490,39 @@ function boxRunsMain(buildCommit) {
   if (!m) return { fail: `the box's buildCommit ${JSON.stringify(buildCommit)} is not a commit` };
   if (m[2]) return { fail: `the box runs ${m[1]}${m[2]}: main's code plus uncommitted changes on the box's checkout` };
   const sha = m[1];
-  let mainSha, mainAt;
-  try {
-    mainSha = git(["rev-parse", ref]);
-    mainAt = Number(git(["log", "-1", "--format=%ct", ref])) * 1000;
-  } catch (e) {
-    return { fail: `could not read ${ref} in this checkout (${e.message.split("\n")[0]}): the comparison was NOT made, which is not the same as the box being on main` };
-  }
+  const p = placeOnMain(sha, ref);
+  if (p.fail) return { fail: p.fail.startsWith("could not") ? p.fail : `the box runs ${p.fail}` };
+  const { mainSha, mainAt } = p;
   if (mainSha.startsWith(sha)) return { ok: `the box runs ${sha}, which is ${ref}` };
-  let ancestor;
-  try { execFileSync("git", ["merge-base", "--is-ancestor", sha, ref], { stdio: "ignore" }); ancestor = true; }
-  catch (e) { ancestor = e.status === 1 ? false : null; }
-  if (ancestor === null) return { fail: `the box runs ${sha}, which this checkout does not know: not on ${ref}'s fetched history, or never on main` };
-  if (!ancestor) return { fail: `the box runs ${sha}, which is not an ancestor of ${ref}: not main's code` };
+  const filter = appFilter();
+  if (!filter) return { fail: "could not read auto-deploy's app filter from deploy/z3/auto-deploy.sh: the comparison was NOT made" };
+  const unbuilt = git(["diff", "--name-only", sha, ref]).split("\n").filter((f) => f && filter.test(f));
+  if (unbuilt.length === 0) return { ok: `the box runs ${sha}; ${ref} is at ${mainSha.slice(0, 7)} with no app change since, so there was nothing to rebuild` };
   const minutes = Math.max(0, (Date.now() - mainAt) / 60_000);
   if (minutes <= DEPLOY_LAG_MIN) return { ok: `${ref} moved to ${mainSha.slice(0, 7)} ${minutes.toFixed(0)} min ago and the box runs its ancestor ${sha}; auto-deploy has ${DEPLOY_LAG_MIN} minutes` };
-  return { fail: `${ref} has been at ${mainSha.slice(0, 7)} for ${minutes.toFixed(0)} minutes and the box still runs ${sha}: the deploy did not land (journalctl -u faucet-autodeploy on the box)` };
+  return { fail: `${ref} has been at ${mainSha.slice(0, 7)} for ${minutes.toFixed(0)} minutes and the box still runs ${sha}, without ${unbuilt.length} app file(s) (${unbuilt.slice(0, 3).join(", ")}): the deploy did not land (journalctl -u faucet-autodeploy on the box)` };
+}
+
+// THE BOX'S CHECKOUT IS MAIN. The image row only sees app changes; ops changes (watchdog,
+// units, repair tools) land through the checkout, and the drift audit compares the box
+// against that checkout, so a checkout stuck behind main makes every audit clean against old
+// code. The audit runs every 30 minutes, so only one that ran after main's head plus the
+// allowance can say the checkout is late.
+function checkoutIsMain(drift) {
+  const ref = (process.env.SMOKE_MAIN_REF ?? "").trim();
+  if (!ref) return { skip: "SMOKE_MAIN_REF is not set, so the box's checkout was not compared to main" };
+  if (drift === undefined) return { skip: "the server does not send the drift audit, so the box's checkout was not compared" };
+  if (typeof drift !== "object" || drift === null) return { skip: "no operator token, so the box did not say which checkout it audited; not compared" };
+  const sha = drift.repoSha;
+  if (typeof sha !== "string" || !/^[0-9a-f]{40}$/.test(sha)) return { fail: "the box's drift audit did not say which checkout it compared (repoSha missing)" };
+  const p = placeOnMain(sha.slice(0, 12), ref);
+  if (p.fail) return { fail: p.fail.startsWith("could not") ? p.fail : `the box's checkout is ${p.fail}` };
+  if (p.mainSha === sha) return { ok: `the box's checkout is ${sha.slice(0, 7)}, which is ${ref}` };
+  const age = Number(drift.ageSeconds);
+  const auditAt = Number.isFinite(age) ? Date.now() - age * 1000 : NaN;
+  const deadline = p.mainAt + DEPLOY_LAG_MIN * 60_000;
+  if (!(auditAt >= deadline)) return { ok: `the box's checkout is ${sha.slice(0, 7)}, behind ${ref}'s ${p.mainSha.slice(0, 7)}, but its last audit predates the ${DEPLOY_LAG_MIN}-minute allowance; the next one will say` };
+  return { fail: `the box's checkout is ${sha.slice(0, 7)} and ${ref} is ${p.mainSha.slice(0, 7)}, in an audit ${((auditAt - p.mainAt) / 60_000).toFixed(0)} minutes after main moved: auto-deploy did not advance it (journalctl -u faucet-autodeploy on the box)` };
 }
 
 async function runFaucetChecks() {
@@ -589,7 +631,9 @@ async function runFaucetChecks() {
   // main's history before the probe); without it the comparison is not made, and says so.
   {
     const r = boxRunsMain(status.body.buildCommit);
-    ok("the box runs main: the commit it serves is main's head, or an ancestor main moved past within the deploy allowance", !r.fail, r.fail ?? r.ok ?? r.skip);
+    ok("the box runs main: its image is main's head, or older with no app change since, or inside the deploy allowance", !r.fail, r.fail ?? r.ok ?? r.skip);
+    const c = checkoutIsMain(status.body.box?.drift);
+    ok("the box's checkout is main, so the ops files it installs are main's", !c.fail, c.fail ?? c.ok ?? c.skip);
   }
   // THE COMPOSITION CHECK cTAZ NEVER HAD, and the reason this file grew it. Every
   // pre-merge layer was green while prod could not serve cTAZ, twice in one day: the

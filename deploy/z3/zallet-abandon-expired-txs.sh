@@ -36,10 +36,10 @@
 #   1. mined_height IS NULL              - never made it into a block, AND
 #   2. its expiry is settled OR absent   - expiry_height < tip - MARGIN, or NULL/0 (a
 #                                          no-expiry tx never expires but can still be dead), AND
-#   3. zebra cannot serve it             - checked live, per transaction: the real proof
-# and it aborts if the node is not answering at all, because an unreachable node is not
-# proof a transaction is gone. A tx zebra still has, or one whose expiry is NEAR the tip
-# (so it might yet be mined), is left alone.
+#   3. zebra answers RPC error -5        - checked live, per transaction: the real proof
+# and it aborts on any other answer, at the start or mid-loop, because an unreachable node
+# is not proof a transaction is gone. A tx zebra still has, or one whose expiry is NEAR the
+# tip (so it might yet be mined), is left alone.
 #
 # WHY NO-EXPIRY TXS ARE INCLUDED (2026-08-18, the second outage that day). The first
 # version abandoned only txs with a SETTLED expiry (0 < expiry_height < tip-MARGIN). But a
@@ -147,6 +147,19 @@ rpc() {
 # stored, every lookup misses and reads as gone, so the node check could never say keep.
 rpc_txid() { printf '%s' "$1" | tr 'A-F' 'a-f' | awk '{ for (i = length($0) - 1; i > 0; i -= 2) printf "%s", substr($0, i, 2) }'; }
 
+# Only -5 proves a transaction is gone. Any other reply, or none, ends the run before any delete.
+# A failed curl counts as no reply, even with half a -5 in hand.
+zebra_has() {
+  local reply
+  reply="$(rpc getrawtransaction "[\"$(rpc_txid "$1")\"]")" || reply=""
+  case "$reply" in
+    *'"error":null'*)        return 0 ;;
+    *'"error":{"code":-5,'*) return 1 ;;
+  esac
+  echo "ABORT: no usable answer from zebra for ${1:0:12}… (got: ${reply:0:200}). An unreachable node is not proof a transaction is gone, so nothing was deleted." >&2
+  exit 1
+}
+
 TIP="$(rpc getblockcount '[]' | grep -oE '"result":[0-9]+' | cut -d: -f2)"
 [ -n "$TIP" ] || { echo "ABORT: zebra is not answering getblockcount. An unreachable node is not proof a transaction is gone." >&2; exit 1; }
 CUTOFF=$(( TIP - MARGIN ))
@@ -163,7 +176,7 @@ echo "candidates: $(echo "$CANDIDATES" | wc -l | tr -d ' ')"
 DEAD_IDS=()
 for ROW in $CANDIDATES; do
   ID="${ROW%%:*}"; HX="${ROW#*:}"
-  if rpc getrawtransaction "[\"$(rpc_txid "$HX")\"]" | grep -q '"error":null'; then
+  if zebra_has "$HX"; then
     echo "  id=$ID ${HX:0:12}… zebra still has it, leaving alone"
   else
     echo "  id=$ID ${HX:0:12}… gone from the chain, abandoning"

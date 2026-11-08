@@ -13,7 +13,7 @@ import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createServer as createTlsServer } from "node:https";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -614,7 +614,8 @@ const TOKEN = "t0ken-t0ken-t0ken-t0ken";
 // the first cut of these rows handed the probe that string (red in CI, green on every laptop).
 // Two commits, `a` then `b`; `whenB` dates the head so "fresh" and "stale" are chosen, not
 // observed. Every sha is asserted 40-hex, so a fixture that stops producing one says so.
-function mainRepo(whenB) {
+// `bFile` makes `b` change that path, so the image rows can tell an app change from an ops one.
+function mainRepo(whenB, bFile) {
   const dir = mkdtempSync(join(tmpdir(), "probe-main-"));
   const at = (iso) => ({ GIT_AUTHOR_DATE: iso, GIT_COMMITTER_DATE: iso, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" });
   const g = (env, ...a) => {
@@ -625,6 +626,11 @@ function mainRepo(whenB) {
   g({}, "init", "-q");
   g(at("2020-01-01T00:00:00Z"), "commit", "-q", "--allow-empty", "-m", "a");
   const a = g({}, "rev-parse", "HEAD");
+  if (bFile) {
+    mkdirSync(dirname(join(dir, bFile)), { recursive: true });
+    writeFileSync(join(dir, bFile), "x\n");
+    g({}, "add", bFile);
+  }
   g(at(whenB), "commit", "-q", "--allow-empty", "-m", "b");
   const b = g({}, "rev-parse", "HEAD");
   // A commit that genuinely exists in this repo and is NOT on main: a side branch off `a`.
@@ -689,7 +695,7 @@ test("the box runs main: main's own head passes; a stranger commit is red; no re
 });
 
 test("the box runs main: a FRESH ancestor is allowed inside the deploy window, and says so", async () => {
-  const repo = mainRepo(new Date().toISOString());
+  const repo = mainRepo(new Date().toISOString(), "src/app/page.tsx");
   try {
     const r = await runProbe({ SMOKE_OPS_TOKEN: TOKEN, ...repo.env }, READY, { token: TOKEN, buildCommit: repo.a.slice(0, 7) });
     assert.equal(r.code, 0, r.out);
@@ -697,12 +703,21 @@ test("the box runs main: a FRESH ancestor is allowed inside the deploy window, a
   } finally { repo.done(); }
 });
 
-test("the box runs main: a STALE ancestor is red - main moved and the deploy did not land", async () => {
-  const repo = mainRepo("2020-01-02T00:00:00Z");
+test("the box runs main: a STALE ancestor missing an APP change is red, and names the file", async () => {
+  const repo = mainRepo("2020-01-02T00:00:00Z", "src/app/page.tsx");
   try {
     const r = await runProbe({ SMOKE_OPS_TOKEN: TOKEN, ...repo.env }, READY, { token: TOKEN, buildCommit: repo.a.slice(0, 7) });
     assert.notEqual(r.code, 0, r.out);
-    assert.match(r.out, /FAIL: the box runs main.*has been at .* for \d+ minutes and the box still runs .*: the deploy did not land/);
+    assert.match(r.out, /FAIL: the box runs main.*has been at .* for \d+ minutes and the box still runs .*without 1 app file\(s\) \(src\/app\/page\.tsx\): the deploy did not land/);
+  } finally { repo.done(); }
+});
+
+test("the box runs main: a STALE ancestor whose only newer changes are ops is current - auto-deploy does not rebuild for those", async () => {
+  const repo = mainRepo("2020-01-02T00:00:00Z", "deploy/z3/watchdog.sh");
+  try {
+    const r = await runProbe({ SMOKE_OPS_TOKEN: TOKEN, ...repo.env }, READY, { token: TOKEN, buildCommit: repo.a.slice(0, 7) });
+    assert.equal(r.code, 0, r.out);
+    assert.match(r.out, /ok: the box runs main.*with no app change since, so there was nothing to rebuild/);
   } finally { repo.done(); }
 });
 
@@ -777,4 +792,50 @@ test("explorer: a page for an invented txid still FAILS, so the wall did not loo
   assert.notEqual(r.code, 0, r.out);
   assert.match(r.out, /an unknown txid is reported absent/);
   assert.match(r.out, /RENDERED/);
+});
+
+// ── THE BOX'S CHECKOUT IS MAIN: ops changes land through it, and the drift audit says which one it compared ──
+
+const opsBox = (drift) => ({ state: "complete", expected: 1, present: 1, notEnabled: 0, watchdogUnit: "active", alertBridge: "ok", minerBinary: "current", ageSeconds: 5, drift: { state: "clean", findings: 0, unverified: 0, reason: "", ...drift } });
+
+test("checkout: main's head passes, and without the token it is not compared, said so", async () => {
+  const repo = mainRepo(new Date().toISOString());
+  try {
+    const r = await runProbe({ SMOKE_OPS_TOKEN: TOKEN, ...repo.env }, READY, { token: TOKEN, buildCommit: repo.b.slice(0, 7), box: opsBox({ ageSeconds: 60, repoSha: repo.b }) });
+    assert.equal(r.code, 0, r.out);
+    assert.match(r.out, /ok: the box's checkout is main.*which is HEAD/);
+    const pub = await runProbe({ ...repo.env }, READY, { token: TOKEN, publicBox: { state: "ok", minerUnit: null, drift: "clean" } });
+    assert.equal(pub.code, 0, pub.out);
+    assert.match(pub.out, /the box's checkout is main.*no operator token, so the box did not say which checkout it audited/);
+  } finally { repo.done(); }
+});
+
+test("checkout: behind main in an audit run well after main moved is red - auto-deploy stopped advancing it", async () => {
+  const repo = mainRepo("2020-01-02T00:00:00Z", "deploy/z3/watchdog.sh");
+  try {
+    const r = await runProbe({ SMOKE_OPS_TOKEN: TOKEN, ...repo.env }, READY, { token: TOKEN, buildCommit: repo.a.slice(0, 7), box: opsBox({ ageSeconds: 60, repoSha: repo.a }) });
+    assert.notEqual(r.code, 0, r.out);
+    assert.match(r.out, /FAIL: the box's checkout is main.*checkout is [0-9a-f]{7} and HEAD is [0-9a-f]{7}.*auto-deploy did not advance it/);
+  } finally { repo.done(); }
+});
+
+test("checkout: behind main in an audit that ran before the allowance is not judged yet", async () => {
+  const repo = mainRepo(new Date().toISOString(), "deploy/z3/watchdog.sh");
+  try {
+    const r = await runProbe({ SMOKE_OPS_TOKEN: TOKEN, ...repo.env }, READY, { token: TOKEN, buildCommit: repo.a.slice(0, 7), box: opsBox({ ageSeconds: 60, repoSha: repo.a }) });
+    assert.equal(r.code, 0, r.out);
+    assert.match(r.out, /ok: the box's checkout is main.*its last audit predates the 20-minute allowance/);
+  } finally { repo.done(); }
+});
+
+test("checkout: a side-branch checkout is not main's code, and a missing repoSha is red rather than skipped", async () => {
+  const repo = mainRepo(new Date().toISOString());
+  try {
+    const side = await runProbe({ SMOKE_OPS_TOKEN: TOKEN, ...repo.env }, READY, { token: TOKEN, buildCommit: repo.b.slice(0, 7), box: opsBox({ ageSeconds: 60, repoSha: repo.c }) });
+    assert.notEqual(side.code, 0, side.out);
+    assert.match(side.out, /FAIL: the box's checkout is main.*which is not an ancestor of HEAD: not main's code/);
+    const none = await runProbe({ SMOKE_OPS_TOKEN: TOKEN, ...repo.env }, READY, { token: TOKEN, buildCommit: repo.b.slice(0, 7), box: opsBox({ ageSeconds: 60, repoSha: null }) });
+    assert.notEqual(none.code, 0, none.out);
+    assert.match(none.out, /FAIL: the box's checkout is main.*repoSha missing/);
+  } finally { repo.done(); }
 });
