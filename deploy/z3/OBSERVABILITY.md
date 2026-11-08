@@ -95,7 +95,10 @@ the public page gets one word, `ok`, `attention` or `unknown`, and no commit, so
 never announces when the box can neither heal nor page (risk register II, R-24). Set
 the same value in `deploy/z3/faucet.env` on the box and as the GitHub secret
 `FAUCET_OPS_TOKEN`; without it the probe still fails on `attention` and `unknown`,
-it just cannot say which fault. The watchdog's own start line reports the channel it
+it just cannot say which fault. With it the probe also checks that the box runs main: the
+app image has every app change on main, and the checkout the drift audit compared is
+main's head, each allowed 20 minutes after main moves. Without it neither is compared,
+and the run says so. The watchdog's own start line reports the channel it
 would page through as `alert.sh --describe` answers it (`signal`, `webhook/slack`,
 `none`, `misconfigured/…`), never a URL.
 
