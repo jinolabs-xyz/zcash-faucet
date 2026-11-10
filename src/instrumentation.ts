@@ -109,6 +109,11 @@ export async function register() {
   const { startCtazStateRefresher } = await import("@/lib/crosslink/cache");
   startCtazStateRefresher();
 
+  // Keeps the TAZ node-status cell warm while nobody is polling, so a first visitor on a quiet
+  // faucet is not the one who waits on the wallet's slow getwalletstatus.
+  const { startNodeStatusWarmer } = await import("@/lib/zcash/nodeStatusCache");
+  startNodeStatusWarmer();
+
   // Warm the independent tip cache so the first readiness check can already tell
   // whether our node is following the chain (#170). Fire-and-forget: never block
   // boot on a public endpoint.

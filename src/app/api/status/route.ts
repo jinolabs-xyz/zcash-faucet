@@ -97,7 +97,14 @@ export const GET = withApi("status", async (req: NextRequest) => {
   // three decided when the balance, the reserve, the miner and the drip count reached the visitor -
   // and measured on prod the page's read refused 11.27% of the time and had a tail to ~10s. It is
   // served from memory now and refreshed behind the response; see nodeStatusCache.ts.
-  const [backend, balanceZat, node] = await Promise.all([pingBackend(), safeBalance(), nodeStatusForPage()]);
+  // The balance comes from the reconciler's 30s tick for the same reason; a fresh read here was a
+  // second slow wallet call on every page load. /api/faucet still reads it fresh before paying.
+  const reserve = getReserveReconciler();
+  const [backend, balanceZat, node] = await Promise.all([
+    pingBackend(),
+    reserve.spendableZatoshi ?? safeBalance(),
+    nodeStatusForPage(),
+  ]);
   // Synchronous and off the await chain: a few hundred bytes from a bind mount, so it
   // does not belong in the Promise.all with three network calls.
   const minerReading = readMinerHeartbeat(config.miner.heartbeatPath);
@@ -209,9 +216,8 @@ export const GET = withApi("status", async (req: NextRequest) => {
       // as-is.
       ...(ops ? { detail: minerRow(minerReading, box.minerUnit), operator: minerOperator } : {}),
     },
-    // Refill loop state. spendableTaz uses this request's balance read (fresher
-    // than the reconciler's last tick); refilling is the reconciler's decision.
-    reserve: { ...getReserveReconciler().status, spendableTaz: balanceTaz },
+    // Refill loop state. spendableTaz is the balance above, so the card and the reserve agree.
+    reserve: { ...reserve.status, spendableTaz: balanceTaz },
     ctaz: await ctazBlock(),
   }, { headers });
 });
