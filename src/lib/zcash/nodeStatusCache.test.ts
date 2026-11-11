@@ -311,3 +311,45 @@ test("and the refresh period is strictly below the page poll, not equal to it", 
   const poll = Number(pm[1].replace(/_/g, ""));
   assert.ok(refresh < poll, `refresh ${refresh}ms must be strictly below the page poll ${poll}ms, or a poll can fail to trigger it`);
 });
+
+test("the warmer refreshes a cold or idle cell and leaves a fresh one alone", async () => {
+  // Owner report 2026-11-10: first visitors on a quiet faucet waited the full read and left.
+  const { warmNodeStatusOnce, NODE_STATUS_WARM_EVERY_MS } = await import("./nodeStatusCache.ts");
+  const settle = () => new Promise((r) => setTimeout(r, 50));
+  // Counts getwalletstatus only: a read also kicks tip-oracle fetches that land late and are not the wallet.
+  const walletReads = () => {
+    let n = 0;
+    const inner = globalThis.fetch;
+    globalThis.fetch = (async (u: Parameters<typeof fetch>[0], i?: RequestInit) => {
+      if (String(i?.body ?? "").includes("getwalletstatus")) n += 1;
+      return inner(u, i);
+    }) as typeof fetch;
+    return () => n;
+  };
+  try {
+    resetNodeStatusCacheForTests();
+    wallet({});
+    const cold = walletReads();
+    warmNodeStatusOnce();
+    await settle(); // the warmer's own read; refreshNodeStatusForTests would start one and hide a dead warmer
+    assert.equal(cold(), 1, "a cold cell was not warmed");
+
+    warmNodeStatusOnce(Date.now() + NODE_STATUS_WARM_EVERY_MS / 2);
+    await settle();
+    assert.equal(cold(), 1, "the warmer asked the wallet while the reading was still fresh");
+
+    warmNodeStatusOnce(Date.now() + NODE_STATUS_WARM_EVERY_MS * 2);
+    await settle();
+    assert.equal(cold(), 2, "an idle cell was not refreshed");
+  } finally {
+    restore();
+  }
+});
+
+test("worst case the warmer lands a reading inside the serve window", async () => {
+  // A refresh starts at most two ticks after the last reading and takes one page read.
+  const { NODE_STATUS_WARM_EVERY_MS } = await import("./nodeStatusCache.ts");
+  const { nodeStatusBudgetMs } = await import("./nodeStatus.ts");
+  const worst = 2 * NODE_STATUS_WARM_EVERY_MS + nodeStatusBudgetMs("page");
+  assert.ok(worst < NODE_STATUS_MAX_AGE_MS, `worst case ${worst}ms is past the ${NODE_STATUS_MAX_AGE_MS}ms window`);
+});

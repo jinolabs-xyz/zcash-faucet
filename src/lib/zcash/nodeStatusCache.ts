@@ -19,10 +19,10 @@
  *
  * TWO DELIBERATE DIFFERENCES FROM THE cTAZ CACHE, both stated so the divergence is a choice rather
  * than a drift:
- *   1. NO BACKGROUND TIMER. That cache runs an interval from instrumentation; this one refreshes
- *      LAZILY, when a read finds the entry stale. The wallet is the component that is struggling,
- *      and a timer asks it a question every N seconds whether or not anybody is looking. Lazy means
- *      an idle faucet costs the wallet nothing, and a busy one still asks at most once per window.
+ *   1. THE TIMER ONLY FILLS IDLE GAPS. Lazy-only meant the first visitor on a quiet faucet always
+ *      found the cell past its window and waited the full read (owner report 2026-11-10: p50 3.8s,
+ *      people left). startNodeStatusWarmer asks only when nobody has refreshed for a tick, so a
+ *      busy faucet's polls still do all the asking and an idle one pays one read per ~tick.
  *   2. IT KEEPS THE PAGE LADDER. The read stays `purpose: "page"` - one 4s attempt. Moving it to
  *      the retrying ladder would raise its success rate (0.35% vs 11.27% refused, same window) and
  *      costs a visitor nothing now that it is off the request path - but the failure counters are
@@ -82,7 +82,7 @@ interface Cell {
   inflight: Promise<void> | null;
 }
 
-const g = globalThis as unknown as { __nodeStatusCache?: Cell };
+const g = globalThis as unknown as { __nodeStatusCache?: Cell; __nodeStatusWarmer?: ReturnType<typeof setInterval> };
 
 function cell(): Cell {
   if (!g.__nodeStatusCache) g.__nodeStatusCache = { status: null, at: 0, inflight: null };
@@ -202,6 +202,27 @@ export async function nodeStatusForPage(nowMs: number = Date.now()): Promise<Nod
     void refresh();
   }
   return cachedNodeStatus(nowMs);
+}
+
+/**
+ * Warmer cadence. Worst case a refresh starts two ticks after the last reading and takes one page
+ * read (6s); that must land inside NODE_STATUS_MAX_AGE_MS or a first visitor still finds the cell
+ * cold. The test pins the sum.
+ */
+export const NODE_STATUS_WARM_EVERY_MS = 4_000;
+
+/** One warmer tick: refresh only if nobody has for a tick. Exported so tests need no timers. */
+export function warmNodeStatusOnce(nowMs: number = Date.now()): void {
+  const c = cell();
+  if (c.at === 0 || nowMs - c.at > NODE_STATUS_WARM_EVERY_MS) void refresh();
+}
+
+/** Started once from instrumentation. unref'd: a warm-up must never keep the process alive. */
+export function startNodeStatusWarmer(): void {
+  if (g.__nodeStatusWarmer) return;
+  warmNodeStatusOnce();
+  g.__nodeStatusWarmer = setInterval(() => warmNodeStatusOnce(), NODE_STATUS_WARM_EVERY_MS);
+  g.__nodeStatusWarmer.unref();
 }
 
 /** Test seam: globalThis state would otherwise leak between cases. */

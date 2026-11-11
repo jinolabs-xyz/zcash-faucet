@@ -470,6 +470,11 @@ class ReserveReconciler {
     }
   }
 
+  /** The last tick's balance, null until one is readable. /api/status serves this so a page load never waits on the wallet. */
+  get spendableZatoshi(): bigint | null {
+    return this.spendableZat;
+  }
+
   get status(): ReserveStatus {
     return {
       targetTaz: Number(config.reserve.targetZatoshi) / Number(ZATOSHI_PER_TAZ),
