@@ -71,8 +71,12 @@ export type ReserveResult =
       retryAfterSeconds?: number;
     };
 
-/** Diagnose why an atomic reserve inserted 0 rows (for a useful error message). */
-async function whyBlocked(
+/**
+ * The per-address, per-connection and per-network refusals, read-only. Null when none
+ * applies. whyBlocked adds the global cap on top; claimBlocker asks this BEFORE the
+ * puzzle, so a reused address is refused in one read instead of after a solve.
+ */
+async function specificBlock(
   addressHash: string,
   ipHash: string | null,
   subnetHash: string | null,
@@ -81,7 +85,7 @@ async function whyBlocked(
   cooldownSeconds: number,
   network: DripNetwork,
   ipDailyMax: number,
-): Promise<ReserveResult & { ok: false }> {
+): Promise<(ReserveResult & { ok: false }) | null> {
   // ADDRESS ONLY. The ip branch moved to a COUNT when the per-IP limit became N, and
   // leaving it here would report "this client already claimed recently" off a single row
   // while the gate was happily allowing four more - diagnosing a block nobody made, which
@@ -164,6 +168,22 @@ async function whyBlocked(
       };
     }
   }
+  return null;
+}
+
+/** Diagnose why an atomic reserve inserted 0 rows (for a useful error message). */
+async function whyBlocked(
+  addressHash: string,
+  ipHash: string | null,
+  subnetHash: string | null,
+  subnetDailyMax: number,
+  now: number,
+  cooldownSeconds: number,
+  network: DripNetwork,
+  ipDailyMax: number,
+): Promise<ReserveResult & { ok: false }> {
+  const specific = await specificBlock(addressHash, ipHash, subnetHash, subnetDailyMax, now, cooldownSeconds, network, ipDailyMax);
+  if (specific) return specific;
   // No live cooldown row and no subnet overage → it was the global daily cap. WHEN it
   // has room again is measured the way the per-IP refusal measures it: the earliest
   // expiry among the rows the cap counts. "Come back tomorrow" at 23:50 on a cap that
@@ -275,6 +295,33 @@ export async function reserveClaim(opts: {
  * The exemption is a spelled-out reason rather than a boolean, so it cannot be passed by
  * accident and reads at the call site as the claim it is making.
  */
+/**
+ * Would reserveClaim refuse this for a reason of the CLAIMANT's (address, connection,
+ * network)? Read-only, and it never reports the global cap: that is the faucet's limit
+ * and /api/faucet still says so. Advisory only - the atomic reserve stays the gate.
+ */
+export async function claimBlocker(opts: {
+  address: string;
+  ipHash: string | null;
+  subnetHash: string | null;
+  now: number;
+  cooldownSeconds: number;
+  subnetDailyMax: number;
+  ipDailyMax?: number;
+  network?: DripNetwork;
+}): Promise<(ReserveResult & { ok: false }) | null> {
+  return specificBlock(
+    fingerprintAddress(opts.address),
+    opts.ipHash,
+    opts.subnetHash,
+    opts.subnetDailyMax,
+    opts.now,
+    opts.cooldownSeconds,
+    opts.network ?? "taz",
+    opts.ipDailyMax ?? 1,
+  );
+}
+
 export type NoTxidReason = "network-has-no-txid";
 
 /**
