@@ -32,6 +32,7 @@ import {
   acceptSentence,
   backendHost,
 } from "@/lib/statusView";
+import { humanAge } from "@/lib/minerLabel";
 import type { Tone, ViewStatus } from "./viewStatus";
 import { UNKNOWN } from "./viewStatus";
 
@@ -106,6 +107,7 @@ export function StatusCards({ status, network }: { status: ViewStatus | null; ne
   const unit = status?.box?.minerUnit ?? null;
   const minerState = minerWord(miner, unit);
   const sends = status?.sends;
+  const sendsJudged = sends?.state != null && sends.state !== "unknown";
   const reserve = status?.reserve;
 
   // A figure we were not given reads "unknown", never zero. "0 TAZ" for a wallet we
@@ -242,10 +244,14 @@ export function StatusCards({ status, network }: { status: ViewStatus | null; ne
               <span className="sdot" />
               miner <b data-status-key="miner">{minerState}</b>
             </span>
-            <span className="tag" data-tone={sendsTone(sends?.state)}>
-              <span className="sdot" />
-              sends <b>{sends?.state ?? UNKNOWN}</b>
-            </span>
+            {/* Only with a verdict, the same rule that removed the Analytics sends card on
+                2026-09-19: on a quiet faucet the window never fills and "unknown" reads as broken. */}
+            {sendsJudged && (
+              <span className="tag" data-tone={sendsTone(sends?.state)}>
+                <span className="sdot" />
+                sends <b>{sends?.state}</b>
+              </span>
+            )}
             <span className="tag" data-tone={boxTone(status?.box?.state)}>
               <span className="sdot" />
               box <b>{status?.box?.state ?? UNKNOWN}</b>
@@ -257,15 +263,17 @@ export function StatusCards({ status, network }: { status: ViewStatus | null; ne
           <Rows>
             <Row label="Miner">
               <Word tone={minerTone(miner, unit)}>{minerState}</Word>
-              {miner?.templateAgoSeconds != null && <> · template {miner.templateAgoSeconds}s</>}
+              {miner?.templateAgoSeconds != null && <> · template {humanAge(miner.templateAgoSeconds)}</>}
             </Row>
             <Row label="Solved / accepted / rejected">
               {miner?.solvedCount ?? UNKNOWN} / {miner?.submittedAccepted ?? UNKNOWN} / {miner?.submittedRejected ?? UNKNOWN}
             </Row>
-            <Row label="Sends">
-              <Word tone={sendsTone(sends?.state)}>{sends?.state ?? UNKNOWN}</Word>
-              {sends?.reason && <> · {sends.reason}</>}
-            </Row>
+            {sendsJudged && (
+              <Row label="Sends">
+                <Word tone={sendsTone(sends?.state)}>{sends?.state}</Word>
+                {sends?.reason && <> · {sends.reason}</>}
+              </Row>
+            )}
             <Row label="Box">
               <Word tone={boxTone(status?.box?.state)}>{status?.box?.state ?? UNKNOWN}</Word>
             </Row>

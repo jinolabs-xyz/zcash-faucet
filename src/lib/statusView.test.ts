@@ -73,7 +73,7 @@ test("production's +1 reads as ahead, and ahead is never marked", () => {
   const diff = heightDiff(PROD.node.nodeHeight, PROD.node.externalHeight);
   assert.equal(diff, 1);
   assert.equal(heightDeltaText(diff), "+1 vs network, ahead");
-  assert.equal(heightNote(diff), "ahead, normal for a node that mines");
+  assert.equal(heightNote(diff), "ahead, the reference can trail a block or two");
   // A node that mines is ahead of the reference by design. Marking it would teach a
   // reader that the normal state is a warning.
   assert.equal(heightTone(diff), "ok");

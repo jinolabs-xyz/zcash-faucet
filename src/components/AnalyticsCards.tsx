@@ -18,6 +18,7 @@ import { useEffect, useRef, useState } from "react";
 import { drawDrips, dripHitAtX, drawReserve, drawSegments, barMax, isUncounted, sevenDayMean, type DripDay, type Segment } from "@/lib/charts";
 import { paintGlyph, type GlyphName } from "@/lib/glyphs";
 import { groupDigits, reserveSentence, reserveWord, reserveChipTone, acceptSentence, minerWord, minerTone, syncFigure, heightDiff, heightNote, backendHost } from "@/lib/statusView";
+import { humanAge } from "@/lib/minerLabel";
 import type { Tone, ViewStatus } from "./viewStatus";
 
 /**
@@ -309,8 +310,8 @@ export function AnalyticsCards({ status }: { status: ViewStatus | null }) {
         </div>
         <p className="sent">{acceptSentence(miner)}</p>
         <Figs items={[
-          { label: "template age", value: miner?.templateAgoSeconds != null ? `${miner.templateAgoSeconds}s` : null },
-          { label: "last beat", value: miner?.beatAgoSeconds != null ? `${miner.beatAgoSeconds}s` : null },
+          { label: "template age", value: miner?.templateAgoSeconds != null ? humanAge(miner.templateAgoSeconds) : null },
+          { label: "last beat", value: miner?.beatAgoSeconds != null ? humanAge(miner.beatAgoSeconds) : null },
           { label: "solved", value: miner?.solvedCount != null ? groupDigits(miner.solvedCount) : null },
         ]} />
       </div>

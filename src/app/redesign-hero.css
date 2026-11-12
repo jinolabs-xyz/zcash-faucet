@@ -265,6 +265,28 @@ html[data-theme]{background:var(--page)}
   .mascot-riso{max-width:min(52vw,240px) !important}
 }
 
+/* PHONES GET THE FORM FIRST. In source order the claim card sat under the chips, the reserve
+ * card and the fox: at 390x844 its field started at 1120px, below the first screen, so a visitor
+ * saw "The reserve is low" and no way to claim. `contents` lets the headline, the card and the
+ * rest of the copy be ordered as one column. After the 64rem gap above, so the row gap wins. */
+@media (max-width:56rem){
+  .hero-copy{display:contents}
+  .hero-grid{row-gap:calc(1.5*var(--u))}
+  .hero-copy > *{order:2}
+  .hero-copy > .eyebrow,.hero-copy > h1,.hero-copy > .lede{order:0}
+  .hero-grid > .card.claim{order:1}
+  .hero-mascot{order:3}
+}
+@media (max-width:32rem){
+  .hero-grid{row-gap:12px}
+}
+
+/* At 1024x768 the reserve-low card pushed the copy column 60px over and it scrolled. The puzzle
+ * sentence gives way while that card is up; the claim card explains the puzzle when it runs. */
+@media (min-width:56rem) and (max-width:72rem) and (max-height:820px){
+  .hero-copy:has([data-phase="reserve-low"]) > .lede.small{display:none}
+}
+
 
 /* THE FOURTH AND FIFTH SURVIVORS, from the red-team's sweep of this same shape.
  * globals.css:101 paints `::selection` with the retired `--color-accent` (#ec3013) and the

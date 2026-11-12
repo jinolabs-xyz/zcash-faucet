@@ -136,7 +136,8 @@ function detect(raw: string) {
 function check(addr: string) {
   const a = addr.trim();
   const d = detect(a);
-  if (d.kind === "none") return { ok: false as const };
+  // Said only after a submit (touched); before this an empty Request did nothing at all.
+  if (d.kind === "none") return { ok: false as const, err: "Paste your testnet address first, or make a throwaway one below." };
   if (d.kind === "mainnet")
     return { ok: false as const, err: "That's a mainnet address. This faucet only sends testnet TAZ. Testnet addresses start with utest1, ztestsapling or tm." };
   if (d.kind === "unknown")
@@ -231,6 +232,17 @@ export default function Home() {
   // has chosen a theme keeps it: the stored key is unchanged, so only people who never
   // toggled see the new default.
   const [view, setView] = useState<View>("claim");
+  // The subpages' nav links here as /#status, /#analytics, /#tools (Shell.tsx HREF), and
+  // nothing read the hash, so every one of them opened Claim.
+  useEffect(() => {
+    const fromHash = () => {
+      const h = window.location.hash.slice(1) as View;
+      if (VIEWS.includes(h)) setView(h);
+    };
+    fromHash();
+    window.addEventListener("hashchange", fromHash);
+    return () => window.removeEventListener("hashchange", fromHash);
+  }, []);
   const [tx, setTx] = useState<Tx | null>(null);
   const [copied, setCopied] = useState<CopyTarget | null>(null);
   // THE KEY THAT COMES WITH A GENERATED ADDRESS (risk register II, R-31). /api/account
@@ -534,7 +546,7 @@ export default function Home() {
   const submit = async (target?: string) => {
     const address = (target ?? addr).trim();
     const c = check(address);
-    if (!c.ok) { setTouched(true); return; }
+    if (!c.ok) { setTouched(true); document.getElementById("zaddr")?.focus(); return; }
     if (!target && keyUnseen(address)) return;
     // Held phases are held for the keyboard and for the error card's "Try again" too:
     // the button is disabled, but Enter in the address field and Try again land here
