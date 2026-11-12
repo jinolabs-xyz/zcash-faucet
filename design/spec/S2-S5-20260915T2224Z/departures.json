@@ -9,6 +9,11 @@
     "shipped": "display:none",
     "why": "#648, owner 2026-09-17: the claim card must show its content rather than scroll it, and the design has no rule for the TERMINAL states because the frozen snapshot shows the card before a claim. Measured with a real claim driven to a receipt: the panel needs 572/536 at 1440 and 534/455 at 1280, i.e. 36px and 79px more than it has. The copy block is 113px and 112px at those widths, so letting it give way clears both with room. It is only hidden AFTER a claim, where it is a caption explaining the product to someone who has already used it while competing with the txid, the buttons and the spending key they came back to read. Before the claim it is untouched, which is the state the design froze and the state the owner nominated the block from."
   },
+  ".card.claim[data-held] > .card-copy": {
+    "kind": "divergence",
+    "shipped": "display:none",
+    "why": "Owner report 2026-11-12: the claim card scrolled whenever the faucet was down. Same trade as [data-terminal] above, for the states where the faucet cannot pay (syncing, fault, queued, empty, degraded), which the frozen snapshot does not show. Swept locally with each state witnessed: 11 of 30 state x viewport combinations scrolled, worst 74px at 1280x720 while syncing, hiding the progress bar and sync figures. The ~112px copy block clears all of them; after, 0 of 30 scroll. `checking` is left out so a normal page load does not drop the block and put it back."
+  },
   ".comp > .view.hero": {
     "kind": "override",
     "shipped": "",

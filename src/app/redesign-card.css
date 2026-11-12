@@ -44,6 +44,9 @@
    back to read. Measured: it is 113px at 1440 and 112px at 1280, against receipt deficits of
    36px and 79px. Before the claim it earns its place and is untouched. */
 .card.claim[data-terminal] > .card-copy{display:none}
+/* Same trade while the faucet cannot pay: the down panels overflowed by up to 74px at 1280x720
+   and the panel scrolled (owner report 2026-11-12). Declared in departures.json. */
+.card.claim[data-held] > .card-copy{display:none}
 .linkbtn{background:none;border:0;padding:0;align-self:flex-start;color:var(--accent-text);font-size:calc(.9*var(--u));font-weight:600;cursor:pointer}
 .linkbtn:hover{text-decoration:underline}
 .assistant-head .ring{width:calc(2.16*var(--u));height:calc(2.16*var(--u));border-radius:50%;background:var(--orange-soft);display:grid;place-items:center;color:var(--orange)}

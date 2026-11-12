@@ -1173,7 +1173,8 @@ export default function Home() {
                 so the stylesheet can let the explanatory copy give way to what the reader now
                 needs. Derived from the phase machine, not from what happens to be rendered. */}
             <article className="card claim feature" id="claim" aria-labelledby="h1" ref={cardRef}
-              data-terminal={phase === "success" || phase === "error" || phase === "cooldown" ? "" : undefined}>
+              data-terminal={phase === "success" || phase === "error" || phase === "cooldown" ? "" : undefined}
+              data-held={phase === "syncing" || phase === "fault" || phase === "queued" || phase === "empty" || phase === "degraded" ? "" : undefined}>
               {/* THE PANEL, which this card did not have. The design's claim card is
                   article.card.claim.feature > div.panel + div.card-copy (index.html:429, :430,
                   :553) and our content sat directly on the article, so `.panel` (hero.css:25),
