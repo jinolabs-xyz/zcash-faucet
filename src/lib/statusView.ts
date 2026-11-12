@@ -103,7 +103,7 @@ export function heightDiffChip(diff: number | null): string | null {
  */
 export function heightNote(diff: number | null): string {
   if (diff === null) return "nothing to compare against";
-  if (diff > 0) return "ahead, normal for a node that mines";
+  if (diff > 0) return "ahead, the reference can trail a block or two";
   if (diff < 0) return "behind the reference";
   return "level with the reference";
 }

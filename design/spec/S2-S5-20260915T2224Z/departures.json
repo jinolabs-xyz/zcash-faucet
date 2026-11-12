@@ -247,5 +247,45 @@
     "kind": "override",
     "shipped": "background:var(--ink-3); border-color:var(--ink-3)",
     "why": "#723, follows the two above: the accent hover rule matches button.tag, which this is, so without this line Another address would hover orange-soft. Restores the spec's ink hover (--ink-3) and carries the border with it."
+  },
+  "@media (max-width:56rem) | .hero-copy": {
+    "kind": "divergence",
+    "shipped": "display:contents",
+    "why": "Owner ask 2026-11-12 (user testing on prod): on a phone the claim form was below the first screen. The design orders narrow screens copy, fox, card in source order; at 390x844 that put the address field at 1120px of an 844px screen, under the chips, the reserve-low card and the fox, so a visitor saw a warning and no way to claim. With .hero-copy as display:contents the headline, then the claim card, then the rest of the copy, then the fox form one ordered column. Measured after: the Request button ends at 587px of 844 (390x844) and 585px of 640 (360x640), in every phase."
+  },
+  "@media (max-width:56rem) | .hero-copy > *": {
+    "kind": "divergence",
+    "shipped": "order:2",
+    "why": "Owner ask 2026-11-12 (user testing on prod): on a phone the claim form was below the first screen. The design orders narrow screens copy, fox, card in source order; at 390x844 that put the address field at 1120px of an 844px screen, under the chips, the reserve-low card and the fox, so a visitor saw a warning and no way to claim. With .hero-copy as display:contents the headline, then the claim card, then the rest of the copy, then the fox form one ordered column. Measured after: the Request button ends at 587px of 844 (390x844) and 585px of 640 (360x640), in every phase."
+  },
+  "@media (max-width:56rem) | .hero-copy > .eyebrow,.hero-copy > h1,.hero-copy > .lede": {
+    "kind": "divergence",
+    "shipped": "order:0",
+    "why": "Owner ask 2026-11-12 (user testing on prod): on a phone the claim form was below the first screen. The design orders narrow screens copy, fox, card in source order; at 390x844 that put the address field at 1120px of an 844px screen, under the chips, the reserve-low card and the fox, so a visitor saw a warning and no way to claim. With .hero-copy as display:contents the headline, then the claim card, then the rest of the copy, then the fox form one ordered column. Measured after: the Request button ends at 587px of 844 (390x844) and 585px of 640 (360x640), in every phase."
+  },
+  "@media (max-width:56rem) | .hero-grid > .card.claim": {
+    "kind": "divergence",
+    "shipped": "order:1",
+    "why": "Owner ask 2026-11-12 (user testing on prod): on a phone the claim form was below the first screen. The design orders narrow screens copy, fox, card in source order; at 390x844 that put the address field at 1120px of an 844px screen, under the chips, the reserve-low card and the fox, so a visitor saw a warning and no way to claim. With .hero-copy as display:contents the headline, then the claim card, then the rest of the copy, then the fox form one ordered column. Measured after: the Request button ends at 587px of 844 (390x844) and 585px of 640 (360x640), in every phase."
+  },
+  "@media (max-width:56rem) | .hero-mascot": {
+    "kind": "divergence",
+    "shipped": "order:3",
+    "why": "Owner ask 2026-11-12 (user testing on prod): on a phone the claim form was below the first screen. The design orders narrow screens copy, fox, card in source order; at 390x844 that put the address field at 1120px of an 844px screen, under the chips, the reserve-low card and the fox, so a visitor saw a warning and no way to claim. With .hero-copy as display:contents the headline, then the claim card, then the rest of the copy, then the fox form one ordered column. Measured after: the Request button ends at 587px of 844 (390x844) and 585px of 640 (360x640), in every phase."
+  },
+  "@media (max-width:56rem) | .hero-grid": {
+    "kind": "divergence",
+    "shipped": "grid-template-columns:1fr || row-gap:calc(1.5*var(--u))",
+    "why": "Same change: with .hero-copy as display:contents its own flex gap no longer spaces the headline lines, so the grid's row gap takes the value that gap had (1.5u, and 12px at 32rem) instead of the 2.5u the 64rem rule sets."
+  },
+  "@media (max-width:32rem) | .hero-grid": {
+    "kind": "divergence",
+    "shipped": "row-gap:12px",
+    "why": "Same change: with .hero-copy as display:contents its own flex gap no longer spaces the headline lines, so the grid's row gap takes the value that gap had (1.5u, and 12px at 32rem) instead of the 2.5u the 64rem rule sets."
+  },
+  "@media (min-width:56rem) and (max-width:72rem) and (max-height:820px) | .hero-copy:has([data-phase=reserve-low]) > .lede.small": {
+    "kind": "divergence",
+    "shipped": "display:none",
+    "why": "User testing on prod 2026-11-12: at 1024x768 the reserve-low card pushed the copy column 60px past its box and .hero-copy scrolled, cutting the card mid-sentence. The puzzle sentence (three lines there) gives way only while that card is showing and only in this short, narrow-desktop band; the claim card explains the puzzle when it runs. Measured after: reserve-low fits at 1024x768, 1152x720, 1280x720, 1366x768 and 1440x900."
   }
 }

@@ -169,6 +169,8 @@ test("ages round coarsely and do not pretend to precision", () => {
   assert.equal(humanAge(90), "2 min");
   assert.equal(humanAge(70 * 60), "70 min");
   assert.equal(humanAge(3 * 3600), "3 h");
+  assert.equal(humanAge(47 * 3600), "47 h");
+  assert.equal(humanAge(3002120), "35 d"); // prod's parked-miner beat, which rendered as "3002120s"
 });
 
 /* ------- not-configured: we were never asked to look, which is not a fault -------- */

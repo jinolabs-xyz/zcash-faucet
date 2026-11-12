@@ -61,7 +61,8 @@ export function humanAge(seconds: number): string {
   if (seconds < 90) return `${Math.round(seconds)}s`;
   const min = Math.round(seconds / 60);
   if (min < 90) return `${min} min`;
-  return `${Math.round(min / 6) / 10} h`;
+  if (min < 48 * 60) return `${Math.round(min / 6) / 10} h`;
+  return `${Math.round(min / 1440)} d`;
 }
 
 const groupDigits = (n: number) => n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
