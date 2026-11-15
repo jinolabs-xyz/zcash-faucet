@@ -505,9 +505,11 @@ export const config = {
     // is a couple seconds on a laptop, more on a phone - modest on purpose so a
     // first-time real user barely waits. Repeat claims escalate above this.
     baseBits: Math.max(8, Math.min(28, Math.floor(num("FAUCET_POW_BITS", 20)))),
-    // Each recent claim from the same client adds this many bits (quadratic cost
-    // for anyone hammering the faucet, unnoticeable for a one-off human).
-    escalateBits: Math.max(0, Math.floor(num("FAUCET_POW_ESCALATE_BITS", 2))),
+    // Each recent claim from the same client adds this many bits. 1, not 2 (owner,
+    // 2026-11-15): at 2 a household's third device waited ~40s on a laptop (20/22/24
+    // bits). The per-connection and subnet caps, checked before the puzzle since #770,
+    // are what bound a farm; this only has to make hammering cost more each time.
+    escalateBits: Math.max(0, Math.floor(num("FAUCET_POW_ESCALATE_BITS", 1))),
     // Hard cap so difficulty can't run away into a device-killing wait.
     maxBits: Math.max(12, Math.min(30, Math.floor(num("FAUCET_POW_MAX_BITS", 26)))),
     // How long a signed challenge is valid before the browser has to fetch a new one.
