@@ -821,6 +821,12 @@ try {
   ok("A main page links to /donate", /href="\/donate"/.test(await (await fetch(BASE_A + "/")).text()));
 
   /* ── A: faucet happy path, then every rejection ──────────────────────── */
+  // /api/claimable is asked BEFORE the puzzle (2026-11-12: a reused address took 36s to be
+  // refused). Unclaimed address: 200, and it consumes nothing, which the claim below proves.
+  const preFresh = await post(BASE_A, "/api/claimable", { address: tmAddr });
+  ok("A /api/claimable says an unclaimed address may claim", preFresh.status === 200 && preFresh.body.ok === true, `${preFresh.status} ${JSON.stringify(preFresh.body)}`);
+  const preBad = await post(BASE_A, "/api/claimable", { address: UNIFIED_BAD });
+  ok("A /api/claimable rejects a malformed address as 400", preBad.status === 400, `status ${preBad.status}`);
   const sent = await claim(BASE_A, tmAddr, await solvedChallenge(BASE_A));
   ok("A claim with pow to generated address is 200 + txid", sent.status === 200 && sent.body.ok === true && typeof sent.body.txid === "string" && sent.body.txid.length >= 32, `status ${sent.status} ${JSON.stringify(sent.body.error ?? "")}`);
   ok("A claim reports transparent recipient", sent.body.to?.kind === "transparent");
@@ -838,6 +844,11 @@ try {
   // for a shielded recipient is a link the chain does not reveal. The browser that made
   // the claim already has the txid from its own 200 and remembers it itself.
   ok("A the 429 does NOT disclose which transaction paid the address", !("priorTxid" in repeat.body) && !/[0-9a-f]{64}/.test(JSON.stringify(repeat.body)), JSON.stringify(repeat.body));
+  const prePaid = await post(BASE_A, "/api/claimable", { address: tmAddr });
+  ok("A /api/claimable refuses the paid address with no puzzle, same kind, scope and clock time as the claim's 429",
+    prePaid.status === 429 && prePaid.body.kind === "cooldown" && prePaid.body.scope === "address" && typeof prePaid.body.nextAt === "string" && Math.abs(Date.parse(prePaid.body.nextAt) - Date.parse(repeat.body.nextAt)) < 5_000,
+    `${prePaid.status} ${JSON.stringify(prePaid.body)}`);
+  ok("A and /api/claimable discloses no transaction either", !/[0-9a-f]{64}/.test(JSON.stringify(prePaid.body)), JSON.stringify(prePaid.body));
 
   const bad = await claim(BASE_A, UNIFIED_BAD, await solvedChallenge(BASE_A));
   ok("A checksum-broken address is 400", bad.status === 400, `status ${bad.status}`);
@@ -1129,6 +1140,12 @@ try {
   ok("H and the refusal names the CONNECTION as a field, not only in prose", dev3.body.kind === "cooldown" && dev3.body.scope === "connection", JSON.stringify({ kind: dev3.body.kind, scope: dev3.body.scope }));
   ok("H and carries a measured nextAt, because this expiry is real", typeof dev3.body.nextAt === "string" && !Number.isNaN(Date.parse(dev3.body.nextAt)), JSON.stringify(dev3.body.nextAt));
   ok("H and discloses no transaction of anyone's", !/[0-9a-f]{64}/.test(JSON.stringify(dev3.body)), JSON.stringify(dev3.body));
+  const preH = await req(BASE_H, "/api/claimable", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-forwarded-for": HOME },
+    body: JSON.stringify({ address: await freshTm() }),
+  });
+  ok("H /api/claimable refuses a FRESH address on a full connection before any puzzle", preH.status === 429 && preH.body.scope === "connection", `${preH.status} ${JSON.stringify(preH.body)}`);
   // A neighbour on a different connection is untouched by this household's ceiling.
   const nb = await req(BASE_H, "/api/faucet", {
     method: "POST",

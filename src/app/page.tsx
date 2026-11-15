@@ -543,6 +543,30 @@ export default function Home() {
   // on the address so a pasted address is never held; a generated one is held until
   // its key has been copied or at least revealed.
   const keyUnseen = (address: string) => !!genKey && genKey.address === address && !keyCopied && !keyShown;
+  // A "you, later" refusal, from /api/claimable before the puzzle or /api/faucet after it.
+  const showRefusal = (data: { error?: string; kind?: string; scope?: string; retryAfterSeconds?: number; nextAt?: string }, address: string) => {
+    // The server's clock time when it gives one, its duration otherwise. Both mean
+    // the same instant; the ISO form is the one a person can read.
+    const nextAtMs = data.nextAt ? Date.parse(data.nextAt) : NaN;
+    setCooldownEnd(Number.isFinite(nextAtMs) ? nextAtMs : Date.now() + (data.retryAfterSeconds ?? status?.cooldownSeconds ?? 86400) * 1000);
+    // Which limit refused, from the FIELDS the API sends, not from its sentence. A
+    // first cut matched /connection/ over the reason and worked on the subnet refusal
+    // only because that sentence happens to end "from a different connection" - a
+    // rewording away from offering "Try a different address" to someone whose whole
+    // network is over quota. Unknown shapes fall to "address", the card with the
+    // least specific advice.
+    const reason: string = typeof data.error === "string" ? data.error : "";
+    const kind: "address" | "connection" | "subnet" =
+      data.kind === "subnet" ? "subnet" : data.scope === "connection" ? "connection" : "address";
+    // Only an ADDRESS refusal can be about a payment this browser made to this
+    // address in this asset. A connection or subnet refusal may be someone else's
+    // drip on the same router, and showing them a receipt from this tab would be
+    // claiming a payment that was not theirs.
+    const ttl = (status?.cooldownSeconds ?? 86400) * 1000;
+    const receipt = kind === "address" ? (readReceipts(ttl)[receiptKey(network, address)] ?? null) : null;
+    setRefusal({ kind, reason, nextAt: Number.isFinite(nextAtMs) ? nextAtMs : null, receipt });
+    setPhase("cooldown");
+  };
   const submit = async (target?: string) => {
     const address = (target ?? addr).trim();
     const c = check(address);
@@ -572,6 +596,16 @@ export default function Home() {
     inFlow.current = true;
     setElapsed(0); setErrMsg(""); setTouched(false); setHoldDropped(false);
     setPhase("submitting");
+
+    // Ask the ledger before the puzzle. A reused address used to solve it (~26s) and then
+    // wait on the wallet (~10s) to hear "already claimed". Anything but a 429 falls
+    // through to the puzzle: /api/faucet is still the gate, this only saves the wait.
+    const early = await fetch("/api/claimable", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ address, network }),
+    }).then((r) => (r.status === 429 ? r.json().catch(() => ({})) : null), () => null);
+    if (early) { showRefusal(early, address); sending.current = false; return; }
 
     // Anti-abuse gate: solve the browser proof-of-work before we ask for coins.
     let pow: PowSolution | undefined;
@@ -682,27 +716,7 @@ export default function Home() {
         );
         setPhase("success");
       } else if (res.status === 429) {
-        // The server's clock time when it gives one, its duration otherwise. Both mean
-        // the same instant; the ISO form is the one a person can read.
-        const nextAtMs = data.nextAt ? Date.parse(data.nextAt) : NaN;
-        setCooldownEnd(Number.isFinite(nextAtMs) ? nextAtMs : Date.now() + (data.retryAfterSeconds ?? status?.cooldownSeconds ?? 86400) * 1000);
-        // Which limit refused, from the FIELDS the API sends, not from its sentence. A
-        // first cut matched /connection/ over the reason and worked on the subnet refusal
-        // only because that sentence happens to end "from a different connection" - a
-        // rewording away from offering "Try a different address" to someone whose whole
-        // network is over quota. Unknown shapes fall to "address", the card with the
-        // least specific advice.
-        const reason: string = typeof data.error === "string" ? data.error : "";
-        const kind: "address" | "connection" | "subnet" =
-          data.kind === "subnet" ? "subnet" : data.scope === "connection" ? "connection" : "address";
-        // Only an ADDRESS refusal can be about a payment this browser made to this
-        // address in this asset. A connection or subnet refusal may be someone else's
-        // drip on the same router, and showing them a receipt from this tab would be
-        // claiming a payment that was not theirs.
-        const ttl = (status?.cooldownSeconds ?? 86400) * 1000;
-        const receipt = kind === "address" ? (readReceipts(ttl)[receiptKey(network, address)] ?? null) : null;
-        setRefusal({ kind, reason, nextAt: Number.isFinite(nextAtMs) ? nextAtMs : null, receipt });
-        setPhase("cooldown");
+        showRefusal(data, address);
       } else if (res.status === 503 && /empty/i.test(data.error || "")) {
         inFlow.current = false;
         setPhase("empty");
